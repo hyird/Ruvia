@@ -2332,6 +2332,71 @@ RUVIA_TEST(http_client_bounds_unfinished_upload_after_response_body_completion) 
     run_operation(worker, io, operation);
 }
 
+// A transport failure while the response body is still arriving is the real
+// cause of the exchange failure, even though the writer sees it first and its
+// cleanup cancels the receiver's read; it is reported as such, not as a
+// cancellation. The response body is left unread so the receiver sits in the
+// backpressure wait without a read in flight and only the upload observes the reset.
+RUVIA_TEST(http_client_reports_upload_transport_failure_during_response_body) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::exception_ptr peer_failure;
+    bool peer_finished = false;
+    ruvia::worker_signal peer_done(worker.handle_);
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await acceptor.async_accept(asio::use_awaitable);
+        asio::streambuf request;
+        co_await asio::async_read_until(socket, request, "\r\n\r\n", asio::use_awaitable);
+        constexpr std::string_view response = "HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n0123456789012345678901234567890123456789";
+        co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+        std::array<char, 4096> input{};
+        std::size_t received = 0;
+        while (received < 64 * 1024) {
+            received += co_await socket.async_read_some(asio::buffer(input), asio::use_awaitable);
+        }
+        // SO_LINGER 0 turns close() into a reset the client's next write observes.
+        socket.set_option(asio::socket_base::linger(true, 0));
+        socket.close();
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+        peer_finished = true;
+        peer_done.notify();
+    });
+    auto config = local_http_client_config(acceptor.local_endpoint().port());
+    config.max_response_bytes_ = 16;
+    config.connection_count_ = 1;
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    auto operation = [&]() -> ruvia::task<void> {
+        const acceptor_closer closer{acceptor};
+        auto exchange = co_await client.handle().open_request({.method_ = "POST", .target_ = "/reset"}, {});
+        auto response = co_await exchange.response();
+        RUVIA_CHECK(response.status() == ruvia::http_status::ok);
+        const std::string chunk(16 * 1024, 'u');
+        std::optional<ruvia::http_client_error::code_type> upload_error;
+        for (int i = 0; i < 1024 && !upload_error.has_value(); ++i) {
+            try {
+                co_await exchange.body().write(chunk);
+            } catch (const ruvia::http_client_error& error) {
+                upload_error = error.code();
+            }
+        }
+        RUVIA_CHECK(upload_error.has_value());
+        if (upload_error.has_value()) {
+            RUVIA_CHECK(*upload_error == ruvia::http_client_error::code_type::io_error);
+        }
+        while (!peer_finished) {
+            co_await peer_done.wait();
+        }
+        if (peer_failure) {
+            std::rethrow_exception(peer_failure);
+        }
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
 RUVIA_TEST(http_capsule_client_retains_payloads_across_reads_and_rejects_truncated_frames) {
     for (const bool truncated : {false, true}) {
         auto& io = ruvia::test::new_test_io_context();

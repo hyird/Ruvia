@@ -541,7 +541,15 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
             }
             // The consumer may swap pending_ away while a read is in flight, so
             // reads land in the connection buffer and move on the next pass.
-            if (!(co_await read_append(read_buffer, std::min(read_chunk_bytes, room), timeout)).ok()) {
+            const auto read = co_await read_append(read_buffer, std::min(read_chunk_bytes, room), timeout);
+            if (!read.ok()) {
+                // Same rule as a message body: a TLS peer that drops TCP
+                // without close_notify leaves the tunnel end unauthenticated
+                // (RFC 8446 section 6.1), so it is a failure, not an orderly end.
+                if (read.error_ == asio::ssl::error::stream_truncated) {
+                    throw http_client_error(http_client_error::code_type::io_error,
+                        "upstream closed the TLS connection without close_notify");
+                }
                 state_value.tunnel_->receive_ended_ = true;
                 state_value.data_signal_.notify();
                 break;
@@ -652,8 +660,17 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
     } catch (...) {
         // A receiver, timeout, or cancellation stops output before it closes
         // the socket; the resulting write abort is a consequence, not the cause.
-        if (!state_value.head_ready_ && !upload.output_.stopped_) {
+        // So is a write that fails once the whole response has been received:
+        // the server may close after its final response (RFC 9112 section 9.6).
+        // A write failure while the response is still being received is the
+        // real cause; closing the socket below only cancels the receiver's read.
+        if (!state_value.complete_ && !upload.output_.stopped_) {
             failure = std::current_exception();
+            // The caller's pending write() wakes on stop() below and reports
+            // the published failure instead of a bare cancellation.
+            if (state_value.failure_ == nullptr) {
+                state_value.failure_ = failure;
+            }
         }
         upload.output_.stop();
         connection_.close();
