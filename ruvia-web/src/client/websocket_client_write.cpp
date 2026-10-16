@@ -16,6 +16,7 @@ void websocket_client_state::finish_write(write_phase_type phase) noexcept {
     }
     write_phase_ = write_phase_type::idle;
     write_signal_.notify();
+    resume_pong_deadline();
 }
 
 task<void> websocket_client_state::wait_for_write_idle(write_wait_type type) {

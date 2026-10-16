@@ -26,6 +26,7 @@
 
 #include "http/static_file_metadata.h"
 #include "http/static_file_types.h"
+#include "http/static_path_normalization.h"
 #include "http/static_root_index.h"
 #include "http/static_root_options_validation.h"
 #include "server/http_file_open.h"
@@ -289,6 +290,29 @@ bool detail::static_root_access::is_indexed_directory(
         return false;
     }
     return contains_static_directory(root.state_->directories_, relative_path);
+}
+
+std::optional<detail::static_root_entry_view> detail::static_root_access::resolve(
+    const static_root& root, std::string_view& relative, std::pmr::string& storage) {
+    relative = normalize_static_relative_path(relative, storage);
+    if (relative.empty() && !has_directory_index(root)) {
+        throw_invalid_static_file_path();
+    }
+    auto entry_value = find(root, relative);
+    if (!entry_value.has_value() && is_indexed_directory(root, relative)) {
+        // A normalized path never ends with '/'.
+        if (relative.data() != storage.data()) {
+            storage.assign(relative.data(), relative.size());
+        }
+        if (!storage.empty()) {
+            storage.push_back('/');
+        }
+        const auto index = index_file(root);
+        storage.append(index.data(), index.size());
+        relative = storage;
+        entry_value = find(root, relative);
+    }
+    return entry_value;
 }
 
 std::uint64_t detail::static_root_access::fingerprint(const static_root& root) noexcept {

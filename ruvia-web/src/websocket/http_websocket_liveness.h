@@ -95,10 +95,15 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
     return payload_value == std::string_view(expected.data(), expected.size());
 }
 
+// pong_observable: an application read is polling the core and no write holds
+// the lane, so a Pong that arrived can actually be seen. Only then does the
+// Pong wait count; a peer that answered during a long write, or while no read
+// is pending, is not dead (RFC 6455 section 5.5.3 only asks the peer to answer
+// promptly). A write that stops making progress is still caught below.
 [[nodiscard]] inline websocket_liveness_decision evaluate_websocket_liveness(
     const websocket_lifecycle_options& options, websocket_liveness_mode liveness_mode,
-    const websocket_liveness_state_type& state_value, bool write_active, std::int64_t last_active_ms,
-    std::int64_t now) noexcept {
+    const websocket_liveness_state_type& state_value, bool write_active, bool pong_observable,
+    std::int64_t last_active_ms, std::int64_t now) noexcept {
     if (liveness_mode != websocket_liveness_mode::open) {
         const auto* close = std::get_if<websocket_awaiting_peer_close>(&state_value);
         return liveness_mode == websocket_liveness_mode::awaiting_peer_close && close != nullptr &&
@@ -114,7 +119,8 @@ using websocket_liveness_state_type = std::variant<websocket_liveness_idle, webs
 
     const auto ping_interval = options.heartbeat_.ping_interval_->count();
     const auto pong_timeout = options.heartbeat_.pong_timeout_->count();
-    if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value)) {
+    const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value);
+    if (pong != nullptr && pong_observable) {
         return now - pong->sent_at_ms() >= pong_timeout ? websocket_liveness_decision::abort_transport
                                                         : websocket_liveness_decision::idle;
     }

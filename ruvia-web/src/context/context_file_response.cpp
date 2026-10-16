@@ -24,7 +24,6 @@
 #include "http/secure_token.h"
 #include "http/static_file_metadata.h"
 #include "http/static_file_variant.h"
-#include "http/static_path_normalization.h"
 #include "http/static_root_index.h"
 #include "server/http_native_file.h"
 #include "server/http_response_compression.h"
@@ -535,26 +534,8 @@ http_response context::static_file(const static_root& root, static_file_response
     // index compare that never joins the path onto the filesystem.
     const auto content_type_value = options.content_type_.view();
     std::pmr::string relative_storage(pool());
-    auto relative = detail::normalize_static_relative_path(options.relative_path_.view(), relative_storage);
-
-    if (relative.empty() && !detail::static_root_access::has_directory_index(root)) {
-        detail::throw_invalid_static_file_path();
-    }
-
-    auto entry_value = detail::static_root_access::find(root, relative);
-    if (!entry_value.has_value() && detail::static_root_access::is_indexed_directory(root, relative)) {
-        // A normalized path never ends with '/'.
-        if (relative.data() != relative_storage.data()) {
-            relative_storage.assign(relative.data(), relative.size());
-        }
-        if (!relative_storage.empty()) {
-            relative_storage.push_back('/');
-        }
-        const auto index_file = detail::static_root_access::index_file(root);
-        relative_storage.append(index_file.data(), index_file.size());
-        relative = relative_storage;
-        entry_value = detail::static_root_access::find(root, relative);
-    }
+    auto relative = options.relative_path_.view();
+    const auto entry_value = detail::static_root_access::resolve(root, relative, relative_storage);
     if (!entry_value.has_value()) {
         throw http_error({.status_ = ruvia::http_status::not_found,
             .code_ = "not_found",

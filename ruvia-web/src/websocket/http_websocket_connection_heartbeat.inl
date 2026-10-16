@@ -3,11 +3,28 @@
 namespace ruvia::detail {
 
 template <typename stream_type>
+bool websocket_connection<stream_type>::pong_observable() const noexcept {
+    return write_phase_ == write_phase_type::idle && read_phase_ == read_phase_type::active;
+}
+
+// The Pong wait is measured only while the reader can poll it. Restarting the
+// window when that becomes true (or at every tick while it is false) keeps a
+// Pong that was already buffered during a write from being timed out before
+// the reader's next poll gets to it.
+template <typename stream_type>
+void websocket_connection<stream_type>::restart_pong_window(std::int64_t now) noexcept {
+    if (const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_)) {
+        liveness_state_ = websocket_awaiting_pong(now, pong->challenge());
+    }
+}
+
+template <typename stream_type>
 void websocket_connection<stream_type>::finish_write(write_phase_type phase) noexcept {
     if (write_phase_ != phase) {
         std::terminate();
     }
     write_phase_ = write_phase_type::idle;
+    restart_pong_window(steady_now_ms());
     if (going_away_pending_) {
         start_going_away();
     }
@@ -55,8 +72,12 @@ task<void> websocket_connection<stream_type>::write_going_away_close() {
 
 template <typename stream_type>
 void websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcept {
+    const bool observable = pong_observable();
+    if (!observable) {
+        restart_pong_window(now);
+    }
     switch (evaluate_websocket_liveness(lifecycle_options_, protocol_.liveness_mode(), liveness_state_,
-        write_phase_ != write_phase_type::idle, scanner_entry_.last_active_ms(), now)) {
+        write_phase_ != write_phase_type::idle, observable, scanner_entry_.last_active_ms(), now)) {
         case websocket_liveness_decision::idle:
             return;
         case websocket_liveness_decision::abort_transport:

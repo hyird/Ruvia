@@ -21,7 +21,8 @@ std::chrono::milliseconds websocket_client_state::heartbeat_delay(std::int64_t n
         return elapsed >= budget ? std::int64_t{0} : budget - std::max<std::int64_t>(elapsed, 0);
     };
     std::int64_t delay_value = 1;
-    if (const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_)) {
+    const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_);
+    if (pong != nullptr && write_phase_ == write_phase_type::idle) {
         delay_value = remaining(pong->sent_at_ms(), config_.heartbeat_.pong_timeout_->count());
     } else if (!std::holds_alternative<websocket_awaiting_peer_close>(liveness_state_)) {
         delay_value = remaining(last_active_ms_, config_.heartbeat_.ping_interval_->count());
@@ -61,19 +62,20 @@ void websocket_client_state::touch_activity() noexcept {
     }
 }
 
+// Called when a reader can poll again: a read begins, or the write lane that
+// blocked the reader frees. A window that expired while nothing could observe
+// the Pong restarts; an open one simply has its timer re-armed to its deadline.
 void websocket_client_state::resume_pong_deadline() noexcept {
     const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_);
-    if (pong == nullptr || !protocol_open()) {
+    if (pong == nullptr || !protocol_open() || !read_active_ || write_phase_ != write_phase_type::idle) {
         return;
     }
     const auto now = steady_now_ms();
-    if (now - pong->sent_at_ms() < config_.heartbeat_.pong_timeout_->count()) {
-        // The window is still open and its timer armed.
-        return;
+    if (now - pong->sent_at_ms() >= config_.heartbeat_.pong_timeout_->count()) {
+        liveness_state_ = websocket_awaiting_pong(now, pong->challenge());
     }
-    liveness_state_ = websocket_awaiting_pong(now, pong->challenge());
     try {
-        arm_heartbeat_timer(*config_.heartbeat_.pong_timeout_);
+        arm_heartbeat_timer(heartbeat_delay(now));
     } catch (...) {
         fail_transport();
     }
@@ -84,19 +86,23 @@ bool websocket_client_state::heartbeat_ping_due() noexcept {
     const websocket_lifecycle_options options{
         .heartbeat_ = config_.heartbeat_, .close_handshake_timeout_ = config_.close_handshake_timeout_};
     // A write holding the lane defers the Ping; a stalled write is aborted
-    // once it exceeds the Ping interval plus the Pong timeout.
+    // once it exceeds the Ping interval plus the Pong timeout. Only a reader
+    // that can poll (one is running and no write holds the lane) observes a
+    // Pong, so the Pong window counts only then; resume_pong_deadline()
+    // restarts an expired window when polling becomes possible again.
     const auto decision = evaluate_websocket_liveness(options, require_protocol().liveness_mode(), liveness_state_,
-        write_phase_ != write_phase_type::idle, last_active_ms_, now);
+        write_phase_ != write_phase_type::idle, read_active_ && write_phase_ == write_phase_type::idle,
+        last_active_ms_, now);
     if (decision == websocket_liveness_decision::send_ping) {
         return true;
     }
     if (decision == websocket_liveness_decision::abort_transport) {
-        // Only a polling reader can match the Pong. Without one, an unread
-        // Pong is not a dead peer: the window restarts when a read begins.
-        if (!read_active_ && std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
-            return false;
-        }
         retire(client_abort_reason::timeout);
+        return false;
+    }
+    if (!read_active_ && write_phase_ == write_phase_type::idle &&
+        std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
+        // Nothing can observe the Pong: no timer until a read begins.
         return false;
     }
     try {

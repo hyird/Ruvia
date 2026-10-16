@@ -255,6 +255,8 @@ private:
     };
 
     void finish_write(write_phase_type phase) noexcept;
+    [[nodiscard]] bool pong_observable() const noexcept;
+    void restart_pong_window(std::int64_t now) noexcept;
     void heartbeat_tick(std::int64_t now) noexcept;
     // A draining server starts the close handshake with 1001 Going Away as
     // soon as the write lane is free; the close-handshake timeout bounds it.

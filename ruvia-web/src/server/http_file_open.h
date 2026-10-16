@@ -59,7 +59,10 @@ public:
             return;
         }
 #if defined(__unix__)
-        const auto result_value = ::read(handle_.get(), output, static_cast<std::size_t>(size));
+        ssize_t result_value = 0;
+        do {
+            result_value = ::read(handle_.get(), output, static_cast<std::size_t>(size));
+        } while (result_value < 0 && errno == EINTR);
         if (result_value < 0) {
             error_ = std::error_code(errno, std::system_category());
             return;

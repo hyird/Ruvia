@@ -20,6 +20,7 @@
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/timer.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/web/app.h"
@@ -64,8 +65,12 @@ class http1_websocket_routes final {
         ruvia::websocket_route_config{.subprotocols_ = {"chat.v1"}, .require_subprotocol_ = true};
     const auto takeover_deflate =
         ruvia::websocket_route_config{.deflate_ = {.context_takeover_ = true, .mem_level_ = 4}};
+    const auto short_heartbeat = ruvia::websocket_route_config{
+        .lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(40),
+                           .pong_timeout_ = std::chrono::milliseconds(40)}}};
     RUVIA_GET_WS("/http1-websocket-eof", read_until_eof);
     RUVIA_GET_WS_OPTIONS("/http1-websocket-longest-heartbeat", write_stalled, longest_heartbeat);
+    RUVIA_GET_WS_OPTIONS("/http1-websocket-write-only-heartbeat", write_without_reading, short_heartbeat);
     RUVIA_GET_WS_OPTIONS("/http1-websocket-required-subprotocol", accept_only, required_subprotocol);
     RUVIA_GET_WS("/http1-websocket-upstream-reset", fail_on_upstream_reset);
     RUVIA_GET_WS("/http1-websocket-echo-send", echo_send);
@@ -99,6 +104,25 @@ class http1_websocket_routes final {
 
     ruvia::task<void> write_stalled(ruvia::context& context_value) {
         co_await context_value.get_websocket().binary(std::string(stalled_payload_size, 'w'));
+    }
+
+    // Never reads, so no Pong is ever polled. Idle long enough for a Ping to
+    // go out and its Pong window to lapse unobserved, then keep writing; the
+    // peer answers every Ping.
+    ruvia::task<void> write_without_reading(ruvia::context& context_value) {
+        auto& websocket_value = context_value.get_websocket();
+        if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(200)) !=
+            ruvia::timer_sleep_result::elapsed) {
+            co_return;
+        }
+        for (int i = 0; i < 20; ++i) {
+            co_await websocket_value.text("tick");
+            if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(10)) !=
+                ruvia::timer_sleep_result::elapsed) {
+                co_return;
+            }
+        }
+        co_await websocket_value.close();
     }
 
     // send(websocket_message&&) borrows the read buffer, so it claims the read
@@ -503,6 +527,77 @@ RUVIA_TEST(http1_websocket_longest_heartbeat_never_aborts_a_slow_write) {
     }
     RUVIA_CHECK_EQ(received, stalled_payload_size);
     RUVIA_CHECK(payload_intact);
+}
+
+// A handler that only writes never polls the Pong the peer sends. The Pong
+// window counts only while a read can observe it, so a responsive peer keeps
+// the connection until the handler's own Close instead of being aborted once
+// the ping interval plus Pong timeout have elapsed.
+RUVIA_TEST(http1_websocket_heartbeat_does_not_abort_an_unread_responsive_peer) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    constexpr std::string_view upgrade =
+        "GET /http1-websocket-write-only-heartbeat HTTP/1.1\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    asio::write(client, asio::buffer(upgrade));
+    std::string head;
+    char byte{};
+    while (!head.ends_with("\r\n\r\n")) {
+        asio::read(client, asio::buffer(&byte, 1));
+        head.push_back(byte);
+    }
+    RUVIA_CHECK(head.starts_with("HTTP/1.1 101 "));
+    ruvia::websocket_connection peer({.role_ = ruvia::websocket_connection_role::client,
+        .mask_key_generator_ = &http1_websocket_test::zero_mask});
+    const auto flush = [&] {
+        const std::string bytes_value(peer.output_plan().bytes());
+        if (!bytes_value.empty()) {
+            asio::write(client, asio::buffer(bytes_value));
+        }
+        RUVIA_CHECK(peer.consume_output(bytes_value.size()) == ruvia::websocket_output_consume_status::drained);
+    };
+    std::size_t messages = 0;
+    std::size_t pings = 0;
+    std::optional<std::uint16_t> close_code;
+    std::array<char, 4096> input{};
+    asio::error_code end;
+    while (!close_code.has_value() && !end) {
+        if (const auto event = peer.next_event()) {
+            if (event->message() != nullptr) {
+                ++messages;
+            } else if (event->ping() != nullptr) {
+                // The core queued the Pong; the peer answers promptly.
+                ++pings;
+                flush();
+            } else if (const auto* close = event->close()) {
+                close_code = close->close_code();
+                flush();
+            } else {
+                break;
+            }
+            continue;
+        }
+        const auto read = client.read_some(asio::buffer(input), end);
+        if (!end) {
+            RUVIA_CHECK(peer.feed(std::string_view(input.data(), read)) == ruvia::websocket_feed_status::accepted);
+        }
+    }
+    // A Ping went out during the 200 ms idle start and was answered, and
+    // the server still ended the session with its own Close, not an abort.
+    RUVIA_CHECK_EQ(messages, std::size_t{20});
+    RUVIA_CHECK(pings != 0);
+    RUVIA_CHECK(close_code.has_value());
+    if (close_code.has_value()) {
+        RUVIA_CHECK_EQ(*close_code, std::uint16_t{1000});
+    }
+    client.close();
+    server.finish();
 }
 
 // A route that requires a subprotocol refuses an upgrade offering none of its
