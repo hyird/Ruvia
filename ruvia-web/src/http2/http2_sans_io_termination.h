@@ -190,8 +190,10 @@ private:
     static void notify_termination(void* raw) noexcept {
         auto& self = *static_cast<http2_sans_io_sleep_awaiter*>(raw);
         // Timer cancellation delivers its completion on the same worker. It owns
-        // the eventual resume and removes this observer in that callback.
-        self.timer_.cancel();
+        // the eventual resume and removes this observer in that callback, so the
+        // notifying form is required: plain cancel() drops the completion and
+        // would leave the sleeping handler suspended forever.
+        self.timer_.cancel_and_notify();
     }
 
     const worker_handle& worker_;

@@ -143,6 +143,7 @@ if(RUVIA_BUILD_WEB)
         web/http2/client_tunnel.cpp
         web/http2/connect.cpp
         web/http2/push.cpp
+        web/http2/streaming.cpp
         web/http/udp_tunnel.cpp)
     # Owns an application with an app-wide rate limit, so it cannot share the
     # process-wide application of the other server suites.
