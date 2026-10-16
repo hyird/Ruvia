@@ -59,13 +59,14 @@ class document_root_routes final {
 }
 
 // Sends one request on a fresh connection and returns the complete response.
-[[nodiscard]] std::string exchange(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view target) {
+[[nodiscard]] std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
+    std::string_view target, std::string_view method = "GET") {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
-    std::string request("GET ");
+    std::string request(method);
+    request.append(" ");
     request.append(target);
-    request.append(" HTTP/1.1\r\nHost: a\r\nConnection: close\r\n\r\n");
+    request.append(" HTTP/1.1\r\nHost: a\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
     asio::write(socket, asio::buffer(request));
     std::string output;
     std::error_code error;
@@ -117,5 +118,18 @@ RUVIA_TEST(document_root_never_serves_targets_rejected_by_routing) {
         RUVIA_CHECK(has_status(response, "404"));
         RUVIA_CHECK(response.find("secret") == std::string::npos);
     }
+
+    // RFC 9110 15.5.6 and 9.3.7: a document-root file exists for every method,
+    // so OPTIONS describes it and other methods are 405 with Allow, while a
+    // missing file stays 404 and an unregistered token stays 501.
+    const auto options = exchange(io, server.endpoint(), "/public.txt", "OPTIONS");
+    RUVIA_CHECK(has_status(options, "204"));
+    RUVIA_CHECK(options.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+    const auto post = exchange(io, server.endpoint(), "/my%20report.txt", "POST");
+    RUVIA_CHECK(has_status(post, "405"));
+    RUVIA_CHECK(post.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/missing.txt", "POST"), "404"));
+    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/missing.txt", "OPTIONS"), "404"));
+    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/public.txt", "BREW"), "501"));
     server.finish();
 }

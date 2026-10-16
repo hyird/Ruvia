@@ -66,6 +66,12 @@ std::error_code append_response_file_bytes(http_response_head_buffer& head, http
     head.append_generated(size, [&error, input, offset = file.offset(), size](char* output) noexcept {
         error = read_native_file_at(input, offset, output, size);
     });
+    // A same-size in-place rewrite between the identity check and the read
+    // would pair new bytes with the framed validators; nothing has been sent
+    // yet, so re-check the handle the bytes came from.
+    if (!error) {
+        error = validate_native_file(input, file);
+    }
     return error;
 }
 
