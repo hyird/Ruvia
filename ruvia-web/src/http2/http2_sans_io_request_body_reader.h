@@ -11,6 +11,7 @@
 
 #include "context/http_interim_response_output.h"
 #include "http2/http2_sans_io_stream_runtime.h"
+#include "server/inbound_transport_error.h"
 namespace ruvia::detail {
 // Streaming request-body reader for the sans-I/O session; the body_reader facade wraps
 // it for handler consumption. Chunk-for-chunk port of the coroutine read_body_chunk.
@@ -36,10 +37,11 @@ public:
         }
         for (;;) {
             if (signal_.terminated()) {
-                throw std::system_error(signal_.terminal_error());
+                throw inbound_transport_error(signal_.terminal_error(), "HTTP/2 connection ended during body read");
             }
             if (connection_.stream_receive_status(stream_id_) == http2_stream_receive_status::closed) {
-                throw std::system_error(std::make_error_code(std::errc::connection_reset));
+                throw inbound_transport_error(
+                    std::make_error_code(std::errc::connection_reset), "HTTP/2 request stream reset during body read");
             }
             const auto chunk = body_queue_.pop();
             // pop() returns the previous chunk's receive-window credit; the
@@ -58,7 +60,7 @@ public:
                 co_return std::nullopt;
             }
             if (signal_.terminated()) {
-                throw std::system_error(signal_.terminal_error());
+                throw inbound_transport_error(signal_.terminal_error(), "HTTP/2 connection ended during body read");
             }
             co_await signal_.wait();
         }

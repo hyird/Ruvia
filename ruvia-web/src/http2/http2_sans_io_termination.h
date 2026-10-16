@@ -10,6 +10,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 
+#include "server/inbound_transport_error.h"
 namespace ruvia::detail {
 
 class http2_sans_io_termination;
@@ -177,7 +178,7 @@ public:
 
     timer_sleep_result await_resume() const {
         if (termination_.terminated()) {
-            throw std::system_error(termination_.error());
+            throw inbound_transport_error(termination_.error(), "HTTP/2 connection ended during sleep");
         }
         if (timer_outcome_ == worker_timer_outcome::cancelled) {
             return timer_sleep_result::stop_requested;

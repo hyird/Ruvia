@@ -187,12 +187,14 @@ using http2_streaming_test::sleeping_stream_observed;
 
 // A client that disconnects while an HTTP/2 stream producer is inside sleep()
 // ends that sleep with the transport error, so the handler, its stream and
-// the connection retire instead of staying suspended for the full duration.
+// the connection retire instead of staying suspended for the full duration;
+// the disconnect is not counted as a connection failure.
 RUVIA_TEST(http2_response_stream_sleep_ends_when_the_peer_disconnects) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     sleeping_stream_observed->sleep_failed_ = false;
     sleeping_stream_observed->sleep_elapsed_ = false;
+    const auto failures_before = ruvia::app().http_stats().connection_failures_;
     for (const bool send_goaway : {false, true}) {
         std::pmr::unsynchronized_pool_resource resource;
         asio::ip::tcp::socket client(io);
@@ -215,6 +217,8 @@ RUVIA_TEST(http2_response_stream_sleep_ends_when_the_peer_disconnects) {
         sleeping_stream_observed->sleep_failed_ = false;
     }
     server.finish();
+    // The peer going away is a normal end of the connection, not a fault.
+    RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
 }
 
 // A request whose HEADERS and complete DATA arrive in one read is still a

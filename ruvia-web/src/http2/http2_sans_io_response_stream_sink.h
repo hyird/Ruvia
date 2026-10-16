@@ -41,6 +41,7 @@
 #include "http2/http2_sans_io_stream_runtime.h"
 #include "server/http_response_stream_state.h"
 #include "server/http_streaming_response_compression.h"
+#include "server/inbound_transport_error.h"
 
 namespace ruvia {
 class context;  // only forwarded as context* via the type-erased bind_context thunk
@@ -139,7 +140,7 @@ public:
                         const auto window = connection_.send_window_state(stream_id_);
                         if (!window) {
                             state_.mark_aborted();
-                            throw std::system_error(std::make_error_code(std::errc::connection_reset));
+                            throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
                         }
                         if (window->available_ != 0) {
                             break;
@@ -147,12 +148,12 @@ public:
                         co_await output_budget_->wait_for_change();
                         if (stream_signal_.terminated()) {
                             state_.mark_aborted();
-                            throw std::system_error(stream_signal_.terminal_error());
+                            throw inbound_transport_error(stream_signal_.terminal_error(), "HTTP/2 connection ended during response stream");
                         }
                     }
                     if (!(co_await output_budget_->acquire(stream_id_, stream_signal_))) {
                         state_.mark_aborted();
-                        throw std::system_error(stream_signal_.terminal_error());
+                        throw inbound_transport_error(stream_signal_.terminal_error(), "HTTP/2 connection ended during response stream");
                     }
                 }
                 const auto result_value =
@@ -174,7 +175,7 @@ public:
                 }
                 if (result_value == http2_data_submit_status::closed) {
                     state_.mark_aborted();
-                    throw std::system_error(std::make_error_code(std::errc::connection_reset));
+                    throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
                 }
                 if (result_value == http2_data_submit_status::invalid_state) {
                     state_.mark_aborted();
@@ -192,9 +193,7 @@ public:
                     co_await await_http2_send_window(connection_, stream_id_, &stream_signal_);
                 if (wait_result.aborted() != nullptr) {
                     state_.mark_aborted();
-                    throw std::system_error(stream_signal_.terminated()
-                                                ? stream_signal_.terminal_error()
-                                                : std::make_error_code(std::errc::connection_reset));
+                    throw inbound_transport_error(stream_signal_.terminated() ? stream_signal_.terminal_error() : std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream aborted");
                 }
                 if (result_value == http2_data_submit_status::queued) {
                     break;  // core owns this bounded chunk; drain before the next one
@@ -206,9 +205,7 @@ public:
                     co_await await_http2_send_window(connection_, stream_id_, &stream_signal_);
                 if (wait_result.aborted() != nullptr) {
                     state_.mark_aborted();
-                    throw std::system_error(stream_signal_.terminated()
-                                                ? stream_signal_.terminal_error()
-                                                : std::make_error_code(std::errc::connection_reset));
+                    throw inbound_transport_error(stream_signal_.terminated() ? stream_signal_.terminal_error() : std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream aborted");
                 }
             }
         }
@@ -255,7 +252,7 @@ public:
         wake_writer();
         if (result_value == http2_finish_response_status::closed) {
             state_.mark_aborted();
-            throw std::system_error(std::make_error_code(std::errc::connection_reset));
+            throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
         }
         if (result_value == http2_finish_response_status::invalid_state) {
             state_.mark_aborted();
@@ -270,9 +267,7 @@ public:
                 co_await await_http2_send_window(connection_, stream_id_, &stream_signal_);
             if (wait_result.aborted() != nullptr) {
                 state_.mark_aborted();
-                throw std::system_error(stream_signal_.terminated()
-                                            ? stream_signal_.terminal_error()
-                                            : std::make_error_code(std::errc::connection_reset));
+                throw inbound_transport_error(stream_signal_.terminated() ? stream_signal_.terminal_error() : std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream aborted");
             }
         }
         state_.mark_ended();
@@ -298,7 +293,7 @@ private:
             const auto* submitted_head = head_result.submitted();
             if (submitted_head == nullptr) {
                 if (head_result.failure()->error() == ruvia::http2_response_head_submit_error::closed) {
-                    throw std::system_error(std::make_error_code(std::errc::connection_reset));
+                    throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
                 }
                 throw std::logic_error("HTTP/2 streaming response head submission failed");
             }
@@ -325,7 +320,7 @@ private:
 
     void throw_if_terminated() const {
         if (stream_signal_.terminated()) {
-            throw std::system_error(stream_signal_.terminal_error());
+            throw inbound_transport_error(stream_signal_.terminal_error(), "HTTP/2 connection ended during response stream");
         }
     }
 

@@ -15,13 +15,18 @@ namespace {
 // server ended the I/O itself. operation_aborted is our cancellation of I/O in
 // flight; bad_descriptor is I/O started after our own close (stop, drain, or a
 // timeout that closes the socket). Only this server closes an inbound socket,
-// so neither code can come from anything else on the inbound transport.
+// so neither code can come from anything else on the inbound transport. The
+// sans-I/O HTTP/2 session reports the same endings as generic-category codes,
+// which the error_condition comparisons below cover in either category.
 [[nodiscard]] bool is_connection_end(const std::error_code& error) noexcept {
     return error == asio::error::connection_reset || error == asio::error::connection_aborted ||
            error == asio::error::broken_pipe || error == asio::error::eof ||
            error == asio::error::operation_aborted || error == asio::error::bad_descriptor ||
            error == asio::error::timed_out || error == asio::error::not_connected ||
-           error == asio::error::shut_down;
+           error == asio::error::shut_down || error == std::errc::connection_reset ||
+           error == std::errc::connection_aborted || error == std::errc::broken_pipe ||
+           error == std::errc::operation_canceled || error == std::errc::timed_out ||
+           error == std::errc::not_connected;
 }
 
 // Only the connection's own transport can end it normally. A handler or
