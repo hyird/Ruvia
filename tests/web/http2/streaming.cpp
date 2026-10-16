@@ -86,8 +86,10 @@ void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t 
     wire.append(payload);
 }
 
+// With expect_continue the HEADERS announce the content but the DATA frame is
+// left for the caller to send once the server has answered the expectation.
 std::string request_wire(std::pmr::memory_resource* resource, std::string_view method,
-    std::string_view path, std::string_view body) {
+    std::string_view path, std::string_view body, bool expect_continue = false) {
     std::string wire(ruvia::http2_client_preface);
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
     std::pmr::string block(resource);
@@ -98,11 +100,56 @@ std::string request_wire(std::pmr::memory_resource* resource, std::string_view m
     if (!body.empty()) {
         ruvia::hpack_encoder::encode_header(block, "content-length", std::to_string(body.size()));
     }
+    if (expect_continue) {
+        ruvia::hpack_encoder::encode_header(block, "expect", "100-continue");
+    }
     append_frame(wire, ruvia::http2_frame_type::headers, static_cast<std::uint8_t>(body.empty() ? 0x5 : 0x4), 1, block);
-    if (!body.empty()) {
+    if (!body.empty() && !expect_continue) {
         append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, body);
     }
     return wire;
+}
+
+struct received_frame final {
+    ruvia::http2_frame_header header_;
+    std::string payload_;
+};
+
+received_frame read_frame(asio::ip::tcp::socket& client) {
+    std::array<char, ruvia::http2_frame_header_bytes> header_bytes{};
+    asio::read(client, asio::buffer(header_bytes));
+    const auto header_value = ruvia::parse_http2_frame_header(header_bytes);
+    if (!header_value.has_value()) {
+        throw std::logic_error("invalid HTTP/2 frame header");
+    }
+    received_frame frame{*header_value, std::string(header_value->length_, '\0')};
+    if (!frame.payload_.empty()) {
+        asio::read(client, asio::buffer(frame.payload_));
+    }
+    return frame;
+}
+
+// Reads frames until the first HEADERS frame on stream 1 and returns the
+// decoded :status; connection-level frames before it are skipped.
+std::string read_first_status(asio::ip::tcp::socket& client, ruvia::hpack_decoder& decoder) {
+    for (;;) {
+        const auto frame = read_frame(client);
+        if (frame.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::headers) ||
+            frame.header_.stream_id_ != 1) {
+            continue;
+        }
+        std::string status;
+        const auto decoded = decoder.decode(frame.payload_, [&](std::string_view name, std::string_view value) {
+            if (name == ":status") {
+                status = value;
+            }
+            return true;
+        });
+        if (!decoded.decoded()) {
+            throw std::logic_error("invalid HPACK block");
+        }
+        return status;
+    }
 }
 
 // Reads frames until the first DATA frame on stream 1 and returns its payload;
@@ -134,6 +181,7 @@ std::string read_first_data(asio::ip::tcp::socket& client) {
 
 using http2_streaming_test::append_frame;
 using http2_streaming_test::read_first_data;
+using http2_streaming_test::read_first_status;
 using http2_streaming_test::request_wire;
 using http2_streaming_test::sleeping_stream_observed;
 
@@ -182,6 +230,40 @@ RUVIA_TEST(http2_streaming_upload_received_in_one_read_is_dispatched) {
         const auto wire = request_wire(&resource, "POST", "/http2-count-upload", std::string(body_size, 'x'));
         asio::write(client, asio::buffer(wire));
         RUVIA_CHECK_EQ(read_first_data(client), std::to_string(body_size));
+        client.close();
+    }
+    server.finish();
+}
+
+// RFC 9110 §10.1.1 on HTTP/2 follows the HTTP/1 policy: 100 Continue is sent
+// when the server starts consuming the content (a streaming handler's first
+// body read), and a request whose final status is known from the head alone
+// (404) is answered with that status and never asked for its content.
+RUVIA_TEST(http2_expect_continue_is_answered_when_the_content_is_consumed) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        const std::string body(40, 'x');
+        asio::write(client, asio::buffer(request_wire(&resource, "POST", "/http2-count-upload", body, true)));
+        RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("100"));
+        std::string data;
+        append_frame(data, ruvia::http2_frame_type::data, 0x1, 1, body);
+        asio::write(client, asio::buffer(data));
+        RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("200"));
+        RUVIA_CHECK_EQ(read_first_data(client), std::string("40"));
+        client.close();
+    }
+    {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        asio::write(client, asio::buffer(request_wire(&resource, "POST", "/http2-missing-upload", std::string(40, 'x'), true)));
+        RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("404"));
         client.close();
     }
     server.finish();

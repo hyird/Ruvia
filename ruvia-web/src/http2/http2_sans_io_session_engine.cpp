@@ -366,7 +366,9 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
 
     std::optional<body_reader_binding<http2_sans_io_request_body_reader>> body_reader_storage;
     if (streaming_body != nullptr && !request_head->snapshot().connect_pending_) {
-        body_reader_storage.emplace(connection_, stream_id, streaming_body->queue(), *stream_signal, write_signal_);
+        const bool continue_on_read = expectation_plan.send_continue() != nullptr && resolved != nullptr;
+        body_reader_storage.emplace(connection_, stream_id, streaming_body->queue(), *stream_signal, write_signal_,
+            continue_on_read ? &interim_output : nullptr);
     }
     auto dispatch_services = request_services;
     if (body_reader_storage) {
@@ -625,7 +627,19 @@ void http2_sans_io_session_engine::drain_events() {
             reset_event_stream(stream_id, http2_error_code::internal_error);
             return;
         }
-        if (expectation_plan.send_continue() != nullptr) {
+        const bool connect_request = snapshot.connect_pending_;
+        const auto* selected_route = stream_runtime->selected_route();
+        const bool resolved_route = selected_route != nullptr && selected_route->resolution().resolved() != nullptr;
+        const bool streaming_body = !connect_request && selected_route != nullptr &&
+                                    selected_route->body().streaming() != nullptr &&
+                                    snapshot.body_open_;
+        // Same policy as HTTP/1: 100 Continue is sent when the server starts
+        // consuming the content. A buffered route consumes it before dispatch, so
+        // it is sent now; a streaming handler's first body read sends it; an
+        // unresolved request (404, 405, document root) never reads the content
+        // and answers with its final status alone (RFC 9110 §10.1.1).
+        if (expectation_plan.send_continue() != nullptr && resolved_route && !connect_request &&
+            selected_route->body().buffered() != nullptr) {
             const auto status = connection_.submit_interim_response_head(
                 stream_id, http_interim_response_head(ruvia::http_status::continue_value));
             if (status == http2_submit_status::accepted) {
@@ -639,12 +653,9 @@ void http2_sans_io_session_engine::drain_events() {
                 return;
             }
         }
-        const bool connect_request = snapshot.connect_pending_;
-        const auto* selected_route = stream_runtime->selected_route();
-        const bool streaming_body = !connect_request && selected_route != nullptr &&
-                                    selected_route->body().streaming() != nullptr &&
-                                    snapshot.body_open_;
-        if (expectation_plan.rejection() != nullptr || connect_request || streaming_body) {
+        // An unresolved request is answered from its head alone; waiting for
+        // content the client may withhold (Expect) would stall the stream.
+        if (expectation_plan.rejection() != nullptr || connect_request || streaming_body || !resolved_route) {
             if (!admit_stream(stream_id)) {
                 reset_event_stream(stream_id, http2_error_code::internal_error);
             }
@@ -664,10 +675,11 @@ void http2_sans_io_session_engine::drain_events() {
         auto& request_body = selected_route->body();
         if (request_body.buffered() != nullptr && stream_runtime->dispatched()) {
             // A buffered body is dispatched before its end only when its
-            // expectation was rejected: the handler never receives that content
-            // and the request borrows the buffered bytes as they were at
-            // dispatch. Appending would reallocate under that borrowed view, so
-            // later DATA is discarded and only its flow-control credit returned.
+            // expectation was rejected or its route is unresolved: the handler
+            // never receives that content and the request borrows the buffered
+            // bytes as they were at dispatch. Appending would reallocate under
+            // that borrowed view, so later DATA is discarded and only its
+            // flow-control credit returned.
             (void)connection_.acknowledge(std::move(body_chunk->take_credit()));
             wake_writer();
             return;

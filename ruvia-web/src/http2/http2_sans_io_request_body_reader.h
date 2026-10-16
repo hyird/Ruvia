@@ -2,12 +2,14 @@
 #include <optional>
 #include <span>
 #include <system_error>
+#include <utility>
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
 
+#include "context/http_interim_response_output.h"
 #include "http2/http2_sans_io_stream_runtime.h"
 namespace ruvia::detail {
 // Streaming request-body reader for the sans-I/O session; the body_reader facade wraps
@@ -15,16 +17,23 @@ namespace ruvia::detail {
 // Admission always binds the runtime-owned signal before this facade can exist.
 class http2_sans_io_request_body_reader final {
 public:
+    // continue_output is non-null when the request carries a pending
+    // 100-continue expectation: the first read sends it, as the HTTP/1 reader
+    // does, so an unread content never prompts the client to send it.
     http2_sans_io_request_body_reader(ruvia::http2_connection& connection, std::uint32_t stream_id,
         http2_sans_io_body_queue& body_queue, http2_sans_io_stream_signal& signal,
-        worker_signal& write_signal) noexcept
+        worker_signal& write_signal, http_interim_response_output* continue_output) noexcept
         : connection_(connection),
           stream_id_(stream_id),
           body_queue_(body_queue),
           signal_(signal),
-          write_signal_(write_signal) {}
+          write_signal_(write_signal),
+          continue_output_(continue_output) {}
 
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() {
+        if (auto* continue_output = std::exchange(continue_output_, nullptr)) {
+            co_await continue_output->send_continue();
+        }
         for (;;) {
             if (signal_.terminated()) {
                 throw std::system_error(signal_.terminal_error());
@@ -61,6 +70,7 @@ private:
     http2_sans_io_body_queue& body_queue_;
     http2_sans_io_stream_signal& signal_;
     worker_signal& write_signal_;
+    http_interim_response_output* continue_output_;
 };
 
 }  // namespace ruvia::detail
