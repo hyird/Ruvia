@@ -7,6 +7,7 @@
 
 #if defined(__linux__)
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #endif
 
 #include <asio.hpp>
@@ -22,6 +23,15 @@
 #include "server/response_file_source.h"
 
 namespace ruvia::detail {
+
+// Only for a final buffered response followed immediately by send shutdown.
+// Linux can carry the response tail and FIN together; other platforms keep
+// their ordinary send flags. Reusable and streaming writes must not use it.
+#if defined(__linux__)
+inline constexpr asio::socket_base::message_flags final_plain_tcp_send_flags = MSG_MORE;
+#else
+inline constexpr asio::socket_base::message_flags final_plain_tcp_send_flags = 0;
+#endif
 
 // asio::async_write completion condition that records each partial transfer on
 // the connection's scanner entry, so write_timeout measures inactivity rather
@@ -76,14 +86,15 @@ inline void enable_plain_tcp_sync_write(asio::ip::tcp::socket& socket) noexcept 
 // false when the remainder must go through async_write.
 template <typename const_buffer_sequence_type>
 [[nodiscard]] inline bool try_plain_tcp_sync_write(asio::ip::tcp::socket& socket,
-    const const_buffer_sequence_type& buffers, std::size_t total_bytes, std::error_code& ec,
+    const const_buffer_sequence_type& buffers, std::size_t total_bytes,
+    asio::socket_base::message_flags flags, std::error_code& ec,
     std::size_t& bytes_written) noexcept {
     ec.clear();
     bytes_written = 0;
     if (!socket.non_blocking()) {
         return false;
     }
-    bytes_written = socket.write_some(buffers, ec);
+    bytes_written = socket.send(buffers, flags, ec);
     if (!ec) {
         return bytes_written == total_bytes;
     }
@@ -212,7 +223,7 @@ task<http1_buffered_response_write_result> finish_file_response_write(stream_typ
             const auto bytes = head.view();
             std::error_code write_ec;
             std::size_t written_bytes = 0;
-            if (!try_plain_tcp_sync_write(stream, asio::buffer(bytes), bytes.size(), write_ec, written_bytes)) {
+            if (!try_plain_tcp_sync_write(stream, asio::buffer(bytes), bytes.size(), 0, write_ec, written_bytes)) {
                 auto write_completion = co_await ruvia::async_asio<std::size_t>(
                     [&stream, &progress, rest = bytes.substr(written_bytes)](auto handler) mutable {
                         asio::async_write(

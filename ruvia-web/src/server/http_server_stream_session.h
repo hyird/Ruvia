@@ -587,7 +587,9 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         response_plan, write_start, file_output, scanner_entry));
                     response_head.reset();
                 } else {
-                    if (!response_output.start(write_start.body_)) {
+                    if (!response_output.start(write_start.body_,
+                            connection_plan.disposition() == http1_close_policy::close_after_response &&
+                                !stop_token_.stop_requested())) {
                         auto completion = co_await ruvia::async_asio<std::size_t>([&response_output](auto handler) {
                             response_output.write_remaining(std::move(handler));
                         });

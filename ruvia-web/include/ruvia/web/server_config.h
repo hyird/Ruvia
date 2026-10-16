@@ -50,6 +50,8 @@ enum class process_signal_handler_policy : std::uint8_t {
 // close_notify) and TCP close, without draining peer input. Unread or late peer
 // data can therefore cause a reset that prevents receipt of the final response
 // (RFC 9112 §9.6); the server does not wait for the peer's FIN.
+// On Linux, a final buffered plain response may share its last TCP segment with
+// FIN. Reusable, streamed and TLS output do not use this send hint.
 // TCP may close before the session task is reclaimed. Worker shutdown still
 // joins session tasks before retiring their worker-local resources.
 struct server_config final {

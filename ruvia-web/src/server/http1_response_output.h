@@ -14,6 +14,7 @@
 #include "ruvia/http/http_response_head_buffer.h"
 
 #include "server/connection_scanner.h"
+#include "server/http_connection_close.h"
 #include "server/http_connection_state.h"
 #include "server/http_response_writer.h"
 #include "server/http_server_options.h"
@@ -71,22 +72,31 @@ public:
 
     // Begins writing the output followed by `body`, which stays borrowed until
     // complete(). Returns true when the write already settled.
+    // A final plain response closes TCP here only after every byte was accepted,
+    // so its Linux send hint is flushed before any logging or frame cleanup.
+    // A partial write falls back to ordinary async_write without that hint.
     // MSVC 19.51 can lose a required coroutine tail call when this synchronous
     // path is inlined into its caller.
     [[nodiscard]]
 #if defined(_MSC_VER) && !defined(__clang__)
     __declspec(noinline)
 #endif
-    bool start(std::string_view body = {}) noexcept {
+    bool start(std::string_view body = {}, bool finish_connection = false) noexcept {
         body_ = body;
         written_ = {};
         if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+            const auto flags = finish_connection ? final_plain_tcp_send_flags : 0;
             const auto output = output_->view();
-            return body.empty() ? try_plain_tcp_sync_write(*stream_, asio::buffer(output), output.size(),
-                                      written_.error_, written_.bytes_)
-                                : try_plain_tcp_sync_write(*stream_,
-                                      std::array<asio::const_buffer, 2>{asio::buffer(output), asio::buffer(body)},
-                                      output.size() + body.size(), written_.error_, written_.bytes_);
+            const bool completed = body.empty()
+                                       ? try_plain_tcp_sync_write(*stream_, asio::buffer(output), output.size(),
+                                             flags, written_.error_, written_.bytes_)
+                                       : try_plain_tcp_sync_write(*stream_,
+                                             std::array<asio::const_buffer, 2>{asio::buffer(output), asio::buffer(body)},
+                                             output.size() + body.size(), flags, written_.error_, written_.bytes_);
+            if (completed && !written_.error_ && finish_connection) {
+                close_plain_http_connection(*stream_, true);
+            }
+            return completed;
         } else {
             return false;
         }

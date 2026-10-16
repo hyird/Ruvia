@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <system_error>
 
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/stream.hpp>
@@ -23,6 +24,20 @@ enum class http_connection_close : std::uint8_t {
     // TLS sends close_notify, and the owner closes without draining peer input.
     after_response,
 };
+
+// Session ownership and its count lease may outlive the transport. Finish a
+// completed plain response before caller-side logging or frame retirement;
+// the session fallback is harmless when its writer already closed TCP.
+inline void close_plain_http_connection(asio::ip::tcp::socket& socket, bool send_shutdown) noexcept {
+    if (!socket.is_open()) {
+        return;
+    }
+    std::error_code ignored;
+    if (send_shutdown) {
+        socket.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
+    }
+    socket.close(ignored);
+}
 
 // Flush TLS close_notify for a non-aborted session without waiting for the
 // peer's alert or draining input. A fixed deadline, write timeout and worker

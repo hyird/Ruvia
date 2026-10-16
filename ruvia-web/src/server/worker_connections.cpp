@@ -27,6 +27,7 @@
 #include "context/context_services.h"
 #include "integration/worker_capabilities.h"
 #include "server/accepted_socket.h"
+#include "server/http_connection_close.h"
 #include "server/http_server_connection_guards.h"
 #include "server/http_server_stream_session.h"
 #include "server/http_server_tls_handshake.h"
@@ -341,14 +342,8 @@ task<void> worker_connections::run_session(
         resolve_remote_endpoint(socket, remote_address, remote_port);
         const auto close_mode = co_await run_stream(listener_value, socket, socket,
             capabilities_.make_context_services(stop_token_).with_plain_transport(remote_address, remote_port));
-        std::error_code ignored;
-        if (close_mode == http_connection_close::after_response && !stop_token_.stop_requested()) {
-            // Closing after the final response satisfies RFC 9112 §9.3 without
-            // reading the remaining request body. No peer FIN is awaited.
-            socket.shutdown(tcp_socket_type::shutdown_send, ignored);
-        }
-        // Do not keep the descriptor alive until deferred coroutine-frame retirement.
-        socket.close(ignored);
+        close_plain_http_connection(socket,
+            close_mode == http_connection_close::after_response && !stop_token_.stop_requested());
     } catch (...) {
         report_session_failure(socket, remote_address, std::current_exception());
     }
