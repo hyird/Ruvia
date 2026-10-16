@@ -29,8 +29,7 @@ public:
             if (signal_.terminated()) {
                 throw std::system_error(signal_.terminal_error());
             }
-            const auto receive_status = connection_.stream_receive_status(stream_id_);
-            if (receive_status == http2_stream_receive_status::closed) {
+            if (connection_.stream_receive_status(stream_id_) == http2_stream_receive_status::closed) {
                 throw std::system_error(std::make_error_code(std::errc::connection_reset));
             }
             const auto chunk = body_queue_.pop();
@@ -46,7 +45,7 @@ public:
             if (!body_queue_.empty()) {
                 continue;
             }
-            if (receive_status == http2_stream_receive_status::ended) {
+            if (body_queue_.ended()) {
                 co_return std::nullopt;
             }
             if (signal_.terminated()) {

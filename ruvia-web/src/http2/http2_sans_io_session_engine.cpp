@@ -740,6 +740,12 @@ void http2_sans_io_session_engine::drain_events() {
                 throw std::logic_error("HTTP/2 decoder published invalid request trailers");
             }
         }
+        if (auto* selected_route = stream_runtime->selected_route()) {
+            if (auto* streaming_body = selected_route->body().streaming()) {
+                // Before admission: the handler may start inline and read at once.
+                streaming_body->queue().mark_ended();
+            }
+        }
         if (auto* signal = stream_runtime->signal()) {
             signal->wake();
         } else if (!admit_stream(stream_id)) {

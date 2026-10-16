@@ -98,6 +98,17 @@ public:
         return queued_bytes_;
     }
 
+    // The message-end event for this body has been delivered. The core's own
+    // receive state can run ahead of event delivery within one input batch, so
+    // readers end on this flag rather than on the stream's receive status.
+    void mark_ended() noexcept {
+        ended_ = true;
+    }
+
+    [[nodiscard]] bool ended() const noexcept {
+        return ended_;
+    }
+
     // The returned view remains valid until the next pop().
     [[nodiscard]] std::string_view pop() & {
         http_clear_pmr_string_retaining_small(active_chunk_);
@@ -124,6 +135,7 @@ private:
     std::pmr::string queued_chunk_;
     std::pmr::string active_chunk_;
     std::size_t queued_bytes_{0};
+    bool ended_{false};
 };
 
 class http2_buffered_request_body;

@@ -280,7 +280,7 @@ std::optional<http2_event> http2_connection::next_event() {
                                              remote.connect_pending_end_stream() != nullptr;
                 const http2_server_request_snapshot snapshot{
                     .content_ = content,
-                    .body_open_ = content == http_request_content_indication::will_follow && !connect_pending,
+                    .body_open_ = value.body_open_,
                     .connect_pending_ = connect_pending,
                 };
                 return http2_event::request_head(impl_->endpoint_, value.stream_id_, std::move(request),

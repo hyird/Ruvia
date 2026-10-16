@@ -96,6 +96,12 @@ private:
 // The request-head event is also the stream-storage lease for every view in
 // request(). Once processing finishes, release(std::move(event)) consumes the
 // event and invalidates those views as one operation.
+// content_ follows the core's current receive state when the event is taken,
+// so content that already arrived in the same input batch reads as no_content
+// (RFC 9110 §10.1.1 then omits a pointless 100 Continue). body_open_ is fixed
+// when the head is published: the HEADERS frame left the peer send half open
+// and message content events follow this head, whether or not the core has
+// already parsed them.
 struct http2_server_request_snapshot final {
     http_request_content_indication content_{http_request_content_indication::no_content};
     bool body_open_{false};

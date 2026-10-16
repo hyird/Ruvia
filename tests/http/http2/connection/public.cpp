@@ -2067,6 +2067,47 @@ RUVIA_TEST(http2_public_server_request_snapshot_exposes_http_decisions) {
     RUVIA_CHECK(plan.rejection() == nullptr);
 }
 
+// body_open_ describes the head as published: a HEADERS frame without
+// END_STREAM promises content events even when the DATA that completes the
+// request arrived in the same feed() and the core already consumed it.
+RUVIA_TEST(http2_public_server_request_snapshot_body_open_survives_batched_content) {
+    for (const bool end_stream_on_headers : {false, true}) {
+        std::pmr::monotonic_buffer_resource resource;
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "POST");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/upload");
+        std::pmr::string wire(ruvia::http2_client_preface, &resource);
+        append_peer_settings(wire);
+        append_frame(wire, ruvia::http2_frame_type::headers,
+            static_cast<std::uint8_t>(end_stream_on_headers ? 0x5 : 0x4), 1, block);
+        if (!end_stream_on_headers) {
+            append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, "x");
+        }
+
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        (void)server.consume_output(server.pending_output().size());
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto event = server.next_event();
+        auto* request = event ? event->request_head() : nullptr;
+        RUVIA_CHECK(request != nullptr);
+        if (request == nullptr) {
+            return;
+        }
+        RUVIA_CHECK(request->snapshot().body_open_ == !end_stream_on_headers);
+        RUVIA_CHECK(!request->snapshot().connect_pending_);
+        if (!end_stream_on_headers) {
+            const auto chunk = server.next_event();
+            RUVIA_CHECK(chunk && chunk->message_body_chunk() != nullptr &&
+                        chunk->message_body_chunk()->bytes() == "x");
+        }
+        const auto end = server.next_event();
+        RUVIA_CHECK(end && end->message_end() != nullptr);
+        RUVIA_CHECK(server.release(std::move(*request)) == ruvia::http2_server_request_release_status::released);
+    }
+}
+
 RUVIA_TEST(http2_public_dropped_request_before_message_end_keeps_terminal_event) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::http2_connection::server({.resource_ = &resource});

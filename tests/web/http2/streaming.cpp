@@ -42,7 +42,20 @@ const auto sleeping_stream_observed = std::make_shared<sleeping_stream_observati
 class sleeping_stream_routes final {
     RUVIA_ROUTES_BEGIN(sleeping_stream_routes)
     RUVIA_GET_STREAM("/http2-sleeping-stream", sleeping);
+    RUVIA_POST_STREAM("/http2-count-upload", count_upload);
     RUVIA_ROUTES_END
+
+    // Streams the request body and answers with the byte count.
+    ruvia::task<ruvia::http_response> count_upload(ruvia::context& context_value) {
+        std::size_t bytes_value = 0;
+        auto& reader_value = context_value.req().get_body_reader();
+        while (auto chunk = co_await reader_value.read()) {
+            bytes_value += chunk->size();
+        }
+        std::pmr::string text(context_value.arena());
+        text.append(std::to_string(bytes_value));
+        co_return context_value.text(std::move(text));
+    }
 
     // Writes one chunk, then pauses far longer than the test waits: only a
     // peer disconnect can end the sleep in time.
@@ -152,6 +165,24 @@ RUVIA_TEST(http2_response_stream_sleep_ends_when_the_peer_disconnects) {
         RUVIA_CHECK(sleeping_stream_observed->sleep_failed_);
         RUVIA_CHECK(!sleeping_stream_observed->sleep_elapsed_);
         sleeping_stream_observed->sleep_failed_ = false;
+    }
+    server.finish();
+}
+
+// A request whose HEADERS and complete DATA arrive in one read is still a
+// streaming upload: the handler is dispatched for the head and consumes the
+// already-received content rather than the stream being reset.
+RUVIA_TEST(http2_streaming_upload_received_in_one_read_is_dispatched) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    for (const std::size_t body_size : {std::size_t{1}, std::size_t{100}, std::size_t{5000}}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        const auto wire = request_wire(&resource, "POST", "/http2-count-upload", std::string(body_size, 'x'));
+        asio::write(client, asio::buffer(wire));
+        RUVIA_CHECK_EQ(read_first_data(client), std::to_string(body_size));
+        client.close();
     }
     server.finish();
 }

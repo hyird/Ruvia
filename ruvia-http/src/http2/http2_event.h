@@ -20,6 +20,10 @@ namespace ruvia::detail {
 struct http2_message_head_record final {
     std::uint32_t stream_id_{0};
     std::optional<http_client_request_content_signal> request_content_signal_;
+    // Server side: the HEADERS frame left the peer send half open, so message
+    // content events follow this head. Captured when the head is published; the
+    // same input batch may already have delivered that content to the core.
+    bool body_open_{false};
 };
 
 // The bytes borrow the accepted feed() input until the next consuming feed().
