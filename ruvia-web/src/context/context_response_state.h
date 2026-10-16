@@ -81,6 +81,10 @@ public:
         return std::get_if<context_final_response>(&value_);
     }
     const context_final_response* final() const&& = delete;
+    [[nodiscard]] context_final_response* final() & noexcept {
+        return std::get_if<context_final_response>(&value_);
+    }
+    context_final_response* final() && = delete;
 
     [[nodiscard]] http_response& active_response() & noexcept {
         return std::visit([](auto& state_value) -> http_response& { return state_value.response(); }, value_);

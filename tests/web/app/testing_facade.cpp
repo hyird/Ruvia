@@ -1155,6 +1155,38 @@ RUVIA_TEST(testing_facade_session_middleware_owns_configured_cookie_policy) {
     RUVIA_CHECK(cookie.has_value());
     RUVIA_CHECK(cookie->starts_with("ruvia_session=;"));
 }
+
+// The session cookie is published after next() returned, so it must enter the
+// final-response metadata overlay: a replacement built by an outer middleware
+// (or an error after next()) starts from that overlay and would otherwise drop
+// the only copy of the cookie after Redis already changed.
+RUVIA_TEST(testing_facade_session_cookie_survives_response_replacement_after_next) {
+    for (const bool error_after : {false, true}) {
+        ruvia::test_app app;
+        if (error_after) {
+            app.use<testing_facade_deny_after>();
+        } else {
+            app.use<testing_facade_replace_after>();
+        }
+        {
+            ruvia::session_config config;
+            config.cookie_name_ = "ruvia_session";
+            config.ttl_ = std::chrono::minutes(15);
+            app.use<ruvia::session_middleware>(config);
+        }
+
+        const auto response = app.request(ruvia::test_request::get("/t/session-clear"));
+        RUVIA_CHECK_EQ(response.status(), error_after ? ruvia::http_status::forbidden : ruvia::http_status::ok);
+        if (!error_after) {
+            RUVIA_CHECK_EQ(response.body(), std::string_view("denied"));
+        }
+        const auto cookie = response.header("Set-Cookie");
+        RUVIA_CHECK(cookie.has_value());
+        if (cookie.has_value()) {
+            RUVIA_CHECK(cookie->starts_with("ruvia_session=;"));
+        }
+    }
+}
 #endif
 
 RUVIA_TEST(testing_facade_routes_an_extension_method_by_its_exact_token) {
