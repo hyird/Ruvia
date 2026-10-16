@@ -65,9 +65,12 @@ class http1_websocket_routes final {
         ruvia::websocket_route_config{.subprotocols_ = {"chat.v1"}, .require_subprotocol_ = true};
     const auto takeover_deflate =
         ruvia::websocket_route_config{.deflate_ = {.context_takeover_ = true, .mem_level_ = 4}};
+    // Short enough for a Ping and a lapsed Pong window inside the handler's
+    // idle start, long enough that a tick write delayed by a busy CI host is
+    // not mistaken for a stalled peer (that budget is interval + timeout).
     const auto short_heartbeat = ruvia::websocket_route_config{
-        .lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(40),
-                           .pong_timeout_ = std::chrono::milliseconds(40)}}};
+        .lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(100),
+                           .pong_timeout_ = std::chrono::milliseconds(150)}}};
     RUVIA_GET_WS("/http1-websocket-eof", read_until_eof);
     RUVIA_GET_WS_OPTIONS("/http1-websocket-longest-heartbeat", write_stalled, longest_heartbeat);
     RUVIA_GET_WS_OPTIONS("/http1-websocket-write-only-heartbeat", write_without_reading, short_heartbeat);
@@ -111,7 +114,7 @@ class http1_websocket_routes final {
     // peer answers every Ping.
     ruvia::task<void> write_without_reading(ruvia::context& context_value) {
         auto& websocket_value = context_value.get_websocket();
-        if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(200)) !=
+        if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(300)) !=
             ruvia::timer_sleep_result::elapsed) {
             co_return;
         }
@@ -588,7 +591,7 @@ RUVIA_TEST(http1_websocket_heartbeat_does_not_abort_an_unread_responsive_peer) {
             RUVIA_CHECK(peer.feed(std::string_view(input.data(), read)) == ruvia::websocket_feed_status::accepted);
         }
     }
-    // A Ping went out during the 200 ms idle start and was answered, and
+    // A Ping went out during the 300 ms idle start and was answered, and
     // the server still ended the session with its own Close, not an abort.
     RUVIA_CHECK_EQ(messages, std::size_t{20});
     RUVIA_CHECK(pings != 0);
