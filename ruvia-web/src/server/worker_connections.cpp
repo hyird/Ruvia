@@ -110,7 +110,11 @@ int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
     const auto& lookup = *static_cast<const sni_context_lookup_type*>(arg);
     for (const auto& [host, context] : lookup) {
         if (http_ascii_equals_ignore_case(host, name)) {
-            SSL_set_SSL_CTX(ssl, context->native_handle());
+            // A failed switch must not handshake with the default identity
+            // for a name that has its own certificate: fail the handshake.
+            if (SSL_set_SSL_CTX(ssl, context->native_handle()) == nullptr) {
+                return SSL_TLSEXT_ERR_ALERT_FATAL;
+            }
             break;
         }
     }
