@@ -25,6 +25,7 @@
 #include "ruvia/web/http_client.h"
 
 #include "test_harness.h"
+#include "test_https_endpoint.h"
 #include "test_io_context.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
@@ -199,11 +200,7 @@ RUVIA_TEST(http3_client_push_permission_survives_reconnecting_after_server_resta
         }
     }
     asio::io_context reservation_io;
-    asio::ip::tcp::acceptor tcp(reservation_io, {asio::ip::address_v4::loopback(), 0});
-    const auto port = tcp.local_endpoint().port();
-    asio::ip::udp::socket udp(reservation_io, {asio::ip::address_v4::loopback(), port});
-    tcp.close();
-    udp.close();
+    const auto port = ruvia::test::select_https_endpoint(reservation_io, asio::ip::address_v4::loopback()).port();
     const auto signal = std::make_shared<startup_signal>();
     ruvia::app()
         .server({.worker_count_ = 1, .worker_queue_capacity_ = 32, .max_connections_per_worker_ = 8})

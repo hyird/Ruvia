@@ -25,6 +25,7 @@
 #include "ruvia/web/websocket.h"
 
 #include "test_harness.h"
+#include "test_https_endpoint.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
@@ -494,11 +495,9 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         const auto destroyed_workers = state_value->destroyed_workers_.load();
         asio::io_context io;
         asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-        asio::ip::tcp::acceptor tls_reservation(io, {asio::ip::address_v4::loopback(), 0});
         const auto endpoint = reservation.local_endpoint();
-        const auto tls_endpoint = tls_reservation.local_endpoint();
+        const auto tls_endpoint = ruvia::test::select_https_endpoint(io, asio::ip::address_v4::loopback());
         reservation.close();
-        tls_reservation.close();
         app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key, .client_certificates_ = {.verify_file_ = identity.ca_file_}}});
         app_run run(app, *state_value);
         const auto owner_thread = run.id();

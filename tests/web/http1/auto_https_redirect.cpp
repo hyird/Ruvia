@@ -21,6 +21,7 @@
 #include "ruvia/web/error.h"
 
 #include "test_harness.h"
+#include "test_https_endpoint.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
@@ -76,13 +77,11 @@ RUVIA_TEST(auto_https_redirect_points_cleartext_requests_at_the_https_service) {
     }
 
     asio::io_context io;
-    // Both reservations are held at once so the two ports differ.
+    // Keep HTTP reserved while selecting HTTPS so the two ports differ.
     asio::ip::tcp::acceptor http_reservation(io, {asio::ip::address_v4::loopback(), 0});
-    asio::ip::tcp::acceptor https_reservation(io, {asio::ip::address_v4::loopback(), 0});
     const auto http_endpoint = http_reservation.local_endpoint();
-    const auto https_endpoint = https_reservation.local_endpoint();
+    const auto https_endpoint = ruvia::test::select_https_endpoint(io, asio::ip::address_v4::loopback());
     http_reservation.close();
-    https_reservation.close();
 
     auto& app = ruvia::app();
     std::binary_semaphore started{0};

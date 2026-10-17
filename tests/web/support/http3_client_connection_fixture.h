@@ -20,7 +20,7 @@
 #include <utility>
 
 #include <asio/io_context.hpp>
-#include <asio/ip/tcp.hpp>
+#include <asio/ip/address.hpp>
 #include <asio/ip/udp.hpp>
 
 #include "ruvia/core/event_loop_attachment.h"
@@ -38,6 +38,7 @@
 #include "ruvia/web/websocket_client.h"
 
 #include "test_harness.h"
+#include "test_https_endpoint.h"
 #include "test_io_context.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
@@ -306,6 +307,9 @@ class local_http3_peer final {
         server_lifetime(const test_identity_files& identity, std::string_view address)
             : states_(std::make_shared<peer_state_source>()),
               address_(address) {
+            const auto loopback = asio::ip::make_address(address_);
+            asio::io_context io;
+            port_ = ruvia::test::select_https_endpoint(io, loopback).port();
             auto& app = ruvia::app();
             // Closing QUIC connections may drain while later cases run.
             app.server({.worker_count_ = 2, .worker_queue_capacity_ = 32, .max_connections_per_worker_ = 32})
@@ -315,13 +319,6 @@ class local_http3_peer final {
                     readiness_published_ = true;
                     ready_.set_value();
                 });
-            const auto loopback = asio::ip::make_address(address_);
-            asio::io_context io;
-            asio::ip::tcp::acceptor tcp(io, {loopback, 0});
-            port_ = tcp.local_endpoint().port();
-            asio::ip::udp::socket udp(io, {loopback, port_});
-            tcp.close();
-            udp.close();
             // Early data only admits replay-safe routes; other cases never offer it.
             app.listen({.address_ = address_, .https_ = port_, .tls_ = {.certificate_chain_file_ = identity.certificate(), .private_key_file_ = identity.private_key(), .http3_early_data_ = true}, .http3_ = {.mode_ = ruvia::http3_mode::enabled}});
             auto ready = ready_.get_future();

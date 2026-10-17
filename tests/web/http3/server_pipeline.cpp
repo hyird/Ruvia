@@ -23,6 +23,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "test_harness.h"
+#include "test_https_endpoint.h"
 #include "test_io_context.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
@@ -101,17 +102,13 @@ private:
 class http3_server final {
 public:
     explicit http3_server(const identity_files& identity) {
+        asio::io_context io;
+        port_ = ruvia::test::select_https_endpoint(io, asio::ip::address_v4::loopback()).port();
         auto& app = ruvia::app();
         app.cors(ruvia::cors_config{}).server({.worker_count_ = 1, .worker_queue_capacity_ = 32, .max_connections_per_worker_ = 8}).on_start([this] {
             started_.store(true);
             ready_.set_value();
         });
-        asio::io_context io;
-        asio::ip::tcp::acceptor tcp(io, {asio::ip::address_v4::loopback(), 0});
-        port_ = tcp.local_endpoint().port();
-        asio::ip::udp::socket udp(io, {asio::ip::address_v4::loopback(), port_});
-        tcp.close();
-        udp.close();
         app.listen({.address_ = "127.0.0.1",
             .https_ = port_,
             .tls_ = {.certificate_chain_file_ = identity.certificate(), .private_key_file_ = identity.private_key()},

@@ -29,6 +29,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "test_harness.h"
+#include "test_https_endpoint.h"
 #include "test_tls_identity.h"
 
 namespace accept_ownership_test {
@@ -219,11 +220,9 @@ RUVIA_TEST(app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pend
     }
     asio::io_context io;
     asio::ip::tcp::acceptor http_reservation(io, {asio::ip::make_address("127.0.0.1"), 0});
-    asio::ip::tcp::acceptor https_reservation(io, {asio::ip::make_address("127.0.0.1"), 0});
     const auto http = http_reservation.local_endpoint();
-    const auto https = https_reservation.local_endpoint();
+    const auto https = ruvia::test::select_https_endpoint(io, asio::ip::address_v4::loopback());
     http_reservation.close();
-    https_reservation.close();
     const auto configure = [&] {
         app.server({.worker_count_ = 3, .drain_timeout_ = 0ms, .connection_scan_interval_ = 5ms});
         app.listen({.address_ = "127.0.0.1", .http_ = http.port(), .https_ = https.port(), .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = key}});

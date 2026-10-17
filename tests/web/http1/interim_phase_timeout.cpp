@@ -25,6 +25,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "test_harness.h"
+#include "test_https_endpoint.h"
 #include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
@@ -129,9 +130,7 @@ RUVIA_TEST(a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
     }
 
     asio::io_context io;
-    asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
-    const auto endpoint = reservation.local_endpoint();
-    reservation.close();
+    const auto endpoint = ruvia::test::select_https_endpoint(io, asio::ip::address_v4::loopback());
 
     auto& app = ruvia::app();
     std::binary_semaphore started{0};
