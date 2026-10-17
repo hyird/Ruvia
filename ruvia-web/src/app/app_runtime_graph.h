@@ -41,8 +41,12 @@ struct app_runtime_graph final {
         : blocking_pool_(nullptr, pmr_object_deleter<blocking_pool>{resource}),
           document_root_(nullptr, pmr_object_deleter<document_root_publisher>{resource}),
           route_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{resource}),
+#if defined(_WIN32)
+          windows_accept_(nullptr, pmr_object_deleter<windows_accept_domain>{resource}),
+#endif
           workers_(resource),
-          group_(resource) {}
+          group_(resource) {
+    }
 
     // Declared before workers so it is destroyed after suspended worker tasks.
     std::unique_ptr<blocking_pool, pmr_object_deleter<blocking_pool>> blocking_pool_;
@@ -51,6 +55,10 @@ struct app_runtime_graph final {
     std::unique_ptr<document_root_publisher, pmr_object_deleter<document_root_publisher>> document_root_;
     // Every worker's route_table binds its instances to this one immutable plan.
     compiled_route_plan_ptr_type route_plan_;
+#if defined(_WIN32)
+    // Native completion slots outlive all listener IOCP and origin workers.
+    std::unique_ptr<windows_accept_domain, pmr_object_deleter<windows_accept_domain>> windows_accept_;
+#endif
     std::pmr::vector<app_worker_slot> workers_;
     // The one lifecycle over every independently listening worker. It borrows
     // their core runtimes, so it is declared after them.

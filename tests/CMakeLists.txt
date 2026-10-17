@@ -83,6 +83,7 @@ if(RUVIA_BUILD_CORE)
         core/memory_pool.cpp
         core/scoped_operation.cpp
         core/stop_token.cpp
+        core/worker_notification.cpp
         core/worker_queue.cpp
         core/worker_runtime.cpp
         support/test_main.cpp)
@@ -118,6 +119,7 @@ if(RUVIA_BUILD_WEB)
     # Process-singleton application fixtures run in separate test executables.
     ruvia_add_web_standalone_test(ruvia_app_startup 30 web/app/startup.cpp)
     ruvia_add_web_standalone_test(ruvia_app_lifecycle 60 web/app/lifecycle.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_accept_ownership 60 web/app/accept_ownership.cpp)
     ruvia_add_web_standalone_test(ruvia_app_http2_drain 30 web/app/http2_drain.cpp)
     ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT

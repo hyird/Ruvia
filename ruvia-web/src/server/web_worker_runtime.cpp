@@ -77,10 +77,20 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
 }
 
 web_worker_runtime::~web_worker_runtime() {
-    // Stop admission, then finalize: a worker destroyed outside the
-    // application's worker_group has no external producers left.
+    runtime_.request_stop();
+#if defined(_WIN32)
+    if (windows_accept_ == nullptr) {
+        runtime_.finalize();
+    }
+#else
     runtime_.finalize();
+#endif
     runtime_.join();
+#if defined(_WIN32)
+    if (windows_accept_ != nullptr) {
+        windows_accept_->detach(windows_origin_);
+    }
+#endif
 }
 
 void web_worker_runtime::request_drain() noexcept {
@@ -102,6 +112,32 @@ http_server_stats web_worker_runtime::stats() const noexcept {
 web_worker_handle web_worker_runtime::web_worker() const {
     return web_worker_dispatch::handle(web_worker_dispatch_);
 }
+#if defined(_WIN32)
+void web_worker_runtime::attach_windows_accept(windows_accept_domain& domain, std::size_t origin) {
+    connections_.attach_windows_accept(domain, origin, worker_runtime_);
+    windows_accept_ = &domain;
+    windows_origin_ = origin;
+}
+
+task<void> web_worker_runtime::run_windows_accepts() {
+    std::exception_ptr failure;
+    try {
+        co_await connections_.run_windows_accepts();
+    } catch (...) {
+        failure = std::current_exception();
+        windows_accept_->request_stop();
+    }
+    windows_accept_joined_ = true;
+    if (failure != nullptr) {
+        // Nested task allocation can fail before the receiver ever starts.
+        // Publish that failure now, not from the scope join after finalization.
+        (void)runtime_.fail(std::move(failure));
+    }
+    if (stop_token_.stop_requested()) {
+        runtime_.finalize();
+    }
+}
+#endif
 
 void web_worker_runtime::serve_on_context() {
     if (static_roots_.enabled()) {
@@ -122,9 +158,15 @@ void web_worker_runtime::stop_admission_on_context() noexcept {
     worker_state_ = http_server_worker_state::stopped;
     stop_source_.request_stop();
     connections_.stop();
-    // No ingress producer remains. This first-tier owner requests its own
-    // finalization; run_worker still joins every pending operation.
+#if defined(_WIN32)
+    // A stopped listener IOCP still produces completions for peer origins.
+    // The receiver closes/joins only after the entire accept matrix is quiet.
+    if (windows_accept_joined_) {
+        runtime_.finalize();
+    }
+#else
     runtime_.finalize();
+#endif
 }
 
 void web_worker_runtime::finalize_on_context() noexcept {
@@ -137,6 +179,15 @@ task<void> web_worker_runtime::run_worker() {
         // A stop applied before this task first runs has already stopped the
         // worker timers; starting the scanner or capability I/O would fail.
         if (!stop_token_.stop_requested()) {
+#if defined(_WIN32)
+            windows_accept_joined_ = false;
+            try {
+                background_tasks_.spawn(run_windows_accepts());
+            } catch (...) {
+                windows_accept_joined_ = true;
+                throw;
+            }
+#endif
             connections_.prepare();
             co_await capabilities_.start();
             // Ignored once stopping: core has already aborted the barrier.

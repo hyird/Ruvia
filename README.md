@@ -66,9 +66,9 @@ select the matching static `CMAKE_MSVC_RUNTIME_LIBRARY` before `project()`.
   HTTP/2 Extended CONNECT.
 - Server workers bind their own listeners. Linux and other supported POSIX
   systems require `SO_REUSEPORT`; startup fails if it is unavailable. Windows
-  uses `SO_REUSEADDR`, not an equivalent of `SO_REUSEPORT`: worker connection
-  distribution may be uneven, and other processes can reuse the listening port.
-  Do not rely on the Windows listener to reserve the port exclusively.
+  workers bind with `SO_REUSEADDR` and accept through all shared listener handles
+  using native `AcceptEx`; connections stay with their initiating worker.
+  Windows does not guarantee strict balancing or exclusive use of the port.
 
 ## Examples
 

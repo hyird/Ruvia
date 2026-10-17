@@ -1,5 +1,6 @@
 #include "server/worker_connections.h"
 
+#include <cassert>
 #include <cerrno>
 #include <cstdint>
 #include <exception>
@@ -38,6 +39,7 @@
 namespace ruvia::detail {
 namespace {
 
+#if !defined(_WIN32)
 enum class accept_error_action { retry,
     report_and_retry,
     fail };
@@ -50,11 +52,6 @@ accept_error_action classify_accept_error(const asio::error_code& error) noexcep
         error == asio::error::would_block || error == asio::error::interrupted) {
         return accept_error_action::retry;
     }
-#if defined(_WIN32)
-    if (error.category() == asio::system_category() && error.value() == ERROR_NETNAME_DELETED) {
-        return accept_error_action::retry;
-    }
-#endif
     if (error == asio::error::no_descriptors || error == asio::error::no_buffer_space ||
         error == asio::error::no_memory || error == std::errc::too_many_files_open_in_system ||
         error == std::errc::protocol_error || error == asio::error::network_down ||
@@ -70,6 +67,7 @@ accept_error_action classify_accept_error(const asio::error_code& error) noexcep
 #endif
     return accept_error_action::fail;
 }
+#endif
 
 void configure_listener_address(asio::ip::tcp::acceptor& socket) {
     socket.set_option(asio::socket_base::reuse_address(true));
@@ -171,15 +169,37 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
     }
     options_.connection_failure_.counter_ = &failures_;
 }
+#if defined(_WIN32)
+void worker_connections::attach_windows_accept(windows_accept_domain& domain, std::size_t origin,
+    worker_runtime_context& context) {
+    domain.attach(origin, context, {
+                                       .target_ = this,
+                                       .accepted_ = [](void* target, std::size_t index, tcp_socket_type socket) { static_cast<worker_connections*>(target)->accept_socket(index, std::move(socket)); },
+                                       .failure_ = [](void* target, std::exception_ptr failure, bool fatal) noexcept { static_cast<worker_connections*>(target)->report_accept_failure(std::move(failure), fatal); },
+                                   });
+    windows_accept_ = &domain;
+    windows_origin_ = origin;
+}
+
+task<void> worker_connections::run_windows_accepts() {
+    co_await windows_accept_->run(windows_origin_);
+    // No origin can issue, cancel, or update accept context using these HANDLEs.
+    close_listeners();
+}
+#endif
 void worker_connections::prepare() {
     try {
-        for (auto& configured : listeners_) {
+        for (std::size_t index = 0; index < listeners_.size(); ++index) {
+            auto& configured = listeners_[index];
             configure_tls(configured->session_);
             auto& socket = configured->socket_;
             socket.open(configured->endpoint_.protocol());
             configure_listener_address(socket);
             socket.bind(configured->endpoint_);
             socket.listen(asio::socket_base::max_listen_connections);
+#if defined(_WIN32)
+            windows_accept_->stage_listener(windows_origin_, index, socket);
+#endif
         }
         scanner_.start();
     } catch (...) {
@@ -192,20 +212,34 @@ void worker_connections::prepare() {
 void worker_connections::open_admission() noexcept {
     drain_.open();
     try {
+#if defined(_WIN32)
+        windows_accept_->serve(windows_origin_);
+#else
         for (std::size_t index = 0; index < listeners_.size(); ++index) {
             tasks_.spawn(run_accept_loop(index));
         }
+#endif
     } catch (...) {
         report_accept_failure(std::current_exception(), true);
     }
 }
 void worker_connections::drain() noexcept {
+#if defined(_WIN32)
+    windows_accept_->request_stop();
+#else
     close_listeners();
+#endif
     drain_.begin();
     scanner_.drain();
 }
 void worker_connections::stop() noexcept {
+#if defined(_WIN32)
+    if (windows_accept_ != nullptr) {
+        windows_accept_->request_stop();
+    }
+#else
     close_listeners();
+#endif
     scanner_.stop();
     scanner_.close_all();
     drain_.complete();
@@ -233,11 +267,14 @@ http_server_stats worker_connections::stats() const noexcept {
 void worker_connections::close_listeners() noexcept {
     for (auto& configured : listeners_) {
         asio::error_code ignored;
+#if !defined(_WIN32)
         configured->retry_.cancel(ignored);
+#endif
         configured->socket_.close(ignored);
     }
 }
 
+#if !defined(_WIN32)
 task<void> worker_connections::run_accept_loop(std::size_t index) {
     auto& configured = *listeners_[index];
     try {
@@ -282,11 +319,16 @@ task<void> worker_connections::run_accept_loop(std::size_t index) {
         report_accept_failure(std::current_exception(), true);
     }
 }
+#endif
 
 void worker_connections::report_accept_failure(std::exception_ptr failure, bool fatal) noexcept {
     accept_failures_.fetch_add(1, std::memory_order_relaxed);
     if (fatal) {
+#if defined(_WIN32)
+        windows_accept_->request_stop();
+#else
         close_listeners();
+#endif
         (void)runtime_.fail(std::move(failure));
     } else {
         ruvia::report_unhandled_failure("web accept", std::move(failure));
@@ -428,6 +470,10 @@ void worker_connections::report_session_failure(
 }
 
 void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_type socket) {
+    assert(worker_.is_current());
+    if (!http_server_worker_running(state_)) {
+        return;
+    }
     const auto& max_connections = options_.server_.max_connections_per_worker_;
     if (max_connections.has_value() && drain_.active() >= *max_connections) {
         refused_.fetch_add(1, std::memory_order_relaxed);

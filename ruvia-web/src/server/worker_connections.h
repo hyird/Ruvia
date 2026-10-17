@@ -23,6 +23,9 @@
 #include "server/http_connection_state.h"
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
+#if defined(_WIN32)
+#include "server/windows_accept_domain.h"
+#endif
 #include "server/http_server_worker_state.h"
 
 namespace ruvia {
@@ -54,6 +57,11 @@ public:
         std::span<const http_server_listener_definition> listeners, worker_runtime& runtime);
     worker_connections(const worker_connections&) = delete;
     worker_connections& operator=(const worker_connections&) = delete;
+#if defined(_WIN32)
+    void attach_windows_accept(windows_accept_domain& domain, std::size_t origin,
+        worker_runtime_context& context);
+    [[nodiscard]] task<void> run_windows_accepts();
+#endif
     void prepare();
     void open_admission() noexcept;
     // Worker thread, once the worker state left running.
@@ -70,16 +78,25 @@ private:
             std::pmr::memory_resource* resource)
             : session_(definition, resource),
               endpoint_(definition.endpoint_),
-              socket_(io),
-              retry_(io) {}
+              socket_(io)
+#if !defined(_WIN32)
+              ,
+              retry_(io)
+#endif
+        {
+        }
 
         http_server_session_config session_;
         asio::ip::tcp::endpoint endpoint_;
         asio::ip::tcp::acceptor socket_;
+#if !defined(_WIN32)
         asio::steady_timer retry_;
+#endif
     };
     void close_listeners() noexcept;
+#if !defined(_WIN32)
     task<void> run_accept_loop(std::size_t index);
+#endif
     void report_accept_failure(std::exception_ptr failure, bool fatal) noexcept;
     void configure_tls(http_server_session_config& session);
     void accept_socket(std::size_t index, tcp_socket_type socket);
@@ -105,6 +122,10 @@ private:
     task_scope& tasks_;
     worker_runtime& runtime_;
     std::pmr::vector<std::unique_ptr<listener, pmr_object_deleter<listener>>> listeners_;
+#if defined(_WIN32)
+    windows_accept_domain* windows_accept_{};
+    std::size_t windows_origin_{};
+#endif
     connection_scanner scanner_;
     connection_work_set_pool work_sets_;
     // Caller-thread statistics require atomic reads.

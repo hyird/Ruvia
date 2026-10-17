@@ -132,6 +132,9 @@ public:
                 // Every independently listening worker is ready before hooks;
                 // no listener accepts until every hook has succeeded.
                 if (group.start()) {
+#if defined(_WIN32)
+                    state_.runtime_->windows_accept_->publish();
+#endif
                     publish_ready_workers();
                     run_start_hooks();
                     if (!stop_requested() && group.serve()) {
@@ -221,6 +224,10 @@ private:
         detail::controller_store first_controllers(controller_registrars);
         runtime->route_plan_ = detail::compile_route_plan(
             runtime_resource_, controller_registrars, first_controllers, state_.configuration_);
+#if defined(_WIN32)
+        runtime->windows_accept_ = make_pmr_object<detail::windows_accept_domain>(runtime_resource_,
+            state_.options_.server_.worker_count_, validated_configuration.listeners().size(), runtime_resource_);
+#endif
         runtime->workers_.reserve(state_.options_.server_.worker_count_);
         for (std::size_t i = 0; i < state_.options_.server_.worker_count_; ++i) {
             auto controllers =
@@ -239,6 +246,9 @@ private:
             };
             auto worker_value = make_pmr_object<detail::web_worker_runtime>(
                 runtime_resource_, validated_configuration, *routes_value, capabilities);
+#if defined(_WIN32)
+            worker_value->attach_windows_accept(*runtime->windows_accept_, i);
+#endif
             runtime->workers_.emplace_back(
                 std::move(controllers), std::move(routes_value), std::move(worker_value));
         }
