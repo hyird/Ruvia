@@ -73,6 +73,7 @@ public:
     // or reports `head_message` for its error code. An encoded body is decoded
     // completely before the head is returned, so its failure is observed here.
     [[nodiscard]] task<void> await_head(std::string_view head_message);
+    void rethrow_response_failure() const;
     [[nodiscard]] bool bind_http3_body_budget(http3_body_budget& budget) noexcept;
     void release_http3_body_budget() noexcept;
     [[nodiscard]] bool has_http3_body_budget() const noexcept;
@@ -125,6 +126,9 @@ public:
     std::size_t offset_{0};
     std::size_t buffered_limit_{default_max_buffered_body_bytes};
     std::exception_ptr failure_;
+    // A late upload failure stays observable to its writer, but cannot change
+    // the EOF of an already validated response. The exception is stored once.
+    bool upload_only_failure_{false};
     // The pool retired before the exchange completed; consumers report
     // http_client_error::closing with their own operation message.
     bool pool_closed_{false};

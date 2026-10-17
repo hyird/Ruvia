@@ -414,7 +414,7 @@ std::optional<http1_parsed_client_response_head> http1_client_exchange::take_fin
 }
 
 void http1_client_exchange::publish_final_head(const http_client_request_storage& request,
-    http_client_response_state& state_value, const http1_parsed_client_response_head& head) {
+    http_client_response_state& state_value, http1_parsed_client_response_head& head) {
     if (state_value.upload_ && !state_value.upload_->output_.ended_ &&
         head.plan().request_content_signal() == http_client_request_content_signal::exchange_complete) {
         state_value.upload_->output_.stop();
@@ -423,10 +423,7 @@ void http1_client_exchange::publish_final_head(const http_client_request_storage
     state_value.protocol_version_ = head.head().protocol_version();
     state_value.response_body_plan_ =
         plan_http_response_body(classify_http_method(request.method()), state_value.status_);
-    state_value.headers_.reserve(head.head().headers().size());
-    for (const auto& header : head.head().headers()) {
-        state_value.headers_.push_back(http_header::copy_of(header.name(), header.value(), state_value.resource_));
-    }
+    state_value.headers_ = std::move(head).take_head().take_headers();
     // A received final head changes the jar before consumers can issue
     // another request, regardless of body completion or abandonment.
     pool_.policy().retain_response_cookies(request.target(), state_value.headers_);
