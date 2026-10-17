@@ -409,7 +409,8 @@ std::optional<http1_parsed_client_response_head> http1_client_exchange::take_fin
         if (informational == nullptr) {
             return std::move(*parsed_value);
         }
-        state_value.retain_informational(parsed_value->head().status(), parsed_value->head().headers());
+        auto head = std::move(*parsed_value).take_head();
+        state_value.retain_informational(head.status(), std::move(head).take_headers());
         if (state_value.upload_ &&
             parsed_value->plan().request_content_signal() == http_client_request_content_signal::continue_value) {
             state_value.upload_->content_released_ = true;

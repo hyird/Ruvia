@@ -14,6 +14,8 @@ class http_client_response_state;
 
 // Immutable metadata retained by its http_client_response. Field views borrow
 // that response and remain valid through subsequent body reads.
+// HTTP/1 transfers its already-owned parsed fields without another field copy.
+// Other protocol resources are copied into response-owned storage.
 class http_client_informational_response final {
 public:
     http_client_informational_response(const http_client_informational_response&) = delete;

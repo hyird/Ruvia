@@ -6,9 +6,11 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "ruvia/core/scoped_operation.h"
@@ -24,6 +26,7 @@
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/http_client_informational_response.h"
 #include "ruvia/web/http_client_response_bytes.h"
+#include "ruvia/web/http_client_types.h"
 
 #include "client/http_client_tunnel_state.h"
 #include "client/http_client_upload_state.h"
@@ -72,8 +75,37 @@ public:
     void discard_response_body() noexcept;
     void release_consumed_body_prefix();
 
-    // The one interim-head retention path; every protocol passes its parsed fields.
-    void retain_informational(http_status_code status, std::span<const http_header> fields);
+    // One retention path: consume response-owned fields or copy borrowed fields.
+    // Owned fields must already use this response's resource.
+    template <typename fields_type>
+        requires(std::is_same_v<std::remove_cvref_t<fields_type>, std::span<const http_header>> ||
+                 std::is_same_v<fields_type, std::pmr::vector<http_header>>)
+    void retain_informational(http_status_code status, fields_type&& fields_value) {
+        constexpr bool transferring = std::is_same_v<fields_type, std::pmr::vector<http_header>>;
+        http_client_informational_response head(status, resource_);
+        if constexpr (transferring) {
+            if (fields_value.get_allocator().resource() != resource_) {
+                throw std::logic_error("owned informational fields use a different response resource");
+            }
+        } else {
+            head.headers_.reserve(fields_value.size());
+        }
+        // Fieldless heads still consume response-budgeted vector storage.
+        auto budget = informational_budget_;
+        for (const auto& field : fields_value) {
+            if (!budget.add_field(field.name(), field.value())) {
+                throw http_client_error(http_client_error::code_type::protocol_error, "informational response metadata exceeds byte limit");
+            }
+            if constexpr (!transferring) {
+                head.headers_.push_back(http_header::copy_of(field.name(), field.value(), resource_));
+            }
+        }
+        if constexpr (transferring) {
+            head.headers_ = std::move(fields_value);
+        }
+        informational_.push_back(std::move(head));
+        informational_budget_ = budget;
+    }
 
     [[nodiscard]] http_client_output_queue* output() noexcept {
         return tunnel_ ? &tunnel_->output_ : upload_ ? &upload_->output_

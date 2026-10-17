@@ -90,22 +90,6 @@ std::span<const http_client_informational_response> http_client_response::inform
     return state_->informational_;
 }
 
-void detail::http_client_response_state::retain_informational(http_status_code status_code, std::span<const http_header> fields_value) {
-    // Bound retained fields in aggregate. Response-resource accounting also
-    // charges head and vector storage, including fieldless informational heads.
-    http_client_informational_response head(status_code, resource_);
-    head.headers_.reserve(fields_value.size());
-    auto budget = informational_budget_;
-    for (const auto& field : fields_value) {
-        if (!budget.add_field(field.name(), field.value())) {
-            throw http_client_error(http_client_error::code_type::protocol_error, "informational response metadata exceeds byte limit");
-        }
-        head.headers_.push_back(http_header::copy_of(field.name(), field.value(), resource_));
-    }
-    informational_.push_back(std::move(head));
-    informational_budget_ = budget;
-}
-
 http_status_code http_client_response::status() const noexcept {
     return state_->status_;
 }
