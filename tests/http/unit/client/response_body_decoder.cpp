@@ -69,6 +69,42 @@ RUVIA_TEST(http1_response_body_decoder_head_and_no_content_complete_without_cons
     }
 }
 
+RUVIA_TEST(http1_response_body_decoder_head_205_keeps_metadata_and_following_response) {
+    const auto head = parse_head("HEAD", "HTTP/1.1 205 Reset Content\r\nContent-Length: 7");
+    RUVIA_CHECK(head.plan().without_content() != nullptr);
+    const auto headers = head.head().headers();
+    RUVIA_CHECK(!headers.empty());
+    if (!headers.empty()) {
+        RUVIA_CHECK_EQ(headers.front().value(), "7");
+    }
+    ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
+    std::array<char, 4> scratch{};
+    constexpr std::string_view following = "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\nxNEXT";
+    const auto complete = decoder.decode(following, scratch);
+    RUVIA_CHECK(complete.complete() != nullptr);
+    RUVIA_CHECK_EQ(complete.consumed_bytes(), std::size_t{0});
+
+    auto remaining = following.substr(complete.consumed_bytes());
+    const auto next = http_client_response_test::parse_wire("GET", remaining);
+    RUVIA_CHECK(next.parsed() != nullptr);
+    if (next.parsed() == nullptr) {
+        return;
+    }
+    remaining.remove_prefix(next.parsed()->consumed_bytes());
+    ruvia::http1_client_response_body_decoder next_decoder(
+        next.parsed()->plan(), std::pmr::get_default_resource());
+    const auto body = next_decoder.decode(remaining, scratch);
+    RUVIA_CHECK(body.output() != nullptr);
+    if (const auto* output = body.output()) {
+        RUVIA_CHECK_EQ(output->bytes(), "x");
+    }
+    remaining.remove_prefix(body.consumed_bytes());
+    const auto next_complete = next_decoder.decode(remaining, scratch);
+    RUVIA_CHECK(next_complete.complete() != nullptr);
+    RUVIA_CHECK_EQ(next_complete.consumed_bytes(), std::size_t{0});
+    RUVIA_CHECK_EQ(remaining, "NEXT");
+}
+
 RUVIA_TEST(http1_response_body_decoder_chunked_trailers_and_tail) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());

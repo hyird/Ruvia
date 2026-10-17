@@ -670,7 +670,6 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     RUVIA_CHECK_EQ(active_plan_alternative_count(zero_length.plan()), std::size_t{1});
 
     RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3"));
-    RUVIA_CHECK(parse_fails("HEAD", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3"));
 
     const auto chunked = parse_head("GET",
         "HTTP/1.1 205 Reset Content\r\n"

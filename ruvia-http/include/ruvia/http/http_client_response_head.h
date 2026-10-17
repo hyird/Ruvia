@@ -30,6 +30,8 @@ enum class http_client_request_content_signal : std::uint8_t {
 // Owns response fields in the parser/connection PMR. That resource must outlive
 // the head and any field vector extracted from it.
 // Decoding a head without fields does not allocate field storage.
+// HEAD response fields remain metadata even for status 205: Content-Length
+// does not become the response's received-content length.
 class http_client_response_head final {
 public:
     http_client_response_head(const http_client_response_head&) = delete;

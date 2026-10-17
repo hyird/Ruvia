@@ -2084,6 +2084,36 @@ RUVIA_TEST(http2_public_single_and_fragmented_response_fields_are_owned_and_keep
     }
 }
 
+RUVIA_TEST(http2_public_head_205_keeps_nonzero_content_length_as_metadata) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto client = prepared_client_method(&resource, "HEAD");
+    std::pmr::string block(&resource);
+    ruvia::hpack_encoder::encode_status(block, ruvia::http_status::reset_content);
+    ruvia::hpack_encoder::encode_header(block, "content-length", "7");
+    std::pmr::string wire(&resource);
+    append_peer_settings(wire);
+    append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
+    RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+    const auto head = client.next_event();
+    RUVIA_CHECK(head && head->response_head());
+    if (head && head->response_head()) {
+        const auto& received = head->response_head()->head();
+        RUVIA_CHECK(received.status() == ruvia::http_status::reset_content);
+        RUVIA_CHECK(!received.headers().empty());
+        if (!received.headers().empty()) {
+            RUVIA_CHECK_EQ(received.headers().front().value(), "7");
+        }
+    }
+    const auto end = client.next_event();
+    RUVIA_CHECK(end && end->message_end());
+    if (end && end->message_end()) {
+        RUVIA_CHECK(end->message_end()->content_semantics() ==
+                    ruvia::http2_message_content_semantics::metadata_only);
+    }
+    RUVIA_CHECK(!client.next_event());
+    RUVIA_CHECK(!client.connection_error());
+}
+
 RUVIA_TEST(http2_public_message_end_reports_metadata_only_and_empty_trailers) {
     for (const auto method : {std::string_view("HEAD"), std::string_view("GET")}) {
         std::pmr::monotonic_buffer_resource resource;

@@ -235,7 +235,8 @@ http1_client_response_planning_result_type plan_http1_client_response(
         return http1_client_response_plan_access::connect_tunnel();
     }
 
-    const bool reset_content_requires_empty = response.status_code_ == http_status::reset_content;
+    const bool reset_content_requires_empty = response.status_code_ == http_status::reset_content &&
+                                              content_semantics == http_response_content_semantics::with_content;
     const auto content_length = response.content_length_.value();
     if (reset_content_requires_empty && content_length.has_value() && *content_length != 0) {
         return http1_client_response_parse_error::invalid_content_length;

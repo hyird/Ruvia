@@ -179,14 +179,11 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
     }
     const auto content_semantics =
         classify_http_response_content_semantics(stream.request_known_method(), *context_value.status_);
-    // RFC 9110 section 15.3.6 gives 205 an ordinary, zero-length content
-    // phase (unlike HEAD/204/304 representation metadata), but forbids a
-    // server from generating any content. Bind that semantic limit into the
-    // same byte-accounting state that validates DATA and Content-Length. A
-    // successful CONNECT takes precedence because its following bytes are a
-    // tunnel, not response content.
+    // Ordinary 205 responses have a zero-length content phase (RFC 9110 15.3.6).
+    // HEAD keeps representation metadata, and successful CONNECT carries a tunnel;
+    // neither uses the ordinary response-content length constraint.
     if (*context_value.status_ == http_status::reset_content &&
-        content_semantics != http_response_content_semantics::connect_tunnel &&
+        content_semantics == http_response_content_semantics::with_content &&
         !stream.declare_remote_content_length(0)) {
         return header_decode_status::protocol_error;
     }
