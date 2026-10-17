@@ -18,6 +18,7 @@
 #include "ruvia/core/async.h"
 #include "ruvia/http/http_pmr_string.h"
 
+#include "http2/http2_data_output_budget.h"
 #include "http2/http2_sans_io_session_engine.h"
 #include "server/http_response_writer.h"
 
@@ -58,7 +59,8 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
             }
             engine.touch_activity();
             engine.output_write_completed();
-            http_clear_pmr_string_retaining_small(write_scratch, 16 * 1024);
+            // Leave room for the frame header and string capacity growth, but keep retention bounded.
+            http_clear_pmr_string_retaining_small(write_scratch, 2 * http2_data_output_credit_bytes);
         }
         if (engine.writer_should_exit()) {
             co_return;

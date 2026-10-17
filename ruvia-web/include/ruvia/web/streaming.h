@@ -72,6 +72,8 @@ public:
     /// An operation occupies the lane when started; starting another before it completes
     /// throws std::logic_error. Unstarted operations may coexist. The string_view overload
     /// copies the chunk into owner-worker PMR storage before returning.
+    /// HTTP/2 may reuse normal DATA-frame transport storage between successful writes;
+    /// oversized write buffers are released after completion.
     scoped_operation<void> write(std::span<const std::byte> chunk) &;
     scoped_operation<void> write(std::span<const std::byte>) && = delete;
     scoped_operation<void> write(std::string_view chunk) &;
