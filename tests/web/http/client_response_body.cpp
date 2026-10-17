@@ -206,13 +206,25 @@ public:
     upload_peer(asio::io_context& io, const ruvia::worker_handle& worker_value, mode_type mode)
         : io_(io),
           acceptor_(io, {asio::ip::tcp::v4(), std::uint16_t{0}}),
+          socket_(io),
           done_(worker_value),
           mode_(mode) {}
     std::uint16_t port() const {
         return acceptor_.local_endpoint().port();
     }
     void start() {
-        asio::co_spawn(io_, serve(), [this](std::exception_ptr error) { failure_ = error; complete_ = true; done_.notify(); });
+        asio::co_spawn(io_, serve(), [this](std::exception_ptr error) {
+            std::error_code ignored;
+            socket_.close(ignored);
+            failure_ = error;
+            complete_ = true;
+            done_.notify();
+        });
+    }
+    void stop() {
+        std::error_code ignored;
+        acceptor_.close(ignored);
+        socket_.close(ignored);
     }
     ruvia::task<void> wait() {
         while (!complete_) {
@@ -227,7 +239,7 @@ public:
 
 private:
     asio::awaitable<void> serve() {
-        asio::ip::tcp::socket socket(io_);
+        auto& socket = socket_;
         co_await acceptor_.async_accept(socket, asio::use_awaitable);
         std::string input;
         const auto head_size = co_await asio::async_read_until(socket, asio::dynamic_buffer(input), "\r\n\r\n", asio::use_awaitable);
@@ -262,6 +274,7 @@ private:
     }
     asio::io_context& io_;
     asio::ip::tcp::acceptor acceptor_;
+    asio::ip::tcp::socket socket_;
     ruvia::worker_signal done_;
     mode_type mode_;
     std::exception_ptr failure_;
@@ -1643,6 +1656,51 @@ RUVIA_TEST(http_client_upload_exchange_owns_chunks_and_trailers_and_drives_conti
         };
         run_operation(worker, io, operation);
     }
+}
+
+RUVIA_TEST(http1_small_upload_completes_with_a_bounded_response_budget) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    upload_peer peer(io, worker.handle_, upload_peer::mode_type::known_length);
+    auto config = local_http_client_config(peer.port());
+    config.max_response_bytes_ = 1024;
+    // Completing a six-byte upload must not require a header-section-sized buffer.
+    ruvia::http_client client(worker.attachment_.loop(), config,
+        {.max_retained_bytes_ = 4096, .max_in_flight_bytes_ = 32 * 1024});
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        std::exception_ptr failure;
+        try {
+            auto exchange = co_await client.handle().open_request(
+                {.method_ = "POST", .target_ = "/upload"}, {.content_length_ = 6, .max_chunk_bytes_ = 3});
+            co_await exchange.body().write("abc");
+            co_await exchange.body().write("def");
+            co_await exchange.body().end();
+            RUVIA_CHECK(exchange.body().complete());
+            auto response = co_await exchange.response();
+            RUVIA_CHECK(response.status() == ruvia::http_status::ok);
+            auto bytes = co_await response.body().read_all(16);
+            RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes.bytes().data()), bytes.size()), "ok");
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        if (failure) {
+            peer.stop();
+        }
+        try {
+            co_await peer.wait();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+        RUVIA_CHECK_EQ(peer.body_, "abcdef");
+    };
+    run_operation(worker, io, operation);
 }
 
 RUVIA_TEST(http_client_tunnel_claims_output_when_started_and_retires_after_abort) {

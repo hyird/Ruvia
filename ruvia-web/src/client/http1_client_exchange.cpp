@@ -19,6 +19,7 @@
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/http/http1_chunked_framing.h"
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_body_decoder.h"
 #include "ruvia/http/http1_request_content_writer.h"
@@ -643,9 +644,13 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
             for (const auto& field : upload.trailers_) {
                 trailers.emplace_back(field.name(), field.value());
             }
-            // Uninitialized: plan_finish writes only the bytes it returns.
+            // Without trailers, HTTP owns an empty or fixed-size last-chunk ending.
+            // Keep that small storage in this operation; only trailers need a buffer.
+            std::array<char, http1_last_chunk_prefix.size() + http1_trailer_section_terminator.size()> inline_ending;
             http_io_buffer scratch(state_value.resource_);
-            const auto ending = writer.plan_finish(scratch.prepare(max_client_request_head_bytes), trailers);
+            const auto finish_buffer = trailers.empty() ? std::span<char>(inline_ending)
+                                                        : scratch.prepare(max_client_request_head_bytes);
+            const auto ending = writer.plan_finish(finish_buffer, trailers);
             if (ending.index() != 0) {
                 throw http_client_error(
                     http_client_error::code_type::invalid_request, "HTTP upload trailer or final length rejected");
@@ -661,7 +666,9 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                     upload_.output_.space_.notify();
                 }
             } completion(upload);
-            co_await write(single_part(std::get<0>(ending)), timeout);
+            if (const auto bytes = std::get<0>(ending); !bytes.empty()) {
+                co_await write(single_part(bytes), timeout);
+            }
             if (writer.commit_finish().index() != 0) {
                 std::terminate();
             }
