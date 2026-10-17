@@ -120,10 +120,9 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
             const std::array<ruvia::http_header_view, 1> headers{{
                 {"content-type", "application/octet-stream"},
             }};
-            // With no content_length, the upload uses chunked transfer coding,
-            // which carries the trailer section passed to end().
+            // With no content_length, HTTP/1 uses chunked transfer coding;
+            // HTTP/2 and HTTP/3 carry the same body and trailers in DATA and HEADERS.
             // A 100-continue expectation lets a peer reject the head first.
-            const bool upload_trailers = config.protocol_ != ruvia::http_client_protocol::http1_only;
             std::cout << "upload\n";
             auto exchange_value = co_await bounded.open_request(
                 {.method_ = "POST", .target_ = "/features/upload", .headers_ = headers},
@@ -131,7 +130,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
             co_await exchange_value.body().write("hello ");
             co_await exchange_value.body().write("world!");
             const std::array<ruvia::http_header_view, 1> trailers{{{"X-Upload-Complete", "yes"}}};
-            co_await exchange_value.body().end(upload_trailers ? std::span<const ruvia::http_header_view>(trailers) : std::span<const ruvia::http_header_view>{});
+            co_await exchange_value.body().end(trailers);
             auto response = co_await exchange_value.response();
             while (const auto text = co_await response.body().text()) {
                 // Each view expires at the next body operation. Do not retain

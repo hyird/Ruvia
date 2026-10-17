@@ -56,8 +56,10 @@ public:
     // response. Transfers response ownership once, when actually started.
     // Unless that response explicitly stops the upload (a closing response or
     // a final response before 100 Continue), finish the request with body().end()
-    // even if the response body already ended. The connection remains leased
-    // until the request content completes; abandoning it closes the connection.
+    // even if the response body already ended. HTTP/2 response END_STREAM alone
+    // does not stop an upload; a subsequent peer reset can stop it without losing
+    // the completed response. Abandoning an unfinished request closes HTTP/1's
+    // connection or resets HTTP/2's stream.
     [[nodiscard]] scoped_operation<http_client_response> response() &;
     scoped_operation<http_client_response> response() && = delete;
 

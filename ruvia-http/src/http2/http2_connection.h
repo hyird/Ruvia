@@ -376,8 +376,8 @@ public:
     // Ends an owner lease. The stream is unpinned once its delivered DATA credit
     // and queued events are gone; until then the release stays deferred.
     void release_stream_lease(std::uint32_t stream_id);
-    // A client tunnel lease additionally waits for the stream to close.
-    void release_stream_lease_after_tunnel_end(std::uint32_t stream_id) noexcept;
+    // Response/tunnel EOF releases the client lease only after both halves close.
+    void release_stream_lease_after_remote_end(std::uint32_t stream_id) noexcept;
     // Destruction path of an unreleased lease: resets a live stream, then
     // releases it. Never throws; a failure is retried later.
     void abandon_stream_lease(std::uint32_t stream_id) noexcept;
@@ -471,27 +471,27 @@ private:
     // WITHOUT resolve_stream_route -- route resolution is application policy the owner runs
     // after pulling message_head). Return the classification; the caller reacts.
     [[nodiscard]] header_decode_status decode_header_block(http2_stream_state& stream,
-        hpack_decoder::decode_transaction_type& hpack_transaction);
+        std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction);
     // Client role: decode a RESPONSE header block (:status + regular headers into the
     // stream's header table). A 1xx interim head is validated then discarded WITHOUT
     // leaving the remote head-pending alternative active, so the next HEADERS block
     // decodes as the real head; callers emit events only after that alternative changes.
     [[nodiscard]] header_decode_status decode_response_header_block(http2_stream_state& stream,
-        hpack_decoder::decode_transaction_type& hpack_transaction);
+        std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction);
     // Role-aware initial-head decode dispatch (request vs response semantics).
     [[nodiscard]] header_decode_status decode_initial_header_block(http2_stream_state& stream,
-        hpack_decoder::decode_transaction_type& hpack_transaction);
+        std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction);
     // Role-aware idle-stream test (server: above the highest peer id; client: any even
     // id or an odd id we have not opened yet).
     [[nodiscard]] bool is_idle_stream_id(std::uint32_t stream_id) const noexcept;
-    [[nodiscard]] header_decode_status decode_refused_header_block(
-        http2_stream_state& stream, hpack_decoder::decode_transaction_type& hpack_transaction);
-    [[nodiscard]] header_decode_status decode_discarded_header_block(
-        http2_stream_state& stream, hpack_decoder::decode_transaction_type& hpack_transaction);
+    [[nodiscard]] header_decode_status decode_refused_header_block(http2_stream_state& stream,
+        std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction);
+    [[nodiscard]] header_decode_status decode_discarded_header_block(http2_stream_state& stream,
+        std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction);
     [[nodiscard]] header_decode_status finish_trailer_block(http2_stream_state& stream,
-        hpack_decoder::decode_transaction_type& hpack_transaction);
+        std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction);
     template <http2_header_block_kind kind>
-    [[nodiscard]] bool complete_decoded_header_block(http2_stream_state& stream);
+    [[nodiscard]] bool complete_decoded_header_block(http2_stream_state& stream, std::string_view block);
     // On a decode failure: compression error is fatal (GOAWAY, returns false); anything
     // else RST_STREAMs the stream and survives (returns true).
     [[nodiscard]] bool handle_header_decode_failure(http2_stream_state& stream,
@@ -501,7 +501,7 @@ private:
     void emit_request_headers(http2_stream_state& stream);
 
     // A stream error or a locally-sent RST does not permit skipping a HEADERS block:
-    // HPACK is connection-scoped, so every fragment must be accumulated and decoded.
+    // HPACK is connection-scoped, so every complete field block must be decoded.
     // The detached scratch prevents discarded fields from mutating a live/reset stream;
     // `discarded_header_action` is applied only after END_HEADERS.
     enum class discarded_header_action_type : std::uint8_t {
@@ -512,7 +512,7 @@ private:
     };
     [[nodiscard]] bool start_discarded_header_block(
         const http2_frame_header& header, std::string_view fragment, discarded_header_action_type action);
-    [[nodiscard]] bool finish_discarded_header_block();
+    [[nodiscard]] bool finish_discarded_header_block(std::string_view block);
     void detach_active_header_block(http2_stream_state& stream);
 
     [[nodiscard]] http2_stream_state* find_stream(std::uint32_t stream_id) noexcept;

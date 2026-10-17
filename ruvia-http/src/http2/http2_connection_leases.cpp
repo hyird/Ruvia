@@ -37,8 +37,8 @@ void http2_connection::release_stream_lease(std::uint32_t stream_id) {
     leases_.erase_release(stream_id);
 }
 
-void http2_connection::release_stream_lease_after_tunnel_end(std::uint32_t stream_id) noexcept {
-    leases_.defer_release(stream_id, http2_stream_lease_ledger::release_kind_type::after_tunnel_end);
+void http2_connection::release_stream_lease_after_remote_end(std::uint32_t stream_id) noexcept {
+    leases_.defer_release(stream_id, http2_stream_lease_ledger::release_kind_type::after_remote_end);
 }
 
 void http2_connection::abandon_stream_lease_checked(std::uint32_t stream_id) {
@@ -95,7 +95,7 @@ void http2_connection::retry_deferred_stream_lease(std::uint32_t stream_id) noex
     }
     const auto* stream = find_stream(stream_id);
     if ((stream != nullptr && (stream->window_debt() != 0 ||
-                                  (pending->kind_ == kind_type::after_tunnel_end &&
+                                  (pending->kind_ == kind_type::after_remote_end &&
                                       !connection_error() && !http2_stream_is_closed(*stream)))) ||
         has_pending_events(stream_id)) {
         return;

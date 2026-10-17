@@ -135,8 +135,9 @@ private:
         http2_state_waiter* next_{};
     };
     [[nodiscard]] http2_stream* find_http2_stream(std::uint32_t stream_id) noexcept;
+    [[nodiscard]] bool http2_exchange_complete(const http2_stream& stream) noexcept;
     void fail_http2_stream(http2_stream& stream, std::exception_ptr failure, bool reset_stream) noexcept;
-    void publish_http2_head(http2_stream& stream, http_client_response_head head);
+    void publish_http2_head(http2_stream& stream, http2_response_head_event& event);
     void consume_http2_data(std::uint32_t stream_id, std::string_view bytes, http2_received_data_credit credit);
     void finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end);
     [[nodiscard]] task<void> wait_for_http2_session_stop(const operation_timeout& timeout, stop_token stop_token_value);

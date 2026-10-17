@@ -24,10 +24,10 @@ namespace {
 }  // namespace
 
 header_decode_status http2_connection::decode_header_block(http2_stream_state& stream,
-    hpack_decoder::decode_transaction_type& hpack_transaction) {
+    std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction) {
     http2_header_decode_context context_value{stream};
     const auto result_value = decoder_.decode(
-        stream.remote_header_block(), &context_value, decode_initial_header_field, hpack_transaction);
+        block, &context_value, decode_initial_header_field, hpack_transaction);
     if (const auto status = http2_classify_header_decode_result(result_value);
         status != header_decode_status::ok) {
         return status;
@@ -110,33 +110,33 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
 }
 
 header_decode_status http2_connection::decode_initial_header_block(http2_stream_state& stream,
-    hpack_decoder::decode_transaction_type& hpack_transaction) {
+    std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction) {
     const auto status = role_ == http2_role::client
-                            ? decode_response_header_block(stream, hpack_transaction)
-                            : decode_header_block(stream, hpack_transaction);
+                            ? decode_response_header_block(stream, block, hpack_transaction)
+                            : decode_header_block(stream, block, hpack_transaction);
     if (status == header_decode_status::ok && http2_remote_final_head_decoded(stream)) {
         emit_request_headers(stream);  // An interim client response does not publish a message head.
     }
     return status;
 }
 
-header_decode_status http2_connection::decode_refused_header_block(
-    http2_stream_state& stream, hpack_decoder::decode_transaction_type& hpack_transaction) {
+header_decode_status http2_connection::decode_refused_header_block(http2_stream_state& stream,
+    std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction) {
     http2_stream_header_decode_transaction transaction{stream, true};
     http2_header_decode_context context_value{stream};
     const auto result_value = decoder_.decode(
-        stream.remote_header_block(), &context_value, decode_initial_header_field, hpack_transaction);
+        block, &context_value, decode_initial_header_field, hpack_transaction);
     return http2_classify_header_decode_result(result_value);
 }
 
-header_decode_status http2_connection::decode_discarded_header_block(
-    http2_stream_state& stream, hpack_decoder::decode_transaction_type& hpack_transaction) {
+header_decode_status http2_connection::decode_discarded_header_block(http2_stream_state& stream,
+    std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction) {
     // Even a block whose HTTP semantics are no longer observable must be decoded in
     // full because HPACK's dynamic table is connection-scoped. Keep the decompressed
     // field-list budget, but deliberately avoid mutating request/response state.
     http2_header_decode_context context_value{stream};
     const auto result_value = decoder_.decode(
-        stream.remote_header_block(), &context_value,
+        block, &context_value,
         [](void* target, std::string_view name, std::string_view value) {
             return http2_accumulate_header_list_bytes(
                 *static_cast<http2_header_decode_context*>(target), name, value);
@@ -154,14 +154,16 @@ bool http2_connection::start_discarded_header_block(
     try {
         discarded_header_stream_.emplace(header_value.stream_id_, resource_);
         discarded_header_action_ = action;
-        if (!http2_start_header_block(*discarded_header_stream_, fragment)) {
+        const bool end_headers = (header_value.flags_ & http2_flag_end_headers) != 0;
+        if (end_headers ? fragment.size() > max_http2_encoded_header_block_bytes
+                        : !http2_start_header_block(*discarded_header_stream_, fragment)) {
             discarded_header_stream_.reset();
             discarded_header_action_ = discarded_header_action_type::ignore;
             append_goaway(http2_error_code::compression_error, "field block not decompressed");
             return false;
         }
-        if ((header_value.flags_ & http2_flag_end_headers) != 0) {
-            return finish_discarded_header_block();
+        if (end_headers) {
+            return finish_discarded_header_block(fragment);
         }
         header_continuation_.start(header_value.stream_id_, http2_header_block_kind::discarded);
         return true;
@@ -175,7 +177,7 @@ bool http2_connection::start_discarded_header_block(
     }
 }
 
-bool http2_connection::finish_discarded_header_block() {
+bool http2_connection::finish_discarded_header_block(std::string_view block) {
     if (!discarded_header_stream_) {
         append_goaway(http2_error_code::protocol_error, "missing discarded HEADERS state");
         return false;
@@ -184,8 +186,8 @@ bool http2_connection::finish_discarded_header_block() {
     const auto action = discarded_header_action_;
     auto hpack_transaction = decoder_.begin_transaction();
     const auto status = action == discarded_header_action_type::refuse_stream
-                            ? decode_refused_header_block(*discarded_header_stream_, hpack_transaction)
-                            : decode_discarded_header_block(*discarded_header_stream_, hpack_transaction);
+                            ? decode_refused_header_block(*discarded_header_stream_, block, hpack_transaction)
+                            : decode_discarded_header_block(*discarded_header_stream_, block, hpack_transaction);
 
     if (status == header_decode_status::compression_error) {
         append_goaway(http2_error_code::compression_error, "invalid HPACK block");
@@ -230,7 +232,7 @@ bool http2_connection::finish_discarded_header_block() {
 }
 
 header_decode_status http2_connection::finish_trailer_block(http2_stream_state& stream,
-    hpack_decoder::decode_transaction_type& hpack_transaction) {
+    std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction) {
     // A successful trailer block publishes exactly one terminal event. Reserve
     // it before HPACK/application-header decoding so a later vector growth cannot
     // leave the decoded stream half-committed without its message end.
@@ -239,13 +241,13 @@ header_decode_status http2_connection::finish_trailer_block(http2_stream_state& 
     const auto result_value =
         role_ == http2_role::server
             ? decoder_.decode(
-                  stream.remote_header_block(), &context_value,
+                  block, &context_value,
                   [](void* target, std::string_view name, std::string_view value) {
                       return http2_on_decoded_request_trailer(
                           *static_cast<http2_header_decode_context*>(target), name, value);
                   },
                   hpack_transaction)
-            : decoder_.decode(stream.remote_header_block(), &context_value, http2_on_decoded_response_trailer,
+            : decoder_.decode(block, &context_value, http2_on_decoded_response_trailer,
                   hpack_transaction);
     if (const auto status = http2_classify_header_decode_result(result_value);
         status != header_decode_status::ok) {

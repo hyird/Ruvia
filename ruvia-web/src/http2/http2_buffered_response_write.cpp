@@ -57,28 +57,41 @@ task<http2_buffered_response_writer::data_write_result_type> http2_buffered_resp
         if (signal == nullptr) {
             co_return data_write_result_type::peer_aborted;
         }
-        for (;;) {
-            const auto window = connection_.send_window_state(stream_id);
-            if (!window) {
+        // Empty END_STREAM needs no flow-control credit (RFC 9113 section
+        // 6.9.1), but must not overtake older core-owned DATA.
+        if (chunk.empty() && end_stream == http2_end_stream::end_stream &&
+            connection_.has_queued_data(stream_id)) {
+            const auto wait_result = co_await await_http2_send_window(connection_, stream_id, signal);
+            if (wait_result.aborted() != nullptr) {
                 co_return data_write_result_type::peer_aborted;
             }
-            if (window->available_ != 0) {
-                break;
-            }
-            co_await output_budget_.wait_for_change();
-            if (signal->terminated()) {
-                co_return data_write_result_type::peer_aborted;
-            }
+            continue;
         }
-        if (!(co_await output_budget_.acquire(stream_id, *signal))) {
-            co_return data_write_result_type::peer_aborted;
+        if (!chunk.empty()) {
+            for (;;) {
+                const auto window = connection_.send_window_state(stream_id);
+                if (!window) {
+                    co_return data_write_result_type::peer_aborted;
+                }
+                if (window->available_ != 0) {
+                    break;
+                }
+                co_await output_budget_.wait_for_change();
+                if (signal->terminated()) {
+                    co_return data_write_result_type::peer_aborted;
+                }
+            }
+            if (!(co_await output_budget_.acquire(stream_id, *signal))) {
+                co_return data_write_result_type::peer_aborted;
+            }
         }
         const auto result_value = connection_.submit_data(stream_id, chunk, end_stream);
         if (result_value == http2_data_submit_status::accepted || result_value == http2_data_submit_status::queued) {
             output_budget_.note_data_submitted(stream_id, chunk.size());
         }
         wake_writer();
-        if (result_value != http2_data_submit_status::accepted && result_value != http2_data_submit_status::queued) {
+        if (!chunk.empty() &&
+            result_value != http2_data_submit_status::accepted && result_value != http2_data_submit_status::queued) {
             output_budget_.release(stream_id);
         }
         if (result_value == http2_data_submit_status::accepted) {

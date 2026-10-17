@@ -139,10 +139,10 @@ bool http2_on_decoded_response_trailer(void* target, std::string_view name, std:
 }
 
 header_decode_status http2_connection::decode_response_header_block(http2_stream_state& stream,
-    hpack_decoder::decode_transaction_type& hpack_transaction) {
+    std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction) {
     http2_response_decode_context context_value{stream, resource_};
     const auto result_value = decoder_.decode(
-        stream.remote_header_block(), &context_value,
+        block, &context_value,
         [](void* target, std::string_view name, std::string_view value) {
             return http2_on_decoded_response_header(target, name, value);
         },

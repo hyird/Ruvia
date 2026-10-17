@@ -92,7 +92,7 @@ bool http2_connection::finish_push_promise() {
     (void)scratch.record_remote_head_end_stream();
     http2_stream_header_decode_transaction stream_transaction{scratch, true};
     auto hpack_transaction = decoder_.begin_transaction();
-    const auto status = decode_header_block(scratch, hpack_transaction);
+    const auto status = decode_header_block(scratch, scratch.remote_header_block(), hpack_transaction);
     if (status == header_decode_status::compression_error) {
         append_goaway(http2_error_code::compression_error, "push field block decompression failed");
         return false;
