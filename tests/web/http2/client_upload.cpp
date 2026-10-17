@@ -47,6 +47,7 @@ public:
           socket_(io),
           done_(worker),
           mode_(mode) {}
+    early_final_peer(asio::io_context&, ruvia::worker_handle&&, response_mode) = delete;
 
     std::uint16_t port() const {
         return acceptor_.local_endpoint().port();
@@ -199,7 +200,9 @@ private:
 void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    early_final_peer peer(io, attachment.loop().handle(), mode);
+    // The peer's signal borrows this handle through completion and join.
+    const auto worker = attachment.loop().handle();
+    early_final_peer peer(io, worker, mode);
     peer.start();
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
