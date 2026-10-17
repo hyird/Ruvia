@@ -116,9 +116,9 @@ public:
 
     /// Atomically terminates the stream with an optional trailer section.
     /// Header views are copied into owner storage before this function returns.
-    /// A non-empty section is never silently dropped when the selected HTTP
-    /// version/method/status cannot represent trailers. If the stream is still
-    /// uncommitted, that rejection occurs before the response head is emitted.
+    /// Framing that cannot carry optional trailers (for example, HTTP/1.0)
+    /// omits them. A response status that forbids trailers rejects a non-empty
+    /// section before an uncommitted response head is emitted.
     scoped_operation<void> end(std::span<const http_header_view> trailers = {}) &;
     scoped_operation<void> end(std::span<const http_header_view> = {}) && = delete;
 

@@ -63,8 +63,10 @@ private:
             // Interim heads are advisory, so the exchange simply omits it.
             co_return;
         }
-        if (const auto error = co_await self.pending_.flush()) {
-            throw inbound_transport_error(error, "failed to write HTTP/1 responses before an interim response");
+        if (!self.pending_.empty()) {
+            if (const auto error = co_await self.pending_.flush()) {
+                throw inbound_transport_error(error, "failed to write HTTP/1 responses before an interim response");
+            }
         }
         const auto completion = co_await async_asio<std::size_t>([&self, bytes = prepared->head()](auto handler) {
             asio::async_write(self.stream_, asio::buffer(bytes), std::move(handler));

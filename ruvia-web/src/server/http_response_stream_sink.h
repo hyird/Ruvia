@@ -195,13 +195,15 @@ private:
         if (chunk.empty()) {
             co_return;
         }
-        co_await commit(http_response_trailer_intent::none);
+        // Only the first chunk needs the asynchronous head-commit path.
+        if (!state_.committed()) {
+            co_await commit(http_response_trailer_intent::none);
+        }
         if (state_.body_suppressed_complete()) {
             // ensure_body_allowed() is about to throw response_stream_head_only_complete
-            // synchronously (commit() returned without suspending on an already
-            // body-suppressed head). Suspend once first: a handler that catches
-            // the control signal and keeps writing (an SSE loop answering a HEAD
-            // or 304) then yields the worker thread each pass instead of
+            // synchronously for an already body-suppressed head. Suspend once so a
+            // handler that catches the control signal and keeps writing (an SSE
+            // loop answering a HEAD or 304) yields the worker thread instead of
             // hard-spinning the event loop with no suspension point. The minimal
             // positive delay is required because a zero duration is await_ready.
             static_cast<void>(co_await sleep_for(worker_, std::chrono::steady_clock::duration(1)));
