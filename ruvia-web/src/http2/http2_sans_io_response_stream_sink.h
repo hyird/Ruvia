@@ -235,7 +235,9 @@ public:
         const auto trailer_intent = response_trailer_intent(trailer_section);
         // Preflight through the HTTP-owned result before committing the initial
         // response head. The typed section carries that proof to finish_response.
-        co_await commit(trailer_intent);
+        if (!state_.committed()) {
+            co_await commit(trailer_intent);
+        }
         if (state_.ended()) {
             co_return;
         }
@@ -277,14 +279,9 @@ public:
     }
 
 private:
+    // Callers check committed() before constructing this head-commit task.
     task<void> commit(http_response_trailer_intent trailer_intent) {
         throw_if_terminated();
-        if (state_.committed()) {
-            if (trailer_intent == http_response_trailer_intent::present) {
-                state_.ensure_trailers_allowed();
-            }
-            co_return;
-        }
         try {
             auto response = co_await context_access::commit_streaming_head(state_.bound_context());
             if (cors_ != nullptr) {

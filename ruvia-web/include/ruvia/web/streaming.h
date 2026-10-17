@@ -119,6 +119,8 @@ public:
     /// Framing that cannot carry optional trailers (for example, HTTP/1.0)
     /// omits them. A response status that forbids trailers rejects a non-empty
     /// section before an uncommitted response head is emitted.
+    /// On HTTP/2, a committed head needs no further head-commit task, while
+    /// trailer constraints remain enforced.
     scoped_operation<void> end(std::span<const http_header_view> trailers = {}) &;
     scoped_operation<void> end(std::span<const http_header_view> = {}) && = delete;
 
