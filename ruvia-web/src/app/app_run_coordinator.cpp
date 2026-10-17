@@ -1,6 +1,9 @@
 #include "app/app_run_coordinator.h"
 
+#include <array>
 #include <csignal>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory>
 #include <memory_resource>
@@ -11,6 +14,7 @@
 #include <vector>
 
 #include <asio/signal_set.hpp>
+#include <openssl/rand.h>
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_runtime.h"
@@ -22,6 +26,7 @@
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"
 #include "http/static_root_index.h"
+#include "http3/http3_worker.h"
 #include "router/router_impl.h"
 #include "server/http_server_options_validation.h"
 
@@ -46,11 +51,6 @@ bool acceptor_target_available(void* object) noexcept {
 
 void acceptor_target_accept(void* object, detail::native_accepted_socket_ticket&& ticket) noexcept {
     static_cast<detail::web_worker_runtime*>(object)->accept_transferred_connection(std::move(ticket));
-}
-
-void stage_worker_quic(void* object, detail::http3_datagram_channel& channel,
-    asio::ip::udp::endpoint endpoint, quic_cid_partition partition) {
-    static_cast<detail::web_worker_runtime*>(object)->stage_quic(channel, endpoint, partition);
 }
 
 void invoke_stop_hooks(detail::app_state& state_value) noexcept {
@@ -261,10 +261,6 @@ private:
                 std::move(controllers), std::move(routes_value), std::move(worker_value));
         }
 
-        const bool has_http3 = std::ranges::any_of(validated_configuration.listeners(),
-            [](const detail::http_server_listener_definition& listener_value) {
-                return listener_value.http3_.has_value();
-            });
         std::pmr::vector<detail::acceptor::worker_target> acceptor_targets(runtime_resource_);
         acceptor_targets.reserve(runtime->workers_.size());
         for (auto& slot : runtime->workers_) {
@@ -274,12 +270,25 @@ private:
                 .object_ = target,
                 .available_ = &acceptor_target_available,
                 .accept_ = &acceptor_target_accept,
-                .stage_quic_ = has_http3 ? &stage_worker_quic : nullptr,
             });
         }
         runtime->ingress_ = make_pmr_object<detail::acceptor>(runtime_resource_,
             validated_configuration.listeners(), acceptor_targets, &owner_, &acceptor_failed);
         runtime->ingress_->prepare();
+        // The TCP listener resolved the HTTP/3 port; every worker binds its own
+        // UDP socket to it and learns its place among the workers.
+        if (const auto quic_endpoint = runtime->ingress_->quic_endpoint()) {
+            std::array<std::byte, detail::http3_worker::probe_secret_bytes> probe_secret{};
+            if (RAND_bytes(reinterpret_cast<unsigned char*>(probe_secret.data()),
+                    static_cast<int>(probe_secret.size())) != 1) {
+                throw std::runtime_error("cannot generate the HTTP/3 worker probe secret");
+            }
+            const auto worker_count = static_cast<std::uint32_t>(runtime->workers_.size());
+            std::uint32_t worker_index = 0;
+            for (auto& slot : runtime->workers_) {
+                slot.runtime_->stage_quic(*quic_endpoint, worker_index++, worker_count, probe_secret);
+            }
+        }
         // Ingress is the external producer of every worker.
         runtime->group_.add(runtime->ingress_->runtime(), 0);
         for (auto& slot : runtime->workers_) {

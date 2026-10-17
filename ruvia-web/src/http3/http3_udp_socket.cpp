@@ -9,6 +9,9 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <cerrno>
+#if defined(__linux__)
+#include <linux/filter.h>
+#endif
 #endif
 // clang-format on
 
@@ -243,6 +246,10 @@ public:
         if (!valid_bind_address(bind_endpoint_.address())) {
             throw std::invalid_argument("HTTP/3 server network UDP bind address is unsupported");
         }
+        if (limits.steering_partitions_ == 0) {
+            throw std::invalid_argument("HTTP/3 server network UDP steering requires at least one partition");
+        }
+        steering_partitions_ = limits.steering_partitions_;
         ipv6_socket_ = bind_endpoint_.address().is_v6();
         for (std::size_t index = 0; index < receive_slots_.size(); ++index) {
             free_receive_.push(static_cast<std::uint32_t>(index));
@@ -304,6 +311,7 @@ public:
             disable_peer_error_report(SIO_UDP_CONNRESET);
             disable_peer_error_report(SIO_UDP_NETRESET);
 #endif
+            set_shared_bind_options();
             socket_.bind(bind_endpoint_, error);
             if (error) {
                 throw std::system_error(error, "bind HTTP/3 server network UDP socket");
@@ -312,6 +320,7 @@ public:
             if (error) {
                 throw std::system_error(error, "read HTTP/3 server network UDP bound port");
             }
+            attach_reuseport_steering();
             prepared_ = true;
         } catch (...) {
             asio::error_code ignored;
@@ -696,6 +705,71 @@ private:
         if (std::this_thread::get_id() != owner_thread_) {
             std::terminate();
         }
+    }
+
+    void set_socket_option(int level, int option, const void* value, native_socket_length_type size,
+        const char* what) {
+#ifdef _WIN32
+        if (::setsockopt(socket_.native_handle(), level, option,
+                static_cast<const char*>(value), size) == SOCKET_ERROR) {
+            throw std::system_error(WSAGetLastError(), std::system_category(), what);
+        }
+#else
+        if (::setsockopt(socket_.native_handle(), level, option, value, size) != 0) {
+            throw std::system_error(errno, std::system_category(), what);
+        }
+#endif
+    }
+
+    // Every worker binds the same listen endpoint. POSIX requires SO_REUSEPORT
+    // for the shared bind; its absence fails startup rather than leaving one
+    // worker as the only listener. Windows has no distribution: SO_REUSEADDR
+    // lets every worker bind, and the kernel delivers to the last bound socket.
+    void set_shared_bind_options() {
+        const int enabled = 1;
+        set_socket_option(SOL_SOCKET, SO_REUSEADDR, &enabled, static_cast<native_socket_length_type>(sizeof(enabled)),
+            "enable HTTP/3 server network UDP address reuse");
+#ifndef _WIN32
+#ifndef SO_REUSEPORT
+        throw std::system_error(std::make_error_code(std::errc::not_supported),
+            "HTTP/3 server network UDP requires SO_REUSEPORT");
+#else
+        set_socket_option(SOL_SOCKET, SO_REUSEPORT, &enabled, static_cast<native_socket_length_type>(sizeof(enabled)),
+            "enable HTTP/3 server network UDP port reuse");
+#endif
+#endif
+    }
+
+    // Classic BPF for the reuseport group (the kernel runs it on the UDP
+    // payload): the first byte's high bit selects the long or short header,
+    // the destination connection id starts at offset 6 or 1, and its first four
+    // bytes modulo the partition count name the group socket index. A packet
+    // too short for the load aborts the program with index 0. The group runs
+    // one program; every member attaching the same program is idempotent, so no
+    // worker is special and attachment needs no ordering.
+    void attach_reuseport_steering() {
+        if (steering_partitions_ <= 1) {
+            return;
+        }
+#if defined(__linux__) && defined(SO_ATTACH_REUSEPORT_CBPF)
+        std::array<sock_filter, 7> program{{
+            {BPF_LD | BPF_B | BPF_ABS, 0, 0, 0},
+            {BPF_JMP | BPF_JSET | BPF_K, 2, 0, 0x80},
+            {BPF_LD | BPF_W | BPF_ABS, 0, 0, 1},
+            {BPF_JMP | BPF_JA, 0, 0, 1},
+            {BPF_LD | BPF_W | BPF_ABS, 0, 0, 6},
+            {BPF_ALU | BPF_MOD | BPF_K, 0, 0, steering_partitions_},
+            {BPF_RET | BPF_A, 0, 0, 0},
+        }};
+        sock_fprog filter{};
+        filter.len = static_cast<unsigned short>(program.size());
+        filter.filter = program.data();
+        set_socket_option(SOL_SOCKET, SO_ATTACH_REUSEPORT_CBPF, &filter, static_cast<native_socket_length_type>(sizeof(filter)),
+            "attach HTTP/3 server network UDP reuseport steering");
+#else
+        throw std::system_error(std::make_error_code(std::errc::not_supported),
+            "HTTP/3 server network UDP reuseport steering is unavailable on this platform");
+#endif
     }
 
     void set_packet_info_option(int level, int option) {
@@ -1458,6 +1532,7 @@ private:
 #endif
     std::size_t pending_handlers_{};
     std::size_t callbacks_running_{};
+    std::uint32_t steering_partitions_{1};
     bool ipv6_socket_{};
     bool prepared_{};
     bool stopping_{};

@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <span>
 
@@ -14,7 +16,6 @@
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_submission_view.h"
-#include "ruvia/http/quic_server.h"
 #include "ruvia/web/web_worker.h"
 
 #include "integration/worker_capabilities.h"
@@ -32,7 +33,6 @@ namespace ruvia::detail {
 class route_table;
 class validated_http_server_configuration;
 class web_worker_dispatch;
-class http3_datagram_channel;
 class http3_worker;
 
 // One server worker: its core worker_runtime plus the HTTP domain state that
@@ -75,8 +75,10 @@ public:
     [[nodiscard]] web_worker_handle web_worker() const;
     // Cold staging only, before launch. Protocol objects are constructed on
     // this worker, not by the ingress thread that supplies the datagram channel.
-    void stage_quic(http3_datagram_channel& channel, asio::ip::udp::endpoint endpoint,
-        ruvia::quic_cid_partition partition);
+    // Cold, before this worker launches: the HTTP/3 listener endpoint every
+    // worker binds and this worker's place among them.
+    void stage_quic(asio::ip::udp::endpoint endpoint, std::uint32_t worker_index, std::uint32_t worker_count,
+        std::span<const std::byte> probe_secret);
 
 private:
     web_worker_runtime(std::span<const http_server_listener_definition> listeners,

@@ -64,14 +64,13 @@ void http3_quic_wire_owner::timer_retirement_handler_type::operator()() noexcept
 }
 
 http3_quic_wire_owner::http3_quic_wire_owner(asio::io_context& worker_io,
-    http3_datagram_channel& channel, http3_worker_datagram_endpoint::udp::endpoint local_endpoint,
-    http3_quic_tls_context& tls, ruvia::quic_server_config transport_config,
-    std::pmr::memory_resource* timer_handler_resource, wake_type wake)
+    http3_worker_datagram_endpoint& endpoint, http3_quic_tls_context& tls,
+    ruvia::quic_server_config transport_config, std::pmr::memory_resource* timer_handler_resource,
+    wake_type wake)
     : owner_thread_(std::this_thread::get_id()),
       network_io_(worker_io),
       wake_(wake),
-      endpoint_(channel, std::move(local_endpoint),
-          http3_worker_datagram_endpoint::notification{this, &endpoint_notification}),
+      endpoint_(endpoint),
       timer_(network_io_),
       timer_handler_allocator_(timer_handler_resource != nullptr
                                    ? timer_handler_resource
@@ -80,7 +79,6 @@ http3_quic_wire_owner::http3_quic_wire_owner(asio::io_context& worker_io,
         if (wake_.wake_ == nullptr) {
             throw std::invalid_argument("HTTP/3 QUIC wire requires a wake target");
         }
-        endpoint_.prepare();
         transport_.emplace(tls, transport_config, timer_handler_allocator_.resource());
     } catch (...) {
         // Cold rollback: nothing was started, so the stop completes in place.
@@ -118,9 +116,17 @@ void http3_quic_wire_owner::start() noexcept {
     }
 }
 
-void http3_quic_wire_owner::poll_channel() noexcept {
+void http3_quic_wire_owner::poll_endpoint() noexcept {
     require_owner_thread();
-    endpoint_.poll_channel();
+    endpoint_.poll();
+}
+
+void http3_quic_wire_owner::on_endpoint_stopping() noexcept {
+    require_owner_thread();
+    capture_endpoint_error();
+    stopping_ = true;
+    desired_deadline_.reset();
+    reconcile_timer();
 }
 
 http3_quic_wire_owner::received_type http3_quic_wire_owner::receive_one(clock_type::time_point now) {
@@ -286,33 +292,13 @@ void http3_quic_wire_owner::poll_stop() noexcept {
     if (transport_destroyed_ || !stopping_) {
         return;
     }
-    endpoint_.poll_channel();
+    endpoint_.poll();
     if (!timer_handlers_retired_ || !endpoint_.endpoint_retired() || endpoint_.outbound_pending()) {
         return;
     }
     transport_.reset();
     capture_endpoint_error();
-    endpoint_.retire_channel();
     transport_destroyed_ = true;
-}
-
-void http3_quic_wire_owner::endpoint_notification(void* context_value,
-    http3_worker_datagram_endpoint::notification_kind kind) noexcept {
-    auto& owner_value = *static_cast<http3_quic_wire_owner*>(context_value);
-    owner_value.require_owner_thread();
-    // The endpoint notifies synchronously from the owner's own poll, receive,
-    // start and stop calls, all made inside a protocol turn that observes the
-    // result. Waking from here would be level-triggered: a retired endpoint or
-    // pending input re-notifies on every poll, so the protocol loop would never
-    // suspend and starve every other task on the worker. Cross-thread channel
-    // events arrive through the worker notification instead.
-    if (kind == http3_worker_datagram_endpoint::notification_kind::stopping) {
-        // The Acceptor closed the channel or the endpoint failed.
-        owner_value.capture_endpoint_error();
-        owner_value.stopping_ = true;
-        owner_value.desired_deadline_.reset();
-        owner_value.reconcile_timer();
-    }
 }
 
 void http3_quic_wire_owner::require_owner_thread() const noexcept {

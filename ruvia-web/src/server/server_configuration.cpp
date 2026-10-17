@@ -143,8 +143,6 @@ void validate_http3_server_limits(
             "HTTP/3 aggregate connection capacity is not representable");
     }
 
-    (void)normalize_http3_capacity(config, worker_count);
-
     if (!max_requests_per_connection.has_value()) {
         throw std::invalid_argument(
             "HTTP/3 requires a finite per-connection request limit");
@@ -180,7 +178,6 @@ void validate_http3_server_limits(
 }
 
 void validate_http3_listen_config(const http3_listen_config& config) {
-    (void)normalize_http3_capacity(config, 1);
     validate_http3_qpack_config(config.qpack_);
     detail::ensure_positive_duration(config.handshake_timeout_,
         "HTTP/3 handshake timeout must be greater than zero");

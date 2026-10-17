@@ -83,12 +83,14 @@ std::error_code packet_error(std::span<const std::byte> bytes_value, const asio:
 
 }  // namespace
 
-http3_acceptor_datagram_endpoint::http3_acceptor_datagram_endpoint(asio::io_context& network_io,
-    udp::endpoint bind_endpoint, notification callback_value, buffer_pool& pool)
+http3_socket_datagram_endpoint::http3_socket_datagram_endpoint(asio::io_context& network_io,
+    udp::endpoint bind_endpoint, std::uint32_t steering_partitions, notification callback_value,
+    buffer_pool& pool)
     : bind_endpoint_(checked_bind_endpoint(std::move(bind_endpoint))),
       owner_thread_(std::this_thread::get_id()),
       pool_(pool),
-      socket_(network_io, bind_endpoint_, {.receive_ = receive_capacity, .send_ = send_capacity}),
+      socket_(network_io, bind_endpoint_,
+          {.receive_ = receive_capacity, .send_ = send_capacity, .steering_partitions_ = steering_partitions}),
       notification_(checked_notification(callback_value)) {
     for (std::uint32_t index = 0; index < receive_capacity; ++index) {
         receive_operations_[index].owner_ = this;
@@ -100,16 +102,16 @@ http3_acceptor_datagram_endpoint::http3_acceptor_datagram_endpoint(asio::io_cont
     }
 }
 
-std::uint16_t http3_acceptor_datagram_endpoint::bound_port() const noexcept {
+std::uint16_t http3_socket_datagram_endpoint::bound_port() const noexcept {
     require_owner_thread();
     return prepared_ ? bound_endpoint_.port() : 0;
 }
 
-bool http3_acceptor_datagram_endpoint::outbound_pending() const noexcept {
+bool http3_socket_datagram_endpoint::outbound_pending() const noexcept {
     return outbound_count() != 0;
 }
 
-http3_acceptor_datagram_endpoint::stop_status http3_acceptor_datagram_endpoint::status() const noexcept {
+http3_socket_datagram_endpoint::stop_status http3_socket_datagram_endpoint::status() const noexcept {
     require_owner_thread();
     if (!stopping_ || callback_depth_ != 0 || !outbound_quiescent() || !endpoint_retired()) {
         return stop_status::pending;
@@ -117,31 +119,31 @@ http3_acceptor_datagram_endpoint::stop_status http3_acceptor_datagram_endpoint::
     return error_ ? stop_status::error : stop_status::done;
 }
 
-std::error_code http3_acceptor_datagram_endpoint::error() const noexcept {
+std::error_code http3_socket_datagram_endpoint::error() const noexcept {
     require_owner_thread();
     return error_;
 }
 
-void http3_acceptor_datagram_endpoint::require_owner_thread() const noexcept {
+void http3_socket_datagram_endpoint::require_owner_thread() const noexcept {
     if (std::this_thread::get_id() != owner_thread_) {
         std::terminate();
     }
 }
 
-void http3_acceptor_datagram_endpoint::notify(notification_kind kind) noexcept {
+void http3_socket_datagram_endpoint::notify(notification_kind kind) noexcept {
     ++callback_depth_;
     notification_.notify_(notification_.context_, kind);
     --callback_depth_;
 }
 
-void http3_acceptor_datagram_endpoint::fail(std::error_code error) noexcept {
+void http3_socket_datagram_endpoint::fail(std::error_code error) noexcept {
     if (!error_) {
         error_ = error ? error : io_failure();
     }
     request_stop();
 }
 
-bool http3_acceptor_datagram_endpoint::valid_packet(std::span<const std::byte> bytes_value,
+bool http3_socket_datagram_endpoint::valid_packet(std::span<const std::byte> bytes_value,
     const udp::endpoint& source_value, const udp::endpoint& peer) noexcept {
     const auto error = packet_error(bytes_value, source_value, peer, bound_endpoint_);
     if (!prepared_ || !started_ || error) {
@@ -151,7 +153,7 @@ bool http3_acceptor_datagram_endpoint::valid_packet(std::span<const std::byte> b
     return true;
 }
 
-http3_acceptor_datagram_endpoint::~http3_acceptor_datagram_endpoint() {
+http3_socket_datagram_endpoint::~http3_socket_datagram_endpoint() {
     require_owner_thread();
     if (!stopping_) {
         request_stop();
@@ -161,7 +163,7 @@ http3_acceptor_datagram_endpoint::~http3_acceptor_datagram_endpoint() {
     }
 }
 
-void http3_acceptor_datagram_endpoint::prepare() {
+void http3_socket_datagram_endpoint::prepare() {
     require_owner_thread();
     if (prepared_ || stopping_) {
         throw std::logic_error("HTTP/3 native endpoint cannot prepare in this state");
@@ -176,7 +178,7 @@ void http3_acceptor_datagram_endpoint::prepare() {
     }
 }
 
-http3_acceptor_datagram_endpoint::pump_result http3_acceptor_datagram_endpoint::start() noexcept {
+http3_socket_datagram_endpoint::pump_result http3_socket_datagram_endpoint::start() noexcept {
     require_owner_thread();
     if (stopping_) {
         return pump_result::stopped;
@@ -191,7 +193,7 @@ http3_acceptor_datagram_endpoint::pump_result http3_acceptor_datagram_endpoint::
                                                    : pump_result::pending;
 }
 
-std::optional<http3_acceptor_datagram_endpoint::datagram> http3_acceptor_datagram_endpoint::take_receive() noexcept {
+std::optional<http3_socket_datagram_endpoint::datagram> http3_socket_datagram_endpoint::take_receive() noexcept {
     require_owner_thread();
     if (stopping_ || held_count_ == 0) {
         return std::nullopt;
@@ -204,12 +206,12 @@ std::optional<http3_acceptor_datagram_endpoint::datagram> http3_acceptor_datagra
     return packet;
 }
 
-void http3_acceptor_datagram_endpoint::poll_receive() noexcept {
+void http3_socket_datagram_endpoint::poll_receive() noexcept {
     require_owner_thread();
     arm_receives();
 }
 
-http3_acceptor_datagram_endpoint::pump_result http3_acceptor_datagram_endpoint::send_owned_datagram(datagram&& packet) noexcept {
+http3_socket_datagram_endpoint::pump_result http3_socket_datagram_endpoint::send_owned_datagram(datagram&& packet) noexcept {
     require_owner_thread();
     if (stopping_) {
         return pump_result::stopped;
@@ -237,22 +239,22 @@ http3_acceptor_datagram_endpoint::pump_result http3_acceptor_datagram_endpoint::
     return pump_result::pending;
 }
 
-bool http3_acceptor_datagram_endpoint::outbound_capacity() const noexcept {
+bool http3_socket_datagram_endpoint::outbound_capacity() const noexcept {
     require_owner_thread();
     return !stopping_ && started_ && idle_send_count_ != 0;
 }
 
-std::size_t http3_acceptor_datagram_endpoint::outbound_count() const noexcept {
+std::size_t http3_socket_datagram_endpoint::outbound_count() const noexcept {
     require_owner_thread();
     return send_capacity - idle_send_count_;
 }
 
-bool http3_acceptor_datagram_endpoint::outbound_quiescent() const noexcept {
+bool http3_socket_datagram_endpoint::outbound_quiescent() const noexcept {
     require_owner_thread();
     return idle_send_count_ == send_capacity;
 }
 
-void http3_acceptor_datagram_endpoint::request_stop() noexcept {
+void http3_socket_datagram_endpoint::request_stop() noexcept {
     require_owner_thread();
     if (stopping_) {
         return;
@@ -271,12 +273,12 @@ void http3_acceptor_datagram_endpoint::request_stop() noexcept {
     }
 }
 
-bool http3_acceptor_datagram_endpoint::endpoint_retired() const noexcept {
+bool http3_socket_datagram_endpoint::endpoint_retired() const noexcept {
     require_owner_thread();
     return socket_.done();
 }
 
-void http3_acceptor_datagram_endpoint::receive_completion(void* context_value, std::error_code error,
+void http3_socket_datagram_endpoint::receive_completion(void* context_value, std::error_code error,
     http3_udp_socket::receive_view view) noexcept {
     auto& operation = *static_cast<receive_operation*>(context_value);
     auto& self = *operation.owner_;
@@ -288,7 +290,7 @@ void http3_acceptor_datagram_endpoint::receive_completion(void* context_value, s
     --self.callback_depth_;
 }
 
-void http3_acceptor_datagram_endpoint::send_completion(void* context_value, std::error_code error, std::size_t size) noexcept {
+void http3_socket_datagram_endpoint::send_completion(void* context_value, std::error_code error, std::size_t size) noexcept {
     auto& operation = *static_cast<send_operation*>(context_value);
     auto& self = *operation.owner_;
     ++self.callback_depth_;
@@ -299,9 +301,9 @@ void http3_acceptor_datagram_endpoint::send_completion(void* context_value, std:
     --self.callback_depth_;
 }
 
-// Armed plus held receive leases never exceed the receive slots, so routing
+// Armed plus held receive leases never exceed the receive slots, so the unread
 // backlog bounds pool use before any further native receive is armed.
-void http3_acceptor_datagram_endpoint::arm_receives() noexcept {
+void http3_socket_datagram_endpoint::arm_receives() noexcept {
     while (!stopping_ && started_ && idle_receive_count_ > held_count_) {
         auto lease = pool_.try_acquire();
         if (!lease) {
@@ -319,7 +321,7 @@ void http3_acceptor_datagram_endpoint::arm_receives() noexcept {
     }
 }
 
-void http3_acceptor_datagram_endpoint::handle_receive(receive_operation& operation, std::error_code error,
+void http3_socket_datagram_endpoint::handle_receive(receive_operation& operation, std::error_code error,
     http3_udp_socket::receive_view view) noexcept {
     if (!operation.lease_) {
         std::terminate();
@@ -354,7 +356,7 @@ void http3_acceptor_datagram_endpoint::handle_receive(receive_operation& operati
     notify(notification_kind::input_available);
 }
 
-void http3_acceptor_datagram_endpoint::handle_send(send_operation& operation, std::error_code error,
+void http3_socket_datagram_endpoint::handle_send(send_operation& operation, std::error_code error,
     std::size_t size) noexcept {
     if (!operation.packet_) {
         std::terminate();
@@ -375,33 +377,62 @@ void http3_acceptor_datagram_endpoint::handle_send(send_operation& operation, st
     }
 }
 
-http3_worker_datagram_endpoint::http3_worker_datagram_endpoint(http3_datagram_channel& channel,
-    udp::endpoint local_endpoint, notification callback_value)
-    : bind_endpoint_(checked_bind_endpoint(std::move(local_endpoint))),
-      owner_thread_(std::this_thread::get_id()),
-      channel_(&channel),
-      notification_(checked_notification(callback_value)) {}
+http3_worker_datagram_endpoint::http3_worker_datagram_endpoint(asio::io_context& network_io,
+    udp::endpoint bind_endpoint, std::uint32_t steering_partitions, notification callback_value,
+    std::pmr::memory_resource* pool_resource)
+    : owner_thread_(std::this_thread::get_id()),
+      notification_(checked_notification(callback_value)),
+      pool_(http3_capacity::pool_slots, http3_capacity::packet_bytes, pool_resource),
+      socket_(network_io, std::move(bind_endpoint), steering_partitions,
+          notification{this, &socket_notification}, pool_) {}
+
+http3_worker_datagram_endpoint::~http3_worker_datagram_endpoint() {
+    require_owner_thread();
+    if (!stopping_) {
+        request_stop();
+    }
+    if (callback_depth_ != 0 || !endpoint_retired()) {
+        std::terminate();
+    }
+    // Held input and the reservation return to the pool before it is destroyed.
+    current_.reset();
+    reservation_.reset();
+}
+
+void http3_worker_datagram_endpoint::socket_notification(void* context_value, notification_kind kind) noexcept {
+    auto& self = *static_cast<http3_worker_datagram_endpoint*>(context_value);
+    if (kind == notification_kind::stopping) {
+        // The socket failed or is stopping on its own; mirror it once.
+        self.stopping_ = true;
+        if (!self.stopping_notified_) {
+            self.stopping_notified_ = true;
+            self.notify(notification_kind::stopping);
+        }
+        return;
+    }
+    self.notify(kind);
+}
 
 std::uint16_t http3_worker_datagram_endpoint::bound_port() const noexcept {
     require_owner_thread();
-    return prepared_ ? bound_endpoint_.port() : 0;
+    return socket_.bound_port();
 }
 
 bool http3_worker_datagram_endpoint::outbound_pending() const noexcept {
-    return outbound_count() != 0;
+    return socket_.outbound_pending();
 }
 
 http3_worker_datagram_endpoint::stop_status http3_worker_datagram_endpoint::status() const noexcept {
     require_owner_thread();
-    if (!stopping_ || callback_depth_ != 0 || !outbound_quiescent() || !endpoint_retired()) {
+    if (!stopping_ || callback_depth_ != 0) {
         return stop_status::pending;
     }
-    return error_ ? stop_status::error : stop_status::done;
+    return socket_.status();
 }
 
 std::error_code http3_worker_datagram_endpoint::error() const noexcept {
     require_owner_thread();
-    return error_;
+    return socket_.error();
 }
 
 void http3_worker_datagram_endpoint::require_owner_thread() const noexcept {
@@ -416,44 +447,13 @@ void http3_worker_datagram_endpoint::notify(notification_kind kind) noexcept {
     --callback_depth_;
 }
 
-void http3_worker_datagram_endpoint::fail(std::error_code error) noexcept {
-    if (!error_) {
-        error_ = error ? error : io_failure();
-    }
-    request_stop();
-}
-
-bool http3_worker_datagram_endpoint::valid_packet(std::span<const std::byte> bytes_value,
-    const udp::endpoint& source_value, const udp::endpoint& peer) noexcept {
-    const auto error = packet_error(bytes_value, source_value, peer, bound_endpoint_);
-    if (!prepared_ || !started_ || error) {
-        fail(error ? error : invalid_datagram());
-        return false;
-    }
-    return true;
-}
-
-http3_worker_datagram_endpoint::~http3_worker_datagram_endpoint() {
-    require_owner_thread();
-    if (!stopping_) {
-        request_stop();
-    }
-    if (callback_depth_ != 0 || !endpoint_retired()) {
-        std::terminate();
-    }
-}
-
 void http3_worker_datagram_endpoint::prepare() {
     require_owner_thread();
-    if (prepared_ || stopping_) {
+    if (stopping_) {
         throw std::logic_error("HTTP/3 worker endpoint cannot prepare in this state");
     }
     try {
-        if (bind_endpoint_.port() == 0) {
-            throw std::invalid_argument("HTTP/3 worker endpoint requires the bound acceptor port");
-        }
-        bound_endpoint_ = bind_endpoint_;
-        prepared_ = true;
+        socket_.prepare();
     } catch (...) {
         request_stop();
         throw;
@@ -465,24 +465,26 @@ http3_worker_datagram_endpoint::pump_result http3_worker_datagram_endpoint::star
     if (stopping_) {
         return pump_result::stopped;
     }
-    if (!prepared_ || started_) {
-        fail(std::make_error_code(std::errc::operation_not_permitted));
-        return pump_result::error;
+    if (started_) {
+        return pump_result::pending;
     }
     started_ = true;
-    poll_channel();
-    return error_ ? pump_result::error : stopping_ ? pump_result::stopped
-                                                   : pump_result::pending;
+    return socket_.start();
 }
 
-std::optional<http3_worker_datagram_endpoint::received_datagram>
-http3_worker_datagram_endpoint::receive_slot() const noexcept {
+std::optional<http3_worker_datagram_endpoint::received_datagram> http3_worker_datagram_endpoint::receive_slot() noexcept {
     require_owner_thread();
     if (stopping_) {
         return std::nullopt;
     }
-    const auto received_value = channel_->worker_input();
-    return received_value ? std::optional<received_datagram>{{received_value->bytes_, received_value->peer_, received_value->local_destination_}} : std::nullopt;
+    if (!current_) {
+        current_ = socket_.take_receive();
+        if (!current_) {
+            return std::nullopt;
+        }
+    }
+    const auto view = current_->view();
+    return received_datagram{view.bytes_, view.peer_, view.local_destination_};
 }
 
 http3_worker_datagram_endpoint::pump_result http3_worker_datagram_endpoint::consume_receive() noexcept {
@@ -490,25 +492,30 @@ http3_worker_datagram_endpoint::pump_result http3_worker_datagram_endpoint::cons
     if (stopping_) {
         return pump_result::stopped;
     }
-    if (channel_->worker_input()) {
-        channel_->worker_consume_input();
-    }
-    if (channel_->worker_input()) {
-        notify(notification_kind::input_available);
-    }
-    return pump_result::pending;
+    current_.reset();
+    // The returned slot re-arms a receive at once.
+    socket_.poll_receive();
+    return socket_.error() ? pump_result::error : pump_result::pending;
 }
 
 std::span<std::byte> http3_worker_datagram_endpoint::packet_buffer() noexcept {
     require_owner_thread();
-    return stopping_ || !prepared_ || !started_ ? std::span<std::byte>{} : channel_->worker_output_buffer();
+    if (stopping_ || !started_ || !socket_.outbound_capacity()) {
+        return {};
+    }
+    if (!reservation_) {
+        auto lease = pool_.try_acquire();
+        if (!lease) {
+            return {};
+        }
+        reservation_.emplace(std::move(*lease));
+    }
+    return reservation_->bytes();
 }
 
 void http3_worker_datagram_endpoint::cancel_packet() noexcept {
     require_owner_thread();
-    if (channel_) {
-        channel_->worker_cancel_output();
-    }
+    reservation_.reset();
 }
 
 http3_worker_datagram_endpoint::pump_result http3_worker_datagram_endpoint::send_datagram(
@@ -518,51 +525,41 @@ http3_worker_datagram_endpoint::pump_result http3_worker_datagram_endpoint::send
         cancel_packet();
         return pump_result::stopped;
     }
-    if (!valid_packet(bytes_value, source_value, peer)) {
+    if (!reservation_ || bytes_value.data() != reservation_->bytes().data() ||
+        bytes_value.size() > reservation_->bytes().size()) {
+        cancel_packet();
+        socket_.request_stop();
         return pump_result::error;
     }
-    if (channel_->worker_send(bytes_value, source_value, peer)) {
-        ++observed_output_count_;
+    datagram packet{std::move(*reservation_), bytes_value.size(), source_value, peer};
+    reservation_.reset();
+    const auto result_value = socket_.send_owned_datagram(std::move(packet));
+    if (result_value == pump_result::error) {
+        return pump_result::error;
     }
+    // Backpressure cannot occur: packet_buffer() reserved only with a free send slot.
     return pump_result::pending;
 }
 
 bool http3_worker_datagram_endpoint::outbound_capacity() const noexcept {
     require_owner_thread();
-    return !stopping_ && started_ && channel_->worker_outbound_capacity();
+    return !stopping_ && started_ && socket_.outbound_capacity();
 }
 
 std::size_t http3_worker_datagram_endpoint::outbound_count() const noexcept {
     require_owner_thread();
-    return channel_ ? channel_->worker_outbound_count() : 0;
+    return socket_.outbound_count();
 }
 
 bool http3_worker_datagram_endpoint::outbound_quiescent() const noexcept {
     require_owner_thread();
-    return !channel_ || channel_->worker_outbound_quiescent();
+    return socket_.outbound_quiescent();
 }
 
-void http3_worker_datagram_endpoint::poll_channel() noexcept {
+void http3_worker_datagram_endpoint::poll() noexcept {
     require_owner_thread();
-    if (!channel_) {
-        return;
-    }
-    const auto count = channel_->worker_outbound_count();
-    if (count < observed_output_count_) {
-        observed_output_count_ = count;
-        notify(notification_kind::output_drained);
-    }
-    if (!stopping_ && channel_->acceptor_closed()) {
-        error_ = channel_->error();
-        request_stop();
-    }
-    if (stopping_) {
-        channel_->worker_stop();
-        if (endpoint_retired()) {
-            notify(notification_kind::endpoint_retired);
-        }
-    } else if (channel_->worker_input()) {
-        notify(notification_kind::input_available);
+    if (!stopping_) {
+        socket_.poll_receive();
     }
 }
 
@@ -572,13 +569,9 @@ void http3_worker_datagram_endpoint::request_stop() noexcept {
         return;
     }
     stopping_ = true;
-    if (!started_) {
-        // A cold endpoint never borrowed channel input or output; detach it so
-        // the owner can abandon the never-started channel instead.
-        channel_ = nullptr;
-    } else {
-        channel_->worker_stop();
-    }
+    current_.reset();
+    reservation_.reset();
+    socket_.request_stop();
     if (!stopping_notified_) {
         stopping_notified_ = true;
         notify(notification_kind::stopping);
@@ -587,21 +580,7 @@ void http3_worker_datagram_endpoint::request_stop() noexcept {
 
 bool http3_worker_datagram_endpoint::endpoint_retired() const noexcept {
     require_owner_thread();
-    return stopping_ && (!channel_ || (channel_->acceptor_closed() && channel_->worker_outbound_quiescent()));
-}
-
-void http3_worker_datagram_endpoint::retire_channel() noexcept {
-    require_owner_thread();
-    if (!channel_) {
-        return;
-    }
-    if (status() == stop_status::pending) {
-        std::terminate();
-    }
-    if (!error_) {
-        error_ = channel_->error();
-    }
-    channel_ = nullptr;
+    return stopping_ && socket_.endpoint_retired();
 }
 
 }  // namespace ruvia::detail

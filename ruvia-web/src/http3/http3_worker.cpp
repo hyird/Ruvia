@@ -1,6 +1,9 @@
 #include "http3/http3_worker.h"
 
 #include <algorithm>
+#include <chrono>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -9,6 +12,7 @@
 #include <asio/post.hpp>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/timer.h"
 
 #include "server/http_server_options.h"
 #include "server/http_server_options_validation.h"
@@ -36,6 +40,74 @@ ruvia::quic_server_config transport_config(const http_server_options& options,
     // New peer paths remain on this worker through its CID partition.
     config.local_transport_parameters_.disable_active_migration_ = false;
     return config;
+}
+
+// Linux steers by connection id partition; elsewhere every worker accepts
+// every connection id because the kernel distributes by other means.
+std::uint32_t steering_partitions(const http3_worker::listener_binding& binding) noexcept {
+#if defined(__linux__)
+    return binding.worker_count_;
+#else
+    (void)binding;
+    return 1;
+#endif
+}
+
+// Probe layout: short-header fixed bit, a 16-byte connection id whose first
+// four bytes carry the partition word, the process secret, and the worker
+// index again; zero padded. It is never a valid QUIC packet for any peer.
+constexpr std::size_t probe_bytes = 64;
+constexpr std::size_t probe_word_offset = 1;
+constexpr std::size_t probe_secret_offset = 17;
+constexpr std::size_t probe_index_offset = probe_secret_offset + http3_worker::probe_secret_bytes;
+constexpr auto probe_timeout = std::chrono::seconds(2);
+constexpr auto probe_poll_interval = std::chrono::milliseconds(1);
+
+void write_word(std::span<std::byte> output, std::uint32_t word) noexcept {
+    for (std::size_t i = 0; i < 4; ++i) {
+        output[i] = static_cast<std::byte>((word >> (8 * (3 - i))) & 0xffU);
+    }
+}
+
+std::uint32_t read_word(std::span<const std::byte> input) noexcept {
+    std::uint32_t word{};
+    for (std::size_t i = 0; i < 4; ++i) {
+        word = (word << 8) | std::to_integer<std::uint8_t>(input[i]);
+    }
+    return word;
+}
+
+void write_probe(std::span<std::byte> output, const http3_worker::listener_binding& binding) noexcept {
+    std::ranges::fill(output, std::byte{});
+    output[0] = std::byte{0x40};
+    write_word(output.subspan(probe_word_offset, 4), binding.worker_index_);
+    std::ranges::copy(binding.probe_secret_, output.subspan(probe_secret_offset).begin());
+    write_word(output.subspan(probe_index_offset, 4), binding.worker_index_);
+}
+
+// The partition word of an authenticated probe of this process.
+std::optional<std::uint32_t> read_probe(std::span<const std::byte> input,
+    const http3_worker::listener_binding& binding) noexcept {
+    if (input.size() != probe_bytes || input[0] != std::byte{0x40} ||
+        !std::ranges::equal(input.subspan(probe_secret_offset, http3_worker::probe_secret_bytes), binding.probe_secret_)) {
+        return std::nullopt;
+    }
+    const auto word = read_word(input.subspan(probe_word_offset, 4));
+    if (read_word(input.subspan(probe_index_offset, 4)) != word || word >= binding.worker_count_) {
+        return std::nullopt;
+    }
+    return word;
+}
+
+// Probes travel through the kernel to the listen endpoint; a wildcard bind is
+// reached through its loopback address.
+asio::ip::udp::endpoint probe_destination(const http3_worker::listener_binding& binding, std::uint16_t port) {
+    const auto& address = binding.endpoint_.address();
+    if (!address.is_unspecified()) {
+        return asio::ip::udp::endpoint(address, port);
+    }
+    return asio::ip::udp::endpoint(
+        address.is_v6() ? asio::ip::address(asio::ip::address_v6::loopback()) : asio::ip::address(asio::ip::address_v4::loopback()), port);
 }
 
 }  // namespace
@@ -67,7 +139,6 @@ http3_worker::http3_worker(worker_runtime_context& runtime, worker_memory& memor
       offers_(memory.resource()),
       scratch_(memory.resource()),
       joins_(runtime.handle(), {.resource_ = memory.resource()}),
-      notifications_(runtime.handle(), {.resource_ = memory.resource()}),
       tasks_(runtime.handle(), {.resource_ = memory.resource()}) {
     if (config_.drain_timeout_ <= std::chrono::milliseconds::zero()) {
         throw std::invalid_argument("HTTP/3 drain timeout must be greater than zero");
@@ -75,50 +146,29 @@ http3_worker::http3_worker(worker_runtime_context& runtime, worker_memory& memor
 }
 
 http3_worker::~http3_worker() {
-    if (channel_ != nullptr || staged_channel_.load(std::memory_order_acquire) != nullptr ||
-        tasks_.size() != 0 || joins_.size() != 0 || notifications_.size() != 0) {
+    if (wire_ || endpoint_ || tasks_.size() != 0 || joins_.size() != 0) {
         std::terminate();
     }
 }
 
-void http3_worker::stage(http3_datagram_channel& channel,
-    asio::ip::udp::endpoint endpoint, quic_cid_partition partition) {
-    if (staged_channel_.load(std::memory_order_acquire) != nullptr) {
-        throw std::logic_error("HTTP/3 worker already has a staged channel");
+void http3_worker::stage(listener_binding binding) {
+    if (binding_) {
+        throw std::logic_error("HTTP/3 worker already has a staged listener");
     }
-    channel.stage_worker(runtime_);
-    endpoint_ = std::move(endpoint);
-    partition_ = partition;
-    staged_channel_.store(&channel, std::memory_order_release);
-    // The second check closes the stop-before-publication race.
-    if (abandoned_.load(std::memory_order_acquire)) {
-        abandon_before_launch();
+    if (binding.worker_count_ == 0 || binding.worker_index_ >= binding.worker_count_) {
+        throw std::invalid_argument("HTTP/3 worker listener binding requires index < count");
     }
-}
-
-void http3_worker::abandon_before_launch() noexcept {
-    abandoned_.store(true, std::memory_order_release);
-    if (auto* channel = staged_channel_.exchange(nullptr, std::memory_order_acq_rel)) {
-        channel->abandon_worker();
-    }
+    binding_ = std::move(binding);
 }
 
 void http3_worker::start() {
     if (!runtime_.handle().is_current() || started_) {
         throw std::logic_error("HTTP/3 component must start once on its owner");
     }
-    started_ = true;
-    struct cold_channel_owner final {
-        http3_datagram_channel* channel_;
-        ~cold_channel_owner() {
-            if (channel_) {
-                channel_->abandon_worker();
-            }
-        }
-    } cold{staged_channel_.exchange(nullptr, std::memory_order_acq_rel)};
-    if (!cold.channel_) {
-        throw std::logic_error("HTTP/3 worker has no staged acceptor channel");
+    if (!binding_) {
+        throw std::logic_error("HTTP/3 worker has no staged listener");
     }
+    started_ = true;
     const auto max_connections = options_.server_.max_connections_per_worker_.value();
     const http3_connection_driver_config driver_config{
         .max_requests_per_connection_ = options_.server_.max_requests_per_connection_.value(),
@@ -131,7 +181,6 @@ void http3_worker::start() {
             .qpack_blocked_streams_ = config_.qpack_.max_blocked_streams_,
             .enable_connect_protocol_ = true,
             .h3_datagram_ = true}};
-    // Everything that can fail cold is built before the wire borrows the channel.
     drivers_.reserve(max_connections);
     for (std::size_t index = 0; index < max_connections; ++index) {
         drivers_.push_back(make_pmr_object<http3_connection_driver>(memory_.resource(), *this, driver_config));
@@ -143,27 +192,33 @@ void http3_worker::start() {
     offers_.reserve(max_connections);
     scratch_.resize(scratch_bytes);
     tls_.emplace(tls_config_, memory_.resource());
-    wire_.emplace(runtime_.io_context(), *cold.channel_, endpoint_, *tls_,
-        transport_config(options_, partition_), memory_.resource(),
-        http3_quic_wire_owner::wake_type{this, [](void* context) noexcept {
-                                             static_cast<http3_worker*>(context)->wake();
-                                         }});
-    cold.channel_->worker_start();
-    channel_ = std::exchange(cold.channel_, nullptr);
-    // From here the channel is borrowed: every exit runs the ordered stop that
-    // waits for the Acceptor's close before the final ACK.
-    wire_->start();
-    if (stop_token_.stop_requested()) {
-        begin_stop();
+    const auto steering = steering_partitions(*binding_);
+    // The Linux index is provisional until serve calibrates it.
+    partition_ = steering > 1 ? quic_cid_partition{.index_ = binding_->worker_index_, .count_ = steering}
+                              : quic_cid_partition{.index_ = 0, .count_ = 1};
+    endpoint_.emplace(runtime_.io_context(), binding_->endpoint_, steering,
+        http3_worker_datagram_endpoint::notification{this, &endpoint_notification}, memory_.resource());
+    // Binds this worker's socket; a failure is this worker's startup failure.
+    endpoint_->prepare();
+}
+
+void http3_worker::serve() {
+    if (!runtime_.handle().is_current() || !started_ || serving_) {
+        throw std::logic_error("HTTP/3 component must serve once after start on its owner");
     }
-    // A spawn failure leaves the stop and retirement to join().
-    notifications_.spawn(run_notifications());
+    serving_ = true;
+    if (stopping_) {
+        return;
+    }
+    if (endpoint_->start() == http3_worker_datagram_endpoint::pump_result::error) {
+        throw std::system_error(endpoint_->error(), "start HTTP/3 worker UDP listener");
+    }
     tasks_.spawn(run());
     wake();
 }
 
 void http3_worker::drain() noexcept {
-    if (draining_ || stopping_ || channel_ == nullptr) {
+    if (draining_ || stopping_ || !serving_) {
         return;
     }
     draining_ = true;
@@ -181,8 +236,7 @@ void http3_worker::stop() noexcept {
     if (!runtime_.handle().is_current()) {
         std::terminate();
     }
-    if (channel_ == nullptr) {
-        abandon_before_launch();
+    if (!started_) {
         return;
     }
     begin_stop();
@@ -195,17 +249,48 @@ task<void> http3_worker::join() {
     } catch (...) {
         failure = std::current_exception();
     }
-    if (channel_ != nullptr) {
-        // The protocol loop never ran (start failed after the channel borrow).
+    if (endpoint_) {
+        // The protocol loop never ran (stopped before serve, or serve failed).
         begin_stop();
-        co_await run();
+        co_await retire_endpoint();
     }
     if (failure) {
         std::rethrow_exception(failure);
     }
 }
 
+void http3_worker::endpoint_notification(void* context_value,
+    http3_worker_datagram_endpoint::notification_kind kind) noexcept {
+    auto& self = *static_cast<http3_worker*>(context_value);
+    if (kind == http3_worker_datagram_endpoint::notification_kind::stopping && self.wire_) {
+        self.wire_->on_endpoint_stopping();
+    }
+    // Native completions are edge events: one wake per received datagram or
+    // completed send keeps the loop from spinning on level state.
+    self.wake();
+}
+
 task<void> http3_worker::run() {
+    try {
+        co_await calibrate_partition();
+        if (!stopping_) {
+            wire_.emplace(runtime_.io_context(), *endpoint_, *tls_,
+                transport_config(options_, partition_), memory_.resource(),
+                http3_quic_wire_owner::wake_type{this, [](void* context) noexcept {
+                                                     static_cast<http3_worker*>(context)->wake();
+                                                 }});
+            wire_->start();
+            if (stop_token_.stop_requested()) {
+                begin_stop();
+            }
+        }
+    } catch (...) {
+        report_failure(std::current_exception());
+    }
+    if (!wire_) {
+        co_await retire_endpoint();
+        co_return;
+    }
     while (!wire_->stopped()) {
         const bool more = turn();
         if (wire_->stopped()) {
@@ -221,43 +306,77 @@ task<void> http3_worker::run() {
             report_failure(std::current_exception());
         }
     }
-    native_stopping_ = true;
-    // Every native wait joins before the final ACK lets the Acceptor reclaim
-    // the channel and its notification.
-    channel_->worker_notification().close();
-    try {
-        co_await notifications_.join();
-    } catch (...) {
-        report_failure(std::current_exception());
-    }
     try {
         co_await joins_.join();
     } catch (...) {
         report_failure(std::current_exception());
     }
     wire_.reset();
+    endpoint_.reset();
     tls_.reset();
-    finish_channel();
 }
 
-task<void> http3_worker::run_notifications() {
-    // The worker's only native datagram wait; local work uses signal_.
-    try {
-        while (!native_stopping_) {
-            const auto status = co_await channel_->worker_notification().wait();
-            if (native_stopping_) {
-                break;
-            }
-            if (status == worker_notification_wait_status::closed) {
-                begin_stop();
-                break;
-            }
-            wake();
-        }
-    } catch (...) {
-        report_failure(std::current_exception());
+// Every worker sends one datagram whose partition word is its worker index;
+// steering delivers it to the group socket of that index, whose worker learns
+// the partition it must generate connection ids in. Datagrams that are not
+// probes arrive before serving and are dropped; QUIC peers retransmit.
+task<void> http3_worker::calibrate_partition() {
+    if (partition_.count_ <= 1 || stopping_) {
+        co_return;
     }
-    wake();
+    const auto probe_buffer = endpoint_->packet_buffer();
+    if (probe_buffer.size() < probe_bytes) {
+        throw std::runtime_error("HTTP/3 worker cannot reserve its partition probe");
+    }
+    write_probe(probe_buffer.first(probe_bytes), *binding_);
+    const auto destination = probe_destination(*binding_, endpoint_->bound_port());
+    if (endpoint_->send_datagram(std::span<const std::byte>(probe_buffer).first(probe_bytes),
+            destination, destination) != http3_worker_datagram_endpoint::pump_result::pending) {
+        throw std::system_error(endpoint_->error(), "send HTTP/3 worker partition probe");
+    }
+    const auto deadline = clock_type::now() + probe_timeout;
+    std::optional<std::uint32_t> learned;
+    while (!stopping_) {
+        while (const auto received = endpoint_->receive_slot()) {
+            if (const auto word = read_probe(received->bytes_, *binding_)) {
+                const auto index = *word % partition_.count_;
+                if (learned && *learned != index) {
+                    throw std::runtime_error("HTTP/3 reuseport steering delivered two partitions to one worker");
+                }
+                learned = index;
+            }
+            if (endpoint_->consume_receive() == http3_worker_datagram_endpoint::pump_result::error) {
+                throw std::system_error(endpoint_->error(), "consume HTTP/3 worker partition probe");
+            }
+        }
+        if (learned) {
+            partition_.index_ = *learned;
+            co_return;
+        }
+        if (clock_type::now() >= deadline) {
+            throw std::runtime_error("HTTP/3 reuseport steering delivered no partition probe to this worker");
+        }
+        if (co_await ruvia::sleep_for(runtime_.handle(), probe_poll_interval) !=
+            ruvia::timer_sleep_result::elapsed) {
+            co_return;
+        }
+    }
+}
+
+task<void> http3_worker::retire_endpoint() {
+    if (!endpoint_) {
+        co_return;
+    }
+    endpoint_->request_stop();
+    while (!endpoint_->endpoint_retired()) {
+        // Cancelled native operations complete on this loop.
+        if (co_await ruvia::sleep_for(runtime_.handle(), probe_poll_interval) !=
+            ruvia::timer_sleep_result::elapsed) {
+            co_await yield();
+        }
+    }
+    endpoint_.reset();
+    tls_.reset();
 }
 
 task<void> http3_worker::yield() {
@@ -276,11 +395,11 @@ task<void> http3_worker::yield() {
 bool http3_worker::turn() {
     bool more = false;
     try {
-        wire_->poll_channel();
+        wire_->poll_endpoint();
         if (const auto failure = wire_->failure()) {
             report_failure(failure);
         }
-        if (channel_->acceptor_closed() || wire_->stopping()) {
+        if (wire_->stopping()) {
             begin_stop();
         }
         const auto now = clock_type::now();
@@ -418,7 +537,7 @@ void http3_worker::flush(http3_connection_driver& driver, clock_type::time_point
         return;
     }
     if (!wire_->output_available() && !driver.send_blocked_) {
-        // More packets may remain; resume once the Acceptor returns output credit.
+        // More packets may remain; resume once a native send completes.
         driver.send_blocked_ = true;
         send_blocked_.push_back(&driver);
     }
@@ -455,12 +574,6 @@ void http3_worker::report_failure(std::exception_ptr failure) noexcept {
     if (failure_notification_.notify_ != nullptr) {
         failure_notification_.notify_(failure_notification_.context_, failure_);
     }
-}
-
-void http3_worker::finish_channel() noexcept {
-    // The wire released its endpoint; no channel borrow survives the final ACK.
-    auto* channel = std::exchange(channel_, nullptr);
-    channel->worker_close();
 }
 
 http3_connection_driver* http3_worker::find(ruvia::quic_connection_token token) noexcept {

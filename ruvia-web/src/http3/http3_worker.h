@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -24,7 +25,7 @@
 
 #include "http3/http3_body_budget.h"
 #include "http3/http3_connection_driver.h"
-#include "http3/http3_datagram_channel.h"
+#include "http3/http3_datagram_endpoint.h"
 #include "http3/http3_quic_tls_context.h"
 #include "http3/http3_quic_wire_owner.h"
 #include "server/connection_drain.h"
@@ -38,19 +39,41 @@ class worker_capabilities;
 struct http_server_options;
 
 // The worker-local HTTP/3 server component, plugged into the worker lifecycle
-// (stage -> start -> stop -> join). One protocol loop on the worker's own loop
-// owns the QUIC wire and every connection slot; it runs only when a datagram,
-// QUIC/local timer, output credit or handler event marks work ready. Core owns
-// the execution loop; the Acceptor owns the borrowed datagram channel until
-// this component's final ACK.
+// (stage -> start -> serve -> stop -> join). The worker binds its own UDP
+// socket to the shared listen endpoint in start (the prepare phase); serve
+// begins receiving once every worker is bound. One protocol loop on the
+// worker's own loop owns the QUIC wire and every connection slot; it runs only
+// when a datagram, QUIC/local timer, send completion or handler event marks
+// work ready. Core owns the execution loop.
+//
+// Linux steers datagrams to the group socket named by the destination
+// connection id partition (http3_udp_socket). The kernel numbers group members
+// by bind order, which no worker can observe, so serve starts with a probe:
+// every worker sends one datagram whose partition word is its own worker index
+// to the listen endpoint, and the worker that receives it learns its group
+// index, which becomes the partition it generates connection ids in. A worker
+// that receives no probe or more than one proves the steering ineffective and
+// fails startup. Other platforms have no steering: every worker accepts every
+// connection id (partition count 1); Windows delivers all datagrams to the
+// last bound socket.
 class http3_worker final {
 public:
     // Worker-wide bound for buffered request bodies and tunnel input.
     static constexpr std::size_t body_budget_bytes = std::size_t{64} * 1024 * 1024;
+    static constexpr std::size_t probe_secret_bytes = 32;
 
     struct failure_notification final {
         void* context_{};
         void (*notify_)(void*, std::exception_ptr) noexcept {};
+    };
+
+    // Cold input fixed by the application before any worker launches.
+    struct listener_binding final {
+        asio::ip::udp::endpoint endpoint_;
+        std::uint32_t worker_index_{};
+        std::uint32_t worker_count_{1};
+        // Shared by every worker of this process; authenticates calibration probes.
+        std::array<std::byte, probe_secret_bytes> probe_secret_{};
     };
 
     http3_worker(worker_runtime_context& runtime, worker_memory& memory,
@@ -63,12 +86,13 @@ public:
     http3_worker(const http3_worker&) = delete;
     http3_worker& operator=(const http3_worker&) = delete;
 
-    // Cold ingress staging can race cancellation before core launches its loop.
-    void stage(http3_datagram_channel&, asio::ip::udp::endpoint, quic_cid_partition);
-    void abandon_before_launch() noexcept;
-    // Owner-loop operations. join retires every connection, the wire and the
-    // channel borrow (final ACK) on the owning thread.
+    // Cold staging before core launches the worker loop.
+    void stage(listener_binding binding);
+    // Owner-loop operations. start binds the socket; serve calibrates the
+    // partition (Linux) and starts the protocol loop; join retires every
+    // connection, the wire and the socket on the owning thread.
     void start();
+    void serve();
     void drain() noexcept;
     void stop() noexcept;
     [[nodiscard]] task<void> join();
@@ -78,8 +102,10 @@ private:
     using clock_type = std::chrono::steady_clock;
     using driver_owner = std::unique_ptr<http3_connection_driver, pmr_object_deleter<http3_connection_driver>>;
 
+    static void endpoint_notification(void*, http3_worker_datagram_endpoint::notification_kind) noexcept;
     [[nodiscard]] task<void> run();
-    [[nodiscard]] task<void> run_notifications();
+    [[nodiscard]] task<void> calibrate_partition();
+    [[nodiscard]] task<void> retire_endpoint();
     [[nodiscard]] task<void> yield();
     [[nodiscard]] bool turn();
     void receive(clock_type::time_point now);
@@ -90,7 +116,6 @@ private:
     void begin_stop() noexcept;
     [[nodiscard]] bool connections_retired() const noexcept;
     void report_failure(std::exception_ptr failure) noexcept;
-    void finish_channel() noexcept;
     [[nodiscard]] http3_connection_driver* find(ruvia::quic_connection_token token) noexcept;
 
     // Connection-driver services.
@@ -115,6 +140,7 @@ private:
     worker_signal signal_;
     http3_body_budget body_budget_;
     std::optional<http3_quic_tls_context> tls_;
+    std::optional<http3_worker_datagram_endpoint> endpoint_;
     std::optional<http3_quic_wire_owner> wire_;
     std::pmr::vector<driver_owner> drivers_;
     std::pmr::unordered_map<std::uint64_t, http3_connection_driver*> connections_;
@@ -125,19 +151,15 @@ private:
     std::optional<clock_type::time_point> local_deadline_;
     // Declared after every object its tasks borrow; joined before they die.
     task_scope joins_;
-    task_scope notifications_;
     task_scope tasks_;
-    asio::ip::udp::endpoint endpoint_;
+    std::optional<listener_binding> binding_;
     quic_cid_partition partition_;
-    std::atomic<http3_datagram_channel*> staged_channel_{};
-    std::atomic<bool> abandoned_{};
-    http3_datagram_channel* channel_{};
     std::exception_ptr failure_;
     std::size_t ready_head_{};
     bool started_{};
+    bool serving_{};
     bool draining_{};
     bool stopping_{};
-    bool native_stopping_{};
     bool failure_reported_{};
 };
 

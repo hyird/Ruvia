@@ -20,11 +20,21 @@ namespace ruvia::detail {
 // POSIX drains readiness in batches (recvmmsg/sendmmsg on Linux) and posts at
 // most one deferred send flush per batch; Windows keeps one overlapped
 // operation per admitted slot.
+//
+// Every worker binds its own socket to the shared listen endpoint: POSIX with
+// SO_REUSEADDR + SO_REUSEPORT (a missing or failing option fails prepare()),
+// Windows with SO_REUSEADDR, where the kernel delivers every datagram to the
+// most recently bound socket. On Linux, steering_partitions > 1 attaches the
+// reuseport classic BPF program that selects the group socket by the QUIC
+// destination connection id partition, the same function server connection
+// ids are generated with (ruvia-http quic_cid_partition); attaching it is
+// required, never silently skipped.
 class http3_udp_socket final {
 public:
     struct operation_limits final {
         std::size_t receive_{};
         std::size_t send_{};
+        std::uint32_t steering_partitions_{1};
     };
 
     struct receive_view final {

@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <span>
 #include <system_error>
@@ -13,7 +14,7 @@
 
 #include "ruvia/core/buffer_pool.h"
 
-#include "http3/http3_datagram_channel.h"
+#include "http3/http3_capacity.h"
 #include "http3/http3_udp_socket.h"
 
 namespace ruvia::detail {
@@ -21,7 +22,22 @@ namespace ruvia::detail {
 class http3_datagram_endpoint_types {
 public:
     using udp = asio::ip::udp;
-    using datagram = http3_datagram_channel::datagram;
+    struct datagram_view final {
+        std::span<const std::byte> bytes_;
+        udp::endpoint local_destination_;
+        udp::endpoint peer_;
+    };
+    // One received or outgoing packet; the lease is a slot of the owning
+    // worker's pool and returns there when the datagram is dropped.
+    struct datagram final {
+        buffer_lease storage_;
+        std::size_t size_{};
+        udp::endpoint local_destination_;
+        udp::endpoint peer_;
+        [[nodiscard]] datagram_view view() const noexcept {
+            return {storage_.bytes().first(size_), local_destination_, peer_};
+        }
+    };
     enum class notification_kind : std::uint8_t { input_available,
         output_drained,
         stopping,
@@ -48,10 +64,12 @@ public:
 // outlive native callback retirement. Destruction requires finalized callbacks.
 // send_owned_datagram moves only on admission: rejection or backpressure leaves
 // the caller's lease intact. An admitted lease survives stop until its callback.
-// Receive leases armed on the socket plus received packets awaiting routing stay
-// within http3_capacity::receive_slots; up to http3_capacity::send_slots sends
-// are in flight at once.
-class http3_acceptor_datagram_endpoint final {
+// Receive leases armed on the socket plus received packets awaiting take_receive
+// stay within http3_capacity::receive_slots; up to http3_capacity::send_slots
+// sends are in flight at once. Notifications run inside native completions on
+// the owner thread (input_available, output_drained, endpoint_retired) or inside
+// the owner's own request_stop (stopping).
+class http3_socket_datagram_endpoint final {
 public:
     using udp = http3_datagram_endpoint_types::udp;
     using datagram = http3_datagram_endpoint_types::datagram;
@@ -60,16 +78,17 @@ public:
     using pump_result = http3_datagram_endpoint_types::pump_result;
     using stop_status = http3_datagram_endpoint_types::stop_status;
 
-    http3_acceptor_datagram_endpoint(asio::io_context&, udp::endpoint, notification, buffer_pool&);
-    ~http3_acceptor_datagram_endpoint();
-    http3_acceptor_datagram_endpoint(const http3_acceptor_datagram_endpoint&) = delete;
-    http3_acceptor_datagram_endpoint& operator=(const http3_acceptor_datagram_endpoint&) = delete;
+    http3_socket_datagram_endpoint(asio::io_context&, udp::endpoint, std::uint32_t steering_partitions,
+        notification, buffer_pool&);
+    ~http3_socket_datagram_endpoint();
+    http3_socket_datagram_endpoint(const http3_socket_datagram_endpoint&) = delete;
+    http3_socket_datagram_endpoint& operator=(const http3_socket_datagram_endpoint&) = delete;
     void prepare();
     [[nodiscard]] std::uint16_t bound_port() const noexcept;
     [[nodiscard]] pump_result start() noexcept;
     // Received packets in completion order.
     [[nodiscard]] std::optional<datagram> take_receive() noexcept;
-    // Arms every receive slot that pool storage and routing backlog allow.
+    // Arms every receive slot that pool storage and the held backlog allow.
     void poll_receive() noexcept;
     [[nodiscard]] pump_result send_owned_datagram(datagram&&) noexcept;
     [[nodiscard]] bool outbound_capacity() const noexcept;
@@ -86,11 +105,11 @@ private:
     static constexpr std::size_t send_capacity = http3_capacity::send_slots;
     // Each native operation's callback context; its lease lives until the callback.
     struct receive_operation final {
-        http3_acceptor_datagram_endpoint* owner_{};
+        http3_socket_datagram_endpoint* owner_{};
         std::optional<buffer_lease> lease_;
     };
     struct send_operation final {
-        http3_acceptor_datagram_endpoint* owner_{};
+        http3_socket_datagram_endpoint* owner_{};
         std::optional<datagram> packet_;
     };
 
@@ -128,10 +147,11 @@ private:
     bool stopping_notified_{};
 };
 
-// Owner-affine channel borrow, never a socket or pool owner. The channel outlives
-// retire_channel(); callback context outlives endpoint destruction. Input bytes
-// expire at consume/stop; a packet reservation expires at commit/cancel/stop.
-// endpoint_retired means channel I/O loans retired, not peer QUIC acknowledgement.
+// The worker's own listener: a worker-local packet pool and the socket bound to
+// the shared listen endpoint, owner-affine. Input bytes expire at consume/stop;
+// a packet reservation expires at commit/cancel/stop. endpoint_retired means
+// every native operation retired, not peer QUIC acknowledgement. The io_context,
+// pool resource and callback context must outlive it.
 class http3_worker_datagram_endpoint final {
 public:
     using udp = http3_datagram_endpoint_types::udp;
@@ -142,45 +162,46 @@ public:
     using stop_status = http3_datagram_endpoint_types::stop_status;
     using received_datagram = http3_datagram_endpoint_types::received_datagram;
 
-    http3_worker_datagram_endpoint(http3_datagram_channel&, udp::endpoint, notification);
+    http3_worker_datagram_endpoint(asio::io_context&, udp::endpoint, std::uint32_t steering_partitions,
+        notification, std::pmr::memory_resource* pool_resource);
     ~http3_worker_datagram_endpoint();
     http3_worker_datagram_endpoint(const http3_worker_datagram_endpoint&) = delete;
     http3_worker_datagram_endpoint& operator=(const http3_worker_datagram_endpoint&) = delete;
+    // Binds the socket (and attaches steering); nothing is received before start().
     void prepare();
     [[nodiscard]] std::uint16_t bound_port() const noexcept;
     [[nodiscard]] pump_result start() noexcept;
-    [[nodiscard]] std::optional<received_datagram> receive_slot() const noexcept;
+    // The oldest received packet, stable until consume_receive().
+    [[nodiscard]] std::optional<received_datagram> receive_slot() noexcept;
     [[nodiscard]] pump_result consume_receive() noexcept;
+    // Reserves one pool slot for an outgoing packet; empty when no send slot or
+    // pool storage is available, or the endpoint is not running.
     [[nodiscard]] std::span<std::byte> packet_buffer() noexcept;
     void cancel_packet() noexcept;
+    // Commits the reserved packet; bytes must lie inside the reservation.
     [[nodiscard]] pump_result send_datagram(std::span<const std::byte>, const udp::endpoint&, const udp::endpoint&) noexcept;
     [[nodiscard]] bool outbound_capacity() const noexcept;
     [[nodiscard]] bool outbound_pending() const noexcept;
     [[nodiscard]] std::size_t outbound_count() const noexcept;
     [[nodiscard]] bool outbound_quiescent() const noexcept;
-    void poll_channel() noexcept;
+    // Re-arms receives freed by consumed input and completed sends.
+    void poll() noexcept;
     void request_stop() noexcept;
-    // Release the channel dependency only after all owner-affine I/O is retired,
-    // before the worker's final ACK lets Acceptor destroy channel storage.
-    void retire_channel() noexcept;
     [[nodiscard]] bool endpoint_retired() const noexcept;
     [[nodiscard]] stop_status status() const noexcept;
     [[nodiscard]] std::error_code error() const noexcept;
 
 private:
+    static void socket_notification(void*, notification_kind) noexcept;
     void require_owner_thread() const noexcept;
-    [[nodiscard]] bool valid_packet(std::span<const std::byte>, const udp::endpoint&, const udp::endpoint&) noexcept;
     void notify(notification_kind) noexcept;
-    void fail(std::error_code) noexcept;
-    udp::endpoint bind_endpoint_;
-    udp::endpoint bound_endpoint_;
     std::thread::id owner_thread_;
-    http3_datagram_channel* channel_;
     notification notification_;
-    std::error_code error_;
+    buffer_pool pool_;
+    http3_socket_datagram_endpoint socket_;
+    std::optional<datagram> current_;
+    std::optional<buffer_lease> reservation_;
     std::size_t callback_depth_{};
-    std::size_t observed_output_count_{};
-    bool prepared_{};
     bool started_{};
     bool stopping_{};
     bool stopping_notified_{};

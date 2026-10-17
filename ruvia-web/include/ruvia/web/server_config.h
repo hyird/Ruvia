@@ -163,9 +163,6 @@ enum class http3_mode : std::uint8_t {
 struct http3_listen_config final {
     http3_mode mode_{http3_mode::automatic};
     http3_qpack_config qpack_{};
-    // Acceptor-to-worker input slots and worker-to-Acceptor output credits.
-    std::size_t datagram_input_capacity_{64};
-    std::size_t datagram_output_capacity_{16};
     // Per-connection deadline to complete the QUIC/TLS handshake; default 10 seconds.
     std::chrono::milliseconds handshake_timeout_{std::chrono::seconds(10)};
     // Maximum time to drain admitted request streams and close the connection.

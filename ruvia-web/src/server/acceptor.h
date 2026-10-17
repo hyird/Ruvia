@@ -18,34 +18,26 @@
 #include <mswsock.h>
 #endif
 
-#include "ruvia/core/buffer_pool.h"
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/task.h"
-#include "ruvia/core/worker_notification.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_submission_view.h"
-#include "ruvia/http/quic_server.h"
 
-#include "http3/http3_capacity.h"
-#include "http3/http3_datagram_endpoint.h"
 #include "server/http_server_listener.h"
 #include "server/native_accepted_socket_ticket.h"
 
 namespace ruvia::detail {
 
-class http3_datagram_channel;
-
 // The ingress owner hands native TCP sockets off once for worker adoption.
 // Linux and Windows accept before the new socket's first reactor/IOCP
 // registration; other backends detach Asio's accepted socket. All use the same
-// bounded worker hand-off and capacity gate. UDP packets are forwarded by CID
-// without accessing worker connection state.
+// bounded worker hand-off and capacity gate. QUIC/UDP never passes through
+// here: every worker binds its own socket to the listener's endpoint
+// (http3_worker); prepare() only resolves that endpoint's port.
 // Target objects must outlive this owner and its joined thread. Only endpoint
-// values and the QUIC listener selection are retained from configuration.
-// Core owns the lifecycle: startup stages QUIC channels into the (unlaunched)
-// workers, serving starts accepting, and stopping retires QUIC before this
-// runtime finalizes itself.
+// values are retained from configuration. Core owns the lifecycle: serving
+// starts accepting, and stopping closes the listeners before this runtime
+// finalizes itself.
 class acceptor final {
 public:
     struct worker_target final {
@@ -53,10 +45,6 @@ public:
         void* object_{};
         bool (*available_)(void*) noexcept {};
         void (*accept_)(void*, native_accepted_socket_ticket&&) noexcept {};
-        // Stages immutable input before any worker launches. QUIC/TLS and HTTP/3
-        // configuration, construction, I/O driving and retirement belong to it.
-        void (*stage_quic_)(void*, http3_datagram_channel&, asio::ip::udp::endpoint,
-            ruvia::quic_cid_partition){};
     };
     using failure_callback = void (*)(void*) noexcept;
 
@@ -68,6 +56,9 @@ public:
 
     // Binds every TCP listener. Cold, once, before the runtime launches.
     void prepare();
+    // The HTTP/3 listener's UDP endpoint (its TCP listener's address and bound
+    // port), known after prepare(); nullopt without an HTTP/3 listener.
+    [[nodiscard]] std::optional<asio::ip::udp::endpoint> quic_endpoint() const noexcept;
     [[nodiscard]] worker_runtime& runtime() & noexcept {
         return runtime_;
     }
@@ -83,7 +74,7 @@ public:
 
 private:
     struct listener final {
-        listener(asio::io_context& context_value, asio::ip::tcp::endpoint configured, std::optional<http3_capacity> quic)
+        listener(asio::io_context& context_value, asio::ip::tcp::endpoint configured, bool quic)
             : socket_(context_value),
               endpoint_(std::move(configured)),
               retry_(context_value),
@@ -91,7 +82,7 @@ private:
         asio::ip::tcp::acceptor socket_;
         asio::ip::tcp::endpoint endpoint_;
         asio::steady_timer retry_;
-        std::optional<http3_capacity> quic_;
+        bool quic_;
 #if defined(_WIN32)
         LPFN_ACCEPTEX accept_function_{};
         // One accept is pending per listener. Its buffer remains alive until
@@ -100,14 +91,7 @@ private:
 #endif
     };
     using listener_ptr = std::unique_ptr<listener, pmr_object_deleter<listener>>;
-    using channel_ptr = std::unique_ptr<http3_datagram_channel,
-        pmr_object_deleter<http3_datagram_channel>>;
 
-    void prepare_quic();
-    task<void> run_quic();
-    void pump_quic() noexcept;
-    [[nodiscard]] bool quic_retired() noexcept;
-    static void datagram_ready(void*, http3_acceptor_datagram_endpoint::notification_kind) noexcept;
     void begin_accept(std::size_t index) noexcept;
     void accept_failed(std::size_t index, const asio::error_code& error) noexcept;
     [[nodiscard]] bool hand_off(std::size_t index, native_accepted_socket_ticket ticket) noexcept;
@@ -126,22 +110,11 @@ private:
     asio::io_context& io_context_;
     std::pmr::vector<listener_ptr> listeners_;
     std::pmr::vector<worker_target> targets_;
-    std::optional<buffer_pool> quic_pool_;
-    std::pmr::vector<channel_ptr> quic_channels_;
-    std::unique_ptr<http3_acceptor_datagram_endpoint, pmr_object_deleter<http3_acceptor_datagram_endpoint>> udp_;
-    worker_notification quic_notification_;
-    // Channels with Acceptor work since the last wake, and this wake's visits.
-    std::optional<http3_channel_ready_set> quic_ready_;
-    std::pmr::vector<std::uint32_t> quic_visits_;
-    asio::steady_timer quic_retirement_;
     void* failure_target_{};
     failure_callback failure_callback_{};
-    bool quic_running_{};
-    bool quic_stopping_{};
     std::size_t next_target_{};
     // Owner thread only.
     bool admitting_{true};
-    std::size_t next_output_{};
     std::atomic<std::size_t> refused_connections_{};
 };
 

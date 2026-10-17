@@ -5,7 +5,6 @@
 #include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_ascii.h"
 
-#include "http3/http3_capacity.h"
 #include "http3/http3_qpack_config_validation.h"
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"

@@ -1,7 +1,9 @@
 #include "server/web_worker_runtime.h"
 
+#include <algorithm>
 #include <exception>
 #include <memory>
+#include <stdexcept>
 #include <utility>
 
 #include <asio/bind_allocator.hpp>
@@ -11,7 +13,6 @@
 #include "ruvia/core/asio_task.h"
 
 #include "app/web_worker_dispatch.h"
-#include "http3/http3_datagram_channel.h"
 #include "http3/http3_worker.h"
 #include "router/route_table.h"
 #include "server/http_server_options_validation.h"
@@ -126,20 +127,28 @@ web_worker_handle web_worker_runtime::web_worker() const {
     return web_worker_dispatch::handle(web_worker_dispatch_);
 }
 
-void web_worker_runtime::stage_quic(http3_datagram_channel& channel,
-    asio::ip::udp::endpoint endpoint, ruvia::quic_cid_partition partition) {
-    if (!http3_ || runtime_.state() == runtime_lifecycle::state_type::running) {
-        throw std::logic_error("worker QUIC channel cannot be staged in this state");
+void web_worker_runtime::stage_quic(asio::ip::udp::endpoint endpoint, std::uint32_t worker_index,
+    std::uint32_t worker_count, std::span<const std::byte> probe_secret) {
+    if (!http3_ || runtime_.state() != runtime_lifecycle::state_type::ready) {
+        throw std::logic_error("worker QUIC listener cannot be staged in this state");
     }
-    http3_->stage(channel, std::move(endpoint), partition);
-    if (runtime_.state() != runtime_lifecycle::state_type::ready) {
-        http3_->abandon_before_launch();
+    http3_worker::listener_binding binding{
+        .endpoint_ = std::move(endpoint), .worker_index_ = worker_index, .worker_count_ = worker_count};
+    if (probe_secret.size() != binding.probe_secret_.size()) {
+        throw std::invalid_argument("worker QUIC probe secret has the wrong size");
     }
+    std::ranges::copy(probe_secret, binding.probe_secret_.begin());
+    http3_->stage(std::move(binding));
 }
 
 void web_worker_runtime::serve_on_context() {
     if (static_roots_.enabled()) {
         background_tasks_.spawn(static_roots_.refresh());
+    }
+    // Every worker is bound once serving starts; HTTP/3 may now calibrate
+    // its partition and receive.
+    if (http3_ && !stop_token_.stop_requested()) {
+        http3_->serve();
     }
     connections_.open_admission();
 }

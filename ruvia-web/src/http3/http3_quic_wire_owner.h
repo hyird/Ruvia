@@ -20,12 +20,12 @@
 
 namespace ruvia::detail {
 
-// The HTTP/3 worker's QUIC wire: the borrowed Acceptor datagram channel, the
+// The HTTP/3 worker's QUIC wire: the worker's own datagram endpoint, the
 // sans-I/O QUIC server and its expiry timer. Owner-thread only. Packet ingress
-// and egress live here, driven from the owner's single protocol loop; only
-// asynchronous timer events wake that loop (endpoint events are observed by the
-// owner's own calls). The worker io_context, channel and TLS context must
-// outlive it.
+// and egress live here, driven from the owner's single protocol loop; the owner
+// forwards endpoint notifications (on_endpoint_stopping) and timer events wake
+// that loop. The worker io_context, endpoint and TLS context must outlive it;
+// the endpoint is prepared and started by the owner before construction.
 class http3_quic_wire_owner final {
 public:
     using clock_type = std::chrono::steady_clock;
@@ -48,10 +48,9 @@ public:
 
     // timer_handler_resource is borrowed through owner destruction and supplies
     // the associated allocator for timer waits and their retirement posts.
-    // Prepares the endpoint and QUIC server without consuming channel input.
-    http3_quic_wire_owner(asio::io_context& worker_io, http3_datagram_channel& channel,
-        http3_worker_datagram_endpoint::udp::endpoint local_endpoint, http3_quic_tls_context& tls,
-        ruvia::quic_server_config transport_config,
+    // Builds the QUIC server without consuming endpoint input.
+    http3_quic_wire_owner(asio::io_context& worker_io, http3_worker_datagram_endpoint& endpoint,
+        http3_quic_tls_context& tls, ruvia::quic_server_config transport_config,
         std::pmr::memory_resource* timer_handler_resource, wake_type wake);
     ~http3_quic_wire_owner();
 
@@ -60,9 +59,11 @@ public:
     http3_quic_wire_owner(http3_quic_wire_owner&&) = delete;
     http3_quic_wire_owner& operator=(http3_quic_wire_owner&&) = delete;
 
-    // Starts consuming channel input. A failure is recorded and starts the stop.
+    // Starts consuming endpoint input. A failure is recorded and starts the stop.
     void start() noexcept;
-    void poll_channel() noexcept;
+    void poll_endpoint() noexcept;
+    // The endpoint stopped or failed; the wire stops producing and cancels its timer.
+    void on_endpoint_stopping() noexcept;
     // Routes one received datagram into the QUIC server and consumes it. A
     // Version Negotiation reply is sent here. kind none: nothing was received.
     [[nodiscard]] received_type receive_one(clock_type::time_point now);
@@ -70,7 +71,7 @@ public:
     [[nodiscard]] bool receive_pending() const noexcept {
         return started_ && !stopping_ && endpoint_.receive_slot().has_value();
     }
-    // Writes packets of one connection until it has none or the channel has no
+    // Writes packets of one connection until it has none or the endpoint has no
     // free output buffer. Returns the packet count, or nullopt when the
     // connection failed.
     [[nodiscard]] std::optional<std::size_t> send(ruvia::quic_connection_token token, clock_type::time_point now);
@@ -96,7 +97,7 @@ public:
 
     // Stop: no new input, timer cancelled. The caller retires every QUIC
     // connection first; poll_stop then destroys the transport once timer
-    // handlers and channel output loans have retired, and releases the channel.
+    // handlers and native endpoint operations have retired.
     void request_stop() noexcept;
     void poll_stop() noexcept;
     [[nodiscard]] bool stopped() const noexcept {
@@ -149,9 +150,6 @@ private:
         allocator_type allocator_;
     };
 
-    static void endpoint_notification(void* context,
-        http3_worker_datagram_endpoint::notification_kind kind) noexcept;
-
     void require_owner_thread() const noexcept;
     void wake() noexcept;
     [[nodiscard]] bool send_packet(std::span<std::byte> packet_buffer,
@@ -170,7 +168,7 @@ private:
     std::thread::id owner_thread_;
     asio::io_context& network_io_;
     wake_type wake_;
-    http3_worker_datagram_endpoint endpoint_;
+    http3_worker_datagram_endpoint& endpoint_;
     asio::steady_timer timer_;
     std::pmr::polymorphic_allocator<std::byte> timer_handler_allocator_;
     std::optional<http3_quic_server_transport> transport_;

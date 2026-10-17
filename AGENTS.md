@@ -73,8 +73,9 @@ ruvia-web  -> ruvia-core + ruvia-http
 
 - 生产 application 是进程级单例，通过 `ruvia::app()` 获取，不可自行构造、复制或移动；配置与生命周期入口唯一。
 - 每个业务 worker 独占一个 standalone Asio 事件循环。n 个业务 worker 另配一个网络接入线程；阻塞池和信号线程另计。
-- 接入线程只由 acceptor 承载：接受 TCP 并一次性交接，按目标 CID 分流 QUIC UDP 数据报。TCP 和 QUIC 连接固定绑定一个 worker，全部请求、I/O、TLS/crypto、协议定时器和连接生命周期由该 worker 管理至连接结束。
-- 初始及轮换 CID 保持同一 worker 分区；容量不足不得改绑。acceptor 与 worker 经有界数据报 channel 交互，双方退役确认且输出借用归还后才能销毁 channel。
+- 接入线程只由 acceptor 承载：接受 TCP 并一次性交接。TCP 和 QUIC 连接固定绑定一个 worker，全部请求、I/O、TLS/crypto、协议定时器和连接生命周期由该 worker 管理至连接结束。
+- QUIC 不经过 acceptor：每个 worker 在准备阶段各自把一个 UDP socket 绑定到 HTTP/3 监听端点（POSIX `SO_REUSEADDR` + `SO_REUSEPORT`，缺失或失败则启动失败；Windows `SO_REUSEADDR`，内核把全部数据报交给最后绑定的 socket，等效单 worker）。Linux 每个 worker 在自己的 socket 上附加同一份 reuseport cBPF，按目标 CID 前 4 字节分区选择组内 socket，与 `quic_cid_partition` 签发 CID 的函数一致；附加失败即启动失败。组内下标不可查询，服务阶段每个 worker 向监听端点发一个探测数据报，收到探测的 worker 据此学到自己的分区；未收到或收到多个即启动失败。其它平台分区数为 1。
+- 初始及轮换 CID 保持同一 worker 分区；对端端口变化由内核按 CID 引导回 owner，不跨 worker 转发数据报，也不迁移连接。
 - 独立 Web worker 组合复用同一个 acceptor，不维护 worker-local accept 旁路。
 - core 是线程、事件循环、调度入口和通用 worker 生命周期的唯一 owner。event_loop_pool 与 Web 组合复用同一承载，Web 不另建线程、事件循环或启停主链。
 - Web 只拥有 worker-local 业务状态、能力、连接 I/O 和接入/退役策略，通过明确的生命周期扩展点接入 core。worker 资源由统一 owner 管理，实例保持 worker-local。
