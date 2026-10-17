@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <memory_resource>
 #include <new>
 #include <stdexcept>
@@ -511,3 +512,77 @@ RUVIA_TEST(hpack_public_callback_exception_precedes_continuation_allocation_fail
     RUVIA_CHECK(saw_original);
 }
 #endif
+
+RUVIA_TEST(hpack_public_fifo_churn_preserves_rollback_and_size_changes) {
+    ruvia::testing::poisoned_retirement_resource resource;
+    {
+        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        std::pmr::unsynchronized_pool_resource wire_memory;
+        constexpr std::string_view name = "x-fifo";
+        constexpr std::size_t table_limit = 512;
+        std::deque<std::string> values;
+        std::size_t table_bytes = 0;
+        const auto evict = [&](std::size_t limit) {
+            while (table_bytes > limit) {
+                table_bytes -= name.size() + values.front().size() + 32;
+                values.pop_front();
+            }
+        };
+        const auto verify = [&] {
+            std::pmr::string indexes(&wire_memory);
+            ruvia::hpack_encoder::encode_indexed(indexes, 62);
+            if (values.size() > 1) {
+                ruvia::hpack_encoder::encode_indexed(indexes, static_cast<std::uint32_t>(61 + values.size()));
+            }
+            unsigned seen = 0;
+            const auto result = decoder.decode(indexes, [&](std::string_view actual_name, std::string_view actual_value) {
+                const auto& expected = seen++ == 0 ? values.back() : values.front();
+                return actual_name == name && actual_value == expected;
+            });
+            RUVIA_CHECK(result.decoded());
+            RUVIA_CHECK_EQ(seen, values.size() > 1 ? 2U : 1U);
+        };
+        std::pmr::string update(&wire_memory);
+        ruvia::hpack_encoder::encode_dynamic_table_size_update(update, table_limit);
+        RUVIA_CHECK(decoder.decode(update, [](auto, auto) { return true; }).decoded());
+        for (unsigned index = 0; index != 256; ++index) {
+            std::string value = std::to_string(index);
+            if ((index & 1U) != 0) {
+                value.append(64, static_cast<char>('a' + index % 26));
+            }
+            std::pmr::string insertion(&wire_memory);
+            ruvia::hpack_encoder::encode_header(insertion, name, value);
+            insertion[0] = static_cast<char>(0x40);
+            if (!values.empty() && index % 13 == 0) {
+                std::pmr::string failed(&wire_memory);
+                ruvia::hpack_encoder::encode_dynamic_table_size_update(failed, 0);
+                ruvia::hpack_encoder::encode_dynamic_table_size_update(failed, table_limit);
+                failed.append(insertion);
+                failed.push_back(static_cast<char>(0x80));
+                const auto rejected = decoder.decode(failed, [](auto, auto) { return true; });
+                RUVIA_CHECK(!rejected.decoded());
+                RUVIA_CHECK(rejected.error() == ruvia::hpack_decode_error::invalid_index);
+                verify();
+            }
+            const bool reject_callback = index % 7 == 0;
+            const auto result = decoder.decode(insertion, [reject_callback](auto, auto) { return !reject_callback; });
+            RUVIA_CHECK(result.decoded() != reject_callback);
+            if (reject_callback) {
+                RUVIA_CHECK(result.error() == ruvia::hpack_decode_error::callback_rejected);
+            }
+            values.push_back(value);
+            table_bytes += name.size() + value.size() + 32;
+            evict(table_limit);
+            verify();
+            if (index != 0 && index % 89 == 0) {
+                decoder.set_max_dynamic_table_size(128);
+                evict(128);
+                verify();
+                decoder.set_max_dynamic_table_size(table_limit);
+                RUVIA_CHECK(decoder.decode(update, [](auto, auto) { return true; }).decoded());
+                verify();
+            }
+        }
+    }
+    RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
+}
