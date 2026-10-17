@@ -48,6 +48,8 @@ public:
     /// An empty optional signals end-of-body. Only one read operation may run at a time;
     /// starting another before it completes throws because concurrent consumers cannot
     /// safely share the borrowed buffer. Unstarted operations may coexist.
+    /// HTTP/1 enters the interim-write operation only while a 100 Continue is
+    /// pending; later reads do not repeat that operation.
     [[nodiscard]] scoped_operation<std::optional<std::span<const std::byte>>> read() &;
     scoped_operation<std::optional<std::span<const std::byte>>> read() && = delete;
 

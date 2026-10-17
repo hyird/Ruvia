@@ -23,7 +23,9 @@ task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
         co_return initial_body_and_pipeline_.substr(0, content_length);
     }
 
-    co_await ensure_continue();
+    if (continue_pending_) {
+        co_await send_continue();
+    }
 
     // The initial segment is shorter than the body, so it is all body and no
     // pipelined bytes follow it; an earlier read() may also have left a

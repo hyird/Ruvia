@@ -70,7 +70,7 @@ public:
     task<std::string_view> read_all(std::pmr::string& body);
 
 private:
-    task<void> ensure_continue();
+    task<void> send_continue();
     void require_not_failed() const;
     [[nodiscard]] std::string_view initial_pipeline_remainder() const noexcept;
     [[nodiscard]] std::string_view buffered_pipeline_remainder() const noexcept;
@@ -108,7 +108,7 @@ private:
     // Set once a read fails: the framing position is unknown, so the body can
     // never be consumed further and must stay incomplete.
     bool failed_{false};
-    bool continue_sent_{false};
+    bool continue_pending_{false};
 };
 
 }  // namespace ruvia::detail

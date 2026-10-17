@@ -22,6 +22,9 @@ stream_body_reader<stream_type>::stream_body_reader(stream_type& stream,
       scanner_entry_(scanner_entry),
       interim_output_(interim_output),
       finished_(!body_plan_.requires_consumption()) {
+    const auto expectation_plan =
+        body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
+    continue_pending_ = expectation_plan.send_continue() != nullptr;
     const auto* chunked = body_plan_.chunked();
     if (chunked != nullptr && !chunked->transfer_codings().empty()) {
         const auto& codings = chunked->transfer_codings().values_;
@@ -64,7 +67,9 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
     require_not_failed();
     try {
         if (body_plan_.chunked() != nullptr) {
-            co_await ensure_continue();
+            if (continue_pending_) {
+                co_await send_continue();
+            }
             co_return co_await read_transfer_decoded_chunked();
         }
         const auto* known_length = body_plan_.known_length();
@@ -75,7 +80,9 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
             throw_request_body_too_large();
         }
 
-        co_await ensure_continue();
+        if (continue_pending_) {
+            co_await send_continue();
+        }
         co_return co_await read_known_length(known_length->content_length());
     } catch (...) {
         failed_ = true;
@@ -94,7 +101,9 @@ task<std::string_view> stream_body_reader<stream_type>::read_all(std::pmr::strin
             co_return std::string_view(body);
         }
 
-        co_await ensure_continue();
+        if (continue_pending_) {
+            co_await send_continue();
+        }
         while (auto chunk = co_await read_chunked()) {
             if (transfer_decoder_ != nullptr) {
                 decode_transfer_append(::ruvia::as_chars(*chunk), body);
@@ -144,13 +153,9 @@ void stream_body_reader<stream_type>::decode_transfer_append(
 }
 
 template <typename stream_type>
-task<void> stream_body_reader<stream_type>::ensure_continue() {
-    const auto expectation_plan =
-        body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
-    if (expectation_plan.send_continue() != nullptr && !continue_sent_) {
-        co_await interim_output_.send_continue();
-        continue_sent_ = true;
-    }
+task<void> stream_body_reader<stream_type>::send_continue() {
+    co_await interim_output_.send_continue();
+    continue_pending_ = false;
 }
 
 template <typename stream_type>
