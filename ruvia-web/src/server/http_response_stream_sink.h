@@ -116,6 +116,15 @@ private:
         state_.release_context();
     }
 
+    // The caller's coroutine frame retains the buffers and temporary scanner phase.
+    // Return the native awaiter instead of allocating another task frame per write.
+    template <typename buffers_type>
+    [[nodiscard]] auto write_to_stream(const buffers_type& buffers) {
+        return ruvia::async_asio([this, &buffers](auto handler) mutable {
+            asio::async_write(stream_, buffers, http_write_progress(scanner_entry_), std::move(handler));
+        });
+    }
+
     task<void> commit(http_response_trailer_intent trailer_intent) {
         if (state_.committed()) {
             if (trailer_intent == http_response_trailer_intent::present) {
@@ -166,25 +175,17 @@ private:
             }
             throw;
         }
-        const auto ec = co_await write_to_stream(asio::buffer(head_.view()));
+        std::error_code ec;
+        {
+            const connection_scanner::entry_type::phase_scope_type write_phase(
+                scanner_entry_, connection_scanner::phase_type::writing);
+            const auto completion = co_await write_to_stream(asio::buffer(head_.view()));
+            ec = completion.error_code();
+        }
         if (ec) {
             state_.mark_aborted();
             throw inbound_transport_error(ec, "failed to write HTTP response stream head");
         }
-    }
-
-    // One socket write, timed as `writing` for exactly its own duration; the
-    // handler's phase and its deadlines resume once it settles. Each partial
-    // transfer refreshes the deadline: write_timeout bounds inactivity, not
-    // the time a large chunk takes to drain to a slow reader.
-    template <typename buffers_type>
-    task<std::error_code> write_to_stream(const buffers_type& buffers) {
-        const connection_scanner::entry_type::phase_scope_type handler_phase(scanner_entry_);
-        scanner_entry_.set_phase(connection_scanner::phase_type::writing);
-        const auto write_completion = co_await ruvia::async_asio([this, &buffers](auto handler) mutable {
-            asio::async_write(stream_, buffers, http_write_progress(scanner_entry_), std::move(handler));
-        });
-        co_return write_completion.error_code();
     }
 
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
@@ -235,7 +236,13 @@ private:
         if (plan_.framing() == http_response_stream_framing::http1_close_delimited) {
             // No chunk framing: write the raw body bytes. The connection close
             // (forced once the stream ends) is what delimits the message.
-            const auto raw_ec = co_await write_to_stream(asio::buffer(chunk));
+            std::error_code raw_ec;
+            {
+                const connection_scanner::entry_type::phase_scope_type write_phase(
+                    scanner_entry_, connection_scanner::phase_type::writing);
+                const auto completion = co_await write_to_stream(asio::buffer(chunk));
+                raw_ec = completion.error_code();
+            }
             if (raw_ec) {
                 state_.mark_aborted();
                 throw inbound_transport_error(raw_ec, "failed to write HTTP response stream body");
@@ -246,7 +253,13 @@ private:
         const http1_chunk_header chunk_header(chunk.size());
         const std::array<asio::const_buffer, 3> buffers{asio::buffer(chunk_header.view()),
             asio::buffer(chunk), asio::buffer(http1_chunk_data_terminator)};
-        const auto write_ec = co_await write_to_stream(buffers);
+        std::error_code write_ec;
+        {
+            const connection_scanner::entry_type::phase_scope_type write_phase(
+                scanner_entry_, connection_scanner::phase_type::writing);
+            const auto completion = co_await write_to_stream(buffers);
+            write_ec = completion.error_code();
+        }
         if (write_ec) {
             state_.mark_aborted();
             throw inbound_transport_error(write_ec, "failed to write HTTP response stream body");
@@ -294,7 +307,13 @@ private:
         // this runtime layer only submits their byte views to the socket.
         const std::array<asio::const_buffer, 3> buffers{asio::buffer(http1_last_chunk_prefix),
             asio::buffer(trailers_), asio::buffer(http1_trailer_section_terminator)};
-        const auto ec = co_await write_to_stream(buffers);
+        std::error_code ec;
+        {
+            const connection_scanner::entry_type::phase_scope_type write_phase(
+                scanner_entry_, connection_scanner::phase_type::writing);
+            const auto completion = co_await write_to_stream(buffers);
+            ec = completion.error_code();
+        }
         if (ec) {
             state_.mark_aborted();
             throw inbound_transport_error(ec, "failed to write HTTP response stream end");

@@ -119,6 +119,10 @@ public:
                   phase_started_ms_(entry.phase_started_ms_),
                   phase_(entry.phase_),
                   reading_request_head_(entry.reading_request_head_) {}
+            phase_scope_type(entry_type& entry, phase_type next_phase) noexcept
+                : phase_scope_type(entry) {
+                entry_.set_phase(next_phase);
+            }
             ~phase_scope_type();
             phase_scope_type(const phase_scope_type&) = delete;
             phase_scope_type& operator=(const phase_scope_type&) = delete;
