@@ -85,18 +85,28 @@ public:
     // makes 405 conditional on the method being "known by the origin server",
     // so a token nobody registered is 501 no matter what the target path holds.
     [[nodiscard]] bool recognizes_method_token(std::string_view method_token) const noexcept;
-    // Canonical buffered-response application dispatch. An unresolved route
-    // first consults the configured document
-    // root, then falls through to 404/405/OPTIONS handling. Any failure escaping
-    // the routing machinery becomes an error response. Connection persistence
-    // and wire framing remain the HTTP/1 driver's responsibility. Pass
-    // document_root_binding::none() when no root is configured, or the
-    // worker's document_root_binding::configured(generation) lease otherwise.
+    // Canonical buffered-response application dispatch for unresolved requests
+    // and callers that need it to own the route context. An unresolved route
+    // first consults the configured document root, then falls through to
+    // 404/405/OPTIONS handling. Any failure escaping the routing machinery
+    // becomes an error response, except an inbound transport failure, which
+    // propagates. Connection persistence and wire framing remain the HTTP/1
+    // driver's responsibility. Pass document_root_binding::none() when no root
+    // is configured, or the worker's configured(generation) lease otherwise.
     // The caller owns response and keeps it alive until dispatch completes;
     // successful completion assigns the selected final response directly.
     task<void> dispatch_buffered_response(const http_request& request,
         const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
         context_services services, static_file_selection_mode static_file_mode, http_response& response) const;
+    // HTTP/1 holds a matched buffered route's context in its existing session
+    // frame and awaits this non-coroutine entry directly. Other callers use
+    // dispatch_buffered_response to own that lifetime. In both cases destroy
+    // the context before completing body consumption and before its arena.
+    [[nodiscard]] task<http_response> invoke_route(const resolved_route& resolved, context& context) const;
+    // Failed buffered/stream invocations share this context-aware completion,
+    // preserving metadata regardless of failure depth. If it fails, destroy
+    // the context before the request-only handle_exception fallback.
+    [[nodiscard]] task<http_response> finalize_failure(context& context, std::exception_ptr exception) const;
     task<http_response> handle_error(const http_request& request, request_memory& memory,
         http_error_info error, context_services services) const;
     task<http_response> handle_exception(const http_request& request, request_memory& memory,
@@ -153,7 +163,6 @@ private:
         http_known_method method, std::string_view path, route_match& match) const noexcept;
     [[nodiscard]] std::uint32_t allowed_methods(
         std::string_view path, http_known_method requested_method, std::uint64_t hash) const noexcept;
-    [[nodiscard]] task<http_response> invoke_route(const resolved_route& resolved, context& context) const;
     // The handler is copied into the coroutine frame: callers may pass one
     // bound from the resolved route as a temporary.
     [[nodiscard]] task<std::optional<http_response>> dispatch_stream_route(const http_request& request,
@@ -173,10 +182,6 @@ private:
     [[nodiscard]] task<http_response> run_unmatched_chain(context& context, route_handler_type terminal) const;
     [[nodiscard]] static task<void> contain_failure(
         const route_table& table, context& context, std::exception_ptr exception);
-    // A failure that escapes the entry hop is answered exactly like one
-    // contained below it, so the response keeps the context metadata and does
-    // not depend on how deep in the chain the failure was raised.
-    [[nodiscard]] task<http_response> finalize_failure(context& context, std::exception_ptr exception) const;
     [[nodiscard]] static task<void> contain_stream_failure(
         const route_table& table, context& context, std::exception_ptr exception);
     [[nodiscard]] task<http_response> handle_error(context& context, http_error_info error) const;

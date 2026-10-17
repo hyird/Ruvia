@@ -151,9 +151,7 @@ namespace {
         }
 
         const auto name_start = cursor_value;
-        while (cursor_value < headers_end && is_http_token_char(static_cast<unsigned char>(buffer[cursor_value]))) {
-            ++cursor_value;
-        }
+        cursor_value += http_token_prefix_size({buffer.data() + cursor_value, headers_end - cursor_value});
         if (cursor_value == name_start || cursor_value >= headers_end || buffer[cursor_value] != ':') {
             return http_parse_error::invalid_header;
         }

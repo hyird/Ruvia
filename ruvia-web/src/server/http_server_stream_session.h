@@ -14,6 +14,7 @@
 
 #include "context/context_services.h"
 #include "http/http_protocol_error_info.h"
+#include "router/route_context.h"
 #include "server/http1_interim_response_sink.h"
 #include "server/http1_request_sequence.h"
 #include "server/http1_response_output.h"
@@ -146,8 +147,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
                                             : connection_scanner::phase_type::reading_initial);
         auto idle_completion = co_await ruvia::async_asio<std::size_t>(
             [&stream, &idle_read_buffer](auto handler) mutable {
-                stream.async_read_some(
-                    asio::buffer(idle_read_buffer.data(), idle_read_buffer.size()), std::move(handler));
+                stream.async_read_some(asio::buffer(idle_read_buffer.data(), idle_read_buffer.size()), std::move(handler));
             });
         const auto idle_ec = idle_completion.error_code();
         // A clean peer end is answered as in the request read loop.
@@ -408,9 +408,34 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         break;
                     }
 
-                    co_await routes_value.dispatch_buffered_response(parsed_value.request_,
-                        route_resolution_value, request_memory_value, options_.document_root_.binding(),
-                        body_state.with_loader(admission->services()), admission->static_file_mode(), response);
+                    const auto route_services = body_state.with_loader(admission->services());
+                    std::exception_ptr dispatch_exception;
+                    try {
+                        // Keep the context in this existing frame rather than
+                        // allocating a dispatch coroutine for a matched route.
+                        // It must die before body completion hands off the
+                        // pipeline and before the request arena.
+                        auto context_value = make_route_context(request_memory_value,
+                            parsed_value.request_, *resolved, route_services.with_routes(routes_value));
+                        std::exception_ptr exception;
+                        try {
+                            response = co_await routes_value.invoke_route(*resolved, context_value);
+                        } catch (...) {
+                            exception = std::current_exception();
+                        }
+                        if (exception != nullptr) {
+                            response = co_await routes_value.finalize_failure(context_value, exception);
+                        }
+                    } catch (...) {
+                        dispatch_exception = std::current_exception();
+                    }
+                    if (dispatch_exception != nullptr) {
+                        // Context construction and failed error finalization
+                        // retain the dispatcher's outer request-only fallback.
+                        // Transport failures still escape to the session.
+                        response = co_await routes_value.handle_exception(
+                            parsed_value.request_, request_memory_value, dispatch_exception, route_services);
+                    }
 
                     request_completion.emplace(complete_successful_http_body_route(scanner_entry,
                         response, parsed_value.connection_plan_, request_sequence, body_state.consumption(),

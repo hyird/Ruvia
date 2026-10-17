@@ -20,24 +20,6 @@
 namespace ruvia {
 namespace {
 
-void validate_connection_control_field(std::string_view name, std::string_view value) {
-    if (http_ascii_equals_ignore_case(name, "Connection")) {
-        detail::http_connection_options options;
-        if (options.parse_field(value, detail::http_field_list_role::sender) !=
-            detail::http_field_list_parse_status::ok) {
-            throw std::invalid_argument("invalid HTTP Connection header");
-        }
-    } else if (http_ascii_equals_ignore_case(name, "Upgrade")) {
-        detail::http_upgrade_protocols protocols;
-        if (protocols.parse_field(value, detail::http_field_list_role::sender) !=
-            detail::http_field_list_parse_status::ok) {
-            throw std::invalid_argument("invalid HTTP Upgrade header");
-        }
-    } else if (http_ascii_equals_ignore_case(name, "TE")) {
-        throw std::invalid_argument("TE is not a response field");
-    }
-}
-
 // Every insertion path validates one field line completely, so a serialized
 // head only re-checks the rules that span several lines. Returns the field's
 // known bit.
@@ -51,13 +33,37 @@ void validate_connection_control_field(std::string_view name, std::string_view v
     if (!is_valid_http_header_value(value)) {
         throw std::invalid_argument("invalid HTTP header value");
     }
-    validate_connection_control_field(key, value);
+    const auto known_bit = detail::classify_response_header_name(key);
+    auto kind = detail::request_header_kind::other;
+    if (known_bit == detail::response_header_content_type) {
+        kind = detail::request_header_kind::content_type;
+    } else if (known_bit == detail::response_header_content_encoding) {
+        kind = detail::request_header_kind::content_encoding;
+    } else if (known_bit == detail::response_header_connection) {
+        detail::http_connection_options options;
+        if (options.parse_field(value, detail::http_field_list_role::sender) !=
+            detail::http_field_list_parse_status::ok) {
+            throw std::invalid_argument("invalid HTTP Connection header");
+        }
+    } else if (known_bit == 0) {
+        if (http_ascii_equals_ignore_case(key, "Trailer")) {
+            kind = detail::request_header_kind::trailer;
+        } else if (http_ascii_equals_ignore_case(key, "Upgrade")) {
+            detail::http_upgrade_protocols protocols;
+            if (protocols.parse_field(value, detail::http_field_list_role::sender) !=
+                detail::http_field_list_parse_status::ok) {
+                throw std::invalid_argument("invalid HTTP Upgrade header");
+            }
+        } else if (http_ascii_equals_ignore_case(key, "TE")) {
+            throw std::invalid_argument("TE is not a response field");
+        }
+    }
     detail::response_field_state fields;
-    if (detail::validate_response_field(detail::classify_request_header(key), value,
+    if (detail::validate_response_field(kind, value,
             detail::http_field_list_role::sender, fields) != detail::response_field_status::ok) {
         throw std::invalid_argument("invalid HTTP response field value");
     }
-    return detail::classify_response_header_name(key);
+    return known_bit;
 }
 
 [[nodiscard]] bool response_header_mode_appends(http_response_header_mode mode) {

@@ -110,11 +110,17 @@ public:
         progress_->set_phase(connection_scanner::phase_type::writing);
         const auto output = output_->view();
         const auto written = written_.bytes_;
-        const std::array<asio::const_buffer, 2> remaining =
-            written < output.size()
-                ? std::array<asio::const_buffer, 2>{asio::buffer(output.substr(written)), asio::buffer(body_)}
-                : std::array<asio::const_buffer, 2>{
-                      asio::buffer(body_.substr(written - output.size())), asio::const_buffer{}};
+        if (written >= output.size()) {
+            asio::async_write(*stream_, asio::buffer(body_.substr(written - output.size())),
+                http_write_progress(*progress_), std::forward<handler_type>(handler));
+            return;
+        }
+        const auto head = asio::buffer(output.substr(written));
+        if (body_.empty()) {
+            asio::async_write(*stream_, head, http_write_progress(*progress_), std::forward<handler_type>(handler));
+            return;
+        }
+        const std::array<asio::const_buffer, 2> remaining{head, asio::buffer(body_)};
         asio::async_write(*stream_, remaining, http_write_progress(*progress_), std::forward<handler_type>(handler));
     }
 
