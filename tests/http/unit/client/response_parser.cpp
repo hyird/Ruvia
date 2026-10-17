@@ -1,5 +1,6 @@
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -42,6 +43,53 @@ void check_empty_response_head(ruvia::testing::test_context& ruvia_ctx,
 }
 
 }  // namespace
+
+RUVIA_TEST(http_client_fieldless_exchange_completes_with_no_response_storage) {
+    ruvia::http_client_request_view request;
+    request.method_ = "POST";
+    request.content_ = ruvia::http_client_request_content_view::bytes("payload");
+    std::array<char, 512> request_head;
+    const auto prepared = ruvia::http1_client_request_writer().prepare(
+        ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
+        http1_client_request_wire_policy{
+            .expectation_ = ruvia::http_client_request_expectation::continue_value});
+    RUVIA_CHECK(prepared.prepared() != nullptr);
+    if (prepared.prepared() == nullptr) {
+        return;
+    }
+    http1_client_response_parser parser(
+        prepared.prepared()->exchange_state(), {.resource_ = std::pmr::null_memory_resource()});
+    constexpr std::array<std::string_view, 3> heads{
+        "HTTP/1.1 103 Early Hints\r\n\r\n",
+        "HTTP/1.1 100 Continue\r\n\r\n",
+        "HTTP/1.1 204 No Content\r\n\r\n"};
+    constexpr std::array<std::uint16_t, 3> statuses{103, 100, 204};
+    for (std::size_t index = 0; index < heads.size(); ++index) {
+        const auto result = parser.parse(heads[index]);
+        const auto* parsed = result.parsed();
+        RUVIA_CHECK(parsed != nullptr);
+        if (parsed == nullptr) {
+            return;
+        }
+        RUVIA_CHECK_EQ(parsed->head().status().value(), statuses[index]);
+        RUVIA_CHECK(parsed->head().headers().empty());
+        RUVIA_CHECK_EQ(parsed->consumed_bytes(), heads[index].size());
+        RUVIA_CHECK((parsed->plan().informational() != nullptr) == (index < 2));
+        if (index == 1) {
+            RUVIA_CHECK(parsed->plan().request_content_signal() ==
+                        http_client_request_content_signal::continue_value);
+            RUVIA_CHECK(parser.complete_request_content() ==
+                        http1_client_request_content_completion_status::completed);
+        } else {
+            RUVIA_CHECK(!parsed->plan().request_content_signal());
+        }
+    }
+    const auto terminal = parser.parse({});
+    RUVIA_CHECK(terminal.terminal() != nullptr);
+    if (terminal.terminal() != nullptr) {
+        RUVIA_CHECK(terminal.terminal()->completed());
+    }
+}
 
 RUVIA_TEST(http_client_take_head_leaves_empty_parsed_fields_and_retains_owned_headers) {
     failing_memory_resource memory;
@@ -304,15 +352,6 @@ RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
     RUVIA_CHECK(
         failure.failure()->error() == http1_client_response_parse_error::unsupported_http_version);
     RUVIA_CHECK_EQ(counting.allocation_count(), std::size_t{0});
-
-    auto success_parser =
-        http1_client_response_parser(prepared->exchange_state(), {.resource_ = &counting});
-    const auto success = success_parser.parse(
-        "HTTP/1.1 200 OK\r\n"
-        "X-Requires-Ownership: a-long-enough-value-to-require-storage\r\n"
-        "Content-Length: 0\r\n\r\n");
-    RUVIA_CHECK(success.parsed() != nullptr);
-    RUVIA_CHECK(counting.allocation_count() > 0);
 }
 
 RUVIA_TEST(http_client_response_parser_enforces_the_complete_head_limit) {

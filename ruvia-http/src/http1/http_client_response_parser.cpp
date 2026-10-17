@@ -160,13 +160,13 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     // they are copied below; neither failure nor allocation commits the exchange.
     auto head = detail::http_client_response_head_access::make(
         parsed_value.status_code_, parsed_value.protocol_version_, resource_);
-    auto& headers = detail::http_client_response_head_access::headers(head);
     if (parsed_value.header_count_ != 0) {
+        auto& headers = detail::http_client_response_head_access::headers(head);
         headers.reserve(parsed_value.header_count_);
-    }
-    for (std::size_t i = 0; i < parsed_value.header_count_; ++i) {
-        const auto& header_value = parsed_value.headers_[i];
-        headers.push_back(http_header::copy_of(header_value.name(), header_value.value(), resource_));
+        for (std::size_t i = 0; i < parsed_value.header_count_; ++i) {
+            const auto& header_value = parsed_value.headers_[i];
+            headers.push_back(http_header::copy_of(header_value.name(), header_value.value(), resource_));
+        }
     }
 
     auto result_value = detail::http1_client_response_parse_result_access::parsed(

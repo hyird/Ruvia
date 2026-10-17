@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <span>
@@ -30,6 +29,7 @@ enum class http_client_request_content_signal : std::uint8_t {
 
 // Owns response fields in the parser/connection PMR. That resource must outlive
 // the head and any field vector extracted from it.
+// Decoding a head without fields does not allocate field storage.
 class http_client_response_head final {
 public:
     http_client_response_head(const http_client_response_head&) = delete;
@@ -73,16 +73,15 @@ private:
     friend struct detail::http_client_response_head_access;
 
     http_client_response_head(http_status_code status, http_protocol_version protocol_version,
-        std::pmr::memory_resource* resource)
+        std::pmr::memory_resource* resource) noexcept
         : http_client_response_head(detail::http_resolved_pmr_resource_tag{}, status, protocol_version,
               detail::http_pmr_resource_or_default(resource)) {}
 
     http_client_response_head(detail::http_resolved_pmr_resource_tag, http_status_code status,
-        http_protocol_version protocol_version, std::pmr::memory_resource* resource)
+        http_protocol_version protocol_version, std::pmr::memory_resource* resource) noexcept
         : status_(status),
           protocol_version_(protocol_version),
-          headers_(detail::make_http_pmr_object<std::pmr::vector<http_header>>(
-              resource, std::initializer_list<http_header>{}, resource)) {}
+          headers_(nullptr, detail::http_pmr_object_deleter<std::pmr::vector<http_header>>{resource}) {}
 
     http_status_code status_;
     http_protocol_version protocol_version_;

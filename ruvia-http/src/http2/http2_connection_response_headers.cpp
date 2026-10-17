@@ -159,10 +159,12 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
         reserve_event_slots(1);
         auto head = http_client_response_head_access::make(
             *context_value.status_, http_protocol_version::http2, resource_);
-        auto& headers = http_client_response_head_access::headers(head);
-        headers.reserve(context_value.informational_fields_.size());
-        for (auto& field : context_value.informational_fields_) {
-            headers.push_back(std::move(field));
+        if (!context_value.informational_fields_.empty()) {
+            auto& headers = http_client_response_head_access::headers(head);
+            headers.reserve(context_value.informational_fields_.size());
+            for (auto& field : context_value.informational_fields_) {
+                headers.push_back(std::move(field));
+            }
         }
         std::optional<http_client_request_content_signal> signal;
         if (*context_value.status_ == http_status::continue_value && stream.release_request_continue()) {

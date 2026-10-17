@@ -48,12 +48,15 @@ namespace {
     }
     auto result_value =
         detail::http_client_response_head_access::make(*status, http_protocol_version::http2, resource);
-    auto& headers = detail::http_client_response_head_access::headers(result_value);
-    headers.reserve(stream.remote_header_count());
-    for (std::size_t index = 0; index < stream.remote_header_count(); ++index) {
-        const auto field = stream.remote_header_at(index);
-        headers.push_back(
-            http_header::copy_of(field.name_, field.value_, resource));
+    const auto header_count = stream.remote_header_count();
+    if (header_count != 0) {
+        auto& headers = detail::http_client_response_head_access::headers(result_value);
+        headers.reserve(header_count);
+        for (std::size_t index = 0; index < header_count; ++index) {
+            const auto field = stream.remote_header_at(index);
+            headers.push_back(
+                http_header::copy_of(field.name_, field.value_, resource));
+        }
     }
     return result_value;
 }
