@@ -299,6 +299,8 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
         }
         app.stop();
         runner.join();
-        RUVIA_CHECK(failure == nullptr);
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
     }
 }
