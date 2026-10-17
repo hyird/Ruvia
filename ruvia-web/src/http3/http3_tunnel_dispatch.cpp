@@ -23,6 +23,7 @@
 #include "router/route_resolution.h"
 #include "router/route_table.h"
 #include "server/http_upgrade_route.h"
+#include "server/inbound_transport_error.h"
 #include "websocket/http_websocket_connection.h"
 #include "websocket/http_websocket_session.h"
 #include "websocket/websocket_response_headers.h"
@@ -261,7 +262,7 @@ task<std::optional<http_datagram_input>> http3_buffered_request_dispatch::read_d
     }
     for (;;) {
         if (cancellation_requested() || tunnel_aborted_) {
-            throw std::system_error(std::make_error_code(std::errc::operation_canceled));
+            throw inbound_transport_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 tunnel ended");
         }
         if (auto native = session_.take_datagram(stream_id_)) {
             co_return http_datagram_input{std::move(*native), true};
@@ -276,7 +277,7 @@ task<std::optional<http_datagram_input>> http3_buffered_request_dispatch::read_d
             throw std::system_error(std::make_error_code(std::errc::no_buffer_space));
         }
         if (result_value.reset_) {
-            throw std::system_error(std::make_error_code(std::errc::connection_reset));
+            throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/3 tunnel stream reset");
         }
         if (result_value.bytes_ != 0) {
             owner_.notify_activation();

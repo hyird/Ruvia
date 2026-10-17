@@ -19,6 +19,7 @@
 #include "router/route_table.h"
 #include "server/http_buffered_response.h"
 #include "server/http_response_stream_dispatch.h"
+#include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
 
@@ -361,7 +362,7 @@ task<http3_buffered_request_dispatch::run_status_type> http3_buffered_request_di
 task<std::optional<std::span<const std::byte>>> http3_buffered_request_dispatch::read_request_body() {
     for (;;) {
         if (response_aborted()) {
-            throw std::system_error(std::make_error_code(std::errc::operation_canceled));
+            throw inbound_transport_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 request ended");
         }
         const auto failure = session_.streaming_body_failure(stream_id_);
         if (failure != http3_sans_io_session_engine::rejection_type::none) {
@@ -375,7 +376,7 @@ task<std::optional<std::span<const std::byte>>> http3_buffered_request_dispatch:
         const auto read = session_.read_tunnel_data(stream_id_, std::span<char>(active_request_body_.data(), active_request_body_.size()));
         active_request_body_.resize(read.bytes_);
         if (read.reset_) {
-            throw std::system_error(std::make_error_code(std::errc::connection_reset));
+            throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/3 request stream reset");
         }
         if (read.bytes_ != 0) {
             owner_.notify_activation();
@@ -391,12 +392,12 @@ task<std::optional<std::span<const std::byte>>> http3_buffered_request_dispatch:
 task<void> http3_buffered_request_dispatch::drain_request_body() {
     for (;;) {
         if (response_aborted()) {
-            throw std::system_error(std::make_error_code(std::errc::operation_canceled));
+            throw inbound_transport_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 request ended");
         }
         std::array<char, 4096> bytes_value{};
         const auto read = session_.read_tunnel_data(stream_id_, bytes_value);
         if (read.reset_) {
-            throw std::system_error(std::make_error_code(std::errc::connection_reset));
+            throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/3 request stream reset");
         }
         if (read.bytes_ != 0) {
             owner_.notify_activation();
@@ -736,7 +737,7 @@ task<void> http3_buffered_request_dispatch::publish_response_bytes(std::span<con
 
 task<void> http3_buffered_request_dispatch::publish_output() {
     if (!co_await await_output()) {
-        throw std::system_error(std::make_error_code(std::errc::operation_canceled));
+        throw inbound_transport_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 response ended");
     }
 }
 
@@ -788,7 +789,7 @@ task<void> http3_buffered_request_dispatch::finish_response() {
     notify_output();
     while (!stream_output_ended_) {
         if (response_aborted()) {
-            throw std::system_error(std::make_error_code(std::errc::operation_canceled));
+            throw inbound_transport_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 request ended");
         }
         co_await tunnel_output_available_.wait();
     }

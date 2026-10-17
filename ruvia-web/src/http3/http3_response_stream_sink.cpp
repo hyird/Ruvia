@@ -11,6 +11,7 @@
 
 #include "context/context_access.h"
 #include "http3/http3_buffered_request_dispatch.h"
+#include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
 http3_response_stream_sink::http3_response_stream_sink(http3_buffered_request_dispatch& publisher,
@@ -30,7 +31,7 @@ bool http3_response_stream_sink::aborted() const noexcept {
 }
 void http3_response_stream_sink::require_active() const {
     if (aborted()) {
-        throw std::system_error(std::make_error_code(std::errc::operation_canceled));
+        throw inbound_transport_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 response stream ended");
     }
 }
 task<timer_sleep_result> http3_response_stream_sink::sleep(std::chrono::milliseconds duration, const stop_token& stop) {
