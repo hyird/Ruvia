@@ -181,6 +181,8 @@ public:
         std::string_view origin, std::string_view field_value);
     [[nodiscard]] http2_submit_status submit_priority_update(std::uint32_t stream_id, http_priority_fields fields);
 
+    // Resetting an associated request leaves any in-progress PUSH_PROMISE block
+    // intact; its CONTINUATION can still publish a promised-stream event.
     [[nodiscard]] http2_submit_status submit_reset(std::uint32_t stream_id, http2_error_code error);
     [[nodiscard]] http2_received_data_acknowledge_status acknowledge(http2_received_data_credit&& credit);
     [[nodiscard]] bool has_queued_data(std::uint32_t stream_id) const noexcept;

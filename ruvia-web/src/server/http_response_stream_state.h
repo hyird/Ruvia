@@ -134,17 +134,11 @@ public:
         if (aborted()) {
             return;
         }
-        if (auto* value = std::get_if<body_open_type>(&state_)) {
-            auto plan = value->plan_;
+        if (const auto* committed_plan = commit_plan()) {
+            // A body-suppressed commit is already logically ended, but its head
+            // can still fail during transport delivery. Preserve that commit.
+            const auto plan = *committed_plan;
             state_.emplace<aborted_after_commit_type>(plan);
-            return;
-        }
-        if (auto* value = std::get_if<trailers_only_type>(&state_)) {
-            auto plan = value->plan_;
-            state_.emplace<aborted_after_commit_type>(plan);
-            return;
-        }
-        if (std::holds_alternative<ended_type>(state_)) {
             return;
         }
         state_.emplace<aborted_before_commit_type>();

@@ -107,7 +107,8 @@ public:
 
     /// Whether the response stream can no longer be delivered. HTTP/2 also
     /// observes peer reset or connection termination, including while sleeping.
-    /// HTTP/1 observes passive disconnect only when a subsequent write fails.
+    /// HTTP/1 observes passive disconnect only when a subsequent write fails,
+    /// including the head write of a response whose body is suppressed.
     /// False means no failure has been observed, not that the peer is connected.
     [[nodiscard]] bool aborted() const noexcept {
         return aborted_(target_);
