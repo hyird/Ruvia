@@ -121,10 +121,18 @@ void http2_connection::consume_event() noexcept {
 }
 
 void http2_connection::reserve_event_slots(std::size_t count) {
-    if (count > events_.max_size() - events_.size()) {
+    const auto max_size = events_.max_size();
+    if (count > max_size - events_.size()) {
         throw std::length_error("HTTP/2 event queue size overflow");
     }
-    events_.reserve(events_.size() + count);
+    // Reserve before state changes, without forcing a reallocation for every frame.
+    const auto required = events_.size() + count;
+    if (required > events_.capacity()) {
+        const auto doubled = events_.capacity() > max_size / 2
+                                 ? max_size
+                                 : events_.capacity() * 2;
+        events_.reserve(std::max(required, doubled));
+    }
 }
 
 std::span<const std::uint32_t> http2_connection::take_drained_data_streams() & noexcept {
