@@ -314,11 +314,17 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
 
     // The body loop stays in this frame: one exchange costs one receive frame.
     const auto max_response_bytes = pool_.config().max_response_bytes_;
-    // Decoder output scratch, borrowed from the worker for this body only:
-    // the frame stays small enough for the frame cache, and nothing is
-    // zero-filled.
+    // Empty framing still runs the decoder and boundary checks, but its
+    // mandatory nonempty scratch can stay inline. Other responses borrow
+    // uninitialized worker storage without inflating this coroutine frame.
+    const auto* zero_content = plan.zero_content();
+    const auto* known_length = zero_content ? zero_content->known_length() : plan.known_length();
+    const bool empty_body = !content_semantics_present ||
+                            (known_length != nullptr && !known_length->requires_body_consumption());
+    std::array<char, 1> empty_output;
     http_io_buffer output_storage(pool_.resource());
-    const auto output = output_storage.prepare(http_body_buffer_bytes);
+    const auto output = empty_body ? std::span<char>(empty_output)
+                                   : output_storage.prepare(http_body_buffer_bytes);
     bool eof = false;
     http1_close_policy persistence = http1_close_policy::close_after_response;
     for (;;) {
