@@ -176,26 +176,26 @@ struct postgresql_socket_wait final {
             earlier_timeout(remaining, io_timeout), deadline_value)};
 }
 
-// libpq's non-blocking send protocol: while PQflush() reports pending output,
-// wait for read OR write readiness and drain input when readable. A server
-// blocked sending results/notices would otherwise never read our query and
-// both sides deadlock on full socket buffers.
+// Called only after PQflush() reports pending output. Wait for read OR write
+// readiness and drain input before retrying the flush. A server blocked sending
+// results/notices would otherwise never read our query and both sides deadlock
+// on full socket buffers.
 task<void> flush_output(postgresql_pool& pool, std::size_t index, const operation_timeout& deadline_value) {
     auto* connection = pool.slot(index).connection_;
     while (true) {
-        const auto status = PQflush(connection);
-        if (status == 0) {
-            co_return;
-        }
-        if (status < 0) {
-            throw postgresql_error(*connection, "PQflush", db_error::code_type::io_error);
-        }
         co_await wait_for_postgresql(
             pool, index, db_socket_readiness::read | db_socket_readiness::write, deadline_value);
         // PQconsumeInput() never blocks; with no input available it is a
         // no-op, so calling it after a write-readiness wake is harmless.
         if (PQconsumeInput(connection) == 0) {
             throw postgresql_error(*connection, "PQconsumeInput", db_error::code_type::io_error);
+        }
+        const auto status = PQflush(connection);
+        if (status == 0) {
+            co_return;
+        }
+        if (status < 0) {
+            throw postgresql_error(*connection, "PQflush", db_error::code_type::io_error);
         }
     }
 }
@@ -242,9 +242,11 @@ task<db_error> postgresql_statement_failure(postgresql_pool& pool, std::size_t i
 }
 
 // `sql` is NUL-terminated (db_pool's hook contract), so it reaches libpq
-// without a copy.
-task<void> send_query(postgresql_pool& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, const operation_timeout& deadline_value, bool single_row) {
+// without a copy. Sending and the first flush are synchronous; only pending
+// output needs a flush_output task. The extended protocol preserves the
+// server-enforced single-statement boundary even without parameters.
+[[nodiscard]] bool send_query(postgresql_pool& pool, std::size_t index, std::string_view sql,
+    std::span<const db_value> params, bool single_row) {
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
@@ -265,7 +267,11 @@ task<void> send_query(postgresql_pool& pool, std::size_t index, std::string_view
     if (single_row && PQsetSingleRowMode(connection) == 0) {
         throw postgresql_error(*connection, "PQsetSingleRowMode", db_error::code_type::statement_failed);
     }
-    co_await flush_output(pool, index, deadline_value);
+    const auto status = PQflush(connection);
+    if (status < 0) {
+        throw postgresql_error(*connection, "PQflush", db_error::code_type::io_error);
+    }
+    return status != 0;
 }
 
 [[nodiscard]] operation_timeout postgresql_stream_deadline(
@@ -334,13 +340,21 @@ void postgresql_driver::close_connection(connection_type& connection) noexcept {
 
 task<db_rows> postgresql_driver::query(pool_type& pool, std::size_t index, std::string_view sql,
     std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
-    co_await send_query(pool, index, sql, params, deadline_value, false);
+    if (send_query(pool, index, sql, params, false)) {
+        co_await flush_output(pool, index, deadline_value);
+    }
     auto* connection = pool.slot(index).connection_;
 
     auto output = db_result_access::make_result(resource);
     bool retained_tuple_result = false;
     while (true) {
-        co_await wait_until_result_ready(pool, index, deadline_value);
+        // Keep readiness in this frame, including the final protocol boundary.
+        while (PQisBusy(connection) != 0) {
+            co_await wait_for_postgresql(pool, index, db_socket_readiness::read, deadline_value);
+            if (PQconsumeInput(connection) == 0) {
+                throw postgresql_error(*connection, "PQconsumeInput", db_error::code_type::io_error);
+            }
+        }
         postgresql_result_owner result_value(PQgetResult(connection));
         if (result_value.get() == nullptr) {
             break;
@@ -370,13 +384,20 @@ task<db_rows> postgresql_driver::query(pool_type& pool, std::size_t index, std::
 
 task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t index, std::string_view sql,
     std::span<const db_value> params, std::pmr::memory_resource*, const operation_timeout& deadline_value) {
-    co_await send_query(pool, index, sql, params, deadline_value, false);
+    if (send_query(pool, index, sql, params, false)) {
+        co_await flush_output(pool, index, deadline_value);
+    }
     auto* connection = pool.slot(index).connection_;
 
     std::uint64_t affected_rows = 0;
     bool returned_rows = false;
     while (true) {
-        co_await wait_until_result_ready(pool, index, deadline_value);
+        while (PQisBusy(connection) != 0) {
+            co_await wait_for_postgresql(pool, index, db_socket_readiness::read, deadline_value);
+            if (PQconsumeInput(connection) == 0) {
+                throw postgresql_error(*connection, "PQconsumeInput", db_error::code_type::io_error);
+            }
+        }
         postgresql_result_owner result_value(PQgetResult(connection));
         if (result_value.get() == nullptr) {
             break;
@@ -406,7 +427,9 @@ task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t ind
 // refuses a statement without a row set.
 task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql,
     std::span<const db_value> params, std::pmr::memory_resource*, const operation_timeout& deadline_value) {
-    co_await send_query(pool, index, sql, params, deadline_value, true);
+    if (send_query(pool, index, sql, params, true)) {
+        co_await flush_output(pool, index, deadline_value);
+    }
     co_return db_stream_start{};
 }
 

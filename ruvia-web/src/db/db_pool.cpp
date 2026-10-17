@@ -215,14 +215,6 @@ task<void> db_pool<driver_type>::connect_slot(std::size_t index, const operation
     }
 }
 
-template <typename driver_type>
-task<void> db_pool<driver_type>::ready_slot(std::size_t index, const operation_timeout& timeout) {
-    leases_.throw_if_aborted(index);
-    if (!slots_[index].connected_) {
-        co_await connect_slot(index, timeout);
-    }
-}
-
 // Resolving runs under the operation deadline with the slot's resolve deadline
 // armed around it, so a stalled resolve is torn down with everything else on
 // that slot. The deadline is checked once before arming and once after
@@ -370,7 +362,8 @@ db_socket_wait_result db_pool<driver_type>::slot_wait::await_resume() {
 
 // One buffered statement on a pooled connection: refuse empty SQL before
 // taking a slot, hold the slot for the duration, and close the connection if
-// the statement failed in a way that leaves the slot unusable. The lease
+// the statement failed in a way that leaves the slot unusable. Abort is checked
+// before reconnecting; a connected slot needs no readiness task. The lease
 // guard releases the slot either way.
 template <typename driver_type>
 template <typename result_type>
@@ -385,7 +378,10 @@ task<result_type> db_pool<driver_type>::run_leased(std::pmr::string sql, std::pm
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     std::exception_ptr failure;
     try {
-        co_await ready_slot(index, timeout);
+        leases_.throw_if_aborted(index);
+        if (!slots_[index].connected_) {
+            co_await connect_slot(index, timeout);
+        }
         co_return co_await statement(*this, index, sql, std::span<const db_value>(params), resource,
             timeout.constrained_by(config_.query_timeout_));
     } catch (...) {
@@ -430,7 +426,10 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     std::exception_ptr failure;
     try {
-        co_await ready_slot(index, timeout);
+        leases_.throw_if_aborted(index);
+        if (!slots_[index].connected_) {
+            co_await connect_slot(index, timeout);
+        }
         co_return co_await statement(*this, index, sql, std::span<const db_value>(params), resource,
             timeout.constrained_by(config_.query_timeout_));
     } catch (...) {
@@ -472,7 +471,10 @@ task<db_exec_result> db_pool<driver_type>::execute_on_transaction_slot(std::size
 template <typename driver_type>
 task<void> db_pool<driver_type>::execute_control(std::size_t index, std::string_view sql,
     std::pmr::memory_resource* resource, const operation_timeout& timeout) {
-    co_await ready_slot(index, timeout);
+    leases_.throw_if_aborted(index);
+    if (!slots_[index].connected_) {
+        co_await connect_slot(index, timeout);
+    }
     (void)co_await driver_type::execute(
         *this, index, sql, {}, resource, timeout.constrained_by(config_.query_timeout_));
 }
@@ -565,7 +567,10 @@ task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::p
     void* pending_result = nullptr;
     bool released = false;
     try {
-        co_await ready_slot(index, timeout);
+        leases_.throw_if_aborted(index);
+        if (!slots_[index].connected_) {
+            co_await connect_slot(index, timeout);
+        }
         const auto start = co_await driver_type::start_stream(*this, index, sql, std::span<const db_value>(params),
             resource, timeout.constrained_by(config_.query_timeout_));
         if (!start.returns_rows_) {

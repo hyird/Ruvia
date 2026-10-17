@@ -287,7 +287,6 @@ private:
         std::span<const db_value>, std::pmr::memory_resource*, const operation_timeout&);
 
     task<void> connect_slot(std::size_t index, const operation_timeout& timeout);
-    task<void> ready_slot(std::size_t index, const operation_timeout& timeout);
     template <typename result_type>
     task<result_type> run_leased(std::pmr::string sql, std::pmr::vector<db_value> params,
         std::pmr::memory_resource* resource, operation_options options, statement_hook_type<result_type> statement);
