@@ -117,10 +117,17 @@ void http2_connection::mark_send_window_opened() {
     }
     output_.reserve_additional(required_output_bytes);
     output_.reserve_segments_additional(required_output_segments);
-    if (drained_count > drained_data_streams_.max_size() - drained_data_streams_.size()) {
+    const auto max_size = drained_data_streams_.max_size();
+    if (drained_count > max_size - drained_data_streams_.size()) {
         throw std::length_error("HTTP/2 drained stream notification size overflow");
     }
-    drained_data_streams_.reserve(drained_data_streams_.size() + drained_count);
+    const auto required = drained_data_streams_.size() + drained_count;
+    if (required > drained_data_streams_.capacity()) {
+        const auto doubled = drained_data_streams_.capacity() > max_size / 2
+                                 ? max_size
+                                 : drained_data_streams_.capacity() * 2;
+        drained_data_streams_.reserve(std::max(required, doubled));
+    }
 
     // Drain core-owned DATA remainders now that a window may have opened. Completion
     // reports that the owner may submit the stream's next source chunk.

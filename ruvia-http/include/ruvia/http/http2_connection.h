@@ -80,8 +80,8 @@ struct http2_extended_connect_request_head_view final {
 // until every event produced by that call has been taken and every event-derived
 // byte view has expired. Calling feed() again may invalidate those views; owning
 // string temporaries are rejected at compile time.
-// Event queue capacity grows geometrically and is retained across drained batches
-// for reuse; its storage uses the connection's PMR resource.
+// Event, deferred-DATA and drain-notification queue capacities grow geometrically
+// and are retained for reuse; their storage uses the connection's PMR resource.
 // A fatal connection error rejects new stream output. Request leases and DATA
 // credits remain releasable without generating more frames. Graceful local or
 // peer GOAWAY still permits output on established streams that remain open.

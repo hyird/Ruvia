@@ -413,7 +413,17 @@ http2_data_submit_status http2_connection::prepare_data_submission(http2_stream_
         if (immediate_bytes < chunk.size()) {
             std::pmr::string remainder(resource_);
             remainder.append(chunk.data() + immediate_bytes, chunk.size() - immediate_bytes);
-            pending_sends_.reserve(pending_sends_.size() + 1);
+            if (pending_sends_.size() == pending_sends_.capacity()) {
+                const auto max_size = pending_sends_.max_size();
+                if (pending_sends_.size() == max_size) {
+                    throw std::length_error("HTTP/2 pending send queue size overflow");
+                }
+                const auto required = pending_sends_.size() + 1;
+                const auto doubled = pending_sends_.capacity() > max_size / 2
+                                         ? max_size
+                                         : pending_sends_.capacity() * 2;
+                pending_sends_.reserve(std::max(required, doubled));
+            }
             prepared.deferred_.emplace(http2_pending_send{
                 stream.id(), std::move(remainder), 0, end_stream, std::pmr::string(resource_)});
         }
