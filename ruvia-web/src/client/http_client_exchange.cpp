@@ -88,9 +88,10 @@ void http_client_exchange::release() noexcept {
     if (upload.response_taken_) {
         response_.consumer_ = false;
     }
-    if (abandon_upload && upload.response_taken_ && !state_value->complete_ &&
-        state_value->transport_ == detail::http_client_response_transport::http1 &&
-        state_value->pool_ != nullptr) {
+    if (abandon_upload && upload.response_taken_ &&
+        !state_value->complete_ && state_value->pool_ != nullptr &&
+        (state_value->transport_ == detail::http_client_response_transport::http1 ||
+            state_value->transport_ == detail::http_client_response_transport::http2)) {
         // Stopping the writer alone cannot interrupt a pending response read.
         // Keep the retained consumer's read scope open to observe cancellation.
         state_value->pool_->abandon_response(*state_value);

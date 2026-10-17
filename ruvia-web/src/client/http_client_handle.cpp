@@ -309,6 +309,10 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
             "HTTP response body exceeds read_all byte limit");
     }
     const auto total_remaining = remaining + state_value.pending_.size();
+    if (total_remaining == 0) {
+        state_value.discard_response_body();
+        co_return http_client_response_bytes{};
+    }
     auto reservation = detail::http_client_result_budget_lease::try_acquire(
         state_value.memory_domain_.result_budget_domain_, total_remaining);
     if (!reservation) {

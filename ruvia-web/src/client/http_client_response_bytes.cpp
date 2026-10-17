@@ -26,6 +26,8 @@ http_client_response_bytes::http_client_response_bytes(
     storage_->bytes_.reserve(reserve_bytes);
 }
 
+http_client_response_bytes::http_client_response_bytes() noexcept = default;
+
 http_client_response_bytes::http_client_response_bytes(http_client_response_bytes&&) noexcept = default;
 
 http_client_response_bytes& http_client_response_bytes::operator=(http_client_response_bytes&&) noexcept =

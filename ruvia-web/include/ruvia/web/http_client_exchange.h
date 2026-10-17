@@ -60,7 +60,7 @@ public:
     // does not stop an upload; a subsequent peer reset can stop it without losing
     // the completed response. Abandoning an active upload closes HTTP/1's
     // connection or resets HTTP/2's stream. This also cancels an incomplete
-    // HTTP/1 response already taken by the caller, but not one whose upload
+    // response already taken by the caller, but not one whose upload
     // has already ended or been stopped.
     // Once the response body completed successfully, later upload failure or
     // cancellation does not invalidate it. Pending upload operations still

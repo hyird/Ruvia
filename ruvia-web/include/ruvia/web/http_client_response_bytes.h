@@ -14,6 +14,7 @@ class http_client_result_budget_lease;
 // Independently owned bytes collected from an outbound HTTP response body.
 // The address-stable backing storage is detached from the client and worker
 // lifecycle, and its read-only view remains valid across moves until destruction.
+// Empty results retain neither backing storage nor a retained-byte reservation.
 class http_client_response_bytes final {
 public:
     http_client_response_bytes(const http_client_response_bytes&) = delete;
@@ -34,6 +35,7 @@ private:
 
     http_client_response_bytes(
         std::size_t reserve_bytes, detail::http_client_result_budget_lease&& lease_value);
+    http_client_response_bytes() noexcept;
     void append(std::span<const std::byte> bytes);
 
     std::unique_ptr<storage_type> storage_;

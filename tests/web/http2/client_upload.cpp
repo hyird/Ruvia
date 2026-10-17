@@ -28,6 +28,7 @@ enum class response_mode { ordinary,
     rejected,
     reset,
     abandoned,
+    abandoned_pending,
     buffered,
     disconnected };
 
@@ -167,7 +168,7 @@ private:
                     ruvia::hpack_encoder::encode_header(fields, "content-length", std::to_string(body.size()));
                 }
                 append_frame(wire, type, empty_final ? 5 : 4, header->stream_id_, fields);
-                if (!empty_final) {
+                if (!empty_final && (requests_ != 1 || mode_ != response_mode::abandoned_pending)) {
                     append_frame(wire, ruvia::http2_frame_type::data, 1, header->stream_id_, body);
                 }
                 if (requests_ == 1 && mode_ == response_mode::reset) {
@@ -221,7 +222,23 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                                                          .request_timeout_ = std::chrono::seconds(2),
                                                          .protocol_ = ruvia::http_client_protocol::http2_only});
         try {
-            if (mode == response_mode::buffered) {
+            if (mode == response_mode::abandoned_pending) {
+                std::optional<ruvia::http_client_response> retained;
+                {
+                    auto exchange = co_await client.handle().open_request(
+                        {.method_ = "POST", .target_ = "/upload"}, {.content_length_ = 7});
+                    retained.emplace(co_await exchange.response());
+                    RUVIA_CHECK(retained->status() == ruvia::http_status::ok);
+                    RUVIA_CHECK(!retained->body().complete());
+                }
+                bool cancelled = false;
+                try {
+                    (void)co_await retained->body().read_all();
+                } catch (const ruvia::http_client_error& error) {
+                    cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+                }
+                RUVIA_CHECK(cancelled);
+            } else if (mode == response_mode::buffered) {
                 const std::string payload(65536, 'b');
                 auto response = co_await client.handle().send({.method_ = "POST", .target_ = "/upload", .content_ = ruvia::http_client_request_content_view::bytes(payload)});
                 RUVIA_CHECK(response.status() == ruvia::http_status::no_content);
@@ -329,6 +346,9 @@ RUVIA_TEST(http2_client_early_final_no_error_reset_preserves_response) {
 }
 RUVIA_TEST(http2_client_early_final_abandoned_upload_retires_stream) {
     http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::abandoned);
+}
+RUVIA_TEST(http2_client_abandoned_upload_cancels_its_retained_incomplete_response) {
+    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::abandoned_pending);
 }
 
 RUVIA_TEST(http2_client_early_final_drains_window_blocked_buffered_upload_before_reuse) {
