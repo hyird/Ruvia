@@ -583,13 +583,19 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                                                    compaction != nullptr &&
                                                    compaction->consumed_bytes() < read_buffer.pending().size() &&
                                                    http_server_worker_running(state_);
-                // The head is checked in full before it touches the output, so a
-                // failure leaves the responses held before it intact.
+                // Head validation fails before touching output. Body coalescing can
+                // fail after appending a head, leaving an incomplete buffered message.
+                const auto held_output_bytes = response_head.view().size();
                 std::exception_ptr head_failure;
                 try {
                     started_write.emplace(start_response_write(response_head, response, *planned_response,
                         next_request_buffered ? pipelined_output_batch_bytes : 0));
                 } catch (...) {
+                    if (response_head.view().size() != held_output_bytes) {
+                        // Never flush an orphan head or append an error response as
+                        // its body. Propagate the real failure and abort this connection.
+                        throw;
+                    }
                     head_failure = std::current_exception();
                 }
                 if (head_failure == nullptr) {

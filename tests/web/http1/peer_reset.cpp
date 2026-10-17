@@ -40,6 +40,8 @@ constexpr auto idle_timeout = 1s;
 std::atomic<bool> peer_closed{false};
 std::atomic<std::size_t> error_handler_calls{0};
 std::atomic<std::size_t> handlers_finished{0};
+std::atomic<bool> head_write_failed{false};
+std::atomic<bool> head_write_aborted{false};
 
 ruvia::task<void> wait_for_peer_close(ruvia::context& c) {
     while (!peer_closed.load()) {
@@ -55,6 +57,7 @@ class peer_reset_routes final {
     RUVIA_GET("/peer-reset/inform", inform);
     RUVIA_POST("/peer-reset/body", body);
     RUVIA_GET_STREAM("/peer-reset/idle-stream", idle_stream);
+    RUVIA_GET_STREAM("/peer-reset/head-only", head_only);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> inform(ruvia::context& c) {
@@ -82,6 +85,22 @@ class peer_reset_routes final {
         co_await c.stream_text().write("first");
         (void)co_await ruvia::sleep_for(c.worker(), idle_timeout + 500ms);
         co_await c.stream_text().write("second");
+        handlers_finished.fetch_add(1);
+    }
+
+    ruvia::task<void> head_only(ruvia::context& c) {
+        c.status(ruvia::http_status::no_content);
+        // A local timeout guarantees a closed socket; a peer RST alone need
+        // not make the first small write fail on every supported transport.
+        (void)co_await ruvia::sleep_for(c.worker(), idle_timeout + 500ms);
+        auto& writer = c.stream();
+        try {
+            co_await writer.end();
+        } catch (const std::exception&) {
+            head_write_failed.store(true);
+            head_write_aborted.store(writer.aborted());
+            throw;
+        }
         handlers_finished.fetch_add(1);
     }
 };
@@ -165,6 +184,12 @@ RUVIA_TEST(a_peer_reset_during_a_handlers_transport_write_is_a_normal_connection
         send_and_read_to_close(io, endpoint, "GET /peer-reset/idle-stream HTTP/1.1\r\nHost: localhost\r\n\r\n");
         wait_until_idle(app);
         RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
+
+        send_and_read_to_close(io, endpoint, "GET /peer-reset/head-only HTTP/1.1\r\nHost: localhost\r\n\r\n");
+        wait_until_idle(app);
+        RUVIA_CHECK_EQ(app.http_stats().active_connections_, std::size_t{0});
+        RUVIA_CHECK(head_write_failed.load());
+        RUVIA_CHECK(head_write_aborted.load());
 
         RUVIA_CHECK_EQ(error_handler_calls.load(), std::size_t{0});
         RUVIA_CHECK_EQ(app.http_stats().connection_failures_, std::size_t{0});

@@ -42,6 +42,12 @@ void http2_connection::detach_active_header_block(http2_stream_state& stream) {
     if (local_connection_state_.fatal_failure() != nullptr || !header_continuation_.matches(stream.id())) {
         return;
     }
+    if (header_continuation_.kind() == http2_header_block_kind::push_promise) {
+        // The latch names the associated stream, but the compressed prefix belongs
+        // to the independent promised-stream scratch. A local reset of the parent
+        // must still let CONTINUATION complete HPACK and reserve the promised stream.
+        return;
+    }
     if (header_continuation_.kind() == http2_header_block_kind::discarded) {
         // An owner-side terminal transition won the race while an already-invalid
         // block was still awaiting CONTINUATION. The RST just emitted is now the final
