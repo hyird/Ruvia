@@ -79,12 +79,7 @@ public:
             compact_consumed_prefix();
             return http2_output_consume_status::pending;
         }
-        const auto logical_end = base_offset_ + bytes_.size();
-        bytes_.clear();
-        segments_.clear();
-        segment_offset_ = 0;
-        base_offset_ = logical_end;
-        consumed_ = 0;
+        reset_after_drain(base_offset_ + bytes_.size());
         return http2_output_consume_status::drained;
     }
 
@@ -189,7 +184,15 @@ public:
             return {http2_output_batch_status::unaligned, 0};
         }
         const auto batch_bytes = end - consumed_;
-        into.append(bytes_.data() + consumed_, batch_bytes);
+        const bool transfer_storage = consumed_ == 0 && end == bytes_.size() &&
+                                      into.empty() && into.get_allocator() == bytes_.get_allocator();
+        std::size_t logical_end{};
+        if (transfer_storage) {
+            logical_end = base_offset_ + end;
+            into.swap(bytes_);
+        } else {
+            into.append(bytes_.data() + consumed_, batch_bytes);
+        }
         if (observer != nullptr) {
             for (std::size_t i = 0; i < segment_count; ++i) {
                 const auto& segment = segments_[segment_offset_ + i];
@@ -199,7 +202,11 @@ public:
                 }
             }
         }
-        consume_batch(batch_bytes);
+        if (transfer_storage) {
+            reset_after_drain(logical_end);
+        } else {
+            consume_batch(batch_bytes);
+        }
         return {http2_output_batch_status::taken, batch_bytes};
     }
 
@@ -224,6 +231,14 @@ public:
     }
 
 private:
+    void reset_after_drain(std::size_t logical_end) noexcept {
+        bytes_.clear();
+        segments_.clear();
+        segment_offset_ = 0;
+        consumed_ = 0;
+        base_offset_ = logical_end;
+    }
+
     void append_raw(std::string_view bytes_value) {
         if (!bytes_value.empty()) {
             bytes_.append(bytes_value.data(), bytes_value.size());
