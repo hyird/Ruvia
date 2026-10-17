@@ -31,9 +31,19 @@ void http_client_connection::register_http2_stream(http2_stream& stream) {
     http2_streams_.push_back(&stream);
 }
 
+bool http_client_connection::http2_exchange_complete(const http2_stream& stream) noexcept {
+    if (!stream.complete_) {
+        return false;
+    }
+    if (const auto* output = stream.state_->output()) {
+        return output->ended_ || output->stopped_;
+    }
+    return !http2_.has_connection() || !http2_.connection().has_queued_data(stream.stream_id_);
+}
+
 void http_client_connection::fail_http2_stream(
     http2_stream& stream, std::exception_ptr failure, bool reset_stream) noexcept {
-    if (stream.complete_ || stream.failed()) {
+    if (http2_exchange_complete(stream) || stream.failed()) {
         return;
     }
     stream.failure_ = std::move(failure);
@@ -53,11 +63,13 @@ void http_client_connection::release_response_data(http_client_response_state& s
     http2_.wake_writer();
 }
 
-void http_client_connection::publish_http2_head(http2_stream& stream, http_client_response_head head) {
+void http_client_connection::publish_http2_head(http2_stream& stream, http2_response_head_event& event) {
     auto& state_value = *stream.state_;
-    if (state_value.upload_ && !state_value.upload_->output_.ended_) {
+    if (state_value.upload_ && !state_value.upload_->output_.ended_ &&
+        event.request_content_signal() == http_client_request_content_signal::exchange_complete) {
         state_value.upload_->output_.stop();
     }
+    auto head = std::move(event).take_head();
     state_value.status_ = head.status();
     state_value.protocol_version_ = head.protocol_version();
     state_value.response_body_plan_ = plan_http_response_body(state_value.request_method_, state_value.status_);
@@ -156,6 +168,10 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
             throw http_client_error(http_client_error::code_type::timeout, "HTTP/2 response body decoding timed out");
         }
         stream->complete_ = true;
+        // Response EOF is independent of the request send half (RFC 9113 8.1).
+        // A consumer can finish reading now and still write/end its upload.
+        state_value.complete_ = true;
+        state_value.data_signal_.notify();
         stream->signal_.notify();
     } catch (...) {
         fail_http2_stream(*stream, std::current_exception(), false);
@@ -192,7 +208,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
             return;
         }
         try {
-            publish_http2_head(*stream, std::move(*head).take_head());
+            publish_http2_head(*stream, *head);
         } catch (...) {
             fail_http2_stream(*stream, std::current_exception(), true);
         }
@@ -218,10 +234,17 @@ void http_client_connection::on_http2_event(http2_event& event) {
         finish_http2_message(end->stream_id(), *end);
     } else if (const auto* closed = event.stream_closed()) {
         if (auto* stream = find_http2_stream(closed->stream_id());
-            stream != nullptr && !stream->complete_ && !stream->failed() && !stream->retryable_) {
-            const auto& state_value = *stream->state_;
-            if (!state_value.tunnel_ || !state_value.tunnel_->accepted_ || !state_value.tunnel_->receive_ended_ ||
-                !state_value.tunnel_->output_.end_requested_) {
+            stream != nullptr && !stream->failed() && !stream->retryable_) {
+            auto& state_value = *stream->state_;
+            if (stream->complete_) {
+                // A peer can stop the remaining upload after a complete response,
+                // including RST_STREAM(NO_ERROR); preserve that response.
+                if (auto* output = state_value.output()) {
+                    output->stop();
+                }
+                stream->signal_.notify();
+            } else if (!state_value.tunnel_ || !state_value.tunnel_->accepted_ || !state_value.tunnel_->receive_ended_ ||
+                       !state_value.tunnel_->output_.end_requested_) {
                 stream->error_ = http_client_error::code_type::protocol_error;
                 stream->signal_.notify();
             }
@@ -256,14 +279,16 @@ void http_client_connection::on_http2_failure(
         stream_error = http_client_transport_error(transport);
     }
     for (auto* stream : http2_streams_) {
-        if (!stream->complete_ && !stream->failed() && !stream->retryable_) {
+        if (!http2_exchange_complete(*stream) && !stream->failed() && !stream->retryable_) {
             if (failure != nullptr) {
                 stream->failure_ = failure;
             } else {
                 stream->error_ = stream_error;
             }
-            stream->signal_.notify();
         }
+        // A driver can still await its final drain notification after the wire
+        // halves closed. Failure must wake it even when its response stays valid.
+        stream->signal_.notify();
     }
 }
 
@@ -274,7 +299,7 @@ void http_client_connection::cancel_http2_stream(std::uint64_t request_id, clien
         return;
     }
     auto& stream = **match;
-    if (stream.complete_ || stream.failed() || stream.retryable_) {
+    if (http2_exchange_complete(stream) || stream.failed() || stream.retryable_) {
         return;
     }
     stream.error_ = http_client_abort_error(reason);
@@ -284,7 +309,9 @@ void http_client_connection::cancel_http2_stream(std::uint64_t request_id, clien
 }
 
 void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept {
-    if (!stream.complete_ && !stream.retryable_) {
+    // The core decides whether a half is still open. In particular a successful
+    // early response does not retire an abandoned or Continue-cancelled upload.
+    if (!stream.retryable_) {
         http2_.submit_reset(stream.stream_id_);
     }
     release_response_data(*stream.state_);
@@ -507,7 +534,7 @@ task<void> http_client_connection::execute_http2(const http_client_request_stora
                     });
             }
             const auto streaming = [&] {
-                return !upload->ended_ && !upload->stopped_ && !stream.complete_ && !stream.failed() && !stream.retryable_;
+                return !upload->ended_ && !upload->stopped_ && !stream.failed() && !stream.retryable_;
             };
             const auto wait_queued = [&]() -> task<void> {
                 http2_.wake_writer();
@@ -573,7 +600,8 @@ task<void> http_client_connection::execute_http2(const http_client_request_stora
                 }
             }
         }
-        while (!stream.complete_ && !stream.failed() && !stream.retryable_) {
+        while ((!stream.complete_ || (request.output() == nullptr && connection.has_queued_data(stream.stream_id_))) &&
+               !stream.failed() && !stream.retryable_) {
             if (request.tunnel() != nullptr && request.tunnel()->accepted_ && request.tunnel()->receive_ended_ &&
                 request.tunnel()->output_.ended_) {
                 stream.complete_ = true;

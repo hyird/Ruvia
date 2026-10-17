@@ -86,6 +86,8 @@ struct http2_extended_connect_request_head_view final {
 // A dropped lease or credit whose release fails is retried by the next feed(),
 // next_event(), output drain, submit_data(), finish_request(), or submit_reset();
 // const queries never mutate.
+// For a streaming client request, response END_STREAM closes only the receive
+// half. Finish or explicitly reset the request send half even after message_end.
 class http2_connection final {
 public:
     [[nodiscard]] static http2_connection server(http2_connection_options options = {});
@@ -198,6 +200,9 @@ public:
     // access to the connection's stream table or mutable protocol state.
     [[nodiscard]] std::optional<http2_server_request_view> server_request_view(
         std::uint32_t stream_id) const noexcept;
+    // Reports each queued-send drain once, even if its final DATA closed the stream.
+    // A reset cancels untaken notifications. IDs borrow storage until the next
+    // take_drained_data_streams() call or connection destruction.
     [[nodiscard]] std::span<const std::uint32_t> take_drained_data_streams() & noexcept;
     std::span<const std::uint32_t> take_drained_data_streams() && = delete;
     // Consume the server request event only after every request-derived view has

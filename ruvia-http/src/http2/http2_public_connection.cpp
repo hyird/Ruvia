@@ -299,13 +299,13 @@ std::optional<http2_event> http2_connection::next_event() {
                 auto result = http2_event::message_end(
                     value.stream_id_, stream->take_remote_trailers(), message_content_semantics(*stream));
                 if (client) {
-                    connection.release_stream_lease(value.stream_id_);
+                    connection.release_stream_lease_after_remote_end(value.stream_id_);
                 }
                 return result;
             } else {
                 if constexpr (std::is_same_v<value_type, http2_tunnel_end_event>) {
                     if (client) {
-                        connection.release_stream_lease_after_tunnel_end(value.stream_id());
+                        connection.release_stream_lease_after_remote_end(value.stream_id());
                     }
                 } else if constexpr (std::is_same_v<value_type, http2_stream_closed_event> ||
                                      std::is_same_v<value_type, http2_request_unprocessed_event>) {

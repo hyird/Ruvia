@@ -16,16 +16,16 @@
 namespace ruvia::detail {
 
 template <http2_header_block_kind kind>
-bool http2_connection::complete_decoded_header_block(http2_stream_state& stream) {
+bool http2_connection::complete_decoded_header_block(http2_stream_state& stream, std::string_view block) {
     static_assert(kind == http2_header_block_kind::initial || kind == http2_header_block_kind::trailers);
     http2_stream_header_decode_transaction transaction{
         stream, kind == http2_header_block_kind::initial && role_ == http2_role::server};
     auto hpack_transaction = decoder_.begin_transaction();
     header_decode_status status = header_decode_status::protocol_error;
     if constexpr (kind == http2_header_block_kind::initial) {
-        status = decode_initial_header_block(stream, hpack_transaction);
+        status = decode_initial_header_block(stream, block, hpack_transaction);
     } else {
-        status = finish_trailer_block(stream, hpack_transaction);
+        status = finish_trailer_block(stream, block, hpack_transaction);
     }
     if (status != header_decode_status::ok) {
         transaction.rollback();
@@ -187,13 +187,14 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
         return result_value;
     }
 
-    // Buffering the compressed fragment is the first fallible operation. Do it
-    // before publishing END_STREAM in the remote lifecycle; if the PMR rejects the
-    // append, a retry sees the original head-pending state. A newly created stream
-    // is likewise removed on this failure because it has not become observable yet.
+    // A complete single-frame block borrows the input only for this synchronous
+    // decode. Incomplete blocks must own their compressed prefix before publishing
+    // END_STREAM; a failed append leaves the complete frame retryable.
+    const bool end_headers = (header_value.flags_ & http2_flag_end_headers) != 0;
     bool started_header_block = false;
     try {
-        started_header_block = http2_start_header_block(*stream, fragment);
+        started_header_block = end_headers ? fragment.size() <= max_http2_encoded_header_block_bytes
+                                           : http2_start_header_block(*stream, fragment);
     } catch (...) {
         if (created_peer_stream) {
             streams_.remove(header_value.stream_id_);
@@ -204,8 +205,8 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
         if (created_peer_stream) {
             streams_.remove(header_value.stream_id_);
         }
-        // The block exceeds the header buffer cap. We cannot decode a block we could
-        // not fully buffer, and skipping it would desync the connection-global HPACK
+        // The block exceeds the encoded byte cap. We cannot decode a partial block,
+        // and skipping it would desync the connection-global HPACK
         // dynamic table for every later block (RFC 9113 §4.3) -- so this is a
         // COMPRESSION_ERROR, not a survivable stream reset.
         append_goaway(http2_error_code::compression_error, "field block not decompressed");
@@ -227,10 +228,10 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
         recorded_head_end_stream = true;
     }
 
-    if ((header_value.flags_ & http2_flag_end_headers) != 0) {
+    if (end_headers) {
         const auto output_checkpoint = output_.checkpoint();
         try {
-            return complete_decoded_header_block<http2_header_block_kind::initial>(*stream);
+            return complete_decoded_header_block<http2_header_block_kind::initial>(*stream, fragment);
         } catch (...) {
             output_.rollback_to(output_checkpoint);
             if (recorded_head_end_stream) {
@@ -264,17 +265,19 @@ bool http2_connection::process_trailer_headers(
         return start_discarded_header_block(
             header_value, fragment, discarded_header_action_type::reset_protocol_error);
     }
-    if (!http2_start_header_block(stream, fragment)) {
-        // Un-bufferable trailer block: same HPACK-consistency reasoning as HEADERS --
-        // COMPRESSION_ERROR rather than a survivable stream reset.
+    const bool end_headers = (header_value.flags_ & http2_flag_end_headers) != 0;
+    if (end_headers ? fragment.size() > max_http2_encoded_header_block_bytes
+                    : !http2_start_header_block(stream, fragment)) {
+        // Trailer blocks retain the same encoded byte cap as initial HEADERS:
+        // exceeding it is a COMPRESSION_ERROR rather than a survivable stream reset.
         append_goaway(http2_error_code::compression_error, "field block not decompressed");
         return false;
     }
 
-    if ((header_value.flags_ & http2_flag_end_headers) != 0) {
+    if (end_headers) {
         const auto output_checkpoint = output_.checkpoint();
         try {
-            return complete_decoded_header_block<http2_header_block_kind::trailers>(stream);
+            return complete_decoded_header_block<http2_header_block_kind::trailers>(stream, fragment);
         } catch (...) {
             output_.rollback_to(output_checkpoint);
             throw;
@@ -336,12 +339,14 @@ bool http2_connection::process_continuation(
         if ((header_value.flags_ & http2_flag_end_headers) != 0) {
             const auto completed_kind = header_continuation_.finish_kind();
             if (completed_kind == http2_header_block_kind::discarded) {
-                return finish_discarded_header_block();
+                return finish_discarded_header_block(stream->remote_header_block());
             }
             if (completed_kind == http2_header_block_kind::trailers) {
-                return complete_decoded_header_block<http2_header_block_kind::trailers>(*stream);
+                return complete_decoded_header_block<http2_header_block_kind::trailers>(
+                    *stream, stream->remote_header_block());
             } else {
-                return complete_decoded_header_block<http2_header_block_kind::initial>(*stream);
+                return complete_decoded_header_block<http2_header_block_kind::initial>(
+                    *stream, stream->remote_header_block());
             }
         }
     } catch (...) {

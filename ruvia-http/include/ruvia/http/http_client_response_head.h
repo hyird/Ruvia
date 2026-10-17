@@ -28,6 +28,8 @@ enum class http_client_request_content_signal : std::uint8_t {
     exchange_complete,
 };
 
+// Owns response fields in the parser/connection PMR. That resource must outlive
+// the head and any field vector extracted from it.
 class http_client_response_head final {
 public:
     http_client_response_head(const http_client_response_head&) = delete;

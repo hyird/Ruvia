@@ -105,50 +105,58 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
         if (output.header_count_ == max_http_header_fields) {
             return http1_client_response_parse_error::too_many_headers;
         }
-        if (validate_response_field(classify_request_header(name), value, http_field_list_role::recipient,
+        const auto kind = classify_request_header(name);
+        if (validate_response_field(kind, value, http_field_list_role::recipient,
                 response_fields) != response_field_status::ok) {
             return http1_client_response_parse_error::invalid_header;
         }
         output.headers_[output.header_count_++] = http_header_view{name, value};
 
-        if (http_ascii_equals_ignore_case(name, "Content-Length")) {
-            output.content_length_field_present_ = true;
-            // A 101 still records its forbidden presence for handshake checks;
-            // successful CONNECT ignores it because the stream becomes a tunnel.
-            if (content_length_describes_representation) {
-                switch (output.content_length_.parse_field(value)) {
-                    case http_content_length_parse_status::ok:
-                        break;
-                    case http_content_length_parse_status::invalid:
-                        return http1_client_response_parse_error::invalid_content_length;
-                    case http_content_length_parse_status::conflicting:
-                        return http1_client_response_parse_error::conflicting_content_length;
+        switch (kind) {
+            case request_header_kind::content_length:
+                output.content_length_field_present_ = true;
+                // A 101 still records its forbidden presence for handshake checks;
+                // successful CONNECT ignores it because the stream becomes a tunnel.
+                if (content_length_describes_representation) {
+                    switch (output.content_length_.parse_field(value)) {
+                        case http_content_length_parse_status::ok:
+                            break;
+                        case http_content_length_parse_status::invalid:
+                            return http1_client_response_parse_error::invalid_content_length;
+                        case http_content_length_parse_status::conflicting:
+                            return http1_client_response_parse_error::conflicting_content_length;
+                    }
                 }
-            }
-        } else if (http_ascii_equals_ignore_case(name, "Connection")) {
-            if (output.connection_options_.parse_field(value, http_field_list_role::recipient) !=
-                http_field_list_parse_status::ok) {
-                return http1_client_response_parse_error::invalid_connection;
-            }
-        } else if (http_ascii_equals_ignore_case(name, "Transfer-Encoding")) {
-            output.saw_transfer_encoding_ = true;
-            // Only a response with content is framed by Transfer-Encoding;
-            // successful CONNECT is ignored by client-side rule.
-            if (framing_fields_apply && output.protocol_version_ == http_protocol_version::http11) {
-                switch (output.transfer_encoding_.parse_field(value)) {
-                    case http_transfer_encoding_parse_status::ok:
-                        break;
-                    case http_transfer_encoding_parse_status::malformed:
-                        return http1_client_response_parse_error::invalid_transfer_encoding;
-                    case http_transfer_encoding_parse_status::unsupported:
-                        break;
+                break;
+            case request_header_kind::connection:
+                if (output.connection_options_.parse_field(value, http_field_list_role::recipient) !=
+                    http_field_list_parse_status::ok) {
+                    return http1_client_response_parse_error::invalid_connection;
                 }
-            }
-        } else if (http_ascii_equals_ignore_case(name, "Upgrade")) {
-            if (output.upgrade_protocols_.parse_field(value, http_field_list_role::recipient) !=
-                http_field_list_parse_status::ok) {
-                return http1_client_response_parse_error::invalid_upgrade;
-            }
+                break;
+            case request_header_kind::transfer_encoding:
+                output.saw_transfer_encoding_ = true;
+                // Only a response with content is framed by Transfer-Encoding;
+                // successful CONNECT is ignored by client-side rule.
+                if (framing_fields_apply && output.protocol_version_ == http_protocol_version::http11) {
+                    switch (output.transfer_encoding_.parse_field(value)) {
+                        case http_transfer_encoding_parse_status::ok:
+                            break;
+                        case http_transfer_encoding_parse_status::malformed:
+                            return http1_client_response_parse_error::invalid_transfer_encoding;
+                        case http_transfer_encoding_parse_status::unsupported:
+                            break;
+                    }
+                }
+                break;
+            case request_header_kind::upgrade:
+                if (output.upgrade_protocols_.parse_field(value, http_field_list_role::recipient) !=
+                    http_field_list_parse_status::ok) {
+                    return http1_client_response_parse_error::invalid_upgrade;
+                }
+                break;
+            default:
+                break;
         }
 
         if (line_end == std::string_view::npos) {

@@ -113,6 +113,19 @@ void append_frame(std::pmr::string& wire, ruvia::http2_frame_type type, std::uin
     wire.append(payload_value);
 }
 
+void append_header_section(std::pmr::string& wire, std::uint32_t stream_id,
+    std::string_view block, bool end_stream, bool fragmented) {
+    const auto flags = static_cast<std::uint8_t>(end_stream ? 0x1 : 0);
+    if (!fragmented) {
+        append_frame(wire, ruvia::http2_frame_type::headers,
+            static_cast<std::uint8_t>(flags | 0x4), stream_id, block);
+        return;
+    }
+    const auto split = block.size() / 2;
+    append_frame(wire, ruvia::http2_frame_type::headers, flags, stream_id, block.substr(0, split));
+    append_frame(wire, ruvia::http2_frame_type::continuation, 0x4, stream_id, block.substr(split));
+}
+
 void append_peer_settings(std::pmr::string& wire) {
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
 }
@@ -1794,6 +1807,146 @@ RUVIA_TEST(http2_public_response_head_and_trailers_are_owned_by_events) {
     RUVIA_CHECK(owned_trailers_value.front().value() == "done");
 }
 
+RUVIA_TEST(http2_public_single_and_fragmented_request_fields_are_owned_and_keep_hpack_indexes) {
+    const std::string head_name = "x-request-" + std::string(48, 'h');
+    const std::string trailer_name = "x-request-" + std::string(48, 't');
+    const std::string head_value(256, 'h');
+    const std::string trailer_value(256, 't');
+    for (const bool fragmented : {false, true}) {
+        std::pmr::monotonic_buffer_resource resource;
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        std::pmr::string head(&resource);
+        ruvia::hpack_encoder::encode_header(head, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(head, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(head, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(head, ":path", "/owned");
+        const auto field_offset = head.size();
+        ruvia::hpack_encoder::encode_header(head, head_name, head_value);
+        head[field_offset] = static_cast<char>(0x40);  // Literal with incremental indexing.
+        std::pmr::string trailer(&resource);
+        ruvia::hpack_encoder::encode_header(trailer, trailer_name, trailer_value);
+        trailer[0] = static_cast<char>(0x40);
+        std::pmr::string wire(ruvia::http2_client_preface, &resource);
+        append_peer_settings(wire);
+        append_header_section(wire, 1, head, false, fragmented);
+        append_header_section(wire, 1, trailer, true, fragmented);
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        std::fill(wire.begin(), wire.end(), '#');
+        auto request = server.next_event();
+        RUVIA_CHECK(request && request->request_head());
+        if (!request || !request->request_head()) {
+            continue;
+        }
+        const auto& received = request->request_head()->request();
+        RUVIA_CHECK(received.target() == "/owned");
+        RUVIA_CHECK(received.header(head_name) == head_value);
+        auto end = server.next_event();
+        RUVIA_CHECK(end && end->message_end());
+        if (!end || !end->message_end()) {
+            continue;
+        }
+        RUVIA_CHECK_EQ(end->message_end()->trailers().size(), std::size_t{1});
+        RUVIA_CHECK(end->message_end()->trailers().front().name() == trailer_name);
+        RUVIA_CHECK(end->message_end()->trailers().front().value() == trailer_value);
+
+        head.resize(field_offset);
+        head.push_back(static_cast<char>(0xbf));     // Older head field: dynamic index 63.
+        trailer.assign(1, static_cast<char>(0xbe));  // Newest trailer field: dynamic index 62.
+        wire.clear();
+        append_header_section(wire, 3, head, false, fragmented);
+        append_header_section(wire, 3, trailer, true, fragmented);
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        std::fill(wire.begin(), wire.end(), '#');
+        auto indexed_request = server.next_event();
+        RUVIA_CHECK(indexed_request && indexed_request->request_head());
+        if (indexed_request && indexed_request->request_head()) {
+            RUVIA_CHECK(indexed_request->request_head()->request().header(head_name) == head_value);
+        }
+        auto indexed_end = server.next_event();
+        RUVIA_CHECK(indexed_end && indexed_end->message_end());
+        if (indexed_end && indexed_end->message_end()) {
+            RUVIA_CHECK_EQ(indexed_end->message_end()->trailers().size(), std::size_t{1});
+            RUVIA_CHECK(indexed_end->message_end()->trailers().front().name() == trailer_name);
+            RUVIA_CHECK(indexed_end->message_end()->trailers().front().value() == trailer_value);
+        }
+        RUVIA_CHECK(received.header(head_name) == head_value);
+        RUVIA_CHECK(end->message_end()->trailers().front().value() == trailer_value);
+    }
+}
+
+RUVIA_TEST(http2_public_single_and_fragmented_response_fields_are_owned_and_keep_hpack_indexes) {
+    const std::string head_name = "x-response-" + std::string(48, 'h');
+    const std::string trailer_name = "x-response-" + std::string(48, 't');
+    const std::string head_value(256, 'h');
+    const std::string trailer_value(256, 't');
+    for (const bool fragmented : {false, true}) {
+        std::pmr::monotonic_buffer_resource resource;
+        auto client = prepared_client(&resource);
+        const auto submitted = client.submit_request_head(ruvia::http2_regular_request_head_view{
+            .method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .target_ = "/two"});
+        RUVIA_CHECK(submitted.submitted());
+        std::pmr::string head(&resource);
+        ruvia::hpack_encoder::encode_status(head, ruvia::http_status::ok);
+        const auto field_offset = head.size();
+        ruvia::hpack_encoder::encode_header(head, head_name, head_value);
+        head[field_offset] = static_cast<char>(0x40);
+        std::pmr::string trailer(&resource);
+        ruvia::hpack_encoder::encode_header(trailer, trailer_name, trailer_value);
+        trailer[0] = static_cast<char>(0x40);
+        std::pmr::string wire(&resource);
+        append_peer_settings(wire);
+        append_header_section(wire, 1, head, false, fragmented);
+        append_header_section(wire, 1, trailer, true, fragmented);
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        std::fill(wire.begin(), wire.end(), '#');
+        auto response = client.next_event();
+        RUVIA_CHECK(response && response->response_head());
+        if (!response || !response->response_head()) {
+            continue;
+        }
+        auto owned_head = std::move(*response->response_head()).take_head();
+        RUVIA_CHECK(owned_head.status() == ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(owned_head.headers().size(), std::size_t{1});
+        RUVIA_CHECK(owned_head.headers().front().name() == head_name);
+        RUVIA_CHECK(owned_head.headers().front().value() == head_value);
+        auto end = client.next_event();
+        RUVIA_CHECK(end && end->message_end());
+        if (!end || !end->message_end()) {
+            continue;
+        }
+        auto owned_trailers = std::move(*end->message_end()).take_trailers();
+        RUVIA_CHECK_EQ(owned_trailers.size(), std::size_t{1});
+        RUVIA_CHECK(owned_trailers.front().name() == trailer_name);
+        RUVIA_CHECK(owned_trailers.front().value() == trailer_value);
+
+        head.resize(field_offset);
+        head.push_back(static_cast<char>(0xbf));
+        trailer.assign(1, static_cast<char>(0xbe));
+        wire.clear();
+        append_header_section(wire, 3, head, false, fragmented);
+        append_header_section(wire, 3, trailer, true, fragmented);
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        std::fill(wire.begin(), wire.end(), '#');
+        auto indexed_response = client.next_event();
+        RUVIA_CHECK(indexed_response && indexed_response->response_head());
+        if (indexed_response && indexed_response->response_head()) {
+            const auto& indexed_head = indexed_response->response_head()->head();
+            RUVIA_CHECK_EQ(indexed_head.headers().size(), std::size_t{1});
+            RUVIA_CHECK(indexed_head.headers().front().name() == head_name);
+            RUVIA_CHECK(indexed_head.headers().front().value() == head_value);
+        }
+        auto indexed_end = client.next_event();
+        RUVIA_CHECK(indexed_end && indexed_end->message_end());
+        if (indexed_end && indexed_end->message_end()) {
+            RUVIA_CHECK_EQ(indexed_end->message_end()->trailers().size(), std::size_t{1});
+            RUVIA_CHECK(indexed_end->message_end()->trailers().front().name() == trailer_name);
+            RUVIA_CHECK(indexed_end->message_end()->trailers().front().value() == trailer_value);
+        }
+        RUVIA_CHECK(owned_head.headers().front().value() == head_value);
+        RUVIA_CHECK(owned_trailers.front().value() == trailer_value);
+    }
+}
+
 RUVIA_TEST(http2_public_message_end_reports_metadata_only_and_empty_trailers) {
     for (const auto method : {std::string_view("HEAD"), std::string_view("GET")}) {
         std::pmr::monotonic_buffer_resource resource;
@@ -2460,4 +2613,83 @@ RUVIA_TEST(http2_public_rejects_invalid_cors_request_fields_on_both_sides) {
     }
     RUVIA_CHECK(http2_client_submits_field("origin", "https://app.example"));
     RUVIA_CHECK(http2_server_accepts_field("origin", "https://app.example"));
+}
+
+RUVIA_TEST(http2_public_completed_response_preserves_request_send_half_and_retires_credits) {
+    accounting_allocation_resource resource;
+    for (const bool reset : {false, true}) {
+        auto client = ruvia::http2_connection::client({.resource_ = &resource});
+        const auto request = client.submit_request_head(ruvia::http2_regular_request_head_view{
+            .method_ = "POST", .scheme_ = "https", .authority_ = "example.test", .target_ = "/upload", .content_ = ruvia::http2_request_content::streaming(3)});
+        RUVIA_CHECK(request.submitted() != nullptr);
+        if (!request.submitted()) {
+            return;
+        }
+        const auto id = request.submitted()->stream_id();
+        auto wire = client_response_wire(&resource, "ok");
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        std::optional<ruvia::http2_received_data_credit> credit;
+        bool ended = false;
+        std::string received;
+        while (auto event = client.next_event()) {
+            if (auto* chunk = event->message_body_chunk()) {
+                received.append(chunk->bytes());
+                credit.emplace(chunk->take_credit());
+            }
+            ended |= event->message_end() != nullptr;
+        }
+        RUVIA_CHECK_EQ(received, "ok");
+        RUVIA_CHECK(ended);
+        if (!reset) {
+            credit.reset();
+        }
+        RUVIA_CHECK(client.submit_data(id, "abc", ruvia::http2_end_stream::keep_open) ==
+                    ruvia::http2_data_submit_status::accepted);
+        if (reset) {
+            RUVIA_CHECK(client.submit_reset(id, ruvia::http2_error_code::cancel) == ruvia::http2_submit_status::accepted);
+        } else {
+            RUVIA_CHECK(client.finish_request(id) == ruvia::http2_finish_request_status::accepted);
+        }
+        credit.reset();
+        while (client.next_event()) {
+        }
+        RUVIA_CHECK(!client.connection_error());
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http2_public_completed_response_keeps_final_queued_data_drain_notification) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    const auto request = client.submit_request_head(ruvia::http2_regular_request_head_view{
+        .method_ = "POST", .scheme_ = "https", .authority_ = "example.test", .target_ = "/upload", .content_ = ruvia::http2_request_content::known_length(65536)});
+    RUVIA_CHECK(request.submitted() != nullptr);
+    if (!request.submitted()) {
+        return;
+    }
+    const auto id = request.submitted()->stream_id();
+    const std::string payload(65536, 'b');
+    RUVIA_CHECK(client.submit_data(id, payload, ruvia::http2_end_stream::end_stream) == ruvia::http2_data_submit_status::queued);
+    std::pmr::string output(&resource);
+    client.take_output(output);
+    auto wire = client_response_wire(&resource, {});
+    RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+    bool ended = false;
+    while (auto event = client.next_event()) {
+        ended |= event->message_end() != nullptr;
+    }
+    RUVIA_CHECK(ended);
+    RUVIA_CHECK(client.has_queued_data(id));
+    wire.clear();
+    const std::string_view increment("\0\0\0\1", 4);
+    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, increment);
+    append_frame(wire, ruvia::http2_frame_type::window_update, 0, id, increment);
+    RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!client.has_queued_data(id));
+    const auto drained = client.take_drained_data_streams();
+    RUVIA_CHECK_EQ(drained.size(), std::size_t{1});
+    if (drained.size() == 1) {
+        RUVIA_CHECK_EQ(drained.front(), id);
+    }
+    RUVIA_CHECK(client.take_drained_data_streams().empty());
 }

@@ -18,7 +18,7 @@ class http2_stream_lease_ledger final {
 public:
     enum class release_kind_type : std::uint8_t {
         after_credits,
-        after_tunnel_end,
+        after_remote_end,
         abandon,
     };
     struct release_type final {
@@ -39,7 +39,7 @@ public:
         return nullptr;
     }
 
-    // abandon and after_tunnel_end override a pending release; after_credits only
+    // abandon and after_remote_end override a pending release; after_credits only
     // replaces abandon, whose reset has then been sent.
     void defer_release(std::uint32_t stream_id, release_kind_type kind) noexcept {
         for (std::size_t index = 0; index < release_count_; ++index) {

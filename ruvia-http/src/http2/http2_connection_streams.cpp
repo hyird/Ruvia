@@ -84,6 +84,8 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         flush_window_debt(*stream);
         detach_active_header_block(*stream);
         discard_deferred_stream_state(stream_id);
+        // A normally drained send still owes its owner a completion notification.
+        // Only an abort below cancels notifications that the owner has not taken.
         ready_queue_.remove(stream_id);
         closed_streams_.remember(stream_id, http2_stream_close_source::local);
         ++completed_responses_;
@@ -116,7 +118,6 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
 void http2_connection::discard_deferred_stream_state(std::uint32_t stream_id) {
     std::erase_if(pending_sends_,
         [stream_id](const http2_pending_send& pending) { return pending.stream_id_ == stream_id; });
-    std::erase(drained_data_streams_, stream_id);
     if (auto* stream = streams_.find(stream_id); stream != nullptr) {
         http2_release_local_header_block(*stream);
     }
@@ -141,6 +142,7 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
         detach_active_header_block(*stream);
     }
     ready_queue_.remove(stream_id);
+    std::erase(drained_data_streams_, stream_id);
     discard_deferred_stream_state(stream_id);
     if (stream == nullptr || stream->is_aborted()) {
         return false;

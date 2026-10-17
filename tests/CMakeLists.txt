@@ -132,7 +132,9 @@ if(RUVIA_BUILD_WEB)
         web/http1/connect.cpp
         web/http1/websocket.cpp
         web/http2/client_tunnel.cpp
+        web/http2/client_upload.cpp
         web/http2/connect.cpp
+        web/http2/file_flow_control.cpp
         web/http2/push.cpp
         web/http2/streaming.cpp
         web/http/udp_tunnel.cpp)
