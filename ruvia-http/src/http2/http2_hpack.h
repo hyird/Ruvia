@@ -158,8 +158,7 @@ private:
     void add_dynamic(std::string_view name, std::string_view value);
     void clear_dynamic() noexcept;
     void evict_dynamic_to_fit(std::size_t entry_size);
-    void evict_dynamic();
-    void compact_dynamic() noexcept;
+    void retire_dynamic_prefix(std::size_t begin) noexcept;
     void begin_decode_transaction() noexcept;
     void commit_decode_transaction() noexcept;
     void rollback_decode_transaction() noexcept;

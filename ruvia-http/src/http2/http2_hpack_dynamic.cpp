@@ -177,39 +177,39 @@ void hpack_decoder::clear_dynamic() noexcept {
 }
 
 void hpack_decoder::evict_dynamic_to_fit(std::size_t entry_size) {
+    const auto previous_offset = dynamic_offset_;
     const auto target_size = max_dynamic_size_ - entry_size;
     while (dynamic_size_ > target_size && dynamic_offset_ < dynamic_.size()) {
         const auto& entry_value = dynamic_[dynamic_offset_++];
         dynamic_size_ -= entry_value.table_size();
     }
-    compact_dynamic();
+    retire_dynamic_prefix(previous_offset);
 }
 
-void hpack_decoder::evict_dynamic() {
-    while (dynamic_size_ > max_dynamic_size_ && dynamic_offset_ < dynamic_.size()) {
-        const auto& entry_value = dynamic_[dynamic_offset_++];
-        dynamic_size_ -= entry_value.table_size();
-    }
-    compact_dynamic();
-}
-
-void hpack_decoder::compact_dynamic() noexcept {
+void hpack_decoder::retire_dynamic_prefix(std::size_t begin) noexcept {
+    static_assert(std::is_nothrow_default_constructible_v<entry_type>);
     static_assert(std::is_nothrow_move_constructible_v<entry_type>);
     if (decode_transaction_active_ || dynamic_offset_ == 0) {
         return;
     }
     const auto remaining = dynamic_entry_count();
+    if (dynamic_offset_ < remaining) {
+        // Return newly evicted heap fields without moving the live suffix.
+        for (auto index = begin; index < dynamic_offset_; ++index) {
+            auto* entry = std::addressof(dynamic_[index]);
+            std::destroy_at(entry);
+            std::construct_at(entry);
+        }
+        return;
+    }
+    // The dead prefix covers every destination. Moving now is amortized over
+    // at least as many evictions as survivors; no source overlaps a destination.
     for (std::size_t i = 0; i < remaining; ++i) {
-        // The source is strictly ahead of the destination. A destination may
-        // itself be an earlier moved-from source, but no unread source is
-        // destroyed. Reconstruct every slot immediately; the vector retains
-        // live elements throughout and resize() destroys the trailing sources.
-        // Move construction transfers packed heap blocks without allocator-aware
-        // assignment or allocation.
         auto* destination = std::addressof(dynamic_[i]);
         std::destroy_at(destination);
         std::construct_at(destination, std::move(dynamic_[dynamic_offset_ + i]));
     }
+    // Also destroys evicted fields in the gap and the moved-from source suffix.
     dynamic_.resize(remaining);
     dynamic_offset_ = 0;
 }
@@ -218,9 +218,8 @@ void hpack_decoder::begin_decode_transaction() noexcept {
     if (decode_transaction_active_) {
         std::terminate();
     }
-    // Defensive compaction before the snapshot keeps rollback bounded even if a
-    // prior mutation left tombstones. No state from this transaction exists yet.
-    compact_dynamic();
+    // Prior commits already retired the prefix. Its empty slots remain in the
+    // snapshot so rollback only drops appended entries and restores the offset.
     decode_transaction_active_ = true;
     transaction_dynamic_size_ = dynamic_size_;
     transaction_dynamic_offset_ = dynamic_offset_;
@@ -232,10 +231,10 @@ void hpack_decoder::commit_decode_transaction() noexcept {
     if (!decode_transaction_active_) {
         std::terminate();
     }
-    // No rollback remains after commit. Release evicted field storage before
-    // returning to the caller; live entries move without allocation or exceptions.
+    // Commit releases newly evicted fields immediately, but leaves empty slots
+    // until compaction is amortized over at least as many evictions as survivors.
     decode_transaction_active_ = false;
-    compact_dynamic();
+    retire_dynamic_prefix(transaction_dynamic_offset_);
 }
 
 void hpack_decoder::rollback_decode_transaction() noexcept {

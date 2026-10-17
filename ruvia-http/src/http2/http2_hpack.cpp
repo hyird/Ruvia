@@ -44,7 +44,7 @@ void hpack_decoder::decode_transaction_type::rollback() noexcept {
 void hpack_decoder::set_max_dynamic_table_size(std::size_t bytes_value) {
     allowed_dynamic_size_ = bytes_value;
     max_dynamic_size_ = std::min(max_dynamic_size_, bytes_value);
-    evict_dynamic();
+    evict_dynamic_to_fit(0);
 }
 
 hpack_decoder::decode_transaction_type hpack_decoder::begin_transaction() noexcept {
@@ -262,7 +262,7 @@ hpack_decode_result hpack_decoder::decode_block(
             }
             ++size_update_count;
             max_dynamic_size_ = size;
-            evict_dynamic();
+            evict_dynamic_to_fit(0);
             continue;
         }
 
