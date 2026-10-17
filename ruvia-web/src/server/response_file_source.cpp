@@ -59,7 +59,6 @@ void response_file_source::select_file(http_response_file_view file) {
 void response_file_source::read_ahead(read_state& state, std::size_t bytes, bool completes_range) {
     state.filled_ = 0;
     if (state.reopen_) {
-        state.input_.reset();
         state.input_.emplace(
             http_response_file_view(state.path_.c_str(), state.size_, 0, state.size_, state.identity_));
         state.reopen_ = false;
