@@ -8,11 +8,13 @@
 #include <utility>
 
 #include <asio/ip/tcp.hpp>
+#include <asio/socket_base.hpp>
 #include <asio/ssl.hpp>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/socket.h"
+#include "ruvia/core/worker_runtime.h"
 #include "ruvia/http/http_ascii.h"
 
 #include "context/context_services.h"
@@ -100,8 +102,13 @@ void resolve_remote_endpoint(tcp_socket_type& socket, std::pmr::string& address,
 worker_connections::worker_connections(asio::io_context& io, const worker_handle& worker_value,
     worker_memory& memory, const route_table& routes_value, worker_capabilities& capabilities,
     http_server_options& options, const stop_token& stop_token_value, http_server_worker_state& state_value,
-    task_scope& tasks, std::span<const http_server_listener_definition> listeners)
+    task_scope& tasks, std::span<const http_server_listener_definition> listeners, worker_runtime& runtime)
+#if defined(_WIN32)
+    : native_listeners_(memory.resource()),
+      io_(io),
+#else
     : io_(io),
+#endif
       worker_(worker_value),
       memory_(memory),
       routes_(routes_value),
@@ -110,32 +117,81 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
       stop_token_(stop_token_value),
       state_(state_value),
       tasks_(tasks),
+      runtime_(runtime),
       listeners_(memory.resource()),
       scanner_(worker_value, make_connection_scanner_options(options, memory)),
       work_sets_(memory) {
     listeners_.reserve(listeners.size());
+#if defined(_WIN32)
+    native_listeners_.reserve(listeners.size());
+#endif
     for (const auto& listener : listeners) {
         listeners_.push_back(make_pmr_object<http_server_session_config>(memory.resource(), listener, memory.resource()));
+#if defined(_WIN32)
+        native_listeners_.push_back(
+            make_pmr_object<native_listener>(memory.resource(), io, listener.endpoint_));
+#endif
     }
     options_.connection_failure_.counter_ = &failures_;
 }
 void worker_connections::prepare() {
-    for (auto& listener : listeners_) {
-        configure_tls(*listener);
+    try {
+        for (std::size_t index = 0; index < listeners_.size(); ++index) {
+            configure_tls(*listeners_[index]);
+#if defined(_WIN32)
+            auto& listener = *native_listeners_[index];
+            asio::error_code error;
+            listener.socket_.open(listener.endpoint_.protocol(), error);
+            if (!error) {
+                listener.socket_.set_option(asio::socket_base::reuse_address(true), error);
+            }
+            if (!error) {
+                listener.socket_.bind(listener.endpoint_, error);
+            }
+            if (!error) {
+                listener.socket_.listen(asio::socket_base::max_listen_connections, error);
+            }
+            if (error) {
+                throw std::system_error(error, "failed to prepare worker TCP listener");
+            }
+            windows_accept_->stage_listener(windows_origin_, index, listener.socket_);
+#endif
+        }
+        scanner_.start();
+    } catch (...) {
+#if defined(_WIN32)
+        close_listeners();
+#endif
+        throw;
     }
-    scanner_.start();
 }
 void worker_connections::open_admission() noexcept {
     drain_.open();
+#if defined(_WIN32)
+    windows_accept_->serve(windows_origin_);
+#else
     serving_.store(true, std::memory_order_release);
+#endif
 }
 void worker_connections::drain() noexcept {
+#if defined(_WIN32)
+    if (windows_accept_ != nullptr) {
+        windows_accept_->request_stop();
+    }
+#else
     serving_.store(false, std::memory_order_release);
+#endif
     drain_.begin();
     scanner_.drain();
 }
 void worker_connections::stop() noexcept {
+#if defined(_WIN32)
+    if (windows_accept_ != nullptr) {
+        windows_accept_->request_stop();
+    }
+#else
     serving_.store(false, std::memory_order_release);
+#endif
     scanner_.stop();
     scanner_.close_all();
     drain_.complete();
@@ -144,17 +200,55 @@ bool worker_connections::wait_until_drained(std::chrono::steady_clock::time_poin
     return drain_.wait_until(deadline);
 }
 void worker_connections::retire_tls() noexcept {
+#if defined(_WIN32)
+    close_listeners();
+#endif
     for (auto& listener : listeners_) {
         listener->tls_context_.reset();
         listener->sni_lookup_.clear();
         listener->sni_contexts_.clear();
     }
 }
+
+#if defined(_WIN32)
+void worker_connections::attach_windows_accept(
+    windows_accept_domain& domain, std::size_t origin, worker_runtime_context& context) {
+    domain.attach(origin, context,
+        {.target_ = this,
+            .accepted_ = [](void* target, std::size_t listener, tcp_socket_type socket) { static_cast<worker_connections*>(target)->accept_socket(listener, std::move(socket)); },
+            .failure_ = [](void* target, std::exception_ptr failure, bool fatal) noexcept { static_cast<worker_connections*>(target)->report_accept_failure(std::move(failure), fatal); }});
+    windows_accept_ = &domain;
+    windows_origin_ = origin;
+}
+
+task<void> worker_connections::run_windows_accepts() {
+    co_await windows_accept_->run(windows_origin_);
+    close_listeners();
+}
+
+void worker_connections::close_listeners() noexcept {
+    for (auto& listener : native_listeners_) {
+        asio::error_code ignored;
+        listener->socket_.close(ignored);
+    }
+}
+#endif
+
+void worker_connections::report_accept_failure(std::exception_ptr failure, bool fatal) noexcept {
+    accept_failures_.fetch_add(1, std::memory_order_relaxed);
+    if (fatal) {
+        (void)runtime_.fail(failure);
+    } else {
+        options_.connection_failure_.invoke({}, std::move(failure));
+    }
+}
+#if !defined(_WIN32)
 bool worker_connections::available() const noexcept {
     return serving_.load(std::memory_order_acquire) &&
            (!options_.server_.max_connections_per_worker_ ||
                drain_.active() < *options_.server_.max_connections_per_worker_);
 }
+#endif
 http_server_stats worker_connections::stats() const noexcept {
     http_server_stats result;
     result.active_connections_ = drain_.active();
@@ -302,6 +396,10 @@ void worker_connections::report_session_failure(
 }
 
 void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_type socket) {
+    if (!http_server_worker_running(state_)) {
+        refused_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
     const auto& max_connections = options_.server_.max_connections_per_worker_;
     if (max_connections.has_value() && drain_.active() >= *max_connections) {
         refused_.fetch_add(1, std::memory_order_relaxed);
@@ -320,6 +418,7 @@ void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_ty
     }
 }
 
+#if !defined(_WIN32)
 void worker_connections::accept(native_accepted_socket_ticket&& ticket) noexcept {
     if (!ticket.valid()) {
         return;
@@ -365,5 +464,6 @@ void worker_connections::accept(native_accepted_socket_ticket&& ticket) noexcept
         accept_failures_.fetch_add(1, std::memory_order_relaxed);
     }
 }
+#endif
 
 }  // namespace ruvia::detail

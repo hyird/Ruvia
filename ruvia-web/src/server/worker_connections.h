@@ -8,6 +8,7 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <asio/io_context.hpp>
@@ -23,7 +24,16 @@
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
 #include "server/http_server_worker_state.h"
+#if !defined(_WIN32)
 #include "server/native_accepted_socket_ticket.h"
+#endif
+#if defined(_WIN32)
+#include "server/windows_accept_domain.h"
+#endif
+
+namespace ruvia {
+class worker_runtime;
+}
 
 namespace ruvia::detail {
 
@@ -47,7 +57,7 @@ public:
         worker_memory& memory, const route_table& routes_value, worker_capabilities& capabilities,
         http_server_options& options, const stop_token& stop_token_value,
         http_server_worker_state& state_value, task_scope& tasks,
-        std::span<const http_server_listener_definition> listeners);
+        std::span<const http_server_listener_definition> listeners, worker_runtime& runtime);
     worker_connections(const worker_connections&) = delete;
     worker_connections& operator=(const worker_connections&) = delete;
     void prepare();
@@ -58,8 +68,15 @@ public:
     // Lifecycle thread: false when `deadline` passed before every connection closed.
     [[nodiscard]] bool wait_until_drained(std::chrono::steady_clock::time_point deadline);
     void retire_tls() noexcept;
+#if !defined(_WIN32)
     [[nodiscard]] bool available() const noexcept;
     void accept(native_accepted_socket_ticket&& ticket) noexcept;
+#endif
+#if defined(_WIN32)
+    void attach_windows_accept(
+        windows_accept_domain& domain, std::size_t origin, worker_runtime_context& context);
+    [[nodiscard]] task<void> run_windows_accepts();
+#endif
     [[nodiscard]] http_server_stats stats() const noexcept;
 
     [[nodiscard]] connection_scanner& scanner() noexcept {
@@ -76,6 +93,20 @@ public:
     }
 
 private:
+#if defined(_WIN32)
+    struct native_listener final {
+        native_listener(asio::io_context& io, asio::ip::tcp::endpoint endpoint)
+            : endpoint_(std::move(endpoint)),
+              socket_(io) {}
+        asio::ip::tcp::endpoint endpoint_;
+        asio::ip::tcp::acceptor socket_;
+    };
+    void close_listeners() noexcept;
+    windows_accept_domain* windows_accept_{};
+    std::size_t windows_origin_{};
+    std::pmr::vector<std::unique_ptr<native_listener, pmr_object_deleter<native_listener>>> native_listeners_;
+#endif
+    void report_accept_failure(std::exception_ptr failure, bool fatal) noexcept;
     void configure_tls(http_server_session_config& session);
     void accept_socket(std::size_t index, tcp_socket_type socket);
     task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection);
@@ -98,6 +129,7 @@ private:
     const stop_token& stop_token_;
     http_server_worker_state& state_;
     task_scope& tasks_;
+    worker_runtime& runtime_;
     std::pmr::vector<std::unique_ptr<http_server_session_config, pmr_object_deleter<http_server_session_config>>> listeners_;
     connection_scanner scanner_;
     connection_work_set_pool work_sets_;
@@ -106,7 +138,9 @@ private:
     std::atomic<std::size_t> refused_{};
     std::atomic<std::size_t> failures_{};
     std::atomic<std::size_t> accept_failures_{};
+#if !defined(_WIN32)
     std::atomic<bool> serving_{};
+#endif
 };
 
 }  // namespace ruvia::detail

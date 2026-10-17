@@ -41,6 +41,7 @@ void add_shutdown_signals(asio::signal_set& signals) {
 #endif
 }
 
+#if !defined(_WIN32)
 void acceptor_failed(void* object) noexcept {
     static_cast<application*>(object)->stop();
 }
@@ -52,6 +53,7 @@ bool acceptor_target_available(void* object) noexcept {
 void acceptor_target_accept(void* object, detail::native_accepted_socket_ticket&& ticket) noexcept {
     static_cast<detail::web_worker_runtime*>(object)->accept_transferred_connection(std::move(ticket));
 }
+#endif
 
 void invoke_stop_hooks(detail::app_state& state_value) noexcept {
     for (auto& hook : state_value.on_stop_hooks_) {
@@ -146,10 +148,12 @@ public:
         try {
             if (!stop_requested()) {
                 start_signal_handling();
-                // Ingress stages its QUIC channels before workers launch; every
-                // worker and the acceptor are ready before any start hook runs,
-                // and no listener accepts until every hook succeeded.
+                // Every worker is ready before any start hook runs, and TCP
+                // admission stays closed until all start hooks succeed.
                 if (group.start()) {
+#if defined(_WIN32)
+                    state_.runtime_->windows_accept_->publish();
+#endif
                     publish_ready_workers();
                     run_start_hooks();
                     if (!stop_requested() && group.serve()) {
@@ -239,6 +243,10 @@ private:
         detail::controller_store first_controllers(controller_registrars);
         runtime->route_plan_ = detail::compile_route_plan(
             runtime_resource_, controller_registrars, first_controllers, state_.configuration_);
+#if defined(_WIN32)
+        runtime->windows_accept_ = make_pmr_object<detail::windows_accept_domain>(runtime_resource_,
+            state_.options_.server_.worker_count_, validated_configuration.listeners().size(), runtime_resource_);
+#endif
         runtime->workers_.reserve(state_.options_.server_.worker_count_);
         for (std::size_t i = 0; i < state_.options_.server_.worker_count_; ++i) {
             auto controllers =
@@ -257,10 +265,14 @@ private:
             };
             auto worker_value = make_pmr_object<detail::web_worker_runtime>(
                 runtime_resource_, validated_configuration, *routes_value, capabilities);
+#if defined(_WIN32)
+            worker_value->attach_windows_accept(*runtime->windows_accept_, i);
+#endif
             runtime->workers_.emplace_back(
                 std::move(controllers), std::move(routes_value), std::move(worker_value));
         }
 
+#if !defined(_WIN32)
         std::pmr::vector<detail::acceptor::worker_target> acceptor_targets(runtime_resource_);
         acceptor_targets.reserve(runtime->workers_.size());
         for (auto& slot : runtime->workers_) {
@@ -275,9 +287,19 @@ private:
         runtime->ingress_ = make_pmr_object<detail::acceptor>(runtime_resource_,
             validated_configuration.listeners(), acceptor_targets, &owner_, &acceptor_failed);
         runtime->ingress_->prepare();
-        // The TCP listener resolved the HTTP/3 port; every worker binds its own
-        // UDP socket to it and learns its place among the workers.
-        if (const auto quic_endpoint = runtime->ingress_->quic_endpoint()) {
+        const auto quic_endpoint = runtime->ingress_->quic_endpoint();
+#else
+        // Validated listeners contain numeric addresses and fixed, nonzero
+        // ports. QUIC staging never needs a TCP ingress owner on Windows.
+        std::optional<asio::ip::udp::endpoint> quic_endpoint;
+        for (const auto& listener : validated_configuration.listeners()) {
+            if (listener.http3_) {
+                quic_endpoint.emplace(listener.endpoint_.address(), listener.endpoint_.port());
+                break;
+            }
+        }
+#endif
+        if (quic_endpoint) {
             std::array<std::byte, detail::http3_worker::probe_secret_bytes> probe_secret{};
             if (RAND_bytes(reinterpret_cast<unsigned char*>(probe_secret.data()),
                     static_cast<int>(probe_secret.size())) != 1) {
@@ -289,10 +311,15 @@ private:
                 slot.runtime_->stage_quic(*quic_endpoint, worker_index++, worker_count, probe_secret);
             }
         }
-        // Ingress is the external producer of every worker.
+#if !defined(_WIN32)
+        // POSIX ingress is the external producer of every worker.
         runtime->group_.add(runtime->ingress_->runtime(), 0);
+        constexpr std::size_t worker_tier = 1;
+#else
+        constexpr std::size_t worker_tier = 0;
+#endif
         for (auto& slot : runtime->workers_) {
-            runtime->group_.add(slot.runtime_->runtime(), 1);
+            runtime->group_.add(slot.runtime_->runtime(), worker_tier);
         }
 
         std::lock_guard lock(state_.mutex_);
@@ -349,8 +376,8 @@ private:
         }
     }
 
-    // Graceful stop of a serving app: ingress stops accepting, every worker
-    // stops admitting requests, and in-flight requests may finish until the
+    // Graceful stop closes TCP admission and stops admitting requests on every
+    // worker. In-flight requests may finish until the
     // shared drain deadline. A member failure has already stopped the group,
     // which closes every connection at once instead.
     void drain() noexcept {
@@ -359,7 +386,9 @@ private:
             return;
         }
         const auto deadline = worker_timer_deadline_after(state_.options_.server_.drain_timeout_);
+#if !defined(_WIN32)
         runtime.ingress_->close_admission();
+#endif
         for (auto& slot : runtime.workers_) {
             slot.runtime_->request_drain();
         }

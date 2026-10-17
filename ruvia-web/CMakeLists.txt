@@ -1,4 +1,8 @@
 ruvia_collect_cpp_sources(ruvia_web_sources src)
+if(WIN32)
+    # Windows accepts on every Web worker through the shared native domain.
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/server/acceptor\\.cpp$")
+endif()
 # Keep the shared database sources whenever either driver is enabled; only the
 # driver-specific translation units and disabled feature directories are omitted.
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)

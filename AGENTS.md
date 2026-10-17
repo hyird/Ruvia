@@ -72,14 +72,14 @@ ruvia-web  -> ruvia-core + ruvia-http
 线程与连接：
 
 - 生产 application 是进程级单例，通过 `ruvia::app()` 获取，不可自行构造、复制或移动；配置与生命周期入口唯一。
-- 每个业务 worker 独占一个 standalone Asio 事件循环。n 个业务 worker 另配一个网络接入线程；阻塞池和信号线程另计。
-- 接入线程只由 acceptor 承载：接受 TCP 并一次性交接。TCP 和 QUIC 连接固定绑定一个 worker，全部请求、I/O、TLS/crypto、协议定时器和连接生命周期由该 worker 管理至连接结束。
+- 每个业务 worker 独占一个 standalone Asio 事件循环。POSIX 另配一个仅接受 TCP 并一次性交接的 acceptor 线程；Windows 不设接入线程，每个 worker 使用 `SO_REUSEADDR` 独立 bind/listen 全部 TCP 监听端点，所有 worker 在全部共享监听句柄上发起原生 `AcceptEx`。阻塞池和信号线程另计。
+- Windows 待接受 socket 从创建及 IOCP 关联起归发起 accept 的 origin worker；监听 IOCP 上的 foreign completion 只向预留有界完成槽发布结果并唤醒，不交接连接，也不得在那里操作或销毁 origin 的 socket、业务状态及 PMR。其容量由 worker 与监听器矩阵确定，不依赖普通业务队列。TCP 和 QUIC 连接固定绑定其 worker，全部请求、I/O、TLS/crypto、协议定时器和连接生命周期由该 worker 管理至结束。Windows 不保证严格均衡，也不阻止其他进程复用端口。
 - QUIC 不经过 acceptor：每个 worker 在准备阶段各自把一个 UDP socket 绑定到 HTTP/3 监听端点（POSIX `SO_REUSEADDR` + `SO_REUSEPORT`，缺失或失败则启动失败；Windows `SO_REUSEADDR`，内核把全部数据报交给最后绑定的 socket，等效单 worker）。Linux 每个 worker 在自己的 socket 上附加同一份 reuseport cBPF，按目标 CID 前 4 字节分区选择组内 socket，与 `quic_cid_partition` 签发 CID 的函数一致；附加失败即启动失败。组内下标不可查询，服务阶段每个 worker 向监听端点发一个探测数据报，收到探测的 worker 据此学到自己的分区；未收到或收到多个即启动失败。其它平台分区数为 1。
 - 初始及轮换 CID 保持同一 worker 分区；对端端口变化由内核按 CID 引导回 owner，不跨 worker 转发数据报，也不迁移连接。
-- 独立 Web worker 组合复用同一个 acceptor，不维护 worker-local accept 旁路。
+- POSIX 独立 Web worker 组合复用同一个 acceptor；Windows 只使用共享监听句柄的 worker-local AcceptEx 主链，不保留 ingress、ticket 或已接受 socket assign 旁路。
 - core 是线程、事件循环、调度入口和通用 worker 生命周期的唯一 owner。event_loop_pool 与 Web 组合复用同一承载，Web 不另建线程、事件循环或启停主链。
 - Web 只拥有 worker-local 业务状态、能力、连接 I/O 和接入/退役策略，通过明确的生命周期扩展点接入 core。worker 资源由统一 owner 管理，实例保持 worker-local。
-- 跨线程交互走有界队列，禁止直接操作连接状态。其他线程只请求停止，资源由所属 owner 线程关闭。
+- 跨线程业务交互走有界队列，禁止直接操作连接状态；Windows accept 仅额外允许共享监听句柄、固定完成槽和合并通知。其他线程只请求停止，资源由所属 owner 线程关闭。
 - 调度入口与事件循环同属一个 owner，入口先于上下文退役。请求期只借用稳定 worker 句柄；显式卸载可复制一次。
 
 协程与任务：
@@ -93,8 +93,10 @@ ruvia-web  -> ruvia-core + ruvia-http
 启动与停机：
 
 - 整体就绪且全部启动 hook 成功后才能服务。启动失败或取消不留下部分服务；失败原因必须可见。
+- Windows 各 worker 准备成功并全部 ready 后才发布共享监听矩阵，全部启动 hook 与服务 barrier 成功后才发起 accept；任何准备失败或取消均须回滚全部 worker 的监听和资源，不留下部分服务。
 - 停机分阶段：停止接入 → 排空（关闭空闲和未完成请求头的连接，已接纳请求在 `drain_timeout` 内完成，WebSocket 以 1001 发起关闭）→ 强制关闭剩余连接 → 最终退役。
 - teardown 先终止 I/O，再 join 全部后台操作。外部生产者静默、跨线程 channel 双方退役确认及后台任务完成前，core 保持 owner 事件循环存活。
+- Windows 停止先封闭 accept 投递并精确取消每个 pending `AcceptEx`，保持全部共享监听句柄和 IOCP owner 存活，直到原生完成已转递、全部 origin 消费完成且通知与定时器已 join，才由各 owner 关闭自己的监听器并允许 finalize。冷取消及未启动 worker 不等待不存在的接收器。
 - 用户 hook 和 join 由生命周期调用线程执行。
 
 ## Web 核心设计

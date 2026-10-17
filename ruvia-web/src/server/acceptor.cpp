@@ -1,5 +1,7 @@
 #include "server/acceptor.h"
 
+#if !defined(_WIN32)
+
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
@@ -12,13 +14,8 @@
 #include <sys/socket.h>
 #endif
 
-#include <asio/bind_allocator.hpp>
 #include <asio/post.hpp>
 #include <asio/socket_base.hpp>
-
-#if defined(_WIN32)
-#include <asio/windows/overlapped_ptr.hpp>
-#endif
 
 #include "ruvia/core/memory/process_resource.h"
 
@@ -41,13 +38,6 @@ bool recoverable_accept_error(const asio::error_code& error) noexcept {
         error == asio::error::timed_out) {
         return true;
     }
-#if defined(_WIN32)
-    // AcceptEx can report a peer abort as an IOCP system error rather than
-    // WSAECONNABORTED. The listening socket is still usable.
-    if (error.category() == asio::system_category() && error.value() == ERROR_NETNAME_DELETED) {
-        return true;
-    }
-#endif
 #if defined(EHOSTDOWN) && defined(ENONET)
     return error.category() == asio::system_category() && (error.value() == EHOSTDOWN || error.value() == ENONET);
 #else
@@ -55,20 +45,9 @@ bool recoverable_accept_error(const asio::error_code& error) noexcept {
 #endif
 }
 
-// Bind the listener exclusively. Windows SO_REUSEADDR (asio's reuse_address)
-// lets another socket bind a port that is already listening, so Windows uses
-// SO_EXCLUSIVEADDRUSE; elsewhere SO_REUSEADDR only permits rebinding over
-// TIME_WAIT connections.
+// POSIX SO_REUSEADDR permits rebinding over TIME_WAIT connections.
 void set_listener_address_option(asio::ip::tcp::acceptor& socket, asio::error_code& error) noexcept {
-#if defined(_WIN32)
-    const BOOL exclusive = TRUE;
-    if (::setsockopt(socket.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
-            reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) != 0) {
-        error = asio::error_code(::WSAGetLastError(), asio::system_category());
-    }
-#else
     socket.set_option(asio::socket_base::reuse_address(true), error);
-#endif
 }
 
 }  // namespace
@@ -142,16 +121,6 @@ void acceptor::prepare() {
         if (!error) {
             socket.native_non_blocking(true, error);
         }
-#elif defined(_WIN32)
-        if (!error) {
-            GUID extension = WSAID_ACCEPTEX;
-            DWORD received = 0;
-            if (::WSAIoctl(socket.native_handle(), SIO_GET_EXTENSION_FUNCTION_POINTER,
-                    &extension, sizeof(extension), &configured->accept_function_,
-                    sizeof(configured->accept_function_), &received, nullptr, nullptr) != 0) {
-                error = asio::error_code(::WSAGetLastError(), asio::system_category());
-            }
-        }
 #endif
         if (!error) {
             configured->endpoint_ = socket.local_endpoint(error);
@@ -220,48 +189,6 @@ void acceptor::begin_accept(std::size_t index) noexcept {
             return;
         }
         asio::post(io_context_, [this, index] { begin_accept(index); });
-#elif defined(_WIN32)
-        const auto protocol = listeners_[index]->endpoint_.protocol();
-        const SOCKET native = ::WSASocketW(protocol.family(), protocol.type(), protocol.protocol(),
-            nullptr, 0, WSA_FLAG_OVERLAPPED | WSA_FLAG_NO_HANDLE_INHERIT);
-        if (native == INVALID_SOCKET) {
-            accept_failed(index, asio::error_code(::WSAGetLastError(), asio::system_category()));
-            return;
-        }
-        native_accepted_socket_ticket ticket(protocol, index, native);
-        // Only the listener belongs to ingress's IOCP. The new socket remains
-        // unregistered until its worker adopts it, avoiding Asio release()'s
-        // cancellation and completion-port detachment after every accept.
-        asio::windows::overlapped_ptr operation(io_context_,
-            asio::bind_allocator(accept_memory_.allocator(),
-                [this, index, ticket = std::move(ticket)](const asio::error_code& error, std::size_t) mutable noexcept {
-                    if (error) {
-                        accept_failed(index, error);
-                        return;
-                    }
-                    if (!admitting()) {
-                        return;
-                    }
-                    const SOCKET listener_socket = listeners_[index]->socket_.native_handle();
-                    if (::setsockopt(ticket.native_handle(), SOL_SOCKET, SO_UPDATE_ACCEPT_CONTEXT,
-                            reinterpret_cast<const char*>(&listener_socket), sizeof(listener_socket)) != 0) {
-                        accept_failed(index, asio::error_code(::WSAGetLastError(), asio::system_category()));
-                        return;
-                    }
-                    if (hand_off(index, std::move(ticket))) {
-                        begin_accept(index);
-                    }
-                }));
-        constexpr DWORD address_size = sizeof(sockaddr_storage) + 16;
-        DWORD received = 0;
-        const auto accepted = listeners_[index]->accept_function_(socket.native_handle(), native,
-            listeners_[index]->accept_addresses_.data(), 0, address_size, address_size, &received, operation.get());
-        const auto error = accepted ? 0 : ::WSAGetLastError();
-        if (accepted || error == WSA_IO_PENDING) {
-            static_cast<void>(operation.release());
-        } else {
-            operation.complete(asio::error_code(error, asio::system_category()), 0);
-        }
 #else
         socket.async_accept([this, index](const asio::error_code& error, asio::ip::tcp::socket accepted_socket) {
             if (error) {
@@ -370,3 +297,5 @@ void acceptor::close_listeners() noexcept {
 }
 
 }  // namespace ruvia::detail
+
+#endif  // !defined(_WIN32)

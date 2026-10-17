@@ -15,7 +15,9 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_signal.h"
+#if !defined(_WIN32)
 #include "ruvia/core/worker_submission_view.h"
+#endif
 #include "ruvia/web/web_worker.h"
 
 #include "integration/worker_capabilities.h"
@@ -23,7 +25,9 @@
 #include "server/http_server_options.h"
 #include "server/http_server_worker_state.h"
 #include "server/inbound_buffer_resource.h"
+#if !defined(_WIN32)
 #include "server/native_accepted_socket_ticket.h"
+#endif
 #include "server/static_root_runtime.h"
 #include "server/worker_codecs.h"
 #include "server/worker_connections.h"
@@ -38,7 +42,7 @@ class http3_worker;
 // One server worker: its core worker_runtime plus the HTTP domain state that
 // runtime's hooks compose. Core owns the generic lifecycle (launch, ready/serve
 // barrier, stop admission, finalization, join, first failure); application
-// sequences every worker and the acceptor through one core worker_group.
+// sequences the platform's TCP topology through one core worker_group.
 class web_worker_runtime final {
 public:
     web_worker_runtime(const validated_http_server_configuration& configuration,
@@ -52,12 +56,17 @@ public:
         return runtime_;
     }
     ruvia::worker_runtime& runtime() && = delete;
+#if defined(_WIN32)
+    void attach_windows_accept(windows_accept_domain& domain, std::size_t origin);
+#endif
+#if !defined(_WIN32)
     // Lock-free admission snapshot for the acceptor. A true
     // result is advisory; the worker rechecks capacity when the socket is delivered.
     [[nodiscard]] bool available_for_network_dispatch() const noexcept;
     // Called on the worker after bounded acceptor queue delivery. Rechecks worker state
     // and capacity, assigns before any I/O, and consumes the ticket on every path.
     void accept_transferred_connection(native_accepted_socket_ticket&& ticket) noexcept;
+#endif
     // Any thread, while serving: stops admitting connections and requests,
     // closes connections outside a request exchange, and lets in-flight
     // requests finish before their connections close. Stopping the runtime
@@ -68,15 +77,16 @@ public:
     [[nodiscard]] bool wait_until_drained(std::chrono::steady_clock::time_point deadline);
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] http_server_stats stats() const noexcept;
+#if !defined(_WIN32)
     [[nodiscard]] worker_submission_view network_submission() const& noexcept {
         return worker_runtime_.submission();
     }
     worker_submission_view network_submission() const&& = delete;
+#endif
     [[nodiscard]] web_worker_handle web_worker() const;
-    // Cold staging only, before launch. Protocol objects are constructed on
-    // this worker, not by the ingress thread that supplies the datagram channel.
     // Cold, before this worker launches: the HTTP/3 listener endpoint every
-    // worker binds and this worker's place among them.
+    // worker binds and this worker's place among them. Protocol and datagram
+    // objects stay owned by the worker throughout their lifetime.
     void stage_quic(asio::ip::udp::endpoint endpoint, std::uint32_t worker_index, std::uint32_t worker_count,
         std::span<const std::byte> probe_secret);
 
@@ -91,6 +101,12 @@ private:
     void finalize_on_context() noexcept;
     void stop_http3() noexcept;
     task<void> run_worker();
+#if defined(_WIN32)
+    task<void> run_windows_accepts();
+    windows_accept_domain* windows_accept_{};
+    std::size_t windows_origin_{};
+    bool windows_accept_joined_{true};
+#endif
     ruvia::worker_runtime runtime_;
     asio::io_context& io_context_;
     ruvia::worker_runtime_context& worker_runtime_;

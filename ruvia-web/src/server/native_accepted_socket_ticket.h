@@ -1,18 +1,13 @@
 #pragma once
 
+#if !defined(_WIN32)
+
+#include <unistd.h>
+
 #include <cstddef>
 #include <utility>
 
 #include <asio/ip/tcp.hpp>
-
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <winsock2.h>
-#else
-#include <unistd.h>
-#endif
 
 namespace ruvia::detail {
 
@@ -61,21 +56,13 @@ public:
             return;
         }
         valid_ = false;
-#if defined(_WIN32)
-        (void)::closesocket(native_);
-#else
         // Do not retry close after EINTR: the descriptor may already be reused.
         (void)::close(native_);
-#endif
         native_ = invalid_native();
     }
 
     [[nodiscard]] static native_handle_type invalid_native() noexcept {
-#if defined(_WIN32)
-        return INVALID_SOCKET;
-#else
         return -1;
-#endif
     }
 
 private:
@@ -93,3 +80,5 @@ private:
 };
 
 }  // namespace ruvia::detail
+
+#endif  // !defined(_WIN32)

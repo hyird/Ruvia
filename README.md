@@ -66,6 +66,10 @@ select the matching static `CMAKE_MSVC_RUNTIME_LIBRARY` before `project()`.
   require finite connection and request limits. WebSocket uses HTTP/1.1 Upgrade
   or HTTP/2 and HTTP/3 Extended CONNECT. See [http_features.cpp](examples/web/http_features.cpp)
   and [http_client_advanced.cpp](examples/web/http_client_advanced.cpp).
+- On Windows, every worker binds its own TCP listeners with `SO_REUSEADDR` and
+  uses native `AcceptEx` on all shared listener handles, without an ingress
+  thread or connection transfer. This does not guarantee strict balancing or
+  exclusive use of the port. POSIX keeps the dedicated TCP ingress thread.
 
 ## Examples
 

@@ -52,7 +52,7 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
                   options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
               .precompressed_static_files_ = options_.compression_.has_value(),
           }),
-      connections_(io_context_, worker_runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners),
+      connections_(io_context_, worker_runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_),
       http3_(nullptr, pmr_object_deleter<http3_worker>{memory_.resource()}),
       web_worker_dispatch_(std::make_shared<web_worker_dispatch>(
           runtime_, memory_.resource(), capabilities_, background_tasks_, stop_token_)) {
@@ -93,12 +93,24 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
 }
 
 web_worker_runtime::~web_worker_runtime() {
-    // Stop admission, then finalize: a worker destroyed outside the
-    // application's worker_group has no external producers left.
+#if defined(_WIN32)
+    runtime_.request_stop();
+    // Only owner-side stop/run hooks inspect the accept-join flag.
+    if (windows_accept_ == nullptr) {
+        runtime_.finalize();
+    }
+    runtime_.join();
+    if (windows_accept_ != nullptr) {
+        windows_accept_->detach(windows_origin_);
+    }
+#else
+    // POSIX standalone retirement has no external ingress producer left.
     runtime_.finalize();
     runtime_.join();
+#endif
 }
 
+#if !defined(_WIN32)
 bool web_worker_runtime::available_for_network_dispatch() const noexcept {
     return connections_.available();
 }
@@ -106,6 +118,35 @@ bool web_worker_runtime::available_for_network_dispatch() const noexcept {
 void web_worker_runtime::accept_transferred_connection(native_accepted_socket_ticket&& ticket) noexcept {
     connections_.accept(std::move(ticket));
 }
+#endif
+
+#if defined(_WIN32)
+void web_worker_runtime::attach_windows_accept(
+    windows_accept_domain& domain, std::size_t origin) {
+    connections_.attach_windows_accept(domain, origin, worker_runtime_);
+    windows_accept_ = &domain;
+    windows_origin_ = origin;
+}
+
+task<void> web_worker_runtime::run_windows_accepts() {
+    std::exception_ptr failure;
+    try {
+        co_await connections_.run_windows_accepts();
+    } catch (...) {
+        failure = std::current_exception();
+        windows_accept_->request_stop();
+    }
+    windows_accept_joined_ = true;
+    if (failure != nullptr) {
+        // Nested task allocation can fail before the receiver ever starts.
+        // Publish that failure now, not from the scope join after finalization.
+        (void)runtime_.fail(std::move(failure));
+    }
+    if (stop_token_.stop_requested()) {
+        runtime_.finalize();
+    }
+}
+#endif
 
 void web_worker_runtime::request_drain() noexcept {
     // A refused control means the worker is already stopping, which completes
@@ -169,6 +210,13 @@ void web_worker_runtime::stop_admission_on_context() noexcept {
     stop_source_.request_stop();
     stop_http3();
     connections_.stop();
+#if defined(_WIN32)
+    // The shared listener IOCPs and origin notifications must stay alive until
+    // every native completion and origin result has retired.
+    if (windows_accept_joined_) {
+        runtime_.finalize();
+    }
+#endif
 }
 
 void web_worker_runtime::finalize_on_context() noexcept {
@@ -187,6 +235,15 @@ task<void> web_worker_runtime::run_worker() {
         // A stop applied before this task first runs has already stopped the
         // worker timers; starting the scanner or capability I/O would fail.
         if (!stop_token_.stop_requested()) {
+#if defined(_WIN32)
+            windows_accept_joined_ = false;
+            try {
+                background_tasks_.spawn(run_windows_accepts());
+            } catch (...) {
+                windows_accept_joined_ = true;
+                throw;
+            }
+#endif
             connections_.prepare();
             co_await capabilities_.start();
             if (http3_ != nullptr && !stop_token_.stop_requested()) {
@@ -203,8 +260,8 @@ task<void> web_worker_runtime::run_worker() {
             (void)runtime_.fail(std::current_exception());
         }
     }
-    // Retain worker-local state until the lifecycle caller has joined ingress
-    // and finalized this worker.
+    // Retain worker-local state until all platform-specific TCP producers
+    // retire and the runtime requests finalization.
     co_await finalize_signal_.wait();
     try {
         co_await background_tasks_.join();

@@ -1,6 +1,7 @@
 #pragma once
 
-#include <array>
+#if !defined(_WIN32)
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -14,11 +15,6 @@
 #include <asio/ip/udp.hpp>
 #include <asio/steady_timer.hpp>
 
-#if defined(_WIN32)
-#include <mswsock.h>
-#endif
-
-#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_submission_view.h"
@@ -28,12 +24,11 @@
 
 namespace ruvia::detail {
 
-// The ingress owner hands native TCP sockets off once for worker adoption.
-// Linux and Windows accept before the new socket's first reactor/IOCP
-// registration; other backends detach Asio's accepted socket. All use the same
-// bounded worker hand-off and capacity gate. QUIC/UDP never passes through
-// here: every worker binds its own socket to the listener's endpoint
-// (http3_worker); prepare() only resolves that endpoint's port.
+// POSIX ingress hands native TCP sockets off once for worker adoption. Linux
+// accepts before the new socket's first reactor registration; other POSIX
+// backends detach Asio's accepted socket. All use the same bounded worker
+// hand-off and capacity gate. QUIC/UDP remains worker-local; prepare() only
+// resolves the UDP listener's endpoint.
 // Target objects must outlive this owner and its joined thread. Only endpoint
 // values are retained from configuration. Core owns the lifecycle: serving
 // starts accepting, and stopping closes the listeners before this runtime
@@ -83,12 +78,6 @@ private:
         asio::ip::tcp::endpoint endpoint_;
         asio::steady_timer retry_;
         bool quic_;
-#if defined(_WIN32)
-        LPFN_ACCEPTEX accept_function_{};
-        // One accept is pending per listener. Its buffer remains alive until
-        // listener closure cancels the operation and the ingress runtime joins.
-        std::array<std::byte, (sizeof(sockaddr_storage) + 16) * 2> accept_addresses_{};
-#endif
     };
     using listener_ptr = std::unique_ptr<listener, pmr_object_deleter<listener>>;
 
@@ -101,11 +90,6 @@ private:
     // Owner thread: listeners still accept.
     [[nodiscard]] bool admitting() const noexcept;
 
-#if defined(_WIN32)
-    // Accept operations allocate and complete only on ingress. Keep its pool
-    // outside the runtime so pending completions retire before pool destruction.
-    worker_memory accept_memory_;
-#endif
     worker_runtime runtime_;
     asio::io_context& io_context_;
     std::pmr::vector<listener_ptr> listeners_;
@@ -119,3 +103,5 @@ private:
 };
 
 }  // namespace ruvia::detail
+
+#endif  // !defined(_WIN32)

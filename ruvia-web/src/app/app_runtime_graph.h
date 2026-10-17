@@ -12,7 +12,11 @@
 
 #include "router/compiled_route_plan.h"
 #include "router/route_table.h"
+#if defined(_WIN32)
+#include "server/windows_accept_domain.h"
+#else
 #include "server/acceptor.h"
+#endif
 #include "server/static_root_runtime.h"
 #include "server/web_worker_runtime.h"
 
@@ -42,9 +46,15 @@ struct app_runtime_graph final {
         : blocking_pool_(nullptr, pmr_object_deleter<blocking_pool>{resource}),
           document_root_(nullptr, pmr_object_deleter<document_root_publisher>{resource}),
           route_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{resource}),
+#if defined(_WIN32)
+          windows_accept_(nullptr, pmr_object_deleter<windows_accept_domain>{resource}),
+#endif
           workers_(resource),
+#if !defined(_WIN32)
           ingress_(nullptr, pmr_object_deleter<acceptor>{resource}),
-          group_(resource) {}
+#endif
+          group_(resource) {
+    }
 
     // Declared before workers so it is destroyed after suspended worker tasks.
     std::unique_ptr<blocking_pool, pmr_object_deleter<blocking_pool>> blocking_pool_;
@@ -53,10 +63,16 @@ struct app_runtime_graph final {
     std::unique_ptr<document_root_publisher, pmr_object_deleter<document_root_publisher>> document_root_;
     // Every worker's route_table binds its instances to this one immutable plan.
     compiled_route_plan_ptr_type route_plan_;
+#if defined(_WIN32)
+    // All notifications and completion slots outlive their borrowed runtimes.
+    std::unique_ptr<windows_accept_domain, pmr_object_deleter<windows_accept_domain>> windows_accept_;
+#endif
     std::pmr::vector<app_worker_slot> workers_;
+#if !defined(_WIN32)
     std::unique_ptr<acceptor, pmr_object_deleter<acceptor>> ingress_;
-    // The one lifecycle over ingress (tier 0) and every worker (tier 1). It
-    // borrows their core runtimes, so it is declared after them.
+#endif
+    // Windows workers share tier 0; POSIX ingress precedes tier 1 workers.
+    // The group borrows core runtimes and is destroyed before their owners.
     worker_group group_;
     // Guarded by the application mutex. Worker handles are published only
     // once every worker is ready, so a posted job never meets a starting worker.

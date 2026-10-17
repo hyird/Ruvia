@@ -75,11 +75,16 @@ enum class native_wake_signal : std::uint8_t {
 
 // The platform wake channel: a nonblocking sender and the receiver handle that
 // the worker adopts into its Asio stream. Implemented by
-// worker_notification_win32.cpp (named pipe) and worker_notification_linux.cpp
-// (eventfd).
+// worker_notification_win32.cpp (named pipe) and worker_notification_posix.cpp
+// (Linux eventfd or a POSIX self-pipe).
 struct native_wake_pair final {
     native_wake_handle sender_{invalid_native_wake_handle};
     native_wake_handle receiver_{invalid_native_wake_handle};
+#if !defined(_WIN32) && !defined(__linux__)
+    // Keep a reader alive through close/notify races, preventing SIGPIPE until
+    // all producers have retired and the pair itself can be destroyed.
+    native_wake_handle receiver_guard_{invalid_native_wake_handle};
+#endif
 
     native_wake_pair() = default;
     native_wake_pair(const native_wake_pair&) = delete;
@@ -93,7 +98,7 @@ struct native_wake_pair final {
     void close_receiver() noexcept;
 };
 
-// startup_timeout bounds the Windows pipe connection; the eventfd ignores it.
+// startup_timeout bounds the Windows pipe connection; POSIX setup ignores it.
 [[nodiscard]] native_wake_pair make_native_wake_pair(std::chrono::milliseconds startup_timeout);
 
 [[noreturn]] void throw_native_wake_error(const char* operation, int error);
@@ -101,7 +106,7 @@ struct native_wake_pair final {
 #ifdef _WIN32
 void disconnect_native_receiver(native_wake_handle receiver) noexcept;
 #else
-// Consumes the eventfd counter; returns whether a notification was pending.
+// Consumes native wake tokens; returns whether a notification was pending.
 [[nodiscard]] bool drain_native_receiver(native_wake_handle receiver, std::error_code& error) noexcept;
 #endif
 
