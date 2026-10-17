@@ -22,8 +22,9 @@ inline constexpr std::size_t http3_server_push_allowance = http3_connection_conf
 [[nodiscard]] std::size_t http3_transport_lifetime_stream_capacity(
     std::size_t max_requests_per_connection);
 
+// Runtime capacities only; listener protocol settings are validated separately.
 void validate_http3_server_limits(
-    std::optional<std::size_t> max_connections, const http3_listen_config& config,
+    std::optional<std::size_t> max_connections,
     std::optional<std::size_t> max_requests_per_connection, std::size_t worker_count);
 
 void validate_http3_listen_config(const http3_listen_config& config);

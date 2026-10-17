@@ -8,6 +8,7 @@
 // the same connection; Ruvia servers allow client migration by default).
 // Successful runs print uploaded=12 and the downloaded chunks. Upload trailers
 // are supported on HTTP/2 and HTTP/3; HTTP/1 prints trailers=0.
+// Upload trailers belong to body().end(), not to the request header span.
 
 #include <array>
 #include <chrono>
@@ -125,7 +126,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
             const bool upload_trailers = config.protocol_ != ruvia::http_client_protocol::http1_only;
             std::cout << "upload\n";
             auto exchange_value = co_await bounded.open_request(
-                {.method_ = "POST", .target_ = "/features/upload", .headers_ = std::span(headers).first(upload_trailers ? 2 : 1)},
+                {.method_ = "POST", .target_ = "/features/upload", .headers_ = headers},
                 {.expectation_ = ruvia::http_client_request_expectation::continue_value, .max_chunk_bytes_ = 1024});
             co_await exchange_value.body().write("hello ");
             co_await exchange_value.body().write("world!");

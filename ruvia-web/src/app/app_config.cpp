@@ -71,7 +71,7 @@ application& application::listen(listen_config config) {
             if (effective_http3.has_value()) {
                 detail::validate_http3_listen_config(*effective_http3);
                 detail::validate_http3_server_limits(state_value.options_.server_.max_connections_per_worker_,
-                    *effective_http3, state_value.options_.server_.max_requests_per_connection_,
+                    state_value.options_.server_.max_requests_per_connection_,
                     state_value.options_.server_.worker_count_);
             }
 

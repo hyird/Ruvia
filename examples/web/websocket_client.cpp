@@ -3,6 +3,7 @@
 // to select HTTP/1 upgrade, HTTP/2 Extended CONNECT, or HTTP/3 Extended CONNECT.
 // Protocol 1/2 uses cleartext localhost:8093 by default. RUVIA_CLIENT_TLS=true
 // switches to TLS on 8444; HTTP/3 always uses TLS. Set RUVIA_TLS_CA for a local CA.
+// HTTP/2 over TLS requires ALPN h2; it never falls back to HTTP/1.
 // Expected output: text=hello, binary bytes=3, then a clean close.
 
 #include "ruvia/web/websocket_client.h"

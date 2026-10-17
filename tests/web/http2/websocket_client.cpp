@@ -11,6 +11,7 @@
 
 #include <asio/co_spawn.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ssl/stream.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
@@ -21,19 +22,32 @@
 
 #include "test_harness.h"
 #include "test_io_context.h"
+#include "test_tls_identity.h"
 
 namespace {
-void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer) {
+void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer, bool secure = false) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::optional<ruvia::test::tls_identity> identity;
+    if (secure) {
+        identity.emplace("localhost");
+        SSL_CTX_set_alpn_select_cb(identity->context_.native_handle(), [](SSL*, const unsigned char** selected, unsigned char* selected_size, const unsigned char* offered, unsigned int offered_size, void*) {
+                static constexpr unsigned char protocols[]{2, 'h', '2'};
+                unsigned char* protocol = nullptr;
+                if (SSL_select_next_proto(&protocol, selected_size, protocols, sizeof(protocols),
+                        offered, offered_size) != OPENSSL_NPN_NEGOTIATED) {
+                    return SSL_TLSEXT_ERR_ALERT_FATAL;
+                }
+                *selected = protocol;
+                return SSL_TLSEXT_ERR_OK; }, nullptr);
+    }
     std::exception_ptr peer_failure;
     bool saw_extended_connect = false;
     bool saw_client_end = false;
     unsigned messages = 0;
     const std::string large(2200000, 'a');
-    const auto serve = [&]() -> asio::awaitable<void> {
-        auto socket = co_await peer.async_accept(asio::use_awaitable);
+    const auto serve_stream = [&](auto& socket) -> asio::awaitable<void> {
         std::pmr::unsynchronized_pool_resource resource;
         auto connection = ruvia::http2_connection::server({.resource_ = &resource});
         std::optional<ruvia::websocket_connection> websocket;
@@ -121,17 +135,37 @@ void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer) {
             }
         }
     };
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await peer.async_accept(asio::use_awaitable);
+        if (identity) {
+            asio::ssl::stream<asio::ip::tcp::socket> stream(std::move(socket), identity->context_);
+            co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+            const unsigned char* selected = nullptr;
+            unsigned int selected_size = 0;
+            SSL_get0_alpn_selected(stream.native_handle(), &selected, &selected_size);
+            RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(selected), selected_size), std::string_view("h2"));
+            co_await serve_stream(stream);
+        } else {
+            co_await serve_stream(socket);
+        }
+    };
     asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peer_failure = failure; });
     bool reset_observed = false;
     const auto run = [&]() -> ruvia::task<void> {
-        ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
-                                                              .protocol_ = ruvia::websocket_client_protocol::http2,
-                                                              .host_ = "127.0.0.1",
-                                                              .port_ = peer.local_endpoint().port(),
-                                                              .headers_ = {{"X-Client", "unified"}},
-                                                              .deflate_ = {.enabled_ = true},
-                                                              .read_timeout_ = std::chrono::milliseconds(2000),
-                                                              .write_timeout_ = std::chrono::milliseconds(2000)});
+        ruvia::websocket_client_config config{
+            .scheme_ = secure ? ruvia::websocket_scheme::wss : ruvia::websocket_scheme::ws,
+            .protocol_ = ruvia::websocket_client_protocol::http2,
+            .host_ = "127.0.0.1",
+            .port_ = peer.local_endpoint().port(),
+            .headers_ = {{"X-Client", "unified"}},
+            .deflate_ = {.enabled_ = true},
+            .read_timeout_ = std::chrono::milliseconds(2000),
+            .write_timeout_ = std::chrono::milliseconds(2000)};
+        if (identity) {
+            config.tls_.ca_file_ = identity->ca_file_.string();
+            config.tls_.server_name_ = "localhost";
+        }
+        ruvia::websocket_client client(attachment.loop(), config);
         std::exception_ptr failure;
         try {
             co_await client.connect();
@@ -350,6 +384,10 @@ void exercise_closing_peer(ruvia::testing::test_context& ruvia_ctx, closing_peer
 
 RUVIA_TEST(http2_websocket_client_drives_flow_control_deflate_and_end_stream) {
     exercise_client(ruvia_ctx, false);
+}
+
+RUVIA_TEST(http2_websocket_wss_authenticates_and_exchanges_deflated_messages) {
+    exercise_client(ruvia_ctx, false, true);
 }
 
 RUVIA_TEST(http2_websocket_client_observes_peer_reset_and_joins_drivers) {

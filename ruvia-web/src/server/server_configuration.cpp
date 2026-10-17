@@ -123,7 +123,7 @@ void validate_http_server_options(const http_server_options& options) {
 }
 
 void validate_http3_server_limits(
-    std::optional<std::size_t> max_connections, const http3_listen_config& config,
+    std::optional<std::size_t> max_connections,
     std::optional<std::size_t> max_requests_per_connection, std::size_t worker_count) {
     if (worker_count == 0) {
         throw std::invalid_argument("HTTP/3 worker count must be greater than zero");
@@ -219,7 +219,7 @@ void validate_http_server_listener(const http_server_listener_definition& listen
     validate_http_server_options(options);
     if (http3) {
         validate_http3_server_limits(
-            options.server_.max_connections_per_worker_, *http3,
+            options.server_.max_connections_per_worker_,
             options.server_.max_requests_per_connection_, 1);
     }
     return validated_http_server_configuration(listeners, std::move(options));
