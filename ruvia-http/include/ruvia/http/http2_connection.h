@@ -111,10 +111,13 @@ public:
     std::string_view pending_output() const&& = delete;
     [[nodiscard]] http2_output_consume_status consume_output(std::size_t bytes) noexcept;
     void take_output(std::pmr::string& output);
-    // Copies whole frame boundaries (the first frame may exceed max_bytes). On
-    // copy failure the output cursor and observer are untouched. After legacy
-    // partial-byte consume_output(), returns unaligned until take_output() drains
-    // the remaining suffix; a client preface is treated as one indivisible segment.
+    // Appends whole frame boundaries (the first frame may exceed max_bytes).
+    // A complete unconsumed batch swaps storage when output is empty and its
+    // allocator matches the connection; all other cases copy the selected bytes.
+    // On copy failure the output cursor and observer are untouched. After legacy
+    // partial-byte consume_output(), a cursor inside a segment returns unaligned;
+    // advance to its next boundary or drain the suffix with take_output().
+    // A client preface is treated as one indivisible segment.
     [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes,
         std::pmr::string& output, http2_data_output_observer_type observer = nullptr,
         void* observer_context = nullptr);

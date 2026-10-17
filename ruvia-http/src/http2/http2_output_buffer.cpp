@@ -9,18 +9,10 @@ void http2_output_buffer::take(std::pmr::string& into) {
     const auto logical_end = base_offset_ + bytes_.size();
     if (consumed_ == 0 && into.get_allocator() == bytes_.get_allocator()) {
         into.swap(bytes_);
-        bytes_.clear();
-        segments_.clear();
-        segment_offset_ = 0;
-        base_offset_ = logical_end;
-        return;
+    } else {
+        into.assign(bytes_.data() + consumed_, bytes_.size() - consumed_);
     }
-    into.assign(bytes_.data() + consumed_, bytes_.size() - consumed_);
-    bytes_.clear();
-    segments_.clear();
-    segment_offset_ = 0;
-    consumed_ = 0;
-    base_offset_ = logical_end;
+    reset_after_drain(logical_end);
 }
 
 void http2_output_buffer::append_goaway_frame(
