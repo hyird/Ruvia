@@ -429,7 +429,7 @@ void http1_client_exchange::publish_final_head(const http_client_request_storage
     }
     // A received final head changes the jar before consumers can issue
     // another request, regardless of body completion or abandonment.
-    pool_.policy().retain_response_cookies(request, state_value.headers_);
+    pool_.policy().retain_response_cookies(request.target(), state_value.headers_);
     connection_.read_buffer_.consume(head.consumed_bytes());
 }
 

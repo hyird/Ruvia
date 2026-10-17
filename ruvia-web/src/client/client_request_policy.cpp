@@ -278,7 +278,7 @@ void client_request_policy::append_headers(const http_client_request_storage& re
 }
 
 void client_request_policy::retain_response_cookies(
-    const http_client_request_storage& request, std::span<const http_header> headers) {
+    std::string_view request_target, std::span<const http_header> headers) {
     if (config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
         return;
     }
@@ -292,7 +292,7 @@ void client_request_policy::retain_response_cookies(
         if (!parsed_cookie) {
             continue;
         }
-        if (const auto accepted = accept_set_cookie(*parsed_cookie, config_, request.target(), now)) {
+        if (const auto accepted = accept_set_cookie(*parsed_cookie, config_, request_target, now)) {
             store_received_cookie(*accepted);
         }
     }

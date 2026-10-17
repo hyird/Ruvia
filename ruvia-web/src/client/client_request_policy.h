@@ -23,7 +23,7 @@ public:
     client_request_policy(const http_client_config_storage& config, std::pmr::memory_resource* resource);
     void append_headers(const http_client_request_storage& request,
         std::pmr::vector<http_header_view>& headers, std::pmr::string& cookie_header);
-    void retain_response_cookies(const http_client_request_storage& request, std::span<const http_header> headers);
+    void retain_response_cookies(std::string_view request_target, std::span<const http_header> headers);
 
 private:
     struct stored_cookie final {

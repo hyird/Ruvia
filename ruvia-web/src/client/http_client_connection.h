@@ -56,6 +56,7 @@ public:
         std::uint32_t stream_id_{0};
         // Borrowed from the request or push driver while registered.
         const operation_timeout* timeout_{nullptr};
+        std::string_view request_target_;
         bool complete_{false};
         bool retryable_{false};
 

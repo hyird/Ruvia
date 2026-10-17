@@ -71,6 +71,9 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
           response_file_io{.pool_ = session_.options().blocking_pool_,
               .worker_ = session_.services().worker(),
               .stop_ = session_.services().get_stop_token()}) {
+    // A plaintext handoff reuses the HTTP/1 scanner entry. It now tracks a
+    // multiplexed session, not an unadmitted HTTP/1 request-head read.
+    set_inactivity_phase();
     session_.scanner_entry().register_periodic_check(drain_registration_, this, [](void*, std::int64_t) noexcept {}, [](void* target) noexcept { static_cast<http2_sans_io_session_engine*>(target)->request_drain(); });
 }
 
@@ -89,6 +92,7 @@ void http2_sans_io_session_engine::take_output(std::pmr::string& output) {
         // would mean another consumer violated that ownership contract.
         std::terminate();
     }
+    output_write_in_flight_ = !output.empty();
 }
 
 bool http2_sans_io_session_engine::write_failed() const noexcept {
@@ -104,6 +108,7 @@ task<void> http2_sans_io_session_engine::wait_for_write() {
 }
 
 void http2_sans_io_session_engine::output_write_completed() noexcept {
+    output_write_in_flight_ = false;
     finish_drain_if_ready();
     output_budget_.reconcile(connection_, true);
 }
@@ -160,7 +165,7 @@ void http2_sans_io_session_engine::request_drain() noexcept {
 
 void http2_sans_io_session_engine::finish_drain_if_ready() noexcept {
     if (!drain_finished_ && connection_.draining() && stream_runtimes_.size() == 0 &&
-        active_handler_tasks_ == 0 && !connection_.wants_write()) {
+        active_handler_tasks_ == 0 && !connection_.wants_write() && !output_write_in_flight_) {
         drain_finished_ = true;
         std::error_code error;
         socket_.cancel(error);

@@ -67,6 +67,8 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http_clien
     for (const auto& header : headers) {
         state_value.headers_.push_back(http_header::copy_of(header.name(), header.value(), state_value.resource_));
     }
+    // Publish cookies with the final head, not again when its body completes.
+    pool_.policy().retain_response_cookies(stream.request_target_, state_value.headers_);
     if (state_value.tunnel_) {
         state_value.tunnel_->accepted_ =
             state_value.response_body_plan_->content_semantics() == http_response_content_semantics::connect_tunnel;
@@ -387,6 +389,7 @@ task<void> http_client_connection::execute_http2(const http_client_request_stora
 
         http2_stream stream(pool_.worker(), state_value);
         stream.timeout_ = &timeout;
+        stream.request_target_ = request.target();
         stream.request_id_ = next_http2_request_id();
         state_value.transport_ = http_client_response_transport::http2;
         state_value.request_method_ = classify_http_method(request.method());
@@ -680,6 +683,7 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
         auto driver = make_pmr_object<http2_push_driver>(
             resource_, *this, connection, http_client_response(response.state_), state_value);
         driver->stream_.timeout_ = &driver->timeout_;
+        driver->stream_.request_target_ = request.path_;
         driver->stream_.request_id_ = state_value.request_id_;
         driver->stream_.stream_id_ = promise.promised_stream_id_;
         connection.register_http2_stream(driver->stream_);

@@ -101,6 +101,8 @@ private:
     std::size_t active_handler_tasks_{0};
     std::size_t accepted_request_heads_{0};
     bool drain_finished_{};
+    // A batch removed from protocol output still belongs to the socket writer.
+    bool output_write_in_flight_{};
     connection_scanner::periodic_check_registration_type drain_registration_;
 };
 
