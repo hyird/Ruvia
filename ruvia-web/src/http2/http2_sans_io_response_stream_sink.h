@@ -96,7 +96,9 @@ public:
         if (chunk.empty()) {
             co_return;
         }
-        co_await commit(http_response_trailer_intent::none);
+        if (!state_.committed()) {
+            co_await commit(http_response_trailer_intent::none);
+        }
         if (state_.body_suppressed_complete()) {
             // Same head-only guard as the HTTP/1 sink: suspend once before the
             // synchronous response_stream_head_only_complete throw so a handler that

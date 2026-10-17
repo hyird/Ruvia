@@ -26,6 +26,8 @@ class response_stream_writer;
 // independently destroyed, or moved away from the response. Body operations
 // bind directly to the response's address-stable transport state, so moving
 // their public response owner does not invalidate a cold or running operation.
+// HTTP/1 body-suppressed and known-zero-length responses do not allocate a
+// framing-decoder scratch block; other response storage and budgets still apply.
 class http_client_response_body final {
 public:
     http_client_response_body(const http_client_response_body&) = delete;
