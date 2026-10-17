@@ -296,7 +296,6 @@ enum class http1_client_response_parse_error : std::uint8_t {
     transfer_encoding_in_http10,
     content_length_and_transfer_encoding,
     invalid_protocol_switch,
-    too_many_informational_responses,
 };
 
 [[nodiscard]] std::string_view http1_client_response_parse_error_message(
@@ -463,6 +462,8 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_r
 // that response, in line with RFC 9931 section 8; it never returns to a pool.
 // HEAD/304 Content-Length representation metadata still requires valid,
 // consistent lengths; ignored 1xx/204/CONNECT framing values are not interpreted.
+// Any number of informational heads may precede the final response; each head
+// remains subject to the header limits and the supplied memory resource.
 class http1_client_response_parser final {
 public:
     struct options_type final {
@@ -511,7 +512,6 @@ private:
     std::pmr::memory_resource* resource_;
     phase_type phase_{phase_type::await_response};
     detail::http1_client_request_content_phase request_content_phase_;
-    std::uint8_t informational_response_count_{0};
     std::size_t header_scan_offset_{0};
 };
 

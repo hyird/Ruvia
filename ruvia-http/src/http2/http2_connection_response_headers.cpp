@@ -21,17 +21,12 @@
 #include "http2/http2_request_headers.h"
 #include "http2/http2_response_headers.h"
 
-// Decoding a response head as the client: ':status' first and once, the interim
-// (1xx) budget, and which regular headers a decoded head may carry into the
-// stream's table.
+// Decoding a client response head: ':status' first and once, informational
+// response events, and regular headers allowed in the stream's final table.
 
 namespace ruvia::detail {
 
 namespace {
-
-// RFC 9113 §8.1: at most this many 1xx interim heads before the final response head
-// (DoS bound; mirrors the retired client session's limit).
-constexpr std::uint8_t max_http2_interim_responses = 8;
 
 struct http2_response_decode_context final {
     http2_response_decode_context(http2_stream_state& stream, std::pmr::memory_resource* resource) noexcept
@@ -160,10 +155,7 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
         if (stream.remote_receive().head_end_stream_pending() != nullptr) {
             return header_decode_status::protocol_error;
         }
-        stream.count_interim_response();
-        if (stream.interim_response_count() > max_http2_interim_responses) {
-            return header_decode_status::protocol_error;
-        }
+        stream.mark_informational_response();
         reserve_event_slots(1);
         auto head = http_client_response_head_access::make(
             *context_value.status_, http_protocol_version::http2, resource_);

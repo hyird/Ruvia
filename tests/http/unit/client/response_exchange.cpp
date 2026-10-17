@@ -30,38 +30,58 @@ RUVIA_TEST(http_client_informational_responses_ignore_framing_fields) {
     }
 }
 
-RUVIA_TEST(http_client_limits_informational_responses_per_exchange) {
+RUVIA_TEST(http_client_long_informational_sequence_preserves_continue_and_final_boundary) {
     ruvia::http_client_request_view request;
-    request.method_ = "GET";
+    request.method_ = "POST";
+    request.content_ = ruvia::http_client_request_content_view::bytes("payload");
     std::array<char, 512> request_head;
     const auto prepared = ruvia::http1_client_request_writer().prepare(
-        ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head);
+        ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
+        http1_client_request_wire_policy{
+            .expectation_ = ruvia::http_client_request_expectation::continue_value});
     RUVIA_CHECK(prepared.prepared() != nullptr);
     if (prepared.prepared() == nullptr) {
         return;
     }
 
     http1_client_response_parser parser(prepared.prepared()->exchange_state());
-    constexpr std::string_view early_hints = "HTTP/1.1 103 Early Hints\r\n\r\n";
-    bool reached_limit = false;
-    for (std::size_t i = 0; i < 1024; ++i) {
+    constexpr std::string_view early_hints =
+        "HTTP/1.1 103 Early Hints\r\nLink: </asset>; rel=preload\r\n\r\n";
+    for (std::size_t i = 0; i < 300; ++i) {
         const auto interim = parser.parse(early_hints);
-        if (const auto* failure = interim.failure()) {
-            RUVIA_CHECK(failure->error() ==
-                        http1_client_response_parse_error::too_many_informational_responses);
-            reached_limit = true;
-            break;
+        const auto* parsed = interim.parsed();
+        RUVIA_CHECK(parsed != nullptr);
+        if (parsed == nullptr) {
+            return;
         }
-        RUVIA_CHECK(interim.parsed() != nullptr);
-        if (interim.parsed() != nullptr) {
-            RUVIA_CHECK(interim.parsed()->plan().informational() != nullptr);
-        }
+        RUVIA_CHECK(parsed->plan().informational() != nullptr);
+        RUVIA_CHECK(!parsed->plan().request_content_signal());
+        RUVIA_CHECK_EQ(parsed->consumed_bytes(), early_hints.size());
     }
-    RUVIA_CHECK(reached_limit);
-    const auto after_failure = parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
-    RUVIA_CHECK(after_failure.terminal() != nullptr);
-    if (after_failure.terminal() != nullptr) {
-        RUVIA_CHECK(after_failure.terminal()->failed());
+    const auto continue_response = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
+    RUVIA_CHECK(continue_response.parsed() != nullptr);
+    if (continue_response.parsed() == nullptr) {
+        return;
+    }
+    RUVIA_CHECK(continue_response.parsed()->plan().request_content_signal() ==
+                http_client_request_content_signal::continue_value);
+    RUVIA_CHECK(
+        parser.complete_request_content() == http1_client_request_content_completion_status::completed);
+
+    constexpr std::string_view final_wire =
+        "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nabcNEXT";
+    const auto final_response = parser.parse(final_wire);
+    RUVIA_CHECK(final_response.parsed() != nullptr);
+    if (const auto* parsed = final_response.parsed()) {
+        RUVIA_CHECK_EQ(parsed->head().status().value(), std::uint16_t{200});
+        RUVIA_CHECK_EQ(require_known_length(parsed->plan()).content_length(), std::size_t{3});
+        RUVIA_CHECK_EQ(final_wire.substr(parsed->consumed_bytes()), "abcNEXT");
+        RUVIA_CHECK(!parsed->plan().request_content_signal());
+    }
+    const auto after_final = parser.parse({});
+    RUVIA_CHECK(after_final.terminal() != nullptr);
+    if (after_final.terminal() != nullptr) {
+        RUVIA_CHECK(after_final.terminal()->completed());
     }
 }
 

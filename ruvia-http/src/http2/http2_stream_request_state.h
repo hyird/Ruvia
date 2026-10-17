@@ -71,7 +71,7 @@ public:
     }
 
     // Client role: nullptr until the final response :status is committed once for
-    // a stream this endpoint opened. The owner bounds preceding 1xx heads.
+    // a stream this endpoint opened. Informational heads do not commit that status.
     [[nodiscard]] const http_status_code* response_status() const& noexcept {
         return response_status_ ? &*response_status_ : nullptr;
     }
@@ -85,12 +85,12 @@ public:
         return true;
     }
 
-    [[nodiscard]] std::uint8_t interim_response_count() const noexcept {
-        return interim_responses_;
+    [[nodiscard]] bool has_informational_response() const noexcept {
+        return has_informational_response_;
     }
 
-    void count_interim_response() noexcept {
-        ++interim_responses_;
+    void mark_informational_response() noexcept {
+        has_informational_response_ = true;
     }
 
 private:
@@ -101,9 +101,9 @@ private:
     bool has_host_ : 1 {false};
     bool has_cookie_ : 1 {false};
     bool regular_header_seen_ : 1 {false};
+    bool has_informational_response_ : 1 {false};
     std::uint16_t scheme_default_port_{0};
     std::optional<http_status_code> response_status_;
-    std::uint8_t interim_responses_{0};
 };
 
 }  // namespace ruvia::detail

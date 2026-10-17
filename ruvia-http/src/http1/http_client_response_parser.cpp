@@ -9,7 +9,6 @@
 
 #include "client/http_client_access.h"
 #include "client/http_client_response_head.h"
-#include "client/http_client_response_limits.h"
 #include "parser/field_line_folding.h"
 #include "parser/http_header_block_parser.h"
 
@@ -95,8 +94,6 @@ std::string_view http1_client_response_parse_error_message(
             return "response has both Content-Length and Transfer-Encoding";
         case http1_client_response_parse_error::invalid_protocol_switch:
             return "invalid Switching Protocols response";
-        case http1_client_response_parse_error::too_many_informational_responses:
-            return "too many informational responses";
     }
     return "invalid HTTP/1 response";
 }
@@ -157,9 +154,6 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     const bool informational = informational_plan != nullptr;
     const bool closing_informational =
         informational && informational_plan->persistence() == http1_close_policy::close_after_response;
-    if (informational && informational_response_count_ >= detail::max_http_client_interim_responses) {
-        return fail(http1_client_response_parse_error::too_many_informational_responses);
-    }
 
     // No owning response head is observable until the entire head and framing
     // plan have validated. Field views borrow the input or unfolded_head until
@@ -177,9 +171,6 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
 
     auto result_value = detail::http1_client_response_parse_result_access::parsed(
         std::move(head), std::move(plan), header_bytes);
-    if (informational) {
-        ++informational_response_count_;
-    }
     if (parsed_value.status_code_ == http_status::continue_value && !closing_informational) {
         request_content_phase_ = receive_continue(request_content_phase_);
     }

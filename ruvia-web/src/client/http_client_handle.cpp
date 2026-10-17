@@ -91,11 +91,8 @@ std::span<const http_client_informational_response> http_client_response::inform
 }
 
 void detail::http_client_response_state::retain_informational(http_status_code status_code, std::span<const http_header> fields_value) {
-    // Retained progress metadata has a separate fixed aggregate bound. It must
-    // never grow with the duration of an upstream response stream.
-    if (informational_.size() >= 8) {
-        throw http_client_error(http_client_error::code_type::protocol_error, "too many informational response heads");
-    }
+    // Bound retained fields in aggregate. Response-resource accounting also
+    // charges head and vector storage, including fieldless informational heads.
     http_client_informational_response head(status_code, resource_);
     head.headers_.reserve(fields_value.size());
     auto budget = informational_budget_;

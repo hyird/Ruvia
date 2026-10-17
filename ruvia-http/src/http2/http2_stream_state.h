@@ -567,12 +567,12 @@ public:
         return request_state_.set_response_status(status);
     }
 
-    [[nodiscard]] std::uint8_t interim_response_count() const noexcept {
-        return request_state_.interim_response_count();
+    [[nodiscard]] bool has_informational_response() const noexcept {
+        return request_state_.has_informational_response();
     }
 
-    void count_interim_response() noexcept {
-        request_state_.count_interim_response();
+    void mark_informational_response() noexcept {
+        request_state_.mark_informational_response();
     }
 };
 

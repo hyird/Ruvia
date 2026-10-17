@@ -1801,6 +1801,122 @@ RUVIA_TEST(http2_public_failed_connection_retires_peer_finished_tunnel) {
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }
 
+RUVIA_TEST(http2_public_client_accepts_long_informational_sequence_before_final_response) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto client = prepared_client(&resource);
+    std::pmr::string wire(&resource);
+    append_peer_settings(wire);
+    std::pmr::string block(&resource);
+    ruvia::hpack_encoder::encode_header(block, ":status", "103");
+    ruvia::hpack_encoder::encode_header(block, "link", "</asset>; rel=preload");
+    constexpr std::size_t informational_count = 300;
+    for (std::size_t index = 0; index < informational_count; ++index) {
+        append_header_section(wire, 1, block, false, false);
+    }
+    append_response(wire, &resource, 1, "200", "final body");
+    RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+    for (std::size_t index = 0; index < informational_count; ++index) {
+        const auto event = client.next_event();
+        const auto* informational = event ? event->informational_head() : nullptr;
+        RUVIA_CHECK(informational != nullptr);
+        if (informational == nullptr) {
+            return;
+        }
+        RUVIA_CHECK_EQ(informational->stream_id(), std::uint32_t{1});
+        RUVIA_CHECK_EQ(informational->head().status().value(), std::uint16_t{103});
+        const auto fields = informational->head().headers();
+        RUVIA_CHECK_EQ(fields.size(), std::size_t{1});
+        if (fields.size() == 1) {
+            RUVIA_CHECK(fields.front().name() == "link");
+            RUVIA_CHECK(fields.front().value() == "</asset>; rel=preload");
+        }
+    }
+    const auto head = client.next_event();
+    RUVIA_CHECK(head && head->response_head());
+    if (head && head->response_head()) {
+        RUVIA_CHECK_EQ(head->response_head()->stream_id(), std::uint32_t{1});
+        RUVIA_CHECK(head->response_head()->head().status() == ruvia::http_status::ok);
+    }
+    const auto body = client.next_event();
+    RUVIA_CHECK(body && body->message_body_chunk());
+    if (body && body->message_body_chunk()) {
+        RUVIA_CHECK_EQ(body->message_body_chunk()->stream_id(), std::uint32_t{1});
+        RUVIA_CHECK(body->message_body_chunk()->bytes() == "final body");
+    }
+    const auto end = client.next_event();
+    RUVIA_CHECK(end && end->message_end());
+    if (end && end->message_end()) {
+        RUVIA_CHECK_EQ(end->message_end()->stream_id(), std::uint32_t{1});
+        RUVIA_CHECK(end->message_end()->trailers().empty());
+        RUVIA_CHECK(end->message_end()->content_semantics() ==
+                    ruvia::http2_message_content_semantics::content);
+    }
+    RUVIA_CHECK(!client.next_event());
+    RUVIA_CHECK(!client.connection_error());
+}
+
+RUVIA_TEST(http2_public_client_rejects_goaway_excluding_informational_response) {
+    for (const std::size_t informational_count : {std::size_t{1}, std::size_t{256}}) {
+        std::pmr::monotonic_buffer_resource resource;
+        auto client = prepared_client(&resource);
+        std::pmr::string wire(&resource);
+        append_peer_settings(wire);
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":status", "103");
+        for (std::size_t index = 0; index < informational_count; ++index) {
+            append_header_section(wire, 1, block, false, false);
+        }
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        for (std::size_t index = 0; index < informational_count; ++index) {
+            const auto event = client.next_event();
+            const auto* informational = event ? event->informational_head() : nullptr;
+            RUVIA_CHECK(informational != nullptr);
+            if (informational == nullptr) {
+                return;
+            }
+            RUVIA_CHECK_EQ(informational->stream_id(), std::uint32_t{1});
+            RUVIA_CHECK_EQ(informational->head().status().value(), std::uint16_t{103});
+        }
+        RUVIA_CHECK(!client.next_event());
+        RUVIA_CHECK(!client.connection_error());
+        (void)client.consume_output(client.pending_output().size());
+        wire.clear();
+        constexpr std::array<char, 8> payload{};
+        append_frame(wire, ruvia::http2_frame_type::goaway, 0, 0,
+            std::string_view(payload.data(), payload.size()));
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::protocol_failure);
+        RUVIA_CHECK(client.connection_error() == ruvia::http2_error_code::protocol_error);
+        // A request_unprocessed event would incorrectly authorize replay.
+        RUVIA_CHECK(!client.next_event());
+        const auto frame = ruvia::parse_http2_frame_header(
+            std::span(client.pending_output().data(), client.pending_output().size()));
+        RUVIA_CHECK(frame && frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway));
+    }
+}
+
+RUVIA_TEST(http2_public_client_rejects_informational_response_with_end_stream) {
+    for (const auto status : {std::string_view("100"), std::string_view("103")}) {
+        std::pmr::monotonic_buffer_resource resource;
+        auto client = prepared_client(&resource);
+        std::pmr::string wire(&resource);
+        append_peer_settings(wire);
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":status", status);
+        append_header_section(wire, 1, block, true, false);
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        const auto event = client.next_event();
+        const auto* closed = event ? event->stream_closed() : nullptr;
+        RUVIA_CHECK(closed != nullptr);
+        if (closed != nullptr) {
+            RUVIA_CHECK_EQ(closed->stream_id(), std::uint32_t{1});
+            RUVIA_CHECK(closed->source() == ruvia::http2_stream_close_source::local);
+            RUVIA_CHECK(closed->error() == ruvia::http2_error_code::protocol_error);
+        }
+        RUVIA_CHECK(!client.next_event());
+        RUVIA_CHECK(!client.connection_error());
+    }
+}
+
 RUVIA_TEST(http2_public_response_head_and_trailers_are_owned_by_events) {
     std::pmr::monotonic_buffer_resource resource;
     auto client = prepared_client(&resource);

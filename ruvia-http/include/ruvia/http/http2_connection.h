@@ -88,6 +88,8 @@ struct http2_extended_connect_request_head_view final {
 // const queries never mutate.
 // For a streaming client request, response END_STREAM closes only the receive
 // half. Finish or explicitly reset the request send half even after message_end.
+// Informational heads do not end the receive half and have no fixed count limit;
+// each header section remains subject to the configured decoding limits.
 class http2_connection final {
 public:
     [[nodiscard]] static http2_connection server(http2_connection_options options = {});

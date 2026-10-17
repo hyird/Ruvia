@@ -198,6 +198,7 @@ private:
 
 class upload_peer final {
 public:
+    static constexpr std::size_t early_hint_count = 300;
     enum class mode_type { chunked,
         known_length,
         continue_value,
@@ -254,7 +255,14 @@ private:
             if (!input.empty()) {
                 throw std::runtime_error("upload arrived before 100 Continue");
             }
-            constexpr std::string_view reply = "HTTP/1.1 103 Early Hints\r\nLink: </asset>; rel=preload\r\n\r\nHTTP/1.1 100 Continue\r\n\r\n";
+            constexpr std::string_view early_hint =
+                "HTTP/1.1 103 Early Hints\r\nLink: </asset>; rel=preload\r\n\r\n";
+            std::string reply;
+            reply.reserve(early_hint_count * early_hint.size() + 25);
+            for (std::size_t i = 0; i < early_hint_count; ++i) {
+                reply.append(early_hint);
+            }
+            reply.append("HTTP/1.1 100 Continue\r\n\r\n");
             co_await asio::async_write(socket, asio::buffer(reply), asio::use_awaitable);
         }
         if (mode_ == mode_type::known_length) {
@@ -1644,10 +1652,21 @@ RUVIA_TEST(http_client_upload_exchange_owns_chunks_and_trailers_and_drives_conti
             auto& response = *received;
             auto bytes_value = co_await response.body().read_all(16);
             RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "ok");
-            RUVIA_CHECK_EQ(response.informational_responses().size(), mode == upload_peer::mode_type::continue_value ? std::size_t{2} : std::size_t{0});
-            if (mode == upload_peer::mode_type::continue_value) {
-                RUVIA_CHECK_EQ(response.informational_responses()[0].status().value(), std::uint16_t{103});
-                RUVIA_CHECK_EQ(response.informational_responses()[0].headers()[0].value(), "</asset>; rel=preload");
+            const auto informational = response.informational_responses();
+            RUVIA_CHECK_EQ(informational.size(), mode == upload_peer::mode_type::continue_value
+                                                     ? upload_peer::early_hint_count + 1
+                                                     : std::size_t{0});
+            if (mode == upload_peer::mode_type::continue_value &&
+                informational.size() == upload_peer::early_hint_count + 1) {
+                for (std::size_t i = 0; i < upload_peer::early_hint_count; ++i) {
+                    RUVIA_CHECK_EQ(informational[i].status().value(), std::uint16_t{103});
+                    const auto fields = informational[i].headers();
+                    RUVIA_CHECK_EQ(fields.size(), std::size_t{1});
+                    if (fields.size() == 1) {
+                        RUVIA_CHECK_EQ(fields[0].value(), "</asset>; rel=preload");
+                    }
+                }
+                RUVIA_CHECK_EQ(informational.back().status().value(), std::uint16_t{100});
             }
             co_await peer.wait();
             RUVIA_CHECK_EQ(peer.body_, known ? "abcdef" : "3\r\nabc\r\n3\r\ndef\r\n0\r\nx-end: retained\r\n\r\n");

@@ -86,6 +86,8 @@ public:
     http_client_response& operator=(http_client_response&& other) noexcept;
     ~http_client_response();
 
+    // Informational heads are retained in wire order without a count cap.
+    // Aggregate field-byte and in-flight allocation budgets still apply.
     [[nodiscard]] std::span<const http_client_informational_response> informational_responses() const& noexcept;
     std::span<const http_client_informational_response> informational_responses() const&& = delete;
     [[nodiscard]] http_status_code status() const noexcept;

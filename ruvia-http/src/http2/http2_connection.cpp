@@ -379,7 +379,7 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
             }
             // A response head proves that the peer acted on this request. Claiming
             // otherwise would make replay unsafe, so reject the contradictory GOAWAY.
-            if (http2_remote_final_head_decoded(stream) || stream.interim_response_count() != 0) {
+            if (http2_remote_final_head_decoded(stream) || stream.has_informational_response()) {
                 response_started_above_last = true;
                 return;
             }
