@@ -2399,7 +2399,12 @@ RUVIA_TEST(http_client_abandoned_request_cancels_its_connect_in_progress) {
 // RFC 9110 §7.5 permits the final response to finish before its request. A
 // persistent final response does not cancel content that was already released.
 RUVIA_TEST(http_client_finishes_upload_after_an_early_persistent_response_before_reusing_connection) {
-    for (const bool expect_continue : {false, true}) {
+    enum class release_mode { immediate,
+        continued,
+        timed_out };
+    for (const auto mode : {release_mode::immediate, release_mode::continued, release_mode::timed_out}) {
+        const bool expect_continue = mode != release_mode::immediate;
+        const bool timeout_release = mode == release_mode::timed_out;
         for (const bool known_length : {false, true}) {
             auto& io = ruvia::test::new_test_io_context();
             test_worker worker(io);
@@ -2415,8 +2420,15 @@ RUVIA_TEST(http_client_finishes_upload_after_an_early_persistent_response_before
                 const auto head_bytes =
                     co_await asio::async_read_until(socket, asio::dynamic_buffer(buffered), "\r\n\r\n", asio::use_awaitable);
                 buffered.erase(0, head_bytes);
+                if (timeout_release) {
+                    const std::size_t first_chunk_bytes = known_length ? 1 : 6;
+                    if (buffered.size() < first_chunk_bytes) {
+                        co_await asio::async_read(socket, asio::dynamic_buffer(buffered),
+                            asio::transfer_exactly(first_chunk_bytes - buffered.size()), asio::use_awaitable);
+                    }
+                }
                 std::string response;
-                if (expect_continue) {
+                if (expect_continue && !timeout_release) {
                     response += "HTTP/1.1 100 Continue\r\n\r\n";
                 }
                 response += "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
@@ -2454,7 +2466,11 @@ RUVIA_TEST(http_client_finishes_upload_after_an_early_persistent_response_before
                 auto exchange = co_await client.handle().open_request({.method_ = "POST", .target_ = "/early"},
                     {.content_length_ = known_length ? std::optional<std::uint64_t>{3} : std::nullopt,
                         .expectation_ = expect_continue ? ruvia::http_client_request_expectation::continue_value
-                                                        : ruvia::http_client_request_expectation::none});
+                                                        : ruvia::http_client_request_expectation::none,
+                        .continue_timeout_ = std::chrono::milliseconds(timeout_release ? 20 : 60000)});
+                if (timeout_release) {
+                    co_await exchange.body().write("a");
+                }
                 auto response = co_await exchange.response();
                 RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{200});
                 const auto early_body = co_await response.body().read_all();
@@ -2462,7 +2478,7 @@ RUVIA_TEST(http_client_finishes_upload_after_an_early_persistent_response_before
                 RUVIA_CHECK(response.body().complete());
                 RUVIA_CHECK(!exchange.body().complete());
                 RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{1});
-                co_await exchange.body().write("abc");
+                co_await exchange.body().write(timeout_release ? "bc" : "abc");
                 const ruvia::http_header_view trailers[] = {{"X-End", "retained"}};
                 co_await exchange.body().end(known_length ? std::span<const ruvia::http_header_view>{}
                                                           : std::span<const ruvia::http_header_view>(trailers));
@@ -2478,10 +2494,78 @@ RUVIA_TEST(http_client_finishes_upload_after_an_early_persistent_response_before
                 co_await client.shutdown();
             };
             run_operation(worker, io, operation);
-            RUVIA_CHECK_EQ(request_body, known_length ? "abc" : "3\r\nabc\r\n0\r\nx-end: retained\r\n\r\n");
+            RUVIA_CHECK_EQ(request_body, known_length      ? "abc"
+                                         : timeout_release ? "1\r\na\r\n2\r\nbc\r\n0\r\nx-end: retained\r\n\r\n"
+                                                           : "3\r\nabc\r\n0\r\nx-end: retained\r\n\r\n");
             RUVIA_CHECK(next_request.starts_with("GET /next HTTP/1.1\r\n"));
         }
     }
+}
+
+RUVIA_TEST(http_client_abandoned_upload_cancels_its_retained_incomplete_response) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::exception_ptr peer_failure;
+    bool peer_finished = false;
+    ruvia::worker_signal peer_done(worker.handle_);
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await acceptor.async_accept(asio::use_awaitable);
+        asio::streambuf request;
+        co_await asio::async_read_until(socket, request, "\r\n\r\n", asio::use_awaitable);
+        constexpr std::string_view head = "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n";
+        co_await asio::async_write(socket, asio::buffer(head), asio::use_awaitable);
+        std::array<char, 1> input;
+        std::error_code error;
+        const auto bytes = co_await socket.async_read_some(asio::buffer(input), asio::redirect_error(asio::use_awaitable, error));
+        if (bytes != 0 || (error != asio::error::eof && error != asio::error::connection_reset)) {
+            throw std::runtime_error("abandoned HTTP/1 upload did not close");
+        }
+        auto next_socket = co_await acceptor.async_accept(asio::use_awaitable);
+        asio::streambuf next_request;
+        co_await asio::async_read_until(next_socket, next_request, "\r\n\r\n", asio::use_awaitable);
+        constexpr std::string_view next_response =
+            "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nnext";
+        co_await asio::async_write(next_socket, asio::buffer(next_response), asio::use_awaitable);
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+        peer_finished = true;
+        peer_done.notify();
+    });
+    auto config = local_http_client_config(acceptor.local_endpoint().port());
+    config.connection_count_ = 1;
+    // A broken abandonment path fails as timeout rather than hanging the suite.
+    config.request_timeout_ = std::chrono::seconds(1);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    auto operation = [&]() -> ruvia::task<void> {
+        const acceptor_closer closer{acceptor};
+        std::optional<ruvia::http_client_response> response;
+        {
+            auto exchange = co_await client.handle().open_request(
+                {.method_ = "POST", .target_ = "/abandoned"}, {.content_length_ = 6});
+            response.emplace(co_await exchange.response());
+            RUVIA_CHECK(!response->body().complete());
+        }
+        bool cancelled = false;
+        try {
+            (void)co_await response->body().read_all();
+        } catch (const ruvia::http_client_error& error) {
+            cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+        }
+        RUVIA_CHECK(cancelled);
+        auto next = co_await client.handle().send({.target_ = "/next"});
+        const auto next_body = co_await next.body().read_all();
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(next_body.bytes().data()), next_body.size()), "next");
+        while (!peer_finished) {
+            co_await peer_done.wait();
+        }
+        if (peer_failure) {
+            std::rethrow_exception(peer_failure);
+        }
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
 }
 
 RUVIA_TEST(http_client_bounds_unfinished_upload_after_response_body_completion) {

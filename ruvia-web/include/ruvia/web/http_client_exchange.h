@@ -55,11 +55,13 @@ public:
     // Can run concurrently with the upload lane to observe an early final
     // response. Transfers response ownership once, when actually started.
     // Unless that response explicitly stops the upload (a closing response or
-    // a final response before 100 Continue), finish the request with body().end()
+    // a final response before the Expect gate opens), finish with body().end()
     // even if the response body already ended. HTTP/2 response END_STREAM alone
     // does not stop an upload; a subsequent peer reset can stop it without losing
-    // the completed response. Abandoning an unfinished request closes HTTP/1's
-    // connection or resets HTTP/2's stream.
+    // the completed response. Abandoning an active upload closes HTTP/1's
+    // connection or resets HTTP/2's stream. This also cancels an incomplete
+    // HTTP/1 response already taken by the caller, but not one whose upload
+    // has already ended or been stopped.
     // Once the response body completed successfully, later upload failure or
     // cancellation does not invalidate it. Pending upload operations still
     // report their send-side failure.

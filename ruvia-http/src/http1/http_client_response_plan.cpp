@@ -73,6 +73,7 @@ namespace {
     bool response_will_close) noexcept {
     if (response_will_close && (phase == http1_client_request_content_phase::awaiting_continue ||
                                    phase == http1_client_request_content_phase::content_pending ||
+                                   phase == http1_client_request_content_phase::content_released_awaiting_continue ||
                                    phase == http1_client_request_content_phase::continue_received)) {
         return http_client_request_content_signal::exchange_complete;
     }
@@ -82,19 +83,12 @@ namespace {
                          http_client_request_content_signal::continue_value)
                    : std::nullopt;
     }
-    if (status_code.is_final()) {
+    if (status_code.is_final() && phase == http1_client_request_content_phase::awaiting_continue) {
         // A final response cancels content only while Expect still gates it.
-        // Once 100 Continue releases the writer, RFC 9110 section 7.5 says the
-        // client should keep sending the request unless the server explicitly
-        // indicates otherwise. RFC 9112 section 9.5 makes a closing final
-        // response that explicit signal, including after Continue released the
-        // body writer.
-        if (phase == http1_client_request_content_phase::awaiting_continue ||
-            (response_will_close &&
-                (phase == http1_client_request_content_phase::content_pending ||
-                    phase == http1_client_request_content_phase::continue_received))) {
-            return http_client_request_content_signal::exchange_complete;
-        }
+        // After 100 Continue or a finite wait releases the writer, RFC 9110
+        // section 7.5 says to keep sending unless the server explicitly stops
+        // it. Closing responses provide that signal and are handled above.
+        return http_client_request_content_signal::exchange_complete;
     }
     return std::nullopt;
 }

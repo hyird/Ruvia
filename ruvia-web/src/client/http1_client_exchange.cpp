@@ -161,6 +161,7 @@ task<void> http1_client_exchange::run(
     // Bound for the exchange so a cancellation or shutdown stops the
     // response's output and wakes its producer waits.
     connection.http1_response_ = &state_value;
+    state_value.transport_ = http_client_response_transport::http1;
     cancellation.arm(stop_token_value);
 
     auto* const response_resource = state_value.resource_;
@@ -606,8 +607,9 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
     worker_timer_registration continue_timer;
     if (!upload.content_released_) {
         (void)pool_.worker().schedule_timer(continue_timer, worker_timer_deadline_after(upload.config_.continue_timeout_),
-            [&upload](worker_timer_outcome outcome) noexcept {
+            [&upload, &parser](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired && !upload.output_.stopped_) {
+                    parser.release_request_content();
                     upload.content_released_ = true;
                     upload.output_.notify_data();
                 }

@@ -82,12 +82,19 @@ void http_client_exchange::release() noexcept {
         return;
     }
     auto& upload = *state_value->upload_;
+    const bool abandon_upload = !upload.output_.ended_ && !upload.output_.stopped_;
     upload.output_.output_scope_.close();
     upload.response_scope_.close();
     if (upload.response_taken_) {
         response_.consumer_ = false;
     }
-    if (!upload.output_.ended_) {
+    if (abandon_upload && upload.response_taken_ && !state_value->complete_ &&
+        state_value->transport_ == detail::http_client_response_transport::http1 &&
+        state_value->pool_ != nullptr) {
+        // Stopping the writer alone cannot interrupt a pending response read.
+        // Keep the retained consumer's read scope open to observe cancellation.
+        state_value->pool_->abandon_response(*state_value);
+    } else if (!upload.output_.ended_) {
         upload.output_.stop();
     }
     response_.release();

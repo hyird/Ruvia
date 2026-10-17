@@ -45,6 +45,7 @@ namespace {
     detail::http1_client_request_content_phase phase) noexcept {
     switch (phase) {
         case detail::http1_client_request_content_phase::awaiting_continue:
+        case detail::http1_client_request_content_phase::content_released_awaiting_continue:
             return detail::http1_client_request_content_phase::continue_received;
         case detail::http1_client_request_content_phase::content_complete_awaiting_continue:
             return detail::http1_client_request_content_phase::continue_received_content_complete;
@@ -181,6 +182,14 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     return result_value;
 }
 
+void http1_client_response_parser::release_request_content() noexcept {
+    if (phase_ == phase_type::await_response &&
+        request_content_phase_ == detail::http1_client_request_content_phase::awaiting_continue) {
+        request_content_phase_ =
+            detail::http1_client_request_content_phase::content_released_awaiting_continue;
+    }
+}
+
 http1_client_request_content_completion_status
 http1_client_response_parser::complete_request_content() noexcept {
     if (phase_ != phase_type::await_response) {
@@ -191,6 +200,7 @@ http1_client_response_parser::complete_request_content() noexcept {
             request_content_phase_ = detail::http1_client_request_content_phase::content_complete;
             return http1_client_request_content_completion_status::completed;
         case detail::http1_client_request_content_phase::awaiting_continue:
+        case detail::http1_client_request_content_phase::content_released_awaiting_continue:
             request_content_phase_ =
                 detail::http1_client_request_content_phase::content_complete_awaiting_continue;
             return http1_client_request_content_completion_status::completed;

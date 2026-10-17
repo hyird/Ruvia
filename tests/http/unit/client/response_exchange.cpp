@@ -265,6 +265,36 @@ RUVIA_TEST(http_client_expect_final_cancels_only_pending_request_content) {
     }
 }
 
+RUVIA_TEST(http_client_timeout_released_content_follows_final_response_persistence) {
+    std::array<char, 512> request_head;
+    const auto prepared = ruvia::http1_client_request_writer().prepare_streaming(
+        ruvia::http_origin_view::https({.host_ = "example.test"}),
+        {.method_ = "POST", .target_ = "/upload", .content_length_ = 6}, request_head,
+        {.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    RUVIA_CHECK(prepared.prepared() != nullptr);
+    if (prepared.prepared() == nullptr) {
+        return;
+    }
+    for (const bool closing : {false, true}) {
+        http1_client_response_parser parser(prepared.prepared()->exchange_state());
+        parser.release_request_content();
+        const auto response = parser.parse(closing
+                                               ? "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                               : "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        RUVIA_CHECK(response.parsed() != nullptr);
+        if (response.parsed() != nullptr) {
+            const auto& plan = response.parsed()->plan();
+            RUVIA_CHECK(require_known_length(plan).persistence() ==
+                        (closing ? http1_close_policy::close_after_response : http1_close_policy::allow_reuse));
+            if (closing) {
+                RUVIA_CHECK(plan.request_content_signal() == http_client_request_content_signal::exchange_complete);
+            } else {
+                RUVIA_CHECK(!plan.request_content_signal());
+            }
+        }
+    }
+}
+
 RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     const ruvia::http_header_view upgrade_headers[] = {
         {"Connection", "Upgrade"},
@@ -315,6 +345,7 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     }
     http1_client_response_parser completed_without_continue_parser(
         completed_without_continue_prepared.prepared()->exchange_state());
+    completed_without_continue_parser.release_request_content();
     RUVIA_CHECK(completed_without_continue_parser.complete_request_content() ==
                 http1_client_request_content_completion_status::completed);
     const auto completed_without_continue = completed_without_continue_parser.parse(switching);
@@ -334,6 +365,7 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
         return;
     }
     http1_client_response_parser late_continue_parser(late_continue_prepared.prepared()->exchange_state());
+    late_continue_parser.release_request_content();
     RUVIA_CHECK(late_continue_parser.complete_request_content() ==
                 http1_client_request_content_completion_status::completed);
     const auto late_continue = late_continue_parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
@@ -376,8 +408,12 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
         return;
     }
     http1_client_response_parser accepted_parser(accepted_prepared.prepared()->exchange_state());
+    accepted_parser.release_request_content();
     const auto continue_response = accepted_parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     RUVIA_CHECK(continue_response.parsed() != nullptr);
+    if (continue_response.parsed() != nullptr) {
+        RUVIA_CHECK(!continue_response.parsed()->plan().request_content_signal());
+    }
     RUVIA_CHECK(accepted_parser.complete_request_content() ==
                 http1_client_request_content_completion_status::completed);
     const auto accepted = accepted_parser.parse(switching);

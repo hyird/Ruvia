@@ -22,13 +22,14 @@ struct http1_client_response_parse_result_access;
 struct http1_client_response_plan_access;
 
 // One request-content lifecycle for the response side of an HTTP/1 exchange.
-// Expect and completion are not independent booleans: receiving Continue and
-// completing content are ordered events, and the combined phase determines
-// whether a later 100 is actionable and whether 101 is legal.
+// Expect and completion are not independent booleans: releasing the gate,
+// receiving Continue, and completing content are ordered events. Their phase
+// determines whether a later 100 is actionable and whether 101 is legal.
 enum class http1_client_request_content_phase : std::uint8_t {
     content_complete,
     content_pending,
     awaiting_continue,
+    content_released_awaiting_continue,
     continue_received,
     content_complete_awaiting_continue,
     continue_received_content_complete,
@@ -478,6 +479,12 @@ public:
     http1_client_response_parser& operator=(const http1_client_response_parser&) = delete;
     http1_client_response_parser(http1_client_response_parser&&) = delete;
     http1_client_response_parser& operator=(http1_client_response_parser&&) = delete;
+
+    // Reports that the driver released the Expect gate without receiving 100,
+    // for example after its finite wait. This neither completes request content
+    // nor substitutes for the 100 required before 101. A terminal response-head
+    // exchange is unchanged; always honor the plan's request-content signal.
+    void release_request_content() noexcept;
 
     // Reports request-content completion while response heads are still pending.
     // exchange_terminal refers to response-head parsing, not an instruction to
