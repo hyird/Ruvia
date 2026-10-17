@@ -36,16 +36,21 @@ bool http2_connection::process_push_promise(const http2_frame_header& header_val
         append_goaway(http2_error_code::protocol_error, "invalid promised stream id");
         return false;
     }
+    const auto block = fragment.substr(4);
+    const bool end_headers = (header_value.flags_ & http2_flag_end_headers) != 0;
     try {
         push_header_stream_.emplace(promised, resource_);
         push_associated_stream_id_ = header_value.stream_id_;
-        if (!http2_start_header_block(*push_header_stream_, fragment.substr(4))) {
+        if (end_headers ? block.size() > max_http2_encoded_header_block_bytes
+                        : !http2_start_header_block(*push_header_stream_, block)) {
             push_header_stream_.reset();
             append_goaway(http2_error_code::compression_error, "push field block exceeds limit");
             return false;
         }
-        if ((header_value.flags_ & http2_flag_end_headers) != 0) {
-            const auto result_value = finish_push_promise();
+        if (end_headers) {
+            // Decode a complete block directly; only fragmented input needs owned
+            // compressed storage. Published promise metadata owns its decoded bytes.
+            const auto result_value = finish_push_promise(block);
             push_header_stream_.reset();
             return result_value;
         }
@@ -71,7 +76,7 @@ bool http2_connection::process_push_continuation(const http2_frame_header& heade
         }
         (void)header_continuation_.record_continuation_frame();
         if ((header_value.flags_ & http2_flag_end_headers) != 0) {
-            const auto result_value = finish_push_promise();
+            const auto result_value = finish_push_promise(push_header_stream_->remote_header_block());
             push_header_stream_.reset();
             header_continuation_.reset();
             return result_value;
@@ -86,13 +91,13 @@ bool http2_connection::process_push_continuation(const http2_frame_header& heade
     }
 }
 
-bool http2_connection::finish_push_promise() {
+bool http2_connection::finish_push_promise(std::string_view block) {
     auto& scratch = *push_header_stream_;
     // PUSH_PROMISE represents a complete request without a request body.
     (void)scratch.record_remote_head_end_stream();
     http2_stream_header_decode_transaction stream_transaction{scratch, true};
     auto hpack_transaction = decoder_.begin_transaction();
-    const auto status = decode_header_block(scratch, scratch.remote_header_block(), hpack_transaction);
+    const auto status = decode_header_block(scratch, block, hpack_transaction);
     if (status == header_decode_status::compression_error) {
         append_goaway(http2_error_code::compression_error, "push field block decompression failed");
         return false;
