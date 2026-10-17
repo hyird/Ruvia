@@ -126,10 +126,13 @@ public:
 
     ~app_run() {
         if (thread_.joinable()) {
-            app_.stop();
-            state_.release_hook_.release();
-            thread_.join();
+            stop_and_join();
         }
+    }
+    void stop_and_join() {
+        app_.stop();
+        state_.release_hook_.release();
+        join();
     }
     void join() {
         thread_.join();
@@ -563,6 +566,11 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         const bool entered = state_value->hook_entered_.try_acquire_for(3s);
         RUVIA_CHECK(entered);
         if (!entered) {
+            // Join before inspecting an exception produced by the startup thread.
+            run.stop_and_join();
+            if (run.failure_) {
+                std::rethrow_exception(run.failure_);
+            }
             return;
         }
         if (outcome == startup_outcome::stop_during_worker_startup) {
@@ -699,6 +707,10 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         const bool entered = state_value->hook_entered_.try_acquire_for(3s);
         RUVIA_CHECK(entered);
         if (!entered) {
+            run.stop_and_join();
+            if (run.failure_) {
+                std::rethrow_exception(run.failure_);
+            }
             return;
         }
         app.stop();
