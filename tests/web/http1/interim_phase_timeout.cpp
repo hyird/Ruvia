@@ -204,5 +204,7 @@ RUVIA_TEST(a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
     }
     app.stop();
     runner.join();
-    RUVIA_CHECK(failure == nullptr);
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
 }

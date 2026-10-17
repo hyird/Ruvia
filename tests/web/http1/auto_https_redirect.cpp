@@ -131,5 +131,7 @@ RUVIA_TEST(auto_https_redirect_points_cleartext_requests_at_the_https_service) {
     }
     app.stop();
     runner.join();
-    RUVIA_CHECK(failure == nullptr);
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
 }
