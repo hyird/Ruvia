@@ -60,6 +60,9 @@ public:
     // does not stop an upload; a subsequent peer reset can stop it without losing
     // the completed response. Abandoning an unfinished request closes HTTP/1's
     // connection or resets HTTP/2's stream.
+    // Once the response body completed successfully, later upload failure or
+    // cancellation does not invalidate it. Pending upload operations still
+    // report their send-side failure.
     [[nodiscard]] scoped_operation<http_client_response> response() &;
     scoped_operation<http_client_response> response() && = delete;
 

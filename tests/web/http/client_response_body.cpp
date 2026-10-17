@@ -2476,6 +2476,7 @@ RUVIA_TEST(http_client_bounds_unfinished_upload_after_response_body_completion) 
             std::rethrow_exception(peer_failure);
         }
         co_await client.shutdown();
+        RUVIA_CHECK(!(co_await response.body().text()).has_value());
     };
     run_operation(worker, io, operation);
 }

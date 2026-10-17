@@ -243,6 +243,8 @@ task<void> http_client_pool::execute_into(
         throw_if_abandoned(*state_value);
         co_await execute_request_into(std::move(request), std::move(options), state_value);
     } catch (...) {
+        state_value->upload_only_failure_ =
+            state_value->complete_ && state_value->upload_ && state_value->failure_ == nullptr;
         state_value->failure_ = std::current_exception();
     }
     state_value->complete_ = true;

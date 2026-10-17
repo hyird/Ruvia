@@ -50,10 +50,10 @@ private:
     // interim head; empty while more input is needed.
     [[nodiscard]] std::optional<http1_parsed_client_response_head> take_final_head(
         http_client_response_state& state_value, http1_client_response_parser& parser);
-    // Publishes the final head's status, fields and body plan, applies its
-    // cookies and consumes it from the read buffer.
+    // Transfers parsed fields from the same response PMR without copying them,
+    // publishes status/body plan and cookies, then consumes the buffered head.
     void publish_final_head(const http_client_request_storage& request, http_client_response_state& state_value,
-        const http1_parsed_client_response_head& head);
+        http1_parsed_client_response_head& head);
     // Waits until the consumer drains the producer queue below the byte limit.
     [[nodiscard]] task<void> wait_for_body_space(
         http_client_response_state& state_value, const operation_timeout& timeout);

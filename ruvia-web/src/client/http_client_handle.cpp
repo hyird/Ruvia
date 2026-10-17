@@ -161,13 +161,17 @@ void detail::http_client_response_state::notify_producer_space() noexcept {
     space_signal_.notify();
 }
 
+void detail::http_client_response_state::rethrow_response_failure() const {
+    if (failure_ && !upload_only_failure_) {
+        std::rethrow_exception(failure_);
+    }
+}
+
 task<void> detail::http_client_response_state::await_head(std::string_view head_message) {
     while (!head_ready_ && !failure_ && !pool_closed_) {
         co_await head_signal_.wait();
     }
-    if (failure_) {
-        std::rethrow_exception(failure_);
-    }
+    rethrow_response_failure();
     if (pool_closed_) {
         throw http_client_error(http_client_error::code_type::closing, head_message);
     }
@@ -181,9 +185,7 @@ task<void> detail::http_client_response_state::await_head(std::string_view head_
     while (!complete_) {
         co_await data_signal_.wait();
     }
-    if (failure_) {
-        std::rethrow_exception(failure_);
-    }
+    rethrow_response_failure();
     if (pool_closed_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client encoded response failed");
     }
@@ -264,9 +266,7 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
         }
         promote_pending_data();
         if (state_value.offset_ == state_value.buffered_.size()) {
-            if (state_value.failure_) {
-                std::rethrow_exception(state_value.failure_);
-            }
+            state_value.rethrow_response_failure();
             if (state_value.pool_closed_) {
                 constexpr auto message = std::is_void_v<view> ? "HTTP response body forwarding failed" : "HTTP response body read failed";
                 throw http_client_error(http_client_error::code_type::closing, message);
@@ -316,9 +316,7 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
     while (!state_value.receive_complete()) {
         co_await state_value.data_signal_.wait();
     }
-    if (state_value.failure_) {
-        std::rethrow_exception(state_value.failure_);
-    }
+    state_value.rethrow_response_failure();
     if (state_value.pool_closed_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP response body read failed");
     }
