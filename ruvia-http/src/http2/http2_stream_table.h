@@ -126,6 +126,10 @@ public:
 
     [[nodiscard]] bool apply_send_window_delta(
         std::int64_t delta, std::int64_t minimum_delta, std::int64_t maximum_delta) noexcept {
+        // A zero final delta alone cannot skip intermediate overflow checks.
+        if (delta == 0 && minimum_delta == 0 && maximum_delta == 0) {
+            return true;
+        }
         // Preflight the extrema of the ordered SETTINGS transaction before
         // committing its final delta. Closed streams may remain as lease
         // storage, but no longer participate in protocol flow control.
@@ -145,11 +149,13 @@ public:
         if (!fits) {
             return false;
         }
-        for_each([delta](http2_stream_state& stream) noexcept {
-            if (!http2_stream_is_closed(stream)) {
-                (void)stream.add_send_window(delta);
-            }
-        });
+        if (delta != 0) {
+            for_each([delta](http2_stream_state& stream) noexcept {
+                if (!http2_stream_is_closed(stream)) {
+                    (void)stream.add_send_window(delta);
+                }
+            });
+        }
         return true;
     }
 
