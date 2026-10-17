@@ -19,8 +19,9 @@ struct http_push_request_view final {
     std::span<const http_header_view> headers_{};
 };
 
-// Detached promise metadata. Its resource must outlive this value, including
-// when it survives the pushed stream or connection. Accepting a promise does
+// Detached promise metadata owns its decoded bytes independently of feed input.
+// Its resource must outlive this value, including when it survives the pushed
+// stream or connection. Accepting a promise does
 // not establish transport authority: the driver validates the URI origin using
 // its authenticated connection before consuming the pushed response.
 struct http_push_request final {

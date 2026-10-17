@@ -448,7 +448,7 @@ private:
         const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_rst_stream(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_push_promise(const http2_frame_header& header, std::string_view payload);
-    [[nodiscard]] bool finish_push_promise();
+    [[nodiscard]] bool finish_push_promise(std::string_view block);
     [[nodiscard]] bool process_push_continuation(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_advertisement(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_priority_update(const http2_frame_header& header, std::string_view payload);

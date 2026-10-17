@@ -1,6 +1,7 @@
 #include <array>
 #include <cstring>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <variant>
 
@@ -65,6 +66,54 @@ RUVIA_TEST(http2_push_promise_fragmentation_response_and_detached_metadata) {
     RUVIA_CHECK(end && end->message_end());
     RUVIA_CHECK(promise->push_promise()->request_.headers_[0].value() == value);
     RUVIA_CHECK(!client.connection_error());
+}
+
+RUVIA_TEST(http2_push_metadata_outlives_input_and_connection_for_complete_and_fragmented_blocks) {
+    for (const std::size_t value_bytes : {std::size_t{1000}, std::size_t{20'000}}) {
+        failing_memory_resource resource;
+        {
+            std::optional<ruvia::http2_event> promise;
+            const std::string value(value_bytes, 'q');
+            {
+                auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
+                auto server = ruvia::http2_connection::server();
+                transfer(client, server);
+                transfer(server, client);
+                transfer(client, server);
+                const auto parent = client.submit_request_head(
+                    ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+                RUVIA_CHECK(parent.submitted());
+                transfer(client, server);
+                auto request = server.next_event();
+                auto end = server.next_event();
+                const std::array fields{ruvia::http_header_view{"x-owned", value}};
+                const auto pushed = server.submit_push_promise(1,
+                    {.authority_ = "example.test", .path_ = "/owned", .headers_ = fields});
+                RUVIA_CHECK(pushed.index() == 0);
+                std::string wire(server.pending_output());
+                const auto first = ruvia::parse_http2_frame_header(std::span(wire.data(), wire.size()));
+                RUVIA_CHECK(first && ((first->flags_ & 4U) != 0) == (value_bytes == 1000));
+                RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+                auto received = client.next_event();
+                RUVIA_CHECK(received && received->push_promise());
+                if (received) {
+                    promise.emplace(std::move(*received));
+                }
+                wire.assign(wire.size(), '\0');
+            }
+            RUVIA_CHECK(promise && promise->push_promise());
+            if (promise && promise->push_promise()) {
+                const auto& request = promise->push_promise()->request_;
+                RUVIA_CHECK_EQ(request.method_, "GET");
+                RUVIA_CHECK_EQ(request.scheme_, "https");
+                RUVIA_CHECK_EQ(request.authority_, "example.test");
+                RUVIA_CHECK_EQ(request.path_, "/owned");
+                RUVIA_CHECK(request.headers_.size() == 1 &&
+                            request.headers_[0].name() == "x-owned" && request.headers_[0].value() == value);
+            }
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
 }
 
 RUVIA_TEST(http2_parent_reset_preserves_fragmented_push_and_hpack_state) {
