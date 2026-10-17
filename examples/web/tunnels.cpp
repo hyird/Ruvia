@@ -1,6 +1,6 @@
-// HTTP/1 CONNECT byte streams and CONNECT-UDP capsules.
+// HTTP/1 and HTTP/2 CONNECT byte streams and CONNECT-UDP capsules.
 // Run ruvia_example_tunnels for the server on port 8094. In another terminal,
-// run ruvia_example_tunnels --client [all|bytes|udp].
+// run ruvia_example_tunnels --client [1|2] [all|bytes|udp].
 // RUVIA_TLS_CERT/KEY enables server TLS on port 8445; RUVIA_CLIENT_TLS=true
 // selects it for the client and RUVIA_TLS_CA supplies its trust root.
 // The server echoes locally and does not forward to an arbitrary host.
@@ -131,10 +131,14 @@ int main(int argc, char** argv) {
     try {
         std::cout << std::unitbuf;
         if (argc > 1) {
-            if (std::string_view(argv[1]) != "--client" || argc > 3) {
-                throw std::invalid_argument("usage: ruvia_example_tunnels [--client [all|bytes|udp]]");
+            if (std::string_view(argv[1]) != "--client" || argc > 4) {
+                throw std::invalid_argument("usage: ruvia_example_tunnels [--client [1|2] [all|bytes|udp]]");
             }
-            const std::string_view selection = argc > 2 ? argv[2] : "all";
+            const std::string_view protocol = argc > 2 ? argv[2] : "1";
+            if (protocol != "1" && protocol != "2") {
+                throw std::invalid_argument("unknown HTTP protocol selection");
+            }
+            const std::string_view selection = argc > 3 ? argv[3] : "all";
             if (selection != "all" && selection != "bytes" && selection != "udp") {
                 throw std::invalid_argument("unknown tunnel selection");
             }
@@ -145,6 +149,8 @@ int main(int argc, char** argv) {
                 .host_ = "localhost",
                 .port_ = tls ? 8445 : 8094,
                 .request_timeout_ = std::chrono::seconds(5),
+                .protocol_ = protocol == "2" ? ruvia::http_client_protocol::http2_only
+                                             : ruvia::http_client_protocol::http1_only,
                 .tls_ = {.ca_file_ = std::string(env_value.get("RUVIA_TLS_CA").value_or(""))},
             };
             ruvia::event_loop_pool loops({.loop_count_ = 1});

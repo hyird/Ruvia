@@ -55,7 +55,7 @@ ruvia-web  -> ruvia-core + ruvia-http
 - 跨库只用非 detail 公开 API，禁止穿透内部头和物理路径。需要共享的辅助能力由所属库公开提供。
 - 安装只包含公开头的真实依赖闭包。根 CMakeLists.txt 只负责全局构建与安装。
 - core 是独立运行时底座：不含 HTTP/Web 语义，不公开依赖 TLS、压缩或数据后端。
-- HTTP 是独立 sans-I/O 协议层，不依赖 core、Asio、socket 或 OpenSSL。它拥有 HTTP/1.0、HTTP/1.1 消息、分帧、连接和 WebSocket 协议语义。
+- HTTP 是独立 sans-I/O 协议层，不依赖 core、Asio、socket 或 OpenSSL。它拥有 HTTP/1.0、HTTP/1.1、HTTP/2 消息、分帧、连接和 WebSocket 协议语义。
 - Web 拥有应用策略、路由、TLS/crypto 和网络驱动。不复制协议判断，不将 Web 能力下沉。
 
 ## 性能与内存
@@ -119,5 +119,5 @@ ruvia-web  -> ruvia-core + ruvia-http
 - 纯文档本地只做文档校验，不主动运行代码构建和测试；自动触发的 CI 如实报告。性能测试只在专用主机运行，性能结论必须可复核。
 - 无关改动导致构建或测试失败时保留现场、报告具体失败及验证限制，不借机扩大修改范围。准确区分已通过、失败、未运行和待 CI 验证。
 - 每轮修改结束汇报结果，自动提交并推送到任务对应的分支；只提交本任务改动，不夹带用户或并行任务的修改，不强推或回滚无关提交，并如实报告提交、推送与 CI 状态。
-- HTTP/2、HTTP/3 开发保留在 `http2/3` 分支，不自动合并或推送到 `main`。两分支共有的修改分别同步；只有用户明确要求合并 HTTP/2、HTTP/3 时才合入 `main`。
+- HTTP/1、HTTP/2 在 `main` 分支维护；HTTP/3 开发保留在 `http3` 分支，不自动合并或推送到 `main`。两分支共有的修改分别同步；只有用户明确要求合并 HTTP/3 时才合入 `main`。
 

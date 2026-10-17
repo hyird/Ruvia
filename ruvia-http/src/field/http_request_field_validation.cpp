@@ -102,13 +102,16 @@ namespace {
 }
 
 [[nodiscard]] bool is_valid_te(
-    std::string_view value, http_field_list_role role) noexcept {
+    std::string_view value, http_field_list_role role, request_field_framing framing) noexcept {
+    if (framing == request_field_framing::binary) {
+        return is_valid_binary_http_te_field_value(value, role);
+    }
     return role == http_field_list_role::sender ? is_valid_client_http_te_field_value(value)
                                                 : is_valid_received_http_te_field_value(value);
 }
 
 [[nodiscard]] bool is_valid_value(request_header_kind kind, std::string_view value,
-    http_field_list_role role) noexcept {
+    http_field_list_role role, request_field_framing framing) noexcept {
     switch (kind) {
         case request_header_kind::origin:
             return is_valid_http_origin_field_value(value);
@@ -123,7 +126,7 @@ namespace {
         case request_header_kind::trailer:
             return is_valid_http_request_trailer_field_value(value, role);
         case request_header_kind::te:
-            return is_valid_te(value, role);
+            return is_valid_te(value, role, framing);
         case request_header_kind::expect:
             return is_valid_received_http_expect_field_value(value);
         case request_header_kind::host:
@@ -145,7 +148,7 @@ request_field_status validate_request_field(request_header_kind kind, std::strin
         (kind == request_header_kind::expect || kind == request_header_kind::content_length)) {
         return request_field_status::managed_by_sender;
     }
-    if (!is_valid_value(kind, value, role)) {
+    if (!is_valid_value(kind, value, role, state.framing_)) {
         return request_field_status::invalid;
     }
     // Invalid date conditions, including repeated field lines, are ignored

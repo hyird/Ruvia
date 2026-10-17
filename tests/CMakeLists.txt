@@ -104,6 +104,7 @@ if(RUVIA_BUILD_HTTP)
     ruvia_collect_test_sources(_ruvia_http_unit_sources
         http/unit/*.cpp
         http/http1/*.cpp
+        http/http2/*.cpp
         http/websocket/*.cpp)
     list(APPEND _ruvia_http_unit_sources support/test_main.cpp)
     list(SORT _ruvia_http_unit_sources)
@@ -117,9 +118,10 @@ if(RUVIA_BUILD_WEB)
     # Process-singleton application fixtures run in separate test executables.
     ruvia_add_web_standalone_test(ruvia_app_startup 30 web/app/startup.cpp)
     ruvia_add_web_standalone_test(ruvia_app_lifecycle 60 web/app/lifecycle.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_http2_drain 30 web/app/http2_drain.cpp)
     ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
-    # A conflicting route pair, like a route for an unsupported CONNECT
-    # protocol, makes every application in its executable fail startup, so
+    # A conflicting route pair, like a route with an invalid CONNECT
+    # protocol token, makes every application in its executable fail startup, so
     # neither can share the process-wide controller registry.
     ruvia_add_web_standalone_test(ruvia_route_conflict 30 web/app/route_conflict.cpp)
     ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/app/route_protocol.cpp)
@@ -127,6 +129,10 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
         web/http1/connect.cpp
         web/http1/websocket.cpp
+        web/http2/client_tunnel.cpp
+        web/http2/connect.cpp
+        web/http2/push.cpp
+        web/http2/streaming.cpp
         web/http/udp_tunnel.cpp)
     # Owns an application with an app-wide rate limit, so it cannot share the
     # process-wide application of the other server suites.

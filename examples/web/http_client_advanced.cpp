@@ -1,5 +1,6 @@
-// Standalone HTTP client: streaming uploads, trailers, body readers, interim
-// heads, redirects and retained result budgets. First run ruvia_example_http_features.
+// Standalone HTTP/1 and HTTP/2 client: streaming uploads, trailers, body readers,
+// interim heads, redirects, push, advertisements, and retained result budgets.
+// First run ruvia_example_http_features, then this executable with 1 or 2.
 // RUVIA_CLIENT_TLS=true selects TLS on localhost:8444 instead of HTTP on port 8093.
 // Set RUVIA_TLS_CA to trust the example server certificate.
 
@@ -12,6 +13,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/http/http_client_redirect.h"
@@ -72,8 +74,8 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
             const std::array<ruvia::http_header_view, 1> headers{{
                 {"content-type", "application/octet-stream"},
             }};
-            // With no content_length, the upload uses chunked transfer coding,
-            // which carries the trailer section passed to end().
+            // With no content_length, HTTP/1 uses chunked transfer coding;
+            // HTTP/2 carries the same body and trailers in DATA and HEADERS.
             // A 100-continue expectation lets a peer reject the head first.
             std::cout << "upload\n";
             auto exchange_value = co_await bounded.open_request(
@@ -91,10 +93,23 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
             }
         }
         {
-            std::cout << "informational response\n";
+            std::cout << "informational response and push\n";
             auto response = co_await bounded.send({.target_ = "/features/info"});
             std::cout << "interim heads=" << response.informational_responses().size() << '\n';
+            if (response.protocol_version() == ruvia::http_protocol_version::http2) {
+                response.reprioritize({.urgency_ = 1, .incremental_ = true});
+            }
             while (co_await response.body().read()) {
+            }
+            while (auto push = client.next_push()) {
+                std::cout << "push=" << push->request().path_ << '\n';
+                auto pushed = co_await push->response();
+                auto content = co_await pushed.body().read_all(4096);
+                std::cout << "pushed bytes=" << content.bytes().size() << '\n';
+            }
+            while (auto advertisement = client.next_advertisement()) {
+                std::cout << "advertisement: origins=" << (advertisement->origins() != nullptr)
+                          << " alt-svc=" << (advertisement->alternative_service() != nullptr) << '\n';
             }
         }
         co_await follow_redirect(client, config);
@@ -117,7 +132,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
     } catch (...) {
         failure = std::current_exception();
     }
-    // Response metadata and borrowed chunks must be
+    // Response metadata, pushes, advertisements, and borrowed chunks must be
     // destroyed on this loop. http_client_response_bytes is the owned exception:
     // it can survive the client and the loop and can cross threads.
     co_await client.shutdown();
@@ -129,15 +144,23 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
         std::cout << std::unitbuf;
+        const std::string_view protocol = argc > 1 ? argv[1] : "1";
+        if (protocol != "1" && protocol != "2") {
+            throw std::invalid_argument("usage: ruvia_example_http_client_advanced [1|2]");
+        }
         const example::environment env;
         const bool tls = env.get<bool>("RUVIA_CLIENT_TLS").value_or(false);
         ruvia::http_client_config config{
             .scheme_ = tls ? ruvia::http_scheme::https : ruvia::http_scheme::http,
             .host_ = "localhost",
             .port_ = tls ? 8444 : 8093,
+            .protocol_ = protocol == "2" ? ruvia::http_client_protocol::http2_only
+                                         : ruvia::http_client_protocol::http1_only,
+            .advertisements_ = {.receive_origins_ = tls, .receive_alternative_services_ = tls},
+            .push_ = {.enabled_ = true},
             .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
             .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
         };

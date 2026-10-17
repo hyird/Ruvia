@@ -50,6 +50,10 @@ public:
     task<void> shutdown() && = delete;
 
     [[nodiscard]] http_client_stats stats() const;
+    [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const&;
+    [[nodiscard]] std::optional<http_client_push> next_push() const&;
+    std::optional<http_client_push> next_push() const&& = delete;
+    std::optional<http_client_advertisement> next_advertisement() const&& = delete;
     [[nodiscard]] std::string_view host() const&;
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;

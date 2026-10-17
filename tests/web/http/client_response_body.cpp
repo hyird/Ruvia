@@ -38,8 +38,10 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
@@ -266,13 +268,20 @@ private:
     bool complete_{};
 };
 
+enum class cookie_peer_mode { http1,
+    http1_replacement,
+    http2 };
+
 class cookie_stream_peer final {
 public:
-    cookie_stream_peer(asio::io_context& io, const ruvia::worker_handle& worker_value)
+    cookie_stream_peer(asio::io_context& io, const ruvia::worker_handle& worker_value,
+        cookie_peer_mode mode = cookie_peer_mode::http1)
         : io_(io),
           acceptor_(io, {asio::ip::tcp::v4(), std::uint16_t{0}}),
           deadline_(io),
-          done_(worker_value) {}
+          gate_(io),
+          done_(worker_value),
+          mode_(mode) {}
 
     [[nodiscard]] std::uint16_t port() const {
         return acceptor_.local_endpoint().port();
@@ -302,12 +311,18 @@ public:
         }
     }
 
+    void release_terminal_body() {
+        release_requested_ = true;
+        gate_.cancel();
+    }
+
     std::array<std::string, 2> requests_;
 
 private:
     void stop() noexcept {
         std::error_code ignored;
         acceptor_.close(ignored);
+        gate_.cancel();
         for (auto& socket : sockets_) {
             if (socket) {
                 socket->close(ignored);
@@ -316,31 +331,116 @@ private:
     }
 
     asio::awaitable<void> serve() {
+        if (mode_ == cookie_peer_mode::http2) {
+            co_await serve_http2();
+            co_return;
+        }
         sockets_[0].emplace(co_await acceptor_.async_accept(asio::use_awaitable));
         std::string request;
         co_await asio::async_read_until(*sockets_[0], asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
-        constexpr std::string_view streaming_head =
-            "HTTP/1.1 103 Early Hints\r\nSet-Cookie: informational=ignored; Path=/\r\n\r\n"
-            "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nSet-Cookie: session=ready; Path=/\r\n\r\n";
+        const std::string_view streaming_head = mode_ == cookie_peer_mode::http1_replacement
+                                                    ? "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\nSet-Cookie: sid=old\r\n\r\n"
+                                                    : "HTTP/1.1 103 Early Hints\r\nSet-Cookie: informational=ignored; Path=/\r\n\r\n"
+                                                      "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nSet-Cookie: session=ready; Path=/\r\n\r\n";
         co_await asio::async_write(*sockets_[0], asio::buffer(streaming_head), asio::use_awaitable);
         for (std::size_t index = 0; index != requests_.size(); ++index) {
             auto& socket = sockets_[index + 1];
             socket.emplace(co_await acceptor_.async_accept(asio::use_awaitable));
             co_await asio::async_read_until(*socket, asio::dynamic_buffer(requests_[index]), "\r\n\r\n", asio::use_awaitable);
-            constexpr std::string_view response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            const std::string_view response = mode_ == cookie_peer_mode::http1_replacement && index == 0
+                                                  ? "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\nSet-Cookie: sid=new; Path=/scope\r\n\r\n"
+                                                  : "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             co_await asio::async_write(*socket, asio::buffer(response), asio::use_awaitable);
             std::error_code ignored;
             socket->close(ignored);
+            if (mode_ == cookie_peer_mode::http1_replacement && index == 0) {
+                if (!release_requested_) {
+                    gate_.expires_at(std::chrono::steady_clock::time_point::max());
+                    std::error_code error;
+                    co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, error));
+                    if (!release_requested_) {
+                        throw std::runtime_error("cookie response completion gate expired");
+                    }
+                }
+                constexpr std::string_view body = "x";
+                co_await asio::async_write(*sockets_[0], asio::buffer(body), asio::use_awaitable);
+                sockets_[0]->close(ignored);
+            }
+        }
+    }
+
+    asio::awaitable<void> serve_http2() {
+        sockets_[0].emplace(co_await acceptor_.async_accept(asio::use_awaitable));
+        auto& socket = *sockets_[0];
+        auto connection = ruvia::http2_connection::server();
+        std::optional<ruvia::http2_request_head_event> streaming_request;
+        std::array<char, 16384> input{};
+        std::pmr::string output;
+        std::size_t received = 0;
+        for (;;) {
+            if (connection.wants_write()) {
+                output.clear();
+                connection.take_output(output);
+                co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
+            }
+            if (received == requests_.size()) {
+                co_return;
+            }
+            const auto count = co_await socket.async_read_some(asio::buffer(input), asio::use_awaitable);
+            const auto bytes = std::string_view(input.data(), count);
+            for (;;) {
+                const auto status = connection.feed(bytes);
+                if (status == ruvia::http2_feed_result::protocol_failure) {
+                    throw std::runtime_error("invalid cookie test HTTP/2 input");
+                }
+                while (auto event = connection.next_event()) {
+                    auto* request = event->request_head();
+                    if (request == nullptr) {
+                        continue;
+                    }
+                    const auto stream_id = request->stream_id();
+                    ruvia::http_response response;
+                    if (!streaming_request) {
+                        const std::array fields{ruvia::http_header_view{"set-cookie", "informational=ignored; Path=/"}};
+                        if (connection.submit_interim_response_head(stream_id,
+                                ruvia::http_interim_response_head(ruvia::http_status::early_hints, fields)) !=
+                            ruvia::http2_submit_status::accepted) {
+                            throw std::runtime_error("cookie test interim head rejected");
+                        }
+                        response.header("set-cookie", "session=ready; Path=/");
+                        if (connection.submit_streaming_response_head(stream_id, std::move(response)) !=
+                            ruvia::http2_submit_status::accepted) {
+                            throw std::runtime_error("cookie test streaming head rejected");
+                        }
+                        streaming_request.emplace(std::move(*request));
+                    } else {
+                        if (received == requests_.size()) {
+                            throw std::runtime_error("unexpected cookie test request");
+                        }
+                        requests_[received++].assign(request->request().header("cookie").value_or(std::string_view{}));
+                        if (connection.submit_buffered_response(stream_id, response) != ruvia::http2_submit_status::accepted ||
+                            connection.release(std::move(*request)) != ruvia::http2_server_request_release_status::released) {
+                            throw std::runtime_error("cookie test response rejected");
+                        }
+                    }
+                }
+                if (status != ruvia::http2_feed_result::events_pending) {
+                    break;
+                }
+            }
         }
     }
 
     asio::io_context& io_;
     asio::ip::tcp::acceptor acceptor_;
     asio::steady_timer deadline_;
+    asio::steady_timer gate_;
     ruvia::worker_signal done_;
+    cookie_peer_mode mode_;
     std::array<std::optional<asio::ip::tcp::socket>, 3> sockets_;
     std::exception_ptr failure_;
     bool complete_{false};
+    bool release_requested_{false};
 };
 
 // Answers one request per connection with the next scripted response head and
@@ -617,14 +717,17 @@ RUVIA_TEST(client_response_body_claims_its_shared_lane_only_when_started) {
     peer.wait();
 }
 
-RUVIA_TEST(http_client_retains_final_head_cookies_before_body_completion_and_after_abandonment) {
+namespace {
+void exercise_final_head_cookies(ruvia::testing::test_context& ruvia_ctx, ruvia::http_client_protocol protocol) {
     for (const auto policy : {ruvia::http_client_received_cookie_policy::retain_and_send,
              ruvia::http_client_received_cookie_policy::ignore}) {
         auto& io = ruvia::test::new_test_io_context();
         test_worker worker(io);
-        cookie_stream_peer peer(io, worker.handle_);
+        const bool http2 = protocol == ruvia::http_client_protocol::http2_only;
+        cookie_stream_peer peer(io, worker.handle_, http2 ? cookie_peer_mode::http2 : cookie_peer_mode::http1);
         auto config = local_http_client_config(peer.port());
-        config.connection_count_ = 2;
+        config.connection_count_ = http2 ? 1 : 2;
+        config.protocol_ = protocol;
         config.received_cookies_ = policy;
         config.request_timeout_ = std::chrono::seconds(3);
         ruvia::http_client client(worker.attachment_.loop(), config);
@@ -633,6 +736,8 @@ RUVIA_TEST(http_client_retains_final_head_cookies_before_body_completion_and_aft
             std::optional<ruvia::http_client_response> streaming;
             streaming.emplace(co_await client.handle().send({.target_ = "/stream"}));
             RUVIA_CHECK(!streaming->body().complete());
+            RUVIA_CHECK(streaming->protocol_version() ==
+                        (http2 ? ruvia::http_protocol_version::http2 : ruvia::http_protocol_version::http11));
             RUVIA_CHECK_EQ(streaming->informational_responses().size(), std::size_t{1});
             {
                 auto response = co_await client.handle().send({.target_ = "/before-abandonment"});
@@ -653,6 +758,49 @@ RUVIA_TEST(http_client_retains_final_head_cookies_before_body_completion_and_aft
         };
         run_operation(worker, io, operation);
     }
+}
+}  // namespace
+
+RUVIA_TEST(http_client_retains_final_head_cookies_before_body_completion_and_after_abandonment) {
+    exercise_final_head_cookies(ruvia_ctx, ruvia::http_client_protocol::negotiate);
+}
+
+RUVIA_TEST(http2_client_retains_final_head_cookies_before_body_completion_and_after_abandonment) {
+    exercise_final_head_cookies(ruvia_ctx, ruvia::http_client_protocol::http2_only);
+}
+
+RUVIA_TEST(http1_slow_body_completion_does_not_roll_back_newer_final_head_cookies) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    cookie_stream_peer peer(io, worker.handle_, cookie_peer_mode::http1_replacement);
+    auto config = local_http_client_config(peer.port());
+    config.connection_count_ = 2;
+    config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        auto slow = co_await client.handle().send({.target_ = "/scope/stream"});
+        RUVIA_CHECK(!slow.body().complete());
+        {
+            auto update = co_await client.handle().send({.target_ = "/scope/update"});
+            RUVIA_CHECK((co_await update.body().read_all()).empty());
+        }
+        // The gate opens only after the newer final head has updated the jar.
+        peer.release_terminal_body();
+        const auto body = co_await slow.body().read_all();
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(body.bytes().data()), body.size()), std::string_view("x"));
+        {
+            auto check = co_await client.handle().send({.target_ = "/scope/check"});
+            RUVIA_CHECK((co_await check.body().read_all()).empty());
+        }
+        co_await peer.wait();
+        RUVIA_CHECK(peer.requests_[0].find("sid=old") != std::string::npos);
+        RUVIA_CHECK(peer.requests_[1].find("sid=new") != std::string::npos);
+        RUVIA_CHECK(peer.requests_[1].find("sid=old") == std::string::npos);
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
 }
 
 // RFC 6265 section 5.3 step 11: a Domain cookie replaces the host-only cookie

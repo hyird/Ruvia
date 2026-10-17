@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -12,6 +13,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_priority.h"
 #include "ruvia/web/conn_info.h"
 
 #include "context/context_capabilities.h"
@@ -30,6 +32,8 @@ namespace ruvia::detail {
 
 class rate_limiter;
 class http_interim_response_output;
+class http_connection_advertisement_output;
+class http_push_output;
 class route_table;
 class worker_state_registry;
 
@@ -55,13 +59,19 @@ struct context_connection_services final {
     bool peer_trusted_{false};
 };
 
+// Borrowed protocol channels outlive every context for this request.
+struct context_request_channels final {
+    http_interim_response_output* interim_output_{};
+    http_connection_advertisement_output* connection_advertisements_{};
+    http_push_output* push_output_{};
+    const std::optional<http_priority>* priority_update_{};
+};
+
 struct context_request_services final {
     std::reference_wrapper<const stop_token> stop_token_;
     context_request_body_source body_source_{};
     const http_request_trailers* trailers_{};
-    // The driver's 1xx output, bound once before admission; null when this
-    // request has none. It outlives every context created for the request.
-    http_interim_response_output* interim_output_{};
+    context_request_channels channels_{};
     context_response_output response_output_{};
     std::size_t dispatch_depth_{};
     // The matched route's declared body_limit; 0 when it declares none.
@@ -173,13 +183,31 @@ public:
     void bind_request_trailers(http_request_trailers&&) = delete;
 
     [[nodiscard]] http_interim_response_output* interim_output() const noexcept {
-        return request_services_.interim_output_;
+        return request_services_.channels_.interim_output_;
+    }
+
+    [[nodiscard]] http_connection_advertisement_output* connection_advertisements() const noexcept {
+        return request_services_.channels_.connection_advertisements_;
+    }
+
+    [[nodiscard]] http_push_output* push_output() const noexcept {
+        return request_services_.channels_.push_output_;
+    }
+
+    [[nodiscard]] const std::optional<http_priority>* request_priority_update() const noexcept {
+        return request_services_.channels_.priority_update_;
+    }
+
+    [[nodiscard]] context_services with_request_channels(const context_request_channels& channels) const noexcept {
+        auto services = *this;
+        services.request_services_.channels_ = channels;
+        return services;
     }
 
     [[nodiscard]] context_services with_interim_output(http_interim_response_output& output) const noexcept {
-        auto services = *this;
-        services.request_services_.interim_output_ = &output;
-        return services;
+        auto channels = request_services_.channels_;
+        channels.interim_output_ = &output;
+        return with_request_channels(channels);
     }
 
     [[nodiscard]] constexpr context_response_output& response_output() noexcept {

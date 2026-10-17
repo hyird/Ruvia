@@ -29,6 +29,8 @@ enum class client_tls_setup_error : std::uint8_t {
 enum class client_alpn : std::uint8_t {
     none,
     http11,
+    http2,
+    negotiate,
 };
 
 // Converts a validated, unbracketed transport host to the uri-host expected by

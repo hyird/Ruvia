@@ -29,8 +29,12 @@ enum class websocket_scheme : std::uint8_t {
     wss,
 };
 
+enum class websocket_client_protocol : std::uint8_t { http1,
+    http2 };
+
 struct websocket_client_config final {
     websocket_scheme scheme_{websocket_scheme::wss};
+    websocket_client_protocol protocol_{websocket_client_protocol::http1};
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
     std::string host_{};
     std::optional<std::uint16_t> port_{};

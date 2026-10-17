@@ -41,20 +41,36 @@ enum class http_field_list_parse_status : std::uint8_t { ok,
 inline constexpr std::array<std::string_view, 2> http_message_framing_fields{
     "content-length", "transfer-encoding"};
 
-// Connection-specific fields (RFC 9110 section 7.6.1).
+// Connection-specific fields (RFC 9110 section 7.6.1). HTTP/2 forbids them
+// outright (RFC 9113 section 8.2.2).
 inline constexpr std::array<std::string_view, 5> http_connection_specific_fields{
     "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade"};
 
-// A successful CONNECT or CONNECT-UDP tunnel carries no representation
+// A successful CONNECT or extended-CONNECT tunnel carries no representation
 // (RFC 9110 section 9.3.6, RFC 9298 section 3): its head must not declare
 // framing or representation metadata.
 inline constexpr std::array<std::string_view, 5> http_connect_forbidden_fields{
     "content-length", "transfer-encoding", "content-type", "content-encoding", "trailer"};
 
 // WebSocket opening-handshake fields owned by the handshake implementation
-// (RFC 6455 section 4).
+// (RFC 6455 section 4). The key exchange pair leads so the HTTP/1.1-only
+// proof fields, which extended CONNECT forbids (RFC 8441 section 5), are a
+// named prefix of the full set.
 inline constexpr std::array<std::string_view, 5> http_websocket_handshake_fields{"sec-websocket-key",
     "sec-websocket-accept", "sec-websocket-version", "sec-websocket-protocol", "sec-websocket-extensions"};
+inline constexpr std::span<const std::string_view, 2> http_websocket_key_exchange_fields =
+    std::span(http_websocket_handshake_fields).first<2>();
+
+// HTTP/2 applies the connection-specific field ban. Decoded-name
+// lowercase validation and the request-only TE value exception belong to the
+// protocol boundary; application-owned names are matched case-insensitively.
+[[nodiscard]] inline bool is_forbidden_http_binary_connection_field(std::string_view name) noexcept {
+    return http_field_name_in(name, http_connection_specific_fields);
+}
+
+[[nodiscard]] inline bool is_forbidden_http_binary_response_field(std::string_view name) noexcept {
+    return is_forbidden_http_binary_connection_field(name) || http_ascii_equals_ignore_case(name, "te");
+}
 
 enum class http_connection_option : std::uint8_t {
     close = 1U << 0,

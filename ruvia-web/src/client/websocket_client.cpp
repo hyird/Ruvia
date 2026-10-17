@@ -33,7 +33,7 @@ websocket_client_state::websocket_client_state(event_loop loop, const websocket_
               .port_ = config_.port_,
               .tls_ = config_.scheme_ == websocket_scheme::wss ? &config_.tls_ : nullptr,
               .tcp_ = config_.tcp_,
-              .alpn_ = client_alpn::http11},
+              .alpn_ = config.protocol_ == websocket_client_protocol::http2 ? client_alpn::http2 : client_alpn::http11},
           wire_counters_),
       write_signal_(worker_),
       input_([&] {

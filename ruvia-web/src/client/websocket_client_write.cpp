@@ -47,6 +47,16 @@ task<void> websocket_client_state::wait_for_write_idle(write_wait_type type) {
 }
 
 task<void> websocket_client_state::write_transport(std::string_view bytes_value) {
+    if (http2_) {
+        worker_timer_registration timer;
+        arm(timer, config_.write_timeout_, client_abort_reason::timeout);
+        co_await http2_->write(bytes_value);
+        disarm(timer);
+        throw_if_aborted();
+        touch_activity();
+        co_return;
+    }
+
     if (bytes_value.empty()) {
         co_return;
     }
@@ -73,6 +83,14 @@ task<void> websocket_client_state::flush_output() {
             continue;
         }
         if (plan.disposition() == websocket_transport_disposition::end_transport) {
+            // The stream end waits for the peer's half; a local close already
+            // bounds it, a peer-initiated close starts the same guard here.
+            if (!close_handshake_timer_.registered()) {
+                arm(close_handshake_timer_, config_.close_handshake_timeout_, client_abort_reason::timeout);
+            }
+            if (http2_) {
+                co_await http2_->finish();
+            }
             protocol.commit_transport_end();
             retire(client_abort_reason::closing);
         }

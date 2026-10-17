@@ -21,7 +21,7 @@
 namespace ruvia::detail {
 
 // Owned in place by one websocket_client_state and never copied or moved: the
-// stored views borrow the strings above them.
+// stored views and the negotiation borrow or copy the strings above them.
 struct websocket_client_config_storage final {
     websocket_client_config_storage(
         const websocket_client_config& source_value, std::pmr::memory_resource* resource)
@@ -32,11 +32,14 @@ struct websocket_client_config_storage final {
     websocket_client_config_storage& operator=(const websocket_client_config_storage&) = delete;
 
     websocket_scheme scheme_;
+    websocket_client_protocol protocol_;
     std::pmr::string host_;
     std::uint16_t port_;
-    // RFC 3986 uri-host (IPv6 literals bracketed) and its fixed origin.
+    // RFC 3986 uri-host (IPv6 literals bracketed), the fixed origin over it and
+    // its default-port-omitted authority, computed once at startup.
     std::pmr::string uri_host_;
     http_origin_view origin_;
+    std::pmr::string authority_;
     std::pmr::string target_;
     std::pmr::vector<http_header> headers_;
     std::pmr::vector<std::pmr::string> subprotocols_;
@@ -53,6 +56,10 @@ struct websocket_client_config_storage final {
     client_tls_config_storage tls_;
     client_tcp_config tcp_;
     std::pmr::string user_agent_;
+    // Extended CONNECT (HTTP/2) request fields and response
+    // validation, built once from the headers, user agent and offers above.
+    websocket_client_negotiation negotiation_;
+    std::pmr::vector<http_header_view> extended_headers_;
 
 private:
     struct validated_config_tag_type final {};
@@ -109,15 +116,25 @@ private:
         return result_value;
     }
 
+    [[nodiscard]] static websocket_client_negotiation make_negotiation(std::span<const http_header_view> headers,
+        std::span<const std::string_view> subprotocols, std::string_view user_agent,
+        const websocket_client_deflate_offer& deflate, std::pmr::memory_resource* resource) {
+        validate_websocket_client_protocols_and_headers(headers, subprotocols, user_agent, deflate);
+        return websocket_client_negotiation(
+            {.subprotocols_ = subprotocols, .deflate_ = deflate}, resource);
+    }
+
     // The views borrow members initialized before them; element storage is
     // heap-owned, so views built from a member stay valid.
     websocket_client_config_storage(validated_config_tag_type, const websocket_client_config& source_value,
         std::pmr::memory_resource* resource)
         : scheme_(source_value.scheme_),
+          protocol_(source_value.protocol_),
           host_(source_value.host_, resource),
           port_(source_value.port_.value_or(source_value.scheme_ == websocket_scheme::wss ? 443 : 80)),
           uri_host_(client_uri_host(source_value.host_, resource)),
           origin_(make_origin(scheme_, uri_host_, port_)),
+          authority_(make_http_origin_authority(origin_, resource)),
           target_(source_value.target_, resource),
           headers_(copy_headers(source_value, resource)),
           subprotocols_(copy_subprotocols(source_value, resource)),
@@ -135,8 +152,12 @@ private:
               source_value.scheme_ == websocket_scheme::wss ? client_tls_files::parse : client_tls_files::keep_paths,
               resource),
           tcp_(source_value.tcp_),
-          user_agent_(source_value.user_agent_, resource) {
-        validate_websocket_client_protocols_and_headers(header_views_, subprotocol_views_, user_agent_, deflate_);
+          user_agent_(source_value.user_agent_, resource),
+          negotiation_(make_negotiation(header_views_, subprotocol_views_, user_agent_, deflate_, resource)),
+          extended_headers_(header_views_.begin(), header_views_.end(), resource) {
+        if (!user_agent_.empty()) {
+            extended_headers_.emplace_back("user-agent", user_agent_);
+        }
     }
 };
 

@@ -85,6 +85,14 @@ http_client_stats http_client::stats() const {
     return state_->stats();
 }
 
+std::optional<http_client_push> http_client::next_push() const& {
+    return with_options({}).next_push();
+}
+
+std::optional<http_client_advertisement> http_client::next_advertisement() const& {
+    return with_options({}).next_advertisement();
+}
+
 std::string_view http_client::host() const& {
     return state_->host();
 }

@@ -61,6 +61,9 @@ std::string_view context_request::route_path() const noexcept {
     return context_->route_path_;
 }
 http_priority context_request::priority() const noexcept {
+    if (const auto* update = context_->services().request_priority_update(); update != nullptr && *update) {
+        return **update;
+    }
     const auto parsed_value = parse_http_priority(context_->request_.headers());
     return (parsed_value.index() == 0) ? std::get<0>(parsed_value).request_priority() : http_priority{};
 }

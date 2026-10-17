@@ -6,7 +6,7 @@ middleware, streaming, WebSocket, and optional SQL, Redis, and JWT support.
 | CMake target | Purpose |
 | --- | --- |
 | `ruvia::core` | Tasks, event loops, bounded channels, and blocking work. |
-| `ruvia::http` | Independent sans-I/O HTTP/1.0, HTTP/1.1, and WebSocket protocols. |
+| `ruvia::http` | Independent sans-I/O HTTP/1.0, HTTP/1.1, HTTP/2, and WebSocket protocols. |
 | `ruvia::web` | Servers, routing, TLS, outbound clients, and data access; uses Core and HTTP. |
 
 ## Build
@@ -60,8 +60,10 @@ select the matching static `CMAKE_MSVC_RUNTIME_LIBRARY` before `project()`.
   awaited or joined, including after cancellation.
 - Request views borrow their owner. Copy data before carrying it beyond the
   request lifetime or into offloaded work.
-- The server and outbound client support HTTP/1 over TCP and TLS; WebSocket
-  uses HTTP/1.1 Upgrade.
+- The server and outbound client support HTTP/1 and HTTP/2 over TCP and TLS.
+  TLS negotiates HTTP/2 through ALPN; cleartext HTTP/2 uses prior knowledge,
+  not the HTTP/1 `Upgrade: h2c` mechanism. WebSocket uses HTTP/1.1 Upgrade or
+  HTTP/2 Extended CONNECT.
 - Server workers bind their own listeners. Linux and other supported POSIX
   systems require `SO_REUSEPORT`; startup fails if it is unavailable. Windows
   uses `SO_REUSEADDR`, not an equivalent of `SO_REUSEPORT`: worker connection
@@ -73,6 +75,9 @@ select the matching static `CMAKE_MSVC_RUNTIME_LIBRARY` before `project()`.
 Start with [basic_http.cpp](examples/web/basic_http.cpp). Further examples cover
 [models and validation](examples/web/models_validation.cpp),
 [tunnels](examples/web/tunnels.cpp), and [ORM with PostgreSQL](examples/web/orm.cpp).
+For HTTP/2, run [http_features.cpp](examples/web/http_features.cpp), then
+[http_client_advanced.cpp](examples/web/http_client_advanced.cpp) or
+[websocket_client.cpp](examples/web/websocket_client.cpp) with argument `2`.
 Browse [examples/web](examples/web) for the remaining features;
 [examples/CMakeLists.txt](examples/CMakeLists.txt) lists their build targets.
 

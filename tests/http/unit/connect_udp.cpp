@@ -139,3 +139,51 @@ RUVIA_TEST(http_connect_udp_http1_request_writer_generates_upgrade_without_messa
     auto disabled = writer.prepare_connect_udp(origin, "/udp", invalid, buffer);
     RUVIA_CHECK(disabled.failure());
 }
+
+RUVIA_TEST(http_connect_udp_http2_uses_extended_connect_without_upgrade_fields) {
+    const std::array fields{ruvia::http_header_view{"capsule-protocol", "?1"}};
+    const ruvia::http_connect_udp_request_view request{
+        .version_ = ruvia::http_protocol_version::http2,
+        .method_ = "CONNECT",
+        .protocol_ = "connect-udp",
+        .scheme_ = "https",
+        .authority_ = "example.test",
+        .path_ = "/proxy",
+        .headers_ = fields};
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request(request).index() == 0);
+    auto invalid = request;
+    invalid.method_ = "GET";
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request(invalid).index() != 0);
+    invalid = request;
+    invalid.protocol_ = "websocket";
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request(invalid).index() != 0);
+    invalid = request;
+    invalid.scheme_ = "";
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request(invalid).index() != 0);
+    const std::array upgrade_fields{fields[0], ruvia::http_header_view{"connection", "upgrade"},
+        ruvia::http_header_view{"upgrade", "connect-udp"}};
+    invalid = request;
+    invalid.headers_ = upgrade_fields;
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request(invalid).index() != 0);
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_response(
+                    ruvia::http_protocol_version::http2, 200, fields)
+                    .index() == 0);
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_response(
+                    ruvia::http_protocol_version::http2, 101, fields)
+                    .index() != 0);
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_response(
+                    ruvia::http_protocol_version::http2, 200, upgrade_fields)
+                    .index() != 0);
+
+    ruvia::http_response response;
+    response.status(ruvia::http_status::created);
+    auto prepared = ruvia::prepare_http_connect_udp_response(
+        std::move(response), ruvia::http_protocol_version::http2);
+    RUVIA_CHECK(prepared.index() == 0);
+    if (prepared.index() == 0) {
+        RUVIA_CHECK(std::get<0>(prepared).status() == ruvia::http_status::created);
+        RUVIA_CHECK(std::get<0>(prepared).header("capsule-protocol") == "?1");
+        RUVIA_CHECK(!std::get<0>(prepared).header("connection").has_value());
+        RUVIA_CHECK(!std::get<0>(prepared).header("upgrade").has_value());
+    }
+}

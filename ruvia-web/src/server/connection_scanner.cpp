@@ -291,7 +291,7 @@ void connection_scanner::impl_type::drain() noexcept {
         auto* const next = current->next_;
         if (current->reading_request_head_) {
             close_socket(*current->socket_);
-        } else if (current->phase_ == phase_type::long_lived) {
+        } else {
             current->notify_drain();
         }
         current = next;

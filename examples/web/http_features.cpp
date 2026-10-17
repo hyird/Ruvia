@@ -1,7 +1,8 @@
-// HTTP/1 server features through the Web API.
-// Run ruvia_example_http_features, then ruvia_example_http_client_advanced.
-// Plain HTTP listens on 127.0.0.1:8093. Set RUVIA_TLS_CERT and RUVIA_TLS_KEY
-// to enable HTTPS on port 8444; clients trust the local CA through RUVIA_TLS_CA.
+// HTTP/1 and HTTP/2 server features through the Web API.
+// Run ruvia_example_http_features, then ruvia_example_http_client_advanced [1|2].
+// Plain HTTP listens on 127.0.0.1:8093 and accepts HTTP/2 prior knowledge.
+// Set RUVIA_TLS_CERT and RUVIA_TLS_KEY to enable HTTPS on port 8444;
+// the certificate must cover localhost and clients trust it through RUVIA_TLS_CA.
 
 #include <array>
 #include <chrono>
@@ -9,6 +10,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/body_limit.h"
@@ -35,13 +37,31 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> info(ruvia::context& c) {
+        const auto connection = c.conn();
         const std::array<ruvia::http_header_view, 1> hints{{
             {"link", "</features/asset>; rel=preload; as=style"},
         }};
         // An interim head is separate from the final response. The Web API
         // copies its input, but the operation must still finish in this request.
         co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, hints));
-        co_return c.text("interim responses\n");
+        c.priority({.urgency_ = 2, .incremental_ = true});
+        if (c.req().protocol_version() == ruvia::http_protocol_version::http2) {
+            if (connection.tls()) {
+                // Advertisements never change the client's trusted origin.
+                const std::array<std::string_view, 1> origins{"https://localhost:8444"};
+                co_await c.advertise_origins(origins);
+                co_await c.advertise_alternative_service("h2=\":8444\"; ma=60");
+            }
+            // Peer settings or capacity can decline push; the asset remains
+            // available through an ordinary request.
+            const bool pushed = co_await c.push({
+                .scheme_ = connection.tls() ? "https" : "http",
+                .authority_ = c.req().header("host").value_or(connection.tls() ? "localhost:8444" : "localhost:8093"),
+                .path_ = "/features/asset",
+            });
+            c.header("X-Push-Accepted", pushed ? "yes" : "no");
+        }
+        co_return c.text("interim responses, priorities, advertisements, and push\n");
     }
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {

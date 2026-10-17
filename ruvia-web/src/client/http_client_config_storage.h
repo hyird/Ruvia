@@ -33,6 +33,7 @@ struct http_client_config_storage final {
     std::uint16_t port_;
     std::pmr::string authority_;
     std::size_t connection_count_;
+    std::size_t max_concurrent_http2_streams_per_connection_;
     std::size_t max_buffered_requests_;
     std::size_t max_cookies_;
     std::size_t max_cookie_bytes_;
@@ -41,6 +42,9 @@ struct http_client_config_storage final {
     std::optional<std::chrono::milliseconds> request_timeout_;
     std::optional<std::chrono::milliseconds> acquire_timeout_;
     std::size_t max_response_bytes_;
+    http_client_protocol protocol_;
+    http_client_advertisement_config advertisements_;
+    http_client_push_config push_;
     client_tls_config_storage tls_;
     client_tcp_config tcp_;
     http_client_received_cookie_policy received_cookies_;
@@ -112,6 +116,7 @@ private:
           port_(resolved_port(source_value)),
           authority_(make_http_origin_authority(origin(), resource)),
           connection_count_(source_value.connection_count_),
+          max_concurrent_http2_streams_per_connection_(source_value.max_concurrent_http2_streams_per_connection_),
           max_buffered_requests_(source_value.max_buffered_requests_),
           max_cookies_(source_value.max_cookies_),
           max_cookie_bytes_(source_value.max_cookie_bytes_),
@@ -120,6 +125,9 @@ private:
           request_timeout_(source_value.request_timeout_),
           acquire_timeout_(source_value.acquire_timeout_),
           max_response_bytes_(source_value.max_response_bytes_),
+          protocol_(source_value.protocol_),
+          advertisements_(source_value.advertisements_),
+          push_(source_value.push_),
           tls_(tls_storage(source_value, resource)),
           tcp_(source_value.tcp_),
           received_cookies_(source_value.received_cookies_),

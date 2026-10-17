@@ -100,12 +100,15 @@ public:
 
     /// Suspends the stream producer. The result is elapsed for a normal
     /// delay, or stop_requested when the owning worker is shutting down or the
-    /// request's stop token trips.
+    /// request's stop token trips. HTTP/2 peer termination is reported as its
+    /// transport error.
     scoped_operation<timer_sleep_result> sleep(std::chrono::milliseconds duration) &;
     scoped_operation<timer_sleep_result> sleep(std::chrono::milliseconds) && = delete;
 
-    /// Whether a prior write failed. A passive disconnect is not observed until
-    /// the next write fails; false does not guarantee the client is connected.
+    /// Whether the response stream can no longer be delivered. HTTP/2 also
+    /// observes peer reset or connection termination, including while sleeping.
+    /// HTTP/1 observes passive disconnect only when a subsequent write fails.
+    /// False means no failure has been observed, not that the peer is connected.
     [[nodiscard]] bool aborted() const noexcept {
         return aborted_(target_);
     }

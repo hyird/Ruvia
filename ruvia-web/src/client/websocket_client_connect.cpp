@@ -24,7 +24,7 @@ namespace ruvia::detail {
 
 task<void> websocket_client_state::connect() {
     // One deadline bounds transport setup, the opening handshake and protocol
-    // setup.
+    // setup for every HTTP version.
     arm(connect_timer_, config_.connect_timeout_, client_abort_reason::timeout);
     std::exception_ptr failure;
     try {
@@ -36,22 +36,34 @@ task<void> websocket_client_state::connect() {
     if (failure == nullptr) {
         co_return;
     }
-    // A failed connect closes its transport before publishing the error.
+    // A failed connect retires its own protocol drivers: the lifecycle only
+    // joins the backend when a close was requested while connecting.
     close_now();
+    co_await join_transports();
     std::rethrow_exception(failure);
 }
 
 task<void> websocket_client_state::establish() {
+    const auto http2 = config_.protocol_ == websocket_client_protocol::http2;
     const operation_timeout unbounded(std::nullopt);
-    const auto result = co_await transport_.connect(unbounded);
-    if (!result.ok()) {
-        throw_transport_failure(result);
+    const auto connected =
+        co_await transport_.connect(unbounded);
+    if (!connected.ok()) {
+        throw_transport_failure(connected);
     }
-    if (!transport_.alpn_allows_http11()) {
-        throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
-            "upstream negotiated an unsupported WebSocket HTTP protocol");
+    if (transport_.secure()) {
+        const auto alpn = transport_.alpn();
+        if ((http2 && alpn != "h2") || (!http2 && !alpn.empty() && alpn != "http/1.1")) {
+            throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
+                "upstream did not negotiate the requested HTTP protocol for WebSocket");
+        }
     }
-    co_await perform_handshake();
+    if (http2) {
+        http2_.emplace(*this, worker_, memory_.resource());
+        co_await http2_->connect();
+    } else {
+        co_await perform_handshake();
+    }
     protocol_.emplace(websocket_connection_options{
         .resource_ = memory_.resource(),
         .message_limit_ = protocol_byte_limit::limited(config_.max_message_bytes_),

@@ -65,6 +65,30 @@ detail::route_resolution detail::route_table::resolve(const http_request& reques
     return resolve(request.known_method(), path);
 }
 
+detail::route_resolution detail::route_table::resolve(route_request_view request) const noexcept {
+    if (request.known_method_ == http_known_method::connect && request.extended_protocol_.empty()) {
+        return resolve_connect({}, request.connect_target_);
+    }
+    const auto path = request.path_;
+    if (path.empty() ||
+        (path.front() != '/' && (path != "*" || request.known_method_ != http_known_method::options)) ||
+        has_dot_segment(path)) {
+        return route_resolution::reject();
+    }
+    if (request.known_method_ == http_known_method::connect) {
+        if (request.extended_protocol_ == "websocket") {
+            auto websocket = resolve(http_known_method::get, path);
+            const auto* route = websocket.resolved();
+            return route != nullptr && route->route().endpoint().get_websocket() != nullptr ? websocket : route_resolution::reject();
+        }
+        return resolve_connect(request.extended_protocol_, path);
+    }
+    if (request.known_method_ == http_known_method::unknown) {
+        return resolve_extension_method(request.method_, path);
+    }
+    return resolve(request.known_method_, path);
+}
+
 detail::route_resolution detail::route_table::resolve_connect(std::string_view protocol, std::string_view target) const noexcept {
     const route_entry* fallback = nullptr;
     for (const auto index : plan_->connect_route_indices_) {

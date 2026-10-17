@@ -47,7 +47,9 @@ void websocket_client_state::close_now() noexcept {
     if (abort_reason_ == client_abort_reason::none) {
         abort_reason_ = client_abort_reason::closing;
     }
-
+    if (http2_) {
+        http2_->stop();
+    }
     transport_.abort(abort_reason_);
     transport_.close();
     disarm(connect_timer_);
@@ -62,6 +64,16 @@ void websocket_client_state::close_now() noexcept {
 
 task<void> websocket_client_state::join() {
     co_await heartbeat_tasks_.join();
+    co_await join_transports();
+}
+
+task<void> websocket_client_state::join_transports() {
+    // Each protocol driver is joined once, either by a failed connect or by
+    // the lifecycle's retirement, and dropped afterwards.
+    if (http2_) {
+        co_await http2_->join();
+        http2_.reset();
+    }
 }
 
 scoped_operation<void> websocket_client_state::close(

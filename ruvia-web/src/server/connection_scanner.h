@@ -190,12 +190,11 @@ public:
     void start();
     void stop() noexcept;
     void close_all() noexcept;
-    // Starts draining: closes connections that have no admitted request (those
-    // waiting for or still reading a request head), notifies each long-lived
-    // upgrade's drain callbacks, and from then on refuses every upgrade as it
-    // reaches enter_long_lived(). Request exchanges already admitted, and
-    // long-lived connections without a drain callback, keep running until the
-    // worker stops.
+    // Starts draining: closes connections waiting for or still reading an
+    // unadmitted HTTP/1 request head, then notifies registered protocol drain
+    // callbacks on all admitted sessions (including multiplexed HTTP/2).
+    // From then on enter_long_lived() refuses new upgrades. Admitted requests
+    // and connections without a callback may finish until the worker stops.
     void drain() noexcept;
 
 private:

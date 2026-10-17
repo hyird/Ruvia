@@ -25,9 +25,11 @@
 #include "ruvia/http/http_ascii.h"
 
 #include "context/context_services.h"
+#include "http2/cleartext_upgrade.h"
 #include "integration/worker_capabilities.h"
 #include "server/accepted_socket.h"
 #include "server/http_connection_close.h"
+#include "server/http_server_alpn.h"
 #include "server/http_server_connection_guards.h"
 #include "server/http_server_stream_session.h"
 #include "server/http_server_tls_handshake.h"
@@ -86,14 +88,12 @@ void configure_listener_address(asio::ip::tcp::acceptor& socket) {
 int select_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length,
     const unsigned char* in, unsigned int in_length, void*) noexcept {
     static constexpr unsigned char protocols[] = {
-        8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+        2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
     if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols,
             static_cast<unsigned int>(sizeof(protocols)), in, in_length) == OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_OK;
     }
-    // RFC 7301 §3.2: a client that offers ALPN without http/1.1 must get a
-    // fatal no_application_protocol alert (OpenSSL sends it for this result),
-    // not a handshake that silently proceeds with HTTP/1.1.
+    // RFC 7301 §3.2: reject ALPN offers without a supported TCP HTTP protocol.
     return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 
@@ -387,9 +387,11 @@ task<void> worker_connections::run_tls_session(
         }
         std::pmr::string client_certificate(memory_.allocator<char>());
         extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
-        const auto close_mode = co_await run_stream(listener_value, tls_stream, socket,
-            capabilities_.make_context_services(stop_token_)
-                .with_tls_transport(remote_address, client_certificate, remote_port));
+        const auto services = capabilities_.make_context_services(stop_token_)
+                                  .with_tls_transport(remote_address, client_certificate, remote_port);
+        const auto close_mode = is_http2_alpn_selected(tls_stream)
+                                    ? co_await run_http2(tls_stream, socket, services)
+                                    : co_await run_stream(listener_value, tls_stream, socket, services);
         // A worker stop keeps the immediate close; scanner close_all reaches a
         // graceful close that is already running.
         if (close_mode != http_connection_close::abort && !stop_token_.stop_requested()) {
@@ -399,6 +401,15 @@ task<void> worker_connections::run_tls_session(
     } catch (...) {
         report_session_failure(socket, remote_address, std::current_exception());
     }
+}
+
+template <typename stream_type>
+task<http_connection_close> worker_connections::run_http2(stream_type& stream, tcp_socket_type& socket,
+    context_services services) {
+    connection_scanner::entry_type scanner_entry;
+    connection_scanner::guard_type scanner_guard(scanner_, scanner_entry, socket);
+    co_return co_await run_http2_server_session(http2_server_session_setup<stream_type>{
+        .stream_ = stream, .socket_ = socket, .memory_ = memory_, .routes_ = routes_, .options_ = options_, .scanner_entry_ = scanner_entry, .services_ = services, .worker_state_ = state_});
 }
 
 void worker_connections::report_session_failure(

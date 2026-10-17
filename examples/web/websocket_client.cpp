@@ -1,4 +1,5 @@
-// Standalone WebSocket client. First run ruvia_example_http_features.
+// Standalone WebSocket client over HTTP/1 or HTTP/2.
+// First run ruvia_example_http_features, then this executable with 1 or 2.
 // Connects to localhost:8093; RUVIA_CLIENT_TLS=true selects TLS on port 8444.
 // Set RUVIA_TLS_CA to trust the local CA. Expected output: text=hello,
 // binary bytes=3, then a clean close.
@@ -10,6 +11,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/dotenv.h"
@@ -56,12 +58,18 @@ ruvia::task<void> exchange(ruvia::event_loop loop, ruvia::websocket_client_confi
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
     try {
+        const std::string_view protocol = argc > 1 ? argv[1] : "1";
+        if (protocol != "1" && protocol != "2") {
+            throw std::invalid_argument("usage: ruvia_example_websocket_client [1|2]");
+        }
         const example::environment env;
         const bool tls = env.get<bool>("RUVIA_CLIENT_TLS").value_or(false);
         ruvia::websocket_client_config config{
             .scheme_ = tls ? ruvia::websocket_scheme::wss : ruvia::websocket_scheme::ws,
+            .protocol_ = protocol == "2" ? ruvia::websocket_client_protocol::http2
+                                         : ruvia::websocket_client_protocol::http1,
             .host_ = "localhost",
             .port_ = tls ? 8444 : 8093,
             .target_ = "/features/ws",

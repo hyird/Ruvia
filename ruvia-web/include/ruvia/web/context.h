@@ -29,6 +29,7 @@
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_native_path.h"
+#include "ruvia/http/http_push.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/conn_info.h"
@@ -187,6 +188,13 @@ public:
     // A failed write throws std::system_error, which is not routed through
     // on_error: the connection ends.
     [[nodiscard]] scoped_operation<void> inform(const http_interim_response_head& response);
+
+    // Queues a promised request on this HTTP/2 connection. False means the
+    // peer disabled push or its stream capacity cannot admit the promise.
+    [[nodiscard]] scoped_operation<bool> push(http_push_request_view request);
+    // Connection-scoped HTTP/2 advertisements; ORIGIN requires TLS.
+    [[nodiscard]] scoped_operation<void> advertise_origins(std::span<const std::string_view> origins);
+    [[nodiscard]] scoped_operation<void> advertise_alternative_service(std::string_view value);
 
     ~context();
 

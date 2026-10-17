@@ -9,6 +9,7 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/websocket_client.h"
 
+#include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
 #include "websocket/websocket_heartbeat_config_validation.h"
 
@@ -17,6 +18,9 @@ namespace ruvia::detail {
 inline void validate_websocket_client_config(const websocket_client_config& config) {
     if (config.scheme_ != websocket_scheme::ws && config.scheme_ != websocket_scheme::wss) {
         throw std::invalid_argument("WebSocket client scheme is invalid");
+    }
+    if (config.protocol_ != websocket_client_protocol::http1 && config.protocol_ != websocket_client_protocol::http2) {
+        throw std::invalid_argument("WebSocket client HTTP protocol is invalid");
     }
     validate_client_origin_host(
         config.host_, "WebSocket client host must not be empty", "WebSocket client host is invalid");

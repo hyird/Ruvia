@@ -115,7 +115,23 @@ http_status_code http_client_response::status() const noexcept {
 http_protocol_version http_client_response::protocol_version() const noexcept {
     return state_->protocol_version_;
 }
-
+void http_client_response::reprioritize(http_priority priority) & {
+    if (state_ == nullptr) {
+        throw std::logic_error("response owner has moved");
+    }
+    check_response_operation_affinity(state_);
+    if (priority.urgency_ > 7) {
+        throw std::invalid_argument("HTTP priority urgency must be between 0 and 7");
+    }
+    if (state_->complete_) {
+        // The peer already finished the stream; there is nothing left to schedule.
+        return;
+    }
+    if (state_->abandoned_ || state_->pool_ == nullptr) {
+        throw http_client_error(http_client_error::code_type::closing, "response transport is retired");
+    }
+    state_->pool_->reprioritize(*state_, priority);
+}
 std::span<const http_header> http_client_response::headers() const& noexcept {
     return state_->headers_;
 }
@@ -157,6 +173,9 @@ task<void> detail::http_client_response_state::await_head(std::string_view head_
     }
     if ((tunnel_ && tunnel_->accepted_) || !body_decode_required_) {
         co_return;
+    }
+    if (http2_data_credit_ && pool_ != nullptr) {
+        pool_->release_response_data(*this);
     }
     notify_producer_space();
     while (!complete_) {
@@ -203,6 +222,9 @@ void detail::http_client_response_state::promote_pending_data() {
     auto& state_value = *this;
     if (state_value.offset_ != state_value.buffered_.size() || state_value.pending_.empty()) {
         return;
+    }
+    if (state_value.http2_data_credit_ && state_value.pool_ != nullptr) {
+        state_value.pool_->release_response_data(state_value);
     }
     std::pmr::string empty(state_value.resource_);
     state_value.buffered_.swap(empty);
@@ -287,6 +309,9 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
     auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
     state_value.release_consumed_body_prefix();
     state_value.collect_all_ = true;
+    if (state_value.http2_data_credit_ && state_value.pool_ != nullptr) {
+        state_value.pool_->release_response_data(state_value);
+    }
     state_value.notify_producer_space();
     while (!state_value.receive_complete()) {
         co_await state_value.data_signal_.wait();
@@ -411,26 +436,36 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_udp_tunnel(
         config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
         throw std::invalid_argument("invalid CONNECT-UDP request or tunnel policy");
     }
-    detail::http_client_request_storage request("GET", head.target_, resource_);
-    request.set_tunnel(pool_->config().authority_, detail::http_client_request_storage::tunnel_kind::udp);
+    std::pmr::vector<http_header_view> fields(resource_);
+    fields.reserve(head.headers_.size() + 1);
     for (const auto& field : head.headers_) {
         if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
             throw std::invalid_argument("CONNECT-UDP Capsule-Protocol is driver-owned");
         }
-        request.append_header(field.name(), field.value());
+        fields.push_back(field);
     }
-    request.append_header("Capsule-Protocol", "?1");
-    return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_tunnel(std::move(request), config, options_));
+    fields.emplace_back("Capsule-Protocol", "?1");
+    // open_tunnel owns all fields before this temporary preparation storage dies.
+    return open_tunnel({.authority_ = pool_->config().authority_, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config);
 }
 
 scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(const http_client_tunnel_request_view& head, http_client_tunnel_config config) const {
     registration_.require_active();
     if (config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes ||
-        !is_valid_http_connect_authority(head.authority_)) {
+        (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority_host(borrowed_text(head.authority_)) || head.authority_.empty()))) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }
-    detail::http_client_request_storage request("CONNECT", "", resource_);
-    request.set_tunnel(head.authority_, detail::http_client_request_storage::tunnel_kind::connect);
+    detail::http_client_request_storage request("CONNECT", head.target_, pmr_resource_or_default(resource_));
+    if (head.protocol_ == "connect-udp" && (validate_http_connect_udp_request({.version_ = http_protocol_version::http2,
+                                                                                  .method_ = "CONNECT",
+                                                                                  .scheme_ = scheme() == http_scheme::https ? "https" : "http",
+                                                                                  .authority_ = head.authority_,
+                                                                                  .path_ = head.target_,
+                                                                                  .headers_ = head.headers_})
+                                                   .index() != 0)) {
+        throw std::invalid_argument("invalid CONNECT-UDP request head");
+    }
+    request.set_tunnel(head.authority_, head.protocol_);
     for (const auto& field : head.headers_) {
         request.append_header(field.name(), field.value());
     }
@@ -440,6 +475,15 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(cons
 http_client_stats http_client_handle::stats() const {
     registration_.require_active();
     return pool_->stats();
+}
+std::optional<http_client_push> http_client_handle::next_push() const {
+    registration_.require_active();
+    return pool_->next_push();
+}
+
+std::optional<http_client_advertisement> http_client_handle::next_advertisement() const {
+    registration_.require_active();
+    return pool_->next_advertisement();
 }
 
 std::string_view http_client_handle::host() const& {

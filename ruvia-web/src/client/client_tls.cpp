@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <exception>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -17,6 +18,23 @@ namespace ruvia::detail {
 namespace {
 
 constexpr std::array<unsigned char, 9> http11_alpn = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+constexpr std::array<unsigned char, 3> http2_alpn = {2, 'h', '2'};
+constexpr std::array<unsigned char, 12> negotiated_http_alpn = {
+    2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+
+[[nodiscard]] std::span<const unsigned char> client_alpn_bytes(client_alpn mode) noexcept {
+    switch (mode) {
+        case client_alpn::none:
+            return {};
+        case client_alpn::http11:
+            return http11_alpn;
+        case client_alpn::http2:
+            return http2_alpn;
+        case client_alpn::negotiate:
+            return negotiated_http_alpn;
+    }
+    std::terminate();
+}
 
 [[nodiscard]] bool configure_client_tls_peer_identity(SSL& connection, const char* host, bool ip_address) noexcept {
     X509_VERIFY_PARAM* const parameters = SSL_get0_param(&connection);
@@ -173,9 +191,9 @@ client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp
         prepared != client_tls_setup_error::none) {
         return prepared;
     }
-    if (alpn == client_alpn::http11 &&
-        SSL_set_alpn_protos(stream.native_handle(), http11_alpn.data(), static_cast<unsigned int>(http11_alpn.size())) !=
-            0) {
+    const auto protocols = client_alpn_bytes(alpn);
+    if (SSL_set_alpn_protos(stream.native_handle(), protocols.data(),
+            static_cast<unsigned int>(protocols.size())) != 0) {
         return client_tls_setup_error::alpn_failed;
     }
     return client_tls_setup_error::none;

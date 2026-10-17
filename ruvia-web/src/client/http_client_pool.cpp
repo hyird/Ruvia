@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/worker_cancellation.h"
 
 #include "client/client_tls.h"
 #include "client/http1_client_exchange.h"
@@ -13,9 +14,6 @@
 
 namespace ruvia::detail {
 namespace {
-
-// An abandoned response may still be queued for a slot, before its lease
-// publishes a cancellation id: it must not write a request.
 void throw_if_abandoned(const http_client_response_state& state_value) {
     if (state_value.abandoned_) {
         throw http_client_error(
@@ -23,9 +21,34 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
     }
 }
 
+[[nodiscard]] std::size_t http_client_scheduler_slots(const http_client_config_storage& config) noexcept {
+    if (config.protocol_ == http_client_protocol::http1_only) {
+        return config.connection_count_;
+    }
+    return config.connection_count_ * config.max_concurrent_http2_streams_per_connection_;
+}
+
+[[nodiscard]] task<std::size_t> acquire_http1_exchange_slot(
+    pool_lease_scheduler& scheduler, const operation_timeout& timeout, stop_token stop_token_value) {
+    const auto result_value = co_await scheduler.acquire(timeout.remaining(), std::move(stop_token_value));
+    if (result_value.has_value()) {
+        co_return result_value.value();
+    }
+    if (result_value.status() == worker_wait_status::timed_out) {
+        throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 connection acquire timed out");
+    }
+    if (result_value.status() == worker_wait_status::cancelled) {
+        throw http_client_error(http_client_error::code_type::cancelled, "HTTP/1 request cancelled");
+    }
+    if (result_value.status() == worker_wait_status::closed) {
+        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closing");
+    }
+    std::terminate();
+}
+
 }  // namespace
 
-void http_client_pool::slot_policy::throw_acquire_failure(const http_client_pool&, worker_wait_status status) {
+void http_client_slot_policy::throw_acquire_failure(const http_client_pool&, worker_wait_status status) {
     switch (status) {
         case worker_wait_status::timed_out:
             throw http_client_error(
@@ -41,15 +64,11 @@ void http_client_pool::slot_policy::throw_acquire_failure(const http_client_pool
     std::terminate();
 }
 
-void http_client_pool::slot_policy::throw_aborted(const http_client_pool&, pool_slot_abort_reason reason) {
+void http_client_slot_policy::throw_aborted(const http_client_pool&, pool_slot_abort_reason reason) {
     if (reason == pool_slot_abort_reason::cancelled) {
         throw http_client_error(http_client_error::code_type::cancelled, "http client request cancelled");
     }
     throw http_client_error(http_client_error::code_type::closing, "http client pool is closing");
-}
-
-void http_client_pool::slot_policy::cancel_slot(http_client_pool& pool, std::size_t slot) noexcept {
-    pool.connection(slot).cancel(client_abort_reason::cancelled);
 }
 
 http_client_pool::http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
@@ -61,9 +80,12 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
       config_(std::move(config)),
       origin_(config_.origin()),
       policy_(config_, resource_),
+      advertisements_(worker_, config_.advertisements_, resource_),
+      pushes_(resource_),
       result_budget_domain_(std::move(result_budget_domain)),
       tls_context_(asio::ssl::context::tls_client),
-      slots_(*this, config_.connection_count_, worker_, resource_),
+      slots_(*this, http_client_scheduler_slots(config_), worker_, resource_),
+      cancellation_target_(make_worker_cancellation_target(*this, worker_)),
       background_tasks_(worker_, {.resource_ = resource_}),
       connections_(resource_) {
     if (config_.scheme_ == http_scheme::https) {
@@ -71,7 +93,7 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
     }
     connections_.reserve(config_.connection_count_);
     for (std::size_t index = 0; index < config_.connection_count_; ++index) {
-        connections_.push_back(make_pmr_object<http_client_connection>(resource_, *this));
+        connections_.push_back(make_pmr_object<http_client_connection>(resource_, *this, index));
     }
     response_memory_ = response_storage == http_client_response_storage::worker_resource
                            ? http_client_response_memory_domain::create(worker_, result_budget_domain_, *resource_)
@@ -80,6 +102,7 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
 
 http_client_pool::~http_client_pool() {
     close_now();
+    cancellation_target_->detach(*this);
 }
 
 void http_client_pool::close_now() noexcept {
@@ -88,6 +111,7 @@ void http_client_pool::close_now() noexcept {
     }
     // slots_.close() retires queued waiters and connection shutdown aborts
     // every connect and exchange; a transferred slot fails at admission.
+    background_tasks_.request_stop();
     for (auto& connection_value : connections_) {
         connection_value->shutdown();
     }
@@ -113,6 +137,8 @@ task<void> http_client_pool::join() {
     // Consumers own their response storage independently of transport. Retire
     // every client borrow, including completed responses, before its owners.
     response_memory_->detach_transport_bindings(*this);
+    pushes_.clear();
+    advertisements_.retire();
     response_memory_.reset();
     if (failure != nullptr) {
         std::rethrow_exception(failure);
@@ -120,19 +146,54 @@ task<void> http_client_pool::join() {
 }
 
 http_client_stats http_client_pool::stats() const noexcept {
-    return {requests_buffered_, requests_in_flight_, completed_requests_, failed_requests_, wire_counters_.sent_, wire_counters_.received_};
+    return {requests_buffered_, requests_in_flight_, completed_requests_, failed_requests_, wire_counters_.sent_,
+        wire_counters_.received_, advertisements_.dropped(), received_pushes_, rejected_pushes_};
 }
 
-void http_client_pool::require_accepting() const {
-    // join() retires background_tasks_, which then rejects every spawn.
-    if (background_joined_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is retired");
+void http_client_pool::cancel_operation_by_id(std::uint64_t cancellation_id) noexcept {
+    if (cancellation_id == 0) {
+        return;
     }
+    for (auto& connection_value : connections_) {
+        if (connection_value->cancel_by_id(cancellation_id)) {
+            return;
+        }
+    }
+}
+
+void http_client_pool::reprioritize(http_client_response_state& state_value, http_priority priority) {
+    if (!worker_.is_current()) {
+        std::terminate();
+    }
+    if (state_value.transport_ != http_client_response_transport::http2 ||
+        state_value.connection_index_ >= connections_.size()) {
+        throw http_client_error(
+            http_client_error::code_type::protocol_unavailable, "priority updates require HTTP/2");
+    }
+    connection(state_value.connection_index_).reprioritize(state_value, priority);
+}
+
+std::optional<http_client_push> http_client_pool::next_push() {
+    if (!worker_.is_current()) {
+        throw std::logic_error("push requires its owner worker");
+    }
+    if (pushes_.empty()) {
+        return std::nullopt;
+    }
+    auto result_value = std::move(pushes_.front());
+    pushes_.pop_front();
+    return result_value;
 }
 
 void http_client_pool::spawn_request(
     http_client_request_storage request, operation_options options, http_client_response_state& state_value) {
     state_value.buffered_limit_ = config_.max_response_bytes_;
+    if (state_value.tunnel_) {
+        request.bind_tunnel(*state_value.tunnel_);
+    }
+    if (state_value.upload_) {
+        request.bind_upload(*state_value.upload_);
+    }
     background_tasks_.spawn(execute_into(std::move(request), std::move(options), &state_value));
 }
 
@@ -192,9 +253,18 @@ task<void> http_client_pool::execute_into(
     state_value->data_signal_.notify();
 }
 
+void http_client_pool::require_accepting() const {
+    // join() retires background_tasks_, which then rejects every spawn.
+    if (background_joined_) {
+        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is retired");
+    }
+}
+
 task<void> http_client_pool::execute_request_into(
     http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
+    throw_if_abandoned(*state_value);
     const operation_timeout timeout(options.timeout_.has_value() ? options.timeout_ : config_.request_timeout_);
+    const auto acquire_timeout = timeout.constrained_by(config_.acquire_timeout_);
     if (requests_buffered_ >= config_.max_buffered_requests_) {
         ++failed_requests_;
         throw http_client_error(http_client_error::code_type::queue_full, "http client request buffer is full");
@@ -211,39 +281,12 @@ task<void> http_client_pool::execute_request_into(
     --requests_buffered_;
     ++requests_in_flight_;
     const slot_pool_type::lease_guard lease(slots_, index);
-    // Declared after the lease so it is destroyed first: a connect or exchange
-    // that did not finish may leave a half-finished handshake or request bytes
-    // on the connection, which must close before its slot is released.
-    struct discard_type final {
-        http_client_connection* connection_{nullptr};
-        ~discard_type() {
-            if (connection_ != nullptr) {
-                connection_->close();
-            }
-        }
-    } discard;
+    http_client_connection* tcp_connection = nullptr;
     try {
-        auto& tcp_connection = connection(index);
-        // Clears the previous lease's abort before the guard is armed: a stop
-        // already requested is delivered at arm and must hold for the whole
-        // lease. A slot transferred after close_now() refuses here.
-        tcp_connection.begin_lease();
-        // Abandonment before the exchange starts leaves no request bytes on
-        // the connection, so it stays reusable.
         throw_if_abandoned(*state_value);
-        slot_pool_type::cancellation_guard cancellation(slots_, index, options.stop_token_);
-        state_value->cancellation_id_ = cancellation.id();
-        discard.connection_ = &tcp_connection;
-        co_await tcp_connection.ensure_connected(timeout);
-        slots_.throw_if_aborted(index);
-        http1_client_exchange exchange(*this, tcp_connection);
-        co_await exchange.run(request, timeout, *state_value);
-        // The response is already complete: an abort landing after the
-        // exchange only poisons the connection, so the discard guard closes it
-        // instead of failing a delivered response.
-        if (!slots_.aborted(index)) {
-            discard.connection_ = nullptr;
-        }
+        tcp_connection = &connection(index);
+        state_value->connection_index_ = tcp_connection->index();
+        co_await execute_tcp(*tcp_connection, request, timeout, acquire_timeout, options.stop_token_, *state_value);
         --requests_in_flight_;
         ++completed_requests_;
     } catch (...) {
@@ -253,18 +296,122 @@ task<void> http_client_pool::execute_request_into(
     }
 }
 
+task<void> http_client_pool::execute_tcp(http_client_connection& connection_value,
+    const http_client_request_storage& request, const operation_timeout& timeout,
+    const operation_timeout& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value) {
+    // A cancelled HTTP/1 producer still owns its SSL stream until its
+    // serialized exchange unwinds. Join that exchange before reconnecting,
+    // including when negotiated HTTP/2-capacity leases share the pool slot.
+    if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
+        // This lease shares a multiplexed session with background drivers and
+        // possibly other requests; a request-local failure must not discard it.
+        co_await connection_value.execute_http2(request, timeout, stop_token_value, state_value);
+        co_return;
+    }
+    // A negotiated HTTP/1 connection can have several operations that already
+    // hold outer HTTP/2-capacity slots. Waiting for this connection's single
+    // exchange slot does not own its socket: a timeout/cancellation here must
+    // not close the exchange currently using it.
+    const bool must_buffer = connection_value.http1_operations_ != 0;
+    if (must_buffer && requests_buffered_ >= config_.max_buffered_requests_) {
+        throw http_client_error(http_client_error::code_type::queue_full, "HTTP client request buffer is full");
+    }
+    bool retry_as_http2 = false;
+    {
+        ++connection_value.http1_operations_;
+        if (must_buffer) {
+            --requests_in_flight_;
+            ++requests_buffered_;
+        }
+        struct http1_operation final {
+            http_client_pool& pool_;
+            http_client_connection& connection_;
+            bool buffered_;
+            ~http1_operation() {
+                if (buffered_) {
+                    --pool_.requests_buffered_;
+                    ++pool_.requests_in_flight_;
+                }
+                if (connection_.http1_operations_ == 0) {
+                    std::terminate();
+                }
+                --connection_.http1_operations_;
+            }
+        } operation{*this, connection_value, must_buffer};
+        const auto slot =
+            co_await acquire_http1_exchange_slot(connection_value.http1_scheduler_, acquire_timeout, stop_token_value);
+        if (operation.buffered_) {
+            --requests_buffered_;
+            ++requests_in_flight_;
+            operation.buffered_ = false;
+        }
+        struct http1_release final {
+            pool_lease_scheduler& scheduler_;
+            std::size_t slot_;
+            ~http1_release() {
+                (void)scheduler_.release(slot_);
+            }
+        } release{connection_value.http1_scheduler_, slot};
+
+        throw_if_abandoned(state_value);
+        // A previous HTTP/1 exchange may have closed this connection while this
+        // request waited for the serial exchange slot. Reconnect only after
+        // acquiring that slot, so the connection cannot be replaced underneath
+        // an active HTTP/1 exchange. Every failure below closes the connection
+        // before the slot is released; pool handoff resumes the next waiter
+        // synchronously.
+        try {
+            co_await connection_value.ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
+            if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
+                retry_as_http2 = true;
+            } else {
+                http1_client_exchange exchange(*this, connection_value);
+                co_await exchange.run(request, timeout, stop_token_value, state_value);
+            }
+        } catch (...) {
+            connection_value.close();
+            throw;
+        }
+    }
+    if (retry_as_http2) {
+        co_await connection_value.execute_http2(request, timeout, stop_token_value, state_value);
+    }
+}
+
 void http_client_pool::abandon_response(http_client_response_state& state_value) noexcept {
     if (state_value.abandoned_) {
         return;
     }
     state_value.abandoned_ = true;
-    // A lease in progress published its id; a response still queued for a
-    // slot has none and fails at admission.
-    slots_.cancel_operation_by_id(state_value.cancellation_id_);
+    switch (state_value.transport_) {
+        case http_client_response_transport::http2:
+            if (state_value.connection_index_ < connections_.size() && state_value.request_id_ != 0) {
+                connection(state_value.connection_index_)
+                    .cancel_http2_stream(state_value.request_id_, client_abort_reason::cancelled);
+            }
+            break;
+        case http_client_response_transport::unassigned:
+        case http_client_response_transport::http1:
+            if (state_value.cancellation_id_ != 0) {
+                cancel_operation_by_id(state_value.cancellation_id_);
+            } else if (state_value.connection_index_ < connections_.size() &&
+                       connection(state_value.connection_index_).http1_response_ == &state_value) {
+                connection(state_value.connection_index_).close();
+            }
+            break;
+    }
     if (auto* output = state_value.output()) {
         output->stop();
     }
     state_value.space_signal_.notify();
+}
+
+void http_client_pool::release_response_data(http_client_response_state& state_value) noexcept {
+    if (state_value.connection_index_ < connections_.size()) {
+        connection(state_value.connection_index_).release_response_data(state_value);
+    } else {
+        state_value.http2_data_credit_.reset();
+    }
 }
 
 }  // namespace ruvia::detail

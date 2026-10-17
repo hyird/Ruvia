@@ -27,7 +27,7 @@
 namespace ruvia {
 
 // Transport-independent sender policy for RFC 9110's only standardized
-// request expectation. The HTTP/1 writer owns generation of the
+// request expectation. HTTP/1 and HTTP/2 writers both own generation of the
 // Expect field so callers cannot create a wire/state-machine mismatch.
 enum class http_client_request_expectation : std::uint8_t {
     none,

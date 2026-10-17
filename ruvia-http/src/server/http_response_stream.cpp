@@ -52,7 +52,7 @@ namespace ruvia {
                                                                       detail::response_header_transfer_encoding);
     const bool needs_sse_cache_control =
         kind == http_response_stream_kind::sse &&
-        body_plan.transfer_encoding_allowed() &&
+        (framing == http_response_stream_framing::http2_frames || body_plan.transfer_encoding_allowed()) &&
         !detail::response_has_known_header(response, detail::response_header_cache_control);
     const auto additional_headers = static_cast<std::size_t>(needs_sse_content_type) +
                                     static_cast<std::size_t>(needs_http1_chunked) +

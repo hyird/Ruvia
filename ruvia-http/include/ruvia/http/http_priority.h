@@ -23,7 +23,13 @@ struct http_priority_fields final {
 };
 enum class http_priority_error : std::uint8_t { invalid_syntax,
     invalid_value,
+    invalid_frame,
     output_too_small };
+struct http_priority_update final {
+    std::uint64_t element_id_{0};
+    bool push_{false};
+    http_priority_fields fields_{};
+};
 
 // RFC 9218 / RFC 8941 Dictionary parsing. Unknown members, invalid parameter
 // types and out-of-range values are ignored; malformed structured syntax fails.
@@ -33,4 +39,7 @@ enum class http_priority_error : std::uint8_t { invalid_syntax,
 // dictionary member replaces the earlier member, including an invalid value.
 [[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(std::span<const http_header_view> headers) noexcept;
 [[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http_priority(std::span<char> output, http_priority_fields fields_value) noexcept;
+[[nodiscard]] std::variant<http_priority_update, http_priority_error> decode_http2_priority_update(std::span<const char> payload_value) noexcept;
+[[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std::span<char> output, std::uint32_t stream_id, http_priority_fields fields_value) noexcept;
+
 }  // namespace ruvia

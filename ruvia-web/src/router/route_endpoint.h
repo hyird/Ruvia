@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/websocket_handshake.h"
@@ -205,10 +206,10 @@ public:
 
     [[nodiscard]] static route_endpoint tunnel(std::pmr::memory_resource* resource,
         route_stream_handler_type::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) {
-        // Requests reach a protocol tunnel only through `Upgrade: connect-udp`;
-        // any other protocol would register a route nothing can resolve.
-        if (!protocol.empty() && protocol != "connect-udp") {
-            throw std::invalid_argument("unsupported CONNECT protocol; only connect-udp is routable");
+        // Extended CONNECT protocols use HTTP/2; connect-udp also admits
+        // the HTTP/1.1 Upgrade form.
+        if (!protocol.empty() && !is_valid_http_header_name(protocol)) {
+            throw std::invalid_argument("CONNECT protocol must be an HTTP token");
         }
         if (protocol == "connect-udp") {
             config.datagrams_ = true;

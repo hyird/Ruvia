@@ -73,11 +73,16 @@ RUVIA_TEST(response_public_server_plans_preserve_head_representation_length) {
     RUVIA_CHECK(!write_plan.send_body());
     RUVIA_CHECK(write_plan.matches_response(response));
 
-    const auto stream_plan = ruvia::plan_http_response_stream_commit(
-        ruvia::http_response_stream_framing::http1_known_length, ruvia::http_known_method::head,
-        response.status(), ruvia::http_response_trailer_intent::none);
-    RUVIA_CHECK(stream_plan.body_plan().body_suppressed());
-    RUVIA_CHECK_EQ(stream_plan.head_disposition(), ruvia::http_response_stream_head_disposition::message_ended);
+    constexpr std::array framings{
+        ruvia::http_response_stream_framing::http1_known_length,
+        ruvia::http_response_stream_framing::http2_frames};
+    for (const auto framing : framings) {
+        const auto stream_plan = ruvia::plan_http_response_stream_commit(
+            framing, ruvia::http_known_method::head,
+            response.status(), ruvia::http_response_trailer_intent::none);
+        RUVIA_CHECK(stream_plan.body_plan().body_suppressed());
+        RUVIA_CHECK_EQ(stream_plan.head_disposition(), ruvia::http_response_stream_head_disposition::message_ended);
+    }
 }
 
 RUVIA_TEST(response_public_trailer_validation_returns_borrowed_section) {

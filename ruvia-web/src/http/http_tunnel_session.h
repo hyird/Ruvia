@@ -13,25 +13,21 @@
 #include "ruvia/web/http_tunnel.h"
 
 #include "context/context_access.h"
-#include "http/http_socket_tunnel_transport.h"
 #include "http/http_stream_read_result.h"
-#include "http/tls_tunnel_output.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
 #include "server/inbound_transport_error.h"
 #include "util/steady_clock.h"
 namespace ruvia::detail {
-// The tunnel over the HTTP/1 connection's byte stream (plain TCP socket or TLS
-// stream); a TLS stream writes its ciphertext through tls_output. Received
-// bytes live in `inbound`, the connection's inbound buffer budget: one reused
-// read window, and each chunk handed to the handler, sized to the bytes read.
-// `resource` holds what the handler sends and the facade's own state.
-template <typename stream_type>
+// A tunnel over an HTTP/1 socket transport or one HTTP/2 stream. Received
+// chunks use the connection's inbound budget; sent data and facade state
+// use the worker resource. The transport owns protocol-specific flow control.
+template <typename transport_type>
 class http_tunnel_session final {
 public:
-    http_tunnel_session(stream_type& stream, tls_tunnel_output* tls_output, const worker_handle& worker_value,
-        std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, std::string_view pending)
-        : transport_(stream, tls_output),
+    http_tunnel_session(transport_type transport, const worker_handle& worker_value,
+        std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, std::string_view pending = {})
+        : transport_(std::move(transport)),
           inbound_(inbound),
           pending_(pending, &inbound),
           read_buffer_(&inbound),
@@ -111,7 +107,7 @@ private:
     static void abort_thunk(void* raw) noexcept {
         static_cast<http_tunnel_session*>(raw)->abort();
     }
-    http_socket_tunnel_transport<stream_type> transport_;
+    transport_type transport_;
     std::pmr::memory_resource& inbound_;
     std::pmr::string pending_;
     std::pmr::string read_buffer_;
@@ -121,8 +117,8 @@ private:
     http_tunnel facade_;
 };
 
-template <typename stream_type>
-[[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<stream_type>& session_value,
+template <typename transport_type>
+[[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<transport_type>& session_value,
     connection_scanner::entry_type& entry_value, const route_stream_handler_type& handler, context& context_value) {
     context_tunnel_binding binding(context_value, session_value.tunnel());
     // A draining worker closed the socket instead of admitting the tunnel.
@@ -132,8 +128,8 @@ template <typename stream_type>
     co_await handler(context_value);
 }
 
-template <typename stream_type>
-[[nodiscard]] task<void> finish_tunnel_session(http_tunnel_session<stream_type>& session_value,
+template <typename transport_type>
+[[nodiscard]] task<void> finish_tunnel_session(http_tunnel_session<transport_type>& session_value,
     std::exception_ptr failure, const connection_failure_sink& sink_value, std::string_view remote,
     connection_scanner::entry_type& scanner, std::chrono::milliseconds timeout) {
     if (failure != nullptr) {
@@ -142,7 +138,7 @@ template <typename stream_type>
     co_await session_value.join();
     if (failure == nullptr && !session_value.aborted()) {
         struct drain_deadline final {
-            http_tunnel_session<stream_type>& session_;
+            http_tunnel_session<transport_type>& session_;
             std::int64_t deadline_;
             connection_scanner::periodic_check_registration_type registration_;
             static void tick(void* raw, std::int64_t now) noexcept {

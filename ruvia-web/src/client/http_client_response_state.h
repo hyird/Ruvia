@@ -13,10 +13,13 @@
 
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
+#include "ruvia/http/http_push.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/http_client_informational_response.h"
@@ -33,6 +36,12 @@ namespace ruvia::detail {
 
 class http_client_pool;
 class http_client_response_memory_domain;
+
+enum class http_client_response_transport : std::uint8_t {
+    unassigned,
+    http1,
+    http2,
+};
 
 // Address-stable response storage. Network stream registration and connection
 // leases are added here rather than to the movable public response wrapper.
@@ -80,6 +89,7 @@ public:
     http_client_pool* pool_{nullptr};
     std::pmr::memory_resource* resource_;
     http_status_code status_{http_status::ok};
+    http_known_method request_method_{http_known_method::unknown};
     http_protocol_version protocol_version_{http_protocol_version::http11};
     std::optional<http_response_body_plan> response_body_plan_{};
     std::pmr::vector<http_client_informational_response> informational_;
@@ -106,10 +116,18 @@ public:
     bool body_decode_required_{false};
     // Content-Encoding parsed with the final head while decoding is pending.
     std::optional<http_content_coding_field_result> content_coding_{};
+    http_client_response_transport transport_{http_client_response_transport::unassigned};
+    std::optional<::ruvia::http2_received_data_credit> http2_data_credit_{};
+    std::size_t connection_index_{0};
+    std::uint64_t request_id_{0};
     std::uint64_t cancellation_id_{0};
+    std::uint64_t stream_id_{0};
     // Declared last so the operation scope closes while every field borrowed
     // by a body coroutine is alive.
     ::ruvia::operation_scope body_operation_scope_;
+    std::optional<http_push_request> promised_request_{};
+    bool push_response_taken_{false};
+    ::ruvia::operation_scope push_response_scope_;
 
 private:
     void promote_pending_data();
