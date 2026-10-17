@@ -140,8 +140,9 @@ struct http1_chunked_body_decoder_config final {
 // on the chunk count, and a zero-size chunk ends the body, so empty chunks cannot
 // repeat. Each chunk-size line (including extensions) and the encoded trailer
 // section (including its final empty line) are bounded independently by
-// max_http_header_bytes. An over-long size line or unterminated trailer section
-// reports framing_limit_exceeded; a complete oversized trailer section is
+// max_http_header_bytes. Searches stop at those caps, and reaching a cap
+// with no terminator reports framing_limit_exceeded without inspecting
+// later bytes. Malformed framing within the permitted prefix still reports
 // invalid_framing.
 // Trailer sections of either role must also fit max_http_header_fields and the
 // http_field_section_budget byte rule (name.size() + value.size() + 4 per field,

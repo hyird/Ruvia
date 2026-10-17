@@ -62,28 +62,26 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(
             case progress::size_line: {
                 // Every LF must end a CRLF (RFC 9112 section 7.1), so a bare LF is
                 // rejected as soon as it arrives instead of waiting for a CRLF.
-                const auto line_feed = available.find('\n', cursor + size_line_search_offset_);
+                const auto line = available.substr(cursor, max_http_header_bytes);
+                const auto line_feed = line.find('\n', size_line_search_offset_);
                 if (line_feed == std::string_view::npos) {
-                    const auto line_bytes = available.size() - cursor;
+                    const auto line_bytes = line.size();
                     if (line_bytes >= max_http_header_bytes) {
                         return fail(cursor, http1_chunk_decode_error::framing_limit_exceeded);
                     }
                     size_line_search_offset_ = line_bytes;
                     return http1_chunk_decode_result::make_need_more(cursor);
                 }
-                if (line_feed == cursor || available[line_feed - 1] != '\r') {
+                if (line_feed == 0 || line[line_feed - 1] != '\r') {
                     return fail(cursor, http1_chunk_decode_error::invalid_framing);
-                }
-                if (line_feed - cursor + 1 > max_http_header_bytes) {
-                    return fail(cursor, http1_chunk_decode_error::framing_limit_exceeded);
                 }
                 size_line_search_offset_ = 0;
                 const auto line_end = line_feed - 1;
                 std::size_t chunk_size = 0;
-                if (!detail::parse_http_chunk_size_line(available.substr(cursor, line_end - cursor), chunk_size)) {
+                if (!detail::parse_http_chunk_size_line(line.substr(0, line_end), chunk_size)) {
                     return fail(cursor, http1_chunk_decode_error::invalid_framing);
                 }
-                cursor = line_end + 2;
+                cursor += line_end + 2;
                 if (chunk_size == 0) {
                     state_ = progress::trailers;
                     trailer_search_offset_ = 0;
@@ -124,7 +122,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(
                 }
                 break;
             case progress::trailers: {
-                const auto trailers = available.substr(cursor);
+                const auto trailers = available.substr(cursor, max_http_header_bytes);
                 if (trailers.starts_with("\r\n")) {
                     state_ = progress::complete;
                     return http1_chunk_decode_result::make_complete(cursor + 2);
@@ -150,7 +148,7 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(
                     return http1_chunk_decode_result::make_need_more(cursor);
                 }
                 const auto trailer_bytes = trailer_end + 4;
-                if (trailer_bytes > max_http_header_bytes || !trailers_valid(trailers.substr(0, trailer_end))) {
+                if (!trailers_valid(trailers.substr(0, trailer_end))) {
                     return fail(cursor, http1_chunk_decode_error::invalid_framing);
                 }
                 state_ = progress::complete;

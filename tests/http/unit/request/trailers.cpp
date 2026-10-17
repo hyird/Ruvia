@@ -127,39 +127,6 @@ RUVIA_TEST(request_trailers_enforce_normalized_section_limit_during_chunk_decodi
     }
 }
 
-RUVIA_TEST(chunk_trailer_encoded_limit_is_independent_of_input_fragmentation) {
-    for (const auto role : {ruvia::http1_chunk_trailer_role::request, ruvia::http1_chunk_trailer_role::response}) {
-        for (const std::size_t excess : {std::size_t{0}, std::size_t{1}, std::size_t{4}}) {
-            std::string wire = "0\r\nX:";
-            wire.append(ruvia::max_http_header_bytes - 7 + excess, ' ');
-            wire.append("x\r\n\r\n");
-            ruvia::http1_chunked_body_decoder full({.trailer_role_ = role});
-            const auto decoded = full.decode(wire);
-            ruvia::http1_chunked_body_decoder fragmented({.trailer_role_ = role});
-            const auto prefix = std::string_view(wire).substr(0, wire.size() - 1);
-            const auto partial = fragmented.decode(prefix);
-            if (excess == 0) {
-                RUVIA_CHECK(decoded.complete() != nullptr);
-                RUVIA_CHECK(partial.need_more() != nullptr);
-                const auto completed = fragmented.decode(std::string_view(wire).substr(partial.consumed_bytes()));
-                RUVIA_CHECK(completed.complete() != nullptr);
-                if (const auto* complete = completed.complete()) {
-                    RUVIA_CHECK_EQ(complete->trailers(), std::string_view(wire).substr(3, wire.size() - 7));
-                }
-            } else {
-                RUVIA_CHECK(decoded.failure() != nullptr);
-                if (const auto* failure = decoded.failure()) {
-                    RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
-                }
-                RUVIA_CHECK(partial.failure() != nullptr);
-                if (const auto* failure = partial.failure()) {
-                    RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::framing_limit_exceeded);
-                }
-            }
-        }
-    }
-}
-
 RUVIA_TEST(request_and_response_trailer_sections_share_one_byte_rule) {
     // Two fields named "X-A": each costs name + value + 4 normalized bytes, and
     // the section pays 2 for its terminating empty line.
