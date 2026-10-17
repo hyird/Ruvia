@@ -54,7 +54,8 @@ struct http_client_config final {
     std::size_t max_cookies_{256};
     std::size_t max_cookie_bytes_{std::size_t{32} * 1024};
     std::chrono::milliseconds connect_timeout_{5000};
-    // Bound of each transport write of the request head, content or an upload chunk.
+    // Bound of each transport write. An ordinary HTTP/1 request head and
+    // immediate content share one write; streamed upload chunks remain separate.
     std::optional<std::chrono::milliseconds> write_timeout_{30000};
     // Total deadline of one exchange, from slot acquisition through connect,
     // request transfer, response head and the complete body, including the

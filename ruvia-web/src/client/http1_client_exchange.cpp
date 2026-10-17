@@ -212,16 +212,20 @@ task<void> http1_client_exchange::run(
                 : "HTTP request head is too large");
     }
     http1_client_response_parser parser(prepared->exchange_state(), {.resource_ = response_resource});
-    co_await write(single_part(prepared->head()), timeout);
-    // The head is on the wire; the content plan borrows only request storage.
-    write_buffer.clear_retaining_small();
-    if (const auto* content = prepared->content_plan().immediate()) {
-        co_await write(single_part(content->bytes()), timeout);
-        if (!content->bytes().empty() &&
-            parser.complete_request_content() != http1_client_request_content_completion_status::completed) {
+    if (const auto* content = prepared->content_plan().immediate(); content && !content->bytes().empty()) {
+        // Keep the retained head alive through the composed scatter-gather write.
+        const std::array<asio::const_buffer, 2> parts{
+            asio::buffer(prepared->head().data(), prepared->head().size()),
+            asio::buffer(content->bytes().data(), content->bytes().size())};
+        co_await write(parts, timeout);
+        if (parser.complete_request_content() != http1_client_request_content_completion_status::completed) {
             std::terminate();
         }
+    } else {
+        // Streaming/continue-gated content must still send its head separately.
+        co_await write(single_part(prepared->head()), timeout);
     }
+    write_buffer.clear_retaining_small();
 
     if (upload == nullptr) {
         co_await receive(request, timeout, state_value, parser);
