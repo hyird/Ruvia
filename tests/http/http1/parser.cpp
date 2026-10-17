@@ -1451,6 +1451,10 @@ RUVIA_TEST(http1_parse_head_classifies_request_line_before_the_head_completes) {
         "GET / HTTP/1.1 extra\r\n", http1_server_request_parse_failure_source::request_line));
     RUVIA_CHECK(ruvia::should_drop_invalid_cleartext_http1_input(
         "SSH-2.0-OpenSSH_9.6\r\n", http1_server_request_parse_failure_source::request_line));
+    // A bare LF inside the request-line is invalid, but the HTTP/ version after
+    // it still identifies an HTTP peer.
+    RUVIA_CHECK(!ruvia::should_drop_invalid_cleartext_http1_input(
+        "GET /\nHTTP/1.1\r\nHost: x\r\n\r\n", http1_server_request_parse_failure_source::request_line));
 
     {
         http1_server_request_parse_state state;

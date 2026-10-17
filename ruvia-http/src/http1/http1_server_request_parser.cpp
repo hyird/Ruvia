@@ -282,10 +282,11 @@ bool should_drop_invalid_cleartext_http1_input(
 
     // Any whitespace-separated token naming an HTTP/ version shows the peer
     // speaks HTTP and earns a 400; a line without one (including a line with
-    // no separator at all, such as an SSH banner) is dropped silently.
+    // no separator at all, such as an SSH banner) is dropped silently. A bare
+    // LF is invalid in the line but still separates what the peer wrote.
     auto line = buffer.substr(0, line_end);
     while (!line.empty()) {
-        const auto token_end = line.find_first_of(" \t");
+        const auto token_end = line.find_first_of(" \t\n");
         if (line.substr(0, token_end).starts_with("HTTP/")) {
             return false;
         }
