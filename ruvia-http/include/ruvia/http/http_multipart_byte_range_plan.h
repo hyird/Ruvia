@@ -46,6 +46,8 @@ public:
         return state_ == nullptr ? std::string_view{} : std::string_view(state_->metadata_);
     }
     [[nodiscard]] std::string_view metadata() const&& = delete;
+    /// Ordered wire fragments, not multipart parts. Adjacent metadata may share a
+    /// descriptor; consumers must not assume a fixed segment count per range.
     [[nodiscard]] std::span<const segment> segments() const& noexcept {
         return state_ == nullptr ? std::span<const segment>{} : std::span<const segment>(state_->segments_);
     }

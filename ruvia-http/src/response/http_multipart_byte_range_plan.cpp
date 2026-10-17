@@ -38,7 +38,7 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     if (!boundary_is_token) {
         storage.content_type_.push_back('"');
     }
-    storage.segments_.reserve(ranges.size() * 3 + 1);
+    storage.segments_.reserve(ranges.size() * 2 + 1);
 
     const auto record_metadata = [&storage](std::size_t offset) {
         const auto length = storage.metadata_.size() - offset;
@@ -47,6 +47,14 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
             throw std::length_error("multipart response content length overflows uint64_t");
         }
         storage.content_length_ += length;
+        if (!storage.segments_.empty()) {
+            auto& previous = storage.segments_.back();
+            if (previous.kind_ == http_multipart_byte_range_plan::segment_kind::metadata &&
+                previous.metadata_offset_ + previous.metadata_length_ == offset) {
+                previous.metadata_length_ = storage.metadata_.size() - previous.metadata_offset_;
+                return;
+            }
+        }
         storage.segments_.push_back({http_multipart_byte_range_plan::segment_kind::metadata,
             offset, length, 0, 0});
     };

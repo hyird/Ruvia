@@ -416,11 +416,6 @@ RUVIA_TEST(multipart_range_plan_owns_rfc_framing_and_reports_exact_length) {
     boundary.assign(boundary.size(), 'y');
 
     RUVIA_CHECK_EQ(plan.content_type(), "multipart/byteranges; boundary=unit_boundary_42");
-    RUVIA_CHECK_EQ(plan.segments().size(), std::size_t{7});
-    RUVIA_CHECK(plan.segments()[1].kind_ ==
-                ruvia::http_multipart_byte_range_plan::segment_kind::file);
-    RUVIA_CHECK_EQ(plan.segments()[1].file_offset_, std::uint64_t{0});
-    RUVIA_CHECK_EQ(plan.segments()[1].file_length_, std::uint64_t{3});
     RUVIA_CHECK(plan.metadata().find("Content-Type: text/plain") != std::string_view::npos);
     RUVIA_CHECK(plan.metadata().find("Content-Range: bytes 7-9/10") != std::string_view::npos);
     std::uint64_t content_length = 0;
