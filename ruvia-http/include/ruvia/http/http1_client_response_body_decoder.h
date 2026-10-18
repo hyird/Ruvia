@@ -153,6 +153,8 @@ public:
         value_type value_;
     };
 
+    // Transfer coding is present only in chunked or close-delimited plans.
+    // Fixed-length plans forward wire content without a transfer-decoding stage.
     http1_client_response_body_decoder(http1_client_response_plan plan,
         std::pmr::memory_resource* resource);
     ~http1_client_response_body_decoder() = default;

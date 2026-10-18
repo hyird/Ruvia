@@ -118,40 +118,15 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
 
 http1_client_response_body_decoder::result_type http1_client_response_body_decoder::step_fixed(
     std::string_view available, std::span<char> scratch, bool eof) {
-    if (!transfer_) {
-        if (remaining_ == 0) {
-            return complete(0);
-        }
-        if (available.empty()) {
-            return need_input_or_incomplete(0, eof);
-        }
-        const auto output_length = std::min({remaining_, available.size(), scratch.size()});
-        remaining_ -= output_length;
-        return emit(output_length, available.substr(0, output_length));
+    if (remaining_ == 0) {
+        return complete(0);
     }
-    std::size_t consumed = 0;
-    for (;;) {
-        if (remaining_ == 0) {
-            return finish_transfer(consumed, scratch);
-        }
-        const auto rest = available.substr(consumed);
-        if (rest.empty()) {
-            return need_input_or_incomplete(consumed, eof);
-        }
-        const auto driven = drive_transfer(rest.substr(0, std::min(remaining_, rest.size())), consumed, scratch);
-        const auto input_consumed = driven.consumed_bytes() - consumed;
-        remaining_ -= input_consumed;
-        if (driven.need_input() == nullptr) {
-            return driven;
-        }
-        consumed += input_consumed;
-        if (remaining_ == 0) {
-            return finish_transfer(consumed, scratch);
-        }
-        if (input_consumed == 0 || consumed == available.size()) {
-            return need_input_or_incomplete(consumed, eof);
-        }
+    if (available.empty()) {
+        return need_input_or_incomplete(0, eof);
     }
+    const auto output_length = std::min({remaining_, available.size(), scratch.size()});
+    remaining_ -= output_length;
+    return emit(output_length, available.substr(0, output_length));
 }
 
 http1_client_response_body_decoder::result_type http1_client_response_body_decoder::step_close_delimited(
