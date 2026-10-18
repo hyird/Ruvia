@@ -98,7 +98,7 @@ public:
         }
 
         const auto field_bytes = name.size() + value.size();
-        if (!using_overflow_storage_ && field_bytes > inline_header_storage_bytes - storage_size_) {
+        if (using_overflow_storage_ || field_bytes > inline_header_storage_bytes - storage_size_) {
             ensure_overflow_storage(field_bytes);
         }
 
@@ -165,10 +165,10 @@ private:
     }
 
     void ensure_overflow_storage(std::size_t additional_bytes) {
+        overflow_storage_.reserve(storage_size_ + additional_bytes);
         if (using_overflow_storage_) {
             return;
         }
-        overflow_storage_.reserve(storage_size_ + additional_bytes);
         overflow_storage_.append(inline_storage_.data(), storage_size_);
         using_overflow_storage_ = true;
     }

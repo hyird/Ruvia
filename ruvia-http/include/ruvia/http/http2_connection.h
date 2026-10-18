@@ -82,6 +82,7 @@ struct http2_extended_connect_request_head_view final {
 // string temporaries are rejected at compile time.
 // Event, deferred-DATA and drain-notification queue capacities grow geometrically
 // and are retained for reuse; their storage uses the connection's PMR resource.
+// Receive-field text growth reserves the whole name/value pair before copying.
 // A fatal connection error rejects new stream output. Request leases and DATA
 // credits remain releasable without generating more frames. Graceful local or
 // peer GOAWAY still permits output on established streams that remain open.
