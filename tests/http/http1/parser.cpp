@@ -979,13 +979,6 @@ RUVIA_TEST(http1_parse_options_content_type_presence_is_sender_obligation) {
         std::size_t{1});
     RUVIA_CHECK_EQ(missing_for_nonempty_content.body_.size(), std::size_t{1});
 
-    const auto invalid = parse_http1_request_message(
-        "OPTIONS /diagnostics HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Content-Type: not a media type\r\n"
-        "Content-Length: 0\r\n\r\n");
-    RUVIA_CHECK(is_failure(invalid.state_, http_parse_error::invalid_header));
-
     const auto valid = parse_http1_request_message(
         "OPTIONS /diagnostics HTTP/1.1\r\n"
         "Host: example.com\r\n"
@@ -1013,13 +1006,29 @@ RUVIA_TEST(http1_parse_options_content_type_presence_is_sender_obligation) {
     RUVIA_CHECK(extension_method.complete());
 }
 
-RUVIA_TEST(http1_parse_rejects_invalid_content_type_syntax) {
-    const auto result_value = parse_http1_request_message(
-        "POST /items HTTP/1.1\r\n"
-        "Host: example.com\r\n"
-        "Content-Type: not a media type\r\n"
-        "Content-Length: 0\r\n\r\n");
-    RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::invalid_header));
+RUVIA_TEST(http1_parse_opaque_content_type_preserves_body_and_pipeline_boundaries) {
+    for (const std::string_view value : {"", "not a media type", "text/plain; charset=\"unfinished"}) {
+        for (const bool chunked : {false, true}) {
+            std::string wire = "POST /items HTTP/1.1\r\nHost: example.com\r\nContent-Type: ";
+            wire.append(value);
+            wire.append("\r\nX-After: kept\r\n");
+            wire.append(chunked ? "Transfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\nNEXT"
+                                : "Content-Length: 3\r\n\r\nabcNEXT");
+            const auto parsed = parse_http1_request_message(wire);
+            RUVIA_CHECK(parsed.complete());
+            if (!parsed.complete()) {
+                continue;
+            }
+            const auto content_type = parsed.state_.request_.header("Content-Type");
+            RUVIA_CHECK(content_type.has_value());
+            if (content_type) {
+                RUVIA_CHECK_EQ(*content_type, value);
+            }
+            RUVIA_CHECK(parsed.state_.request_.header("X-After") == std::string_view("kept"));
+            RUVIA_CHECK_EQ(parsed.body_, "abc");
+            RUVIA_CHECK_EQ(std::string_view(wire).substr(*parsed.message_bytes_), "NEXT");
+        }
+    }
 }
 
 RUVIA_TEST(http1_parse_rejects_invalid_content_encoding_syntax) {

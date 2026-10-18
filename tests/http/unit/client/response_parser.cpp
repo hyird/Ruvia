@@ -240,16 +240,7 @@ RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
             .empty());
 }
 
-RUVIA_TEST(http_client_validates_content_type_syntax_without_sender_singleton_policy) {
-    const auto invalid = parse_result("GET",
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: not a media type\r\n"
-        "Content-Length: 0");
-    RUVIA_CHECK(invalid.failure() != nullptr);
-    if (invalid.failure() != nullptr) {
-        RUVIA_CHECK(invalid.failure()->error() == http1_client_response_parse_error::invalid_header);
-    }
-
+RUVIA_TEST(http_client_preserves_repeated_content_type_without_selecting_media_type) {
     const auto repeated = parse_head("GET",
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: text/plain\r\n"
@@ -267,6 +258,27 @@ RUVIA_TEST(http_client_validates_content_type_syntax_without_sender_singleton_po
     RUVIA_CHECK_EQ(valid.head_.headers().size(), std::size_t{2});
     RUVIA_CHECK_EQ(
         valid.head_.headers().front().value(), std::string_view("application/json; charset=utf-8"));
+}
+
+RUVIA_TEST(http_client_opaque_content_type_owns_metadata_without_changing_body_boundary) {
+    for (const std::string_view value : {"", "not a media type", "text/plain; charset=\"unfinished"}) {
+        std::string wire = "HTTP/1.1 200 OK\r\nContent-Type: ";
+        wire.append(value);
+        wire.append("\r\nContent-Length: 3\r\n\r\nabcNEXT");
+        const auto result = parse_wire("GET", wire);
+        const auto* parsed = result.parsed();
+        RUVIA_CHECK(parsed != nullptr);
+        if (parsed == nullptr) {
+            continue;
+        }
+        RUVIA_CHECK_EQ(parsed->head().headers().front().value(), value);
+        const auto length = require_known_length(parsed->plan()).content_length();
+        RUVIA_CHECK_EQ(length, std::size_t{3});
+        RUVIA_CHECK_EQ(std::string_view(wire).substr(parsed->consumed_bytes(), length), "abc");
+        RUVIA_CHECK_EQ(std::string_view(wire).substr(parsed->consumed_bytes() + length), "NEXT");
+        wire.assign(wire.size(), 'x');
+        RUVIA_CHECK_EQ(parsed->head().headers().front().value(), value);
+    }
 }
 
 RUVIA_TEST(http_client_rejects_invalid_trailer_field_names_in_response_head) {

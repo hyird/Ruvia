@@ -120,7 +120,9 @@ namespace {
         case request_header_kind::access_control_request_headers:
             return is_valid_http_cors_request_header_names(value);
         case request_header_kind::content_type:
-            return is_valid_http_content_type_field_value(value);
+            // Recipients interpret media types at the application boundary.
+            return role == http_field_list_role::recipient ||
+                   is_valid_http_content_type_field_value(value);
         case request_header_kind::content_encoding:
             return is_valid_http_content_encoding_field_value(value, role);
         case request_header_kind::trailer:

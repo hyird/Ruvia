@@ -107,6 +107,8 @@ public:
     // exposed through method()/scheme()/authority()/target(), split Cookie
     // fields are coalesced, and Host is synthesized from a valid :authority
     // when absent. Repeated regular fields retain wire order.
+    // Content-Type is retained as metadata without parsing media-type syntax;
+    // interpreting or rejecting that media type belongs to the application.
     [[nodiscard]] std::span<const http_header_view> headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return headers_.fields();
     }

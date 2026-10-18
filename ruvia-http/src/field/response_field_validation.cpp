@@ -11,10 +11,10 @@ response_field_status validate_response_field(request_header_kind kind, std::str
     http_field_list_role role, response_field_state& state) noexcept {
     switch (kind) {
         case request_header_kind::content_type:
-            if (!is_valid_http_content_type_field_value(value)) {
-                return response_field_status::invalid;
-            }
             if (role == http_field_list_role::sender) {
+                if (!is_valid_http_content_type_field_value(value)) {
+                    return response_field_status::invalid;
+                }
                 if (state.content_type_seen_) {
                     return response_field_status::repeated_singleton;
                 }

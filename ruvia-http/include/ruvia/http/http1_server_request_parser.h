@@ -134,7 +134,8 @@ public:
     // around ';' is allowed, but whitespace around '=' is invalid.
     // Auxiliary Upgrade and Trailer fields do not establish message framing.
     // OPTIONS Content-Type presence is a sender obligation (RFC 9110 9.3.7),
-    // not a recipient rejection rule; supplied field values remain validated.
+    // not a recipient rejection rule. Content-Type retains its normalized field
+    // value without interpreting media-type syntax; applications own that decision.
     // TRACE and CONNECT accept Content-Length: 0, but reject nonzero or
     // unknown-length content. Framing still follows RFC 9112 section 6.3.
     // Recipient Transfer-Encoding lists ignore empty members but still require

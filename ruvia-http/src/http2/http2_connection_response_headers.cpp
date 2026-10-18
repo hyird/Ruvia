@@ -78,8 +78,7 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
     }
     context_value->saw_regular_ = true;
     if (context_value->status_->is_informational()) {
-        // Interim fields are validated but not stored. The shared incremental
-        // validator keeps receive acceptance identical to both response writers.
+        // Validate interim fields as a recipient before taking owned snapshots.
         if (context_value->interim_headers_.validate(name, value) !=
             http_interim_response_header_validation_status::ok) {
             return false;
