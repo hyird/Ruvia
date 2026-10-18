@@ -27,9 +27,11 @@ public:
         : heap_(allocator) {}
 
     void reset() noexcept;
+    // value may alias storage, including a written range returned by stack_cursor().
     void append(std::string_view value);
     void append(char value);
     void append_unsigned(std::uint64_t value);
+    // Reserve beyond the current size without spilling a fitting inline range.
     void reserve_additional(std::size_t size);
     [[nodiscard]] std::string_view view() const& noexcept;
     [[nodiscard]] std::string_view view() const&& = delete;

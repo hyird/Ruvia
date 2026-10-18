@@ -29,7 +29,7 @@ void http_response_head_buffer::append(std::string_view value) {
     }
     if (auto* const stack_state = std::get_if<stack_state_type>(&state_)) {
         if (value.size() <= stack_.size() - stack_state->used_) {
-            std::memcpy(stack_.data() + stack_state->used_, value.data(), value.size());
+            std::memmove(stack_.data() + stack_state->used_, value.data(), value.size());
             stack_state->used_ += value.size();
             return;
         }
@@ -66,6 +66,9 @@ void http_response_head_buffer::reserve_additional(std::size_t size) {
         return;
     }
     const auto used = std::get<stack_state_type>(state_).used_;
+    if (size <= stack_.size() - used) {
+        return;
+    }
     if (size > heap_.max_size() - used) {
         throw std::length_error("HTTP response head is too large");
     }

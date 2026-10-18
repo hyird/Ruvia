@@ -1,8 +1,10 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <memory_resource>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -107,6 +109,61 @@ bool throws_length(fn_type&& fn) {
 }
 
 }  // namespace
+
+RUVIA_TEST(http1_response_head_reserve_preserves_inline_capacity_and_failed_growth) {
+    for (const std::size_t used : {std::size_t{0}, std::size_t{1}, ruvia::response_head_stack_bytes - 1, ruvia::response_head_stack_bytes}) {
+        // Leave room for implementation-owned STL proxies, but not a spilled head.
+        std::array<std::byte, 256> allocation_storage{};
+        std::pmr::monotonic_buffer_resource resource(allocation_storage.data(), allocation_storage.size(), std::pmr::null_memory_resource());
+        ruvia::http_response_head_buffer buffer(&resource);
+        const std::string prefix(used, 'p');
+        buffer.append(prefix);
+        const auto remaining = ruvia::response_head_stack_bytes - used;
+        buffer.reserve_additional(0);
+        buffer.reserve_additional(remaining);
+        RUVIA_CHECK_EQ(buffer.view(), std::string_view(prefix));
+
+        bool rejected = false;
+        try {
+            buffer.reserve_additional(remaining + 1);
+        } catch (const std::bad_alloc&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK_EQ(buffer.view(), std::string_view(prefix));
+        const std::string suffix(remaining, 's');
+        buffer.append(suffix);
+        const std::string expected = prefix + suffix;
+        RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+        buffer.reset();
+        buffer.append("reusable");
+        RUVIA_CHECK_EQ(buffer.view(), std::string_view("reusable"));
+    }
+}
+
+RUVIA_TEST(http1_response_head_append_accepts_overlapping_written_inline_ranges) {
+    for (const auto back : {std::size_t{0}, std::size_t{1}, ruvia::response_head_stack_bytes / 8, ruvia::response_head_stack_bytes / 4}) {
+        ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
+        const auto size = ruvia::response_head_stack_bytes / 4;
+        std::string prefix(size, 'a');
+        std::string generated(size, 'A');
+        for (std::size_t index = 0; index < size; ++index) {
+            prefix[index] = static_cast<char>('a' + index % 26);
+            generated[index] = static_cast<char>('A' + index % 26);
+        }
+        buffer.append(prefix);
+        auto* const cursor = buffer.stack_cursor(size);
+        RUVIA_CHECK(cursor != nullptr);
+        if (cursor == nullptr) {
+            continue;
+        }
+        std::memcpy(cursor, generated.data(), size);
+        const std::string_view source(cursor - back, size);
+        const std::string expected = prefix + std::string(source);
+        buffer.append(source);
+        RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+    }
+}
 
 RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
     using ruvia::plan_buffered_http_response_write;
