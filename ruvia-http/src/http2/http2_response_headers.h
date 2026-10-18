@@ -89,6 +89,8 @@ inline constexpr std::size_t http2_lower_header_stack_bytes = 64;
     }
 }
 
+// Stack-backed results expose only fully written prefixes; an already-lowercase
+// name continues to borrow the input, so unused scratch bytes are never read.
 [[nodiscard]] inline std::string_view http2_lower_header_name(std::string_view name,
     std::array<char, http2_lower_header_stack_bytes>& stack, std::pmr::string& scratch) {
     const auto write_lower = [](std::string_view source_value, char* target) noexcept {
@@ -166,7 +168,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     try {
         header_block.clear();
         hpack_encoder::encode_status(header_block, response.status());
-        std::array<char, http2_lower_header_stack_bytes> lower_name_stack{};
+        std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
         std::pmr::string lower_name_scratch(header_block.get_allocator());
         for (const auto& header : response.headers()) {
             append_http2_encoded_response_header(header_block, header.name(), header.value(),
@@ -218,7 +220,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
             }
         }
     }
-    std::array<char, 20> content_length_bytes{};
+    std::array<char, 20> content_length_bytes;
     std::string_view content_length_value;
     if (const auto content_length = plan.content_length()) {
         const auto [end, error] = std::to_chars(content_length_bytes.data(),
@@ -239,7 +241,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     try {
         header_block.clear();
         hpack_encoder::encode_status(header_block, plan.body_plan().response_status());
-        std::array<char, http2_lower_header_stack_bytes> lower_name_stack{};
+        std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
         std::pmr::string lower_name_scratch(header_block.get_allocator());
         for (const auto& header : response.headers()) {
             const auto known_bit = http_response_header_access::known_bit(header);
@@ -275,7 +277,7 @@ inline void append_http2_response_trailers(
     if (section.empty()) {
         return;
     }
-    std::array<char, http2_lower_header_stack_bytes> lower_name_stack{};
+    std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
     std::pmr::string lower_name_scratch(trailer_block.get_allocator());
     for (const auto& trailer : section.fields()) {
         hpack_encoder::encode_header(trailer_block,
