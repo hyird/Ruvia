@@ -8,7 +8,6 @@
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
@@ -37,8 +36,6 @@ public:
                 return http_protocol_error(http_status::bad_request, "missing HTTP/2 :method");
             case kind_type::missing_target:
                 return http_protocol_error(http_status::bad_request, "missing HTTP/2 request target");
-            case kind_type::invalid_target:
-                return http_protocol_error(http_status::bad_request, "invalid HTTP/2 request target");
             case kind_type::too_many_headers:
                 return http_protocol_error(
                     http_status::request_header_fields_too_large, "too many HTTP/2 request headers");
@@ -53,7 +50,6 @@ private:
     enum class kind_type : std::uint8_t {
         missing_method,
         missing_target,
-        invalid_target,
         too_many_headers
     };
 
@@ -66,6 +62,8 @@ private:
 // Building the runtime-facing http_request either completes the whole borrowed
 // message view or returns one HTTP-owned protocol failure. The private failure
 // kind prevents runtimes from reconstructing status/message mappings.
+// Heads come from validated HTTP/2 admission or local push submission. Their
+// stored targets need splitting, not another URI syntax or method check.
 class http2_request_build_result final {
 public:
     [[nodiscard]] constexpr const http2_request_built* built() const& noexcept {
@@ -126,41 +124,12 @@ public:
         const auto* pending = stream.tunnel().pending();
         const bool standard_connect =
             pending != nullptr && pending->form() == http2_connect_form::standard;
-        const bool extended_connect =
-            pending != nullptr && pending->form() == http2_connect_form::extended;
         const auto target = request_target(stream);
         if (target.empty() && (standard_connect || !stream.has_path())) {
             return http2_request_build_result::make_failure(
                 http2_request_build_failure::kind_type::missing_target);
         }
-        request_target_parts_type target_parts;
-        if (standard_connect) {
-            target_parts = split_request_target(target);
-        } else if (target.empty()) {
-            const bool valid_empty_target =
-                stream.has_scheme() &&
-                (extended_connect ? http2_is_valid_extended_connect_path(stream.request_scheme(), target)
-                                  : http2_is_valid_regular_request_path(stream.request_known_method(),
-                                        stream.request_scheme(), target));
-            if (!valid_empty_target) {
-                return http2_request_build_result::make_failure(
-                    http2_request_build_failure::kind_type::invalid_target);
-            }
-            target_parts = request_target_parts_type{};
-        } else {
-            request_target_view target_view;
-            // Extended CONNECT retains normal :scheme/:path target components.
-            // Parse its target using the origin-form grammar without changing the
-            // wire method stored on http_request.
-            const auto target_method =
-                extended_connect ? http_known_method::get : stream.request_known_method();
-            if (!parse_request_target(target_method, target, target_view)) {
-                return http2_request_build_result::make_failure(
-                    http2_request_build_failure::kind_type::invalid_target);
-            }
-            target_parts =
-                request_target_parts_type{.path_ = target_view.path_, .query_string_ = target_view.query_};
-        }
+        const auto target_parts = split_request_target(target);
 
         http_request_access::set_method(request, method);
         http_request_access::set_protocol_version(request, http_protocol_version::http2);
