@@ -579,15 +579,14 @@ public:
 // Header callbacks write into stream-owned PMR storage and typed protocol state. A
 // callback is allowed to throw (most commonly from a request-header allocation), so
 // the complete field block needs the same strong exception guarantee as HPACK's
-// connection-global dynamic table. The transaction swaps out the prior request data
-// without allocating, snapshots the scalar protocol state, and restores both on
-// destruction unless the decoder explicitly commits the block.
+// connection-global dynamic table. Isolated request decoding swaps out prior data
+// without allocating; response/trailer decoding keeps only a header checkpoint.
+// Both snapshot scalar protocol state and restore it unless explicitly committed.
 class http2_stream_header_decode_transaction final {
 public:
     explicit http2_stream_header_decode_transaction(
         http2_stream_state& stream, bool isolate_request_data = true) noexcept
         : stream_(&stream),
-          message_data_(stream.message_data_.resource()),
           remote_content_(stream.remote_content_),
           local_content_(stream.local_content_),
           lifecycle_(stream.lifecycle_),
@@ -595,10 +594,10 @@ public:
           request_state_(stream.request_state_),
           tunnel_state_(stream.tunnel_state_),
           local_request_content_gate_(stream.local_request_content_gate_),
-          isolate_request_data_(isolate_request_data),
           remote_headers_checkpoint_(stream.message_data_.header_checkpoint()) {
-        if (isolate_request_data_) {
-            message_data_.swap(stream.message_data_);
+        if (isolate_request_data) {
+            message_data_.emplace(stream.message_data_.resource());
+            message_data_->swap(stream.message_data_);
         }
     }
 
@@ -620,8 +619,8 @@ public:
         if (!active_) {
             return;
         }
-        if (isolate_request_data_) {
-            stream_->message_data_.swap(message_data_);
+        if (message_data_) {
+            stream_->message_data_.swap(*message_data_);
         } else {
             stream_->message_data_.rollback_headers(remote_headers_checkpoint_);
         }
@@ -637,7 +636,7 @@ public:
 
 private:
     http2_stream_state* stream_;
-    http2_stream_request_data message_data_;
+    std::optional<http2_stream_request_data> message_data_;
     http2_remote_content_state remote_content_;
     http2_local_content_state local_content_;
     http2_stream_lifecycle lifecycle_;
@@ -645,7 +644,6 @@ private:
     http2_stream_request_state request_state_;
     http2_tunnel_state tunnel_state_;
     http2_local_request_content_gate local_request_content_gate_;
-    bool isolate_request_data_;
     http2_stream_request_data::header_checkpoint_type remote_headers_checkpoint_;
     bool active_{true};
 };
