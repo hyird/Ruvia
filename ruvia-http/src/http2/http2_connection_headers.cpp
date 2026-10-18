@@ -76,10 +76,10 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
     if (role_ == http2_role::server && stream.request_known_method() != http_known_method::connect) {
         const auto content_semantics = http_request_content_semantics(stream.request_method());
         if (content_semantics == http_request_content_semantics::forbidden) {
-            // A declared length is an explicit content signal, including zero.
-            // Without a length, retain the open remote half for a legal empty
-            // DATA(END_STREAM), but make non-empty DATA unrepresentable as content.
-            if (stream.remote_content().allowed_known_length() != nullptr ||
+            // Zero-length framing carries no content. Keep the remote half open
+            // for an empty DATA(END_STREAM), but forbid every non-empty DATA.
+            const auto* declared = stream.remote_content().allowed_known_length();
+            if ((declared != nullptr && declared->declared_length() != 0) ||
                 !stream.select_remote_content_metadata_only()) {
                 return header_decode_status::protocol_error;
             }

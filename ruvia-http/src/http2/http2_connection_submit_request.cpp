@@ -61,7 +61,7 @@ namespace {
 
 [[nodiscard]] bool http2_is_valid_outbound_regular_request_head(std::string_view method,
     std::string_view scheme, std::optional<std::string_view> authority, std::string_view path,
-    std::span<const http_header_view> headers, bool explicit_content,
+    std::span<const http_header_view> headers,
     http_request_content_indication content_indication, std::string_view content_length_value,
     http_client_request_expectation expectation) noexcept {
     if (!http2_is_valid_outbound_method(method) || !is_valid_uri_scheme(scheme) ||
@@ -99,7 +99,7 @@ namespace {
     if (!content_length_value.empty() && !section_size.add("content-length", content_length_value)) {
         return false;
     }
-    if (!explicit_content) {
+    if (content_indication == http_request_content_indication::no_content) {
         return true;
     }
     const auto content_semantics = http_request_content_semantics(method);
@@ -152,8 +152,7 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
         return http2_request_head_submit_result::make_failure(
             http2_request_head_submit_error::invalid_message);
     }
-    const bool content_will_follow =
-        streaming_content || (known_length_content != nullptr && known_length_content->length() != 0);
+    const bool content_will_follow = !without_content && (!expected_length || *expected_length != 0);
     const auto content_indication = content_will_follow ? http_request_content_indication::will_follow
                                                         : http_request_content_indication::no_content;
     http2_end_stream end_stream = http2_end_stream::keep_open;
@@ -165,7 +164,8 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
         end_stream = known_length_content->length() == 0 ? http2_end_stream::end_stream
                                                          : http2_end_stream::keep_open;
     }
-    if (expected_length) {
+    const bool emit_length = expected_length && method != "TRACE";
+    if (emit_length) {
         // 20 bytes always hold the canonical decimal form of uint64_t. Do this
         // before mutating stream/HPACK state so every rejection is transactional.
         if (const auto [end, ec] = std::to_chars(length_buffer.data(),
@@ -182,7 +182,7 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
     // Validate the entire semantic head and decoded-size budget before touching
     // HPACK storage, outbound bytes, stream metadata, or lifecycle state.
     if (!http2_is_valid_outbound_regular_request_head(method, scheme, authority, path, headers,
-            !without_content, content_indication, content_length_value, expectation)) {
+            content_indication, content_length_value, expectation)) {
         return http2_request_head_submit_result::make_failure(
             http2_request_head_submit_error::invalid_message);
     }
@@ -202,9 +202,9 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
         if (expectation == http_client_request_expectation::continue_value) {
             hpack_encoder::encode_header(block, "expect", http_continue_expectation_token);
         }
-        if (expected_length) {
+        if (emit_length) {
             hpack_encoder::encode_header_with_name_index(block, hpack_static_index::content_length,
-                std::string_view(length_buffer.data(), length_bytes));
+                content_length_value);
         }
         // This is the commit point for the wire representation. Every operation
         // above is retryable; append_response_header_frames pre-reserves the complete
@@ -329,7 +329,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     }
     if ((request.method_ != "GET" && request.method_ != "HEAD") ||
         !http2_is_valid_outbound_regular_request_head(request.method_, request.scheme_, request.authority_, request.path_,
-            request.headers_, false, http_request_content_indication::no_content, {}, http_client_request_expectation::none)) {
+            request.headers_, http_request_content_indication::no_content, {}, http_client_request_expectation::none)) {
         return error_type::invalid_request;
     }
     std::pmr::string block(resource_);

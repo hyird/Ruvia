@@ -47,9 +47,13 @@ public:
     [[nodiscard]] static constexpr http2_request_content none() noexcept {
         return http2_request_content(http2_request_without_content());
     }
+    // Zero describes no content: it does not require OPTIONS Content-Type and
+    // cannot use Expect: 100-continue. TRACE omits the zero Content-Length.
     [[nodiscard]] static constexpr http2_request_content known_length(std::uint64_t length) noexcept {
         return http2_request_content(http2_known_length_request_content(length));
     }
+    // A known zero keeps the send half open until finish_request() or an empty
+    // END_STREAM; it cannot send content or wait for 100 Continue.
     [[nodiscard]] static constexpr http2_request_content streaming(std::optional<std::uint64_t> length = {}) noexcept {
         return http2_request_content(http2_streaming_request_content(length));
     }

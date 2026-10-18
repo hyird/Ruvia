@@ -101,6 +101,7 @@ struct http2_extended_connect_request_head_view final {
 // Response TE remains malformed even when empty.
 // An incoming OPTIONS body does not require Content-Type at admission; RFC 9110
 // section 9.3.7 places that media-description requirement on senders.
+// TRACE accepts zero Content-Length and empty DATA endings but rejects content.
 class http2_connection final {
 public:
     [[nodiscard]] static http2_connection server(http2_connection_options options = {});

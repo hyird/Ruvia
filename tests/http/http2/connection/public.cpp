@@ -3139,6 +3139,80 @@ RUVIA_TEST(http2_public_received_te_accepts_empty_lists_without_dropping_fields)
     }
 }
 
+RUVIA_TEST(http2_public_trace_zero_length_accepts_header_or_empty_data_endings) {
+    for (const bool head_end : {false, true}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        auto wire = server_request_wire(&resource, {}, "TRACE", {}, head_end);
+        if (!head_end) {
+            append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, {});
+        }
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto head = server.next_event();
+        auto* request = head ? head->request_head() : nullptr;
+        RUVIA_CHECK(request != nullptr);
+        if (!request) {
+            continue;
+        }
+        RUVIA_CHECK_EQ(request->request().method(), "TRACE");
+        RUVIA_CHECK_EQ(request->request().header("Content-Length").value_or(""), "0");
+        const auto end = server.next_event();
+        RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == 1);
+        RUVIA_CHECK(!server.next_event());
+        ruvia::http_response reply({.resource_ = &resource});
+        RUVIA_CHECK(server.submit_buffered_response(1, reply) == ruvia::http2_submit_status::accepted);
+        RUVIA_CHECK(server.release(std::move(*request)) == ruvia::http2_server_request_release_status::released);
+    }
+}
+
+RUVIA_TEST(http2_public_known_empty_requests_never_wait_for_continue_or_send_content) {
+    for (const std::string_view method : {"GET", "OPTIONS", "TRACE"}) {
+        for (const bool streaming : {false, true}) {
+            std::pmr::unsynchronized_pool_resource resource;
+            auto client = ruvia::http2_connection::client({.resource_ = &resource});
+            std::pmr::string wire(client.pending_output(), &resource);
+            (void)client.consume_output(client.pending_output().size());
+            ruvia::http2_regular_request_head_view head{
+                .method_ = method, .authority_ = "example.test", .content_ = streaming ? ruvia::http2_request_content::streaming(0) : ruvia::http2_request_content::known_length(0), .expectation_ = ruvia::http_client_request_expectation::continue_value};
+            const auto rejected = client.submit_request_head(head);
+            RUVIA_CHECK(rejected.failure() && rejected.failure()->error() == ruvia::http2_request_head_submit_error::invalid_message);
+            RUVIA_CHECK(client.pending_output().empty());
+            head.expectation_ = ruvia::http_client_request_expectation::none;
+            const auto submitted = client.submit_request_head(head);
+            RUVIA_CHECK(submitted.submitted() && submitted.submitted()->stream_id() == 1);
+            if (!submitted.submitted()) {
+                continue;
+            }
+            const std::string before(client.pending_output());
+            RUVIA_CHECK(client.submit_data(1, "x", ruvia::http2_end_stream::keep_open) != ruvia::http2_data_submit_status::accepted);
+            RUVIA_CHECK(client.pending_output() == before);
+            if (streaming) {
+                RUVIA_CHECK(client.submit_data(1, {}, ruvia::http2_end_stream::end_stream) == ruvia::http2_data_submit_status::accepted);
+            }
+            wire.append(client.pending_output());
+            auto server = ruvia::http2_connection::server({.resource_ = &resource});
+            RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+            auto request_event = server.next_event();
+            auto* request = request_event ? request_event->request_head() : nullptr;
+            RUVIA_CHECK(request != nullptr);
+            if (!request) {
+                continue;
+            }
+            RUVIA_CHECK_EQ(request->request().method(), method);
+            RUVIA_CHECK(!request->request().header("Content-Type"));
+            RUVIA_CHECK(!request->request().header("Expect"));
+            RUVIA_CHECK(request->request().header("Content-Length") ==
+                        (method == "TRACE" ? std::nullopt : std::optional<std::string_view>{"0"}));
+            const auto end = server.next_event();
+            RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == 1);
+            RUVIA_CHECK(!server.next_event());
+            ruvia::http_response reply({.resource_ = &resource});
+            RUVIA_CHECK(server.submit_buffered_response(1, reply) == ruvia::http2_submit_status::accepted);
+            RUVIA_CHECK(server.release(std::move(*request)) == ruvia::http2_server_request_release_status::released);
+        }
+    }
+}
+
 RUVIA_TEST(http2_public_options_without_content_type_preserves_body_and_following_stream) {
     for (const std::string_view body : {"", "abc"}) {
         for (const bool declared_length : {false, true}) {
