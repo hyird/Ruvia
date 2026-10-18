@@ -586,3 +586,78 @@ RUVIA_TEST(hpack_public_fifo_churn_preserves_rollback_and_size_changes) {
     }
     RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
 }
+
+RUVIA_TEST(hpack_public_single_block_churn_preserves_indexed_names_and_rollback) {
+    for (const std::size_t table_limit : {97U, 512U}) {
+        for (unsigned mode = 0; mode != 4; ++mode) {
+            ruvia::testing::poisoned_retirement_resource resource;
+            {
+                ruvia::hpack_decoder decoder({.resource_ = &resource});
+                decoder.set_max_dynamic_table_size(table_limit);
+                const std::string seed(64, 's');
+                const auto value_at = [](unsigned index) {
+                    auto value = std::to_string(index);
+                    value.append(64 - value.size(), static_cast<char>('a' + index % 26));
+                    return value;
+                };
+                const auto literal = [](std::pmr::string& block, std::string_view value) {
+                    const auto begin = block.size();
+                    ruvia::hpack_encoder::encode_header(block, "x", value);
+                    block[begin] = static_cast<char>(0x40);
+                };
+                std::pmr::string initial;
+                literal(initial, seed);
+                RUVIA_CHECK(decoder.decode(initial, [](auto, auto) { return true; }).decoded());
+                std::pmr::string block;
+                for (unsigned index = 0; index != 128; ++index) {
+                    if (mode == 1 && index == 64) {
+                        literal(block, std::string(table_limit + 1, 'o'));
+                        literal(block, value_at(index));
+                    } else {
+                        // Incremental indexing with the newest dynamic name (62).
+                        block.push_back(static_cast<char>(0x7e));
+                        block.push_back(static_cast<char>(64));
+                        block.append(value_at(index));
+                    }
+                }
+                block.push_back(static_cast<char>(0x82));
+                if (mode == 3) {
+                    block.push_back(static_cast<char>(0x80));
+                }
+                unsigned seen = 0;
+                const auto result = decoder.decode(block, [&](std::string_view name, std::string_view value) {
+                    if (name == ":method") {
+                        RUVIA_CHECK_EQ(value, "GET");
+                    } else {
+                        RUVIA_CHECK_EQ(name, "x");
+                        if (!(mode == 1 && value.size() == table_limit + 1)) {
+                            const auto expected_value = value_at(seen++);
+                            RUVIA_CHECK_EQ(value, std::string_view(expected_value));
+                        }
+                    }
+                    return mode != 2;
+                });
+                if (mode == 3) {
+                    RUVIA_CHECK(result.error() == ruvia::hpack_decode_error::invalid_index);
+                } else if (mode == 2) {
+                    RUVIA_CHECK(result.error() == ruvia::hpack_decode_error::callback_rejected);
+                } else {
+                    RUVIA_CHECK(result.decoded());
+                    RUVIA_CHECK_EQ(seen, 128U);
+                }
+                block.assign(1, static_cast<char>(0xbe));
+                const auto expected = mode == 3 ? seed : value_at(127);
+                unsigned indexed = 0;
+                const auto newest = decoder.decode(block, [&](std::string_view name, std::string_view value) {
+                    ++indexed;
+                    RUVIA_CHECK_EQ(name, "x");
+                    RUVIA_CHECK_EQ(value, std::string_view(expected));
+                    return true;
+                });
+                RUVIA_CHECK(newest.decoded());
+                RUVIA_CHECK_EQ(indexed, 1U);
+            }
+            RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
+        }
+    }
+}

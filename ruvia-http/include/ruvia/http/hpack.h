@@ -24,6 +24,8 @@ struct hpack_decoder_options final {
 // Stateful RFC 7541 decoder. One decode() call is one dynamic-table
 // transaction; protocol failures roll back table changes while callback
 // rejection still consumes the complete block to keep peer state synchronized.
+// A block retains its starting table snapshot for rollback, but entries inserted
+// and evicted within that same block are retired incrementally.
 class hpack_decoder final {
 public:
     explicit hpack_decoder(hpack_decoder_options options = {});

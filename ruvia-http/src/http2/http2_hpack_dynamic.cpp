@@ -164,11 +164,12 @@ const hpack_decoder::entry_type& hpack_decoder::dynamic_entry_by_newest_index(
 
 void hpack_decoder::clear_dynamic() noexcept {
     if (decode_transaction_active_) {
-        // Keep the physical entries alive until the field-block transaction
-        // commits. A later allocation failure can then restore the original
-        // vector by truncating only entries appended by this decode.
+        // Preserve the pre-block snapshot for rollback, but reclaim entries
+        // inserted and subsequently evicted within this block.
+        const auto previous_offset = dynamic_offset_;
         dynamic_offset_ = dynamic_.size();
         dynamic_size_ = 0;
+        retire_dynamic_prefix(previous_offset);
         return;
     }
     dynamic_.clear();
@@ -189,13 +190,14 @@ void hpack_decoder::evict_dynamic_to_fit(std::size_t entry_size) {
 void hpack_decoder::retire_dynamic_prefix(std::size_t begin) noexcept {
     static_assert(std::is_nothrow_default_constructible_v<entry_type>);
     static_assert(std::is_nothrow_move_constructible_v<entry_type>);
-    if (decode_transaction_active_ || dynamic_offset_ == 0) {
+    const auto retained_prefix = decode_transaction_active_ ? transaction_dynamic_vector_size_ : 0;
+    if (dynamic_offset_ <= retained_prefix) {
         return;
     }
     const auto remaining = dynamic_entry_count();
-    if (dynamic_offset_ < remaining) {
+    if (dynamic_offset_ - retained_prefix < remaining) {
         // Return newly evicted heap fields without moving the live suffix.
-        for (auto index = begin; index < dynamic_offset_; ++index) {
+        for (auto index = std::max(begin, retained_prefix); index < dynamic_offset_; ++index) {
             auto* entry = std::addressof(dynamic_[index]);
             std::destroy_at(entry);
             std::construct_at(entry);
@@ -205,13 +207,13 @@ void hpack_decoder::retire_dynamic_prefix(std::size_t begin) noexcept {
     // The dead prefix covers every destination. Moving now is amortized over
     // at least as many evictions as survivors; no source overlaps a destination.
     for (std::size_t i = 0; i < remaining; ++i) {
-        auto* destination = std::addressof(dynamic_[i]);
+        auto* destination = std::addressof(dynamic_[retained_prefix + i]);
         std::destroy_at(destination);
         std::construct_at(destination, std::move(dynamic_[dynamic_offset_ + i]));
     }
     // Also destroys evicted fields in the gap and the moved-from source suffix.
-    dynamic_.resize(remaining);
-    dynamic_offset_ = 0;
+    dynamic_.resize(retained_prefix + remaining);
+    dynamic_offset_ = retained_prefix;
 }
 
 void hpack_decoder::begin_decode_transaction() noexcept {
