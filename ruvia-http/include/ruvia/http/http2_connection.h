@@ -100,6 +100,8 @@ struct http2_extended_connect_request_head_view final {
 // not frame the interim or final response. END_STREAM on a 1xx remains malformed.
 // Received Trailer declarations remain opaque metadata in requests and responses;
 // they never authorize forbidden actual trailer fields or select message framing.
+// Generic-byte-valid Expect members are classified for the owner's existing
+// 417/ignore policy, not rejected as malformed merely for member syntax.
 // Received request TE permits empty lists and ignores empty members; every
 // nonempty member must be "trailers" (case-insensitive).
 // Response TE remains malformed even when empty.

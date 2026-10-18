@@ -2789,6 +2789,101 @@ RUVIA_TEST(http2_public_server_request_snapshot_exposes_http_decisions) {
     RUVIA_CHECK(plan.rejection() == nullptr);
 }
 
+RUVIA_TEST(http2_public_semantically_invalid_expectations_preserve_upload_boundaries) {
+    for (const std::string_view expectation :
+        {"bad field", "100-continue;foo=bar", "custom=\"unterminated", "100-continue, bad field"}) {
+        std::pmr::monotonic_buffer_resource resource;
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "POST");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/upload");
+        ruvia::hpack_encoder::encode_header(block, "content-length", "3");
+        ruvia::hpack_encoder::encode_header(block, "expect", expectation);
+        std::pmr::string wire(ruvia::http2_client_preface, &resource);
+        append_peer_settings(wire);
+        append_header_section(wire, 1, block, false, true);
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto event = server.next_event();
+        auto* request = event ? event->request_head() : nullptr;
+        RUVIA_CHECK(request != nullptr);
+        if (!request) {
+            continue;
+        }
+        RUVIA_CHECK_EQ(request->stream_id(), std::uint32_t{1});
+        RUVIA_CHECK(request->request().header("Expect") == expectation);
+        RUVIA_CHECK(request->snapshot().body_open_);
+        RUVIA_CHECK(request->snapshot().content_ == ruvia::http_request_content_indication::will_follow);
+        const auto rejected = request->expectation_plan(ruvia::http_unsupported_expectation_policy::reject);
+        RUVIA_CHECK(rejected.send_continue() == nullptr);
+        RUVIA_CHECK(rejected.rejection() != nullptr);
+        if (const auto* rejection = rejected.rejection()) {
+            RUVIA_CHECK_EQ(rejection->protocol_error().status(), ruvia::http_status::expectation_failed);
+        }
+        const auto ignored = request->expectation_plan(ruvia::http_unsupported_expectation_policy::ignore);
+        const bool known_continue = expectation == "100-continue, bad field";
+        RUVIA_CHECK((ignored.send_continue() != nullptr) == known_continue);
+        RUVIA_CHECK((ignored.no_action() != nullptr) == !known_continue);
+        RUVIA_CHECK(ignored.rejection() == nullptr);
+        RUVIA_CHECK(!server.next_event());
+
+        wire.clear();
+        append_frame(wire, ruvia::http2_frame_type::data, 0, 1, "a");
+        append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, "bc");
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        std::string body;
+        unsigned ends = 0;
+        while (auto content = server.next_event()) {
+            if (auto* chunk = content->message_body_chunk()) {
+                RUVIA_CHECK_EQ(chunk->stream_id(), std::uint32_t{1});
+                body.append(chunk->bytes());
+                RUVIA_CHECK(server.acknowledge(chunk->take_credit()) ==
+                            ruvia::http2_received_data_acknowledge_status::acknowledged);
+            } else {
+                const auto* end = content->message_end();
+                RUVIA_CHECK(end != nullptr);
+                if (end) {
+                    RUVIA_CHECK_EQ(end->stream_id(), std::uint32_t{1});
+                    RUVIA_CHECK(end->trailers().empty());
+                    ++ends;
+                }
+            }
+        }
+        RUVIA_CHECK_EQ(body, "abc");
+        RUVIA_CHECK_EQ(ends, 1u);
+        ruvia::http_response reply({.resource_ = &resource});
+        RUVIA_CHECK(server.submit_buffered_response(1, reply) == ruvia::http2_submit_status::accepted);
+        RUVIA_CHECK(server.release(std::move(*request)) ==
+                    ruvia::http2_server_request_release_status::released);
+
+        block.clear();
+        ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/next");
+        wire.clear();
+        append_header_section(wire, 3, block, true, true);
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto next = server.next_event();
+        RUVIA_CHECK(next && next->request_head());
+        if (next && next->request_head()) {
+            RUVIA_CHECK_EQ(next->request_head()->stream_id(), std::uint32_t{3});
+            RUVIA_CHECK_EQ(next->request_head()->request().path(), "/next");
+            RUVIA_CHECK(server.submit_buffered_response(3, reply) == ruvia::http2_submit_status::accepted);
+            RUVIA_CHECK(server.release(std::move(*next->request_head())) ==
+                        ruvia::http2_server_request_release_status::released);
+        }
+        auto end = server.next_event();
+        RUVIA_CHECK(end && end->message_end());
+        if (end && end->message_end()) {
+            RUVIA_CHECK_EQ(end->message_end()->stream_id(), std::uint32_t{3});
+        }
+        RUVIA_CHECK(!server.next_event());
+        RUVIA_CHECK(!server.connection_error());
+    }
+}
+
 // body_open_ describes the head as published: a HEADERS frame without
 // END_STREAM promises content events even when the DATA that completes the
 // request arrived in the same feed() and the core already consumed it.

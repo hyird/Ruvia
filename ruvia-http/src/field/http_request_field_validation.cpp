@@ -132,7 +132,9 @@ namespace {
         case request_header_kind::te:
             return is_valid_te(value, role, framing);
         case request_header_kind::expect:
-            return is_valid_received_http_expect_field_value(value);
+            // Binary field semantics feed the existing 417/ignore policy, not malformed-message rejection.
+            return framing == request_field_framing::binary ||
+                   is_valid_received_http_expect_field_value(value);
         case request_header_kind::host:
             return is_valid_host_header(value);
         default:
