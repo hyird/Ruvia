@@ -2062,6 +2062,76 @@ RUVIA_TEST(http2_public_client_accepts_long_informational_sequence_before_final_
     RUVIA_CHECK(!client.connection_error());
 }
 
+RUVIA_TEST(http2_public_informational_metadata_does_not_frame_or_leak_into_final_responses) {
+    for (const std::string_view length : {"0", "123"}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        auto client = prepared_client(&resource);
+        const auto following = client.submit_request_head(ruvia::http2_regular_request_head_view{
+            .authority_ = "example.test"});
+        RUVIA_CHECK(following.submitted() && following.submitted()->stream_id() == 3);
+        std::pmr::string wire(&resource);
+        append_peer_settings(wire);
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":status", "103");
+        ruvia::hpack_encoder::encode_header(block, "content-length", length);
+        ruvia::hpack_encoder::encode_header(block, "trailer", "x-checksum");
+        ruvia::hpack_encoder::encode_header(block, "date", "Sun, 06 Nov 1994 08:49:37 GMT");
+        ruvia::hpack_encoder::encode_header(block, "date", "Mon, 07 Nov 1994 08:49:37 GMT");
+        append_header_section(wire, 1, block, false, true);
+        append_response(wire, &resource, 1, "200", "abc");
+        append_response(wire, &resource, 3, "200", "next");
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        const auto event = client.next_event();
+        const auto* info = event ? event->informational_head() : nullptr;
+        RUVIA_CHECK(info != nullptr);
+        if (info == nullptr) {
+            continue;
+        }
+        RUVIA_CHECK_EQ(info->stream_id(), std::uint32_t{1});
+        RUVIA_CHECK_EQ(info->head().status().value(), std::uint16_t{103});
+        const auto fields = info->head().headers();
+        RUVIA_CHECK_EQ(fields.size(), std::size_t{4});
+        if (fields.size() != 4) {
+            continue;
+        }
+        RUVIA_CHECK_EQ(fields[0].name(), "content-length");
+        RUVIA_CHECK_EQ(fields[0].value(), length);
+        RUVIA_CHECK_EQ(fields[1].name(), "trailer");
+        RUVIA_CHECK_EQ(fields[1].value(), "x-checksum");
+        const auto consume_response = [&](std::uint32_t stream_id, std::string_view expected) {
+            const auto head = client.next_event();
+            RUVIA_CHECK(head && head->response_head());
+            if (head && head->response_head()) {
+                RUVIA_CHECK_EQ(head->response_head()->stream_id(), stream_id);
+                RUVIA_CHECK(head->response_head()->head().status() == ruvia::http_status::ok);
+                RUVIA_CHECK(head->response_head()->head().headers().empty());
+            }
+            auto body = client.next_event();
+            auto* chunk = body ? body->message_body_chunk() : nullptr;
+            RUVIA_CHECK(chunk != nullptr);
+            if (chunk != nullptr) {
+                RUVIA_CHECK_EQ(chunk->stream_id(), stream_id);
+                RUVIA_CHECK_EQ(chunk->bytes(), expected);
+                auto credit = chunk->take_credit();
+                (void)client.acknowledge(std::move(credit));
+            }
+            const auto end = client.next_event();
+            RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == stream_id);
+            if (end && end->message_end()) {
+                RUVIA_CHECK(end->message_end()->trailers().empty());
+            }
+        };
+        consume_response(1, "abc");
+        consume_response(3, "next");
+        RUVIA_CHECK_EQ(fields[2].name(), "date");
+        RUVIA_CHECK_EQ(fields[2].value(), "Sun, 06 Nov 1994 08:49:37 GMT");
+        RUVIA_CHECK_EQ(fields[3].name(), "date");
+        RUVIA_CHECK_EQ(fields[3].value(), "Mon, 07 Nov 1994 08:49:37 GMT");
+        RUVIA_CHECK(!client.next_event());
+        RUVIA_CHECK(!client.connection_error());
+    }
+}
+
 RUVIA_TEST(http2_public_client_rejects_goaway_excluding_informational_response) {
     for (const std::size_t informational_count : {std::size_t{1}, std::size_t{256}}) {
         std::pmr::monotonic_buffer_resource resource;

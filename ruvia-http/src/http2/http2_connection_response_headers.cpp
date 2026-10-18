@@ -12,7 +12,6 @@
 
 #include "client/http_client_access.h"
 #include "coding/http_content_length.h"
-#include "field/http_interim_response_validation.h"
 #include "field/response_field_validation.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_header_block.h"
@@ -31,19 +30,17 @@ namespace {
 struct http2_response_decode_context final {
     http2_response_decode_context(http2_stream_state& stream, std::pmr::memory_resource* resource) noexcept
         : base_(stream),
-          interim_headers_(http_field_list_role::recipient),
           informational_fields_(resource) {}
 
     http2_header_decode_context base_;
-    http_interim_response_header_validator interim_headers_;
     response_field_state fields_;
     std::pmr::vector<http_header> informational_fields_;
     std::optional<http_status_code> status_;
     bool saw_regular_{false};
 };
 
-// Client-role response head decode: ':status' once and first, then validated regular
-// headers into the stream's header table (1xx heads are validated but not stored).
+// ':status' is first and unique. Generic binary field checks precede dispatch;
+// interim metadata is retained separately without applying sender prohibitions.
 bool http2_on_decoded_response_header(void* target, std::string_view name, std::string_view value) {
     auto* context_value = static_cast<http2_response_decode_context*>(target);
     if (!http2_accumulate_header_list_bytes(context_value->base_, name, value)) {
@@ -78,11 +75,7 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
     }
     context_value->saw_regular_ = true;
     if (context_value->status_->is_informational()) {
-        // Validate interim fields as a recipient before taking owned snapshots.
-        if (context_value->interim_headers_.validate(name, value) !=
-            http_interim_response_header_validation_status::ok) {
-            return false;
-        }
+        // These fields cannot frame a 1xx or carry over to the final response.
         context_value->informational_fields_.push_back(http_header::copy_of(
             name, value, context_value->informational_fields_.get_allocator().resource()));
         return true;

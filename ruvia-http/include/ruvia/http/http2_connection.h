@@ -94,6 +94,8 @@ struct http2_extended_connect_request_head_view final {
 // half. Finish or explicitly reset the request send half even after message_end.
 // Informational heads do not end the receive half and have no fixed count limit;
 // each header section remains subject to the configured decoding limits.
+// Received 1xx fields remain ordered metadata; Content-Length and Trailer do
+// not frame the interim or final response. END_STREAM on a 1xx remains malformed.
 // Received request TE permits empty lists and ignores empty members; every
 // nonempty member must be "trailers" (case-insensitive).
 // Response TE remains malformed even when empty.
