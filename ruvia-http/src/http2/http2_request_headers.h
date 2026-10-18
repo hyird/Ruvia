@@ -82,6 +82,14 @@ struct http2_header_decode_context final {
     return is_valid_uri_authority(authority);
 }
 
+// Call only after authority admission (or validated local push submission).
+// HTTP(S) already uses Host syntax; other schemes can contain URI userinfo.
+[[nodiscard]] inline bool http2_request_synthesizes_host(const http2_stream_state& stream) noexcept {
+    return !stream.has_host() && stream.has_authority() &&
+           (http2_is_http_request_scheme(stream.request_scheme()) ||
+               is_valid_host_header(stream.request_authority()));
+}
+
 [[nodiscard]] inline std::string_view http2_request_host_field(const http2_stream_state& stream) noexcept {
     if (!stream.has_host()) {
         return {};

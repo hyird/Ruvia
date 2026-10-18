@@ -3139,6 +3139,86 @@ RUVIA_TEST(http2_public_received_te_accepts_empty_lists_without_dropping_fields)
     }
 }
 
+RUVIA_TEST(http2_public_normalized_request_capacity_rejects_only_the_oversized_stream) {
+    for (const std::size_t fields : {ruvia::max_http_header_fields - 1, ruvia::max_http_header_fields}) {
+        for (const bool explicit_host : {false, true}) {
+            for (const unsigned cookies : {0U, 1U, 2U}) {
+                std::pmr::unsynchronized_pool_resource resource;
+                std::pmr::string wire(ruvia::http2_client_preface, &resource);
+                append_peer_settings(wire);
+                std::pmr::string block(&resource);
+                const auto encode_target = [&](std::string_view path) {
+                    ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+                    ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+                    ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+                    ruvia::hpack_encoder::encode_header(block, ":path", path);
+                };
+                encode_target("/capacity?x=kept");
+                if (explicit_host) {
+                    ruvia::hpack_encoder::encode_header(block, "host", "EXAMPLE.test:443");
+                }
+                for (unsigned i = 0; i < cookies; ++i) {
+                    ruvia::hpack_encoder::encode_header(block, "cookie", i == 0 ? "a=1" : "b=2");
+                }
+                for (std::size_t i = static_cast<std::size_t>(explicit_host) + cookies; i < fields; ++i) {
+                    ruvia::hpack_encoder::encode_header(block, "x-pad", "value");
+                }
+                append_header_section(wire, 1, block, true, true);
+                block.clear();
+                encode_target("/next");
+                append_header_section(wire, 3, block, true, false);
+                auto server = ruvia::http2_connection::server({.resource_ = &resource});
+                RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+                const auto normalized = fields - cookies + static_cast<std::size_t>(cookies != 0) +
+                                        static_cast<std::size_t>(!explicit_host);
+                const bool oversized = normalized > ruvia::max_http_header_fields;
+                unsigned first_heads = 0;
+                unsigned first_ends = 0;
+                unsigned resets = 0;
+                unsigned following_heads = 0;
+                unsigned following_ends = 0;
+                while (auto event = server.next_event()) {
+                    if (auto* head = event->request_head()) {
+                        const auto id = head->stream_id();
+                        if (id == 1) {
+                            ++first_heads;
+                            RUVIA_CHECK_EQ(head->request().headers().size(), normalized);
+                            RUVIA_CHECK_EQ(head->request().header("Host").value_or(""),
+                                explicit_host ? "EXAMPLE.test:443" : "example.test");
+                            RUVIA_CHECK_EQ(head->request().query_string(), "x=kept");
+                            if (cookies != 0) {
+                                RUVIA_CHECK_EQ(head->request().header("Cookie").value_or(""),
+                                    cookies == 1 ? "a=1" : "a=1; b=2");
+                            }
+                        } else {
+                            ++following_heads;
+                            RUVIA_CHECK(id == 3 && head->request().path() == "/next");
+                        }
+                        ruvia::http_response reply({.resource_ = &resource});
+                        RUVIA_CHECK(server.submit_buffered_response(id, reply) == ruvia::http2_submit_status::accepted);
+                        RUVIA_CHECK(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);
+                    } else if (const auto* end = event->message_end()) {
+                        if (end->stream_id() == 1) {
+                            ++first_ends;
+                        } else if (end->stream_id() == 3) {
+                            ++following_ends;
+                        }
+                    } else if (const auto* closed = event->stream_closed()) {
+                        if (closed->stream_id() == 1 && closed->source() == ruvia::http2_stream_close_source::local &&
+                            closed->error() == ruvia::http2_error_code::protocol_error) {
+                            ++resets;
+                        }
+                    }
+                }
+                RUVIA_CHECK(first_heads == (oversized ? 0U : 1U));
+                RUVIA_CHECK(first_ends == (oversized ? 0U : 1U));
+                RUVIA_CHECK(resets == (oversized ? 1U : 0U));
+                RUVIA_CHECK(following_heads == 1 && following_ends == 1 && !server.connection_error());
+            }
+        }
+    }
+}
+
 RUVIA_TEST(http2_public_trace_zero_length_accepts_header_or_empty_data_endings) {
     for (const bool head_end : {false, true}) {
         std::pmr::unsynchronized_pool_resource resource;

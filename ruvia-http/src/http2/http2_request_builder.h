@@ -142,7 +142,7 @@ public:
         http_request_access::set_body(request, std::as_bytes(std::span(body.data(), body.size())));
 
         const auto authority = stream.request_authority();
-        const bool synthesize_host = !stream.has_host() && stream.has_authority() && is_valid_host_header(authority);
+        const bool synthesize_host = http2_request_synthesizes_host(stream);
         const auto header_count = stream.remote_header_count() + static_cast<std::size_t>(synthesize_host) +
                                   static_cast<std::size_t>(stream.has_cookie());
         if (header_count > max_http_header_fields) {

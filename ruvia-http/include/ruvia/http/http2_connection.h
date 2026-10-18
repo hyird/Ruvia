@@ -83,6 +83,8 @@ struct http2_extended_connect_request_head_view final {
 // Event, deferred-DATA and drain-notification queue capacities grow geometrically
 // and are retained for reuse; their storage uses the connection's PMR resource.
 // Receive-field text growth reserves the whole name/value pair before copying.
+// Request field capacity includes synthesized Host and coalesced Cookie. A head
+// that cannot fit the public request view resets its stream before publication.
 // Outbound HPACK never inserts dynamic entries; required capacity reductions select zero.
 // A fatal connection error rejects new stream output. Request leases and DATA
 // credits remain releasable without generating more frames. Graceful local or
