@@ -219,6 +219,7 @@ public:
     [[nodiscard]] std::optional<http2_server_request_view> server_request_view(
         std::uint32_t stream_id) const noexcept;
     // Reports each queued-send drain once, even if its final DATA closed the stream.
+    // Control frames with no queued DATA preserve any untaken drain notifications.
     // A reset cancels untaken notifications. IDs borrow storage until the next
     // take_drained_data_streams() call or connection destruction.
     [[nodiscard]] std::span<const std::uint32_t> take_drained_data_streams() & noexcept;

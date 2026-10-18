@@ -70,6 +70,9 @@ std::size_t http2_connection::send_data_up_to_window(
 }
 
 void http2_connection::mark_send_window_opened() {
+    if (pending_sends_.empty()) {
+        return;
+    }
     // Drain is a wire/state transaction: a throwing PMR resource must not leave
     // a queued body with a smaller window and no corresponding bytes. Simulate
     // the complete drain first and reserve both outbound bytes and the
