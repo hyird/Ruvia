@@ -165,6 +165,47 @@ RUVIA_TEST(http1_response_head_append_accepts_overlapping_written_inline_ranges)
     }
 }
 
+RUVIA_TEST(http1_response_trailers_preserve_fields_borrowed_from_output) {
+    for (const std::size_t size : {std::size_t{8}, std::size_t{32}, std::size_t{4096}}) {
+        for (const bool reserve_first : {false, true}) {
+            std::pmr::string output(std::pmr::new_delete_resource());
+            output = "X-Tail";
+            output.append(size, 'v');
+            if (reserve_first) {
+                output.reserve(output.size() * 4 + 64);
+            }
+            const std::string prefix(output);
+            const std::array<ruvia::http_header_view, 2> fields{{
+                {std::string_view(output).substr(0, 6), std::string_view(output).substr(6)},
+                {"X-Again", std::string_view(output).substr(6)},
+            }};
+            const auto section = ruvia::validate_http_response_trailers(fields);
+            const std::string expected = prefix + "X-Tail: " + std::string(size, 'v') + "\r\nX-Again: " + std::string(size, 'v') + "\r\n";
+            ruvia::append_http1_response_trailers(output, section);
+            RUVIA_CHECK_EQ(std::string_view(output), std::string_view(expected));
+        }
+    }
+}
+
+RUVIA_TEST(http1_response_trailers_leave_existing_output_on_allocation_failure) {
+    std::array<std::byte, 256> allocation_storage{};
+    std::pmr::monotonic_buffer_resource resource(allocation_storage.data(), allocation_storage.size(), std::pmr::null_memory_resource());
+    std::pmr::string output("prefix", &resource);
+    const std::string value(4096, 'v');
+    const std::array<ruvia::http_header_view, 1> fields{{{"X-Long", value}}};
+    const auto section = ruvia::validate_http_response_trailers(fields);
+    bool rejected = false;
+    try {
+        ruvia::append_http1_response_trailers(output, section);
+    } catch (const std::bad_alloc&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("prefix"));
+    output.append(" reused");
+    RUVIA_CHECK_EQ(std::string_view(output), std::string_view("prefix reused"));
+}
+
 RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
     using ruvia::plan_buffered_http_response_write;
     using ruvia::testing::parse_http1_request_message;

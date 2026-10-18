@@ -23,6 +23,8 @@ void append_http1_response_head(
     const http_response& response, http_response_head_buffer& head,
     const http1_response_head_plan& plan);
 
+// Append only field lines; chunk delimiters belong to the caller. Inputs may
+// alias output. Allocation failure leaves the existing output bytes unchanged.
 void append_http1_response_trailers(
     std::pmr::string& output, const http_response_trailer_section& trailers);
 

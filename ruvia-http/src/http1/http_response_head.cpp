@@ -1,5 +1,6 @@
 #include "server/http_response_head.h"
 
+#include <array>
 #include <optional>
 #include <stdexcept>
 
@@ -115,6 +116,28 @@ void emit_response_head(const http_response& response, http_raw_wire_sink& sink_
         sink_value.append(std::string_view("\r\n"));
     }
     sink_value.append(std::string_view("\r\n"));
+}
+
+template <typename sink_type>
+void emit_response_trailer_fields(sink_type& sink, std::span<const http_header_view> fields) {
+    for (const auto& field : fields) {
+        emit_http1_field_line(sink, field.name(), field.value());
+    }
+}
+
+// Consume aliased names, values and descriptors before append can reallocate.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+__attribute__((noinline))
+#endif
+void append_response_trailer_snapshot(std::pmr::string& output,
+    std::span<const http_header_view> fields, std::size_t bytes) {
+    std::array<char, max_http_header_bytes> scratch;
+    http_raw_wire_sink sink(scratch.data());
+    emit_response_trailer_fields(sink, fields);
+    check_http_wire_end(sink.position(), scratch.data() + bytes);
+    output.append(scratch.data(), bytes);
 }
 
 }  // namespace
@@ -242,10 +265,27 @@ void append_http1_response_head(const http_response& response, http_response_hea
 
 void append_http1_response_trailers(
     std::pmr::string& output, const http_response_trailer_section& trailers) {
-    detail::http_string_wire_sink sink(output);
-    for (const auto& trailer : trailers.fields()) {
-        detail::emit_http1_field_line(sink, trailer.name(), trailer.value());
+    const auto fields = trailers.fields();
+    if (fields.empty()) {
+        return;
     }
+    auto budget = http_trailer_section_budget();
+    for (const auto& field : fields) {
+        if (!budget.add_field(field.name(), field.value())) {
+            throw std::length_error("HTTP response trailers are too large");
+        }
+    }
+    const auto bytes = budget.bytes() - std::string_view("\r\n").size();
+    if (bytes > output.max_size() - output.size()) {
+        throw std::length_error("HTTP response trailers are too large");
+    }
+    if (detail::http_wire_inputs_overlap(output, fields)) {
+        detail::append_response_trailer_snapshot(output, fields, bytes);
+        return;
+    }
+    output.reserve(output.size() + bytes);
+    detail::http_string_wire_sink sink(output);
+    detail::emit_response_trailer_fields(sink, fields);
 }
 
 }  // namespace ruvia
