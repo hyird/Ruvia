@@ -79,7 +79,8 @@ inline constexpr std::string_view content_length_name = "Content-Length";
 }
 
 void emit_response_head(const http_response& response, http_raw_wire_sink& sink_value, http_status_code response_status,
-    std::string_view reason_phrase, std::string_view date_header, response_head_flags flags) noexcept {
+    std::string_view reason_phrase, std::string_view date_header, response_head_flags flags,
+    std::string_view content_length_value) noexcept {
     sink_value.append(
         flags.protocol_version_ == http_protocol_version::http10 ? http10_status_prefix : http11_status_prefix);
     const auto status_token = http_status_code_token(response_status);
@@ -112,7 +113,7 @@ void emit_response_head(const http_response& response, http_raw_wire_sink& sink_
     if (flags.emit_content_length_) {
         sink_value.append(content_length_name);
         sink_value.append(std::string_view(": "));
-        sink_value.append_unsigned(flags.canonical_content_length_);
+        sink_value.append(content_length_value);
         sink_value.append(std::string_view("\r\n"));
     }
     sink_value.append(std::string_view("\r\n"));
@@ -198,6 +199,12 @@ void append_response_head(
     const auto reason_phrase = http_reason_phrase(response_status);
     const auto date_header =
         (known_bits & response_header_date) == 0 ? cached_date_header() : std::string_view{};
+    // Reuse the formatted token for exact measurement and emission instead of
+    // separately dividing the length to count its digits.
+    std::array<char, http_max_unsigned_decimal_size> content_length_buffer;
+    const auto content_length_value = flags.emit_content_length_
+                                          ? http_format_unsigned(content_length_buffer, flags.canonical_content_length_)
+                                          : std::string_view{};
 
     // Measure the exact emitted head before touching reusable output storage.
     // This both bounds the unchecked raw stack sink and enforces the shared
@@ -239,8 +246,7 @@ void append_response_head(
     }
     if (flags.emit_content_length_) {
         ++field_count;
-        charge(head_budget.add_field(content_length_name.size(),
-            http_unsigned_decimal_size(flags.canonical_content_length_)));
+        charge(head_budget.add_field(content_length_name.size(), content_length_value.size()));
     }
     if (field_count > max_http_header_fields) {
         throw std::length_error("too many HTTP response headers");
@@ -249,7 +255,8 @@ void append_response_head(
 
     head.append_generated(head_budget.bytes(), [&](char* cursor_value) noexcept {
         http_raw_wire_sink sink_value(cursor_value);
-        emit_response_head(response, sink_value, response_status, reason_phrase, date_header, flags);
+        emit_response_head(response, sink_value, response_status, reason_phrase, date_header, flags,
+            content_length_value);
         check_http_wire_end(sink_value.position(), cursor_value + head_budget.bytes());
     });
 }

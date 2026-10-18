@@ -17,6 +17,7 @@ namespace ruvia {
 
 // Serialize a finalized HTTP/1 response head into caller-owned reusable scratch.
 // The plan must describe the same response representation.
+// Canonical Content-Length is measured and emitted from the same decimal token.
 // An explicit Date is preserved without consulting the clock; otherwise a
 // cached current Date is generated when a usable clock is available.
 void append_http1_response_head(
