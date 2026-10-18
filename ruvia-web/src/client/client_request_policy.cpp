@@ -249,28 +249,25 @@ void client_request_policy::append_headers(const http_client_request_storage& re
 
     // RFC 9110 §9.3.8: TRACE reflects the request, so stored credentials stay
     // out; caller-written Cookie fields above remain the caller's choice.
-    if (request.method() == "TRACE") {
-        if (!cookie_header.empty()) {
-            headers.emplace_back("cookie", cookie_header);
+    // Empty jars have no expiry or path constraints to inspect.
+    if (!cookies_.empty() && request.method() != "TRACE") {
+        discard_expired(std::chrono::system_clock::now());
+        const auto path = request_path_only(request.target());
+        for (const auto& cookie : cookies_) {
+            if (!cookie.configured_ &&
+                config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
+                continue;
+            }
+            if (cookie.secure_ && config_.scheme_ != http_scheme::https) {
+                continue;
+            }
+            // Domain matching is settled at storage: every stored domain is empty or
+            // matched the same fixed origin host.
+            if (!cookie_path_matches(path, cookie.path_)) {
+                continue;
+            }
+            append_cookie_request_pair(cookie_header, cookie.name_, cookie.value_);
         }
-        return;
-    }
-    discard_expired(std::chrono::system_clock::now());
-    const auto path = request_path_only(request.target());
-    for (const auto& cookie : cookies_) {
-        if (!cookie.configured_ &&
-            config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
-            continue;
-        }
-        if (cookie.secure_ && config_.scheme_ != http_scheme::https) {
-            continue;
-        }
-        // Domain matching is settled at storage: every stored domain is empty or
-        // matched the same fixed origin host.
-        if (!cookie_path_matches(path, cookie.path_)) {
-            continue;
-        }
-        append_cookie_request_pair(cookie_header, cookie.name_, cookie.value_);
     }
     if (!cookie_header.empty()) {
         headers.emplace_back("cookie", cookie_header);

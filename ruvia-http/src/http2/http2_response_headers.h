@@ -282,9 +282,12 @@ inline void http2_release_local_header_block(http2_stream_state& stream) {
 
 inline void append_http2_response_trailers(
     std::pmr::string& trailer_block, const http_response_trailer_section& section) {
+    if (section.empty()) {
+        return;
+    }
+    std::array<char, http2_lower_header_stack_bytes> lower_name_stack{};
+    std::pmr::string lower_name_scratch(trailer_block.get_allocator());
     for (const auto& trailer : section.fields()) {
-        std::array<char, http2_lower_header_stack_bytes> lower_name_stack{};
-        std::pmr::string lower_name_scratch(trailer_block.get_allocator());
         hpack_encoder::encode_header(trailer_block,
             http2_lower_header_name(trailer.name(), lower_name_stack, lower_name_scratch),
             trailer.value());

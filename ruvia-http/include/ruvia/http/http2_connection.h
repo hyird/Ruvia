@@ -178,6 +178,8 @@ public:
     // Convenience form for generic streaming responses without trailers.
     [[nodiscard]] http2_submit_status submit_streaming_response_head(
         std::uint32_t stream_id, http_response response);
+    // Encodes trailers before returning accepted or queued; field storage may be
+    // released or changed even while the ending waits for DATA flow control.
     [[nodiscard]] http2_finish_response_status finish_response(
         std::uint32_t stream_id, const http_response_trailer_section& trailers);
     [[nodiscard]] http2_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
