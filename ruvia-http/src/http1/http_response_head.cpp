@@ -173,7 +173,8 @@ void append_response_head(
                 : std::uint64_t{0})};
 
     const auto reason_phrase = http_reason_phrase(response_status);
-    const auto date_header = cached_date_header();
+    const auto date_header =
+        (known_bits & response_header_date) == 0 ? cached_date_header() : std::string_view{};
 
     // Measure the exact emitted head before touching reusable output storage.
     // This both bounds the unchecked raw stack sink and enforces the shared

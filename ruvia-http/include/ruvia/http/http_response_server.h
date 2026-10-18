@@ -17,6 +17,8 @@ namespace ruvia {
 
 // Serialize a finalized HTTP/1 response head into caller-owned reusable scratch.
 // The plan must describe the same response representation.
+// An explicit Date is preserved without consulting the clock; otherwise a
+// cached current Date is generated when a usable clock is available.
 void append_http1_response_head(
     const http_response& response, http_response_head_buffer& head,
     const http1_response_head_plan& plan);
