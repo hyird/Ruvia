@@ -33,8 +33,9 @@ public:
     [[nodiscard]] std::string_view view() const&& = delete;
 
 private:
-    std::array<char, sizeof(std::size_t) * 2 + 2> storage_{};
-    std::size_t offset_{storage_.size()};
+    // Construction writes every byte exposed by view(), plus the final offset.
+    std::array<char, sizeof(std::size_t) * 2 + 2> storage_;
+    std::size_t offset_;
 };
 
 }  // namespace ruvia
