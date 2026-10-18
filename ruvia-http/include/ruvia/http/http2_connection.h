@@ -127,6 +127,9 @@ public:
         void* observer_context = nullptr);
     [[nodiscard]] bool wants_write() const noexcept;
 
+    // Submitted fields are encoded/owned before returning. If owner-lease
+    // allocation fails after HEADERS commit, cancellation follows the deferred
+    // release rules above and the original exception is rethrown.
     [[nodiscard]] http2_request_head_submit_result submit_request_head(
         const http2_regular_request_head_view& request);
     [[nodiscard]] http2_request_head_submit_result submit_request_head(

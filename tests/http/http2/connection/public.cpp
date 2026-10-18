@@ -74,6 +74,9 @@ public:
     void reject_at_least(std::size_t bytes) noexcept {
         reject_at_least_ = bytes;
     }
+    void reject_after_output(const ruvia::http2_connection* connection) noexcept {
+        reject_after_output_ = connection;
+    }
     [[nodiscard]] std::size_t allocation_attempts() const noexcept {
         return allocation_attempts_;
     }
@@ -84,7 +87,8 @@ public:
 private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
         ++allocation_attempts_;
-        if (reject_ || (reject_at_least_ != 0 && bytes_value >= reject_at_least_)) {
+        if (reject_ || (reject_at_least_ != 0 && bytes_value >= reject_at_least_) ||
+            (reject_after_output_ != nullptr && !reject_after_output_->pending_output().empty())) {
             throw std::bad_alloc();
         }
         auto* allocation = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
@@ -100,6 +104,7 @@ private:
     }
     bool reject_{false};
     std::size_t reject_at_least_{};
+    const ruvia::http2_connection* reject_after_output_{};
     std::size_t allocation_attempts_{};
     std::size_t live_allocations_{};
 };
@@ -303,6 +308,75 @@ RUVIA_TEST(http2_public_request_submission_exposes_one_exclusive_success_or_fail
     RUVIA_CHECK(wrong_role.failure() != nullptr);
     if (const auto* failure = wrong_role.failure()) {
         RUVIA_CHECK(failure->error() == ruvia::http2_request_head_submit_error::invalid_state);
+    }
+}
+
+RUVIA_TEST(http2_public_failed_request_lease_recovers_after_persistent_allocation_failure) {
+    for (unsigned kind = 0; kind != 4; ++kind) {
+        toggle_allocation_resource resource;
+        {
+            auto client = ruvia::http2_connection::client({.resource_ = &resource});
+            (void)client.consume_output(client.pending_output().size());
+            const std::array<char, 18> settings_payload{
+                0, 3, 0, 0, 0, 1, 0, 4, 0, 0, 0, 0, 0, 8, 0, 0, 0, 1};
+            std::pmr::string settings;
+            append_frame(settings, ruvia::http2_frame_type::settings, 0, 0,
+                std::string_view(settings_payload.data(), settings_payload.size()));
+            RUVIA_CHECK(client.feed(settings) == ruvia::http2_feed_result::accepted);
+            RUVIA_CHECK(!client.next_event());
+            (void)client.consume_output(client.pending_output().size());
+            std::array<std::string, 16> names;
+            std::array<std::string, 16> values;
+            std::array<ruvia::http_header_view, 16> fields{};
+            for (std::size_t index = 0; index < fields.size(); ++index) {
+                names[index] = "x-field-" + std::to_string(index);
+                values[index].assign(1200, static_cast<char>('a' + index));
+                fields[index] = {names[index], values[index]};
+            }
+            // Fail only once output is observable, not in noexcept STL constructors.
+            resource.reject_after_output(&client);
+            bool threw = false;
+            try {
+                switch (kind) {
+                    case 0:
+                        (void)client.submit_request_head(ruvia::http2_regular_request_head_view{
+                            .authority_ = "example.test", .headers_ = fields});
+                        break;
+                    case 1:
+                        (void)client.submit_request_head(ruvia::http2_regular_request_head_view{
+                            .method_ = "POST", .authority_ = "example.test", .headers_ = fields, .content_ = ruvia::http2_request_content::streaming()});
+                        break;
+                    case 2:
+                        (void)client.submit_request_head(ruvia::http2_connect_request_head_view{
+                            .authority_ = "example.test:443", .headers_ = fields});
+                        break;
+                    case 3:
+                        (void)client.submit_request_head(ruvia::http2_extended_connect_request_head_view{
+                            .protocol_ = "example", .authority_ = "example.test:443", .target_ = "/tunnel", .headers_ = fields});
+                        break;
+                }
+            } catch (const std::bad_alloc&) {
+                threw = true;
+            }
+            resource.reject_after_output(nullptr);
+            RUVIA_CHECK(threw);
+            const std::string committed(client.pending_output());
+            while (client.next_event()) {
+            }
+            std::pmr::string cancel;
+            constexpr std::array<char, 4> payload{0, 0, 0, 8};
+            append_frame(cancel, ruvia::http2_frame_type::rst_stream, 0, 1,
+                std::string_view(payload.data(), payload.size()));
+            RUVIA_CHECK(client.pending_output().starts_with(committed));
+            RUVIA_CHECK(client.pending_output().ends_with(cancel));
+            const auto follow = client.submit_request_head(ruvia::http2_regular_request_head_view{
+                .authority_ = "example.test", .target_ = "/after"});
+            RUVIA_CHECK(follow.submitted() != nullptr);
+            if (follow.submitted() != nullptr) {
+                RUVIA_CHECK_EQ(follow.submitted()->stream_id(), std::uint32_t{3});
+            }
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     }
 }
 

@@ -16,14 +16,8 @@ void http2_connection::lease_submitted_request(const http2_request_head_submit_r
     try {
         pin_stream(submitted->stream_id());
     } catch (...) {
-        const auto original = std::current_exception();
-        try {
-            (void)submit_reset(submitted->stream_id(), http2_error_code::cancel);
-            // Preserve the original pinning failure; this reset is rollback only.
-            // NOLINTNEXTLINE(bugprone-empty-catch)
-        } catch (...) {
-        }
-        std::rethrow_exception(original);
+        abandon_stream_lease(submitted->stream_id());
+        throw;
     }
 }
 

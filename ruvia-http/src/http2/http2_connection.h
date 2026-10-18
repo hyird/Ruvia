@@ -371,7 +371,7 @@ public:
     // emitting stream_closed so the owner can drop the response) instead of freeing it.
     void pin_stream(std::uint32_t stream_id);
     // Pins the stream of a successful client request-head submission. A pin
-    // failure resets that stream and rethrows.
+    // failure abandons that stream, deferring cleanup if necessary, and rethrows.
     void lease_submitted_request(const http2_request_head_submit_result& result);
     // Ends an owner lease. The stream is unpinned once its delivered DATA credit
     // and queued events are gone; until then the release stays deferred.
