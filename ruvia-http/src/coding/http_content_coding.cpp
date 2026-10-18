@@ -117,7 +117,9 @@ http_content_coding_field_result http_content_coding_field_parser::finish() && {
 }
 
 bool is_valid_http_content_encoding_field_value(std::string_view value, http_field_list_role role) noexcept {
-    return visit_content_coding_members(value, role, [](std::string_view) noexcept {});
+    // Received metadata is interpreted by the content decoder, not message framing.
+    return role == http_field_list_role::recipient ||
+           visit_content_coding_members(value, role, [](std::string_view) noexcept {});
 }
 
 }  // namespace ruvia::detail

@@ -3013,73 +3013,75 @@ RUVIA_TEST(http2_public_received_te_accepts_empty_lists_without_dropping_fields)
     }
 }
 
-RUVIA_TEST(http2_public_opaque_content_type_preserves_request_and_response_bodies) {
+RUVIA_TEST(http2_public_opaque_representation_metadata_preserves_request_and_response_bodies) {
     for (const bool server_role : {true, false}) {
-        for (const std::string_view value : {"", "not a media type", "text/plain; charset=\"unfinished"}) {
-            std::pmr::unsynchronized_pool_resource resource;
-            std::pmr::string block(&resource);
-            if (server_role) {
-                ruvia::hpack_encoder::encode_header(block, ":method", "POST");
-                ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
-                ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
-                ruvia::hpack_encoder::encode_header(block, ":path", "/");
-            } else {
-                ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
-            }
-            ruvia::hpack_encoder::encode_header(block, "content-type", value);
-            ruvia::hpack_encoder::encode_header(block, "content-length", "3");
-            ruvia::hpack_encoder::encode_header(block, "x-after", "kept");
-            std::pmr::string wire(&resource);
-            if (server_role) {
-                wire.append(ruvia::http2_client_preface);
-            }
-            append_peer_settings(wire);
-            append_header_section(wire, 1, block, false, true);
-            append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, "abc");
-            auto connection = server_role ? ruvia::http2_connection::server({.resource_ = &resource})
-                                          : ruvia::http2_connection::client({.resource_ = &resource});
-            if (!server_role) {
-                const auto submitted = connection.submit_request_head(ruvia::http2_regular_request_head_view{
-                    .authority_ = "example.test"});
-                RUVIA_CHECK(submitted.submitted() != nullptr);
-            }
-            RUVIA_CHECK(connection.feed(wire) == ruvia::http2_feed_result::accepted);
-            auto head = connection.next_event();
-            auto* request = head ? head->request_head() : nullptr;
-            const auto* response = head ? head->response_head() : nullptr;
-            RUVIA_CHECK(server_role ? request != nullptr : response != nullptr);
-            if (server_role ? request == nullptr : response == nullptr) {
-                continue;
-            }
-            if (request != nullptr) {
-                RUVIA_CHECK(request->request().header("content-type") == std::optional<std::string_view>{value});
-                RUVIA_CHECK(request->request().header("x-after") == std::string_view("kept"));
-            } else {
-                const auto fields = response->head().headers();
-                const auto type = std::find_if(fields.begin(), fields.end(), [](const auto& field) {
-                    return field.name() == "content-type";
-                });
-                RUVIA_CHECK(type != fields.end() && type->value() == value);
-                const auto after = std::find_if(fields.begin(), fields.end(), [](const auto& field) {
-                    return field.name() == "x-after";
-                });
-                RUVIA_CHECK(after != fields.end() && after->value() == "kept");
-            }
-            auto body = connection.next_event();
-            auto* chunk = body ? body->message_body_chunk() : nullptr;
-            RUVIA_CHECK(chunk != nullptr);
-            if (chunk != nullptr) {
-                RUVIA_CHECK_EQ(chunk->bytes(), "abc");
-                auto credit = chunk->take_credit();
-                (void)connection.acknowledge(std::move(credit));
-            }
-            const auto end = connection.next_event();
-            RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == 1);
-            RUVIA_CHECK(!connection.connection_error());
-            if (request != nullptr) {
-                ruvia::http_response reply({.resource_ = &resource});
-                RUVIA_CHECK(connection.submit_buffered_response(1, reply) == ruvia::http2_submit_status::accepted);
-                RUVIA_CHECK(connection.release(std::move(*request)) == ruvia::http2_server_request_release_status::released);
+        for (const std::string_view field_name : {"content-type", "content-encoding"}) {
+            for (const std::string_view value : {"", "not a media type", "text/plain; charset=\"unfinished"}) {
+                std::pmr::unsynchronized_pool_resource resource;
+                std::pmr::string block(&resource);
+                if (server_role) {
+                    ruvia::hpack_encoder::encode_header(block, ":method", "POST");
+                    ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+                    ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+                    ruvia::hpack_encoder::encode_header(block, ":path", "/");
+                } else {
+                    ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
+                }
+                ruvia::hpack_encoder::encode_header(block, field_name, value);
+                ruvia::hpack_encoder::encode_header(block, "content-length", "3");
+                ruvia::hpack_encoder::encode_header(block, "x-after", "kept");
+                std::pmr::string wire(&resource);
+                if (server_role) {
+                    wire.append(ruvia::http2_client_preface);
+                }
+                append_peer_settings(wire);
+                append_header_section(wire, 1, block, false, true);
+                append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, "abc");
+                auto connection = server_role ? ruvia::http2_connection::server({.resource_ = &resource})
+                                              : ruvia::http2_connection::client({.resource_ = &resource});
+                if (!server_role) {
+                    const auto submitted = connection.submit_request_head(ruvia::http2_regular_request_head_view{
+                        .authority_ = "example.test"});
+                    RUVIA_CHECK(submitted.submitted() != nullptr);
+                }
+                RUVIA_CHECK(connection.feed(wire) == ruvia::http2_feed_result::accepted);
+                auto head = connection.next_event();
+                auto* request = head ? head->request_head() : nullptr;
+                const auto* response = head ? head->response_head() : nullptr;
+                RUVIA_CHECK(server_role ? request != nullptr : response != nullptr);
+                if (server_role ? request == nullptr : response == nullptr) {
+                    continue;
+                }
+                if (request != nullptr) {
+                    RUVIA_CHECK(request->request().header(field_name) == std::optional<std::string_view>{value});
+                    RUVIA_CHECK(request->request().header("x-after") == std::string_view("kept"));
+                } else {
+                    const auto fields = response->head().headers();
+                    const auto metadata = std::find_if(fields.begin(), fields.end(), [field_name](const auto& field) {
+                        return field.name() == field_name;
+                    });
+                    RUVIA_CHECK(metadata != fields.end() && metadata->value() == value);
+                    const auto after = std::find_if(fields.begin(), fields.end(), [](const auto& field) {
+                        return field.name() == "x-after";
+                    });
+                    RUVIA_CHECK(after != fields.end() && after->value() == "kept");
+                }
+                auto body = connection.next_event();
+                auto* chunk = body ? body->message_body_chunk() : nullptr;
+                RUVIA_CHECK(chunk != nullptr);
+                if (chunk != nullptr) {
+                    RUVIA_CHECK_EQ(chunk->bytes(), "abc");
+                    auto credit = chunk->take_credit();
+                    (void)connection.acknowledge(std::move(credit));
+                }
+                const auto end = connection.next_event();
+                RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == 1);
+                RUVIA_CHECK(!connection.connection_error());
+                if (request != nullptr) {
+                    ruvia::http_response reply({.resource_ = &resource});
+                    RUVIA_CHECK(connection.submit_buffered_response(1, reply) == ruvia::http2_submit_status::accepted);
+                    RUVIA_CHECK(connection.release(std::move(*request)) == ruvia::http2_server_request_release_status::released);
+                }
             }
         }
     }

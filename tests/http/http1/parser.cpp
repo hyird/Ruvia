@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <concepts>
 #include <cstdint>
+#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -14,6 +15,7 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_parse_error.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_content_decoding.h"
 
 #include "failing_memory_resource.h"
 #include "http1_request_message_fixture.h"
@@ -1031,23 +1033,43 @@ RUVIA_TEST(http1_parse_opaque_content_type_preserves_body_and_pipeline_boundarie
     }
 }
 
-RUVIA_TEST(http1_parse_rejects_invalid_content_encoding_syntax) {
-    for (const std::string_view value : {"gzip;level=9", "bad coding", "gzip/deflate"}) {
-        std::string request =
-            "POST /items HTTP/1.1\r\n"
-            "Host: example.com\r\n"
-            "Content-Encoding: ";
-        request.append(value);
-        request.append("\r\nContent-Length: 0\r\n\r\n");
-        const auto result_value = parse_http1_request_message(request);
-        RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::invalid_header));
-    }
+RUVIA_TEST(http1_parse_content_encoding_accepts_empty_list_members) {
     const auto accepted = parse_http1_request_message(
         "POST /items HTTP/1.1\r\n"
         "Host: example.com\r\n"
         "Content-Encoding: , gzip,,\r\n"
         "Content-Length: 0\r\n\r\n");
     RUVIA_CHECK(accepted.complete());
+}
+
+RUVIA_TEST(http1_parse_coding_metadata_preserves_body_and_rejects_decoder_fallback) {
+    for (const std::string_view value : {"gzip;level=9", "bad coding", "gzip/deflate", "future-coding"}) {
+        for (const bool chunked : {false, true}) {
+            std::string wire = "POST /items HTTP/1.1\r\nHost: example.com\r\nContent-Encoding: ";
+            wire.append(value);
+            wire.append("\r\nContent-Encoding: identity\r\n");
+            wire.append(chunked ? "Transfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\nNEXT"
+                                : "Content-Length: 3\r\n\r\nabcNEXT");
+            const auto parsed = parse_http1_request_message(wire);
+            RUVIA_CHECK(parsed.complete());
+            if (!parsed.complete()) {
+                continue;
+            }
+            RUVIA_CHECK_EQ(parsed.body_, "abc");
+            RUVIA_CHECK_EQ(std::string_view(wire).substr(*parsed.message_bytes_), "NEXT");
+            const auto coding = ruvia::request_content_coding(
+                parsed.state_.request_, std::pmr::get_default_resource());
+            const bool unsupported = value == "future-coding";
+            RUVIA_CHECK((coding.unsupported() != nullptr) == unsupported);
+            RUVIA_CHECK((coding.invalid() != nullptr) == !unsupported);
+            if (const auto* error = coding.invalid()) {
+                RUVIA_CHECK(error->status() == ruvia::http_status::bad_request);
+            }
+            if (const auto* error = coding.unsupported()) {
+                RUVIA_CHECK(error->status() == ruvia::http_status::unsupported_media_type);
+            }
+        }
+    }
 }
 
 RUVIA_TEST(http1_parse_authority_uses_shared_uri_normalization) {

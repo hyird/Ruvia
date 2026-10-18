@@ -43,6 +43,8 @@ private:
     bool invalid_{false};
 };
 
+// Admission validates generated lists. Received metadata is left to the strict
+// content-coding parser before any decoder is selected.
 [[nodiscard]] bool is_valid_http_content_encoding_field_value(
     std::string_view value, http_field_list_role role) noexcept;
 

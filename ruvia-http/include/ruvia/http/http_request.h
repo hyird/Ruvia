@@ -109,6 +109,8 @@ public:
     // when absent. Repeated regular fields retain wire order.
     // Content-Type is retained as metadata without parsing media-type syntax;
     // interpreting or rejecting that media type belongs to the application.
+    // Content-Encoding likewise remains metadata at admission; content-coding
+    // parsers validate the complete stack before a decoder is selected.
     [[nodiscard]] std::span<const http_header_view> headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return headers_.fields();
     }

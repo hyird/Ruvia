@@ -58,15 +58,7 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
     }
 }
 
-RUVIA_TEST(http_client_rejects_invalid_content_encoding_syntax) {
-    for (const std::string_view value : {"gzip;level=9", "bad coding", "gzip/deflate"}) {
-        std::string response = "HTTP/1.1 200 OK\r\nContent-Encoding: ";
-        response.append(value);
-        response.append("\r\nContent-Length: 0");
-        RUVIA_CHECK(
-            parse_failure_error("GET", response) == http1_client_response_parse_error::invalid_header);
-    }
-
+RUVIA_TEST(http_client_content_encoding_ignores_empty_list_members) {
     const auto tolerant = parse_response("GET",
         "HTTP/1.1 200 OK\r\n"
         "Content-Encoding: , gzip,,\r\n"
@@ -77,5 +69,28 @@ RUVIA_TEST(http_client_rejects_invalid_content_encoding_syntax) {
     RUVIA_CHECK_EQ(coding.codings().size(), 1U);
     if (!coding.codings().empty()) {
         RUVIA_CHECK(coding.codings().front() == ruvia::http_content_coding::gzip);
+    }
+}
+
+RUVIA_TEST(http_client_coding_metadata_preserves_framing_without_decoder_fallback) {
+    for (const std::string_view value : {"gzip;level=9", "bad coding", "gzip/deflate", "future-coding"}) {
+        std::string wire = "HTTP/1.1 200 OK\r\nContent-Encoding: ";
+        wire.append(value);
+        wire.append("\r\nContent-Encoding: identity\r\nContent-Length: 3\r\n\r\nabcNEXT");
+        const auto result = parse_wire("GET", wire);
+        const auto* parsed = result.parsed();
+        RUVIA_CHECK(parsed != nullptr);
+        if (parsed == nullptr) {
+            continue;
+        }
+        RUVIA_CHECK_EQ(parsed->head().headers().front().value(), value);
+        const auto length = require_known_length(parsed->plan()).content_length();
+        RUVIA_CHECK_EQ(length, std::size_t{3});
+        RUVIA_CHECK_EQ(std::string_view(wire).substr(parsed->consumed_bytes(), length), "abc");
+        RUVIA_CHECK_EQ(std::string_view(wire).substr(parsed->consumed_bytes() + length), "NEXT");
+        const auto coding = ruvia::parse_http_content_coding_headers(parsed->head().headers());
+        const bool unsupported = value == "future-coding";
+        RUVIA_CHECK((coding.unsupported() != nullptr) == unsupported);
+        RUVIA_CHECK((coding.invalid() != nullptr) == !unsupported);
     }
 }
