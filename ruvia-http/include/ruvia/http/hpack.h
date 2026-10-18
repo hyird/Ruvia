@@ -26,6 +26,8 @@ struct hpack_decoder_options final {
 // rejection still consumes the complete block to keep peer state synchronized.
 // A block retains its starting table snapshot for rollback, but entries inserted
 // and evicted within that same block are retired incrementally.
+// Leading dynamic-table capacity updates are applied in wire order. Updates
+// after a field or above the configured maximum are decoding errors.
 class hpack_decoder final {
 public:
     explicit hpack_decoder(hpack_decoder_options options = {});

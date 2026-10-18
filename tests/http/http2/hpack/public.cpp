@@ -5,6 +5,7 @@
 #include <deque>
 #include <memory_resource>
 #include <new>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -375,6 +376,90 @@ RUVIA_TEST(hpack_public_size_update_evicts_entries_and_accepts_new_insertions) {
                            return name_view == "a" && value_view == "b";
                        })
             .decoded());
+}
+
+RUVIA_TEST(hpack_public_leading_capacity_updates_preserve_order_eviction_and_rollback) {
+    const std::array<std::uint32_t, 2> descending{512, 64};
+    const std::array<std::uint32_t, 3> shrink_restore{512, 64, 512};
+    const std::array<std::uint32_t, 3> clear_restore{0, 0, 512};
+    for (const auto updates : {std::span<const std::uint32_t>(descending),
+             std::span<const std::uint32_t>(shrink_restore), std::span<const std::uint32_t>(clear_restore)}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        const std::string seed_value(64, 's');
+        std::pmr::string seed(&resource);
+        ruvia::hpack_encoder::encode_header(seed, "x-seed", seed_value);
+        seed[0] = static_cast<char>(0x40);
+        RUVIA_CHECK(decoder.decode(seed, [](auto, auto) { return true; }).decoded());
+        const auto check_newest = [&](std::string_view expected_name, std::string_view expected_value) {
+            std::size_t fields = 0;
+            const auto result = decoder.decode(std::string_view("\xbe", 1),
+                [&](std::string_view name, std::string_view value) {
+                    RUVIA_CHECK_EQ(name, expected_name);
+                    RUVIA_CHECK_EQ(value, expected_value);
+                    ++fields;
+                    return true;
+                });
+            RUVIA_CHECK(result.decoded());
+            RUVIA_CHECK_EQ(fields, std::size_t{1});
+        };
+        std::pmr::string block(&resource);
+        for (const auto size : updates) {
+            ruvia::hpack_encoder::encode_dynamic_table_size_update(block, size);
+        }
+        const auto field_offset = block.size();
+        ruvia::hpack_encoder::encode_header(block, "x", "fresh");
+        block[field_offset] = static_cast<char>(0x40);
+
+        std::pmr::string malformed(block, &resource);
+        malformed.push_back(static_cast<char>(0x80));
+        const auto rejected = decoder.decode(malformed, [](auto, auto) { return true; });
+        RUVIA_CHECK(rejected.error() == ruvia::hpack_decode_error::invalid_index);
+        check_newest("x-seed", seed_value);
+
+        std::size_t fields = 0;
+        const auto decoded = decoder.decode(block, [&](std::string_view name, std::string_view value) {
+            RUVIA_CHECK_EQ(name, std::string_view("x"));
+            RUVIA_CHECK_EQ(value, std::string_view("fresh"));
+            ++fields;
+            return true;
+        });
+        RUVIA_CHECK(decoded.decoded());
+        RUVIA_CHECK_EQ(fields, std::size_t{1});
+        check_newest("x", "fresh");
+        // Restoring capacity cannot restore an entry evicted at an intermediate minimum.
+        const auto evicted = decoder.decode(std::string_view("\xbf", 1), [](auto, auto) { return true; });
+        RUVIA_CHECK(evicted.error() == ruvia::hpack_decode_error::invalid_index);
+        check_newest("x", "fresh");
+    }
+}
+
+RUVIA_TEST(hpack_public_capacity_updates_reject_excess_and_late_positions) {
+    for (const bool late : {false, true}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        std::pmr::string seed(&resource);
+        ruvia::hpack_encoder::encode_header(seed, "x-seed", "kept");
+        seed[0] = static_cast<char>(0x40);
+        RUVIA_CHECK(decoder.decode(seed, [](auto, auto) { return true; }).decoded());
+        std::pmr::string invalid(&resource);
+        if (late) {
+            ruvia::hpack_encoder::encode_indexed(invalid, 62);
+        }
+        ruvia::hpack_encoder::encode_dynamic_table_size_update(invalid, late ? 0 : 4097);
+        const auto rejected = decoder.decode(invalid, [](auto, auto) { return true; });
+        RUVIA_CHECK(rejected.error() == ruvia::hpack_decode_error::dynamic_table_size);
+        std::size_t fields = 0;
+        const auto restored = decoder.decode(std::string_view("\xbe", 1),
+            [&](std::string_view name, std::string_view value) {
+                RUVIA_CHECK_EQ(name, std::string_view("x-seed"));
+                RUVIA_CHECK_EQ(value, std::string_view("kept"));
+                ++fields;
+                return true;
+            });
+        RUVIA_CHECK(restored.decoded());
+        RUVIA_CHECK_EQ(fields, std::size_t{1});
+    }
 }
 
 RUVIA_TEST(hpack_public_callback_rejection_keeps_dynamic_table_consistent) {

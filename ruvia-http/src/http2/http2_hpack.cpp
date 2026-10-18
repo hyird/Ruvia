@@ -205,8 +205,6 @@ hpack_decode_result hpack_decoder::decode_block(
     const auto* cursor_value = reinterpret_cast<const unsigned char*>(block.data());
     const auto* const end = cursor_value + block.size();
     bool saw_header = false;
-    std::uint8_t size_update_count = 0;
-    std::uint32_t first_size_update = 0;
     // Callback rejection does NOT abort the block: the whole field block must be
     // decoded so the connection-global dynamic table stays consistent (RFC 7541 §4.1 /
     // RFC 9113 §4.3). We keep going with the callback suppressed and report the
@@ -243,24 +241,18 @@ hpack_decode_result hpack_decoder::decode_block(
         }
 
         if ((first & 0xe0U) == 0x20U) {
-            if (saw_header || size_update_count == 2) {
+            if (saw_header) {
                 return hpack_decode_result(hpack_decode_error::dynamic_table_size);
             }
             std::uint32_t size = 0;
             if (const auto error = decode_integer(cursor_value, end, 5, size); (error.has_value())) {
                 return hpack_decode_result(*error);
             }
-            // RFC 7541 section 4.2 permits at most two updates at the start
-            // of a field block. When two are present, the first is the
-            // smallest intervening maximum and the second is the final
-            // maximum, so the second value cannot be lower than the first.
-            if (size > allowed_dynamic_size_ || (size_update_count == 1 && size < first_size_update)) {
+            // RFC 7541 section 6.3 bounds each update by the decoder's allowance.
+            // Section 4.2's encoder coalescing policy is not a receiver count/order cap.
+            if (size > allowed_dynamic_size_) {
                 return hpack_decode_result(hpack_decode_error::dynamic_table_size);
             }
-            if (size_update_count == 0) {
-                first_size_update = size;
-            }
-            ++size_update_count;
             max_dynamic_size_ = size;
             evict_dynamic_to_fit(0);
             continue;
