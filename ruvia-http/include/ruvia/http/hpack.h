@@ -106,9 +106,11 @@ public:
     static void encode_dynamic_table_size_update(std::pmr::string& output, std::uint32_t maximum);
     // Names and values may borrow output. Aliasing inputs are owned in output's
     // resource before appending can invalidate them.
+    // Literal fields reserve their complete encoding before writing; allocation
+    // failure leaves the existing output bytes unchanged.
     static void encode_header(
         std::pmr::string& output, std::string_view name, std::string_view value);
-    // The same borrowing contract applies to value; name_index must be nonzero.
+    // The same borrowing and reservation contracts apply; name_index must be nonzero.
     static void encode_header_with_name_index(std::pmr::string& output, std::uint32_t name_index,
         std::string_view value, hpack_header_with_name_index_options options = {});
     static void encode_status(std::pmr::string& output, http_status_code status);

@@ -19,6 +19,43 @@ void validate_hpack_string_length(std::string_view value) {
     }
 }
 
+[[nodiscard]] constexpr std::uint64_t hpack_integer_encoded_bytes(
+    std::uint8_t prefix_bits, std::uint32_t value) noexcept {
+    const auto prefix_max = static_cast<std::uint32_t>((1U << prefix_bits) - 1U);
+    if (value < prefix_max) {
+        return 1;
+    }
+    value -= prefix_max;
+    std::uint64_t bytes = 2;
+    while (value >= 128) {
+        ++bytes;
+        value >>= 7;
+    }
+    return bytes;
+}
+
+void reserve_hpack_literal(std::pmr::string& out, std::uint32_t name_index,
+    std::string_view name, std::string_view value) {
+    // A literal's prefixes use at most 13 bytes (two uint32 lengths and
+    // the representation byte). Keep spare-capacity writes on a cheap path.
+    if (static_cast<std::uint64_t>(name.size()) + value.size() + 13 <= out.capacity() - out.size()) {
+        return;
+    }
+    // Both validated uint32 literals and their prefixes fit this wide sum,
+    // including when size_t is 32 bits.
+    auto bytes = hpack_integer_encoded_bytes(4, name_index) +
+                 hpack_integer_encoded_bytes(7, static_cast<std::uint32_t>(value.size())) +
+                 static_cast<std::uint64_t>(value.size());
+    if (name_index == 0) {
+        bytes += hpack_integer_encoded_bytes(7, static_cast<std::uint32_t>(name.size())) +
+                 static_cast<std::uint64_t>(name.size());
+    }
+    if (bytes > out.max_size() - out.size()) {
+        throw std::length_error("HPACK field exceeds the output size limit");
+    }
+    out.reserve(out.size() + static_cast<std::size_t>(bytes));
+}
+
 void encode_hpack_integer(std::pmr::string& out, std::uint8_t first_byte_mask,
     std::uint8_t prefix_bits, std::uint32_t value) {
     const auto prefix_max = static_cast<std::uint32_t>((1U << prefix_bits) - 1U);
@@ -89,6 +126,7 @@ void hpack_encoder::encode_header(
         owned_value.assign(value);
         value = owned_value;
     }
+    reserve_hpack_literal(out, 0, name, value);
     encode_hpack_integer(
         out, never_indexed ? detail::hpack_literal_never_indexed : detail::hpack_literal_without_indexing, 4, 0);
     encode_hpack_string(out, name);
@@ -106,6 +144,7 @@ void hpack_encoder::encode_header_with_name_index(std::pmr::string& out, std::ui
         owned_value.assign(value);
         value = owned_value;
     }
+    reserve_hpack_literal(out, name_index, {}, value);
     encode_hpack_integer(out,
         options.never_indexed_ ? detail::hpack_literal_never_indexed : detail::hpack_literal_without_indexing, 4,
         name_index);

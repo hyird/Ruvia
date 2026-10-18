@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -192,6 +193,31 @@ RUVIA_TEST(hpack_public_encoder_preserves_output_when_alias_copy_fails) {
         }
         RUVIA_CHECK(threw);
         RUVIA_CHECK_EQ(std::string_view(output), std::string_view(before));
+    }
+}
+
+RUVIA_TEST(hpack_public_encoder_keeps_output_when_literal_growth_fails) {
+    for (const unsigned int kind : {0U, 1U, 2U}) {
+        std::array<std::byte, 256> storage{};
+        std::pmr::monotonic_buffer_resource resource(storage.data(), storage.size(), std::pmr::null_memory_resource());
+        std::pmr::string output("prefix", &resource);
+        const std::string value(4096, 'v');
+        bool threw = false;
+        try {
+            if (kind == 0) {
+                ruvia::hpack_encoder::encode_header(output, "x-field", value);
+            } else if (kind == 1) {
+                ruvia::hpack_encoder::encode_header(output, "content-type", value);
+            } else {
+                ruvia::hpack_encoder::encode_header_with_name_index(output, 31, value);
+            }
+        } catch (const std::bad_alloc&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+        RUVIA_CHECK_EQ(std::string_view(output), std::string_view("prefix"));
+        output.append(" reusable");
+        RUVIA_CHECK_EQ(std::string_view(output), std::string_view("prefix reusable"));
     }
 }
 
