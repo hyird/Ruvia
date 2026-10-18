@@ -387,10 +387,7 @@ http_client_handle http_client_handle::with_options(operation_options options) c
 scoped_operation<http_client_response> http_client_handle::send(
     const http_client_request_view& view) const {
     registration_.require_active();
-    detail::http_client_request_storage request(view.method_.view(), view.target_.view(), resource_);
-    for (const auto& header : view.headers_) {
-        request.append_header(header.name(), header.value());
-    }
+    detail::http_client_request_storage request(view.method_.view(), view.target_.view(), view.headers_, resource_);
     if (const auto* bytes = view.content_.borrowed_bytes()) {
         request.set_body(bytes->value());
     }
@@ -406,10 +403,7 @@ scoped_operation<http_client_exchange> http_client_handle::open_request(const ht
         (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_value)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }
-    detail::http_client_request_storage request(head.method_.view(), head.target_.view(), resource_);
-    for (const auto& field : head.headers_) {
-        request.append_header(field.name(), field.value());
-    }
+    detail::http_client_request_storage request(head.method_.view(), head.target_.view(), head.headers_, resource_);
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_request(std::move(request), upload, options_));
 }
 
@@ -438,7 +432,6 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(cons
         (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority_host(borrowed_text(head.authority_)) || head.authority_.empty()))) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }
-    detail::http_client_request_storage request("CONNECT", head.target_, pmr_resource_or_default(resource_));
     if (head.protocol_ == "connect-udp" && (validate_http_connect_udp_request({.version_ = http_protocol_version::http2,
                                                                                   .method_ = "CONNECT",
                                                                                   .scheme_ = scheme() == http_scheme::https ? "https" : "http",
@@ -448,10 +441,8 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(cons
                                                    .index() != 0)) {
         throw std::invalid_argument("invalid CONNECT-UDP request head");
     }
+    detail::http_client_request_storage request("CONNECT", head.target_, head.headers_, pmr_resource_or_default(resource_));
     request.set_tunnel(head.authority_, head.protocol_);
-    for (const auto& field : head.headers_) {
-        request.append_header(field.name(), field.value());
-    }
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_tunnel(std::move(request), config, options_));
 }
 

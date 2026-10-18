@@ -15,6 +15,19 @@ http_client_output_queue* http_client_request_storage::output() const noexcept {
                                                                        : nullptr;
 }
 
+http_client_request_storage::http_client_request_storage(std::string_view method,
+    std::string_view target, std::span<const http_header_view> fields, std::pmr::memory_resource* resource)
+    : http_client_request_storage(method, target, resource) {
+    if (fields.empty()) {
+        return;
+    }
+    headers_.reserve(fields.size());
+    auto* const field_resource = this->resource();
+    for (const auto& field : fields) {
+        headers_.push_back(http_header::copy_with_lowercase_name(field.name(), field.value(), field_resource));
+    }
+}
+
 http_client_request_storage::http_client_request_storage(
     std::string_view method, std::string_view target, std::pmr::memory_resource* resource)
     : method_(method, pmr_resource_or_default(resource)),
@@ -67,13 +80,6 @@ void http_client_request_storage::set_tunnel(std::string_view authority, std::st
     tunnel_authority_.assign(authority);
     tunnel_protocol_.assign(protocol);
     is_tunnel_ = true;
-}
-
-http_client_request_storage& http_client_request_storage::append_header(
-    std::string_view name, std::string_view value) {
-    // Normalize names once at the owning request boundary.
-    headers_.push_back(http_header::copy_with_lowercase_name(name, value, resource()));
-    return *this;
 }
 
 http_client_request_storage& http_client_request_storage::set_body(std::string_view body) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory_resource>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -15,10 +16,10 @@ class http_client_output_queue;
 
 class http_client_request_storage final {
 public:
-    // Internal owning boundary: callers must transfer the completed request before
-    // asynchronous transport work can outlive the source operation.
-    http_client_request_storage(
-        std::string_view method, std::string_view target, std::pmr::memory_resource* resource);
+    // Complete owning boundary: reserve field metadata once and normalize/copy
+    // every field before asynchronous work can outlive caller storage.
+    http_client_request_storage(std::string_view method, std::string_view target,
+        std::span<const http_header_view> fields, std::pmr::memory_resource* resource);
 
     http_client_request_storage(const http_client_request_storage&) = delete;
     http_client_request_storage& operator=(const http_client_request_storage&) = delete;
@@ -28,7 +29,6 @@ public:
     [[nodiscard]] http_client_request_storage into_resource(
         std::pmr::memory_resource* resource) &&;
 
-    http_client_request_storage& append_header(std::string_view name, std::string_view value);
     http_client_request_storage& set_body(std::string_view body);
 
     void set_tunnel(std::string_view authority, std::string_view protocol);
@@ -83,6 +83,9 @@ public:
     }
 
 private:
+    http_client_request_storage(
+        std::string_view method, std::string_view target, std::pmr::memory_resource* resource);
+
     std::pmr::string method_;
     std::pmr::string target_;
     std::pmr::vector<http_header> headers_;
