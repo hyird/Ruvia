@@ -205,8 +205,8 @@ bool http2_connection::process_window_update(
         const auto output_checkpoint = output_.checkpoint();
         try {
             output_.append_rst_stream(header_value.stream_id_, error);
+            // A reset returns no send credit, so it cannot unblock other streams.
             close_stream(header_value.stream_id_, http2_stream_close_source::local, error);
-            mark_send_window_opened();
         } catch (...) {
             output_.rollback_to(output_checkpoint);
             throw;
