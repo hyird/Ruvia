@@ -449,21 +449,15 @@ std::variant<http2_request_head_event, http2_push_submit_error> http2_connection
     try {
         auto built = build_http2_server_request(impl_->connection_, std::get<0>(id), impl_->resource_, {});
         if ((built.index() != 0)) {
-            (void)impl_->connection_.submit_reset(std::get<0>(id), http2_error_code::cancel);
+            impl_->connection_.abandon_stream_lease(std::get<0>(id));
             return http2_push_submit_error::invalid_request;
         }
         impl_->connection_.pin_stream(std::get<0>(id));
         return http2_request_head_event(impl_->endpoint_, std::get<0>(id), std::move(std::get<0>(built)), {},
             http_request_content_indication::no_content, {});
     } catch (...) {
-        const auto original = std::current_exception();
-        try {
-            (void)impl_->connection_.submit_reset(std::get<0>(id), http2_error_code::cancel);
-            // Preserve the original failure; this reset is rollback only.
-            // NOLINTNEXTLINE(bugprone-empty-catch)
-        } catch (...) {
-        }
-        std::rethrow_exception(original);
+        impl_->connection_.abandon_stream_lease(std::get<0>(id));
+        throw;
     }
 }
 

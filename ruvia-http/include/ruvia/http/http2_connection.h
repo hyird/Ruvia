@@ -146,6 +146,8 @@ public:
         std::uint32_t stream_id) noexcept;
     // Commits a promise and returns the server request/storage lease used to
     // produce its response. Release or abandon it exactly like an incoming request.
+    // If materializing the lease fails after promise commit, the promised stream
+    // is cancelled using the deferred release rules above; the parent is unchanged.
     [[nodiscard]] std::variant<http2_request_head_event, http2_push_submit_error> submit_push_request(
         std::uint32_t associated_stream_id, http_push_request_view request);
 

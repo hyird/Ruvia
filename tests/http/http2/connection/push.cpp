@@ -1,6 +1,7 @@
 #include <array>
 #include <cstring>
 #include <memory_resource>
+#include <new>
 #include <optional>
 #include <string>
 #include <variant>
@@ -14,6 +15,55 @@
 #include "test_harness.h"
 
 namespace {
+class promise_failure_resource final : public std::pmr::memory_resource {
+public:
+    void reject_after_promise(const ruvia::http2_connection* connection) noexcept {
+        connection_ = connection;
+    }
+    [[nodiscard]] std::size_t live_allocations() const noexcept {
+        return live_;
+    }
+
+private:
+    [[nodiscard]] bool promise_complete() const noexcept {
+        if (connection_ == nullptr) {
+            return false;
+        }
+        const auto wire = connection_->pending_output();
+        bool promise = false;
+        for (std::size_t offset = 0; offset < wire.size();) {
+            const auto header = ruvia::parse_http2_frame_header(std::span<const char>(wire).subspan(offset));
+            if (!header || header->length_ > wire.size() - offset - ruvia::http2_frame_header_bytes) {
+                return false;
+            }
+            promise = promise || header->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::push_promise);
+            if (promise && (header->flags_ & 0x4) != 0) {
+                return true;
+            }
+            offset += ruvia::http2_frame_header_bytes + header->length_;
+        }
+        return false;
+    }
+    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+        // Tiny STL debug proxies may allocate in noexcept constructors.
+        if (bytes >= 32 && promise_complete()) {
+            throw std::bad_alloc();
+        }
+        auto* result = std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        ++live_;
+        return result;
+    }
+    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
+        --live_;
+        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
+    }
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+    const ruvia::http2_connection* connection_{};
+    std::size_t live_{};
+};
+
 void transfer(ruvia::http2_connection& from, ruvia::http2_connection& to) {
     const auto bytes_value = from.pending_output();
     const auto status = to.feed(bytes_value);
@@ -24,6 +74,69 @@ void transfer(ruvia::http2_connection& from, ruvia::http2_connection& to) {
     (void)from.consume_output(bytes_value.size());
 }
 }  // namespace
+
+RUVIA_TEST(http2_push_failed_lease_cancels_after_persistent_allocation_failure) {
+    promise_failure_resource resource;
+    {
+        auto client = ruvia::http2_connection::client({.enable_push_ = true});
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        transfer(client, server);
+        transfer(server, client);
+        transfer(client, server);
+        const auto submitted = client.submit_request_head(
+            ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+        RUVIA_CHECK(submitted.submitted() != nullptr);
+        transfer(client, server);
+        auto request = server.next_event();
+        auto end = server.next_event();
+        RUVIA_CHECK(request && request->request_head());
+        RUVIA_CHECK(end && end->message_end());
+        (void)server.consume_output(server.pending_output().size());
+        const std::string value(20'000, 'x');
+        const std::array fields{ruvia::http_header_view{"x-long", value}};
+        resource.reject_after_promise(&server);
+        bool threw = false;
+        try {
+            (void)server.submit_push_request(1,
+                {.authority_ = "example.test", .path_ = "/asset", .headers_ = fields});
+        } catch (const std::bad_alloc&) {
+            threw = true;
+        }
+        resource.reject_after_promise(nullptr);
+        RUVIA_CHECK(threw);
+        while (server.next_event()) {
+        }
+        RUVIA_CHECK(server.stream_aborted(2));
+        transfer(server, client);
+        auto promise = client.next_event();
+        RUVIA_CHECK(promise && promise->push_promise());
+        if (promise && promise->push_promise()) {
+            const auto& pushed = promise->push_promise()->request_;
+            RUVIA_CHECK_EQ(pushed.path_, "/asset");
+            RUVIA_CHECK_EQ(pushed.headers_.size(), std::size_t{1});
+            if (pushed.headers_.size() == 1) {
+                RUVIA_CHECK_EQ(pushed.headers_[0].value(), std::string_view(value));
+            }
+        }
+        auto closed = client.next_event();
+        RUVIA_CHECK(closed && closed->stream_closed());
+        if (closed && closed->stream_closed()) {
+            RUVIA_CHECK_EQ(closed->stream_closed()->stream_id(), std::uint32_t{2});
+            RUVIA_CHECK(closed->stream_closed()->error() == ruvia::http2_error_code::cancel);
+        }
+        RUVIA_CHECK(server.submit_buffered_response(1, ruvia::http_response{}) == ruvia::http2_submit_status::accepted);
+        transfer(server, client);
+        auto parent_head = client.next_event();
+        auto parent_end = client.next_event();
+        RUVIA_CHECK(parent_head && parent_head->response_head() && parent_head->response_head()->stream_id() == 1);
+        RUVIA_CHECK(parent_end && parent_end->message_end() && parent_end->message_end()->stream_id() == 1);
+        RUVIA_CHECK(!client.connection_error() && !server.connection_error());
+        if (request && request->request_head()) {
+            RUVIA_CHECK(server.release(std::move(*request->request_head())) == ruvia::http2_server_request_release_status::released);
+        }
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
 
 RUVIA_TEST(http2_push_promise_fragmentation_response_and_detached_metadata) {
     std::pmr::unsynchronized_pool_resource resource;
