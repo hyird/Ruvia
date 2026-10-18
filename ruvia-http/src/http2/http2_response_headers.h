@@ -20,7 +20,6 @@
 #include "ruvia/http/http_response.h"
 
 #include "field/http_interim_response_validation.h"
-#include "field/response_field_validation.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_hpack.h"
 #include "http2/http2_response_head_plan.h"
@@ -130,16 +129,6 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         value);
 }
 
-[[nodiscard]] inline bool http2_is_valid_encoded_response_header(
-    std::string_view name, std::string_view value, response_field_state& fields) noexcept {
-    if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value) ||
-        is_forbidden_http_binary_response_field(name)) {
-        return false;
-    }
-    return validate_response_field(classify_request_header(name), value, http_field_list_role::sender, fields) ==
-           response_field_status::ok;
-}
-
 [[nodiscard]] inline http2_interim_response_header_encode_status validate_http2_interim_response_headers(
     const http_interim_response_head& response) noexcept {
     if (response.headers().size() > max_http_header_fields) {
@@ -196,6 +185,9 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     // The unforgeable control alternative proves that the same submission path
     // rejected all HTTP/2 connection-specific fields before this function can
     // touch HPACK state. The encoder therefore has no silent filtering branch.
+    // The owning header block already enforces field syntax, sender metadata
+    // grammar and singleton rules. Revisit only protocol-specific section limits,
+    // not the same field bytes or metadata parsers.
     (void)control;
     const auto known_bits = response_known_header_bits(response);
 
@@ -205,7 +197,6 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         return false;
     }
     std::size_t field_count = 0;
-    response_field_state fields;
     for (const auto& header : response.headers()) {
         const auto known_bit = http_response_header_access::known_bit(header);
         if (known_bit == response_header_content_length) {
@@ -213,7 +204,6 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         }
         ++field_count;
         if (field_count > max_http_header_fields ||
-            !http2_is_valid_encoded_response_header(header.name(), header.value(), fields) ||
             !section_size.add(header.name(), header.value())) {
             return false;
         }

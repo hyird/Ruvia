@@ -460,7 +460,8 @@ public:
     void reserve_headers(std::size_t count);
     [[nodiscard]] std::pmr::memory_resource* memory_resource() const noexcept;
     // Apply a streaming coding, or atomically replace a buffered representation
-    // and its coding-dependent metadata. The coding must be a nonempty HTTP coding list.
+    // and its coding-dependent metadata. The coding must be a nonempty HTTP coding list;
+    // outer SP/HTAB are removed before storing its field value.
     // A failed replacement leaves this
     // response unchanged.
     void apply_content_encoding(std::string_view content_encoding);

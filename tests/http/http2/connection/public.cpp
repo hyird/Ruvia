@@ -1366,6 +1366,62 @@ RUVIA_TEST(http2_public_streaming_head_response_ends_at_headers) {
                 ruvia::http2_server_request_release_status::released);
 }
 
+RUVIA_TEST(http2_public_transformed_coding_ows_preserves_response_framing) {
+    // A complete gzip representation of an empty payload; the coded body still
+    // has twenty bytes that must be framed independently of its decoded size.
+    constexpr std::string_view encoded("\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03\x03\x00\x00\x00\x00\x00\x00\x00\x00\x00", 20);
+    for (const bool replace_body : {false, true}) {
+        for (const std::string_view coding : {" gzip", "gzip ", "\tgzip\t", " \tgzip\t "}) {
+            std::pmr::unsynchronized_pool_resource resource;
+            auto client = prepared_client(&resource);
+            auto server = ruvia::http2_connection::server({.resource_ = &resource});
+            const auto wire = server_request_wire(&resource, {}, "GET");
+            RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+            auto request = server.next_event();
+            RUVIA_CHECK(request && request->request_head());
+            const auto request_end = server.next_event();
+            RUVIA_CHECK(request_end && request_end->message_end());
+            ruvia::http_response response({.resource_ = &resource});
+            response.body(replace_body ? "old representation" : encoded);
+            response.header("ETag", "\"v1\"");
+            response.header("Content-Length", "999");
+            if (replace_body) {
+                std::pmr::string replacement(encoded, &resource);
+                response.replace_body_with_content_encoding(std::move(replacement), coding);
+            } else {
+                response.apply_content_encoding(coding);
+            }
+            RUVIA_CHECK(server.submit_buffered_response(1, response) == ruvia::http2_submit_status::accepted);
+            RUVIA_CHECK(client.feed(server.pending_output()) == ruvia::http2_feed_result::accepted);
+            const auto head = client.next_event();
+            RUVIA_CHECK(head && head->response_head());
+            if (head && head->response_head()) {
+                const auto fields = head->response_head()->head().headers();
+                const auto find_value = [&](std::string_view name) {
+                    const auto found = std::find_if(fields.begin(), fields.end(),
+                        [name](const auto& field) { return field.name() == name; });
+                    return found == fields.end() ? std::string_view{} : found->value();
+                };
+                RUVIA_CHECK_EQ(find_value("content-encoding"), "gzip");
+                RUVIA_CHECK_EQ(find_value("content-length"), "20");
+                RUVIA_CHECK_EQ(find_value("etag"), "W/\"v1\"");
+            }
+            auto body = client.next_event();
+            auto* chunk = body ? body->message_body_chunk() : nullptr;
+            RUVIA_CHECK(chunk != nullptr);
+            if (chunk != nullptr) {
+                RUVIA_CHECK_EQ(chunk->bytes(), encoded);
+                auto credit = chunk->take_credit();
+                (void)client.acknowledge(std::move(credit));
+            }
+            const auto end = client.next_event();
+            RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == 1);
+            RUVIA_CHECK(!client.next_event());
+            RUVIA_CHECK(!client.connection_error());
+        }
+    }
+}
+
 RUVIA_TEST(http2_public_server_submits_buffered_response_head_and_returns_write_plan) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::http2_connection::server({.resource_ = &resource});

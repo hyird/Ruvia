@@ -12,6 +12,7 @@
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/server/http_response_head_policy.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
+#include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_status.h"
 
@@ -234,6 +235,9 @@ void http_response::replace_body_with_content_encoding(
 void http_response::apply_encoded_representation(
     std::string_view content_encoding, std::pmr::string* body) {
     detail::validate_response_header_storage_size(std::string_view("Content-Encoding").size(), content_encoding.size());
+    // Coding-list parsing permits field-line OWS; publish normalized field
+    // content so the same response can be emitted by HTTP/1 and HTTP/2.
+    content_encoding = http_trim_ows(content_encoding);
     detail::response_field_state fields;
     if (detail::validate_response_field(detail::request_header_kind::content_encoding, content_encoding,
             detail::http_field_list_role::sender, fields) != detail::response_field_status::ok) {
