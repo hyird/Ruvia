@@ -2,6 +2,8 @@
 #include <string>
 #include <utility>
 
+#include "ruvia/http/http1_client_response_body_decoder.h"
+
 #include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
 
@@ -417,6 +419,58 @@ RUVIA_TEST(http_client_no_body_precedence_ignores_framing_fields) {
     RUVIA_CHECK(no_content.plan().without_content() != nullptr);
 }
 
+RUVIA_TEST(http_client_trailer_declaration_metadata_preserves_framed_body_and_next_response) {
+    for (const std::string_view declaration :
+        {"Content-Length", "Host", "Bad Field", "\"x-name\"", ",", "X-One,,X-Two"}) {
+        for (const bool chunked : {false, true}) {
+            std::string head = "HTTP/1.1 200 OK\r\nTrailer: \t";
+            head.append(declaration);
+            head.append(" \t\r\n");
+            head.append(chunked ? "Transfer-Encoding: chunked\r\n\r\n" : "Content-Length: 3\r\n\r\n");
+            const std::string wire = head + (chunked ? "3\r\nabc\r\n0\r\n\r\n" : "abc") +
+                                     "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+            const auto result = parse_wire("GET", wire);
+            RUVIA_CHECK(result.parsed() != nullptr);
+            if (const auto* parsed = result.parsed()) {
+                RUVIA_CHECK_EQ(parsed->head().headers().front().value(), declaration);
+                RUVIA_CHECK_EQ(parsed->consumed_bytes(), head.size());
+                if (chunked) {
+                    RUVIA_CHECK(parsed->plan().chunked() != nullptr);
+                } else {
+                    RUVIA_CHECK_EQ(require_known_length(parsed->plan()).content_length(), std::size_t{3});
+                }
+                ruvia::http1_client_response_body_decoder decoder(
+                    parsed->plan(), std::pmr::get_default_resource());
+                std::array<char, 8> scratch{};
+                auto remaining = std::string_view(wire).substr(parsed->consumed_bytes());
+                std::string body;
+                bool complete = false;
+                for (int step = 0; step < 8; ++step) {
+                    const auto decoded = decoder.decode(remaining, scratch);
+                    RUVIA_CHECK(decoded.protocol_failure() == nullptr);
+                    RUVIA_CHECK(decoded.decoder_failure() == nullptr);
+                    remaining.remove_prefix(decoded.consumed_bytes());
+                    if (const auto* output = decoded.output()) {
+                        body.append(output->bytes());
+                    }
+                    if (decoded.complete()) {
+                        complete = true;
+                        break;
+                    }
+                }
+                RUVIA_CHECK(complete);
+                RUVIA_CHECK_EQ(body, "abc");
+                const auto next = parse_wire("GET", remaining);
+                RUVIA_CHECK(next.parsed() != nullptr);
+                if (const auto* next_head = next.parsed()) {
+                    RUVIA_CHECK_EQ(require_known_length(next_head->plan()).content_length(), std::size_t{2});
+                    RUVIA_CHECK_EQ(remaining.substr(next_head->consumed_bytes()), "ok");
+                }
+            }
+        }
+    }
+}
+
 RUVIA_TEST(http_client_bodyless_trailer_declarations_preserve_message_boundaries) {
     for (const auto& [method, status_line] : {
              std::pair{std::string_view("HEAD"), std::string_view("HTTP/1.1 200 OK")},
@@ -441,7 +495,7 @@ RUVIA_TEST(http_client_bodyless_trailer_declarations_preserve_message_boundaries
             // RFC 9110 section 6.6.2 makes Trailer a declaration, not a promise
             // that trailer fields follow. RFC 9112 section 6.3 ends both of
             // these responses at the empty line regardless of their fields.
-            head.append("Trailer: ETag, X-Checksum\r\n\r\n");
+            head.append("Trailer: Content-Length, Bad Field, \"x-name\"\r\n\r\n");
             const std::string wire = head + "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
             http1_client_response_parser parser(prepared.prepared()->exchange_state());
             for (std::size_t size = 1; size < head.size(); ++size) {
@@ -457,7 +511,7 @@ RUVIA_TEST(http_client_bodyless_trailer_declarations_preserve_message_boundaries
             RUVIA_CHECK(parsed->plan().without_content() != nullptr);
             RUVIA_CHECK_EQ(parsed->consumed_bytes(), head.size());
             RUVIA_CHECK_EQ(parsed->head().headers().back().name(), "Trailer");
-            RUVIA_CHECK_EQ(parsed->head().headers().back().value(), "ETag, X-Checksum");
+            RUVIA_CHECK_EQ(parsed->head().headers().back().value(), "Content-Length, Bad Field, \"x-name\"");
             const auto following = std::string_view(wire).substr(parsed->consumed_bytes());
             const auto next = parse_wire("GET", following);
             RUVIA_CHECK(next.parsed() != nullptr);
@@ -466,12 +520,10 @@ RUVIA_TEST(http_client_bodyless_trailer_declarations_preserve_message_boundaries
                 RUVIA_CHECK_EQ(following.substr(next_head->consumed_bytes()), "ok");
             }
         }
-        RUVIA_CHECK(parse_fails(method, std::string(status_line) + "\r\nTrailer: Bad Field"));
-        RUVIA_CHECK(parse_fails(method, std::string(status_line) + "\r\nTrailer: Content-Length"));
     }
 
     constexpr std::string_view tunnel_wire =
-        "HTTP/1.1 200 Connection Established\r\nTrailer: X-Checksum\r\n\r\ntunnel bytes";
+        "HTTP/1.1 200 Connection Established\r\nTrailer: Content-Length, Bad Field\r\n\r\ntunnel bytes";
     const auto tunnel = parse_wire("CONNECT", tunnel_wire);
     RUVIA_CHECK(tunnel.parsed() != nullptr);
     if (const auto* parsed = tunnel.parsed()) {
@@ -548,7 +600,7 @@ RUVIA_TEST(http_client_informational_auxiliary_fields_preserve_the_final_respons
         std::string head(status_line);
         head.append(
             "Content-Length: ignored\r\nTransfer-Encoding: ignored\r\n"
-            "Trailer: X-Checksum\r\nTE: trailers\r\nUpgrade: websocket\r\n"
+            "Trailer: Content-Length, Bad Field\r\nTE: trailers\r\nUpgrade: websocket\r\n"
             "Content-Type: text/plain\r\nContent-Type: application/json\r\n"
             "Server: first\r\nServer: second\r\n\r\n");
         const std::string wire = head + "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";

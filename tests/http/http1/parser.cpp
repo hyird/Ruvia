@@ -100,6 +100,44 @@ void verify_parser_allocation_failures(ruvia::testing::test_context& ruvia_ctx,
 
 }  // namespace
 
+RUVIA_TEST(http1_request_trailer_declaration_metadata_preserves_body_and_pipeline) {
+    constexpr std::string_view next_wire = "GET /next HTTP/1.1\r\nHost: example.test\r\n\r\n";
+    for (const std::string_view declaration :
+        {"Content-Length", "Host", "bad field", "\"x-name\"", ",", "X-One,,X-Two"}) {
+        for (const bool chunked : {false, true}) {
+            std::string head = "POST /first HTTP/1.1\r\nHost: example.test\r\nTrailer: \t";
+            head.append(declaration);
+            head.append(" \t\r\n");
+            head.append(chunked ? "Transfer-Encoding: chunked\r\n\r\n" : "Content-Length: 3\r\n\r\n");
+            const std::string message = head + (chunked ? "3\r\nabc\r\n0\r\n\r\n" : "abc");
+            const std::string wire = message + std::string(next_wire);
+            const auto incomplete = parse_http1_request_message(head);
+            RUVIA_CHECK(incomplete.need_body());
+            const auto parsed = parse_http1_request_message(wire);
+            RUVIA_CHECK(parsed.complete());
+            if (!parsed.complete()) {
+                continue;
+            }
+            RUVIA_CHECK_EQ(parsed.state_.request_.header("Trailer").value_or("missing"), declaration);
+            RUVIA_CHECK_EQ(parsed.state_.request_.header("Host").value_or("missing"), "example.test");
+            RUVIA_CHECK_EQ(parsed.state_.head_ready()->header_bytes(), head.size());
+            if (chunked) {
+                RUVIA_CHECK(parsed.state_.body_plan_.chunked() != nullptr);
+            } else {
+                RUVIA_CHECK_EQ(require_known_length(parsed.state_.body_plan_).content_length(), std::size_t{3});
+            }
+            RUVIA_CHECK_EQ(parsed.body_, "abc");
+            RUVIA_CHECK_EQ(*parsed.message_bytes_, message.size());
+            const auto remaining = std::string_view(wire).substr(*parsed.message_bytes_);
+            RUVIA_CHECK_EQ(remaining, next_wire);
+            const auto next = parse_http1_request_message(remaining);
+            RUVIA_CHECK(next.complete());
+            RUVIA_CHECK_EQ(next.state_.request_.path(), "/next");
+            RUVIA_CHECK_EQ(next.message_bytes_.value_or(0), next_wire.size());
+        }
+    }
+}
+
 RUVIA_TEST(http1_public_request_connection_plan_only_tightens_reuse) {
     const auto http10 = ruvia::plan_http10_request_connection(false, true);
     RUVIA_CHECK_EQ(http10.protocol_version(), http_protocol_version::http10);

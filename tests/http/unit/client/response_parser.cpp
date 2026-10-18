@@ -281,29 +281,6 @@ RUVIA_TEST(http_client_opaque_content_type_owns_metadata_without_changing_body_b
     }
 }
 
-RUVIA_TEST(http_client_rejects_invalid_trailer_field_names_in_response_head) {
-    for (const std::string_view value : {"Content-Length", "X-Checksum, bad field"}) {
-        std::string head = "HTTP/1.1 200 OK\r\nTrailer: ";
-        head.append(value);
-        head.append("\r\nContent-Length: 0");
-        RUVIA_CHECK(
-            parse_failure_error("GET", head) == http1_client_response_parse_error::invalid_header);
-    }
-
-    const auto announced_without_chunking = parse_head("GET",
-        "HTTP/1.1 200 OK\r\n"
-        "Trailer: ETag, X-Checksum\r\n"
-        "Content-Length: 0");
-    RUVIA_CHECK_EQ(require_known_length(announced_without_chunking.plan()).content_length(), std::size_t{0});
-
-    const auto valid = parse_response("GET",
-        "HTTP/1.1 200 OK\r\n"
-        "Trailer: ETag, X-Checksum\r\n"
-        "Transfer-Encoding: chunked");
-    RUVIA_CHECK_EQ(valid.head_.headers().size(), std::size_t{2});
-    RUVIA_CHECK_EQ(valid.head_.headers().front().name(), std::string_view("Trailer"));
-}
-
 RUVIA_TEST(http_client_ignores_request_only_te_in_final_response_head) {
     const auto parsed = parse_head("GET",
         "HTTP/1.1 200 OK\r\n"

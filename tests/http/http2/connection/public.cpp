@@ -2669,6 +2669,75 @@ RUVIA_TEST(http2_public_request_headers_remain_valid_while_trailers_arrive) {
                 ruvia::http2_server_request_release_status::released);
 }
 
+RUVIA_TEST(http2_public_trailer_declaration_does_not_authorize_forbidden_actual_fields) {
+    for (const std::string_view forbidden : {"content-length", "host"}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        std::pmr::string wire(ruvia::http2_client_preface, &resource);
+        append_peer_settings(wire);
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "POST");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/");
+        ruvia::hpack_encoder::encode_header(block, "content-length", "3");
+        ruvia::hpack_encoder::encode_header(block, "trailer", "Content-Length, Host, bad field");
+        append_header_section(wire, 1, block, false, true);
+        append_frame(wire, ruvia::http2_frame_type::data, 0, 1, "abc");
+        block.clear();
+        ruvia::hpack_encoder::encode_header(block, "x-checksum", "kept");
+        ruvia::hpack_encoder::encode_header(block, forbidden, forbidden == "host" ? "other.test" : "99");
+        append_header_section(wire, 1, block, true, true);
+        block.clear();
+        ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/next");
+        append_header_section(wire, 3, block, true, false);
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        std::optional<ruvia::http2_request_head_event> first;
+        std::optional<ruvia::http2_request_head_event> next;
+        std::string body;
+        unsigned resets = 0;
+        unsigned first_ends = 0;
+        unsigned next_ends = 0;
+        while (auto event = server.next_event()) {
+            if (auto* head = event->request_head()) {
+                if (head->stream_id() == 1) {
+                    first.emplace(std::move(*head));
+                } else if (head->stream_id() == 3) {
+                    next.emplace(std::move(*head));
+                }
+            } else if (auto* chunk = event->message_body_chunk()) {
+                RUVIA_CHECK(chunk->stream_id() == 1);
+                body.append(chunk->bytes());
+                auto credit = chunk->take_credit();
+                (void)server.acknowledge(std::move(credit));
+            } else if (const auto* end = event->message_end()) {
+                first_ends += end->stream_id() == 1;
+                next_ends += end->stream_id() == 3;
+            } else if (const auto* closed = event->stream_closed()) {
+                resets += closed->stream_id() == 1 && closed->error() == ruvia::http2_error_code::protocol_error;
+            }
+        }
+        RUVIA_CHECK(first && next && resets == 1 && first_ends == 0 && next_ends == 1);
+        RUVIA_CHECK_EQ(body, "abc");
+        RUVIA_CHECK(!server.connection_error());
+        if (first) {
+            RUVIA_CHECK_EQ(first->request().header("Trailer").value_or(""), "Content-Length, Host, bad field");
+            RUVIA_CHECK_EQ(first->request().header("Content-Length").value_or(""), "3");
+            RUVIA_CHECK_EQ(first->request().header("Host").value_or(""), "example.test");
+            (void)server.release(std::move(*first));
+        }
+        if (next) {
+            RUVIA_CHECK_EQ(next->request().path(), "/next");
+            ruvia::http_response reply({.resource_ = &resource});
+            RUVIA_CHECK(server.submit_buffered_response(3, reply) == ruvia::http2_submit_status::accepted);
+            (void)server.release(std::move(*next));
+        }
+    }
+}
+
 RUVIA_TEST(http2_public_server_release_before_message_end_keeps_terminal_event) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::http2_connection::server({.resource_ = &resource});
@@ -3358,7 +3427,7 @@ RUVIA_TEST(http2_public_options_without_content_type_preserves_body_and_followin
 RUVIA_TEST(http2_public_opaque_metadata_preserves_request_and_response_bodies) {
     for (const bool server_role : {true, false}) {
         for (const std::string_view field_name : {"content-type", "content-encoding",
-                 "origin", "access-control-request-method", "access-control-request-headers"}) {
+                 "origin", "access-control-request-method", "access-control-request-headers", "trailer"}) {
             for (const std::string_view value : {"", "not a media type", "text/plain; charset=\"unfinished"}) {
                 std::pmr::unsynchronized_pool_resource resource;
                 std::pmr::string block(&resource);
@@ -3430,10 +3499,11 @@ RUVIA_TEST(http2_public_opaque_metadata_preserves_request_and_response_bodies) {
     }
 }
 
-RUVIA_TEST(http2_public_sender_rejects_invalid_cors_request_fields) {
+RUVIA_TEST(http2_public_sender_rejects_invalid_request_metadata) {
     for (const auto& [name, value] :
         {std::pair<std::string_view, std::string_view>{"origin", "https://app.example/path"},
-            {"access-control-request-method", "POST GET"}, {"access-control-request-headers", "x bad"}}) {
+            {"access-control-request-method", "POST GET"}, {"access-control-request-headers", "x bad"},
+            {"trailer", "Content-Length"}, {"trailer", "bad field"}, {"trailer", "\"x-name\""}}) {
         RUVIA_CHECK(!http2_client_submits_field(name, value));
     }
     RUVIA_CHECK(http2_client_submits_field("origin", "https://app.example"));

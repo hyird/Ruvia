@@ -27,7 +27,8 @@ response_field_status validate_response_field(request_header_kind kind, std::str
             }
             break;
         case request_header_kind::trailer:
-            if (!is_valid_http_response_trailer_field_value(value, role)) {
+            if (role == http_field_list_role::sender &&
+                !is_valid_http_response_trailer_field_value(value, role)) {
                 return response_field_status::invalid;
             }
             break;

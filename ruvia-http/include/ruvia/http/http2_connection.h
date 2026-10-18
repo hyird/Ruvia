@@ -98,6 +98,8 @@ struct http2_extended_connect_request_head_view final {
 // each header section remains subject to the configured decoding limits.
 // Received 1xx fields remain ordered metadata; Content-Length and Trailer do
 // not frame the interim or final response. END_STREAM on a 1xx remains malformed.
+// Received Trailer declarations remain opaque metadata in requests and responses;
+// they never authorize forbidden actual trailer fields or select message framing.
 // Received request TE permits empty lists and ignores empty members; every
 // nonempty member must be "trailers" (case-insensitive).
 // Response TE remains malformed even when empty.

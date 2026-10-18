@@ -126,7 +126,9 @@ namespace {
         case request_header_kind::content_encoding:
             return is_valid_http_content_encoding_field_value(value, role);
         case request_header_kind::trailer:
-            return is_valid_http_request_trailer_field_value(value, role);
+            // The declaration neither frames content nor authorizes actual trailers.
+            return role == http_field_list_role::recipient ||
+                   is_valid_http_request_trailer_field_value(value, role);
         case request_header_kind::te:
             return is_valid_te(value, role, framing);
         case request_header_kind::expect:

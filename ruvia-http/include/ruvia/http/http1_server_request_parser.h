@@ -133,6 +133,10 @@ public:
     // Expect extensions follow RFC 9110 sections 10.1.1 and 5.6.6: OWS
     // around ';' is allowed, but whitespace around '=' is invalid.
     // Auxiliary Upgrade and Trailer fields do not establish message framing.
+    // Initial Trailer values retain OWS-normalized opaque declaration metadata,
+    // subject to ordinary field-byte and size limits, not trailer-name/list
+    // validation. A declaration neither promises nor authorizes actual trailers;
+    // actual trailer fields remain subject to their independent restrictions.
     // OPTIONS Content-Type presence is a sender obligation (RFC 9110 9.3.7),
     // not a recipient rejection rule. Content-Type retains its normalized field
     // value without interpreting media-type syntax; applications own that decision.
