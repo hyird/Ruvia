@@ -67,12 +67,20 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return method_.get_allocator().resource();
     }
+
+    [[nodiscard]] std::string_view body() const& noexcept {
+        return body_;
+    }
+    std::string_view body() const&& = delete;
+    [[nodiscard]] bool has_body() const noexcept {
+        return has_body_;
+    }
+    [[nodiscard]] const std::pmr::vector<http_header>& headers() const noexcept {
+        return headers_;
+    }
     [[nodiscard]] bool udp_tunnel() const noexcept {
         return tunnel_protocol_ == "connect-udp";
     }
-
-    // Field views borrow this request's owned fields through `headers`.
-    [[nodiscard]] http_client_request_view view(std::pmr::vector<http_header_view>& headers) const;
 
 private:
     std::pmr::string method_;

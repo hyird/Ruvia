@@ -389,10 +389,8 @@ task<void> http_client_connection::execute_http2(const http_client_request_stora
     const auto& config = pool_.config();
     auto* const resource = pool_.resource();
     std::pmr::vector<http_header_view> headers(resource);
-    auto source_value = request.view(headers);
     std::pmr::string cookie_header(resource);
-    pool_.policy().append_headers(request, headers, cookie_header);
-    source_value.headers_ = std::span<const http_header_view>(headers);
+    auto source_value = pool_.policy().prepare_request(request, headers, cookie_header);
     const std::string_view scheme = config.scheme_ == http_scheme::https ? "https" : "http";
     const auto* body = source_value.content_.borrowed_bytes();
     const auto content = request.upload() != nullptr

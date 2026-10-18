@@ -227,25 +227,27 @@ void client_request_policy::discard_expired(std::chrono::system_clock::time_poin
     });
 }
 
-void client_request_policy::append_headers(const http_client_request_storage& request,
+http_client_request_view client_request_policy::prepare_request(const http_client_request_storage& request,
     std::pmr::vector<http_header_view>& headers, std::pmr::string& cookie_header) {
-    const auto has_header = [&headers](std::string_view name) {
-        return std::ranges::any_of(headers,
-            [name](const http_header_view& header_value) { return http_ascii_equals_ignore_case(header_value.name(), name); });
-    };
-    if (!config_.user_agent_.empty() && !has_header("user-agent")) {
-        headers.emplace_back("user-agent", config_.user_agent_);
-    }
-    std::erase_if(headers, [&cookie_header](const http_header_view& header_value) {
-        if (!http_ascii_equals_ignore_case(header_value.name(), "cookie")) {
-            return false;
+    const auto& input_headers = request.headers();
+    auto field_count = input_headers.size();
+    bool add_user_agent = !config_.user_agent_.empty();
+    cookie_header.clear();
+    // Owning request storage has already normalized every field name.
+    for (const auto& field : input_headers) {
+        const auto name = field.name();
+        if (add_user_agent && name == "user-agent") {
+            add_user_agent = false;
         }
+        if (name != "cookie") {
+            continue;
+        }
+        --field_count;
         if (!cookie_header.empty()) {
             cookie_header.append("; ");
         }
-        cookie_header.append(header_value.value());
-        return true;
-    });
+        cookie_header.append(field.value());
+    }
 
     // RFC 9110 §9.3.8: TRACE reflects the request, so stored credentials stay
     // out; caller-written Cookie fields above remain the caller's choice.
@@ -269,9 +271,28 @@ void client_request_policy::append_headers(const http_client_request_storage& re
             append_cookie_request_pair(cookie_header, cookie.name_, cookie.value_);
         }
     }
+    const bool add_cookie = !cookie_header.empty();
+    field_count += static_cast<std::size_t>(add_user_agent) + static_cast<std::size_t>(add_cookie);
+    headers.clear();
+    headers.reserve(field_count);
+    for (const auto& field : input_headers) {
+        if (field.name() != "cookie") {
+            headers.emplace_back(field.name(), field.value());
+        }
+    }
+    if (add_user_agent) {
+        headers.emplace_back("user-agent", config_.user_agent_);
+    }
     if (!cookie_header.empty()) {
         headers.emplace_back("cookie", cookie_header);
     }
+    http_client_request_view result;
+    result.method_ = request.method();
+    result.target_ = request.target();
+    result.headers_ = std::span<const http_header_view>(headers);
+    result.content_ = request.has_body() ? http_client_request_content_view::bytes(request.body())
+                                         : http_client_request_content_view::none();
+    return result;
 }
 
 void client_request_policy::retain_response_cookies(

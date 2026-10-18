@@ -82,19 +82,4 @@ http_client_request_storage& http_client_request_storage::set_body(std::string_v
     return *this;
 }
 
-http_client_request_view http_client_request_storage::view(std::pmr::vector<http_header_view>& headers) const {
-    headers.clear();
-    headers.reserve(headers_.size());
-    for (const auto& header : headers_) {
-        headers.emplace_back(header.name(), header.value());
-    }
-    http_client_request_view result;
-    result.method_ = method_;
-    result.target_ = target_;
-    result.headers_ = std::span<const http_header_view>(headers);
-    result.content_ = has_body_ ? http_client_request_content_view::bytes(body_)
-                                : http_client_request_content_view::none();
-    return result;
-}
-
 }  // namespace ruvia::detail

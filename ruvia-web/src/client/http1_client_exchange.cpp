@@ -166,10 +166,8 @@ task<void> http1_client_exchange::run(
 
     auto* const response_resource = state_value.resource_;
     std::pmr::vector<http_header_view> headers(pool_.resource());
-    auto source_value = request.view(headers);
     std::pmr::string cookie_header(pool_.resource());
-    pool_.policy().append_headers(request, headers, cookie_header);
-    source_value.headers_ = std::span<const http_header_view>(headers);
+    auto source_value = pool_.policy().prepare_request(request, headers, cookie_header);
 
     auto origin = pool_.origin();
     const bool connect_udp = request.udp_tunnel();
