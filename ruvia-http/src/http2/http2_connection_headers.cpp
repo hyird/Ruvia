@@ -40,7 +40,8 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
             stream.request_known_method() != http_known_method::connect || !stream.has_scheme() ||
             !stream.has_path() || !stream.has_authority() ||
             !http2_is_valid_request_authority(stream.request_scheme(), stream.request_authority()) ||
-            !http2_is_valid_extended_connect_path(stream.request_scheme(), stream.request_path()) ||
+            !http2_request_path_matches_method_and_scheme(
+                stream.request_known_method(), stream.request_scheme(), stream.request_path()) ||
             stream.remote_content().allowed_known_length() != nullptr) {
             return header_decode_status::protocol_error;
         }
@@ -68,7 +69,7 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
     } else if (!stream.has_scheme() || !stream.has_path() ||
                (stream.has_authority() && !http2_is_valid_request_authority(
                                               stream.request_scheme(), stream.request_authority())) ||
-               !http2_is_valid_regular_request_path(
+               !http2_request_path_matches_method_and_scheme(
                    stream.request_known_method(), stream.request_scheme(), stream.request_path()) ||
                !http2_has_required_request_authority(stream)) {
         return header_decode_status::protocol_error;

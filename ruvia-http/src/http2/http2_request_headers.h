@@ -50,20 +50,26 @@ struct http2_header_decode_context final {
     return path != "*" && http2_is_http_request_scheme(scheme);
 }
 
-[[nodiscard]] inline bool http2_is_valid_regular_request_path(
+// Cross-field constraints only. Decoded :path syntax is already checked;
+// senders combine this predicate with the origin-form grammar below.
+[[nodiscard]] inline bool http2_request_path_matches_method_and_scheme(
     http_known_method method, std::string_view scheme, std::string_view path) noexcept {
     if (path.empty()) {
         return !http2_is_http_request_scheme(scheme);
     }
-    return is_valid_origin_or_asterisk_form_target(method, path);
+    return path != "*" || method == http_known_method::options;
+}
+
+[[nodiscard]] inline bool http2_is_valid_regular_request_path(
+    http_known_method method, std::string_view scheme, std::string_view path) noexcept {
+    return http2_request_path_matches_method_and_scheme(method, scheme, path) &&
+           (path.empty() || path == "*" || is_valid_origin_form_target(path));
 }
 
 [[nodiscard]] inline bool http2_is_valid_extended_connect_path(
     std::string_view scheme, std::string_view path) noexcept {
-    if (path.empty()) {
-        return !http2_is_http_request_scheme(scheme);
-    }
-    return is_valid_origin_form_target(path);
+    return http2_request_path_matches_method_and_scheme(http_known_method::connect, scheme, path) &&
+           (path.empty() || is_valid_origin_form_target(path));
 }
 
 [[nodiscard]] inline bool http2_is_valid_request_authority(
