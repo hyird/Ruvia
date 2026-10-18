@@ -156,7 +156,8 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
     const auto content_indication = content_will_follow ? http_request_content_indication::will_follow
                                                         : http_request_content_indication::no_content;
     http2_end_stream end_stream = http2_end_stream::keep_open;
-    std::array<char, 20> length_buffer{};
+    // Only the formatted prefix is exposed; an omitted length keeps an empty view.
+    std::array<char, 20> length_buffer;
     std::size_t length_bytes = 0;
     if (without_content) {
         end_stream = http2_end_stream::end_stream;
@@ -372,7 +373,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         (void)stream->record_remote_head_end_stream();
         (void)stream->finalize_remote_content_head();
         stream->reserve_push(http2_push_reservation::local);
-        std::array<char, 4> promised{};
+        std::array<char, 4> promised;
         http2_write32(promised.data(), next_push_stream_id_);
         std::size_t offset = 0;
         bool first = true;
