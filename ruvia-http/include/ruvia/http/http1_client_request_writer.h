@@ -290,6 +290,7 @@ private:
 // validation. It validates the complete request before touching the caller's
 // buffer, generates Host and exact Content-Length, and returns separate
 // head/content views for writev-style I/O or Expect: 100-continue gating.
+// Generated port and Content-Length tokens are shared by measurement and writing.
 // Metadata text and the header descriptor array may overlap head_buffer:
 // successful preparation consumes them before overwriting the emitted head.
 // Borrowed content must not overlap those written bytes; it may use the unused

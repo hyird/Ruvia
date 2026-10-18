@@ -1,5 +1,6 @@
 #include "ruvia/http/http1_client_request_writer.h"
 
+#include <array>
 #include <cstdint>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
@@ -81,26 +82,21 @@ constexpr std::string_view expect_prefix = "Expect: ";
 constexpr std::string_view connection_close = "Connection: close\r\n";
 constexpr std::string_view chunked_header = "Transfer-Encoding: chunked\r\n";
 
-[[nodiscard]] std::size_t authority_length(const http_origin_view& origin, bool force_port) noexcept {
-    return origin.host().size() + ((force_port || !detail::http_origin_uses_default_port(origin))
-                                          ? 1 + http_unsigned_decimal_size(origin.port())
-                                          : 0);
-}
-
-void append_authority(detail::http_raw_wire_sink& sink, const http_origin_view& origin, bool force_port) noexcept {
-    sink.append(origin.host());
-    if (force_port || !detail::http_origin_uses_default_port(origin)) {
+void append_authority(detail::http_raw_wire_sink& sink, std::string_view host, std::string_view port) noexcept {
+    sink.append(host);
+    if (!port.empty()) {
         sink.append(':');
-        sink.append_unsigned(origin.port());
+        sink.append(port);
     }
 }
 
 struct request_head_write_plan final {
-    http_origin_view origin_;
+    std::string_view host_;
+    std::string_view port_;
     std::string_view method_;
     std::string_view target_;
     std::span<const http_header_view> headers_;
-    std::optional<std::uint64_t> length_;
+    std::string_view content_length_;
     bool connect_;
     bool explicit_content_;
     bool expect_continue_;
@@ -112,22 +108,22 @@ struct request_head_write_plan final {
     sink.append(plan.method_);
     sink.append(' ');
     if (plan.connect_) {
-        append_authority(sink, plan.origin_, true);
+        append_authority(sink, plan.host_, plan.port_);
     } else {
         sink.append(plan.target_);
     }
     sink.append(http11_request_line_suffix);
     sink.append(host_prefix);
-    append_authority(sink, plan.origin_, plan.connect_);
+    append_authority(sink, plan.host_, plan.port_);
     sink.append(crlf);
     for (const auto& header : plan.headers_) {
         detail::emit_http1_field_line(sink, header.name(), header.value());
     }
-    if (plan.explicit_content_ && !plan.length_) {
+    if (plan.explicit_content_ && plan.content_length_.empty()) {
         sink.append(chunked_header);
     } else if (plan.explicit_content_) {
         sink.append(content_length_prefix);
-        sink.append_unsigned(*plan.length_);
+        sink.append(plan.content_length_);
         sink.append(crlf);
     }
     if (plan.expect_continue_) {
@@ -226,17 +222,28 @@ struct request_head_write_plan final {
             http1_client_request_prepare_error::too_many_headers);
     }
 
-    const std::size_t target_bytes = connect ? authority_length(origin, true) : target.size();
+    // Reuse each decimal token in measurement and emission. CONNECT uses the
+    // same port token for both its authority target and generated Host field.
+    std::array<char, http_max_unsigned_decimal_size> port_buffer;
+    const auto port_value = connect || !detail::http_origin_uses_default_port(origin)
+                                ? http_format_unsigned(port_buffer, origin.port())
+                                : std::string_view{};
+    const auto authority_bytes = origin.host().size() + (port_value.empty() ? 0 : 1 + port_value.size());
+    std::array<char, http_max_unsigned_decimal_size> content_length_buffer;
+    const auto content_length_value = explicit_content && !chunked
+                                          ? http_format_unsigned(content_length_buffer, *length)
+                                          : std::string_view{};
+    const std::size_t target_bytes = connect ? authority_bytes : target.size();
     // The caller's fields are already charged; add the request line and the
     // generated fields to the same section budget.
     auto head_budget = header_facts.section_;
     if (!head_budget.add(method.size()) || !head_budget.add(1) || !head_budget.add(target_bytes) ||
         !head_budget.add(http11_request_line_suffix.size()) ||
-        !head_budget.add(host_prefix.size()) || !head_budget.add(authority_length(origin, connect)) ||
+        !head_budget.add(host_prefix.size()) || !head_budget.add(authority_bytes) ||
         !head_budget.add(crlf.size()) || (chunked && !head_budget.add(chunked_header.size())) ||
         (explicit_content && !chunked &&
             (!head_budget.add(content_length_prefix.size()) ||
-                !head_budget.add(http_unsigned_decimal_size(*length)) || !head_budget.add(crlf.size()))) ||
+                !head_budget.add(content_length_value.size()) || !head_budget.add(crlf.size()))) ||
         (expect_continue &&
             (!head_budget.add(expect_prefix.size()) ||
                 !head_budget.add(detail::http_continue_expectation_token.size()) ||
@@ -267,7 +274,7 @@ struct request_head_write_plan final {
         connect ? http_known_method::connect : classify_http_method(method),
         header_facts.connection_options_, effective_close_policy, content_state,
         std::move(offered_upgrade_protocols));
-    const request_head_write_plan write_plan{origin, method, target, headers, length,
+    const request_head_write_plan write_plan{origin.host(), port_value, method, target, headers, content_length_value,
         connect, explicit_content, expect_continue, generate_connection_close};
     const auto output = head_buffer.first(head_bytes);
     // Descriptors and every borrowed string are consumed before the output is
