@@ -3139,6 +3139,68 @@ RUVIA_TEST(http2_public_received_te_accepts_empty_lists_without_dropping_fields)
     }
 }
 
+RUVIA_TEST(http2_public_options_without_content_type_preserves_body_and_following_stream) {
+    for (const std::string_view body : {"", "abc"}) {
+        for (const bool declared_length : {false, true}) {
+            std::pmr::unsynchronized_pool_resource resource;
+            std::pmr::string wire(ruvia::http2_client_preface, &resource);
+            append_peer_settings(wire);
+            std::pmr::string block(&resource);
+            ruvia::hpack_encoder::encode_header(block, ":method", "OPTIONS");
+            ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+            ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+            ruvia::hpack_encoder::encode_header(block, ":path", "*");
+            if (declared_length) {
+                const auto length = std::to_string(body.size());
+                ruvia::hpack_encoder::encode_header(block, "content-length", length);
+            }
+            append_header_section(wire, 1, block, false, true);
+            append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, body);
+            block.clear();
+            ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+            ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+            ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+            ruvia::hpack_encoder::encode_header(block, ":path", "/next");
+            append_header_section(wire, 3, block, true, false);
+            auto server = ruvia::http2_connection::server({.resource_ = &resource});
+            RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+            auto first = server.next_event();
+            auto* options = first ? first->request_head() : nullptr;
+            RUVIA_CHECK(options != nullptr);
+            if (options == nullptr) {
+                continue;
+            }
+            RUVIA_CHECK_EQ(options->request().method(), "OPTIONS");
+            RUVIA_CHECK_EQ(options->request().path(), "*");
+            RUVIA_CHECK(!options->request().header("Content-Type"));
+            if (!body.empty()) {
+                auto data = server.next_event();
+                auto* chunk = data ? data->message_body_chunk() : nullptr;
+                RUVIA_CHECK(chunk && chunk->stream_id() == 1 && chunk->bytes() == body);
+                if (chunk) {
+                    auto credit = chunk->take_credit();
+                    (void)server.acknowledge(std::move(credit));
+                }
+            }
+            const auto end = server.next_event();
+            RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == 1);
+            auto next = server.next_event();
+            auto* following = next ? next->request_head() : nullptr;
+            RUVIA_CHECK(following && following->stream_id() == 3 && following->request().path() == "/next");
+            const auto next_end = server.next_event();
+            RUVIA_CHECK(next_end && next_end->message_end() && next_end->message_end()->stream_id() == 3);
+            RUVIA_CHECK(!server.connection_error());
+            for (auto* request : {options, following}) {
+                if (request) {
+                    ruvia::http_response reply({.resource_ = &resource});
+                    RUVIA_CHECK(server.submit_buffered_response(request->stream_id(), reply) == ruvia::http2_submit_status::accepted);
+                    RUVIA_CHECK(server.release(std::move(*request)) == ruvia::http2_server_request_release_status::released);
+                }
+            }
+        }
+    }
+}
+
 RUVIA_TEST(http2_public_opaque_metadata_preserves_request_and_response_bodies) {
     for (const bool server_role : {true, false}) {
         for (const std::string_view field_name : {"content-type", "content-encoding",

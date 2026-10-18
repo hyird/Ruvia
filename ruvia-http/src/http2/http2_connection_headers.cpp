@@ -83,15 +83,6 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
                 !stream.select_remote_content_metadata_only()) {
                 return header_decode_status::protocol_error;
             }
-        } else if (content_semantics == http_request_content_semantics::content_type_required) {
-            // A declared length (including zero) or an open peer send half is
-            // explicit OPTIONS content in the same cases modeled by the HTTP/2
-            // request writer. RFC 9110 section 9.3.7 requires a valid media type.
-            const bool explicit_content = stream.remote_content().allowed_known_length() != nullptr ||
-                                          stream.remote_receive().head_pending() != nullptr;
-            if (explicit_content && !context_value.request_fields_.seen(request_header_kind::content_type)) {
-                return header_decode_status::protocol_error;
-            }
         }
     }
     const bool remote_head_finalized = stream.tunnel().pending() != nullptr

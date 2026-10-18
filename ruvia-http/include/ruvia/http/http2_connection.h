@@ -99,6 +99,8 @@ struct http2_extended_connect_request_head_view final {
 // Received request TE permits empty lists and ignores empty members; every
 // nonempty member must be "trailers" (case-insensitive).
 // Response TE remains malformed even when empty.
+// An incoming OPTIONS body does not require Content-Type at admission; RFC 9110
+// section 9.3.7 places that media-description requirement on senders.
 class http2_connection final {
 public:
     [[nodiscard]] static http2_connection server(http2_connection_options options = {});
