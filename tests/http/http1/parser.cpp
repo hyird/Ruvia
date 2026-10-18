@@ -1418,18 +1418,27 @@ RUVIA_TEST(http1_parse_te_trailers_tolerates_ows) {
     }
 }
 
-RUVIA_TEST(http1_parse_rejects_invalid_cors_request_fields) {
-    for (const std::string_view field : {"Origin: https://app.example/path", "Access-Control-Request-Method: POST GET",
-             "Access-Control-Request-Headers: x bad"}) {
-        std::string wire = "OPTIONS / HTTP/1.1\r\nHost: x\r\n";
-        wire.append(field);
-        wire.append("\r\n\r\n");
-        RUVIA_CHECK(is_failure(parse_http1_request_message(wire).state_, http_parse_error::invalid_header));
+RUVIA_TEST(http1_parse_cors_metadata_preserves_body_and_pipeline_boundary) {
+    for (const auto& [name, value] : {
+             std::pair<std::string_view, std::string_view>{"Origin", "https://app.example/path"},
+             {"Access-Control-Request-Method", "POST GET"},
+             {"Access-Control-Request-Headers", "x good, bad name"}}) {
+        std::string wire = "POST /first HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n";
+        wire.append(name).append(": ").append(value).append("\r\n\r\nabc");
+        const auto message_bytes = wire.size();
+        wire.append("GET /next HTTP/1.1\r\nHost: x\r\n\r\n");
+        const auto first = parse_http1_request_message(wire);
+        RUVIA_CHECK(first.complete());
+        if (!first.complete()) {
+            continue;
+        }
+        RUVIA_CHECK_EQ(first.state_.request_.header(name).value_or(""), value);
+        RUVIA_CHECK_EQ(first.body_, "abc");
+        RUVIA_CHECK_EQ(*first.message_bytes_, message_bytes);
+        const auto next = parse_http1_request_message(std::string_view(wire).substr(*first.message_bytes_));
+        RUVIA_CHECK(next.complete());
+        RUVIA_CHECK_EQ(next.state_.request_.path(), "/next");
     }
-    const auto parsed = parse_http1_request_message(
-        "OPTIONS / HTTP/1.1\r\nHost: x\r\nOrigin: https://app.example\r\n"
-        "Access-Control-Request-Method: POST\r\n\r\n");
-    RUVIA_CHECK(parsed.complete());
 }
 
 RUVIA_TEST(http1_parse_head_resumes_leading_empty_lines_and_request_line_across_segments) {

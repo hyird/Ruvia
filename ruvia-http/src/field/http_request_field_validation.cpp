@@ -114,11 +114,11 @@ namespace {
     http_field_list_role role, request_field_framing framing) noexcept {
     switch (kind) {
         case request_header_kind::origin:
-            return is_valid_http_origin_field_value(value);
+            return role == http_field_list_role::recipient || is_valid_http_origin_field_value(value);
         case request_header_kind::access_control_request_method:
-            return is_valid_http_cors_request_method(value);
+            return role == http_field_list_role::recipient || is_valid_http_cors_request_method(value);
         case request_header_kind::access_control_request_headers:
-            return is_valid_http_cors_request_header_names(value);
+            return role == http_field_list_role::recipient || is_valid_http_cors_request_header_names(value);
         case request_header_kind::content_type:
             // Recipients interpret media types at the application boundary.
             return role == http_field_list_role::recipient ||

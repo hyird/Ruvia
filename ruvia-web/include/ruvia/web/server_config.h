@@ -212,6 +212,10 @@ struct cors_request_headers_config final {
     std::vector<std::string> names_{};
 };
 
+// CORS metadata does not establish HTTP message framing. Invalid origin,
+// requested-method or requested-header syntax generates no policy headers;
+// the application still receives the request. Reflected header names are
+// serialized as one comma-delimited field, including repeated request lines.
 struct cors_config final {
     cors_origin_config origin_{};
     cors_request_headers_config request_headers_{};

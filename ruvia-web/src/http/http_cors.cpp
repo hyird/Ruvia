@@ -3,13 +3,16 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_name_list.h"
+#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_origin.h"
 
@@ -43,35 +46,55 @@ void set_cors_max_age(http_response& response, const std::optional<std::chrono::
         http_format_unsigned(buffer, static_cast<std::uint64_t>(max_age->count())));
 }
 
-void reflect_cors_request_header_names(const http_request& request, http_response& response) {
-    if (has_response_header(response, "Access-Control-Allow-Headers")) {
-        return;
-    }
-
+// Validate the whole list before reflecting any prefix. One request field may
+// name many headers; it must not expand into that many response field lines.
+[[nodiscard]] std::optional<std::size_t> cors_request_header_names_size(const http_request& request) {
+    std::size_t size = 0;
     bool first = true;
-    const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
-        const auto& header_value = headers[i];
-        if (!http_ascii_equals_ignore_case(
-                header_value.name(), "Access-Control-Request-Headers")) {
+    for (const auto& field : request.headers()) {
+        if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
             continue;
         }
-        http_field_name_list names(header_value.value());
+        http_field_name_list names(field.value());
         bool saw_name = false;
         while (const auto name = names.next()) {
             saw_name = true;
-            if (first) {
-                set_response_header_if_missing(response, "Access-Control-Allow-Headers", *name);
-                first = false;
-            } else {
-                response.header("Access-Control-Allow-Headers", *name,
-                    http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
+            const auto separator_size = first ? std::size_t{0} : std::size_t{2};
+            const auto maximum = (std::numeric_limits<std::size_t>::max)();
+            if (name->size() > maximum - separator_size ||
+                size > maximum - separator_size - name->size()) {
+                return std::nullopt;
             }
+            size += separator_size + name->size();
+            first = false;
         }
         if (!saw_name || !names.valid()) {
-            throw std::logic_error("validated CORS request header list became invalid");
+            return std::nullopt;
         }
     }
+    return size;
+}
+
+void reflect_cors_request_header_names(
+    const http_request& request, http_response& response, std::size_t size) {
+    if (size == 0 || has_response_header(response, "Access-Control-Allow-Headers")) {
+        return;
+    }
+    std::pmr::string value(response.memory_resource());
+    value.reserve(size);
+    for (const auto& field : request.headers()) {
+        if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
+            continue;
+        }
+        http_field_name_list names(field.value());
+        while (const auto name = names.next()) {
+            if (!value.empty()) {
+                value.append(", ");
+            }
+            value.append(*name);
+        }
+    }
+    response.header("Access-Control-Allow-Headers", value);
 }
 
 void validate_cors_header_names(const std::vector<std::string>& names, const char* empty_message) {
@@ -155,6 +178,22 @@ cors_options make_cors_options(const cors_config& config, std::pmr::memory_resou
 void apply_cors_headers(const http_request& request, http_response& response, const cors_options& cors) {
     const auto origin_field = request.header("Origin");
     const auto origin = origin_field.value_or(std::string_view{});
+    // CORS is an application policy, not message framing. Opaque or malformed
+    // metadata may reach the handler but must not generate cross-origin grants.
+    // Never select one origin from a multi-origin value for a CORS decision.
+    if (origin_field && origin != "null" && !::ruvia::is_valid_http_serialized_origin(origin)) {
+        return;
+    }
+    const auto requested_method = request.header("Access-Control-Request-Method");
+    if (requested_method && !is_valid_http_method_token(*requested_method)) {
+        return;
+    }
+    const auto request_header_names_size = request.header("Access-Control-Request-Headers")
+                                               ? cors_request_header_names_size(request)
+                                               : std::optional<std::size_t>{0};
+    if (!request_header_names_size) {
+        return;
+    }
     const bool wildcard_origin = cors.origin_mode_ == cors_origin_mode::any;
     const auto allow_origin = wildcard_origin ? std::string_view("*") : std::string_view(cors.origin_);
     std::array<std::string_view, 3> vary_tokens{};
@@ -172,7 +211,6 @@ void apply_cors_headers(const http_request& request, http_response& response, co
         set_response_header_if_missing(response, "Access-Control-Allow-Credentials", "true");
     }
 
-    const auto requested_method = request.header("Access-Control-Request-Method");
     const bool preflight = options && !origin.empty() && requested_method.has_value() &&
                            !requested_method->empty();
     if (preflight) {
@@ -182,7 +220,7 @@ void apply_cors_headers(const http_request& request, http_response& response, co
         if (cors.request_headers_mode_ == cors_request_headers_mode::fixed) {
             set_response_header_if_missing(response, "Access-Control-Allow-Headers", cors.request_headers_);
         } else {
-            reflect_cors_request_header_names(request, response);
+            reflect_cors_request_header_names(request, response, *request_header_names_size);
         }
         add_vary_tokens(response, vary_tokens.data(), vary_token_count);
         set_cors_max_age(response, cors.max_age_);

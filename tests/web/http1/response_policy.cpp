@@ -176,6 +176,54 @@ RUVIA_TEST(http1_response_stream_head_carries_the_application_cors_policy) {
     RUVIA_CHECK(lower_head(output).find("\r\naccess-control-allow-origin: *") != std::string::npos);
     RUVIA_CHECK(output.find("chunk") != std::string::npos);
 }
+RUVIA_TEST(http1_cors_reflection_preserves_many_requested_names_in_one_field) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    std::string names;
+    for (unsigned i = 0; i != 128; ++i) {
+        if (!names.empty()) {
+            names.append(", ");
+        }
+        names.append("x-name-").append(std::to_string(i));
+    }
+    const auto response = ::exchange(server.endpoint(),
+        "OPTIONS /policy-stream HTTP/1.1\r\nHost: localhost\r\n"
+        "Origin: https://client.test\r\nAccess-Control-Request-Method: GET\r\n"
+        "Access-Control-Request-Headers: " +
+            names +
+            "\r\nAccess-Control-Request-Headers: x-final\r\nConnection: close\r\n\r\n");
+    server.finish();
+    RUVIA_CHECK(response.has_value());
+    const auto output = response.value_or("");
+    RUVIA_CHECK(output.starts_with("HTTP/1.1 204 "));
+    const auto head = lower_head(output);
+    const auto expected = "\r\naccess-control-allow-headers: " + names + ", x-final\r\n";
+    RUVIA_CHECK(head.find(expected) != std::string::npos);
+    const auto first = head.find("\r\naccess-control-allow-headers:");
+    RUVIA_CHECK(first != std::string::npos &&
+                head.find("\r\naccess-control-allow-headers:", first + 1) == std::string::npos);
+}
+
+RUVIA_TEST(http1_cors_invalid_metadata_never_reflects_a_valid_prefix) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    for (const auto& [origin, method, names] : {
+             std::array<std::string_view, 3>{"https://client.test/path", "GET", "x-good"},
+             {"https://client.test", "BAD METHOD", "x-good"},
+             {"https://client.test", "GET", "x-good, bad name"}}) {
+        std::string request = "OPTIONS /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: ";
+        request.append(origin).append("\r\nAccess-Control-Request-Method: ").append(method).append("\r\nAccess-Control-Request-Headers: ").append(names).append("\r\nConnection: close\r\n\r\n");
+        const auto response = ::exchange(server.endpoint(), request);
+        RUVIA_CHECK(response.has_value());
+        const auto output = response.value_or("");
+        RUVIA_CHECK(output.starts_with("HTTP/1.1 204 "));
+        const auto head = lower_head(output);
+        RUVIA_CHECK(head.find("\r\naccess-control-allow-origin:") == std::string::npos);
+        RUVIA_CHECK(head.find("\r\naccess-control-allow-methods:") == std::string::npos);
+        RUVIA_CHECK(head.find("\r\naccess-control-allow-headers:") == std::string::npos);
+    }
+    server.finish();
+}
 
 // Trailers are optional metadata: an HTTP/1.0 close-delimited stream drops the
 // Trailer field and the trailer section instead of failing with 500.

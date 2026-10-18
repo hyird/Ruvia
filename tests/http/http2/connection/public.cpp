@@ -3139,9 +3139,10 @@ RUVIA_TEST(http2_public_received_te_accepts_empty_lists_without_dropping_fields)
     }
 }
 
-RUVIA_TEST(http2_public_opaque_representation_metadata_preserves_request_and_response_bodies) {
+RUVIA_TEST(http2_public_opaque_metadata_preserves_request_and_response_bodies) {
     for (const bool server_role : {true, false}) {
-        for (const std::string_view field_name : {"content-type", "content-encoding"}) {
+        for (const std::string_view field_name : {"content-type", "content-encoding",
+                 "origin", "access-control-request-method", "access-control-request-headers"}) {
             for (const std::string_view value : {"", "not a media type", "text/plain; charset=\"unfinished"}) {
                 std::pmr::unsynchronized_pool_resource resource;
                 std::pmr::string block(&resource);
@@ -3213,12 +3214,11 @@ RUVIA_TEST(http2_public_opaque_representation_metadata_preserves_request_and_res
     }
 }
 
-RUVIA_TEST(http2_public_rejects_invalid_cors_request_fields_on_both_sides) {
+RUVIA_TEST(http2_public_sender_rejects_invalid_cors_request_fields) {
     for (const auto& [name, value] :
         {std::pair<std::string_view, std::string_view>{"origin", "https://app.example/path"},
             {"access-control-request-method", "POST GET"}, {"access-control-request-headers", "x bad"}}) {
         RUVIA_CHECK(!http2_client_submits_field(name, value));
-        RUVIA_CHECK(!http2_server_accepts_field(name, value));
     }
     RUVIA_CHECK(http2_client_submits_field("origin", "https://app.example"));
     RUVIA_CHECK(http2_server_accepts_field("origin", "https://app.example"));

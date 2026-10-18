@@ -111,6 +111,8 @@ public:
     // interpreting or rejecting that media type belongs to the application.
     // Content-Encoding likewise remains metadata at admission; content-coding
     // parsers validate the complete stack before a decoder is selected.
+    // Origin and CORS preflight fields are metadata, not transport framing.
+    // Applications validate them before deriving any cross-origin permission.
     [[nodiscard]] std::span<const http_header_view> headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return headers_.fields();
     }
