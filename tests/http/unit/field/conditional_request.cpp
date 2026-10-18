@@ -98,7 +98,6 @@ RUVIA_TEST(http_etag_preconditions_fold_repeated_field_lines) {
     const auto matched = get_http_etag_preconditions(request, R"("current")");
     RUVIA_CHECK(matched.if_none_match_.present_);
     RUVIA_CHECK(matched.if_none_match_.matches());
-    RUVIA_CHECK_EQ(matched.if_none_match_.line_count_, std::size_t{2});
 
     const http_header_view wildcard_fields[]{{"If-Match", "*"}};
     auto [wildcard, wildcard_error] = ruvia::make_parsed_http_request(

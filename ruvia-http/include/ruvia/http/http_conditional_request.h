@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstddef>
 #include <ctime>
 #include <optional>
 #include <string_view>
@@ -53,18 +52,18 @@ struct http_conditional_headers final {
 
 // One entity-tag precondition field's outcome, accumulated across every field
 // line of that name. `valid` is false for a malformed field, which the caller
-// must treat differently from a field that simply did not match.
+// must treat differently from a field that simply did not match. A valid
+// wildcard is the only member across all accumulated field lines.
 struct http_etag_field_condition final {
     bool present_{false};
     bool valid_{true};
     bool matched_{false};
     bool wildcard_{false};
-    std::size_t line_count_{0};
 
     void update(std::string_view value, std::string_view expected, bool strong) noexcept;
 
     [[nodiscard]] bool matches() const noexcept {
-        return valid_ && ((wildcard_ && line_count_ == 1) || (!wildcard_ && matched_));
+        return valid_ && (wildcard_ || matched_);
     }
 };
 

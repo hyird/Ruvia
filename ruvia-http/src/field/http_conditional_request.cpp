@@ -46,12 +46,12 @@ http_conditional_headers get_http_conditional_headers(const http_request& reques
 
 void http_etag_field_condition::update(
     std::string_view value, std::string_view expected, bool strong) noexcept {
+    const bool already_present = present_;
     present_ = true;
-    ++line_count_;
     const auto trimmed = http_trim_ows(value);
     if (trimmed == "*") {
         wildcard_ = true;
-        if (line_count_ != 1) {
+        if (already_present) {
             valid_ = false;
         }
         return;
