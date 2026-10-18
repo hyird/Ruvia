@@ -16,9 +16,7 @@
 namespace ruvia::detail {
 namespace {
 
-// The largest HPACK integer encoding for a dynamic-table update is six bytes
-// (the value is a uint32 with a five-bit prefix). The drain preflight uses this
-// upper bound; append_response_header_frames computes the exact prefix afterwards.
+// Match the field-block framing pass using the selected first-frame prefix.
 [[nodiscard]] std::size_t http2_header_frame_encoded_bytes(
     std::size_t header_bytes, std::size_t max_frame_size, std::size_t first_prefix_bytes) {
     if (first_prefix_bytes > max_frame_size) {
@@ -82,7 +80,6 @@ void http2_connection::mark_send_window_opened() {
     auto simulated_connection_window = connection_send_window_;
     bool simulated_table_update_pending = encoder_table_size_update_pending_;
     const auto max_frame = peer_settings_.max_frame_size();
-    constexpr std::size_t max_dynamic_table_update_bytes = 6;
     for (const auto& pending : pending_sends_) {
         auto* stream = find_stream(pending.stream_id_);
         if (stream == nullptr || stream->is_aborted()) {
@@ -106,12 +103,11 @@ void http2_connection::mark_send_window_opened() {
         ++drained_count;
         if (!pending.trailer_block_.empty()) {
             const auto header_frame_bytes = http2_header_frame_encoded_bytes(pending.trailer_block_.size(),
-                max_frame, simulated_table_update_pending ? max_dynamic_table_update_bytes : 0);
+                max_frame, simulated_table_update_pending ? encoder_zero_table_size_update_.size() : 0);
             required_output_bytes = checked_output_bytes_add(required_output_bytes, header_frame_bytes);
+            // Ceil the positive encoded size: a full final frame needs no extra slot.
             required_output_segments = checked_output_bytes_add(required_output_segments,
-                (header_frame_bytes + http2_frame_header_bytes - 1) /
-                        (max_frame + http2_frame_header_bytes) +
-                    1);
+                (header_frame_bytes - 1) / (max_frame + http2_frame_header_bytes) + 1);
             simulated_table_update_pending = false;
         }
     }

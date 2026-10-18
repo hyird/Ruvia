@@ -51,16 +51,9 @@ void http2_connection::append_response_header_frames(
         // A HEADERS + CONTINUATION run must be an uninterrupted frame sequence for the same
         // stream (RFC 9113 §6.10). Appending them contiguously to the single outbound buffer
         // guarantees that ordering.
-        // The table-size update is at most six bytes. Keep this scratch on the
-        // stack so a later output-allocation failure cannot occur after a drain has
-        // already committed flow-control state.
-        std::array<std::byte, 32> table_size_update_storage{};
-        std::pmr::monotonic_buffer_resource table_size_update_resource(table_size_update_storage.data(),
-            table_size_update_storage.size(), std::pmr::null_memory_resource());
-        std::pmr::string table_size_update(&table_size_update_resource);
-        if (encoder_table_size_update_pending_) {
-            hpack_encoder::encode_dynamic_table_size_update(table_size_update, encoder_dynamic_table_size_);
-        }
+        const auto table_size_update = encoder_table_size_update_pending_
+                                           ? encoder_zero_table_size_update_
+                                           : std::string_view{};
 
         const std::size_t max_frame = peer_settings_.max_frame_size();
         std::size_t encoded_bytes = 0;
@@ -90,7 +83,7 @@ void http2_connection::append_response_header_frames(
         std::size_t offset = 0;
         bool first = true;
         while (offset < header_block.size() || (first && !table_size_update.empty())) {
-            const auto prefix = first ? std::string_view(table_size_update) : std::string_view{};
+            const auto prefix = first ? table_size_update : std::string_view{};
             const auto chunk =
                 std::min<std::size_t>(header_block.size() - offset, max_frame - prefix.size());
             const bool last = offset + chunk == header_block.size();

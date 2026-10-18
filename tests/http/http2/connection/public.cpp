@@ -1215,6 +1215,127 @@ RUVIA_TEST(http2_public_server_streaming_response_commit_plan_and_finish_are_pub
                 ruvia::http2_server_request_release_status::released);
 }
 
+RUVIA_TEST(http2_public_queued_trailers_keep_data_and_hpack_state_across_window_reopen) {
+    for (const auto value_size : {ruvia::http2_default_max_frame_size - 12,
+             ruvia::http2_default_max_frame_size - 11}) {
+        toggle_allocation_resource resource;
+        {
+            auto server = ruvia::http2_connection::server({.resource_ = &resource});
+            (void)server.consume_output(server.pending_output().size());
+            const auto wire = server_request_wire(&resource, {}, "GET");
+            RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+            auto request = server.next_event();
+            const auto end = server.next_event();
+            auto* request_head = request ? request->request_head() : nullptr;
+            RUVIA_CHECK(request_head != nullptr);
+            RUVIA_CHECK(end && end->message_end() != nullptr);
+            (void)server.consume_output(server.pending_output().size());
+
+            constexpr std::array<char, 6> zero_window{0, 4, 0, 0, 0, 0};
+            std::pmr::string window_settings(&resource);
+            append_frame(window_settings, ruvia::http2_frame_type::settings, 0, 0,
+                std::string_view(zero_window.data(), zero_window.size()));
+            RUVIA_CHECK(server.feed(window_settings) == ruvia::http2_feed_result::accepted);
+            RUVIA_CHECK(!server.next_event());
+            (void)server.consume_output(server.pending_output().size());
+            ruvia::http_response response({.resource_ = &resource});
+            response.header("Date", "Wed, 21 Oct 2015 07:28:00 GMT");
+            const auto committed = server.submit_streaming_response_head(1, std::move(response),
+                ruvia::http_response_stream_kind::generic, ruvia::http_response_trailer_intent::present);
+            RUVIA_CHECK(committed.submitted() != nullptr);
+            (void)server.consume_output(server.pending_output().size());
+            RUVIA_CHECK(server.submit_data(1, "z", ruvia::http2_end_stream::keep_open) ==
+                        ruvia::http2_data_submit_status::queued);
+            std::string value(value_size, 't');
+            const auto expected = value;
+            const std::array fields{ruvia::http_header_view{"x-tail", value}};
+            const auto trailers = ruvia::validate_http_response_trailers(fields);
+            RUVIA_CHECK(server.finish_response(1, trailers) == ruvia::http2_finish_response_status::queued);
+            value.assign(value_size, 'x');
+
+            constexpr std::array<char, 6> zero_table{0, 1, 0, 0, 0, 0};
+            std::pmr::string table_settings(&resource);
+            append_frame(table_settings, ruvia::http2_frame_type::settings, 0, 0,
+                std::string_view(zero_table.data(), zero_table.size()));
+            RUVIA_CHECK(server.feed(table_settings) == ruvia::http2_feed_result::accepted);
+            RUVIA_CHECK(!server.next_event());
+            (void)server.consume_output(server.pending_output().size());
+            constexpr std::array<char, 4> increment{0, 0, 0, 1};
+            std::pmr::string window_update(&resource);
+            append_frame(window_update, ruvia::http2_frame_type::window_update, 0, 1,
+                std::string_view(increment.data(), increment.size()));
+            // Every allocation must precede the first DATA frame's credit commit.
+            resource.reject_after_output(&server);
+            RUVIA_CHECK(server.feed(window_update) == ruvia::http2_feed_result::accepted);
+            resource.reject_after_output(nullptr);
+            RUVIA_CHECK(!server.next_event());
+
+            const auto output = server.pending_output();
+            std::string body;
+            std::pmr::string encoded(&resource);
+            unsigned header_runs = 0;
+            bool headers_complete = false;
+            for (std::size_t offset = 0; offset < output.size();) {
+                const auto frame = ruvia::parse_http2_frame_header(std::span<const char>(output).subspan(offset));
+                RUVIA_CHECK(frame.has_value());
+                if (!frame) {
+                    break;
+                }
+                const auto payload_offset = offset + ruvia::http2_frame_header_bytes;
+                RUVIA_CHECK(frame->length_ <= output.size() - payload_offset);
+                if (frame->length_ > output.size() - payload_offset) {
+                    break;
+                }
+                const auto payload = output.substr(payload_offset, frame->length_);
+                RUVIA_CHECK_EQ(frame->stream_id_, std::uint32_t{1});
+                if (frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
+                    RUVIA_CHECK_EQ(header_runs, 0u);
+                    RUVIA_CHECK((frame->flags_ & 1) == 0);
+                    body.append(payload);
+                } else {
+                    RUVIA_CHECK(!headers_complete);
+                    if (frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
+                        ++header_runs;
+                        RUVIA_CHECK((frame->flags_ & 1) != 0);
+                    } else {
+                        RUVIA_CHECK(frame->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::continuation));
+                        RUVIA_CHECK_EQ(header_runs, 1u);
+                    }
+                    encoded.append(payload);
+                    headers_complete = (frame->flags_ & 4) != 0;
+                }
+                offset = payload_offset + frame->length_;
+            }
+            RUVIA_CHECK_EQ(body, "z");
+            RUVIA_CHECK_EQ(header_runs, 1u);
+            RUVIA_CHECK(headers_complete);
+            RUVIA_CHECK(encoded.starts_with('\x20'));
+            ruvia::hpack_decoder decoder({.resource_ = &resource});
+            decoder.set_max_dynamic_table_size(0);
+            unsigned field_count = 0;
+            const auto decoded = decoder.decode(encoded, [&](std::string_view name, std::string_view field_value) {
+                ++field_count;
+                RUVIA_CHECK_EQ(name, "x-tail");
+                RUVIA_CHECK_EQ(field_value, expected);
+                return true;
+            });
+            RUVIA_CHECK(decoded.decoded());
+            RUVIA_CHECK_EQ(field_count, 1u);
+            const auto drained = server.take_drained_data_streams();
+            RUVIA_CHECK_EQ(drained.size(), std::size_t{1});
+            if (drained.size() == 1) {
+                RUVIA_CHECK_EQ(drained.front(), std::uint32_t{1});
+            }
+            RUVIA_CHECK(server.take_drained_data_streams().empty());
+            if (request_head != nullptr) {
+                RUVIA_CHECK(server.release(std::move(*request_head)) ==
+                            ruvia::http2_server_request_release_status::released);
+            }
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
+}
+
 RUVIA_TEST(http2_public_streaming_head_response_ends_at_headers) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::http2_connection::server({.resource_ = &resource});

@@ -336,7 +336,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     // PUSH_PROMISE begins a field block and therefore carries pending HPACK
     // table-size updates, just like HEADERS.
     if (encoder_table_size_update_pending_) {
-        hpack_encoder::encode_dynamic_table_size_update(block, encoder_dynamic_table_size_);
+        block.append(encoder_zero_table_size_update_);
     }
     hpack_encoder::encode_header(block, ":method", request.method_);
     hpack_encoder::encode_header(block, ":scheme", request.scheme_);

@@ -587,6 +587,8 @@ private:
     // The static-only encoder starts with HPACK's implicit 4096-byte maximum even
     // though it never inserts entries. A peer reduction below this value must still
     // be acknowledged on the wire at the beginning of the next field block.
+    // Required reductions select zero; its update needs no temporary encoding.
+    static constexpr std::string_view encoder_zero_table_size_update_{"\x20", 1};
     std::uint32_t encoder_dynamic_table_size_{http2_local_settings::header_table_size};
     bool encoder_table_size_update_pending_{false};
     std::optional<http2_stream_state> push_header_stream_;
