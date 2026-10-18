@@ -88,7 +88,7 @@ private:
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
         ++allocation_attempts_;
         if (reject_ || (reject_at_least_ != 0 && bytes_value >= reject_at_least_) ||
-            (reject_after_output_ != nullptr && !reject_after_output_->pending_output().empty())) {
+            (bytes_value >= 32 && reject_after_output_ != nullptr && !reject_after_output_->pending_output().empty())) {
             throw std::bad_alloc();
         }
         auto* allocation = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
@@ -318,13 +318,21 @@ RUVIA_TEST(http2_public_failed_request_lease_recovers_after_persistent_allocatio
             auto client = ruvia::http2_connection::client({.resource_ = &resource});
             (void)client.consume_output(client.pending_output().size());
             const std::array<char, 18> settings_payload{
-                0, 3, 0, 0, 0, 1, 0, 4, 0, 0, 0, 0, 0, 8, 0, 0, 0, 1};
+                0, 3, 0, 0, 0, 9, 0, 4, 0, 0, 0, 0, 0, 8, 0, 0, 0, 1};
             std::pmr::string settings;
             append_frame(settings, ruvia::http2_frame_type::settings, 0, 0,
                 std::string_view(settings_payload.data(), settings_payload.size()));
             RUVIA_CHECK(client.feed(settings) == ruvia::http2_feed_result::accepted);
             RUVIA_CHECK(!client.next_event());
             (void)client.consume_output(client.pending_output().size());
+            // Keep eight requests alive so the next lease growth is not a tiny
+            // STL debug-proxy allocation inside a noexcept constructor.
+            for (unsigned index = 0; index != 8; ++index) {
+                const auto active = client.submit_request_head(
+                    ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+                RUVIA_CHECK(active.submitted() != nullptr);
+                (void)client.consume_output(client.pending_output().size());
+            }
             std::array<std::string, 16> names;
             std::array<std::string, 16> values;
             std::array<ruvia::http_header_view, 16> fields{};
@@ -365,7 +373,7 @@ RUVIA_TEST(http2_public_failed_request_lease_recovers_after_persistent_allocatio
             }
             std::pmr::string cancel;
             constexpr std::array<char, 4> payload{0, 0, 0, 8};
-            append_frame(cancel, ruvia::http2_frame_type::rst_stream, 0, 1,
+            append_frame(cancel, ruvia::http2_frame_type::rst_stream, 0, 17,
                 std::string_view(payload.data(), payload.size()));
             RUVIA_CHECK(client.pending_output().starts_with(committed));
             RUVIA_CHECK(client.pending_output().ends_with(cancel));
@@ -373,7 +381,7 @@ RUVIA_TEST(http2_public_failed_request_lease_recovers_after_persistent_allocatio
                 .authority_ = "example.test", .target_ = "/after"});
             RUVIA_CHECK(follow.submitted() != nullptr);
             if (follow.submitted() != nullptr) {
-                RUVIA_CHECK_EQ(follow.submitted()->stream_id(), std::uint32_t{3});
+                RUVIA_CHECK_EQ(follow.submitted()->stream_id(), std::uint32_t{19});
             }
         }
         RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
