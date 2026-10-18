@@ -53,12 +53,12 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
     if (auto value = detail::http_find_semicolon_parameter(last_cookie, name)) {
         return value;
     }
-    for (std::size_t i = headers_.size(); i > 0; --i) {
+    // The one-based cache points to the last Cookie field; only earlier fields can contribute.
+    for (std::size_t i = last_cookie_index - 1; i > 0; --i) {
         const auto index = i - 1;
         const auto header_value = headers_[index];
         if (headers_.kind_at(index) !=
-                static_cast<std::uint8_t>(detail::request_header_kind::cookie) ||
-            i == last_cookie_index) {
+            static_cast<std::uint8_t>(detail::request_header_kind::cookie)) {
             continue;
         }
         if (auto value = detail::http_find_semicolon_parameter(header_value.value(), name)) {

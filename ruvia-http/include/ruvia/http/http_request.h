@@ -130,6 +130,8 @@ public:
     // form-urlencoded `+` conversion is applied. Later duplicate fields win.
     [[nodiscard]] std::optional<std::string_view> last_raw_query_value(
         std::string_view raw_name) const noexcept;
+    // Case-sensitive Cookie lookup; the last matching pair across field lines wins.
+    // The returned view borrows the corresponding header text.
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const noexcept;
 
 private:
