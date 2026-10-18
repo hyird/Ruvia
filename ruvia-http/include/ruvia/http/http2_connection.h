@@ -94,6 +94,9 @@ struct http2_extended_connect_request_head_view final {
 // half. Finish or explicitly reset the request send half even after message_end.
 // Informational heads do not end the receive half and have no fixed count limit;
 // each header section remains subject to the configured decoding limits.
+// Received request TE permits empty lists and ignores empty members; every
+// nonempty member must be "trailers" (case-insensitive).
+// Response TE remains malformed even when empty.
 class http2_connection final {
 public:
     [[nodiscard]] static http2_connection server(http2_connection_options options = {});

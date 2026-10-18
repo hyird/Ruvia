@@ -125,8 +125,8 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
 // "trailers" (RFC 9113 section 8.2.2). The member is an
 // unprefixed ABNF literal and therefore case-insensitive (RFC 7405 section
 // 2.1); list members are OWS-trimmed (RFC 9110 section 5.6.1). Recipients
-// ignore empty members, senders must not generate them, and a field without
-// any member is rejected because it carries no permitted value.
+// ignore empty members and accept empty lists (RFC 9110 section 10.1.4).
+// This sender API requires a nonempty list without empty members.
 [[nodiscard]] inline bool is_valid_binary_http_te_field_value(
     std::string_view value, http_field_list_role role) noexcept {
     bool valid = true;
@@ -140,7 +140,7 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
         has_member = has_member || !member.empty();
         return true;
     });
-    return valid && has_member;
+    return valid && (role == http_field_list_role::recipient || has_member);
 }
 
 }  // namespace ruvia::detail

@@ -2978,6 +2978,41 @@ RUVIA_TEST(http2_public_te_allows_only_trailers_with_list_ows) {
     }
 }
 
+RUVIA_TEST(http2_public_received_te_accepts_empty_lists_without_dropping_fields) {
+    for (const std::string_view value : {"", ",,", ", trailers,,"}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/");
+        ruvia::hpack_encoder::encode_header(block, "te", value);
+        ruvia::hpack_encoder::encode_header(block, "x-after", "kept");
+        std::pmr::string wire(ruvia::http2_client_preface, &resource);
+        append_peer_settings(wire);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
+
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        (void)server.consume_output(server.pending_output().size());
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto event = server.next_event();
+        auto* request = event ? event->request_head() : nullptr;
+        RUVIA_CHECK(request != nullptr);
+        if (request == nullptr) {
+            continue;
+        }
+        RUVIA_CHECK(request->request().header("te") == std::optional<std::string_view>{value});
+        RUVIA_CHECK(request->request().header("x-after") == std::string_view("kept"));
+        const auto end = server.next_event();
+        RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == 1);
+        RUVIA_CHECK(!server.connection_error());
+        ruvia::http_response response({.resource_ = &resource});
+        RUVIA_CHECK(server.submit_buffered_response(1, response) == ruvia::http2_submit_status::accepted);
+        RUVIA_CHECK(server.release(std::move(*request)) ==
+                    ruvia::http2_server_request_release_status::released);
+    }
+}
+
 RUVIA_TEST(http2_public_rejects_invalid_cors_request_fields_on_both_sides) {
     for (const auto& [name, value] :
         {std::pair<std::string_view, std::string_view>{"origin", "https://app.example/path"},
