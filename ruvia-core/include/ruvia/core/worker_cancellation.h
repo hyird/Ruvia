@@ -122,12 +122,8 @@ private:
 
 template <typename target_type>
 inline constexpr bool worker_cancellation_post_is_inline =
-    sizeof(worker_cancellation_post<target_type>) <= 3 * sizeof(void*) &&
-    sizeof(worker_cancellation_dispatch<target_type>) <= 3 * sizeof(void*) &&
-    alignof(worker_cancellation_post<target_type>) <= alignof(std::max_align_t) &&
-    alignof(worker_cancellation_dispatch<target_type>) <= alignof(std::max_align_t) &&
-    std::is_nothrow_move_constructible_v<worker_cancellation_post<target_type>> &&
-    std::is_nothrow_move_constructible_v<worker_cancellation_dispatch<target_type>>;
+    detail::move_only_function_fits_inline<worker_cancellation_post<target_type>> &&
+    detail::move_only_function_fits_inline<worker_cancellation_dispatch<target_type>>;
 
 // Worker-affine registration owns the supplied identity until reset(). Bind
 // owner state before arm(), which may deliver an already-requested stop inline.
@@ -135,6 +131,8 @@ inline constexpr bool worker_cancellation_post_is_inline =
 // cancellation cannot address a reused slot.
 template <typename target_type>
 class worker_cancellation_registration final {
+    static_assert(worker_cancellation_post_is_inline<target_type>);
+
 public:
     worker_cancellation_registration(const std::shared_ptr<target_type>& target, std::uint64_t& identity)
         : target_(target.get()),

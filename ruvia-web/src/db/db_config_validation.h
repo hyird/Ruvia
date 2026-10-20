@@ -1,11 +1,8 @@
 #pragma once
 
-#include <system_error>
-
-#include <asio/ip/address.hpp>
-
 #include "ruvia/web/db/db_types.h"
 
+#include "client/client_host.h"
 #include "client/client_tls_config_storage.h"
 #include "util/config_validation.h"
 
@@ -53,9 +50,7 @@ inline void validate_db_config(const db_config& config) {
     }
     const auto driver = config.driver_;
     if (driver == db_driver::mariadb && config.tls_.mode_ == client_tls_mode::verify_identity) {
-        std::error_code error;
-        (void)asio::ip::make_address(config.host_, error);
-        if (error || config.tls_.server_name_.has_value()) {
+        if (!is_client_ip_address(config.host_) || config.tls_.server_name_.has_value()) {
             throw std::invalid_argument("MariaDB authenticated TLS requires a numeric host with an IP certificate; server_name is unsupported");
         }
     }

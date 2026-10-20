@@ -4,9 +4,9 @@
 #include <stdexcept>
 
 #include "ruvia/web/db/db_query.h"
-#include "ruvia/web/detail/db/db_utils.h"
 
 #include "db/db_pool.h"
+#include "db/db_pool_utils.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "db/db_query_cache.h"
 #include "db/db_query_cache_state.h"

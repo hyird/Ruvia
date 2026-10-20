@@ -11,6 +11,7 @@
 #include "ruvia/http/url_encoding.h"
 
 #include "parser/http_uri_grammar.h"
+#include "request/http_request_access.h"
 
 namespace ruvia {
 namespace {
@@ -22,8 +23,10 @@ bool valid_host(std::string_view host) {
 struct handshake_fields {
     bool capsule_{false}, upgrade_{false}, connection_{false}, connection_field_{false}, host_{false}, forbidden_{false};
 };
+template <typename header_type>
 std::variant<handshake_fields, http_connect_udp_error> fields(
-    std::span<const http_header_view> headers, http_connect_udp_error syntax_error = http_connect_udp_error::invalid_request) {
+    std::span<const header_type> headers,
+    http_connect_udp_error syntax_error = http_connect_udp_error::invalid_request) noexcept {
     handshake_fields found;
     for (const auto& field : headers) {
         if (!is_valid_http_header_name(field.name()) || !is_valid_http_header_value(field.value())) {
@@ -57,6 +60,27 @@ std::variant<handshake_fields, http_connect_udp_error> fields(
         }
     }
     return found;
+}
+template <typename header_type>
+std::variant<std::monostate, http_connect_udp_error> validate_connect_udp_response(
+    http_protocol_version version, std::uint16_t status, std::span<const header_type> headers) noexcept {
+    if (version == http_protocol_version::http10) {
+        return http_connect_udp_error::invalid_response;
+    }
+    const bool extended_connect = version != http_protocol_version::http11;
+    const auto parsed_value = fields(headers, http_connect_udp_error::invalid_response);
+    if ((parsed_value.index() != 0)) {
+        return std::get<1>(parsed_value);
+    }
+    if (!std::get<0>(parsed_value).capsule_ || std::get<0>(parsed_value).forbidden_ ||
+        (extended_connect
+                ? status < 200 || status >= 300 || std::get<0>(parsed_value).upgrade_ ||
+                      std::get<0>(parsed_value).connection_field_
+                : status != 101 || !std::get<0>(parsed_value).upgrade_ ||
+                      !std::get<0>(parsed_value).connection_)) {
+        return http_connect_udp_error::invalid_response;
+    }
+    return {};
 }
 }  // namespace
 std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_path(http_connect_udp_target_view target, std::pmr::memory_resource* resource) {
@@ -122,47 +146,43 @@ std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_r
     }
     return {};
 }
-std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_response(http_protocol_version version, std::uint16_t status, std::span<const http_header_view> headers) noexcept {
-    if (version == http_protocol_version::http10) {
-        return http_connect_udp_error::invalid_response;
-    }
-    const bool extended_connect = version != http_protocol_version::http11;
-    const auto parsed_value = fields(headers, http_connect_udp_error::invalid_response);
-    if ((parsed_value.index() != 0)) {
-        return std::get<1>(parsed_value);
-    }
-    if (!std::get<0>(parsed_value).capsule_ || std::get<0>(parsed_value).forbidden_ ||
-        (extended_connect ? status < 200 || status >= 300 || std::get<0>(parsed_value).upgrade_ || std::get<0>(parsed_value).connection_field_ : status != 101 || !std::get<0>(parsed_value).upgrade_ || !std::get<0>(parsed_value).connection_)) {
-        return http_connect_udp_error::invalid_response;
-    }
-    return {};
+std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_response(
+    http_protocol_version version, std::uint16_t status, std::span<const http_header_view> headers) noexcept {
+    return validate_connect_udp_response(version, status, headers);
+}
+std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_response(
+    http_protocol_version version, std::uint16_t status, std::span<const http_header> headers) noexcept {
+    return validate_connect_udp_response(version, status, headers);
 }
 bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept {
     return request.known_method() == http_known_method::get &&
-           http_ascii_equals_ignore_case(http_trim_ows(request.header("upgrade").value_or("")), "connect-udp");
+           http_ascii_equals_ignore_case(
+               http_trim_ows(detail::request_known_header(request, detail::request_header_kind::upgrade)),
+               "connect-udp");
 }
 std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept {
     const auto path = request.target_form() == http_request_target_form::absolute && request.query_string().empty()
                           ? request.path()
                           : request.target();
-    return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .scheme_ = request.scheme(), .authority_ = request.authority().empty() ? request.header("host").value_or("") : request.authority(), .path_ = path, .headers_ = request.headers()});
+    return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .scheme_ = request.scheme(), .authority_ = request.authority().empty() ? detail::request_known_header(request, detail::request_header_kind::host) : request.authority(), .path_ = path, .headers_ = request.headers()});
 }
 std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response response, http_protocol_version version) {
     if (version == http_protocol_version::http10 || !response.status().is_successful() ||
         response.file_body() || !response.body_bytes().empty()) {
         return http_connect_udp_error::invalid_response;
     }
+    bool capsule = false;
     for (const auto& field : response.headers()) {
-        if (http_ascii_equals_ignore_case(field.name(), "connection") ||
-            http_ascii_equals_ignore_case(field.name(), "upgrade") ||
-            detail::http_field_name_in(field.name(), detail::http_connect_forbidden_fields)) {
+        if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
+            const auto enabled = parse_http_capsule_protocol(field.value());
+            if (capsule || (enabled.index() != 0) || !std::get<0>(enabled)) {
+                return http_connect_udp_error::invalid_capsule_protocol;
+            }
+            capsule = true;
+        } else if (http_ascii_equals_ignore_case(field.name(), "connection") ||
+                   http_ascii_equals_ignore_case(field.name(), "upgrade") ||
+                   detail::http_field_name_in(field.name(), detail::http_connect_forbidden_fields)) {
             return http_connect_udp_error::invalid_response;
-        }
-    }
-    if (const auto capsule = response.header("capsule-protocol")) {
-        const auto enabled = parse_http_capsule_protocol(*capsule);
-        if ((enabled.index() != 0) || !std::get<0>(enabled)) {
-            return http_connect_udp_error::invalid_capsule_protocol;
         }
     }
     response.header("Capsule-Protocol", "?1");
@@ -170,13 +190,6 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
         response.status_code_ = http_status::switching_protocols;
         response.header("Connection", "Upgrade");
         response.header("Upgrade", "connect-udp");
-    }
-    std::pmr::vector<http_header_view> fields_value(response.memory_resource());
-    for (const auto& field : response.headers()) {
-        fields_value.emplace_back(field.name(), field.value());
-    }
-    if (const auto valid = validate_http_connect_udp_response(version, response.status().value(), fields_value); (valid.index() != 0)) {
-        return std::get<1>(valid);
     }
     return response;
 }
@@ -198,10 +211,12 @@ std::variant<http1_response_head_plan, http_connect_udp_error> prepare_http1_con
             }
             upgrade = true;
         } else if (http_ascii_equals_ignore_case(field.name(), "connection")) {
-            if (connection || !http_ascii_equals_ignore_case(field.value(), "Upgrade")) {
+            detail::http_connection_options options;
+            if (options.parse_field(field.value(), detail::http_field_list_role::recipient) !=
+                detail::http_field_list_parse_status::ok) {
                 return http_connect_udp_error::invalid_response;
             }
-            connection = true;
+            connection = connection || options.contains(detail::http_connection_option::upgrade);
         } else if (detail::http_field_name_in(field.name(), detail::http_connect_forbidden_fields)) {
             return http_connect_udp_error::invalid_response;
         }

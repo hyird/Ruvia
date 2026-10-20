@@ -78,9 +78,9 @@ void decode_array_element(std::string_view text, t_type& value, std::pmr::memory
     } else if constexpr (std::is_same_v<t_type, string>) {
         value.assign_owned(text);
     } else if constexpr (std::is_same_v<t_type, bool>) {
-        if (text == "t" || text == "true" || text == "1") {
+        if (text == "1" || text == "t" || text == "true" || text == "TRUE") {
             value = true;
-        } else if (text == "f" || text == "false" || text == "0") {
+        } else if (text == "0" || text == "f" || text == "false" || text == "FALSE") {
             value = false;
         } else {
             throw db_conversion_error(db_conversion_error::code_type::invalid_format, "invalid boolean array element");
@@ -88,7 +88,10 @@ void decode_array_element(std::string_view text, t_type& value, std::pmr::memory
     } else {
         const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
         if (ec != std::errc{} || end != text.data() + text.size()) {
-            throw db_conversion_error(db_conversion_error::code_type::invalid_format, "invalid array element");
+            throw db_conversion_error(ec == std::errc::result_out_of_range
+                                          ? db_conversion_error::code_type::out_of_range
+                                          : db_conversion_error::code_type::invalid_format,
+                "invalid array element");
         }
     }
     (void)resource;

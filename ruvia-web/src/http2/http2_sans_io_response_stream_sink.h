@@ -63,7 +63,7 @@ public:
           kind_(kind),
           write_signal_(write_signal),
           stream_signal_(stream_signal),
-          output_budget_(&output_budget),
+          output_budget_(output_budget),
           request_method_(request_method),
           cors_(cors),
           compression_(resource, codecs, response_coding, response_coding_availability) {}
@@ -132,85 +132,31 @@ public:
     }
 
     task<void> write_encoded(std::string_view chunk) {
-        constexpr std::size_t submit_chunk_bytes = http2_data_output_credit_bytes;
-        std::size_t offset = 0;
-        while (offset < chunk.size()) {
-            const auto count = std::min(submit_chunk_bytes, chunk.size() - offset);
-            const auto part = chunk.substr(offset, count);
-            for (;;) {
-                if (output_budget_ != nullptr) {
-                    for (;;) {
-                        const auto window = connection_.send_window_state(stream_id_);
-                        if (!window) {
-                            state_.mark_aborted();
-                            throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
-                        }
-                        if (window->available_ != 0) {
-                            break;
-                        }
-                        co_await output_budget_->wait_for_change();
-                        if (stream_signal_.terminated()) {
-                            state_.mark_aborted();
-                            throw inbound_transport_error(stream_signal_.terminal_error(), "HTTP/2 connection ended during response stream");
-                        }
-                    }
-                    if (!(co_await output_budget_->acquire(stream_id_, stream_signal_))) {
-                        state_.mark_aborted();
-                        throw inbound_transport_error(stream_signal_.terminal_error(), "HTTP/2 connection ended during response stream");
-                    }
-                }
-                const auto result_value =
-                    connection_.submit_data(stream_id_, part, http2_end_stream::keep_open);
-                if (output_budget_ != nullptr &&
-                    (result_value == http2_data_submit_status::accepted ||
-                        result_value == http2_data_submit_status::queued)) {
-                    output_budget_->note_data_submitted(stream_id_, part.size());
-                }
-                wake_writer();
-                if (result_value != http2_data_submit_status::accepted &&
-                    result_value != http2_data_submit_status::queued) {
-                    if (output_budget_ != nullptr) {
-                        output_budget_->release(stream_id_);
-                    }
-                }
-                if (result_value == http2_data_submit_status::accepted) {
-                    break;
-                }
-                if (result_value == http2_data_submit_status::closed) {
-                    state_.mark_aborted();
-                    throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
-                }
-                if (result_value == http2_data_submit_status::invalid_state) {
-                    state_.mark_aborted();
-                    throw std::logic_error("invalid HTTP/2 response stream DATA state");
-                }
-                if (result_value == http2_data_submit_status::content_length_exceeded) {
-                    state_.mark_aborted();
-                    throw std::length_error("HTTP/2 response exceeds Content-Length");
-                }
-                if (result_value == http2_data_submit_status::content_length_incomplete) {
-                    state_.mark_aborted();
-                    throw std::length_error("HTTP/2 response ended before Content-Length");
-                }
-                const auto wait_result =
-                    co_await await_http2_send_window(connection_, stream_id_, &stream_signal_);
-                if (wait_result.aborted() != nullptr) {
-                    state_.mark_aborted();
-                    throw inbound_transport_error(stream_signal_.terminated() ? stream_signal_.terminal_error() : std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream aborted");
-                }
-                if (result_value == http2_data_submit_status::queued) {
-                    break;  // core owns this bounded chunk; drain before the next one
-                }
-            }
-            offset += count;
-            if (offset < chunk.size()) {
-                const auto wait_result =
-                    co_await await_http2_send_window(connection_, stream_id_, &stream_signal_);
-                if (wait_result.aborted() != nullptr) {
-                    state_.mark_aborted();
-                    throw inbound_transport_error(stream_signal_.terminated() ? stream_signal_.terminal_error() : std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream aborted");
-                }
-            }
+        if (chunk.empty()) {
+            co_return;
+        }
+        const auto status = co_await write_http2_stream_data(connection_, stream_id_, &stream_signal_,
+            write_signal_, output_budget_, chunk, http2_end_stream::keep_open);
+        if (status == http2_stream_data_write_status::completed) {
+            co_return;
+        }
+        state_.mark_aborted();
+        switch (status) {
+            case http2_stream_data_write_status::completed:
+                co_return;
+            case http2_stream_data_write_status::session_terminated:
+                throw inbound_transport_error(
+                    stream_signal_.terminal_error(), "HTTP/2 connection ended during response stream");
+            case http2_stream_data_write_status::local_aborted:
+            case http2_stream_data_write_status::peer_closed:
+                throw inbound_transport_error(
+                    std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
+            case http2_stream_data_write_status::invalid_state:
+                throw std::logic_error("invalid HTTP/2 response stream DATA state");
+            case http2_stream_data_write_status::content_length_exceeded:
+                throw std::length_error("HTTP/2 response exceeds Content-Length");
+            case http2_stream_data_write_status::content_length_incomplete:
+                throw std::length_error("HTTP/2 response ended before Content-Length");
         }
     }
 
@@ -334,7 +280,7 @@ private:
     http_interim_response_output* interim_output_{};
     worker_signal& write_signal_;
     http2_sans_io_stream_signal& stream_signal_;
-    http2_data_output_budget* output_budget_{nullptr};
+    http2_data_output_budget& output_budget_;
     http_known_method request_method_{http_known_method::unknown};
     const cors_options* cors_;
     http_streaming_response_compression compression_;

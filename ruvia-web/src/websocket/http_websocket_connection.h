@@ -17,9 +17,12 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/http/websocket_protocol.h"
 #include "ruvia/http/websocket_server_protocol.h"
 #include "ruvia/web/websocket.h"
 

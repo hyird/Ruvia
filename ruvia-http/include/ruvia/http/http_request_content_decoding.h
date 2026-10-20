@@ -21,7 +21,7 @@ namespace ruvia {
 // Admission keeps Content-Encoding opaque. Inspect invalid()/unsupported()
 // before using codings(); an empty span in either error state is not identity.
 [[nodiscard]] http_content_coding_field_result request_content_coding(
-    const http_request& request, std::pmr::memory_resource* resource);
+    const http_request& request, std::pmr::memory_resource* resource = nullptr) noexcept;
 
 class http_request_content_decode_protocol_failure final {
 public:

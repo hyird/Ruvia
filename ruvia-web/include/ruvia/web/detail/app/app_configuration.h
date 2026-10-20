@@ -27,7 +27,7 @@ template <middleware middleware_type, typename... args_types>
         "use_at(); register it app-wide with use<T>()");
     const auto normalized = normalize_fallback_prefix(options.prefix_);
     return make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...)
-        .scoped_to(retain_registration_text(normalized));
+        .scoped_to(normalized);
 }
 
 template <typename state_type>

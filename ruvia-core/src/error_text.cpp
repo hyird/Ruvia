@@ -4,12 +4,12 @@
 #include <array>
 #include <string_view>
 
-#include <asio/error_code.hpp>
-
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
 #include <windows.h>
+
+#include <asio/error_code.hpp>
 #endif
 
 namespace ruvia {

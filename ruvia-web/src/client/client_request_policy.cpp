@@ -300,8 +300,16 @@ void client_request_policy::retain_response_cookies(
     if (config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
         return;
     }
-    const auto now = std::chrono::system_clock::now();
-    discard_expired(now);
+    std::optional<std::chrono::system_clock::time_point> now;
+    const auto current_time = [&now] {
+        if (!now.has_value()) {
+            now = std::chrono::system_clock::now();
+        }
+        return *now;
+    };
+    if (!cookies_.empty()) {
+        discard_expired(current_time());
+    }
     for (const auto& header : headers) {
         if (!http_ascii_equals_ignore_case(header.name(), "set-cookie")) {
             continue;
@@ -310,7 +318,7 @@ void client_request_policy::retain_response_cookies(
         if (!parsed_cookie) {
             continue;
         }
-        if (const auto accepted = accept_set_cookie(*parsed_cookie, config_, request_target, now)) {
+        if (const auto accepted = accept_set_cookie(*parsed_cookie, config_, request_target, current_time())) {
             store_received_cookie(*accepted);
         }
     }
@@ -322,9 +330,10 @@ void client_request_policy::store_received_cookie(const client_received_cookie& 
     const auto identity_domain = [this](std::string_view domain) {
         return domain.empty() ? std::string_view(config_.host_) : domain;
     };
+    const auto cookie_domain = identity_domain(cookie.domain_);
     const auto match = std::ranges::find_if(cookies_, [&](const stored_cookie& stored) {
         return !stored.configured_ && stored.name_ == cookie.name_ && stored.path_ == cookie.path_ &&
-               http_ascii_equals_ignore_case(identity_domain(stored.domain_), identity_domain(cookie.domain_));
+               http_ascii_equals_ignore_case(identity_domain(stored.domain_), cookie_domain);
     });
     const auto replaced_bytes =
         match == cookies_.end() ? 0 : storage_bytes(match->name_, match->value_, match->path_, match->domain_);

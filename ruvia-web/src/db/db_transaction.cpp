@@ -3,9 +3,9 @@
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/detail/db/db_result_access.h"
-#include "ruvia/web/detail/db/db_utils.h"
 
 #include "db/db_pool.h"
+#include "db/db_pool_utils.h"
 #include "db/db_prepared_statement.h"
 #include "db/db_query_execution.h"
 #include "db/db_sql_format.h"
@@ -239,7 +239,6 @@ task<void> db_transaction::rollback_task(operation_guard_type pending) {
     co_await rollback_pool_transaction(lease_value.client_, lease_value.slot_, lease_value.resource_, lease_value.options_);
     operation.finish_closed();
 }
-
 scoped_operation<void> db_transaction::savepoint(std::string_view name) & {
     return run_savepoint_command("SAVEPOINT ", name);
 }

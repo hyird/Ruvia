@@ -30,40 +30,26 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline websocket_handshake_validation_result validate_http2_websocket_handshake(
-    const http2_stream_state& stream, const http_request& request) noexcept {
+    const http2_stream_state& stream, const http_request& request,
+    websocket_handshake_validation_options options = {}) noexcept {
     if (!http2_is_pending_websocket_connect(stream) || !http2_remote_final_head_decoded(stream) ||
         http2_remote_peer_half_closed(stream) ||
         stream.remote_content().allowed_without_length() == nullptr) {
         return websocket_handshake_validation_result::make_invalid_request();
     }
 
-    std::size_t version_count = 0;
-    std::string_view version;
+    websocket_request_header_validator validator;
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto kind = static_cast<request_header_kind>(http_request_access::header_kind(request, i));
         if (kind == request_header_kind::sec_websocket_key ||
-            http_ascii_equals_ignore_case(headers[i].name(), "sec-websocket-accept")) {
+            (kind == request_header_kind::other &&
+                http_ascii_equals_ignore_case(headers[i].name(), "sec-websocket-accept")) ||
+            !validator.observe_header(kind, headers[i].value())) {
             return websocket_handshake_validation_result::make_invalid_request();
         }
-        if (kind == request_header_kind::sec_websocket_version) {
-            version = headers[i].value();
-            ++version_count;
-        }
     }
-    if (version_count != 1) {
-        return websocket_handshake_validation_result::make_invalid_request();
-    }
-    if (!websocket_subprotocol_offers_valid(request)) {
-        return websocket_handshake_validation_result::make_invalid_request();
-    }
-    if (!websocket_extension_offers_valid(request)) {
-        return websocket_handshake_validation_result::make_invalid_request();
-    }
-    if (version != "13") {
-        return websocket_handshake_validation_result::make_unsupported_version();
-    }
-    return websocket_handshake_validation_result::make_accepted();
+    return validator.finish(options);
 }
 
 inline void http2_encode_websocket_handshake_headers(

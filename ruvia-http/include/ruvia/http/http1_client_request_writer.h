@@ -9,7 +9,6 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_exchange_state.h"
 #include "ruvia/http/http1_close_policy.h"
 #include "ruvia/http/http_client.h"

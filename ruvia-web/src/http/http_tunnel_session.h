@@ -29,8 +29,8 @@ public:
         std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, std::string_view pending = {})
         : transport_(std::move(transport)),
           inbound_(inbound),
-          pending_(pending, &inbound),
           read_buffer_(&inbound),
+          pending_(pending, &inbound),
           facade_(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk) {}
     [[nodiscard]] http_tunnel& tunnel() noexcept {
         return facade_;
@@ -109,8 +109,8 @@ private:
     }
     transport_type transport_;
     std::pmr::memory_resource& inbound_;
-    std::pmr::string pending_;
     std::pmr::string read_buffer_;
+    std::pmr::string pending_;
     bool ended_{false};
     bool receive_ended_{false};
     bool aborted_{false};

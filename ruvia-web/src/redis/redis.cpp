@@ -9,16 +9,26 @@
 namespace ruvia {
 namespace detail {
 
-redis_registry::redis_registry(asio::io_context& io_context, std::pmr::memory_resource* resource,
-    std::span<const redis_definition_type> redis, worker_handle worker_value)
-    : worker_(std::move(worker_value)),
-      resource_(pmr_resource_or_default(resource)),
-      pools_(resource_),
-      alias_index_(resource_) {
-    if (!worker_.valid()) {
+namespace {
+
+[[nodiscard]] std::pmr::memory_resource* validated_redis_resource(
+    const worker_handle& worker_value, std::pmr::memory_resource* resource,
+    std::span<const redis_definition_type> redis) {
+    if (!worker_value.valid()) {
         throw std::invalid_argument("redis registry requires a valid worker");
     }
     validate_capability_aliases(redis, "redis alias must not be empty", "duplicate redis alias");
+    return pmr_resource_or_default(resource);
+}
+
+}  // namespace
+
+redis_registry::redis_registry(asio::io_context& io_context, std::pmr::memory_resource* resource,
+    std::span<const redis_definition_type> redis, worker_handle worker_value)
+    : worker_(std::move(worker_value)),
+      resource_(validated_redis_resource(worker_, resource, redis)),
+      pools_(resource_),
+      alias_index_(resource_) {
     alias_index_.build(redis);
     pools_.reserve(redis.size());
     for (const auto& definition : redis) {

@@ -123,13 +123,26 @@ void context::ensure_request_query() const {
     // vector growth invalidates views into its inline buffer. Count decoded
     // owners exactly so unencoded fields do not reserve unused string storage.
     std::size_t decoded_component_count = 0;
+    std::size_t pair_count = 0;
     (void)visit_url_encoded_pairs(request_.query_string(),
-        [&decoded_component_count](std::string_view name, std::string_view value) {
+        [&decoded_component_count, &pair_count](std::string_view name, std::string_view value) {
+            ++pair_count;
             decoded_component_count += has_url_encoding(name, url_decode_mode::form);
             decoded_component_count += has_url_encoding(value, url_decode_mode::form);
         });
-    storage.reserve(decoded_component_count);
     auto query = detail::request_name_value_list_access::make(arena());
+    detail::request_name_value_list_access::reserve(query, pair_count);
+    if (decoded_component_count == 0) {
+        (void)visit_url_encoded_pairs(
+            request_.query_string(), [&query](std::string_view key, std::string_view value) {
+                detail::request_name_value_list_access::push_back(
+                    query, detail::request_name_value_view_access::make(key, value));
+                return true;
+            });
+        cache.emplace(std::move(storage), std::move(query));
+        return;
+    }
+    storage.reserve(decoded_component_count);
     bool valid = true;
     const bool completed = visit_url_encoded_pairs(request_.query_string(),
         [&storage, &query, &valid](std::string_view key, std::string_view value) {
@@ -176,20 +189,19 @@ const request_name_value_list& context::request_cookies() const {
     auto& cache = request_storage().cookies_;
     if (!cache) {
         auto cookies = detail::request_name_value_list_access::make(arena());
-        const auto headers = request_.headers();
         if (request_.header("Cookie").has_value()) {
             detail::request_name_value_list_access::reserve(cookies, 8);
-        }
-        for (const auto& header : headers) {
-            if (!http_ascii_equals_ignore_case(header.name(), "Cookie")) {
-                continue;
+            for (const auto& header : request_.headers()) {
+                if (!http_ascii_equals_ignore_case(header.name(), "Cookie")) {
+                    continue;
+                }
+                http_visit_cookie_pairs(header.value(), [&cookies](std::string_view key,
+                                                            std::string_view value) {
+                    detail::request_name_value_list_access::push_back(
+                        cookies, detail::request_name_value_view_access::make(key, value));
+                    return true;
+                });
             }
-            http_visit_cookie_pairs(header.value(), [&cookies](std::string_view key,
-                                                        std::string_view value) {
-                detail::request_name_value_list_access::push_back(
-                    cookies, detail::request_name_value_view_access::make(key, value));
-                return true;
-            });
         }
         cache.emplace(std::move(cookies));
     }
@@ -297,6 +309,9 @@ std::optional<std::string_view> context::request_negotiate(
     }
 
     const auto header_name = negotiation_header_name(field);
+    if (!request_.header(header_name).has_value()) {
+        return supported.front();
+    }
     const bool media_type = field == context_request::negotiable_type::media_type;
     const bool encoding = field == context_request::negotiable_type::encoding;
     // Only Accept-Language needs prefix matching in the generic token parser.
@@ -376,7 +391,7 @@ task<std::string_view> context::request_body() const {
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
     auto* const decode_resource = services().inbound_buffer_pool() != nullptr ? services().inbound_buffer_pool() : pool();
-    const auto parsed_coding = request_content_coding(request_, decode_resource);
+    const auto parsed_coding = request_content_coding(request_);
     if (const auto* invalid = parsed_coding.invalid()) {
         throw http_protocol_error(invalid->status(), "invalid request Content-Encoding");
     }
@@ -470,7 +485,7 @@ multipart_reader context::request_multipart_reader() const {
     const auto boundary = get_multipart_boundary();
     // The reader parses raw body bytes as they arrive and decodes no content
     // coding, so only an identity body is accepted.
-    const auto parsed_coding = request_content_coding(request_, pool());
+    const auto parsed_coding = request_content_coding(request_);
     if (const auto* invalid = parsed_coding.invalid()) {
         throw http_protocol_error(invalid->status(), "invalid request Content-Encoding");
     }

@@ -35,43 +35,48 @@ namespace detail {
 class event_loop_stop_listener final : public std::enable_shared_from_this<event_loop_stop_listener> {
 public:
     event_loop_stop_listener(worker_handle worker_value, asio::io_context::executor_type executor,
-        move_only_function<task<void>()> callback_value, std::weak_ptr<event_loop_state> loop,
-        std::shared_ptr<event_loop_retirement> retirement)
+        move_only_function<task<void>()> callback_value, std::weak_ptr<event_loop_state> loop)
         : worker_(std::move(worker_value)),
           executor_(std::move(executor)),
           callback_(std::move(callback_value)),
-          loop_(std::move(loop)),
-          retirement_(std::move(retirement)) {}
+          loop_(std::move(loop)) {}
 
     void install_shutdown_hook() {
-        worker_handle_access::register_shutdown_hook(
-            worker_, shared_from_this(), &event_loop_stop_listener::shutdown_hook_);
+        worker_handle_access::register_shutdown_hook(worker_, shutdown_hook_, shared_from_this(),
+            worker_shutdown_operations<event_loop_stop_listener>);
     }
 
     void cancel() noexcept {
         move_only_function<task<void>()> abandoned;
-        bool finish_retirement = false;
+        std::shared_ptr<event_loop_state> active_loop;
         {
             const std::lock_guard lock(mutex_);
             if (started_) {
                 return;
             }
             abandoned = std::move(callback_);
-            finish_retirement = std::exchange(retirement_begun_, false);
+            if (std::exchange(retirement_begun_, false)) {
+                active_loop = std::move(active_loop_);
+            }
         }
         abandoned = nullptr;
-        if (finish_retirement) {
-            retirement_->finish();
+        if (active_loop) {
+            active_loop->retirement_.finish();
         }
     }
 
     void worker_stopping() noexcept {
+        auto loop = loop_.lock();
+        if (!loop) {
+            return;
+        }
         {
             const std::lock_guard lock(mutex_);
             if (!callback_ || retirement_begun_ || started_) {
                 return;
             }
-            retirement_->begin();
+            loop->retirement_.begin();
+            active_loop_ = std::move(loop);
             retirement_begun_ = true;
         }
         auto self = shared_from_this();
@@ -109,7 +114,8 @@ private:
             std::terminate();
         } catch (...) {
             report(std::current_exception());
-            retirement_->finish();
+            auto active_loop = std::move(active_loop_);
+            active_loop->retirement_.finish();
             return;
         }
 
@@ -120,7 +126,8 @@ private:
                         if (const auto* failure = result_value.failure()) {
                             self->report(failure->exception());
                         }
-                        self->retirement_->finish();
+                        auto active_loop = std::move(self->active_loop_);
+                        active_loop->retirement_.finish();
                     }));
         } catch (...) {
             report(std::current_exception());
@@ -137,7 +144,7 @@ private:
     bool started_{false};
     move_only_function<task<void>()> callback_;
     std::weak_ptr<event_loop_state> loop_;
-    std::shared_ptr<event_loop_retirement> retirement_;
+    std::shared_ptr<event_loop_state> active_loop_;
 };
 
 event_loop_state::event_loop_state(std::size_t queue_capacity)
@@ -154,7 +161,8 @@ event_loop_state::event_loop_state(asio::io_context& external_context, std::size
       runtime_(std::get_if<attached_context>(&context_ownership_)->runtime_) {}
 
 void event_loop_state::install_shutdown_hook() {
-    worker_handle_access::register_shutdown_hook(runtime_.handle(), shared_from_this(), &event_loop_state::shutdown_hook_);
+    worker_handle_access::register_shutdown_hook(
+        runtime_.handle(), shutdown_hook_, shared_from_this(), worker_shutdown_operations<event_loop_state>);
 }
 
 void event_loop_state::worker_stopping_complete() noexcept {
@@ -187,36 +195,14 @@ void event_loop_state::stop() noexcept {
     if (stopping_.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-    retirement_->close_root_admission();
-    if (!retirement_->try_begin()) {
+    retirement_.close_root_admission();
+    if (!retirement_.try_begin()) {
         return;
     }
     const std::weak_ptr<event_loop_state> weak = weak_from_this();
-    retirement_->set_finalize([weak] {
-        auto state_value = weak.lock();
-        if (!state_value) {
-            return;
-        }
-        try {
-            worker_handle_access::when_idle(state_value->runtime_.handle(), [weak] {
-                auto idle_state = weak.lock();
-                if (!idle_state) {
-                    return;
-                }
-                auto failure_owner = idle_state;
-                const auto worker_value = idle_state->runtime_.handle();
-                auto finalization_keep_alive = std::move(idle_state);
-                try {
-                    // A detached context ran shutdown_external_context(), which
-                    // already abandoned the stop chain this would finalize.
-                    (void)worker_handle_access::defer_if_attached(worker_value,
-                        [state_value = std::move(finalization_keep_alive)] { state_value->finalize_stop(); });
-                } catch (...) {
-                    failure_owner->fail_teardown_start(std::current_exception());
-                }
-            });
-        } catch (...) {
-            state_value->fail_teardown_start(std::current_exception());
+    retirement_.set_finalize([weak] {
+        if (const auto state_value = weak.lock()) {
+            state_value->schedule_finalize_when_idle();
         }
     });
     if (auto* attached = std::get_if<attached_context>(&context_ownership_)) {
@@ -229,11 +215,38 @@ void event_loop_state::stop() noexcept {
     // not seal the retirement gate until that first notification batch is
     // fully complete, so every listener can acquire its cleanup lease.
     try {
-        worker_handle_access::when_shutdown_notifications_complete(runtime_.handle(),
-            [retirement = retirement_] {
-                retirement->seal();
-                retirement->finish();
-            });
+        worker_handle_access::when_shutdown_notifications_complete(runtime_.handle(), [weak] {
+            if (const auto state_value = weak.lock()) {
+                state_value->retirement_.seal();
+                state_value->retirement_.finish();
+            }
+        });
+    } catch (...) {
+        fail_teardown_start(std::current_exception());
+    }
+}
+
+void event_loop_state::schedule_finalize_when_idle() noexcept {
+    const std::weak_ptr<event_loop_state> weak = weak_from_this();
+    try {
+        worker_handle_access::when_idle(runtime_.handle(), [weak] {
+            if (auto idle_state = weak.lock()) {
+                auto* const state_ptr = idle_state.get();
+                state_ptr->defer_finalize_stop(std::move(idle_state));
+            }
+        });
+    } catch (...) {
+        fail_teardown_start(std::current_exception());
+    }
+}
+
+void event_loop_state::defer_finalize_stop(std::shared_ptr<event_loop_state> self) noexcept {
+    const auto worker_value = runtime_.handle();
+    try {
+        // A detached context ran shutdown_external_context(), which
+        // already abandoned the stop chain this would finalize.
+        (void)worker_handle_access::defer_if_attached(
+            worker_value, [state_value = std::move(self)] { state_value->finalize_stop(); });
     } catch (...) {
         fail_teardown_start(std::current_exception());
     }
@@ -328,7 +341,7 @@ std::shared_ptr<void> event_loop::acquire_root_lease() const {
     if (!state_) {
         return {};
     }
-    return state_->retirement_->try_acquire();
+    return state_->retirement_.try_acquire(state_);
 }
 
 bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const {
@@ -338,7 +351,7 @@ bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const
     if (!state_) {
         return false;
     }
-    auto lease_value = state_->retirement_->try_acquire(false);
+    auto lease_value = state_->retirement_.try_acquire(state_, false);
     if (!lease_value) {
         return false;
     }
@@ -364,9 +377,9 @@ event_loop_stop_registration event_loop::register_stop_callback(
     if (!state_->runtime_.handle().accepting()) {
         throw std::runtime_error("cannot register a stop callback on a stopping event loop");
     }
-    auto listener_value = std::make_shared<detail::event_loop_stop_listener>(state_->runtime_.handle(),
-        state_->executor_, std::move(callback_value), state_,
-        state_->retirement_);
+    auto listener_value = std::allocate_shared<detail::event_loop_stop_listener>(
+        std::pmr::polymorphic_allocator<detail::event_loop_stop_listener>(process_resource()),
+        state_->runtime_.handle(), state_->executor_, std::move(callback_value), state_);
     listener_value->install_shutdown_hook();
     return event_loop_stop_registration(std::move(listener_value));
 }

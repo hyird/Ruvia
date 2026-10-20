@@ -49,7 +49,8 @@ public:
         }
     }
 
-    [[nodiscard]] std::shared_ptr<void> try_acquire(bool root_admission = true) {
+    [[nodiscard]] std::shared_ptr<void> try_acquire(
+        const std::shared_ptr<event_loop_state>& owner, bool root_admission = true) {
         {
             const std::lock_guard lock(mutex_);
             if (finalized_ || (root_admission && (root_admission_closed_ || sealed_))) {
@@ -59,7 +60,7 @@ public:
         }
         try {
             auto token = std::allocate_shared<lease_token_type>(
-                std::pmr::polymorphic_allocator<lease_token_type>(process_resource()), this);
+                std::pmr::polymorphic_allocator<lease_token_type>(process_resource()), owner);
             return std::shared_ptr<void>(std::move(token), this);
         } catch (...) {
             finish();
@@ -118,12 +119,10 @@ public:
 
 private:
     struct lease_token_type final {
-        explicit lease_token_type(event_loop_retirement* owner_value) noexcept
-            : owner_(owner_value) {}
-        ~lease_token_type() {
-            owner_->finish();
-        }
-        event_loop_retirement* owner_;
+        explicit lease_token_type(std::shared_ptr<event_loop_state> owner_value) noexcept
+            : owner_(std::move(owner_value)) {}
+        ~lease_token_type();
+        std::shared_ptr<event_loop_state> owner_;
     };
 
     mutable std::mutex mutex_;
@@ -209,7 +208,15 @@ struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
     // owner. Root tasks and stop callbacks borrow it through the loop state
     // instead of copying it.
     move_only_function<void(std::exception_ptr)> failure_sink_;
-    std::shared_ptr<event_loop_retirement> retirement_{std::make_shared<event_loop_retirement>()};
+    event_loop_retirement retirement_;
+
+private:
+    void schedule_finalize_when_idle() noexcept;
+    void defer_finalize_stop(std::shared_ptr<event_loop_state> self) noexcept;
 };
+
+inline event_loop_retirement::lease_token_type::~lease_token_type() {
+    owner_->retirement_.finish();
+}
 
 }  // namespace ruvia::detail

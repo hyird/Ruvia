@@ -1,6 +1,7 @@
 #include "ruvia/http/http1_server_request_parser.h"
 
 #include <algorithm>
+#include <limits>
 
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
@@ -198,7 +199,11 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
     if (final_chunked != nullptr) {
         state_value.body_plan_ = http1_request_body_plan(final_chunked->transfer_codings(), expectations);
     } else if (content_length.has_value()) {
-        state_value.body_plan_ = http1_request_body_plan(*content_length, expectations);
+        if (*content_length > (std::numeric_limits<std::size_t>::max)()) {
+            return fail(http_parse_error::invalid_content_length);
+        }
+        state_value.body_plan_ =
+            http1_request_body_plan(static_cast<std::size_t>(*content_length), expectations);
     } else {
         state_value.body_plan_ = http1_request_body_plan(expectations);
     }

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <algorithm>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -9,34 +8,17 @@
 #include <variant>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_transfer_coding.h"
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline bool http_valid_transfer_parameter_value(std::string_view value) noexcept {
-    if (value.empty()) {
-        return false;
-    }
-    if (value.front() != '"') {
-        return std::ranges::all_of(value,
-            [](char byte) noexcept { return is_http_token_char(static_cast<unsigned char>(byte)); });
-    }
-    return http_is_quoted_string(value);
-}
-
 [[nodiscard]] inline bool http_parse_transfer_coding_syntax(
     std::string_view item, std::string_view& coding, bool& has_parameters) noexcept {
     const auto first_semicolon = http_find_unquoted_delimiter(item, 0, ';');
     coding = http_trim_ows(item.substr(0, first_semicolon));
-    if (coding.empty()) {
+    if (!is_valid_http_header_name(coding)) {
         return false;
-    }
-    for (const auto byte : coding) {
-        if (!is_http_token_char(static_cast<unsigned char>(byte))) {
-            return false;
-        }
     }
 
     has_parameters = first_semicolon < item.size();
@@ -51,15 +33,7 @@ namespace ruvia::detail {
         }
         const auto name = http_trim_ows(parameter.substr(0, equals));
         const auto value = http_trim_ows(parameter.substr(equals + 1));
-        if (name.empty()) {
-            return false;
-        }
-        for (const auto byte : name) {
-            if (!is_http_token_char(static_cast<unsigned char>(byte))) {
-                return false;
-            }
-        }
-        if (!http_valid_transfer_parameter_value(value)) {
+        if (!is_valid_http_header_name(name) || !is_http_token_or_quoted_string(value)) {
             return false;
         }
         start = end;

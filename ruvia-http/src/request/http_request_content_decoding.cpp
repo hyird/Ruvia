@@ -11,10 +11,10 @@
 namespace ruvia {
 
 http_content_coding_field_result request_content_coding(
-    const http_request& request, std::pmr::memory_resource* resource) {
-    detail::http_content_coding_field_parser parser(resource);
+    const http_request& request, std::pmr::memory_resource*) noexcept {
+    detail::http_content_coding_field_parser parser;
     if (!detail::request_has_known_header(request, detail::request_header_kind::content_encoding)) {
-        return std::move(parser).finish();
+        return parser.finish();
     }
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
@@ -23,7 +23,7 @@ http_content_coding_field_result request_content_coding(
             parser.update(headers[i].value());
         }
     }
-    return std::move(parser).finish();
+    return parser.finish();
 }
 
 }  // namespace ruvia

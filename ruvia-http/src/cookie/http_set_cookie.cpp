@@ -189,12 +189,11 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
     const auto cookie_pair = value.substr(0, first_end);
     std::string_view name;
     std::string_view cookie_value;
-    if (!(cookie_pair.find('=') != std::string_view::npos)) {
+    if (const auto equals = cookie_pair.find('='); equals == std::string_view::npos) {
         cookie_value = http_trim_ows(cookie_pair);
     } else {
-        const auto fields_value = split_attribute(cookie_pair);
-        name = fields_value.first;
-        cookie_value = fields_value.second;
+        name = http_trim_ows(cookie_pair.substr(0, equals));
+        cookie_value = http_trim_ows(cookie_pair.substr(equals + 1));
     }
     if ((name.empty() && cookie_value.empty()) || name.size() > detail::max_cookie_name_value_bytes ||
         cookie_value.size() > detail::max_cookie_name_value_bytes - name.size() ||

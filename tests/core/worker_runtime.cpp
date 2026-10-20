@@ -322,52 +322,41 @@ RUVIA_TEST(worker_runtime_serve_failure_fails_the_runtime) {
     RUVIA_CHECK(runtime.failure() != nullptr);
 }
 
-RUVIA_TEST(worker_group_orders_tiers_through_startup_serving_and_retirement) {
-    ruvia::worker_runtime producer;
-    ruvia::worker_runtime first_consumer;
-    ruvia::worker_runtime second_consumer;
+RUVIA_TEST(worker_group_coordinates_startup_serving_and_retirement) {
+    ruvia::worker_runtime first;
+    ruvia::worker_runtime second;
     std::mutex order_mutex;
     std::vector<std::string> order;
     const auto record = [&](std::string event) {
         const std::lock_guard lock(order_mutex);
         order.push_back(std::move(event));
     };
-    std::atomic<bool> staged{};
-    std::atomic<bool> consumers_saw_staging{true};
-    std::atomic<bool> finalized_after_producer{true};
-    producer.configure({
+    std::atomic<int> ready_count{};
+    first.configure({
         .startup_ = [&] {
-            staged.store(true);
-            producer.mark_ready(); },
-        .serve_ = [&] { record("serve producer"); },
+            ++ready_count;
+            first.mark_ready(); },
+        .serve_ = [&] { record("serve first"); },
     });
-    for (auto* consumer : {&first_consumer, &second_consumer}) {
-        consumer->configure({
-            .startup_ = [&, consumer] {
-                consumers_saw_staging.store(consumers_saw_staging.load() && staged.load());
-                consumer->mark_ready(); },
-            .serve_ = [&] { record("serve consumer"); },
-            // Consumers wait for the group: their producer must quiesce first.
-            .stop_admission_ = [] {},
-            .finalize_ = [&] { finalized_after_producer.store(
-                                   finalized_after_producer.load() && producer.state() == state::stopped); },
-        });
-    }
+    second.configure({
+        .startup_ = [&] {
+            ++ready_count;
+            second.mark_ready(); },
+        .serve_ = [&] { record("serve second"); },
+    });
     {
         ruvia::worker_group group;
-        group.add(producer, 0);
-        group.add(first_consumer, 1);
-        group.add(second_consumer, 1);
+        group.add(first);
+        group.add(second);
         RUVIA_CHECK(group.start());
-        RUVIA_CHECK(consumers_saw_staging.load());
+        RUVIA_CHECK_EQ(ready_count.load(), 2);
         RUVIA_CHECK(group.serve());
         group.request_stop();
         RUVIA_CHECK(group.join() == nullptr);
     }
-    RUVIA_CHECK(finalized_after_producer.load());
-    RUVIA_CHECK_EQ(order, (std::vector<std::string>{"serve consumer", "serve consumer", "serve producer"}));
-    RUVIA_CHECK_EQ(producer.state(), state::stopped);
-    RUVIA_CHECK_EQ(second_consumer.state(), state::stopped);
+    RUVIA_CHECK_EQ(order.size(), 2u);
+    RUVIA_CHECK_EQ(first.state(), state::stopped);
+    RUVIA_CHECK_EQ(second.state(), state::stopped);
 }
 
 RUVIA_TEST(worker_group_stop_before_start_launches_nothing) {
@@ -375,8 +364,7 @@ RUVIA_TEST(worker_group_stop_before_start_launches_nothing) {
     std::atomic<bool> started{};
     member.configure({.startup_ = [&] { started.store(true); }});
     ruvia::worker_group group;
-    group.add(member, 0);
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { group.add(member, 2); }));
+    group.add(member);
     group.request_stop();
     RUVIA_CHECK(group.stop_requested());
     RUVIA_CHECK(!group.start());
@@ -396,7 +384,7 @@ RUVIA_TEST(worker_group_cold_shutdown_hooks_observe_and_reenter_stop) {
             group.request_stop();
             ++shutdowns;
         }});
-        group.add(*member, 0);
+        group.add(*member);
     }
     group.request_stop();
     group.request_stop();
@@ -407,30 +395,30 @@ RUVIA_TEST(worker_group_cold_shutdown_hooks_observe_and_reenter_stop) {
     RUVIA_CHECK_EQ(second.state(), state::stopped);
 }
 
-RUVIA_TEST(worker_group_stop_during_startup_retires_unlaunched_members) {
-    ruvia::worker_runtime producer;
-    ruvia::worker_runtime consumer;
+RUVIA_TEST(worker_group_stop_during_startup_aborts_readiness_and_retires_members) {
+    ruvia::worker_runtime first;
+    ruvia::worker_runtime second;
     ruvia::worker_group group;
-    bool consumer_started = false;
-    bool consumer_retired = false;
-    producer.configure({.startup_ = [&] {
+    bool second_served = false;
+    bool second_retired = false;
+    first.configure({.startup_ = [&] {
         group.request_stop();
-        producer.mark_ready();
+        first.mark_ready();
     }});
-    consumer.configure({
-        .startup_ = [&] { consumer_started = true; },
+    second.configure({
+        .serve_ = [&] { second_served = true; },
         .shutdown_ = [&] {
-            consumer_retired = group.stop_requested() && consumer.context().handle().is_current();
+            second_retired = group.stop_requested() && second.context().handle().is_current();
             group.request_stop(); },
     });
-    group.add(producer, 0);
-    group.add(consumer, 1);
+    group.add(first);
+    group.add(second);
     RUVIA_CHECK(!group.start());
     RUVIA_CHECK(group.join() == nullptr);
-    RUVIA_CHECK(!consumer_started);
-    RUVIA_CHECK(consumer_retired);
-    RUVIA_CHECK_EQ(producer.state(), state::stopped);
-    RUVIA_CHECK_EQ(consumer.state(), state::stopped);
+    RUVIA_CHECK(!second_served);
+    RUVIA_CHECK(second_retired);
+    RUVIA_CHECK_EQ(first.state(), state::stopped);
+    RUVIA_CHECK_EQ(second.state(), state::stopped);
 }
 
 RUVIA_TEST(worker_group_cold_retirement_waits_for_producer_shutdown) {
@@ -451,8 +439,8 @@ RUVIA_TEST(worker_group_cold_retirement_waits_for_producer_shutdown) {
     consumer.configure({.shutdown_ = [&] {
         consumer_after_producer = shutdown_finished.load() && producer.state() == state::stopped;
     }});
-    group.add(producer, 0);
-    group.add(consumer, 1);
+    group.add(producer);
+    group.add(consumer);
     std::thread observer([&] {
         shutdown_started.acquire();
         group.request_stop();
@@ -485,8 +473,8 @@ RUVIA_TEST(worker_group_external_failure_preserves_cause_while_hook_reenters_sto
             finish_failure.acquire(); },
         .shutdown_ = [&] { shutdown_on_owner = producer.context().handle().is_current(); },
     });
-    group.add(producer, 0);
-    group.add(consumer, 1);
+    group.add(producer);
+    group.add(consumer);
     RUVIA_CHECK(producer.context().handle().post([&] { accepted_work_ran = true; }).accepted());
     std::thread reporter([&] { static_cast<void>(producer.fail(error)); });
     failure_started.acquire();
@@ -516,8 +504,8 @@ RUVIA_TEST(worker_group_rethrows_the_first_member_failure) {
     healthy.configure({.startup_ = [&] { healthy.mark_ready(); }});
     failing.configure({.startup_ = [] { throw std::runtime_error("member startup failed"); }});
     ruvia::worker_group group;
-    group.add(healthy, 0);
-    group.add(failing, 0);
+    group.add(healthy);
+    group.add(failing);
     std::string message;
     try {
         (void)group.start();
@@ -534,7 +522,7 @@ RUVIA_TEST(worker_group_join_returns_the_callers_primary_failure) {
     ruvia::worker_runtime failing;
     failing.configure({.startup_ = [] { throw std::runtime_error("member startup failed"); }});
     ruvia::worker_group group;
-    group.add(failing, 0);
+    group.add(failing);
     bool start_threw = false;
     try {
         (void)group.start();
@@ -565,8 +553,8 @@ RUVIA_TEST(worker_group_serve_failure_closes_every_members_admission) {
         .stop_admission_ = [] {},
     });
     ruvia::worker_group group;
-    group.add(producer, 0);
-    group.add(consumer, 1);
+    group.add(consumer);
+    group.add(producer);
     const bool started = group.start();
     std::string message;
     try {
@@ -580,6 +568,7 @@ RUVIA_TEST(worker_group_serve_failure_closes_every_members_admission) {
     const bool producer_accepting = producer.context().handle().accepting();
     const bool consumer_accepting = consumer.context().handle().accepting();
     const bool consumer_accepted_work = consumer.context().handle().post([] {}).accepted();
+    consumer.finalize();
     const auto failure = group.join();
 
     RUVIA_CHECK(started);
@@ -633,8 +622,8 @@ RUVIA_TEST(worker_group_member_exit_wakes_an_earlier_asynchronous_startup) {
             .failure_ = [&](std::exception_ptr) noexcept { ++failure_reports; },
         });
         ruvia::worker_group group;
-        group.add(pending, 0);
-        group.add(failing, 0);
+        group.add(pending);
+        group.add(failing);
         std::promise<void> start_returned;
         auto start_returned_future = start_returned.get_future();
         std::atomic<bool> watchdog_fired{};
@@ -671,47 +660,31 @@ RUVIA_TEST(worker_group_member_exit_wakes_an_earlier_asynchronous_startup) {
     }
 }
 
-RUVIA_TEST(worker_group_tiers_do_not_wrap_at_the_maximum_value) {
-    ruvia::worker_runtime first;
-    ruvia::worker_runtime second;
-    ruvia::worker_group group;
-    group.add(first, std::numeric_limits<std::size_t>::max());
-    bool rejected = false;
-    try {
-        group.add(second, 0);
-    } catch (const std::invalid_argument&) {
-        rejected = true;
-    }
-    const auto failure = group.join();
-    RUVIA_CHECK(rejected);
-    RUVIA_CHECK(failure == nullptr);
-}
-
 RUVIA_TEST(worker_group_membership_is_exclusive_and_closes_at_launch_or_stop) {
     ruvia::worker_runtime member;
     ruvia::worker_runtime second;
     ruvia::worker_runtime third;
     member.configure({.startup_ = [&] { member.mark_ready(); }});
     ruvia::worker_group group;
-    group.add(member, 0);
-    const bool duplicate_rejected = ruvia::testing::throws_on([&] { group.add(member, 0); });
+    group.add(member);
+    const bool duplicate_rejected = ruvia::testing::throws_on([&] { group.add(member); });
     bool other_group_rejected = false;
     bool stopped_group_rejected = false;
     {
         ruvia::worker_group other;
-        other_group_rejected = ruvia::testing::throws_on([&] { other.add(member, 0); });
-        other.add(second, 0);
+        other_group_rejected = ruvia::testing::throws_on([&] { other.add(member); });
+        other.add(second);
         other.request_stop();
-        stopped_group_rejected = ruvia::testing::throws_on([&] { other.add(third, 0); });
+        stopped_group_rejected = ruvia::testing::throws_on([&] { other.add(third); });
         RUVIA_CHECK(other.join() == nullptr);
     }
     const bool started = group.start();
-    const bool launched_group_rejected = ruvia::testing::throws_on([&] { group.add(third, 0); });
+    const bool launched_group_rejected = ruvia::testing::throws_on([&] { group.add(third); });
     const auto failure = group.join();
     const auto repeated_failure = group.join();
     // Rejected additions leave the new member available to its own owner.
     ruvia::worker_group third_group;
-    third_group.add(third, 0);
+    third_group.add(third);
     RUVIA_CHECK(third_group.join() == nullptr);
     RUVIA_CHECK(duplicate_rejected);
     RUVIA_CHECK(other_group_rejected);
@@ -732,12 +705,12 @@ RUVIA_TEST(worker_group_destruction_releases_observations_and_preserves_runtime_
     peer.configure({.startup_ = [&] { peer.mark_ready(); }});
     {
         ruvia::worker_group cold_owner;
-        cold_owner.add(member, 0);
+        cold_owner.add(member);
     }
     {
         ruvia::worker_group group;
-        group.add(member, 0);
-        group.add(peer, 0);
+        group.add(member);
+        group.add(peer);
         RUVIA_CHECK(group.start());
         RUVIA_CHECK(group.serve());
     }
@@ -766,8 +739,8 @@ RUVIA_TEST(worker_group_failure_hook_can_release_completed_member_observations) 
         // Member observations have retired before invoking the public hook.
         group.reset();
     }});
-    group->add(failing, 0);
-    group->add(peer, 0);
+    group->add(failing);
+    group->add(peer);
     const auto error = std::make_exception_ptr(std::runtime_error("externally reported failure"));
     const bool recorded = failing.fail(error);
     failing.join();
@@ -864,7 +837,7 @@ RUVIA_TEST(worker_runtime_and_group_reject_repeated_start_and_invalid_serve) {
         ruvia::worker_runtime member;
         member.configure({.startup_ = [&] { member.mark_ready(); }});
         ruvia::worker_group group;
-        group.add(member, 0);
+        group.add(member);
         RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)group.serve(); }));
         RUVIA_CHECK(group.start());
         RUVIA_CHECK(group.serve());

@@ -3,6 +3,7 @@
 #include <concepts>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
@@ -12,6 +13,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/detail/io/asio_await.h"
+#include "ruvia/core/memory/process_resource.h"
 #include "ruvia/core/root_task.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -97,7 +99,9 @@ public:
         if (!retirement_lease) {
             throw std::runtime_error("event loop is stopping");
         }
-        auto completion = std::make_shared<detail::root_task_state<t_type>>(handle(), state_);
+        auto completion = std::allocate_shared<detail::root_task_state<t_type>>(
+            std::pmr::polymorphic_allocator<detail::root_task_state<t_type>>(process_resource()),
+            handle(), state_);
         const auto bound_executor = executor();
         // drain() destroys remaining queue closures without invoking them when
         // a posted task throws. Own that destructor path so wait()/get() cannot

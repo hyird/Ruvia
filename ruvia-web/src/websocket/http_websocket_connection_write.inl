@@ -1,6 +1,40 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <exception>
+#include <stdexcept>
+#include <string_view>
+#include <system_error>
+#include <utility>
+
+#include <asio.hpp>
+
+#include "ruvia/core/async.h"
+#include "ruvia/core/socket.h"
+#include "ruvia/core/task.h"
+#include "ruvia/http/websocket_protocol.h"
+#include "ruvia/web/websocket.h"
+
+#include "server/connection_scanner.h"
+#include "server/inbound_transport_error.h"
+#include "util/steady_clock.h"
+#include "websocket/http_websocket_connection.h"
+#include "websocket/http_websocket_liveness.h"
+
 namespace ruvia::detail {
+
+struct websocket_write_progress final {
+    connection_scanner::entry_type* entry_;
+
+    [[nodiscard]] std::size_t operator()(
+        const std::error_code& ec, std::size_t bytes_transferred) const noexcept {
+        if (bytes_transferred != 0) {
+            entry_->touch();
+        }
+        return asio::transfer_all()(ec, bytes_transferred);
+    }
+};
 
 template <typename stream_type>
 task<void> websocket_connection<stream_type>::write(websocket_opcode opcode, std::string_view payload_value, bool compress) {
@@ -163,11 +197,8 @@ auto websocket_connection<stream_type>::write_bytes(const websocket_output_plan&
             asio::buffer(plan.borrowed_bytes().data(), plan.borrowed_bytes().size())};
         return ruvia::async_asio([this, buffers](auto handler) mutable {
             // Partial progress refreshes heartbeat transport activity.
-            asio::async_write(stream_, buffers, [this](const std::error_code& ec, std::size_t bytes_transferred) noexcept {
-                    if (bytes_transferred != 0) {
-                        scanner_entry_.touch();
-                    }
-                    return asio::transfer_all()(ec, bytes_transferred); }, std::move(handler));
+            asio::async_write(
+                stream_, buffers, websocket_write_progress{&scanner_entry_}, std::move(handler));
         });
     }
 }
@@ -191,13 +222,12 @@ task<void> websocket_connection<stream_type>::flush_protocol_output_now() {
         }
         if (size != 0 || (!native_stream && disposition == websocket_transport_disposition::end_transport)) {
             const auto write_completion = co_await write_bytes(plan);
-            const auto ec = [&] {
-                if constexpr (native_stream) {
-                    return write_completion.error_code();
-                } else {
-                    return write_completion;
-                }
-            }();
+            std::error_code ec;
+            if constexpr (native_stream) {
+                ec = write_completion.error_code();
+            } else {
+                ec = write_completion;
+            }
             if (ec) {
                 close_stream();
                 (void)protocol_.abort();

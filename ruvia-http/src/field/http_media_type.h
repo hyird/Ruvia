@@ -1,12 +1,10 @@
 #pragma once
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <string_view>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 
 #include "field/http_quality_value.h"
 
@@ -25,11 +23,7 @@ template <http_temporary_owning_char_string value_type>
 std::string_view http_media_type_only(value_type&&) = delete;
 
 [[nodiscard]] inline bool http_media_token(std::string_view token) noexcept {
-    if (token.empty()) {
-        return false;
-    }
-    return std::ranges::all_of(
-        token, [](char ch) noexcept { return is_http_token_char(static_cast<unsigned char>(ch)); });
+    return is_valid_http_header_name(token);
 }
 
 struct http_media_type_parts final {
@@ -140,7 +134,7 @@ struct http_media_type_parameters final {
             if (quality != nullptr && http_ascii_equals_ignore_case(name, "q")) {
                 const auto parsed = http_parse_quality_value(parameter_value);
                 *quality = parsed < 0 ? 0 : parsed;
-            } else if (!http_media_token(parameter_value) && !http_is_quoted_string(parameter_value)) {
+            } else if (!is_http_token_or_quoted_string(parameter_value)) {
                 return false;
             }
             values_[size_++] = {name.data(), name.size(), parameter_value.data(), parameter_value.size()};

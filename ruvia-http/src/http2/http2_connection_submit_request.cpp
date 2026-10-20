@@ -23,24 +23,34 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] bool http2_is_valid_outbound_method(std::string_view method) noexcept {
-    return method != "CONNECT" && is_valid_http_method_token(method);
+[[nodiscard]] bool http2_is_valid_outbound_method(
+    std::string_view method, http_known_method known_method) noexcept {
+    if (known_method == http_known_method::connect) {
+        return false;
+    }
+    return known_method != http_known_method::unknown || is_valid_http_method_token(method);
 }
 
 [[nodiscard]] bool http2_are_valid_outbound_request_headers(std::optional<std::string_view> authority,
     std::uint16_t default_port, std::span<const http_header_view> headers, bool allow_host,
     bool allow_trailers, http_header_section_size& section_size, request_field_state& fields,
-    std::size_t generated_fields = 0) noexcept {
+    std::size_t generated_fields = 0, bool websocket_connect = false,
+    std::span<request_header_kind> classified_kinds = {}) noexcept {
     if (generated_fields > max_http_header_fields ||
         headers.size() > max_http_header_fields - generated_fields) {
         return false;
     }
-    for (const auto& header : headers) {
+    websocket_request_header_validator websocket_headers;
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        const auto& header = headers[i];
         if (!http2_is_valid_regular_header(header.name(), header.value()) ||
             !section_size.add(header.name(), header.value())) {
             return false;
         }
         const auto kind = classify_request_header(header.name());
+        if (i < classified_kinds.size()) {
+            classified_kinds[i] = kind;
+        }
         if ((!allow_trailers && (kind == request_header_kind::trailer || kind == request_header_kind::te)) ||
             (!allow_host && kind == request_header_kind::host)) {
             return false;
@@ -55,22 +65,31 @@ namespace {
             !authority_matches_host(*authority, header.value(), default_port)) {
             return false;
         }
+        // Host is already refused for websocket extended CONNECT by the outbound field
+        // check (:authority is the sole target authority there).
+        if (websocket_connect &&
+            (kind == request_header_kind::sec_websocket_key ||
+                (kind == request_header_kind::other && header.name() == "sec-websocket-accept") ||
+                !websocket_headers.observe_header(kind, header.value()))) {
+            return false;
+        }
     }
-    return true;
+    return !websocket_connect || websocket_headers.client_offers_valid();
 }
 
 [[nodiscard]] bool http2_is_valid_outbound_regular_request_head(std::string_view method,
-    std::string_view scheme, std::optional<std::string_view> authority, std::string_view path,
+    http_known_method known_method, std::string_view scheme, std::uint16_t default_port,
+    std::optional<std::string_view> authority, std::string_view path,
     std::span<const http_header_view> headers,
     http_request_content_indication content_indication, std::string_view content_length_value,
-    http_client_request_expectation expectation) noexcept {
-    if (!http2_is_valid_outbound_method(method) || !is_valid_uri_scheme(scheme) ||
+    http_client_request_expectation expectation,
+    std::span<request_header_kind> classified_kinds = {}) noexcept {
+    if (!http2_is_valid_outbound_method(method, known_method) || !is_valid_uri_scheme(scheme) ||
         (authority.has_value() && !http2_is_valid_request_authority(scheme, *authority)) ||
-        !http2_is_valid_regular_request_path(classify_http_method(method), scheme, path) ||
+        !http2_is_valid_regular_request_path(known_method, scheme, path) ||
         (!authority.has_value() && http2_regular_request_requires_authority(scheme, path))) {
         return false;
     }
-    const auto default_port = http_uri_scheme_default_port(scheme);
     http_header_section_size section_size;
     bool expect_continue = false;
     switch (expectation) {
@@ -93,7 +112,8 @@ namespace {
     if (!http2_are_valid_outbound_request_headers(authority, default_port, headers,
             /*allow_host=*/true,
             /*allow_trailers=*/true, section_size, fields,
-            (content_length_value.empty() ? 0 : 1) + (expect_continue ? 1 : 0))) {
+            (content_length_value.empty() ? 0 : 1) + (expect_continue ? 1 : 0),
+            /*websocket_connect=*/false, classified_kinds)) {
         return false;
     }
     if (!content_length_value.empty() && !section_size.add("content-length", content_length_value)) {
@@ -106,25 +126,6 @@ namespace {
     return content_semantics != http_request_content_semantics::forbidden &&
            (content_semantics != http_request_content_semantics::content_type_required ||
                fields.seen(request_header_kind::content_type));
-}
-
-// Host is already refused for websocket extended CONNECT by the outbound field
-// check (:authority is the sole target authority there).
-[[nodiscard]] bool http2_is_valid_websocket_connect_headers(
-    std::span<const http_header_view> headers) noexcept {
-    bool saw_version = false;
-    for (const auto& header : headers) {
-        if (http_field_name_in(header.name(), http_websocket_key_exchange_fields)) {
-            return false;
-        }
-        if (classify_request_header(header.name()) == request_header_kind::sec_websocket_version) {
-            if (saw_version || header.value() != "13") {
-                return false;
-            }
-            saw_version = true;
-        }
-    }
-    return saw_version && websocket_client_offer_headers_valid(headers);
 }
 
 void http2_encode_outbound_request_headers(
@@ -165,6 +166,8 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
         end_stream = known_length_content->length() == 0 ? http2_end_stream::end_stream
                                                          : http2_end_stream::keep_open;
     }
+    const auto known_method = classify_http_method(method);
+    const auto default_port = http_uri_scheme_default_port(scheme);
     const bool emit_length = expected_length && method != "TRACE";
     if (emit_length) {
         // 20 bytes always hold the canonical decimal form of uint64_t. Do this
@@ -182,12 +185,11 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
     const auto content_length_value = std::string_view(length_buffer.data(), length_bytes);
     // Validate the entire semantic head and decoded-size budget before touching
     // HPACK storage, outbound bytes, stream metadata, or lifecycle state.
-    if (!http2_is_valid_outbound_regular_request_head(method, scheme, authority, path, headers,
-            content_indication, content_length_value, expectation)) {
+    if (!http2_is_valid_outbound_regular_request_head(method, known_method, scheme, default_port,
+            authority, path, headers, content_indication, content_length_value, expectation)) {
         return http2_request_head_submit_result::make_failure(
             http2_request_head_submit_error::invalid_message);
     }
-
     return submit_local_request_head([&](http2_stream_state& stream) {
         stream.assign_request_method(method);
         stream.assign_request_scheme(scheme);
@@ -274,20 +276,19 @@ http2_request_head_submit_result http2_connection::submit_extended_connect_reque
     }
 
     const bool websocket_value = http_ascii_equals_ignore_case(protocol, "websocket");
-    const bool websocket_scheme_value =
-        http_ascii_equals_ignore_case(scheme, "http") || http_ascii_equals_ignore_case(scheme, "https");
+    const auto default_port = http_uri_scheme_default_port(scheme);
     const auto encoded_protocol = websocket_value ? std::string_view("websocket") : protocol;
     http_header_section_size section_size;
     request_field_state fields{request_field_framing::binary};
     if (!is_valid_http_header_name(protocol) || !is_valid_uri_scheme(scheme) ||
-        (websocket_value && !websocket_scheme_value) || !http2_is_valid_request_authority(scheme, authority) ||
+        (websocket_value && default_port == 0) || !http2_is_valid_request_authority(scheme, authority) ||
         !http2_is_valid_extended_connect_path(scheme, path) || !section_size.add(":method", "CONNECT") ||
         !section_size.add(":protocol", encoded_protocol) || !section_size.add(":scheme", scheme) ||
         !section_size.add(":authority", authority) || !section_size.add(":path", path) ||
-        !http2_are_valid_outbound_request_headers(authority, http_uri_scheme_default_port(scheme), headers,
+        !http2_are_valid_outbound_request_headers(authority, default_port, headers,
             /*allow_host=*/!websocket_value,
-            /*allow_trailers=*/false, section_size, fields) ||
-        (websocket_value && !http2_is_valid_websocket_connect_headers(headers))) {
+            /*allow_trailers=*/false, section_size, fields,
+            /*generated_fields=*/0, /*websocket_connect=*/websocket_value)) {
         return http2_request_head_submit_result::make_failure(
             http2_request_head_submit_error::invalid_message);
     }
@@ -328,9 +329,16 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     if (!peer_settings_.enable_push()) {
         return error_type::push_disabled;
     }
-    if ((request.method_ != "GET" && request.method_ != "HEAD") ||
-        !http2_is_valid_outbound_regular_request_head(request.method_, request.scheme_, request.authority_, request.path_,
-            request.headers_, http_request_content_indication::no_content, {}, http_client_request_expectation::none)) {
+    const auto known_method = request.method_ == "GET"    ? http_known_method::get
+                              : request.method_ == "HEAD" ? http_known_method::head
+                                                          : http_known_method::unknown;
+    const auto default_port = http_uri_scheme_default_port(request.scheme_);
+    std::array<request_header_kind, max_http_header_fields> header_kinds{};
+    if (known_method == http_known_method::unknown ||
+        !http2_is_valid_outbound_regular_request_head(request.method_, known_method, request.scheme_,
+            default_port, request.authority_, request.path_, request.headers_,
+            http_request_content_indication::no_content, {}, http_client_request_expectation::none,
+            header_kinds)) {
         return error_type::invalid_request;
     }
     std::pmr::string block(resource_);
@@ -354,11 +362,12 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         stream->assign_request_scheme(request.scheme_);
         stream->assign_request_authority(request.authority_);
         stream->assign_request_path(request.path_);
-        stream->mark_scheme(http_uri_scheme_default_port(request.scheme_));
+        stream->mark_scheme(default_port);
         stream->mark_authority();
         stream->mark_path();
-        for (const auto& header : request.headers_) {
-            const auto kind = classify_request_header(header.name());
+        for (std::size_t i = 0; i < request.headers_.size(); ++i) {
+            const auto& header = request.headers_[i];
+            const auto kind = header_kinds[i];
             if (kind == request_header_kind::host) {
                 stream->mark_host();
             }

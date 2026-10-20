@@ -80,6 +80,7 @@ enum class http_response_compression_status : std::uint8_t {
                 // outside the framework's decoder/registry. Leave that full
                 // stack under application ownership instead of guessing.
                 saw_unknown_coding = true;
+                return false;
             }
             return true;
         });

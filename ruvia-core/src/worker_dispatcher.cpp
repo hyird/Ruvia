@@ -10,6 +10,7 @@
 #include "ruvia/core/failure_report.h"
 
 #include "worker_dispatcher_impl.h"
+
 namespace ruvia::detail {
 namespace {
 
@@ -49,7 +50,24 @@ worker_id_type next_worker_dispatcher_id() noexcept {
 
 worker_dispatcher::worker_dispatcher(asio::io_context& io_context, std::size_t capacity)
     : io_context_(io_context),
-      impl_(std::make_unique<impl_type>(io_context, capacity)) {}
+      timer_(std::make_unique<asio::steady_timer>(io_context)),
+      capacity_(checked_queue_capacity(capacity)),
+      nodes_(process_resource()),
+      worker_id_(next_worker_dispatcher_id()),
+      timers_(process_resource()),
+      timer_slots_(process_resource()) {
+    // At most `capacity_` nodes are pending (reserved or ready) and at most
+    // `capacity_` belong to the batch drain() is running, since a batch is
+    // the ready list it spliced. Twice the capacity therefore keeps the
+    // free list non-empty whenever admission has room.
+    nodes_.resize(capacity_ * 2);
+    for (std::size_t index = 0; index + 1 < nodes_.size(); ++index) {
+        nodes_[index].next_ = index + 1;
+    }
+    free_head_ = 0;
+    timers_.reserve(capacity);
+    // Timer slots are address-stable (deque); they grow on demand.
+}
 
 worker_dispatcher::~worker_dispatcher() = default;
 
@@ -60,34 +78,34 @@ worker_shutdown_hook::~worker_shutdown_hook() {
 }
 
 void worker_dispatcher::schedule_drain_locked() {
-    if (!impl_->drain_scheduled_) {
+    if (!drain_scheduled_) {
         asio::post(io_context_, [self = shared_from_this()] { self->drain(); });
-        impl_->drain_scheduled_ = true;
+        drain_scheduled_ = true;
     }
 }
 
 void worker_dispatcher::push_ready_locked(std::size_t index) noexcept {
-    impl_->nodes_[index].next_ = impl_type::no_node;
-    if (impl_->ready_tail_ == impl_type::no_node) {
-        impl_->ready_head_ = index;
+    nodes_[index].next_ = no_node;
+    if (ready_tail_ == no_node) {
+        ready_head_ = index;
     } else {
-        impl_->nodes_[impl_->ready_tail_].next_ = index;
+        nodes_[ready_tail_].next_ = index;
     }
-    impl_->ready_tail_ = index;
-    ++impl_->ready_count_;
+    ready_tail_ = index;
+    ++ready_count_;
 }
 
 post_status worker_dispatcher::reserve(std::size_t& index) noexcept {
-    std::lock_guard lock(impl_->mutex_);
-    if (!impl_->context_attached_ || !impl_->accepting_) {
+    std::lock_guard lock(mutex_);
+    if (!context_attached_ || !accepting_) {
         return post_status::worker_stopping;
     }
-    if (impl_->pending_count_ == impl_->capacity_) {
+    if (pending_count_ == capacity_) {
         return post_status::queue_full;
     }
-    index = impl_->free_head_;
-    impl_->free_head_ = impl_->nodes_[index].next_;
-    ++impl_->pending_count_;
+    index = free_head_;
+    free_head_ = nodes_[index].next_;
+    ++pending_count_;
     return post_status::accepted;
 }
 
@@ -99,11 +117,11 @@ post_result_type worker_dispatcher::post(move_only_function<void()> task_value) 
     if (!task_value) {
         throw std::invalid_argument("worker post requires a callable task");
     }
-    std::size_t index = impl_type::no_node;
+    std::size_t index = no_node;
     if (const auto status = reserve(index); status != post_status::accepted) {
         return post_result_type::reject(status, std::move(task_value));
     }
-    impl_->nodes_[index].task_ = std::move(task_value);
+    nodes_[index].task_ = std::move(task_value);
     publish(index);
     return post_result_type::accept();
 }
@@ -112,7 +130,7 @@ post_status worker_dispatcher::post_factory(move_only_function<move_only_functio
     if (!factory) {
         throw std::invalid_argument("worker post factory requires a callable");
     }
-    std::size_t index = impl_type::no_node;
+    std::size_t index = no_node;
     if (const auto status = reserve(index); status != post_status::accepted) {
         return status;
     }
@@ -121,7 +139,7 @@ post_status worker_dispatcher::post_factory(move_only_function<move_only_functio
         if (!task_value) {
             throw std::invalid_argument("worker post factory produced an empty task");
         }
-        impl_->nodes_[index].task_ = std::move(task_value);
+        nodes_[index].task_ = std::move(task_value);
     } catch (...) {
         release_abandoned_node(index);
         throw;
@@ -131,8 +149,8 @@ post_status worker_dispatcher::post_factory(move_only_function<move_only_functio
 }
 
 void worker_dispatcher::publish(std::size_t index) {
-    std::unique_lock lock(impl_->mutex_);
-    if (!impl_->abandon_drain_ && impl_->context_attached_) {
+    std::unique_lock lock(mutex_);
+    if (!abandon_drain_ && context_attached_) {
         try {
             schedule_drain_locked();
         } catch (...) {
@@ -151,18 +169,18 @@ void worker_dispatcher::release_abandoned_node(std::size_t index) noexcept {
     // The caller exclusively claimed this pending node. Move its payload out
     // before returning the slot; user destruction can reenter admission or
     // reconcile higher-level work, and must run unlocked before idle callbacks.
-    auto abandoned = std::move(impl_->nodes_[index].task_);
+    auto abandoned = std::move(nodes_[index].task_);
     idle_callbacks_type callbacks{process_resource()};
     {
-        std::lock_guard lock(impl_->mutex_);
-        impl_->nodes_[index].next_ = impl_->free_head_;
-        impl_->free_head_ = index;
-        --impl_->pending_count_;
+        std::lock_guard lock(mutex_);
+        nodes_[index].next_ = free_head_;
+        free_head_ = index;
+        --pending_count_;
         callbacks = take_idle_callbacks_locked();
     }
     abandoned = nullptr;
     notify_idle(std::move(callbacks));
-    impl_->pending_changed_.notify_all();
+    pending_changed_.notify_all();
 }
 
 void worker_dispatcher::defer(move_only_function<void()> task_value) {
@@ -177,8 +195,8 @@ void worker_dispatcher::defer(move_only_function<void()> task_value) {
     }
     // Off the worker, the mutex orders this post before detach_context(),
     // after which the context may be destroyed.
-    std::lock_guard lock(impl_->mutex_);
-    if (!impl_->context_attached_) {
+    std::lock_guard lock(mutex_);
+    if (!context_attached_) {
         throw std::runtime_error("worker execution context is detached");
     }
     asio::post(io_context_, std::move(task_value));
@@ -192,8 +210,8 @@ bool worker_dispatcher::defer_if_attached(move_only_function<void()> task_value)
         asio::post(io_context_, std::move(task_value));
         return true;
     }
-    std::lock_guard lock(impl_->mutex_);
-    if (!impl_->context_attached_) {
+    std::lock_guard lock(mutex_);
+    if (!context_attached_) {
         return false;
     }
     asio::post(io_context_, std::move(task_value));
@@ -206,8 +224,8 @@ void worker_dispatcher::register_shutdown_hook(
     // notify_stopping() first takes this mutex on the same thread, so a
     // registration that still observes accepting here is linked before the
     // stopping batch walks the list.
-    std::lock_guard lock(impl_->hooks_mutex_);
-    if (!impl_->accepting_) {
+    std::lock_guard lock(hooks_mutex_);
+    if (!accepting_) {
         throw std::runtime_error("cannot register state on a stopping worker");
     }
     if (hook.registry_) {
@@ -216,31 +234,31 @@ void worker_dispatcher::register_shutdown_hook(
     hook.operations_ = &operations;
     hook.registry_ = shared_from_this();
     hook.owner_ = std::move(owner);
-    hook.previous_ = impl_->hooks_tail_;
+    hook.previous_ = hooks_tail_;
     hook.next_ = nullptr;
     hook.linked_ = true;
-    if (impl_->hooks_tail_ != nullptr) {
-        impl_->hooks_tail_->next_ = &hook;
+    if (hooks_tail_ != nullptr) {
+        hooks_tail_->next_ = &hook;
     } else {
-        impl_->hooks_head_ = &hook;
+        hooks_head_ = &hook;
     }
-    impl_->hooks_tail_ = &hook;
+    hooks_tail_ = &hook;
 }
 
 void worker_dispatcher::unlink_shutdown_hook(worker_shutdown_hook& hook) noexcept {
-    std::lock_guard lock(impl_->hooks_mutex_);
+    std::lock_guard lock(hooks_mutex_);
     if (!hook.linked_) {
         return;
     }
     if (hook.previous_ != nullptr) {
         hook.previous_->next_ = hook.next_;
     } else {
-        impl_->hooks_head_ = hook.next_;
+        hooks_head_ = hook.next_;
     }
     if (hook.next_ != nullptr) {
         hook.next_->previous_ = hook.previous_;
     } else {
-        impl_->hooks_tail_ = hook.previous_;
+        hooks_tail_ = hook.previous_;
     }
     hook.previous_ = nullptr;
     hook.next_ = nullptr;
@@ -253,9 +271,9 @@ void worker_dispatcher::when_shutdown_notifications_complete(move_only_function<
     }
     bool ready = false;
     {
-        std::lock_guard lock(impl_->mutex_);
-        if (impl_->shutdown_notification_active_) {
-            impl_->shutdown_notification_waiters_.push_back(std::move(callback_value));
+        std::lock_guard lock(mutex_);
+        if (shutdown_notification_active_) {
+            shutdown_notification_waiters_.push_back(std::move(callback_value));
         } else {
             ready = true;
         }
@@ -271,13 +289,13 @@ void worker_dispatcher::when_idle(move_only_function<void()> callback_value) {
     }
     bool ready = false;
     {
-        std::lock_guard lock(impl_->mutex_);
-        if (!impl_->context_attached_) {
+        std::lock_guard lock(mutex_);
+        if (!context_attached_) {
             throw std::runtime_error("worker execution context is detached");
         }
-        ready = impl_->pending_count_ == 0 && impl_->active_count_ == 0;
+        ready = pending_count_ == 0 && active_count_ == 0;
         if (!ready) {
-            impl_->idle_waiters_.push_back(std::move(callback_value));
+            idle_waiters_.push_back(std::move(callback_value));
         }
     }
     if (ready) {
@@ -287,8 +305,8 @@ void worker_dispatcher::when_idle(move_only_function<void()> callback_value) {
 
 worker_dispatcher::idle_callbacks_type worker_dispatcher::take_idle_callbacks_locked() {
     idle_callbacks_type callbacks{process_resource()};
-    if (impl_->pending_count_ == 0 && impl_->active_count_ == 0) {
-        callbacks.swap(impl_->idle_waiters_);
+    if (pending_count_ == 0 && active_count_ == 0) {
+        callbacks.swap(idle_waiters_);
     }
     return callbacks;
 }
@@ -365,24 +383,24 @@ void worker_dispatcher::close() noexcept {
 }
 
 void worker_dispatcher::detach_context() noexcept {
-    std::pmr::vector<timer_entry> abandoned_timers(impl_->timers_.get_allocator());
+    std::pmr::vector<timer_entry> abandoned_timers(timers_.get_allocator());
     std::unique_ptr<asio::steady_timer> detached_timer;
     {
-        std::lock_guard lock(impl_->mutex_);
-        if (!impl_->context_attached_) {
+        std::lock_guard lock(mutex_);
+        if (!context_attached_) {
             return;
         }
-        impl_->accepting_ = false;
-        impl_->context_attached_ = false;
-        impl_->abandon_drain_ = true;
-        detached_timer = std::move(impl_->timer_);
+        accepting_ = false;
+        context_attached_ = false;
+        abandon_drain_ = true;
+        detached_timer = std::move(timer_);
     }
     {
         // Detached hooks are never notified; their destructors find them
         // unlinked.
-        std::lock_guard lock(impl_->hooks_mutex_);
-        auto* hook = std::exchange(impl_->hooks_head_, nullptr);
-        impl_->hooks_tail_ = nullptr;
+        std::lock_guard lock(hooks_mutex_);
+        auto* hook = std::exchange(hooks_head_, nullptr);
+        hooks_tail_ = nullptr;
         while (hook != nullptr) {
             auto* next = hook->next_;
             hook->previous_ = nullptr;
@@ -400,12 +418,12 @@ void worker_dispatcher::detach_context() noexcept {
     // destroyed outside the mutex so a destructor that releases another worker
     // primitive cannot deadlock. Slots stay in place: bound registrations may
     // still read their activity until the dispatcher itself is destroyed.
-    impl_->timers_stopping_.store(true, std::memory_order_release);
-    abandoned_timers.swap(impl_->timers_);
-    impl_->stale_timer_count_ = 0;
-    impl_->timer_armed_ = false;
-    for (std::size_t index = 0; index < impl_->timer_slots_.size(); ++index) {
-        if (impl_->timer_slots_[index].occupied_) {
+    timers_stopping_.store(true, std::memory_order_release);
+    abandoned_timers.swap(timers_);
+    stale_timer_count_ = 0;
+    timer_armed_ = false;
+    for (std::size_t index = 0; index < timer_slots_.size(); ++index) {
+        if (timer_slots_[index].occupied_) {
             static_cast<void>(release_timer_slot(index));
         }
     }
@@ -414,29 +432,29 @@ void worker_dispatcher::detach_context() noexcept {
 }
 
 void worker_dispatcher::wait_for_reservations() noexcept {
-    std::unique_lock lock(impl_->mutex_);
-    impl_->pending_changed_.wait(lock, [this] { return impl_->pending_count_ == 0; });
+    std::unique_lock lock(mutex_);
+    pending_changed_.wait(lock, [this] { return pending_count_ == 0; });
 }
 
 bool worker_dispatcher::attached() const noexcept {
-    return impl_->context_attached_.load(std::memory_order_acquire);
+    return context_attached_.load(std::memory_order_acquire);
 }
 
 bool worker_dispatcher::begin_stopping(bool abandon_drain) noexcept {
-    std::lock_guard lock(impl_->mutex_);
+    std::lock_guard lock(mutex_);
     return begin_stopping_locked(abandon_drain);
 }
 
 bool worker_dispatcher::begin_stopping_locked(bool abandon_drain) noexcept {
     if (abandon_drain) {
-        impl_->drain_scheduled_ = false;
-        impl_->abandon_drain_ = true;
+        drain_scheduled_ = false;
+        abandon_drain_ = true;
     }
-    if (!impl_->accepting_) {
+    if (!accepting_) {
         return false;
     }
-    impl_->accepting_ = false;
-    impl_->shutdown_notification_active_ = true;
+    accepting_ = false;
+    shutdown_notification_active_ = true;
     return true;
 }
 
@@ -465,8 +483,8 @@ void worker_dispatcher::notify_stopping(bool batch_active) noexcept {
     const auto notify_each = [this, &first_live](operations_type::phase_type operations_type::* phase) noexcept {
         pinned_hook current;
         {
-            std::lock_guard lock(impl_->hooks_mutex_);
-            current = first_live(impl_->hooks_head_);
+            std::lock_guard lock(hooks_mutex_);
+            current = first_live(hooks_head_);
         }
         while (current.owner_) {
             if (const auto callback = current.hook_->operations_->*phase) {
@@ -474,7 +492,7 @@ void worker_dispatcher::notify_stopping(bool batch_active) noexcept {
             }
             pinned_hook next;
             {
-                std::lock_guard lock(impl_->hooks_mutex_);
+                std::lock_guard lock(hooks_mutex_);
                 next = first_live(current.hook_->next_);
             }
             current = std::move(next);
@@ -485,12 +503,12 @@ void worker_dispatcher::notify_stopping(bool batch_active) noexcept {
 
     idle_callbacks_type waiters{process_resource()};
     {
-        std::lock_guard lock(impl_->mutex_);
-        if (!impl_->shutdown_notification_active_) {
+        std::lock_guard lock(mutex_);
+        if (!shutdown_notification_active_) {
             std::terminate();
         }
-        impl_->shutdown_notification_active_ = false;
-        waiters.swap(impl_->shutdown_notification_waiters_);
+        shutdown_notification_active_ = false;
+        waiters.swap(shutdown_notification_waiters_);
     }
     for (auto& waiter : waiters) {
         try {
@@ -502,17 +520,17 @@ void worker_dispatcher::notify_stopping(bool batch_active) noexcept {
 }
 
 void worker_dispatcher::abandon_queued() noexcept {
-    std::size_t index = impl_type::no_node;
+    std::size_t index = no_node;
     {
-        std::lock_guard lock(impl_->mutex_);
-        index = std::exchange(impl_->ready_head_, impl_type::no_node);
-        impl_->ready_tail_ = impl_type::no_node;
-        impl_->ready_count_ = 0;
+        std::lock_guard lock(mutex_);
+        index = std::exchange(ready_head_, no_node);
+        ready_tail_ = no_node;
+        ready_count_ = 0;
     }
     // The spliced chain is exclusively owned here; each node stays pending
     // until release_abandoned_node returns it.
-    while (index != impl_type::no_node) {
-        const auto next = impl_->nodes_[index].next_;
+    while (index != no_node) {
+        const auto next = nodes_[index].next_;
         release_abandoned_node(index);
         index = next;
     }
@@ -522,16 +540,16 @@ bool worker_dispatcher::is_current() const noexcept {
     if (g_current_worker == this) {
         return true;
     }
-    std::lock_guard lock(impl_->mutex_);
-    return impl_->context_attached_ && io_context_.get_executor().running_in_this_thread();
+    std::lock_guard lock(mutex_);
+    return context_attached_ && io_context_.get_executor().running_in_this_thread();
 }
 
 bool worker_dispatcher::accepting() const noexcept {
-    return impl_->accepting_.load(std::memory_order_acquire);
+    return accepting_.load(std::memory_order_acquire);
 }
 
 worker_id_type worker_dispatcher::id() const noexcept {
-    return impl_->context_attached_.load(std::memory_order_acquire) ? impl_->worker_id_ : 0;
+    return context_attached_.load(std::memory_order_acquire) ? worker_id_ : 0;
 }
 
 void worker_dispatcher::drain() {
@@ -539,23 +557,23 @@ void worker_dispatcher::drain() {
     // Work published meanwhile is left to a freshly posted handler, so I/O
     // completions, timers, and deferred continuations interleave with a busy
     // queue instead of starving behind it.
-    std::size_t batch_head = impl_type::no_node;
+    std::size_t batch_head = no_node;
     std::size_t batch_count = 0;
     bool abandon = false;
     idle_callbacks_type callbacks{process_resource()};
     {
-        std::lock_guard lock(impl_->mutex_);
-        if (impl_->abandon_drain_) {
-            impl_->drain_scheduled_ = false;
+        std::lock_guard lock(mutex_);
+        if (abandon_drain_) {
+            drain_scheduled_ = false;
             abandon = true;
-        } else if (impl_->ready_count_ == 0) {
-            impl_->drain_scheduled_ = false;
+        } else if (ready_count_ == 0) {
+            drain_scheduled_ = false;
         } else {
-            batch_head = std::exchange(impl_->ready_head_, impl_type::no_node);
-            batch_count = std::exchange(impl_->ready_count_, 0);
-            impl_->ready_tail_ = impl_type::no_node;
-            impl_->pending_count_ -= batch_count;
-            impl_->active_count_ += batch_count;
+            batch_head = std::exchange(ready_head_, no_node);
+            batch_count = std::exchange(ready_count_, 0);
+            ready_tail_ = no_node;
+            pending_count_ -= batch_count;
+            active_count_ += batch_count;
         }
         callbacks = take_idle_callbacks_locked();
     }
@@ -569,10 +587,10 @@ void worker_dispatcher::drain() {
     }
 
     std::size_t index = batch_head;
-    std::size_t batch_tail = impl_type::no_node;
+    std::size_t batch_tail = no_node;
     std::size_t completed = 0;
-    while (index != impl_type::no_node) {
-        auto& node = impl_->nodes_[index];
+    while (index != no_node) {
+        auto& node = nodes_[index];
         const auto next = node.next_;
         try {
             node.task_();
@@ -585,23 +603,23 @@ void worker_dispatcher::drain() {
                 // and is released below like queued work. The remainder can
                 // push pending past capacity, so admission closes in this
                 // same critical section before any reservation observes it.
-                std::lock_guard lock(impl_->mutex_);
-                node.next_ = impl_->free_head_;
-                impl_->free_head_ = batch_head;
-                impl_->active_count_ -= batch_count;
-                impl_->pending_count_ += batch_count - completed - 1;
+                std::lock_guard lock(mutex_);
+                node.next_ = free_head_;
+                free_head_ = batch_head;
+                active_count_ -= batch_count;
+                pending_count_ += batch_count - completed - 1;
                 batch_active = begin_stopping_locked(true);
             }
             notify_stopping(batch_active);
-            for (auto remaining = next; remaining != impl_type::no_node;) {
-                const auto following = impl_->nodes_[remaining].next_;
+            for (auto remaining = next; remaining != no_node;) {
+                const auto following = nodes_[remaining].next_;
                 release_abandoned_node(remaining);
                 remaining = following;
             }
             abandon_queued();
             idle_callbacks_type failure_callbacks{process_resource()};
             {
-                std::lock_guard lock(impl_->mutex_);
+                std::lock_guard lock(mutex_);
                 failure_callbacks = take_idle_callbacks_locked();
             }
             notify_idle(std::move(failure_callbacks));
@@ -617,13 +635,13 @@ void worker_dispatcher::drain() {
         // The finished batch returns to the free list. A post failure leaves
         // drain unscheduled and escapes as a worker failure, whose handling
         // abandons the ready list.
-        std::lock_guard lock(impl_->mutex_);
-        impl_->nodes_[batch_tail].next_ = impl_->free_head_;
-        impl_->free_head_ = batch_head;
-        impl_->active_count_ -= batch_count;
-        impl_->drain_scheduled_ = false;
-        abandon = impl_->abandon_drain_;
-        if (!abandon && impl_->ready_count_ != 0) {
+        std::lock_guard lock(mutex_);
+        nodes_[batch_tail].next_ = free_head_;
+        free_head_ = batch_head;
+        active_count_ -= batch_count;
+        drain_scheduled_ = false;
+        abandon = abandon_drain_;
+        if (!abandon && ready_count_ != 0) {
             schedule_drain_locked();
         }
         callbacks = take_idle_callbacks_locked();

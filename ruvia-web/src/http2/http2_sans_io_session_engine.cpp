@@ -34,9 +34,10 @@
 #include "http/http_tunnel_session.h"
 #include "http2/http2_request_memory.h"
 #include "http2/http2_sans_io_request_body.h"
+#include "http2/http2_sans_io_request_body_reader.h"
 #include "http2/http2_sans_io_response_stream_sink.h"
 #include "http2/http2_sans_io_route_selection.h"
-#include "http2/http2_sans_io_ws_transport.h"
+#include "http2/http2_sans_io_tunnel_transport.h"
 #include "router/route_resolution.h"
 #include "router/route_table.h"
 #include "server/http_buffered_response.h"
@@ -70,7 +71,8 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
       buffered_response_writer_(connection_, stream_runtimes_, write_signal_, output_budget_,
           response_file_io{.pool_ = session_.options().blocking_pool_,
               .worker_ = session_.services().worker(),
-              .stop_ = session_.services().get_stop_token()}) {
+              .stop_ = session_.services().get_stop_token(),
+              .resource_ = worker_value.resource()}) {
     // A plaintext handoff reuses the HTTP/1 scanner entry. It now tracks a
     // multiplexed session, not an unadmitted HTTP/1 request-head read.
     set_inactivity_phase();
@@ -243,9 +245,10 @@ task<bool> http2_sans_io_session_engine::push_request(std::uint32_t associated_s
         co_return false;
     }
     const auto id = std::get<0>(promised).stream_id();
+    http2_sans_io_stream_runtime* runtime = nullptr;
     try {
         const auto request_view = connection_.server_request_view(id);
-        auto* runtime = request_view ? http2_select_stream_route(routes_, *request_view, stream_runtimes_, id) : nullptr;
+        runtime = request_view ? http2_select_stream_route(routes_, *request_view, stream_runtimes_, id) : nullptr;
         if (runtime == nullptr || !runtime->hold_request_head(std::move(std::get<0>(promised)))) {
             throw std::logic_error("HTTP/2 push dispatch admission failed");
         }
@@ -255,7 +258,7 @@ task<bool> http2_sans_io_session_engine::push_request(std::uint32_t associated_s
         wake_writer();
         throw;
     }
-    stream_runtimes_.find(id)->bind_push_parent(associated_stream_id);
+    runtime->bind_push_parent(associated_stream_id);
     if (!admit_stream(id)) {
         reset_stream_no_throw(id, http2_error_code::cancel);
         wake_writer();
@@ -265,10 +268,112 @@ task<bool> http2_sans_io_session_engine::push_request(std::uint32_t associated_s
     co_return true;
 }
 
+struct http2_sans_io_session_engine::tunnel_upgrade_operation final {
+    using transport_type = http2_sans_io_tunnel_transport<asio::any_io_executor>;
+    using session_type = http_tunnel_session<transport_type>;
+
+    http2_sans_io_session_engine& engine_;
+    std::uint32_t stream_id_;
+    bool udp_;
+    http2_streaming_request_body& streaming_body_;
+    http2_sans_io_stream_signal& stream_signal_;
+    const resolved_route& resolved_;
+    const tunnel_route_endpoint& tunnel_endpoint_;
+    const context_services& base_services_;
+    std::optional<session_type>& tunnel_session_;
+
+    [[nodiscard]] task<void> operator()(context& context_value) {
+        auto head = context_access::streaming_head(context_value);
+        if (udp_) {
+            auto negotiated = prepare_http_connect_udp_response(std::move(head), http_protocol_version::http2);
+            if ((negotiated.index() != 0)) {
+                throw std::invalid_argument("invalid CONNECT-UDP response metadata");
+            }
+            head = std::move(std::get<0>(negotiated));
+        }
+        const auto committed = engine_.connection_.submit_connect_response_head(stream_id_, head);
+        if (committed != http2_submit_status::accepted) {
+            throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
+        }
+        if (!engine_.stream_runtimes_.mark_tunnel(stream_id_)) {
+            std::terminate();
+        }
+        engine_.set_inactivity_phase();
+        context_access::commit_upgrade(context_value);
+        engine_.wake_writer();
+        tunnel_session_.emplace(
+            transport_type(engine_.connection_, stream_id_, streaming_body_.queue(), stream_signal_,
+                engine_.write_signal_, engine_.output_budget_, engine_.executor_),
+            base_services_.worker(), *context_value.pool(), engine_.inbound_buffers_);
+        co_await invoke_tunnel_handler(
+            *tunnel_session_, engine_.session_.scanner_entry(), resolved_.stream_handler(), context_value);
+    }
+
+    [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
+        return finish_tunnel_session(session_value, std::move(failure),
+            engine_.session_.options().connection_failure_, engine_.remote_address_,
+            engine_.session_.scanner_entry(), tunnel_endpoint_.config().peer_transport_fin_timeout_);
+    }
+};
+
+struct http2_sans_io_session_engine::websocket_upgrade_operation final {
+    using transport_type = http2_sans_io_tunnel_transport<asio::any_io_executor>;
+    using session_type = websocket_connection<transport_type>;
+
+    http2_sans_io_session_engine& engine_;
+    std::uint32_t stream_id_;
+    const http_request& request_;
+    const websocket_handshake_validation_result& handshake_validation_;
+    http2_streaming_request_body& streaming_body_;
+    http2_sans_io_stream_signal& stream_signal_;
+    const resolved_route& resolved_;
+    const websocket_route_endpoint& websocket_endpoint_;
+    const context_services& base_services_;
+    std::optional<session_type>& websocket_session_;
+
+    [[nodiscard]] task<void> operator()(context& context_value) {
+        const auto& options = engine_.session_.options();
+        const auto response_headers_value = websocket_response_headers(context_value);
+        const auto handshake_result = engine_.connection_.submit_websocket_handshake(stream_id_, request_,
+            handshake_validation_,
+            {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
+                .response_headers_ = response_headers_value,
+                .deflate_ = websocket_endpoint_.deflate()});
+        const auto* submitted_handshake = handshake_result.submitted();
+        if (submitted_handshake == nullptr) {
+            // The handshake is not started, so stream dispatch still
+            // answers this pending CONNECT with an error response.
+            throw std::invalid_argument("HTTP/2 WebSocket handshake rejected");
+        }
+        if (!engine_.stream_runtimes_.mark_tunnel(stream_id_)) {
+            std::terminate();
+        }
+        engine_.set_inactivity_phase();
+        context_access::commit_upgrade(context_value);
+        engine_.wake_writer();
+        websocket_session_.emplace(
+            transport_type(engine_.connection_, stream_id_, streaming_body_.queue(), stream_signal_,
+                engine_.write_signal_, engine_.output_budget_, engine_.executor_),
+            base_services_.worker(), engine_.session_.scanner_entry(), websocket_endpoint_.lifecycle(),
+            protocol_byte_limit::limited(options.server_.max_websocket_message_bytes_),
+            &engine_.inbound_buffers_, std::string_view{},
+            websocket_server_protocol_options{.compression_ = submitted_handshake->compression(),
+                .compression_level_ = websocket_endpoint_.deflate().compression_level_,
+                .mem_level_ = websocket_endpoint_.deflate().mem_level_,
+                .shared_deflate_ = &options.codecs_->websocket_deflate()});
+        co_await invoke_websocket_handler(
+            *websocket_session_, engine_.session_.scanner_entry(), resolved_.stream_handler(), context_value);
+    }
+
+    [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
+        return finish_websocket_session(session_value, std::move(failure),
+            engine_.session_.options().connection_failure_, engine_.remote_address_);
+    }
+};
+
 task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream_id) {
     const auto request_start = std::chrono::steady_clock::now();
     const auto& options = session_.options();
-    auto& scanner_entry = session_.scanner_entry();
     const auto base_services = session_.services().with_inbound_buffer_pool(inbound_buffers_);
 
     std::array<std::byte, http2_request_arena_stack_bytes> arena_block;
@@ -393,41 +498,21 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
                 wake_writer();
                 co_return;
             }
-            const bool udp = admission.udp_tunnel();
             const auto& tunnel_endpoint = *resolved->route().endpoint().tunnel();
-            using transport_type = http2_sans_io_tunnel_transport<asio::any_io_executor>;
-            using session_type = http_tunnel_session<transport_type>;
-            std::optional<session_type> tunnel_session;
-            auto establish = [&](context& context_value) -> task<void> {
-                auto head = context_access::streaming_head(context_value);
-                if (udp) {
-                    auto negotiated = prepare_http_connect_udp_response(std::move(head), http_protocol_version::http2);
-                    if ((negotiated.index() != 0)) {
-                        throw std::invalid_argument("invalid CONNECT-UDP response metadata");
-                    }
-                    head = std::move(std::get<0>(negotiated));
-                }
-                const auto committed = connection_.submit_connect_response_head(stream_id, head);
-                if (committed != http2_submit_status::accepted) {
-                    throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
-                }
-                if (!stream_runtimes_.mark_tunnel(stream_id)) {
-                    std::terminate();
-                }
-                set_inactivity_phase();
-                context_access::commit_upgrade(context_value);
-                wake_writer();
-                tunnel_session.emplace(transport_type(connection_, stream_id, streaming_body->queue(), *stream_signal,
-                                           write_signal_, output_budget_, executor_),
-                    base_services.worker(), *context_value.pool(), inbound_buffers_);
-                co_await invoke_tunnel_handler(*tunnel_session, scanner_entry, resolved->stream_handler(), context_value);
+            std::optional<tunnel_upgrade_operation::session_type> tunnel_session;
+            tunnel_upgrade_operation upgrade{
+                .engine_ = *this,
+                .stream_id_ = stream_id,
+                .udp_ = admission.udp_tunnel(),
+                .streaming_body_ = *streaming_body,
+                .stream_signal_ = *stream_signal,
+                .resolved_ = *resolved,
+                .tunnel_endpoint_ = tunnel_endpoint,
+                .base_services_ = base_services,
+                .tunnel_session_ = tunnel_session,
             };
-            auto finish = [&](session_type& session_value, std::exception_ptr failure) {
-                return finish_tunnel_session(session_value, std::move(failure), options.connection_failure_,
-                    remote_address_, scanner_entry, tunnel_endpoint.config().peer_transport_fin_timeout_);
-            };
-            auto outcome = co_await run_http_upgrade_route(routes_, request, *resolved,
-                request_memory_value, dispatch_services, tunnel_session, establish, finish);
+            auto outcome = co_await run_http_upgrade_route(
+                routes_, request, *resolved, request_memory_value, dispatch_services, tunnel_session, upgrade, upgrade);
             auto* buffered = outcome.response();
             if (buffered == nullptr) {
                 co_return;
@@ -436,7 +521,9 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
             break;
         }
         case http_request_endpoint::websocket: {
-            const auto handshake_validation = ruvia::validate_http2_websocket_handshake(connection_, stream_id, request);
+            const auto& websocket_endpoint = *resolved->route().endpoint().get_websocket();
+            const auto handshake_validation = ruvia::validate_http2_websocket_handshake(
+                connection_, stream_id, request, websocket_endpoint.handshake_validation());
             if (handshake_validation.accepted() == nullptr) {
                 const auto* failure = handshake_validation.failure();
                 if (failure == nullptr) {
@@ -453,41 +540,21 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
                 wake_writer();
                 co_return;
             }
-            const auto& websocket_endpoint = *resolved->route().endpoint().get_websocket();
-            using ws_transport_type = http2_sans_io_ws_transport<asio::any_io_executor>;
-            using session_type = websocket_connection<ws_transport_type>;
-            std::optional<session_type> websocket_session;
-            auto establish = [&](context& context_value) -> task<void> {
-                const auto response_headers_value = websocket_response_headers(context_value);
-                const auto handshake_result = connection_.submit_websocket_handshake(stream_id, request,
-                    handshake_validation,
-                    {.supported_subprotocols_ = websocket_endpoint.subprotocols(),
-                        .response_headers_ = response_headers_value});
-                const auto* submitted_handshake = handshake_result.submitted();
-                if (submitted_handshake == nullptr) {
-                    // The handshake is not started, so stream dispatch still
-                    // answers this pending CONNECT with an error response.
-                    throw std::invalid_argument("HTTP/2 WebSocket handshake rejected");
-                }
-                if (!stream_runtimes_.mark_tunnel(stream_id)) {
-                    std::terminate();
-                }
-                set_inactivity_phase();
-                context_access::commit_upgrade(context_value);
-                wake_writer();
-                websocket_session.emplace(ws_transport_type(connection_, stream_id, streaming_body->queue(),
-                                              *stream_signal, write_signal_, output_budget_, executor_),
-                    base_services.worker(), scanner_entry, websocket_endpoint.lifecycle(),
-                    protocol_byte_limit::limited(options.server_.max_websocket_message_bytes_), &inbound_buffers_,
-                    std::string_view{}, websocket_server_protocol_options{.compression_ = submitted_handshake->compression(), .compression_level_ = websocket_endpoint.deflate().compression_level_, .mem_level_ = websocket_endpoint.deflate().mem_level_, .shared_deflate_ = &options.codecs_->websocket_deflate()});
-                co_await invoke_websocket_handler(
-                    *websocket_session, scanner_entry, resolved->stream_handler(), context_value);
-            };
-            auto finish = [&](session_type& session_value, std::exception_ptr failure) {
-                return finish_websocket_session(session_value, std::move(failure), options.connection_failure_, remote_address_);
+            std::optional<websocket_upgrade_operation::session_type> websocket_session;
+            websocket_upgrade_operation upgrade{
+                .engine_ = *this,
+                .stream_id_ = stream_id,
+                .request_ = request,
+                .handshake_validation_ = handshake_validation,
+                .streaming_body_ = *streaming_body,
+                .stream_signal_ = *stream_signal,
+                .resolved_ = *resolved,
+                .websocket_endpoint_ = websocket_endpoint,
+                .base_services_ = base_services,
+                .websocket_session_ = websocket_session,
             };
             auto outcome = co_await run_http_upgrade_route(routes_, request, *resolved,
-                request_memory_value, dispatch_services, websocket_session, establish, finish);
+                request_memory_value, dispatch_services, websocket_session, upgrade, upgrade);
             auto* buffered = outcome.response();
             if (buffered == nullptr) {
                 co_return;
@@ -596,215 +663,222 @@ bool http2_sans_io_session_engine::admit_stream(std::uint32_t stream_id) {
     return true;
 }
 
-void http2_sans_io_session_engine::drain_events() {
+void http2_sans_io_session_engine::reset_event_stream(
+    std::uint32_t stream_id, http2_error_code error) noexcept {
+    auto* signal = stream_runtimes_.signal_for(stream_id);
+    reset_stream_no_throw(stream_id, error);
+    if (signal != nullptr) {
+        signal->wake();
+    } else {
+        remove_stream_runtime(stream_id);
+    }
+    wake_writer();
+}
+
+http2_sans_io_stream_runtime* http2_sans_io_session_engine::resolve_stream_route(std::uint32_t stream_id) {
+    const auto request_view = connection_.server_request_view(stream_id);
+    if (!request_view.has_value()) {
+        return nullptr;
+    }
+    return http2_select_stream_route(routes_, *request_view, stream_runtimes_, stream_id);
+}
+
+void http2_sans_io_session_engine::on_message_head(http2_request_head_event& message_head) {
     const auto& options = session_.options();
-    const auto reset_event_stream = [&](std::uint32_t stream_id, http2_error_code error) {
-        auto* signal = stream_runtimes_.signal_for(stream_id);
-        reset_stream_no_throw(stream_id, error);
-        if (signal != nullptr) {
-            signal->wake();
-        } else {
-            remove_stream_runtime(stream_id);
-        }
+    const auto stream_id = message_head.stream_id();
+    ++accepted_request_heads_;
+    if (!connection_.draining() && options.server_.max_requests_per_connection_.has_value() &&
+        accepted_request_heads_ >= *options.server_.max_requests_per_connection_) {
+        connection_.begin_drain();
         wake_writer();
-    };
-    const auto resolve_stream_route = [&](std::uint32_t stream_id) {
-        const auto request_view = connection_.server_request_view(stream_id);
-        if (!request_view.has_value()) {
-            return static_cast<http2_sans_io_stream_runtime*>(nullptr);
-        }
-        return http2_select_stream_route(routes_, *request_view, stream_runtimes_, stream_id);
-    };
-    const auto on_message_head = [&](http2_request_head_event* message_head) {
-        const auto stream_id = message_head->stream_id();
-        ++accepted_request_heads_;
-        if (!connection_.draining() && options.server_.max_requests_per_connection_.has_value() &&
-            accepted_request_heads_ >= *options.server_.max_requests_per_connection_) {
-            connection_.begin_drain();
+    }
+    const auto expectation_plan =
+        message_head.expectation_plan(http_unsupported_expectation_policy::reject);
+    const auto snapshot = message_head.snapshot();
+    auto* stream_runtime = resolve_stream_route(stream_id);
+    if (stream_runtime == nullptr || !stream_runtime->hold_request_head(std::move(message_head))) {
+        reset_event_stream(stream_id, http2_error_code::internal_error);
+        return;
+    }
+    const bool connect_request = snapshot.connect_pending_;
+    const auto* selected_route = stream_runtime->selected_route();
+    const bool resolved_route = selected_route != nullptr && selected_route->resolution().resolved() != nullptr;
+    const bool streaming_body = !connect_request && selected_route != nullptr &&
+                                selected_route->body().streaming() != nullptr &&
+                                snapshot.body_open_;
+    // Same policy as HTTP/1: 100 Continue is sent when the server starts
+    // consuming the content. A buffered route consumes it before dispatch, so
+    // it is sent now; a streaming handler's first body read sends it; an
+    // unresolved request (404, 405, document root) never reads the content
+    // and answers with its final status alone (RFC 9110 §10.1.1).
+    if (expectation_plan.send_continue() != nullptr && resolved_route && !connect_request &&
+        selected_route->body().buffered() != nullptr) {
+        const auto status = connection_.submit_interim_response_head(
+            stream_id, http_interim_response_head(ruvia::http_status::continue_value));
+        if (status == http2_submit_status::accepted) {
             wake_writer();
-        }
-        const auto expectation_plan =
-            message_head->expectation_plan(http_unsupported_expectation_policy::reject);
-        const auto snapshot = message_head->snapshot();
-        auto* stream_runtime = resolve_stream_route(stream_id);
-        if (stream_runtime == nullptr || !stream_runtime->hold_request_head(std::move(*message_head))) {
-            reset_event_stream(stream_id, http2_error_code::internal_error);
-            return;
-        }
-        const bool connect_request = snapshot.connect_pending_;
-        const auto* selected_route = stream_runtime->selected_route();
-        const bool resolved_route = selected_route != nullptr && selected_route->resolution().resolved() != nullptr;
-        const bool streaming_body = !connect_request && selected_route != nullptr &&
-                                    selected_route->body().streaming() != nullptr &&
-                                    snapshot.body_open_;
-        // Same policy as HTTP/1: 100 Continue is sent when the server starts
-        // consuming the content. A buffered route consumes it before dispatch, so
-        // it is sent now; a streaming handler's first body read sends it; an
-        // unresolved request (404, 405, document root) never reads the content
-        // and answers with its final status alone (RFC 9110 §10.1.1).
-        if (expectation_plan.send_continue() != nullptr && resolved_route && !connect_request &&
-            selected_route->body().buffered() != nullptr) {
-            const auto status = connection_.submit_interim_response_head(
-                stream_id, http_interim_response_head(ruvia::http_status::continue_value));
-            if (status == http2_submit_status::accepted) {
-                wake_writer();
-            } else {
-                if (status != http2_submit_status::closed) {
-                    reset_event_stream(stream_id, http2_error_code::internal_error);
-                } else {
-                    remove_stream_runtime(stream_id);
-                }
-                return;
-            }
-        }
-        // An unresolved request is answered from its head alone; waiting for
-        // content the client may withhold (Expect) would stall the stream.
-        if (expectation_plan.rejection() != nullptr || connect_request || streaming_body || !resolved_route) {
-            if (!admit_stream(stream_id)) {
-                reset_event_stream(stream_id, http2_error_code::internal_error);
-            }
-        }
-    };
-    const auto on_body_chunk = [&](auto* body_chunk) {
-        const auto stream_id = body_chunk->stream_id();
-        auto* stream_runtime = stream_runtimes_.find(stream_id);
-        if (stream_runtime == nullptr) {
-            return;
-        }
-        auto* selected_route = stream_runtime->selected_route();
-        if (selected_route == nullptr) {
-            reset_event_stream(stream_id, http2_error_code::internal_error);
-            return;
-        }
-        auto& request_body = selected_route->body();
-        if (request_body.buffered() != nullptr && stream_runtime->dispatched()) {
-            // A buffered body is dispatched before its end only when its
-            // expectation was rejected or its route is unresolved: the handler
-            // never receives that content and the request borrows the buffered
-            // bytes as they were at dispatch. Appending would reallocate under
-            // that borrowed view, so later DATA is discarded and only its
-            // flow-control credit returned.
-            (void)connection_.acknowledge(std::move(body_chunk->take_credit()));
-            wake_writer();
-            return;
-        }
-        const auto total_limit =
-            http_request_body_limit(selected_route->resolution(), request_body.mode(), admission_policy_);
-        auto stored = [&] {
-            if (request_body.streaming() != nullptr) {
-                return request_body.store(body_chunk->bytes(), total_limit,
-                    options.server_.max_buffered_body_bytes_, std::move(body_chunk->take_credit()));
-            }
-            return request_body.store(
-                body_chunk->bytes(), total_limit, options.server_.max_buffered_body_bytes_);
-        }();
-        if (stored.stored() == nullptr) {
-            const bool known_rejection =
-                stored.protocol_failure() != nullptr || stored.backlog_overflow() != nullptr;
-            reset_event_stream(stream_id,
-                known_rejection ? http2_error_code::cancel : http2_error_code::internal_error);
-            return;
-        }
-        if (request_body.streaming() != nullptr) {
-            auto* signal = stream_runtime->signal();
-            if (signal == nullptr) {
-                reset_event_stream(stream_id, http2_error_code::internal_error);
-                return;
-            }
-            signal->wake();
         } else {
-            (void)connection_.acknowledge(std::move(body_chunk->take_credit()));
-            wake_writer();
-        }
-    };
-    const auto on_tunnel_data = [&](auto* tunnel_data) {
-        const auto stream_id = tunnel_data->stream_id();
-        auto* stream_runtime = stream_runtimes_.find(stream_id);
-        auto* signal = stream_runtime != nullptr ? stream_runtime->signal() : nullptr;
-        if (stream_runtime == nullptr || signal == nullptr) {
+            if (status != http2_submit_status::closed) {
+                reset_event_stream(stream_id, http2_error_code::internal_error);
+            } else {
+                remove_stream_runtime(stream_id);
+            }
             return;
         }
-        auto* selected_route = stream_runtime->selected_route();
-        auto* streaming_body =
-            selected_route != nullptr ? selected_route->body().streaming() : nullptr;
-        if (streaming_body == nullptr) {
+    }
+    // An unresolved request is answered from its head alone; waiting for
+    // content the client may withhold (Expect) would stall the stream.
+    if (expectation_plan.rejection() != nullptr || connect_request || streaming_body || !resolved_route) {
+        if (!admit_stream(stream_id)) {
             reset_event_stream(stream_id, http2_error_code::internal_error);
-            return;
         }
-        if (!streaming_body->queue().enqueue_bounded(tunnel_data->bytes(),
-                std::move(tunnel_data->take_credit()), options.server_.max_buffered_body_bytes_)) {
-            reset_event_stream(stream_id, http2_error_code::cancel);
+    }
+}
+
+void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event& body_chunk) {
+    const auto& options = session_.options();
+    const auto stream_id = body_chunk.stream_id();
+    auto* stream_runtime = stream_runtimes_.find(stream_id);
+    if (stream_runtime == nullptr) {
+        return;
+    }
+    auto* selected_route = stream_runtime->selected_route();
+    if (selected_route == nullptr) {
+        reset_event_stream(stream_id, http2_error_code::internal_error);
+        return;
+    }
+    auto& request_body = selected_route->body();
+    if (request_body.buffered() != nullptr && stream_runtime->dispatched()) {
+        // A buffered body is dispatched before its end only when its
+        // expectation was rejected or its route is unresolved: the handler
+        // never receives that content and the request borrows the buffered
+        // bytes as they were at dispatch. Appending would reallocate under
+        // that borrowed view, so later DATA is discarded and only its
+        // flow-control credit returned.
+        (void)connection_.acknowledge(body_chunk.take_credit());
+        wake_writer();
+        return;
+    }
+    const auto total_limit =
+        http_request_body_limit(selected_route->resolution(), request_body.mode(), admission_policy_);
+    const auto stored = request_body.streaming() != nullptr
+                            ? request_body.store(body_chunk.bytes(), total_limit,
+                                  options.server_.max_buffered_body_bytes_, body_chunk.take_credit())
+                            : request_body.store(
+                                  body_chunk.bytes(), total_limit, options.server_.max_buffered_body_bytes_);
+    if (stored.stored() == nullptr) {
+        const bool known_rejection =
+            stored.protocol_failure() != nullptr || stored.backlog_overflow() != nullptr;
+        reset_event_stream(stream_id,
+            known_rejection ? http2_error_code::cancel : http2_error_code::internal_error);
+        return;
+    }
+    if (request_body.streaming() != nullptr) {
+        auto* signal = stream_runtime->signal();
+        if (signal == nullptr) {
+            reset_event_stream(stream_id, http2_error_code::internal_error);
             return;
         }
         signal->wake();
+    } else {
+        (void)connection_.acknowledge(body_chunk.take_credit());
         wake_writer();
-    };
-    const auto on_tunnel_end = [&](const auto* tunnel_end) {
-        if (auto* signal = stream_runtimes_.signal_for(tunnel_end->stream_id())) {
-            signal->wake();
-        }
-    };
-    const auto on_message_end = [&](const auto* message_end) {
-        const auto stream_id = message_end->stream_id();
-        auto* stream_runtime = stream_runtimes_.find(stream_id);
-        if (stream_runtime == nullptr) {
-            reset_event_stream(stream_id, http2_error_code::internal_error);
-            return;
-        }
-        for (const auto& field : message_end->trailers()) {
-            if (stream_runtime->trailers().append(field.name(), field.value()).index() != 0) {
-                throw std::logic_error("HTTP/2 decoder published invalid request trailers");
-            }
-        }
-        if (auto* selected_route = stream_runtime->selected_route()) {
-            if (auto* streaming_body = selected_route->body().streaming()) {
-                // Before admission: the handler may start inline and read at once.
-                streaming_body->queue().mark_ended();
-            }
-        }
-        if (auto* signal = stream_runtime->signal()) {
-            signal->wake();
-        } else if (!admit_stream(stream_id)) {
-            reset_event_stream(stream_id, http2_error_code::internal_error);
-        }
-    };
-    const auto on_stream_closed = [&](const auto* stream_closed) {
-        const auto stream_id = stream_closed->stream_id();
-        stream_runtimes_.for_each([&](http2_sans_io_stream_runtime& child_value) {
-            if (child_value.push_parent() == stream_id) {
-                reset_stream_no_throw(child_value.stream_id(), http2_error_code::cancel);
-                if (auto* child_signal = child_value.signal()) {
-                    child_signal->wake();
-                }
-            }
-        });
-        output_budget_.release_and_reconcile(stream_id, connection_);
-        auto* stream_runtime = stream_runtimes_.find(stream_id);
-        auto* signal = stream_runtime != nullptr ? stream_runtime->signal() : nullptr;
-        if (signal != nullptr) {
-            signal->wake();
-        } else {
-            remove_stream_runtime(stream_id);
-        }
-    };
+    }
+}
 
+void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunnel_data) {
+    const auto& options = session_.options();
+    const auto stream_id = tunnel_data.stream_id();
+    auto* stream_runtime = stream_runtimes_.find(stream_id);
+    auto* signal = stream_runtime != nullptr ? stream_runtime->signal() : nullptr;
+    if (stream_runtime == nullptr || signal == nullptr) {
+        return;
+    }
+    auto* selected_route = stream_runtime->selected_route();
+    auto* streaming_body =
+        selected_route != nullptr ? selected_route->body().streaming() : nullptr;
+    if (streaming_body == nullptr) {
+        reset_event_stream(stream_id, http2_error_code::internal_error);
+        return;
+    }
+    if (!streaming_body->queue().enqueue_bounded(tunnel_data.bytes(),
+            tunnel_data.take_credit(), options.server_.max_buffered_body_bytes_)) {
+        reset_event_stream(stream_id, http2_error_code::cancel);
+        return;
+    }
+    signal->wake();
+    wake_writer();
+}
+
+void http2_sans_io_session_engine::on_tunnel_end(const http2_tunnel_end_event& tunnel_end) noexcept {
+    if (auto* signal = stream_runtimes_.signal_for(tunnel_end.stream_id())) {
+        signal->wake();
+    }
+}
+
+void http2_sans_io_session_engine::on_message_end(const http2_message_end_event& message_end) {
+    const auto stream_id = message_end.stream_id();
+    auto* stream_runtime = stream_runtimes_.find(stream_id);
+    if (stream_runtime == nullptr) {
+        reset_event_stream(stream_id, http2_error_code::internal_error);
+        return;
+    }
+    for (const auto& field : message_end.trailers()) {
+        if (stream_runtime->trailers().append(field.name(), field.value()).index() != 0) {
+            throw std::logic_error("HTTP/2 decoder published invalid request trailers");
+        }
+    }
+    if (auto* selected_route = stream_runtime->selected_route()) {
+        if (auto* streaming_body = selected_route->body().streaming()) {
+            // Before admission: the handler may start inline and read at once.
+            streaming_body->queue().mark_ended();
+        }
+    }
+    if (auto* signal = stream_runtime->signal()) {
+        signal->wake();
+    } else if (!admit_stream(stream_id)) {
+        reset_event_stream(stream_id, http2_error_code::internal_error);
+    }
+}
+
+void http2_sans_io_session_engine::on_stream_closed(const http2_stream_closed_event& stream_closed) noexcept {
+    const auto stream_id = stream_closed.stream_id();
+    stream_runtimes_.for_each([this, stream_id](http2_sans_io_stream_runtime& child_value) {
+        if (child_value.push_parent() == stream_id) {
+            reset_stream_no_throw(child_value.stream_id(), http2_error_code::cancel);
+            if (auto* child_signal = child_value.signal()) {
+                child_signal->wake();
+            }
+        }
+    });
+    output_budget_.release_and_reconcile(stream_id, connection_);
+    auto* stream_runtime = stream_runtimes_.find(stream_id);
+    auto* signal = stream_runtime != nullptr ? stream_runtime->signal() : nullptr;
+    if (signal != nullptr) {
+        signal->wake();
+    } else {
+        remove_stream_runtime(stream_id);
+    }
+}
+
+void http2_sans_io_session_engine::drain_events() {
     for (;;) {
         auto event = connection_.next_event();
         if (!event.has_value()) {
             break;
         }
         if (auto* request_head = event->request_head()) {
-            on_message_head(request_head);
+            on_message_head(*request_head);
         } else if (auto* body_chunk = event->message_body_chunk()) {
-            on_body_chunk(body_chunk);
+            on_body_chunk(*body_chunk);
         } else if (auto* tunnel_data = event->tunnel_data()) {
-            on_tunnel_data(tunnel_data);
+            on_tunnel_data(*tunnel_data);
         } else if (const auto* tunnel_end = event->tunnel_end()) {
-            on_tunnel_end(tunnel_end);
+            on_tunnel_end(*tunnel_end);
         } else if (const auto* message_end = event->message_end()) {
-            on_message_end(message_end);
+            on_message_end(*message_end);
         } else if (const auto* stream_closed = event->stream_closed()) {
-            on_stream_closed(stream_closed);
+            on_stream_closed(*stream_closed);
         } else if (const auto* update = event->priority_update(); update != nullptr && !update->push_) {
             if (auto* runtime = stream_runtimes_.find(static_cast<std::uint32_t>(update->element_id_))) {
                 runtime->reprioritize(update->fields_.request_priority());

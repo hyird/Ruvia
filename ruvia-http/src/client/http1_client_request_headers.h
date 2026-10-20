@@ -29,6 +29,12 @@ struct request_header_facts final {
     bool has_te_{false};
 };
 
+[[nodiscard]] bool analyze_header(http_header_view header, detail::request_header_kind kind,
+    request_header_facts& facts, http1_client_request_prepare_error& error) noexcept;
+
+[[nodiscard]] bool finalize_headers(
+    const request_header_facts& facts, http1_client_request_prepare_error& error) noexcept;
+
 // Validate every field and collect the facts the encoder needs. Returns false
 // with `error` set on the first field that cannot be sent.
 [[nodiscard]] bool analyze_headers(std::span<const http_header_view> headers,

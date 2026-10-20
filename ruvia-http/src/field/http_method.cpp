@@ -1,6 +1,4 @@
-#include <algorithm>
-
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_known_method.h"
 
 // The method vocabulary: recognising the standard tokens, spelling them back,
@@ -76,11 +74,7 @@ std::string_view known_http_method_token(http_known_method method) noexcept {
 }
 
 bool is_valid_http_method_token(std::string_view method) noexcept {
-    if (method.empty()) {
-        return false;
-    }
-    return std::ranges::all_of(method,
-        [](char ch) noexcept { return is_http_token_char(static_cast<unsigned char>(ch)); });
+    return is_valid_http_header_name(method);
 }
 
 bool is_http_method_safe(std::string_view method) noexcept {

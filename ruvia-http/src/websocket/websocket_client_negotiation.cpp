@@ -4,7 +4,6 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/websocket_subprotocol_set.h"
@@ -174,21 +173,22 @@ websocket_client_negotiation::websocket_client_negotiation(websocket_client_nego
 std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_fields(std::span<const http_header> fields_value) const {
     return validate(fields_value, [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, false);
 }
-http2_request_head_submit_result websocket_client_negotiation::submit_http2_request(http2_connection& connection, std::string_view scheme, std::string_view authority, std::string_view target, std::span<const http_header_view> application_headers) const {
+http2_request_head_submit_result websocket_client_negotiation::submit_http2_request(
+    http2_connection& connection, std::string_view scheme, std::string_view authority,
+    std::string_view target, std::span<const http_header_view> application_headers) const {
     std::pmr::vector<http_header_view> headers(protocols_.get_allocator().resource());
+    headers.reserve(fields_.size() + application_headers.size());
     for (const auto& f : fields_) {
         headers.emplace_back(f.name(), f.value());
     }
-    std::pmr::vector<std::pmr::string> names(protocols_.get_allocator().resource());
-    names.reserve(application_headers.size());
-    for (const auto& field : application_headers) {
-        auto& name = names.emplace_back(field.name());
-        for (auto& byte : name) {
-            byte = http_ascii_to_lower(static_cast<unsigned char>(byte));
-        }
-        headers.emplace_back(name, field.value());
-    }
-    return connection.submit_request_head(http2_extended_connect_request_head_view{.protocol_ = "websocket", .scheme_ = scheme, .authority_ = authority, .target_ = target, .headers_ = headers});
+    headers.insert(headers.end(), application_headers.begin(), application_headers.end());
+    return connection.submit_request_head(http2_extended_connect_request_head_view{
+        .protocol_ = "websocket",
+        .scheme_ = scheme,
+        .authority_ = authority,
+        .target_ = target,
+        .headers_ = headers,
+    });
 }
 std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_response(const http_client_response_head& head, bool stream_open) const {
     if (head.status().value() < 200 || head.status().value() >= 300) {

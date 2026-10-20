@@ -274,8 +274,7 @@ private:
             co_return;
         }
 
-        const auto trailer_result = validated_response_trailer_section(trailers);
-        const auto& trailer_section = *trailer_result.section();
+        const auto trailer_section = validate_http_response_trailers(trailers);
         const auto trailer_intent = response_trailer_intent(trailer_section);
         if (!trailer_section.empty()) {
             http_clear_pmr_string_retaining_small(trailers_);

@@ -126,8 +126,8 @@ void event_loop_state::attach(const std::shared_ptr<event_loop_state>& self) {
 void event_loop_state::shutdown_external_context() noexcept {
     // Only attach() retains a state with this service, so it is an attached loop.
     auto& attached = *std::get_if<attached_context>(&context_ownership_);
-    retirement_->close_admission();
-    if (retirement_->pending() != 0) {
+    retirement_.close_admission();
+    if (retirement_.pending() != 0) {
         // Their frames and leases are owned by handlers that this shutdown
         // destroys without running; nothing can retire them safely.
         report_unhandled_failure("attached event loop",
@@ -181,7 +181,9 @@ void event_loop_attachment::stop() noexcept {
 
 event_loop_attachment attach_event_loop(
     asio::io_context& io_context, event_loop_attachment_options options) {
-    auto state_value = std::make_shared<detail::event_loop_state>(io_context, options.queue_capacity_);
+    auto state_value = std::allocate_shared<detail::event_loop_state>(
+        std::pmr::polymorphic_allocator<detail::event_loop_state>(process_resource()),
+        io_context, options.queue_capacity_);
     const std::weak_ptr<detail::event_loop_state> weak_state = state_value;
     // root_task uses this sink directly; it must not call event_loop_state::report_failure,
     // which would route back through this same sink.

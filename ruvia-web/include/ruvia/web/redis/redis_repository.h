@@ -225,12 +225,15 @@ private:
         const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
         auto args = detail::redis_orm_write_arguments(key, mode, options, memory);
 
-        std::size_t required = 0;
-        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
-            if constexpr (!column_type::options.nullable_) {
-                ++required;
-            }
-        });
+        static constexpr std::size_t required = [] {
+            std::size_t count = 0;
+            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+                if constexpr (!column_type::options.nullable_) {
+                    ++count;
+                }
+            });
+            return count;
+        }();
         args.emplace_back(detail::encode_redis_scalar(required, memory));
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
             if constexpr (!column_type::options.nullable_) {

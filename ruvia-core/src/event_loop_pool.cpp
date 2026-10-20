@@ -28,14 +28,50 @@ std::size_t default_loop_count() noexcept {
 
 }  // namespace
 
-class event_loop_pool_owner final {
-public:
-    explicit event_loop_pool_owner(std::size_t loop_count) {
-        loops_.reserve(loop_count);
+struct event_loop_pool::impl_type final {
+    explicit impl_type(event_loop_pool_options options) {
+        const auto count = options.loop_count_ == 0 ? default_loop_count() : options.loop_count_;
+        if (options.queue_capacity_ == 0) {
+            throw std::invalid_argument("event loop queue capacity must be greater than zero");
+        }
+        loops_.reserve(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            loops_.push_back(std::allocate_shared<detail::event_loop_state>(
+                std::pmr::polymorphic_allocator<detail::event_loop_state>(process_resource()),
+                options.queue_capacity_));
+            loops_.back()->install_shutdown_hook();
+        }
     }
 
-    void add_loop(const std::shared_ptr<detail::event_loop_state>& loop) {
-        loops_.emplace_back(loop);
+    void bind_callbacks(const std::shared_ptr<impl_type>& self) {
+        const std::weak_ptr<impl_type> weak_owner = self;
+        for (const auto& loop : loops_) {
+            loop->failure_sink_ = [weak_owner](std::exception_ptr failure) {
+                if (const auto owner = weak_owner.lock()) {
+                    owner->report_failure(std::move(failure));
+                } else {
+                    report_unhandled_failure("event loop failure after pool retirement", std::move(failure));
+                }
+            };
+            const std::weak_ptr<detail::event_loop_state> weak_loop = loop;
+            auto* const stable_runtime = &loop->owned_runtime();
+            stable_runtime->configure({
+                .stop_admission_ = [weak_loop, stable_runtime] {
+                    if (const auto locked_loop = weak_loop.lock()) {
+                        locked_loop->stop();
+                    } else {
+                        // Construction rollback can destroy an unpublished
+                        // state before its core owner drains this control.
+                        stable_runtime->finalize();
+                    } },
+                .failure_ = [weak_owner](std::exception_ptr failure) noexcept {
+                    if (const auto owner = weak_owner.lock()) {
+                        owner->report_failure(std::move(failure));
+                    } else {
+                        report_unhandled_failure("event loop failure after pool retirement", std::move(failure));
+                    } },
+            });
+        }
     }
 
     // Keeps the first failure for join() while the pool observes its loops;
@@ -72,10 +108,8 @@ public:
         if (!lifecycle_.request_stop()) {
             return;
         }
-        for (const auto& weak_loop : loops_) {
-            if (const auto loop = weak_loop.lock()) {
-                loop->stop();
-            }
+        for (const auto& loop : loops_) {
+            loop->stop();
         }
     }
 
@@ -108,54 +142,11 @@ public:
         }
     }
 
-private:
-    std::pmr::vector<std::weak_ptr<detail::event_loop_state>> loops_{process_resource()};
-    runtime_lifecycle lifecycle_;
-    std::mutex failure_mutex_;
-    first_failure failure_;
-    bool observed_{true};
-};
-
-struct event_loop_pool::impl_type {
-    explicit impl_type(event_loop_pool_options options) {
-        const auto count = options.loop_count_ == 0 ? default_loop_count() : options.loop_count_;
-        if (options.queue_capacity_ == 0) {
-            throw std::invalid_argument("event loop queue capacity must be greater than zero");
-        }
-        owner_ = std::make_shared<event_loop_pool_owner>(count);
-        loops_.reserve(count);
-        for (std::size_t i = 0; i < count; ++i) {
-            loops_.push_back(std::make_shared<detail::event_loop_state>(options.queue_capacity_));
-            loops_.back()->install_shutdown_hook();
-            owner_->add_loop(loops_.back());
-            loops_.back()->failure_sink_ = [stable_owner = owner_](std::exception_ptr failure) {
-                stable_owner->report_failure(std::move(failure));
-            };
-            const std::weak_ptr<detail::event_loop_state> weak = loops_.back();
-            auto* const stable_runtime = &loops_.back()->owned_runtime();
-            stable_runtime->configure({
-                .stop_admission_ = [weak, stable_runtime] {
-                    if (const auto loop = weak.lock()) {
-                        loop->stop();
-                    } else {
-                        // Construction rollback can destroy an unpublished
-                        // state before its core owner drains this control.
-                        stable_runtime->finalize();
-                    } },
-                .failure_ = [stable_owner = owner_](std::exception_ptr failure) noexcept { stable_owner->report_failure(std::move(failure)); },
-            });
-        }
-    }
-
-    void stop() noexcept {
-        owner_->stop();
-    }
-
     // A pool stop (requested directly or by a failing loop) closes the owner
     // lifecycle before it stops any loop, and can win a cold loop's launch
     // transition. Launching then ends; join() reports the stop's outcome.
     [[nodiscard]] bool launch(worker_runtime& runtime) {
-        return !owner_->stop_requested() && runtime.start();
+        return !stop_requested() && runtime.start();
     }
 
     void join_loops() {
@@ -165,12 +156,18 @@ struct event_loop_pool::impl_type {
     }
 
     std::pmr::vector<std::shared_ptr<detail::event_loop_state>> loops_{process_resource()};
-    std::shared_ptr<event_loop_pool_owner> owner_;
+    runtime_lifecycle lifecycle_;
+    std::mutex failure_mutex_;
+    first_failure failure_;
+    bool observed_{true};
     std::atomic<std::size_t> next_index_{0};
 };
 
 event_loop_pool::event_loop_pool(event_loop_pool_options options)
-    : impl_(std::make_unique<impl_type>(options)) {}
+    : impl_(std::allocate_shared<impl_type>(
+          std::pmr::polymorphic_allocator<impl_type>(process_resource()), options)) {
+    impl_->bind_callbacks(impl_);
+}
 
 event_loop_pool::~event_loop_pool() {
     stop();
@@ -182,11 +179,11 @@ event_loop_pool::~event_loop_pool() {
         // cannot rethrow it further. Report rather than end here.
         report_unhandled_failure("event loop pool", std::current_exception());
     }
-    impl_->owner_->detach_pool_observer();
+    impl_->detach_pool_observer();
 }
 
 void event_loop_pool::start() {
-    if (!impl_->owner_->start()) {
+    if (!impl_->start()) {
         throw std::logic_error("event loop pool can only be started once");
     }
     try {
@@ -199,7 +196,7 @@ void event_loop_pool::start() {
         const auto launch_failure = std::current_exception();
         impl_->stop();
         impl_->join_loops();
-        impl_->owner_->complete_stop();
+        impl_->complete_stop();
         std::rethrow_exception(launch_failure);
     }
 }
@@ -218,9 +215,9 @@ void event_loop_pool::join() {
     for (const auto& loop : impl_->loops_) {
         detail::worker_handle_access::wait_for_reservations(loop->runtime_.handle());
     }
-    impl_->owner_->complete_stop();
+    impl_->complete_stop();
 
-    if (const auto failure = impl_->owner_->take_failure()) {
+    if (const auto failure = impl_->take_failure()) {
         std::rethrow_exception(failure);
     }
 }

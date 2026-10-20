@@ -56,6 +56,8 @@ struct http_connect_udp_request_view final {
 [[nodiscard]] std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_request(http_connect_udp_request_view request) noexcept;
 [[nodiscard]] std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_response(
     http_protocol_version version, std::uint16_t status, std::span<const http_header_view> headers) noexcept;
+[[nodiscard]] std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_response(
+    http_protocol_version version, std::uint16_t status, std::span<const http_header> headers) noexcept;
 // Classifies the HTTP/1 Upgrade token; full validation remains mandatory.
 [[nodiscard]] bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept;
 [[nodiscard]] std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept;

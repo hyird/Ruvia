@@ -28,7 +28,7 @@ void configure_http_client_response_decoding(http_client_response_state& state_v
     }
     // Parsed once with the final head; decoding reuses this result at FIN.
     auto& parsed_coding = state_value.content_coding_.emplace(
-        parse_http_content_coding_headers(state_value.headers_, state_value.resource_));
+        parse_http_content_coding_headers(state_value.headers_));
     const bool transforms_body = std::ranges::any_of(parsed_coding.codings(), [](http_content_coding coding) {
         return coding != http_content_coding::identity;
     });

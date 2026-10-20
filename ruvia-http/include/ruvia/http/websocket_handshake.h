@@ -72,7 +72,10 @@ class websocket_handshake_validation_result;
 class http2_connection;
 namespace detail {
 class http2_stream_state;
-[[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(const http2_stream_state&, const http_request&) noexcept;
+class websocket_request_header_validator;
+[[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(
+    const http2_stream_state&, const http_request&,
+    websocket_handshake_validation_options) noexcept;
 }  // namespace detail
 
 class websocket_handshake_validation_result final {
@@ -88,8 +91,13 @@ public:
     const websocket_handshake_failure* failure() const&& = delete;
 
 private:
-    friend websocket_handshake_validation_result validate_http2_websocket_handshake(http2_connection&, std::uint32_t, const http_request&) noexcept;
-    friend websocket_handshake_validation_result detail::validate_http2_websocket_handshake(const detail::http2_stream_state&, const http_request&) noexcept;
+    friend class detail::websocket_request_header_validator;
+    friend websocket_handshake_validation_result validate_http2_websocket_handshake(
+        http2_connection&, std::uint32_t, const http_request&,
+        websocket_handshake_validation_options) noexcept;
+    friend websocket_handshake_validation_result detail::validate_http2_websocket_handshake(
+        const detail::http2_stream_state&, const http_request&,
+        websocket_handshake_validation_options) noexcept;
     friend websocket_handshake_validation_result validate_websocket_handshake(
         const http_request&, const http1_request_body_plan&, websocket_handshake_validation_options) noexcept;
 

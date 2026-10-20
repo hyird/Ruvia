@@ -4,7 +4,6 @@
 #include <memory_resource>
 #include <string_view>
 #include <utility>
-#include <vector>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http_content_coding.h"
@@ -12,9 +11,11 @@
 namespace ruvia::detail {
 
 struct http_content_coding_field_result_access final {
-    [[nodiscard]] static http_content_coding_field_result coding(
-        std::pmr::vector<http_content_coding> values) noexcept {
-        return http_content_coding_field_result(std::move(values));
+    using sequence_type = http_content_coding_field_result::content_coding_sequence;
+
+    [[nodiscard]] static constexpr http_content_coding_field_result coding(
+        sequence_type values) noexcept {
+        return http_content_coding_field_result(values);
     }
 
     [[nodiscard]] static constexpr http_content_coding_field_result unsupported() noexcept {
@@ -30,15 +31,15 @@ struct http_content_coding_field_result_access final {
 // empty list members are ignored.
 class http_content_coding_field_parser final {
 public:
-    explicit http_content_coding_field_parser(std::pmr::memory_resource* resource)
-        : codings_(resource != nullptr ? resource : std::pmr::get_default_resource()) {}
+    constexpr http_content_coding_field_parser() noexcept = default;
+    explicit constexpr http_content_coding_field_parser(std::pmr::memory_resource*) noexcept {}
 
-    void update(std::string_view value);
+    void update(std::string_view value) noexcept;
 
-    [[nodiscard]] http_content_coding_field_result finish() &&;
+    [[nodiscard]] http_content_coding_field_result finish() const noexcept;
 
 private:
-    std::pmr::vector<http_content_coding> codings_;
+    http_content_coding_field_result_access::sequence_type codings_{};
     bool unsupported_{false};
     bool invalid_{false};
 };
@@ -50,14 +51,14 @@ private:
 
 template <typename headers_type>
 [[nodiscard]] inline http_content_coding_field_result http_content_coding_from_headers(
-    const headers_type& headers, std::pmr::memory_resource* resource) {
-    http_content_coding_field_parser parser(resource);
+    const headers_type& headers) noexcept {
+    http_content_coding_field_parser parser;
     for (const auto& header : headers) {
         if (http_ascii_equals_ignore_case(header.name(), "Content-Encoding")) {
             parser.update(header.value());
         }
     }
-    return std::move(parser).finish();
+    return parser.finish();
 }
 
 }  // namespace ruvia::detail

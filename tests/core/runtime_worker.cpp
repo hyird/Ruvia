@@ -290,7 +290,294 @@ bool test_worker_handle_callable_lifetime() {
             return false;
         }
     }
-    return resource.allocations_ == resource.deallocations_;
+    if (resource.allocations_ != resource.deallocations_) {
+        return false;
+    }
+
+    struct throw_on_copy final {
+        explicit throw_on_copy(std::pmr::memory_resource* resource_value)
+            : bytes_(resource_value) {
+            bytes_.resize(4096, 'c');
+        }
+        throw_on_copy(const throw_on_copy& other)
+            : bytes_(other.bytes_, other.bytes_.get_allocator().resource()) {
+            throw std::runtime_error("copy failed");
+        }
+        throw_on_copy(throw_on_copy&&) noexcept = default;
+        void operator()() const {}
+        std::pmr::vector<char> bytes_;
+    };
+    struct throw_on_move final {
+        explicit throw_on_move(std::pmr::memory_resource* resource_value)
+            : bytes_(resource_value) {
+            bytes_.resize(4096, 'm');
+        }
+        throw_on_move(throw_on_move&& other)
+            : bytes_(std::move(other.bytes_)) {
+            throw std::runtime_error("move failed");
+        }
+        void operator()() const {}
+        std::pmr::vector<char> bytes_;
+    };
+
+    asio::io_context exception_context;
+    ruvia::worker_runtime_context exception_runtime(exception_context, 1);
+    const auto& exception_handle = exception_runtime.handle();
+    counting_resource exception_resource;
+    {
+        throw_on_copy copy_input(&exception_resource);
+        throw_on_move move_input(&exception_resource);
+        bool copy_threw = false;
+        bool move_threw = false;
+        try {
+            static_cast<void>(exception_handle.post(copy_input));
+        } catch (const std::runtime_error&) {
+            copy_threw = true;
+        }
+        try {
+            static_cast<void>(exception_handle.post(std::move(move_input)));
+        } catch (const std::runtime_error&) {
+            move_threw = true;
+        }
+        const auto after_exception = exception_handle.post([] {});
+        if (!copy_threw || !move_threw || !exception_handle.valid() || !exception_handle.accepting() ||
+            after_exception != ruvia::post_status::accepted) {
+            return false;
+        }
+    }
+    if (exception_resource.allocations_ != exception_resource.deallocations_) {
+        return false;
+    }
+
+    struct handle_reentry_state final {
+        std::optional<ruvia::worker_handle>* source_;
+        ruvia::worker_runtime_context* runtime_;
+        bool detach_;
+        bool retired_{false};
+        bool payload_valid_{false};
+        counting_resource* resource_;
+
+        void retire() noexcept {
+            if (retired_) {
+                return;
+            }
+            retired_ = true;
+            source_->reset();
+            if (detach_) {
+                runtime_->detach();
+            } else {
+                runtime_->close();
+            }
+        }
+    };
+    struct reentrant_handle_callable final {
+        explicit reentrant_handle_callable(handle_reentry_state& state_value)
+            : state_(&state_value),
+              payload_(state_value.resource_) {
+            payload_.resize(4096, 'v');
+        }
+        reentrant_handle_callable(const reentrant_handle_callable& other)
+            : state_(other.state_),
+              payload_(other.payload_, other.payload_.get_allocator().resource()) {
+            state_->retire();
+        }
+        reentrant_handle_callable(reentrant_handle_callable&& other) noexcept
+            : state_(other.state_),
+              payload_(std::move(other.payload_)) {
+            state_->retire();
+        }
+        void operator()() {
+            state_->payload_valid_ = payload_.size() == 4096 && payload_.front() == 'v' &&
+                                     payload_.back() == 'v';
+        }
+        handle_reentry_state* state_;
+        std::pmr::vector<char> payload_;
+    };
+
+    const auto exercise_reentry = [](bool detach, bool use_copy) {
+        counting_resource reentry_resource;
+        asio::io_context context;
+        ruvia::worker_runtime_context runtime(context, 1);
+        std::optional<ruvia::worker_handle> source;
+        source.emplace(runtime.handle());
+        handle_reentry_state state_value{
+            .source_ = &source, .runtime_ = &runtime, .detach_ = detach, .resource_ = &reentry_resource};
+        std::optional<reentrant_handle_callable> input;
+        input.emplace(state_value);
+        auto rejected = use_copy ? source->post(*input) : source->post(std::move(*input));
+        if (!state_value.retired_ || source || runtime.handle().valid() == detach ||
+            runtime.handle().accepting() || rejected != ruvia::post_status::worker_stopping ||
+            rejected.rejected() == nullptr) {
+            return false;
+        }
+        auto task_value = std::move(rejected).take_rejected();
+        ruvia::event_loop_pool recovery({.loop_count_ = 1, .queue_capacity_ = 1});
+        if (recovery.loop(0).post(std::move(task_value)) != ruvia::post_status::accepted) {
+            return false;
+        }
+        recovery.start();
+        recovery.join();
+        input.reset();
+        return state_value.payload_valid_ && reentry_resource.allocations_ == reentry_resource.deallocations_;
+    };
+    if (!exercise_reentry(false, true) || !exercise_reentry(true, false)) {
+        return false;
+    }
+
+    struct reserved_move_state final {
+        ruvia::worker_runtime_context* runtime_;
+        counting_resource* resource_;
+        bool detach_;
+        int moves_{0};
+        bool reservation_observed_{false};
+        bool ran_{false};
+    };
+    struct inline_reserved_move_callable final {
+        explicit inline_reserved_move_callable(reserved_move_state& state_value)
+            : state_(&state_value),
+              payload_(static_cast<char*>(state_value.resource_->allocate(16, alignof(char)))) {
+            std::fill_n(payload_, 16, 'r');
+        }
+        inline_reserved_move_callable(inline_reserved_move_callable&& other) noexcept
+            : state_(other.state_),
+              payload_(std::exchange(other.payload_, nullptr)) {
+            // This move transfers the callable into its already reserved node;
+            // detach may cause additional cleanup moves after this point.
+            if (++state_->moves_ == 3) {
+                state_->reservation_observed_ =
+                    state_->runtime_->handle().post([] {}) == ruvia::post_status::queue_full;
+                if (state_->detach_) {
+                    state_->runtime_->detach();
+                } else {
+                    state_->runtime_->close();
+                }
+            }
+        }
+        ~inline_reserved_move_callable() {
+            if (payload_ != nullptr) {
+                state_->resource_->deallocate(payload_, 16, alignof(char));
+            }
+        }
+        void operator()() {
+            state_->ran_ = payload_ != nullptr && payload_[0] == 'r' && payload_[15] == 'r';
+        }
+
+        reserved_move_state* state_;
+        char* payload_;
+    };
+
+    const auto exercise_reserved_move = [](bool detach) {
+        counting_resource reserved_resource;
+        asio::io_context context;
+        ruvia::worker_runtime_context runtime(context, 1);
+        reserved_move_state state_value{
+            .runtime_ = &runtime, .resource_ = &reserved_resource, .detach_ = detach};
+        inline_reserved_move_callable input(state_value);
+        const auto submitted = runtime.handle().post(std::move(input));
+        if (submitted != ruvia::post_status::accepted || !state_value.reservation_observed_ ||
+            reserved_resource.allocations_ != 1) {
+            return false;
+        }
+        if (detach) {
+            if (state_value.ran_ || reserved_resource.deallocations_ != 1) {
+                return false;
+            }
+        } else {
+            context.run();
+            if (!state_value.ran_ || reserved_resource.deallocations_ != 1) {
+                return false;
+            }
+        }
+        return reserved_resource.allocations_ == reserved_resource.deallocations_;
+    };
+    if (!exercise_reserved_move(false) || !exercise_reserved_move(true)) {
+        return false;
+    }
+
+    constexpr std::size_t repeated_posts = 64;
+    counting_resource repeated_resource;
+    asio::io_context context;
+    ruvia::worker_runtime_context runtime(context, repeated_posts + 2);
+    const auto& handle_value = runtime.handle();
+    bool accepted_payload_valid = false;
+    if (!handle_value.valid() || !handle_value.accepting() ||
+        handle_value.post([] {}) != ruvia::post_status::accepted) {
+        return false;
+    }
+    auto accepted = handle_value.post([payload = post_payload(&repeated_resource), &accepted_payload_valid]() mutable {
+        accepted_payload_valid = payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' &&
+                                 payload.bytes_.back() == 'x';
+    });
+    if (accepted != ruvia::post_status::accepted) {
+        return false;
+    }
+    for (std::size_t index = 0; index < repeated_posts; ++index) {
+        auto posted = handle_value.post([payload = post_payload(&repeated_resource)]() mutable {
+            if (payload.bytes_.size() != 4096 || payload.bytes_.front() != 'x') {
+                std::terminate();
+            }
+        });
+        if (!posted.accepted()) {
+            return false;
+        }
+    }
+    context.run();
+    if (!accepted_payload_valid || repeated_resource.allocations_ != repeated_resource.deallocations_) {
+        return false;
+    }
+
+    asio::io_context full_context;
+    ruvia::worker_runtime_context full_runtime(full_context, 1);
+    const auto& full_handle = full_runtime.handle();
+    counting_resource rejected_resource;
+    bool retained_payload_valid = false;
+    if (full_handle.post([] {}) != ruvia::post_status::accepted) {
+        return false;
+    }
+    auto full = full_handle.post([payload = post_payload(&rejected_resource), &retained_payload_valid]() mutable {
+        retained_payload_valid = payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' &&
+                                 payload.bytes_.back() == 'x';
+    });
+    if (full != ruvia::post_status::queue_full || full.rejected() == nullptr) {
+        return false;
+    }
+    auto retained = std::move(full).take_rejected();
+    for (int attempt_value = 0; attempt_value < 3; ++attempt_value) {
+        auto again = full_handle.post(std::move(retained));
+        if (again != ruvia::post_status::queue_full || again.rejected() == nullptr ||
+            rejected_resource.allocations_ == rejected_resource.deallocations_) {
+            return false;
+        }
+        retained = std::move(again).take_rejected();
+    }
+    full_context.run();
+    full_context.restart();
+    const auto retried = full_handle.post(std::move(retained));
+    if (retried != ruvia::post_status::accepted) {
+        return false;
+    }
+    full_context.run();
+    if (!retained_payload_valid || rejected_resource.allocations_ != rejected_resource.deallocations_) {
+        return false;
+    }
+
+    asio::io_context closed_context;
+    ruvia::worker_runtime_context closed_runtime(closed_context, 1);
+    auto closed_handle = closed_runtime.handle();
+    closed_runtime.close();
+    if (!closed_handle.valid() || closed_handle.accepting() ||
+        closed_handle.post([] {}) != ruvia::post_status::worker_stopping) {
+        return false;
+    }
+    closed_runtime.detach();
+    if (closed_handle.valid() || closed_handle.accepting()) {
+        return false;
+    }
+    ruvia::worker_handle invalid;
+    return !invalid.valid() && !invalid.accepting() &&
+           invalid.post([] {}) == ruvia::post_status::worker_stopping &&
+           repeated_resource.allocations_ > 0 &&
+           repeated_resource.allocations_ == repeated_resource.deallocations_;
 }
 
 struct queue_destructor_state final {
@@ -620,289 +907,6 @@ bool test_event_loop_post_protects_reentrant_heap_copy() {
     recovery.stop();
     recovery.join();
     return payload_valid.load(std::memory_order_acquire) &&
-           resource.allocations_ == resource.deallocations_;
-}
-
-bool test_worker_submission_view_lifecycle_and_rejection() {
-    struct throw_on_copy final {
-        explicit throw_on_copy(std::pmr::memory_resource* resource)
-            : bytes_(resource) {
-            bytes_.resize(4096, 'c');
-        }
-        throw_on_copy(const throw_on_copy& other)
-            : bytes_(other.bytes_, other.bytes_.get_allocator().resource()) {
-            throw std::runtime_error("copy failed");
-        }
-        throw_on_copy(throw_on_copy&&) noexcept = default;
-        void operator()() const {}
-        std::pmr::vector<char> bytes_;
-    };
-    struct throw_on_move final {
-        explicit throw_on_move(std::pmr::memory_resource* resource)
-            : bytes_(resource) {
-            bytes_.resize(4096, 'm');
-        }
-        throw_on_move(throw_on_move&& other)
-            : bytes_(std::move(other.bytes_)) {
-            throw std::runtime_error("move failed");
-        }
-        void operator()() const {}
-        std::pmr::vector<char> bytes_;
-    };
-
-    asio::io_context exception_context;
-    ruvia::worker_runtime_context exception_runtime(exception_context, 1);
-    const auto exception_view = exception_runtime.submission();
-    counting_resource exception_resource;
-    {
-        throw_on_copy copy_input(&exception_resource);
-        throw_on_move move_input(&exception_resource);
-        bool copy_threw = false;
-        bool move_threw = false;
-        try {
-            static_cast<void>(exception_view.post(copy_input));
-        } catch (const std::runtime_error&) {
-            copy_threw = true;
-        }
-        try {
-            static_cast<void>(exception_view.post(std::move(move_input)));
-        } catch (const std::runtime_error&) {
-            move_threw = true;
-        }
-        const auto after_exception = exception_view.post([] {});
-        if (!copy_threw || !move_threw || !exception_view.valid() || !exception_view.accepting() ||
-            after_exception != ruvia::post_status::accepted) {
-            return false;
-        }
-    }
-    if (exception_resource.allocations_ != exception_resource.deallocations_) {
-        return false;
-    }
-
-    struct view_reentry_state final {
-        std::optional<ruvia::worker_submission_view>* source_;
-        ruvia::worker_runtime_context* runtime_;
-        bool detach_;
-        bool retired_{false};
-        bool payload_valid_{false};
-        counting_resource* resource_;
-
-        void retire() noexcept {
-            if (retired_) {
-                return;
-            }
-            retired_ = true;
-            source_->reset();
-            if (detach_) {
-                runtime_->detach();
-            } else {
-                runtime_->close();
-            }
-        }
-    };
-    struct reentrant_view_callable final {
-        explicit reentrant_view_callable(view_reentry_state& state_value)
-            : state_(&state_value),
-              payload_(state_value.resource_) {
-            payload_.resize(4096, 'v');
-        }
-        reentrant_view_callable(const reentrant_view_callable& other)
-            : state_(other.state_),
-              payload_(other.payload_, other.payload_.get_allocator().resource()) {
-            state_->retire();
-        }
-        reentrant_view_callable(reentrant_view_callable&& other) noexcept
-            : state_(other.state_),
-              payload_(std::move(other.payload_)) {
-            state_->retire();
-        }
-        void operator()() {
-            state_->payload_valid_ = payload_.size() == 4096 && payload_.front() == 'v' &&
-                                     payload_.back() == 'v';
-        }
-        view_reentry_state* state_;
-        std::pmr::vector<char> payload_;
-    };
-
-    const auto exercise_reentry = [](bool detach, bool use_copy) {
-        counting_resource resource;
-        asio::io_context context;
-        ruvia::worker_runtime_context runtime(context, 1);
-        std::optional<ruvia::worker_submission_view> source;
-        source.emplace(runtime.submission());
-        view_reentry_state state_value{.source_ = &source, .runtime_ = &runtime, .detach_ = detach, .resource_ = &resource};
-        std::optional<reentrant_view_callable> input;
-        input.emplace(state_value);
-        auto rejected = use_copy ? source->post(*input) : source->post(std::move(*input));
-        if (!state_value.retired_ || source || !runtime.submission().valid() ||
-            runtime.submission().accepting() || rejected != ruvia::post_status::worker_stopping ||
-            rejected.rejected() == nullptr) {
-            return false;
-        }
-        auto task_value = std::move(rejected).take_rejected();
-        ruvia::event_loop_pool recovery({.loop_count_ = 1, .queue_capacity_ = 1});
-        if (recovery.loop(0).post(std::move(task_value)) != ruvia::post_status::accepted) {
-            return false;
-        }
-        recovery.start();
-        recovery.join();
-        input.reset();
-        return state_value.payload_valid_ && resource.allocations_ == resource.deallocations_;
-    };
-    if (!exercise_reentry(false, true) || !exercise_reentry(true, false)) {
-        return false;
-    }
-
-    struct reserved_move_state final {
-        ruvia::worker_runtime_context* runtime_;
-        counting_resource* resource_;
-        bool detach_;
-        int moves_{0};
-        bool reservation_observed_{false};
-        bool ran_{false};
-    };
-    struct inline_reserved_move_callable final {
-        explicit inline_reserved_move_callable(reserved_move_state& state_value)
-            : state_(&state_value),
-              payload_(static_cast<char*>(state_value.resource_->allocate(16, alignof(char)))) {
-            std::fill_n(payload_, 16, 'r');
-        }
-        inline_reserved_move_callable(inline_reserved_move_callable&& other) noexcept
-            : state_(other.state_),
-              payload_(std::exchange(other.payload_, nullptr)) {
-            // This move transfers the callable into its already reserved node;
-            // detach may cause additional cleanup moves after this point.
-            if (++state_->moves_ == 3) {
-                state_->reservation_observed_ =
-                    state_->runtime_->submission().post([] {}) == ruvia::post_status::queue_full;
-                if (state_->detach_) {
-                    state_->runtime_->detach();
-                } else {
-                    state_->runtime_->close();
-                }
-            }
-        }
-        ~inline_reserved_move_callable() {
-            if (payload_ != nullptr) {
-                state_->resource_->deallocate(payload_, 16, alignof(char));
-            }
-        }
-        void operator()() {
-            state_->ran_ = payload_ != nullptr && payload_[0] == 'r' && payload_[15] == 'r';
-        }
-
-        reserved_move_state* state_;
-        char* payload_;
-    };
-
-    const auto exercise_reserved_move = [](bool detach) {
-        counting_resource resource;
-        asio::io_context context;
-        ruvia::worker_runtime_context runtime(context, 1);
-        reserved_move_state state_value{.runtime_ = &runtime, .resource_ = &resource, .detach_ = detach};
-        inline_reserved_move_callable input(state_value);
-        const auto submitted = runtime.submission().post(std::move(input));
-        if (submitted != ruvia::post_status::accepted || !state_value.reservation_observed_ ||
-            resource.allocations_ != 1) {
-            return false;
-        }
-        if (detach) {
-            if (state_value.ran_ || resource.deallocations_ != 1) {
-                return false;
-            }
-        } else {
-            context.run();
-            if (!state_value.ran_ || resource.deallocations_ != 1) {
-                return false;
-            }
-        }
-        return resource.allocations_ == resource.deallocations_;
-    };
-    if (!exercise_reserved_move(false) || !exercise_reserved_move(true)) {
-        return false;
-    }
-
-    constexpr std::size_t repeated_posts = 64;
-    counting_resource resource;
-    asio::io_context context;
-    ruvia::worker_runtime_context runtime(context, repeated_posts + 2);
-    const auto view = runtime.submission();
-    bool accepted_payload_valid = false;
-    if (!view.valid() || !view.accepting() || view.post([] {}) != ruvia::post_status::accepted) {
-        return false;
-    }
-    auto accepted = view.post([payload = post_payload(&resource), &accepted_payload_valid]() mutable {
-        accepted_payload_valid = payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' &&
-                                 payload.bytes_.back() == 'x';
-    });
-    if (accepted != ruvia::post_status::accepted) {
-        return false;
-    }
-    for (std::size_t index = 0; index < repeated_posts; ++index) {
-        auto posted = view.post([payload = post_payload(&resource)]() mutable {
-            if (payload.bytes_.size() != 4096 || payload.bytes_.front() != 'x') {
-                std::terminate();
-            }
-        });
-        if (!posted.accepted()) {
-            return false;
-        }
-    }
-    context.run();
-    if (!accepted_payload_valid || resource.allocations_ != resource.deallocations_) {
-        return false;
-    }
-
-    asio::io_context full_context;
-    ruvia::worker_runtime_context full_runtime(full_context, 1);
-    const auto full_view = full_runtime.submission();
-    counting_resource rejected_resource;
-    bool retained_payload_valid = false;
-    if (full_view.post([] {}) != ruvia::post_status::accepted) {
-        return false;
-    }
-    auto full = full_view.post([payload = post_payload(&rejected_resource), &retained_payload_valid]() mutable {
-        retained_payload_valid = payload.bytes_.size() == 4096 && payload.bytes_.front() == 'x' &&
-                                 payload.bytes_.back() == 'x';
-    });
-    if (full != ruvia::post_status::queue_full || full.rejected() == nullptr) {
-        return false;
-    }
-    auto retained = std::move(full).take_rejected();
-    for (int attempt_value = 0; attempt_value < 3; ++attempt_value) {
-        auto again = full_view.post(std::move(retained));
-        if (again != ruvia::post_status::queue_full || again.rejected() == nullptr ||
-            rejected_resource.allocations_ == rejected_resource.deallocations_) {
-            return false;
-        }
-        retained = std::move(again).take_rejected();
-    }
-    full_context.run();
-    full_context.restart();
-    const auto retried = full_view.post(std::move(retained));
-    if (retried != ruvia::post_status::accepted) {
-        return false;
-    }
-    full_context.run();
-    if (!retained_payload_valid || rejected_resource.allocations_ != rejected_resource.deallocations_) {
-        return false;
-    }
-
-    asio::io_context closed_context;
-    ruvia::worker_runtime_context closed_runtime(closed_context, 1);
-    auto closed_view = closed_runtime.submission();
-    closed_runtime.close();
-    if (!closed_view.valid() || closed_view.accepting() ||
-        closed_view.post([] {}) != ruvia::post_status::worker_stopping) {
-        return false;
-    }
-    closed_runtime.detach();
-    if (!closed_view.valid() || closed_view.accepting()) {
-        return false;
-    }
-    ruvia::worker_submission_view invalid;
-    return !invalid.valid() && !invalid.accepting() &&
-           invalid.post([] {}) == ruvia::post_status::worker_stopping && resource.allocations_ > 0 &&
            resource.allocations_ == resource.deallocations_;
 }
 
@@ -2189,8 +2193,6 @@ int main() {
                    run("event_loop_post_protects_reentrant_heap_copy",
                        test_event_loop_post_protects_reentrant_heap_copy) &&
                    run("worker_handle_callable_lifetime", test_worker_handle_callable_lifetime) &&
-                   run("worker_submission_view_lifecycle_and_rejection",
-                       test_worker_submission_view_lifecycle_and_rejection) &&
                    run("post_outcome_invariants_and_empty_callbacks",
                        test_post_outcome_invariants_and_empty_callbacks) &&
                    run("worker_runtime_context_owns_stable_detached_endpoint",

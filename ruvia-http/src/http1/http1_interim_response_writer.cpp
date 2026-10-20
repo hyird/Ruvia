@@ -65,26 +65,36 @@ struct http1_interim_header_facts final {
 
 [[nodiscard]] bool analyze_http1_fields(const http_interim_response_head& response,
     http1_interim_header_facts& facts, http1_interim_response_prepare_error& error) noexcept {
+    detail::http_interim_response_sender_validator validator;
     for (const auto& header : response.headers()) {
         const auto name = header.name();
-        if (http_ascii_equals_ignore_case(name, "Connection")) {
-            if (facts.connection_options_.parse_field(header.value(), detail::http_field_list_role::sender) !=
+        const auto value = header.value();
+        std::uint32_t known_bit = 0;
+        const auto status = validator.validate(name, value, &known_bit);
+        if (status != detail::http_interim_response_header_validation_status::ok) {
+            error = common_validation_error(status);
+            return false;
+        }
+        if (known_bit == detail::response_header_connection) {
+            if (facts.connection_options_.parse_field(value, detail::http_field_list_role::sender) !=
                 detail::http_field_list_parse_status::ok) {
                 error = http1_interim_response_prepare_error::invalid_connection;
                 return false;
             }
-        } else if (http_ascii_equals_ignore_case(name, "Upgrade")) {
-            if (facts.upgrade_protocols_.parse_field(header.value(), detail::http_field_list_role::sender) !=
-                detail::http_field_list_parse_status::ok) {
-                error = http1_interim_response_prepare_error::invalid_upgrade;
+        } else if (known_bit == 0) {
+            if (http_ascii_equals_ignore_case(name, "Upgrade")) {
+                if (facts.upgrade_protocols_.parse_field(value, detail::http_field_list_role::sender) !=
+                    detail::http_field_list_parse_status::ok) {
+                    error = http1_interim_response_prepare_error::invalid_upgrade;
+                    return false;
+                }
+            } else if (http_ascii_equals_ignore_case(name, "TE")) {
+                error = http1_interim_response_prepare_error::te_field_forbidden;
                 return false;
             }
-        } else if (http_ascii_equals_ignore_case(name, "TE")) {
-            error = http1_interim_response_prepare_error::te_field_forbidden;
-            return false;
         }
 
-        if (!facts.section_.add_field(name, header.value())) {
+        if (!facts.section_.add_field(name, value)) {
             error = http1_interim_response_prepare_error::header_too_large;
             return false;
         }
@@ -147,11 +157,6 @@ http1_interim_response_prepare_result http1_interim_response_writer::prepare(
     if (response.headers().size() > max_http_header_fields) {
         return detail::http1_interim_response_prepare_result_access::failure(
             http1_interim_response_prepare_error::too_many_headers);
-    }
-    const auto common_validation = detail::validate_http_interim_response_headers(response);
-    if (common_validation != detail::http_interim_response_header_validation_status::ok) {
-        return detail::http1_interim_response_prepare_result_access::failure(
-            common_validation_error(common_validation));
     }
 
     const auto reason_phrase = http_reason_phrase(response.status());

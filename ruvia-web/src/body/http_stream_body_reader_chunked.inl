@@ -1,5 +1,16 @@
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string_view>
+
+#include "ruvia/core/bytes.h"
+#include "ruvia/core/task.h"
+
+#include "body/http_stream_body_reader.h"
 #include "body/http_stream_body_reader_errors.h"
 
 namespace ruvia::detail {

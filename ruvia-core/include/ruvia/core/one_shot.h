@@ -39,57 +39,8 @@ struct one_shot_options final {
 };
 
 template <typename t_type>
-class one_shot_complete_result final {
-public:
-    one_shot_complete_result(const one_shot_complete_result&) = delete;
-    one_shot_complete_result& operator=(const one_shot_complete_result&) = delete;
-    one_shot_complete_result(one_shot_complete_result&&) noexcept(
-        std::is_nothrow_move_constructible_v<t_type>) = default;
-    one_shot_complete_result& operator=(one_shot_complete_result&&) noexcept(
-        std::is_nothrow_move_constructible_v<t_type> && std::is_nothrow_move_assignable_v<t_type>) = default;
-
-    [[nodiscard]] one_shot_complete_status status() const noexcept {
-        return status_;
-    }
-
-    [[nodiscard]] bool accepted() const noexcept {
-        return status_ == one_shot_complete_status::completed;
-    }
-
-    [[nodiscard]] t_type* rejected() & noexcept {
-        return rejected_ ? &*rejected_ : nullptr;
-    }
-
-    [[nodiscard]] const t_type* rejected() const& noexcept {
-        return rejected_ ? &*rejected_ : nullptr;
-    }
-
-    t_type* rejected() && = delete;
-    const t_type* rejected() const&& = delete;
-
-private:
-    friend class one_shot_completion<t_type>;
-
-    explicit one_shot_complete_result(one_shot_complete_status status) noexcept
-        : status_(status) {}
-
-    one_shot_complete_result(one_shot_complete_status status, t_type&& rejected) noexcept(
-        std::is_nothrow_move_constructible_v<t_type>)
-        : status_(status),
-          rejected_(std::move(rejected)) {}
-
-    [[nodiscard]] static one_shot_complete_result accept() noexcept {
-        return one_shot_complete_result(one_shot_complete_status::completed);
-    }
-
-    [[nodiscard]] static one_shot_complete_result reject(
-        one_shot_complete_status status, t_type&& value) noexcept(std::is_nothrow_move_constructible_v<t_type>) {
-        return one_shot_complete_result(status, std::move(value));
-    }
-
-    one_shot_complete_status status_;
-    std::optional<t_type> rejected_;
-};
+using one_shot_complete_result =
+    detail::worker_delivery_result<t_type, one_shot_complete_status, one_shot_complete_status::completed>;
 
 namespace detail {
 

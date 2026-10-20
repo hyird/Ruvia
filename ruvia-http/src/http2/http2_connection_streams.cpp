@@ -92,7 +92,6 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         discard_deferred_stream_state(stream_id);
         // A normally drained send still owes its owner a completion notification.
         // Only an abort below cancels notifications that the owner has not taken.
-        ready_queue_.remove(stream_id);
         closed_streams_.remember(stream_id, http2_stream_close_source::local);
         ++completed_responses_;
         release_local_request_stream_if_closed(*stream);
@@ -147,7 +146,6 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
     if (stream != nullptr && !stream->is_aborted()) {
         detach_active_header_block(*stream);
     }
-    ready_queue_.remove(stream_id);
     std::erase(drained_data_streams_, stream_id);
     discard_deferred_stream_state(stream_id);
     if (stream == nullptr || stream->is_aborted()) {

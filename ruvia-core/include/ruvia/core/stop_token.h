@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -59,9 +58,8 @@ private:
 };
 
 // The state one stop_source shares with its tokens and registrations. It is
-// allocated from a caller-chosen memory resource instead of the global heap;
-// because its last owner may retire on any thread, that resource must be
-// thread-safe and outlive every owner.
+// allocated from std::pmr::new_delete_resource(), which is thread-safe and
+// never destroyed, so its last owner may retire on any thread at any time.
 //
 // Callbacks form an intrusive list under a mutex. request_stop() runs each one
 // with the mutex released; unlinking a callback that is running on another
@@ -71,8 +69,7 @@ public:
     stop_state(const stop_state&) = delete;
     stop_state& operator=(const stop_state&) = delete;
 
-    [[nodiscard]] static stop_state_ref create(std::pmr::memory_resource& resource);
-
+    [[nodiscard]] static stop_state_ref create();
     void retain() noexcept {
         references_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -100,8 +97,7 @@ private:
     static constexpr std::uint8_t source_flag = 1;
     static constexpr std::uint8_t requested_flag = 2;
 
-    explicit stop_state(std::pmr::memory_resource& resource) noexcept
-        : resource_(&resource) {}
+    stop_state() noexcept = default;
     ~stop_state() = default;
 
     void destroy() noexcept;
@@ -111,7 +107,6 @@ private:
 
     std::atomic<std::uint8_t> flags_{source_flag};
     std::atomic<std::size_t> references_{1};
-    std::pmr::memory_resource* resource_;
     std::mutex mutex_;
     stop_callback_node* head_{nullptr};
     // The callback request_stop() is running with the mutex released, and the

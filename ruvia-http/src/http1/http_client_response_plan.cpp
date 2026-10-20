@@ -1,3 +1,4 @@
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -270,12 +271,15 @@ http1_client_response_planning_result_type plan_http1_client_response(
     }
 
     if (content_length.has_value()) {
+        if (*content_length > (std::numeric_limits<std::size_t>::max)()) {
+            return http1_client_response_parse_error::invalid_content_length;
+        }
         if (reset_content_requires_empty) {
             return http1_client_response_plan_access::zero_content_known_length(
                 persistence, persistent_content_signal);
         }
         return http1_client_response_plan_access::known_length(
-            *content_length, persistence, persistent_content_signal);
+            static_cast<std::size_t>(*content_length), persistence, persistent_content_signal);
     }
 
     // RFC 9112 section 6.3: a body-allowed response with no declared

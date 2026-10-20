@@ -217,76 +217,72 @@ namespace {
 
 }  // namespace
 
+bool detail::jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_value, std::string_view key,
+    std::string_view value, std::pmr::memory_resource* resolved) {
+    if (key == "iss") {
+        if (auto issuer = detail::jwt_decode_json_string_value(value, resolved)) {
+            payload_value.issuer_ = std::move(*issuer);
+            return true;
+        }
+        return false;
+    }
+    if (key == "sub") {
+        if (auto subject = detail::jwt_decode_json_string_value(value, resolved)) {
+            payload_value.subject_ = std::move(*subject);
+            return true;
+        }
+        return false;
+    }
+    if (key == "aud") {
+        return jwt_decode_audiences(payload_value.audiences_, value, resolved);
+    }
+    if (key == "jti") {
+        if (auto id = detail::jwt_decode_json_string_value(value, resolved)) {
+            payload_value.id_ = std::move(*id);
+            return true;
+        }
+        return false;
+    }
+    if (key == "exp") {
+        if (const auto exp = detail::jwt_parse_json_numeric_date(value)) {
+            payload_value.expires_at_ = *exp;
+            return true;
+        }
+        return false;
+    }
+    if (key == "nbf") {
+        if (const auto nbf = detail::jwt_parse_json_numeric_date(value)) {
+            payload_value.not_before_ = *nbf;
+            return true;
+        }
+        return false;
+    }
+    if (key == "iat") {
+        if (const auto iat = detail::jwt_parse_json_numeric_date(value)) {
+            payload_value.issued_at_ = *iat;
+            return true;
+        }
+        return false;
+    }
+    // Custom claims are string-valued like the registered name claims;
+    // any other JSON value rejects the token instead of vanishing.
+    if (auto claim_value = detail::jwt_decode_json_string_value(value, resolved)) {
+        std::pmr::string claim_name(resolved);
+        claim_name.assign(key.data(), key.size());
+        payload_value.claims_.push_back(detail::jwt_payload_access::claim(
+            std::move(claim_name), std::move(*claim_value)));
+        return true;
+    }
+    return false;
+}
+
 jwt_payload detail::jwt_payload_access::decode_payload_json(
     std::string_view json, std::pmr::memory_resource* resolved) {
     jwt_payload payload_value({.resource_ = resolved});
-
     bool claim_invalid = false;
-
     const bool valid = detail::visit_unique_jwt_json_object_fields(
         json, resolved, [&](std::string_view key, std::string_view value) {
-            if (key == "iss") {
-                if (auto issuer = detail::jwt_decode_json_string_value(value, resolved)) {
-                    payload_value.issuer_ = std::move(*issuer);
-                } else {
-                    claim_invalid = true;
-                }
-                return;
-            }
-            if (key == "sub") {
-                if (auto subject = detail::jwt_decode_json_string_value(value, resolved)) {
-                    payload_value.subject_ = std::move(*subject);
-                } else {
-                    claim_invalid = true;
-                }
-                return;
-            }
-            if (key == "aud") {
-                if (!jwt_decode_audiences(payload_value.audiences_, value, resolved)) {
-                    claim_invalid = true;
-                }
-                return;
-            }
-            if (key == "jti") {
-                if (auto id = detail::jwt_decode_json_string_value(value, resolved)) {
-                    payload_value.id_ = std::move(*id);
-                } else {
-                    claim_invalid = true;
-                }
-                return;
-            }
-            if (key == "exp") {
-                if (const auto exp = detail::jwt_parse_json_numeric_date(value)) {
-                    payload_value.expires_at_ = *exp;
-                } else {
-                    claim_invalid = true;
-                }
-                return;
-            }
-            if (key == "nbf") {
-                if (const auto nbf = detail::jwt_parse_json_numeric_date(value)) {
-                    payload_value.not_before_ = *nbf;
-                } else {
-                    claim_invalid = true;
-                }
-                return;
-            }
-            if (key == "iat") {
-                if (const auto iat = detail::jwt_parse_json_numeric_date(value)) {
-                    payload_value.issued_at_ = *iat;
-                } else {
-                    claim_invalid = true;
-                }
-                return;
-            }
-            // Custom claims are string-valued like the registered name claims;
-            // any other JSON value rejects the token instead of vanishing.
-            if (auto claim_value = detail::jwt_decode_json_string_value(value, resolved)) {
-                std::pmr::string claim_name(resolved);
-                claim_name.assign(key.data(), key.size());
-                payload_value.claims_.push_back(detail::jwt_payload_access::claim(
-                    std::move(claim_name), std::move(*claim_value)));
-            } else {
+            if (!decode_jwt_payload_claim(payload_value, key, value, resolved)) {
                 claim_invalid = true;
             }
         });

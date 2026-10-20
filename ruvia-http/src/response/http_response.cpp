@@ -10,7 +10,6 @@
 #include "ruvia/http/detail/coding/http_response_content_semantics.h"
 #include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
-#include "ruvia/http/detail/server/http_response_head_policy.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_number_format.h"
@@ -21,6 +20,7 @@
 #include "response/http_response_descriptor_stage.h"
 #include "response/http_response_header_access.h"
 #include "response/response_header_utils.h"
+#include "server/http_response_head_policy.h"
 
 namespace ruvia {
 

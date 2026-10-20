@@ -193,11 +193,17 @@ private:
         const route_table& table, context& context, std::exception_ptr exception);
     [[nodiscard]] static task<void> contain_stream_failure(
         const route_table& table, context& context, std::exception_ptr exception);
-    [[nodiscard]] task<http_response> handle_error(context& context, http_error_info error) const;
+    [[nodiscard]] task<http_response> handle_error(
+        context& context, http_error_info error, http_error_handler_ref_type error_handler) const;
     [[nodiscard]] task<http_response> handle_not_found(
         const http_request& request, request_memory& memory, context_services services) const;
     [[nodiscard]] task<http_response> handle_exception(
         context& context, std::exception_ptr exception) const;
+    [[nodiscard]] task<http_response> handle_exception(context& context, std::exception_ptr exception,
+        http_error_handler_ref_type error_handler) const;
+    [[nodiscard]] task<http_response> handle_exception(const http_request& request, request_memory& memory,
+        std::exception_ptr exception, context_services services,
+        http_error_handler_ref_type error_handler) const;
 
     [[nodiscard]] http_error_handler_ref_type error_handler_for(std::string_view path) const noexcept;
 

@@ -1,9 +1,12 @@
 #pragma once
 
+#include <array>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 #include "ruvia/web/detail/redis/redis_entity_codec.h"
@@ -14,39 +17,40 @@
 namespace ruvia::detail {
 
 template <typename entity_type>
-entity_type decode_redis_entity(const redis_value& reply, std::string_view key,
+entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::string_view key,
     std::pmr::memory_resource* resource, std::string_view prefix) {
-    const auto fields_value = redis_orm_array(reply);
     if (fields_value.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, "invalid entity hash reply");
     }
+    std::array<std::optional<std::string_view>, std::tuple_size_v<typename entity_type::columns_type>> values{};
     bool marker = false;
     for (std::size_t i = 0; i < fields_value.size(); i += 2) {
         const auto name = redis_orm_string(fields_value[i]);
-        (void)redis_orm_string(fields_value[i + 1]);
+        const auto value = redis_orm_string(fields_value[i + 1]);
         if (name == "__ruvia_entity") {
-            if (marker || redis_orm_string(fields_value[i + 1]) != "1") {
+            if (marker || value != "1") {
                 throw redis_error(redis_error::code_type::protocol_error, "invalid entity storage marker");
             }
             marker = true;
+            continue;
         }
+        for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t index> {
+            if (name == field_type::name.view()) {
+                if (values[index].has_value()) {
+                    throw redis_error(redis_error::code_type::protocol_error, "duplicate entity field");
+                }
+                values[index] = value;
+            }
+        });
     }
     if (!marker) {
         throw redis_error(redis_error::code_type::protocol_error, "entity storage marker missing");
     }
     entity_type entity(resource);
-    for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t> {
-        std::optional<std::string_view> value;
-        for (std::size_t i = 0; i < fields_value.size(); i += 2) {
-            if (redis_orm_string(fields_value[i]) == field_type::name.view()) {
-                if (value) {
-                    throw redis_error(redis_error::code_type::protocol_error, "duplicate entity field");
-                }
-                value = redis_orm_string(fields_value[i + 1]);
-            }
-        }
-        if (value) {
-            entity.template set<field_type::name>(decode_redis_scalar<typename field_type::value_type>(*value, resource));
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t index> {
+        if (values[index].has_value()) {
+            entity.template set<field_type::name>(
+                decode_redis_scalar<typename field_type::value_type>(*values[index], resource));
         } else if constexpr (field_type::options.nullable_) {
             entity.template set_null<field_type::name>();
         } else {
@@ -65,23 +69,29 @@ entity_type decode_redis_entity(const redis_value& reply, std::string_view key,
 }
 
 template <typename entity_type>
+entity_type decode_redis_entity(const redis_value& reply, std::string_view key,
+    std::pmr::memory_resource* resource, std::string_view prefix) {
+    return decode_redis_entity<entity_type>(redis_orm_array(reply), key, resource, prefix);
+}
+
+template <typename entity_type>
 struct redis_map_one final {
     std::pmr::string key_;
     std::pmr::string prefix_;
     std::optional<entity_type> operator()(redis_value&& reply, std::pmr::memory_resource* resource) const {
-        if (redis_orm_array(reply).empty()) {
+        const auto fields_value = redis_orm_array(reply);
+        if (fields_value.empty()) {
             return std::nullopt;
         }
-        return decode_redis_entity<entity_type>(reply, key_, resource, prefix_);
+        return decode_redis_entity<entity_type>(fields_value, key_, resource, prefix_);
     }
 };
 
 template <typename entity_type>
 struct redis_map_search final {
     std::pmr::string prefix_;
-    std::pair<entity_rows<entity_type>, std::uint64_t> operator()(
-        redis_value&& reply, std::pmr::memory_resource* resource) const {
-        const auto values = redis_orm_array(reply);
+    std::pair<entity_rows<entity_type>, std::uint64_t> decode(
+        std::span<const redis_value> values, std::pmr::memory_resource* resource) const {
         if (values.empty() || values.size() % 2 != 1) {
             throw redis_error(redis_error::code_type::protocol_error, "invalid entity search reply");
         }
@@ -100,6 +110,10 @@ struct redis_map_search final {
         }
         return {std::move(rows), count};
     }
+    std::pair<entity_rows<entity_type>, std::uint64_t> operator()(
+        redis_value&& reply, std::pmr::memory_resource* resource) const {
+        return decode(redis_orm_array(reply), resource);
+    }
 };
 
 template <typename entity_type>
@@ -110,8 +124,9 @@ struct redis_map_many final {
     std::optional<std::uint64_t> unpaged_skip_;
     entity_rows<entity_type> operator()(
         redis_value&& reply, std::pmr::memory_resource* resource) const {
-        const auto documents = redis_orm_array(reply).size() / 2;
-        auto [rows, count] = search_(std::move(reply), resource);
+        const auto values = redis_orm_array(reply);
+        const auto documents = values.size() / 2;
+        auto [rows, count] = search_.decode(values, resource);
         if (unpaged_skip_.has_value() && count > *unpaged_skip_ && count - *unpaged_skip_ > documents) {
             throw redis_error(redis_error::code_type::command_error,
                 "redis find() matched more entities than one default page; set take_ to page the results");

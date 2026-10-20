@@ -1,12 +1,8 @@
 #include "ruvia/http/http_cache.h"
 
-#include <algorithm>
 #include <limits>
 
 #include "ruvia/http/detail/field/header_token_utils.h"  // http_trim_ows, http_ascii_equals_ignore_case
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
-
-#include "field/http_date.h"
 
 namespace ruvia {
 namespace {
@@ -52,18 +48,6 @@ namespace {
     return result_value;
 }
 
-[[nodiscard]] bool is_valid_cache_directive_argument(std::string_view value) noexcept {
-    if (value.empty()) {
-        return false;
-    }
-    if (value.front() != '"') {
-        return std::ranges::all_of(value, [](char ch) noexcept {
-            return is_http_token_char(static_cast<unsigned char>(ch));
-        });
-    }
-    return http_is_quoted_string(value);
-}
-
 }  // namespace
 
 void cache_control_field_parser::update(std::string_view value) noexcept {
@@ -84,7 +68,7 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
 
         if (!has_argument && http_ascii_equals_ignore_case(name, "no-store")) {
             value_.set(cache_control_directive::no_store);
-        } else if ((!has_argument || is_valid_cache_directive_argument(arg)) &&
+        } else if ((!has_argument || detail::is_http_token_or_quoted_string(arg)) &&
                    http_ascii_equals_ignore_case(name, "no-cache")) {
             value_.set(cache_control_directive::no_cache);
         } else if (!has_argument && http_ascii_equals_ignore_case(name, "no-transform")) {
@@ -93,7 +77,7 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
             value_.set(cache_control_directive::must_revalidate);
         } else if (!has_argument && http_ascii_equals_ignore_case(name, "proxy-revalidate")) {
             value_.set(cache_control_directive::proxy_revalidate);
-        } else if ((!has_argument || is_valid_cache_directive_argument(arg)) &&
+        } else if ((!has_argument || detail::is_http_token_or_quoted_string(arg)) &&
                    http_ascii_equals_ignore_case(name, "private")) {
             value_.set(cache_control_directive::private_value);
         } else if (!has_argument && http_ascii_equals_ignore_case(name, "public")) {
@@ -144,10 +128,6 @@ cache_control parse_cache_control(std::string_view value) noexcept {
     cache_control_field_parser parser;
     parser.update(value);
     return parser.finish();
-}
-
-std::optional<std::time_t> parse_http_date(std::string_view value) noexcept {
-    return detail::http_parse_http_date(http_trim_ows(value));
 }
 
 }  // namespace ruvia

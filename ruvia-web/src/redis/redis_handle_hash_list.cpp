@@ -1,11 +1,11 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/detail/redis/redis_utils.h"
 #include "ruvia/web/redis/redis.h"
 
 #include "redis/redis_handle_command_ops.h"
 #include "redis/redis_handle_helpers.h"
+#include "redis/redis_utils.h"
 
 namespace ruvia {
 

@@ -1,11 +1,14 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 #include <type_traits>
 
 #include "ruvia/core/task.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
 
+#include "http2/http2_data_output_budget.h"
 #include "http2/http2_sans_io_stream_signal.h"
 
 namespace ruvia::detail {
@@ -63,25 +66,28 @@ static_assert(sizeof(http2_send_window_wait_result) <= 2);
 // and queue state are re-checked together after every wake.
 [[nodiscard]] task<http2_send_window_wait_result> await_http2_send_window(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
-    http2_sans_io_stream_signal* signal);
+    http2_sans_io_stream_signal* signal, const bool* aborted = nullptr);
 
-// Existing Web protocol drivers own the sans-I/O connection directly. Keep this
-// HTTP-target-private overload generic over its semantic connection queries so
-// those callers need not expose or alias the internal connection type here.
-template <typename connection_type>
-[[nodiscard]] task<http2_send_window_wait_result> await_http2_send_window(
-    connection_type& connection, std::uint32_t stream_id, http2_sans_io_stream_signal* signal) {
-    for (;;) {
-        const auto status = connection.stream_receive_status(stream_id);
-        if (status == ruvia::http2_stream_receive_status::closed || signal == nullptr ||
-            signal->terminated()) {
-            co_return http2_send_window_wait_result::make_aborted();
-        }
-        if (!connection.has_queued_data(stream_id)) {
-            co_return http2_send_window_wait_result::make_ready();
-        }
-        co_await signal->wait();
-    }
-}
+enum class http2_stream_data_write_status : std::uint8_t {
+    completed,
+    local_aborted,
+    session_terminated,
+    peer_closed,
+    invalid_state,
+    content_length_exceeded,
+    content_length_incomplete,
+};
+
+[[nodiscard]] task<http2_stream_data_write_status> write_http2_stream_data_chunk(
+    ruvia::http2_connection& connection, std::uint32_t stream_id,
+    http2_sans_io_stream_signal* signal, worker_signal& write_signal,
+    http2_data_output_budget& output_budget, std::string_view chunk,
+    http2_end_stream end_stream, const bool* aborted = nullptr);
+
+[[nodiscard]] task<http2_stream_data_write_status> write_http2_stream_data(
+    ruvia::http2_connection& connection, std::uint32_t stream_id,
+    http2_sans_io_stream_signal* signal, worker_signal& write_signal,
+    http2_data_output_budget& output_budget, std::string_view bytes,
+    http2_end_stream end_stream, const bool* aborted = nullptr);
 
 }  // namespace ruvia::detail

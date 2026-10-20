@@ -9,6 +9,7 @@
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/detail/db/db_utils.h"
+#include "ruvia/web/detail/db/db_value_access.h"
 #include "ruvia/web/detail/json/json_byte_scan.h"
 
 namespace ruvia::detail {

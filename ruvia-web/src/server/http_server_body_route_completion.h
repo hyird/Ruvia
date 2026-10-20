@@ -64,6 +64,18 @@ inline void prepare_http_lazy_buffered_body_route(http_lazy_buffered_body_route_
         *d.base_route_services_.interim_output());
 }
 
+template <typename stream_type>
+[[nodiscard]] inline std::exception_ptr try_prepare_http_lazy_buffered_body_route(
+    http_lazy_buffered_body_route_state<stream_type>& state_value, http1_route_dispatch<stream_type> d,
+    protocol_byte_limit body_limit_value, std::string_view body_and_pipeline) {
+    try {
+        prepare_http_lazy_buffered_body_route(state_value, d, body_limit_value, body_and_pipeline);
+        return nullptr;
+    } catch (...) {
+        return std::current_exception();
+    }
+}
+
 // `request_bytes` is the connection's buffered input from the start of this
 // request: its head, then whatever body and pipelined bytes followed it.
 [[nodiscard]] inline std::string_view http_body_and_pipeline(
@@ -110,6 +122,16 @@ template <typename take_pipeline_type>
             }
             return http1_session_request_completion::make_buffered_closing(committed);
         });
+}
+
+template <typename body_owner_type>
+[[nodiscard]] inline http1_session_request_completion complete_successful_http_body_route(
+    connection_scanner::entry_type& scanner_entry, http_response& response,
+    http1_request_connection_plan connection_plan, http1_request_sequence& request_sequence,
+    std::size_t request_bytes, std::pmr::string& pipeline_stash, body_owner_type& body_owner) {
+    return complete_successful_http_body_route(scanner_entry, response, connection_plan, request_sequence,
+        body_owner.consumption(), request_bytes, pipeline_stash,
+        [&body_owner](std::pmr::string& stash) { return body_owner.take_pipeline(stash); });
 }
 
 }  // namespace ruvia::detail

@@ -32,32 +32,37 @@ http_response_preparation http_response_tail::prepare(
     if (!first_pass.offload_) {
         auto policy = coding_policy_;
         buffered_response_recovery recovery;
-        if (recovery.advance(policy, request, response, first_pass.status_).action_ ==
-            buffered_response_recovery_action::ready) {
+        const auto step = recovery.advance(policy, request, response, first_pass.status_);
+        if (step.action_ == buffered_response_recovery_action::ready) {
             return http_response_preparation(prepared_application_response{
                 plan_buffered_http_response_write(request.known_method(), response), false});
         }
+        return http_response_preparation(first_pass, policy, recovery, step);
     }
-    return http_response_preparation(first_pass);
+    return http_response_preparation(first_pass, coding_policy_);
 }
 
 task<prepared_application_response> http_response_tail::finish_prepare(const http_response_preparation& preparation,
     http_response& response, const http_server_options& options, const route_table& routes, request_memory& memory,
     const context_services& services) const {
     const auto& request = *request_;
-    auto policy = coding_policy_;
-    buffered_response_recovery recovery;
-    // Resume after prepare()'s pass over this same response. Recovery is a pure
-    // function of policy, request, response and compression outcome, so a fresh
-    // recovery state re-derives exactly the step that pass stopped at.
+    auto policy = preparation.policy_;
+    auto recovery = preparation.recovery_;
     auto pass = preparation.first_pass_;
+    auto pending_step = preparation.pending_step_;
     for (;;) {
-        auto compression = pass.status_;
-        if (pass.offload_) {
-            compression = co_await compress_response_offloaded(
-                policy.selection()->coding(), response, *options.blocking_pool_, services.worker());
+        buffered_response_recovery_step step;
+        if (pending_step.has_value()) {
+            step = *pending_step;
+            pending_step.reset();
+        } else {
+            auto compression = pass.status_;
+            if (pass.offload_) {
+                compression = co_await compress_response_offloaded(
+                    policy.selection()->coding(), response, *options.blocking_pool_, services.worker());
+            }
+            step = recovery.advance(policy, request, response, compression);
         }
-        const auto step = recovery.advance(policy, request, response, compression);
         if (step.action_ == buffered_response_recovery_action::ready) {
             co_return prepared_application_response{
                 plan_buffered_http_response_write(request.known_method(), response), recovery.recovered()};

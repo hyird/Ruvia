@@ -8,12 +8,16 @@
 #include <memory_resource>
 #include <optional>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait_result.h"
 
 namespace ruvia {
+namespace detail {
+class pool_waiter_queue;
+}  // namespace detail
 
 enum class pool_lease_release_status : std::uint8_t {
     released,
@@ -60,7 +64,7 @@ private:
     friend class pool_lease_acquire;
 
     class impl_type;
-    std::unique_ptr<impl_type> impl_;
+    std::unique_ptr<impl_type, pmr_object_deleter<impl_type>> impl_;
 };
 
 // One acquire: single-use, movable only before it is awaited. The scheduler
@@ -74,20 +78,32 @@ public:
     ~pool_lease_acquire();
 
     [[nodiscard]] bool await_ready();
-    [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation);
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);
     [[nodiscard]] worker_wait_result<std::size_t> await_resume();
 
 private:
     friend class pool_lease_scheduler;
+    friend class detail::pool_waiter_queue;
 
     pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value,
         std::optional<std::chrono::milliseconds> timeout, stop_token stop_token_value) noexcept;
+    void cancel_registrations() noexcept;
+    void complete(worker_wait_result<std::size_t> result_value) noexcept;
+    void complete(worker_wait_status status) noexcept;
+    void resume() noexcept;
+    [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept;
 
     pool_lease_scheduler::impl_type* owner_;
     std::optional<std::chrono::milliseconds> timeout_;
     stop_token stop_token_;
     std::optional<worker_wait_result<std::size_t>> result_;
-    std::optional<detail::task_awaiter<worker_wait_result<std::size_t>>> waiting_;
+    std::uint64_t waiter_id_{0};
+    std::coroutine_handle<> continuation_{};
+    pool_lease_acquire* previous_{nullptr};
+    pool_lease_acquire* next_{nullptr};
+    worker_timer_registration deadline_timer_;
+    stop_registration stop_registration_;
+    bool queued_{false};
     bool awaited_{false};
 };
 

@@ -3840,3 +3840,99 @@ RUVIA_TEST(http2_public_output_batch_copy_failure_and_partial_consumption_preser
     RUVIA_CHECK(observed.entries_[1].stream_id_ == ids[2] && observed.entries_[1].payload_bytes_ == bodies[2].size());
     RUVIA_CHECK(!observed.overflow_);
 }
+
+RUVIA_TEST(http2_public_websocket_handshake_validates_required_subprotocols_and_configures_deflate) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    (void)server.consume_output(server.pending_output().size());
+
+    std::pmr::string wire(ruvia::http2_client_preface, &resource);
+    append_peer_settings(wire);
+
+    std::pmr::string block1(&resource);
+    ruvia::hpack_encoder::encode_header(block1, ":method", "CONNECT");
+    ruvia::hpack_encoder::encode_header(block1, ":protocol", "websocket");
+    ruvia::hpack_encoder::encode_header(block1, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(block1, ":authority", "example.test");
+    ruvia::hpack_encoder::encode_header(block1, ":path", "/ws");
+    ruvia::hpack_encoder::encode_header(block1, "sec-websocket-version", "13");
+    ruvia::hpack_encoder::encode_header(block1, "sec-websocket-protocol", "other, chat.v1");
+    ruvia::hpack_encoder::encode_header(
+        block1, "sec-websocket-extensions", "permessage-deflate; client_no_context_takeover");
+    append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block1);
+
+    std::pmr::string block3(&resource);
+    ruvia::hpack_encoder::encode_header(block3, ":method", "CONNECT");
+    ruvia::hpack_encoder::encode_header(block3, ":protocol", "websocket");
+    ruvia::hpack_encoder::encode_header(block3, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(block3, ":authority", "example.test");
+    ruvia::hpack_encoder::encode_header(block3, ":path", "/ws");
+    ruvia::hpack_encoder::encode_header(block3, "sec-websocket-version", "13");
+    ruvia::hpack_encoder::encode_header(block3, "sec-websocket-extensions", "permessage-deflate");
+    append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 3, block3);
+
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    auto event1 = server.next_event();
+    auto* head1 = event1 ? event1->request_head() : nullptr;
+    RUVIA_CHECK(head1 != nullptr);
+    if (head1 == nullptr) {
+        return;
+    }
+
+    constexpr std::array<std::string_view, 1> unmatched{"chat.v2"};
+    const auto rejected = ruvia::validate_http2_websocket_handshake(server, 1, head1->request(),
+        {.supported_subprotocols_ = unmatched, .require_subprotocol_ = true});
+    RUVIA_CHECK(rejected.accepted() == nullptr);
+    RUVIA_CHECK(rejected.failure() != nullptr);
+    if (const auto* failure = rejected.failure()) {
+        RUVIA_CHECK_EQ(failure->protocol_error().status(), ruvia::http_status::bad_request);
+    }
+
+    const auto optional_subprotocol = ruvia::validate_http2_websocket_handshake(server, 1, head1->request(),
+        {.supported_subprotocols_ = unmatched, .require_subprotocol_ = false});
+    RUVIA_CHECK(optional_subprotocol.accepted() != nullptr);
+
+    constexpr std::array<std::string_view, 2> supported{"chat.v2", "chat.v1"};
+    const auto accepted1 = ruvia::validate_http2_websocket_handshake(server, 1, head1->request(),
+        {.supported_subprotocols_ = supported, .require_subprotocol_ = true});
+    RUVIA_CHECK(accepted1.accepted() != nullptr);
+
+    const auto submitted1 = server.submit_websocket_handshake(1, head1->request(), accepted1,
+        {
+            .supported_subprotocols_ = supported,
+            .deflate_ = {.enabled_ = true, .context_takeover_ = true},
+        });
+    RUVIA_CHECK(submitted1.submitted() != nullptr);
+    if (const auto* negotiation = submitted1.submitted()) {
+        RUVIA_CHECK_EQ(negotiation->subprotocol(), std::string_view("chat.v1"));
+        RUVIA_CHECK(negotiation->compression().enabled_);
+        RUVIA_CHECK(!negotiation->compression().server_no_context_takeover_);
+        RUVIA_CHECK(negotiation->compression().client_no_context_takeover_);
+    }
+    RUVIA_CHECK(server.release(std::move(*head1)) == ruvia::http2_server_request_release_status::released);
+
+    auto event3 = server.next_event();
+    auto* head3 = event3 ? event3->request_head() : nullptr;
+    RUVIA_CHECK(head3 != nullptr);
+    if (head3 == nullptr) {
+        return;
+    }
+
+    const auto rejected3 = ruvia::validate_http2_websocket_handshake(server, 3, head3->request(),
+        {.supported_subprotocols_ = supported, .require_subprotocol_ = true});
+    RUVIA_CHECK(rejected3.accepted() == nullptr);
+    RUVIA_CHECK(rejected3.failure() != nullptr);
+
+    const auto accepted3 = ruvia::validate_http2_websocket_handshake(server, 3, head3->request());
+    RUVIA_CHECK(accepted3.accepted() != nullptr);
+    const auto submitted3 = server.submit_websocket_handshake(3, head3->request(), accepted3,
+        {
+            .deflate_ = {.enabled_ = false},
+        });
+    RUVIA_CHECK(submitted3.submitted() != nullptr);
+    if (const auto* negotiation = submitted3.submitted()) {
+        RUVIA_CHECK(negotiation->subprotocol().empty());
+        RUVIA_CHECK(!negotiation->compression().enabled_);
+    }
+    RUVIA_CHECK(server.release(std::move(*head3)) == ruvia::http2_server_request_release_status::released);
+}

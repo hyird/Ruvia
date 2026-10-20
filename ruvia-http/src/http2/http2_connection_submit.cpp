@@ -56,23 +56,9 @@ void http2_connection::append_response_header_frames(
                                            : std::string_view{};
 
         const std::size_t max_frame = peer_settings_.max_frame_size();
-        std::size_t encoded_bytes = 0;
-        std::size_t encoded_segments = 0;
-        std::size_t planned_offset = 0;
-        bool planned_first = true;
-        while (planned_offset < header_block.size() || (planned_first && !table_size_update.empty())) {
-            const auto prefix_size = planned_first ? table_size_update.size() : std::size_t{0};
-            const auto chunk =
-                std::min<std::size_t>(header_block.size() - planned_offset, max_frame - prefix_size);
-            const auto frame_bytes = http2_frame_header_bytes + prefix_size + chunk;
-            if (frame_bytes > std::numeric_limits<std::size_t>::max() - encoded_bytes) {
-                throw std::length_error("HTTP/2 header output size overflow");
-            }
-            encoded_bytes += frame_bytes;
-            ++encoded_segments;
-            planned_offset += chunk;
-            planned_first = false;
-        }
+        const auto encoded_bytes =
+            http2_header_frame_encoded_bytes(header_block.size(), max_frame, table_size_update.size());
+        const auto encoded_segments = http2_header_frame_count(encoded_bytes, max_frame);
         if (additional_output_bytes > std::numeric_limits<std::size_t>::max() - encoded_bytes ||
             additional_output_segments > std::numeric_limits<std::size_t>::max() - encoded_segments) {
             throw std::length_error("HTTP/2 response output size overflow");
@@ -514,7 +500,7 @@ http2_submit_status http2_connection::submit_connect_response_head(
 
 http2_websocket_handshake_submit_result http2_connection::submit_websocket_handshake(
     std::uint32_t stream_id, const websocket_handshake_validation_result& validation,
-    const websocket_server_negotiation& negotiation) {
+    websocket_server_negotiation&& negotiation) {
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
         return http2_websocket_handshake_submit_result(
@@ -526,10 +512,10 @@ http2_websocket_handshake_submit_result http2_connection::submit_websocket_hands
         return http2_websocket_handshake_submit_result(
             http2_websocket_handshake_submit_failure(http2_websocket_handshake_submit_error::invalid_state));
     }
-    http2_websocket_negotiation submitted(
-        std::pmr::string(negotiation.subprotocol(), resource_), negotiation.compression());
     http2_encode_websocket_handshake_headers(stream->local_header_block(), negotiation);
     commit_connect_response_head(*stream, false);
+    const auto compression = negotiation.compression();
+    http2_websocket_negotiation submitted(std::move(negotiation).take_subprotocol(), compression);
     return http2_websocket_handshake_submit_result(std::move(submitted));
 }
 

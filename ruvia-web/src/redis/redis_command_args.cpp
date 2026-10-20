@@ -2,10 +2,10 @@
 #include <stdexcept>
 
 #include "ruvia/web/detail/redis/redis_owned_command.h"
-#include "ruvia/web/detail/redis/redis_utils.h"
 
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_types_access.h"
+#include "redis/redis_utils.h"
 
 namespace ruvia::detail {
 

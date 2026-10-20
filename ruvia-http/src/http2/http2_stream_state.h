@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <string_view>
@@ -146,8 +147,11 @@ public:
     }
     [[nodiscard]] const std::pmr::string& local_header_block() const&& = delete;
 
-    [[nodiscard]] bool declare_remote_content_length(std::size_t value) noexcept {
-        return remote_content_.declare_known_length(value);
+    [[nodiscard]] bool declare_remote_content_length(std::uint64_t value) noexcept {
+        if (value > (std::numeric_limits<std::size_t>::max)()) {
+            return false;
+        }
+        return remote_content_.declare_known_length(static_cast<std::size_t>(value));
     }
 
     [[nodiscard]] bool select_remote_content_metadata_only() noexcept {

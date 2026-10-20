@@ -71,12 +71,7 @@ constexpr std::size_t response_read_chunk_bytes = 16384;
     if (head.plan().connect_tunnel() == nullptr && head.plan().protocol_upgrade() == nullptr) {
         return false;
     }
-    std::pmr::vector<http_header_view> fields(state_value.resource_);
-    fields.reserve(state_value.headers_.size());
-    for (const auto& field : state_value.headers_) {
-        fields.emplace_back(field.name(), field.value());
-    }
-    if (validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.value(), fields).index() != 0) {
+    if (validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.value(), state_value.headers_).index() != 0) {
         throw http_client_error(http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
     }
     return true;
@@ -473,6 +468,63 @@ task<void> http1_client_exchange::wait_for_body_space(
     }
 }
 
+void http1_client_exchange::expire_tunnel() noexcept {
+    connection_.transport_.abort(client_abort_reason::timeout);
+    connection_.abort_http1_response();
+    connection_.close();
+}
+
+task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& output,
+    const operation_timeout& timeout, tls_tunnel_output* tls, std::exception_ptr& failure) {
+    const bool secure = connection_.transport_.secure();
+    auto& stream = connection_.transport_.stream();
+    try {
+        while (!output.ended_ && !output.stopped_) {
+            if (!output.chunk_ready_ && !output.end_requested_) {
+                co_await output.data_.wait();
+                continue;
+            }
+            worker_timer_registration write_timer;
+            if (const auto remaining = timeout.constrained_by(pool_.config().write_timeout_).remaining()) {
+                (void)pool_.worker().schedule_timer(write_timer, worker_timer_deadline_after(*remaining),
+                    [this](worker_timer_outcome outcome) noexcept {
+                        if (outcome == worker_timer_outcome::expired) {
+                            expire_tunnel();
+                        }
+                    });
+            }
+            const auto ending = output.end_requested_ && !output.chunk_ready_ ? http_stream_end::end
+                                                                              : http_stream_end::keep_open;
+            const auto bytes_value = output.chunk_ready_ ? std::string_view(output.chunk_) : std::string_view{};
+            std::error_code error;
+            if (tls != nullptr) {
+                http_socket_tunnel_transport transport(stream, tls);
+                error = co_await transport.write_bytes(bytes_value, ending);
+            } else {
+                http_socket_tunnel_transport transport(stream.next_layer(), nullptr);
+                error = co_await transport.write_bytes(bytes_value, ending);
+            }
+            write_timer.cancel();
+            connection_.throw_if_aborted();
+            if (error) {
+                throw http_client_error(secure && is_tls_error(error) ? http_client_error::code_type::tls_failed
+                                                                      : http_client_error::code_type::io_error,
+                    error_code_text(error));
+            }
+            pool_.wire_counters().sent_ += bytes_value.size();
+            if (ending == http_stream_end::end) {
+                output.finish();
+            } else {
+                output.acknowledge_chunk();
+            }
+        }
+    } catch (...) {
+        failure = std::current_exception();
+        connection_.close();
+        output.stop();
+    }
+}
+
 task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_value, const operation_timeout& timeout) {
     auto& connection = connection_;
     auto& output = state_value.tunnel_->output_;
@@ -489,62 +541,18 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
         tls.emplace(*stream.native_handle(), stream.next_layer(), pool_.worker(), *pool_.resource());
         tls->start();
     }
-    const auto expire = [&connection](worker_timer_outcome outcome) noexcept {
-        if (outcome == worker_timer_outcome::expired) {
-            connection.transport_.abort(client_abort_reason::timeout);
-            connection.abort_http1_response();
-            connection.close();
-        }
-    };
     std::exception_ptr writer_failure;
-    const auto send = [&]() -> task<void> {
-        try {
-            while (!output.ended_ && !output.stopped_) {
-                if (!output.chunk_ready_ && !output.end_requested_) {
-                    co_await output.data_.wait();
-                    continue;
-                }
-                worker_timer_registration write_timer;
-                if (const auto remaining = timeout.constrained_by(pool_.config().write_timeout_).remaining()) {
-                    (void)pool_.worker().schedule_timer(write_timer, worker_timer_deadline_after(*remaining), expire);
-                }
-                const auto ending = output.end_requested_ && !output.chunk_ready_ ? http_stream_end::end
-                                                                                  : http_stream_end::keep_open;
-                const auto bytes_value = output.chunk_ready_ ? std::string_view(output.chunk_) : std::string_view{};
-                std::error_code error;
-                if (tls) {
-                    http_socket_tunnel_transport transport(stream, &*tls);
-                    error = co_await transport.write_bytes(bytes_value, ending);
-                } else {
-                    http_socket_tunnel_transport transport(stream.next_layer(), nullptr);
-                    error = co_await transport.write_bytes(bytes_value, ending);
-                }
-                write_timer.cancel();
-                connection.throw_if_aborted();
-                if (error) {
-                    throw http_client_error(secure && is_tls_error(error) ? http_client_error::code_type::tls_failed
-                                                                          : http_client_error::code_type::io_error,
-                        error_code_text(error));
-                }
-                pool_.wire_counters().sent_ += bytes_value.size();
-                if (ending == http_stream_end::end) {
-                    output.finish();
-                } else {
-                    output.acknowledge_chunk();
-                }
-            }
-        } catch (...) {
-            writer_failure = std::current_exception();
-            connection.close();
-            output.stop();
-        }
-    };
     std::exception_ptr receive_failure;
     try {
         if (const auto remaining = timeout.remaining()) {
-            (void)pool_.worker().schedule_timer(lifetime_timer, worker_timer_deadline_after(*remaining), expire);
+            (void)pool_.worker().schedule_timer(lifetime_timer, worker_timer_deadline_after(*remaining),
+                [this](worker_timer_outcome outcome) noexcept {
+                    if (outcome == worker_timer_outcome::expired) {
+                        expire_tunnel();
+                    }
+                });
         }
-        writers.spawn(send());
+        writers.spawn(write_tunnel_output(output, timeout, tls ? &*tls : nullptr, writer_failure));
         auto& read_buffer = connection.read_buffer_;
         constexpr std::size_t read_chunk_bytes = 4096;
         for (;;) {

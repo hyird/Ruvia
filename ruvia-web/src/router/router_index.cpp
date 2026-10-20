@@ -24,11 +24,10 @@ detail::route_resolution detail::route_table::resolved(
     return route_resolution::resolved(route, handler_targets_[route.index()], match);
 }
 
-detail::route_resolution detail::route_table::resolve(const http_request& request) const noexcept {
-    // A plain CONNECT routes by its authority-form target.
-    if (request.known_method() == http_known_method::connect) {
-        return resolve_connect({}, request.path());
-    }
+namespace {
+
+[[nodiscard]] bool is_routable_origin_or_asterisk_path(
+    http_known_method known_method, std::string_view path) noexcept {
     // Routes and path scopes name origin paths. A generic-scheme absolute-form
     // target can carry a rootless path ("x:admin/panel") that the segment trie
     // would match like "/admin/panel" while every path-scoped middleware and
@@ -44,10 +43,20 @@ detail::route_resolution detail::route_table::resolve(const http_request& reques
     // The rejection is terminal: the document root normalizes dot segments
     // itself, so serving "/private/./file" from it would bypass the guards of
     // the route that owns "/private/file".
+    return !path.empty() &&
+           (path.front() == '/' || (path == "*" && known_method == http_known_method::options)) &&
+           !detail::has_dot_segment(path);
+}
+
+}  // namespace
+
+detail::route_resolution detail::route_table::resolve(const http_request& request) const noexcept {
+    // A plain CONNECT routes by its authority-form target.
+    if (request.known_method() == http_known_method::connect) {
+        return resolve_connect({}, request.path());
+    }
     const auto path = request.path();
-    if (path.empty() ||
-        (path.front() != '/' && (path != "*" || request.known_method() != http_known_method::options)) ||
-        has_dot_segment(path)) {
+    if (!is_routable_origin_or_asterisk_path(request.known_method(), path)) {
         return route_resolution::reject();
     }
     // An HTTP/1.1 `Upgrade: connect-udp` request routes by its origin-form path
@@ -59,10 +68,9 @@ detail::route_resolution detail::route_table::resolve(const http_request& reques
             return tunnel;
         }
     }
-    if (request.known_method() == http_known_method::unknown) {
-        return resolve_extension_method(request.method(), path);
-    }
-    return resolve(request.known_method(), path);
+    return request.known_method() == http_known_method::unknown
+               ? resolve_extension_method(request.method(), path)
+               : resolve(request.known_method(), path);
 }
 
 detail::route_resolution detail::route_table::resolve(route_request_view request) const noexcept {
@@ -70,23 +78,22 @@ detail::route_resolution detail::route_table::resolve(route_request_view request
         return resolve_connect({}, request.connect_target_);
     }
     const auto path = request.path_;
-    if (path.empty() ||
-        (path.front() != '/' && (path != "*" || request.known_method_ != http_known_method::options)) ||
-        has_dot_segment(path)) {
+    if (!is_routable_origin_or_asterisk_path(request.known_method_, path)) {
         return route_resolution::reject();
     }
     if (request.known_method_ == http_known_method::connect) {
         if (request.extended_protocol_ == "websocket") {
             auto websocket = resolve(http_known_method::get, path);
             const auto* route = websocket.resolved();
-            return route != nullptr && route->route().endpoint().get_websocket() != nullptr ? websocket : route_resolution::reject();
+            return route != nullptr && route->route().endpoint().get_websocket() != nullptr
+                       ? websocket
+                       : route_resolution::reject();
         }
         return resolve_connect(request.extended_protocol_, path);
     }
-    if (request.known_method_ == http_known_method::unknown) {
-        return resolve_extension_method(request.method_, path);
-    }
-    return resolve(request.known_method_, path);
+    return request.known_method_ == http_known_method::unknown
+               ? resolve_extension_method(request.method_, path)
+               : resolve(request.known_method_, path);
 }
 
 detail::route_resolution detail::route_table::resolve_connect(std::string_view protocol, std::string_view target) const noexcept {

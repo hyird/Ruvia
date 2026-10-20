@@ -47,17 +47,17 @@ public:
         return status;
     }
 
-    [[nodiscard]] std::optional<std::size_t> value() const noexcept {
+    [[nodiscard]] std::optional<std::uint64_t> value() const noexcept {
         return value_;
     }
 
 private:
     [[nodiscard]] static http_content_length_parse_status accumulate(
-        std::string_view item, std::optional<std::size_t>& value) noexcept {
+        std::string_view item, std::optional<std::uint64_t>& value) noexcept {
         if (item.empty()) {
             return http_content_length_parse_status::invalid;
         }
-        std::size_t parsed_value = 0;
+        std::uint64_t parsed_value = 0;
         const auto [end, ec] = std::from_chars(item.data(), item.data() + item.size(), parsed_value);
         if (ec != std::errc{} || end != item.data() + item.size()) {
             return http_content_length_parse_status::invalid;
@@ -69,7 +69,7 @@ private:
         return http_content_length_parse_status::ok;
     }
 
-    std::optional<std::size_t> value_;
+    std::optional<std::uint64_t> value_;
 };
 
 }  // namespace ruvia::detail

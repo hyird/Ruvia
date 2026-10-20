@@ -32,7 +32,19 @@ bool operation_deadline_transitions_are_exclusive() {
 
     deadline.arm(now, deadline_kind::write);
     deadline.reset();
-    return deadline.kind() == nullptr && !deadline.expired() && !deadline.clear();
+    if (deadline.kind() != nullptr || deadline.expired() || deadline.clear()) {
+        return false;
+    }
+
+    ruvia::operation_deadline<> unlabelled;
+    unlabelled.arm(std::optional<std::chrono::milliseconds>{});
+    if (unlabelled.kind() != nullptr || unlabelled.expired()) {
+        return false;
+    }
+    unlabelled.arm(std::optional<std::chrono::milliseconds>{std::chrono::milliseconds(0)});
+    return unlabelled.kind() != nullptr &&
+           unlabelled.expire(ruvia::operation_deadline<>::clock::now()).has_value() &&
+           unlabelled.expired() && unlabelled.clear();
 }
 
 bool operation_timeout_uses_one_absolute_deadline() {

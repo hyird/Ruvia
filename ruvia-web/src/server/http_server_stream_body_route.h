@@ -53,8 +53,7 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
     }
 
     co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan_,
-        d.request_sequence_, body_reader->reader().consumption(), request_bytes.size(), pipeline_stash,
-        [&body_reader](std::pmr::string& stash) { return body_reader->reader().take_pipeline(stash); });
+        d.request_sequence_, request_bytes.size(), pipeline_stash, body_reader->reader());
 }
 
 }  // namespace ruvia::detail

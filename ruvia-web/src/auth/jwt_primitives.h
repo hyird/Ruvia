@@ -30,6 +30,8 @@ struct jwt_payload_access final {
         return jwt_claim(jwt_claim::owned_tag_type{}, std::move(name), std::move(value));
     }
 
+    [[nodiscard]] static bool decode_jwt_payload_claim(jwt_payload& payload_value, std::string_view key,
+        std::string_view value, std::pmr::memory_resource* resource);
     static jwt_payload decode_payload_json(std::string_view json, std::pmr::memory_resource* resource);
 };
 

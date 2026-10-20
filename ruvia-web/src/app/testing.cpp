@@ -111,6 +111,87 @@ struct test_app::impl_type final {
             throw;
         }
     }
+
+    [[nodiscard]] task<test_response> execute_request(const test_request& request) {
+        const auto request_start = std::chrono::steady_clock::now();
+        request_memory request_memory_value(memory_);
+        std::vector<http_header_view> headers;
+        headers.reserve(request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U));
+        for (const auto& [name, value] : request.headers_) {
+            headers.emplace_back(name, value);
+        }
+        if (!request.cookies_.empty()) {
+            headers.emplace_back("Cookie", request.cookies_);
+        }
+        auto [parsed_value, parse_error] = make_parsed_http_request(request.method_, request.target_, headers,
+            std::as_bytes(std::span(request.body_.data(), request.body_.size())),
+            request_memory_value.resource());
+
+        const auto& routes_value = *routes_;
+        const auto resolution = routes_value.resolve(parsed_value);
+        const auto services = capabilities_->make_context_services(stop_token_);
+
+        // A malformed request is rejected before admission, with no coding
+        // promise, exactly as a server answers a malformed head.
+        std::optional<detail::http_request_admission> admission;
+        std::optional<detail::http_request_rejection> rejection;
+        if (parse_error.has_value()) {
+            rejection = detail::http_request_rejection::error(detail::copy_http_protocol_error_info(
+                request_memory_value.resource(), http_parse_protocol_error(*parse_error)));
+        } else {
+            admission.emplace(detail::admit_http_request(
+                {
+                    .request_ = parsed_value,
+                    .resolution_ = resolution,
+                    .coding_ = http_response_coding_selection_for(parsed_value),
+                    .resource_ = request_memory_value.resource(),
+                    .start_ = request_start,
+                },
+                detail::http_request_admission_policy::server(options_), services));
+            if (const auto* admitted_rejection = admission->rejection()) {
+                // As in the server: a rejection does not inherit the coding promise.
+                rejection = *admitted_rejection;
+                admission->tail().disable_response_coding();
+            }
+        }
+        const auto& request_services = admission ? admission->services() : services;
+
+        http_response response({.resource_ = request_memory_value.resource()});
+        if (rejection) {
+            response = co_await detail::respond_http_request_rejection(
+                routes_value, parsed_value, request_memory_value, *rejection, request_services);
+        } else {
+            co_await routes_value.dispatch_buffered_response(parsed_value, resolution,
+                request_memory_value, detail::document_root_binding::none(), request_services,
+                admission->static_file_mode(), response);
+        }
+
+        const auto tail = admission ? admission->tail()
+                                    : detail::http_response_tail(parsed_value,
+                                          detail::http_response_coding_policy::disabled(), {}, request_start);
+        const auto preparation = tail.prepare(response, options_);
+        const auto prepared = preparation.ready() != nullptr
+                                  ? *preparation.ready()
+                                  : co_await tail.finish_prepare(
+                                        preparation, response, options_, routes_value, request_memory_value,
+                                        request_services);
+
+        // Copy everything out while the request arena is still alive.
+        test_response result_value(response.status());
+        result_value.headers_.reserve(response.headers().size());
+        for (const auto& header : response.headers()) {
+            result_value.headers_.emplace_back(std::string(header.name()), std::string(header.value()));
+        }
+        // Mirror wire semantics: the response writers suppress the body for HEAD
+        // and content-forbidden statuses, so the facade must not surface one
+        // either. Writer-synthesized fields (Content-Length, Date, Connection)
+        // are framing concerns and stay absent here.
+        if (!prepared.write_plan_.body_suppressed()) {
+            const auto body = response.body_bytes();
+            result_value.body_.assign(reinterpret_cast<const char*>(body.data()), body.size());
+        }
+        co_return result_value;
+    }
 };
 
 test_app::test_app()
@@ -157,90 +238,7 @@ test_app& test_app::use_worker_state_definition(detail::worker_state_definition 
 test_response test_app::request(const test_request& request) {
     impl_->finalize();
 
-    // Keep the request arena and every arena-backed response on the worker
-    // until the response has been copied into its owning facade type.
-    auto operation = [this, &request]() -> task<test_response> {
-        const auto request_start = std::chrono::steady_clock::now();
-        request_memory request_memory_value(impl_->memory_);
-        std::vector<http_header_view> headers;
-        headers.reserve(request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U));
-        for (const auto& [name, value] : request.headers_) {
-            headers.emplace_back(name, value);
-        }
-        if (!request.cookies_.empty()) {
-            headers.emplace_back("Cookie", request.cookies_);
-        }
-        auto [parsed_value, parse_error] = make_parsed_http_request(request.method_, request.target_, headers,
-            std::as_bytes(std::span(request.body_.data(), request.body_.size())),
-            request_memory_value.resource());
-
-        const auto& options = impl_->options_;
-        const auto& routes_value = *impl_->routes_;
-        const auto resolution = routes_value.resolve(parsed_value);
-        const auto services = impl_->capabilities_->make_context_services(impl_->stop_token_);
-
-        // A malformed request is rejected before admission, with no coding
-        // promise, exactly as a server answers a malformed head.
-        std::optional<detail::http_request_admission> admission;
-        std::optional<detail::http_request_rejection> rejection;
-        if (parse_error.has_value()) {
-            rejection = detail::http_request_rejection::error(detail::copy_http_protocol_error_info(
-                request_memory_value.resource(), http_parse_protocol_error(*parse_error)));
-        } else {
-            admission.emplace(detail::admit_http_request(
-                {
-                    .request_ = parsed_value,
-                    .resolution_ = resolution,
-                    .coding_ = http_response_coding_selection_for(parsed_value),
-                    .resource_ = request_memory_value.resource(),
-                    .start_ = request_start,
-                },
-                detail::http_request_admission_policy::server(options), services));
-            if (const auto* admitted_rejection = admission->rejection()) {
-                // As in the server: a rejection does not inherit the coding promise.
-                rejection = *admitted_rejection;
-                admission->tail().disable_response_coding();
-            }
-        }
-        const auto& request_services = admission ? admission->services() : services;
-
-        http_response response({.resource_ = request_memory_value.resource()});
-        if (rejection) {
-            response = co_await detail::respond_http_request_rejection(
-                routes_value, parsed_value, request_memory_value, *rejection, request_services);
-        } else {
-            co_await routes_value.dispatch_buffered_response(parsed_value, resolution,
-                request_memory_value, detail::document_root_binding::none(), request_services,
-                admission->static_file_mode(), response);
-        }
-
-        const auto tail = admission ? admission->tail()
-                                    : detail::http_response_tail(parsed_value,
-                                          detail::http_response_coding_policy::disabled(), {}, request_start);
-        const auto preparation = tail.prepare(response, options);
-        const auto prepared = preparation.ready() != nullptr
-                                  ? *preparation.ready()
-                                  : co_await tail.finish_prepare(
-                                        preparation, response, options, routes_value, request_memory_value,
-                                        request_services);
-
-        // Copy everything out while the request arena is still alive.
-        test_response result_value(response.status());
-        result_value.headers_.reserve(response.headers().size());
-        for (const auto& header : response.headers()) {
-            result_value.headers_.emplace_back(std::string(header.name()), std::string(header.value()));
-        }
-        // Mirror wire semantics: the response writers suppress the body for HEAD
-        // and content-forbidden statuses, so the facade must not surface one
-        // either. Writer-synthesized fields (Content-Length, Date, Connection)
-        // are framing concerns and stay absent here.
-        if (!prepared.write_plan_.body_suppressed()) {
-            const auto body = response.body_bytes();
-            result_value.body_.assign(reinterpret_cast<const char*>(body.data()), body.size());
-        }
-        co_return result_value;
-    };
-    return impl_->event_loop_.start(operation()).get();
+    return impl_->event_loop_.start(impl_->execute_request(request)).get();
 }
 
 std::optional<std::string_view> test_response::header(std::string_view name) const& noexcept {

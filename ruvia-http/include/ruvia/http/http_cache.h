@@ -1,9 +1,10 @@
 #pragma once
 
 #include <cstdint>
-#include <ctime>
 #include <optional>
 #include <string_view>
+
+#include "ruvia/http/http_date.h"
 
 namespace ruvia {
 
@@ -93,9 +94,5 @@ private:
 
 // Parse a Cache-Control field value (a single line, or several joined by commas).
 [[nodiscard]] cache_control parse_cache_control(std::string_view value) noexcept;
-
-// Parse an HTTP-date (RFC 7231 section 7.1.1.1: IMF-fixdate / RFC 850 / asctime) as used by Date,
-// Expires, Last-Modified, If-Modified-Since. Returns std::nullopt if malformed.
-[[nodiscard]] std::optional<std::time_t> parse_http_date(std::string_view value) noexcept;
 
 }  // namespace ruvia

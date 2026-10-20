@@ -8,7 +8,6 @@
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_base64.h"
-#include "ruvia/http/websocket_subprotocol_set.h"
 
 #include "client/http1_client_request_headers.h"
 #include "websocket/http_websocket_accept_key.h"
@@ -18,42 +17,50 @@ namespace {
 // The one application-header policy of the client handshake: it generates
 // Host, the Upgrade/Connection pair and every Sec-WebSocket-* field, and an
 // Upgrade request carries no content, so Trailer and Expect have no place.
-bool is_reserved_handshake_header(std::string_view name) noexcept {
-    switch (detail::classify_request_header(name)) {
+bool is_reserved_handshake_header(std::string_view name, detail::request_header_kind kind) noexcept {
+    switch (kind) {
         case detail::request_header_kind::host:
         case detail::request_header_kind::trailer:
         case detail::request_header_kind::expect:
+        case detail::request_header_kind::connection:
+        case detail::request_header_kind::upgrade:
+        case detail::request_header_kind::content_length:
+        case detail::request_header_kind::transfer_encoding:
+        case detail::request_header_kind::sec_websocket_key:
+        case detail::request_header_kind::sec_websocket_version:
+        case detail::request_header_kind::sec_websocket_protocol:
+        case detail::request_header_kind::sec_websocket_extensions:
             return true;
+        case detail::request_header_kind::other:
+            return http_ascii_equals_ignore_case(name, "keep-alive") ||
+                   http_ascii_equals_ignore_case(name, "proxy-connection") ||
+                   http_ascii_equals_ignore_case(name, "sec-websocket-accept");
         default:
-            return detail::http_field_name_in(name, detail::http_connection_specific_fields) ||
-                   detail::http_field_name_in(name, detail::http_message_framing_fields) ||
-                   detail::http_field_name_in(name, detail::http_websocket_handshake_fields);
+            return false;
     }
 }
 }  // namespace
 
 void http1_websocket_client_handshake::validate_configuration(
-    std::span<const http_header_view> headers, std::span<const std::string_view> subprotocols,
+    std::span<const http_header_view> headers, std::span<const std::string_view>,
     std::string_view user_agent) {
-    for (const auto& header : headers) {
-        if (is_reserved_handshake_header(header.name())) {
-            throw std::invalid_argument("invalid or reserved WebSocket handshake header");
-        }
-    }
     request_header_facts facts;
     http1_client_request_prepare_error error{};
-    if (!analyze_headers(headers, facts, error)) {
-        throw std::invalid_argument(std::string(http1_client_request_prepare_error_message(error)));
-    }
-    websocket_subprotocol_set seen;
-    for (auto protocol : subprotocols) {
-        if (!seen.append(protocol)) {
-            throw std::invalid_argument("invalid WebSocket subprotocol");
+    for (const auto& header : headers) {
+        const auto kind = detail::classify_request_header(header.name());
+        if (is_reserved_handshake_header(header.name(), kind)) {
+            throw std::invalid_argument("invalid or reserved WebSocket handshake header");
+        }
+        if (!analyze_header(header, kind, facts, error)) {
+            throw std::invalid_argument(std::string(http1_client_request_prepare_error_message(error)));
         }
     }
+    if (!finalize_headers(facts, error)) {
+        throw std::invalid_argument(std::string(http1_client_request_prepare_error_message(error)));
+    }
     if (!user_agent.empty()) {
-        const std::array generated{http_header_view{"User-Agent", user_agent}};
-        if (!analyze_headers(generated, facts, error)) {
+        if (!analyze_header(
+                http_header_view{"User-Agent", user_agent}, detail::request_header_kind::user_agent, facts, error)) {
             throw std::invalid_argument(std::string(http1_client_request_prepare_error_message(error)));
         }
     }

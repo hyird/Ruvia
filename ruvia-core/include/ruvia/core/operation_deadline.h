@@ -6,13 +6,15 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/worker_timer.h"
+
 namespace ruvia {
 
 // One allocation-free deadline lifecycle. A deadline is either absent, armed
 // with its cancellation kind and exact time point, or expired with that same
 // kind retained until the awaiting operation consumes the outcome.
-template <typename kind_type>
-    requires std::is_enum_v<kind_type>
+template <typename kind_type = std::monostate>
+    requires(std::is_enum_v<kind_type> || std::is_same_v<kind_type, std::monostate>)
 class operation_deadline final {
 public:
     using clock = std::chrono::steady_clock;
@@ -21,6 +23,21 @@ public:
         state_.template emplace<active>(deadline_value, std::move(kind));
     }
 
+    void arm(clock::time_point deadline_value) noexcept
+        requires std::is_same_v<kind_type, std::monostate>
+    {
+        arm(deadline_value, std::monostate{});
+    }
+
+    void arm(std::optional<std::chrono::milliseconds> timeout) noexcept
+        requires std::is_same_v<kind_type, std::monostate>
+    {
+        if (timeout.has_value()) {
+            arm(worker_timer_deadline_after(*timeout), std::monostate{});
+        } else {
+            reset();
+        }
+    }
     void reset() noexcept {
         state_.template emplace<inactive>();
     }

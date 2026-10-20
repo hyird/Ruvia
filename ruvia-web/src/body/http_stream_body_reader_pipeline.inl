@@ -1,5 +1,10 @@
 #pragma once
 
+#include <algorithm>
+#include <string_view>
+
+#include "body/http_stream_body_reader.h"
+
 namespace ruvia::detail {
 
 template <typename stream_type>

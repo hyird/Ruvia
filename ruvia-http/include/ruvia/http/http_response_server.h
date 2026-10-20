@@ -5,10 +5,9 @@
 #include <memory_resource>
 #include <span>
 #include <string>
-#include <utility>
 
-#include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/http1_response_head_plan.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_response_trailer_section.h"
@@ -31,10 +30,7 @@ void append_http1_response_trailers(
 
 // Validate a complete response trailer section and return a borrowed proof for
 // synchronous protocol submission. The input storage must outlive its use.
-[[nodiscard]] inline http_response_trailer_section validate_http_response_trailers(
-    std::span<const http_header_view> trailers) {
-    auto result_value = detail::validated_response_trailer_section(trailers);
-    return *result_value.section();
-}
+[[nodiscard]] http_response_trailer_section validate_http_response_trailers(
+    std::span<const http_header_view> trailers);
 
 }  // namespace ruvia

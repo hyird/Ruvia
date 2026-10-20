@@ -34,8 +34,7 @@ public:
     }
 
     [[nodiscard]] bool expired() const noexcept {
-        const auto value = remaining();
-        return value.has_value() && value->count() == 0;
+        return deadline_.has_value() && clock_type::now() >= *deadline_;
     }
 
     [[nodiscard]] operation_timeout constrained_by(

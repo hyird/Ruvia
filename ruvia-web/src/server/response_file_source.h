@@ -45,6 +45,7 @@ struct response_file_io final {
     blocking_pool* pool_{};
     worker_handle worker_;
     stop_token stop_;
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
 class response_body_chunk final {
@@ -108,7 +109,8 @@ private:
     // through the synchronized process resource.
     class read_buffer final {
     public:
-        read_buffer() noexcept = default;
+        explicit read_buffer(std::pmr::memory_resource* resource) noexcept
+            : resource_(resource) {}
         read_buffer(read_buffer&& other) noexcept;
         read_buffer& operator=(read_buffer&& other) noexcept;
         ~read_buffer();
@@ -116,13 +118,14 @@ private:
         [[nodiscard]] char* data();
 
     private:
+        std::pmr::memory_resource* resource_{};
         char* data_{};
     };
 
     struct read_state final {
         explicit read_state(std::pmr::memory_resource* resource)
-            : path_(resource) {}
-
+            : path_(resource),
+              buffer_(resource) {}
         std::pmr::basic_string<std::filesystem::path::value_type> path_;
         std::uint64_t size_{};
         http_response_file_identity identity_{http_response_file_identity::unchecked()};

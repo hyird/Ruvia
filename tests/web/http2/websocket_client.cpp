@@ -95,7 +95,7 @@ void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer, b
                         saw_extended_connect = request_view && request_view->method_ == "CONNECT" &&
                                                request_view->protocol_ == "websocket";
                         const auto validation = ruvia::validate_http2_websocket_handshake(connection, request->stream_id(), request->request());
-                        const auto submitted = connection.submit_websocket_handshake(request->stream_id(), request->request(), validation);
+                        const auto submitted = connection.submit_websocket_handshake(request->stream_id(), request->request(), validation, {.deflate_ = {.enabled_ = true}});
                         if (!submitted.submitted()) {
                             throw std::runtime_error("HTTP/2 WebSocket handshake failed");
                         }

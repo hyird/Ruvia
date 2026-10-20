@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/detail/redis/redis_entity_traits.h"
 #include "ruvia/web/detail/redis/redis_predicate_storage.h"
 #include "ruvia/web/fixed_string.h"

@@ -2,7 +2,6 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_field_whitespace.h"
 
 #include "coding/http_content_coding.h"
@@ -22,22 +21,6 @@ namespace {
                                              : singleton_request_header_bit(kind);
 }
 
-[[nodiscard]] bool http_expectation_token(std::string_view token) noexcept {
-    if (token.empty()) {
-        return false;
-    }
-    for (const auto ch : token) {
-        if (!is_http_token_char(static_cast<unsigned char>(ch))) {
-            return false;
-        }
-    }
-    return true;
-}
-
-[[nodiscard]] bool http_expectation_value(std::string_view value) noexcept {
-    return http_expectation_token(value) || http_is_quoted_string(value);
-}
-
 [[nodiscard]] bool http_expectation_item(std::string_view item) noexcept {
     item = http_trim_ows(item);
     if (item.empty()) {
@@ -48,12 +31,12 @@ namespace {
     const auto leading = http_trim_ows(item.substr(0, parameters_start));
     const auto equals = leading.find('=');
     if (equals == std::string_view::npos) {
-        return parameters_start == item.size() && http_expectation_token(leading);
+        return parameters_start == item.size() && is_valid_http_header_name(leading);
     }
 
     const auto name = leading.substr(0, equals);
     const auto value = leading.substr(equals + 1);
-    if (!http_expectation_token(name) || !http_expectation_value(value)) {
+    if (!is_valid_http_header_name(name) || !is_http_token_or_quoted_string(value)) {
         return false;
     }
 
@@ -73,7 +56,8 @@ namespace {
         }
         const auto parameter_name = parameter.substr(0, parameter_equals);
         const auto parameter_value = parameter.substr(parameter_equals + 1);
-        if (!http_expectation_token(parameter_name) || !http_expectation_value(parameter_value)) {
+        if (!is_valid_http_header_name(parameter_name) ||
+            !is_http_token_or_quoted_string(parameter_value)) {
             return false;
         }
         start = end;

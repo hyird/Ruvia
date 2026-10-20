@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_limits.h"
 
@@ -17,15 +17,7 @@ namespace ruvia {
 class websocket_subprotocol_set final {
 public:
     [[nodiscard]] bool append(std::string_view protocol) noexcept {
-        if (protocol.empty()) {
-            return false;
-        }
-        for (const char character : protocol) {
-            if (!is_http_token_char(static_cast<unsigned char>(character))) {
-                return false;
-            }
-        }
-        if (size_ == protocols_.size() || contains(protocol)) {
+        if (!is_valid_http_header_name(protocol) || size_ == protocols_.size() || contains(protocol)) {
             return false;
         }
         protocols_[size_++] = protocol;

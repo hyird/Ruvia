@@ -25,7 +25,7 @@ namespace {
 
 [[nodiscard]] std::pmr::vector<http_header> copy_websocket_response_headers(
     std::span<const http_header_view> headers, std::string_view subprotocol,
-    websocket_compression compression, std::pmr::memory_resource* resource) {
+    std::string_view extension, std::pmr::memory_resource* resource) {
     if (headers.size() > max_http_header_fields - 5) {
         throw std::length_error("too many WebSocket handshake response headers");
     }
@@ -42,8 +42,7 @@ namespace {
     if (!subprotocol.empty() && !size.add_field("sec-websocket-protocol", subprotocol)) {
         throw std::length_error("WebSocket handshake response headers are too large");
     }
-    const websocket_compression_extension extension(compression);
-    if (!extension.empty() && !size.add_field("sec-websocket-extensions", extension.view())) {
+    if (!extension.empty() && !size.add_field("sec-websocket-extensions", extension)) {
         throw std::length_error("WebSocket handshake response headers are too large");
     }
     std::pmr::vector<http_header> result(resource);
@@ -70,20 +69,6 @@ namespace {
     return result;
 }
 
-[[nodiscard]] bool append_websocket_subprotocol_offers(std::span<const http_header_view> headers,
-    websocket_subprotocol_set& protocols, bool& present) noexcept {
-    for (const auto& header : headers) {
-        if (!http_ascii_equals_ignore_case(header.name(), "Sec-WebSocket-Protocol")) {
-            continue;
-        }
-        present = true;
-        if (!protocols.append_list(header.value())) {
-            return false;
-        }
-    }
-    return true;
-}
-
 [[nodiscard]] bool append_websocket_subprotocol_offers(const http_request& request,
     websocket_subprotocol_set& protocols, bool& present) noexcept {
     const auto headers = request.headers();
@@ -98,22 +83,6 @@ namespace {
         }
     }
     return true;
-}
-
-[[nodiscard]] bool websocket_subprotocol_header_offers_valid(
-    std::span<const http_header_view> headers) noexcept {
-    websocket_subprotocol_set protocols;
-    bool present = false;
-    return append_websocket_subprotocol_offers(headers, protocols, present) &&
-           (!present || !protocols.empty());
-}
-
-[[nodiscard]] bool websocket_protocol_token_valid(std::string_view protocol) noexcept {
-    if (protocol.empty()) {
-        return false;
-    }
-    return std::ranges::all_of(
-        protocol, [](char ch) noexcept { return is_http_token_char(static_cast<unsigned char>(ch)); });
 }
 
 void skip_websocket_extension_ows(std::string_view value, std::size_t& cursor_value) noexcept {
@@ -159,7 +128,9 @@ void skip_websocket_extension_ows(std::string_view value, std::size_t& cursor_va
     return false;
 }
 
-[[nodiscard]] bool append_websocket_extension_list(
+}  // namespace
+
+bool append_websocket_extension_list(
     std::string_view value, bool& has_extension) noexcept {
     std::size_t cursor_value = 0;
     while (true) {
@@ -215,80 +186,16 @@ void skip_websocket_extension_ows(std::string_view value, std::size_t& cursor_va
     }
 }
 
-[[nodiscard]] bool websocket_extension_header_offers_valid(
-    std::span<const http_header_view> headers) noexcept {
-    bool present = false;
-    bool has_extension = false;
-    for (const auto& header : headers) {
-        if (!http_ascii_equals_ignore_case(header.name(), "Sec-WebSocket-Extensions")) {
-            continue;
-        }
-        present = true;
-        if (!append_websocket_extension_list(header.value(), has_extension)) {
-            return false;
-        }
-    }
-    return !present || has_extension;
-}
-
-[[nodiscard]] bool websocket_extension_header_offers_valid(const http_request& request) noexcept {
-    bool present = false;
-    bool has_extension = false;
-    const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
-        if (http_request_access::header_kind(request, i) !=
-            static_cast<std::uint8_t>(request_header_kind::sec_websocket_extensions)) {
-            continue;
-        }
-        present = true;
-        if (!append_websocket_extension_list(headers[i].value(), has_extension)) {
-            return false;
-        }
-    }
-    return !present || has_extension;
-}
-
-}  // namespace
-
-bool websocket_subprotocol_offers_valid(const http_request& request) noexcept {
-    websocket_subprotocol_set protocols;
-    bool present = false;
-    return append_websocket_subprotocol_offers(request, protocols, present) &&
-           (!present || !protocols.empty());
-}
-
-bool websocket_extension_offers_valid(const http_request& request) noexcept {
-    return websocket_extension_header_offers_valid(request);
-}
-
-bool websocket_client_offer_headers_valid(std::span<const http_header_view> headers) noexcept {
-    return websocket_subprotocol_header_offers_valid(headers) &&
-           websocket_extension_header_offers_valid(headers);
-}
-
-bool websocket_protocol_offered(const http_request& request, std::string_view protocol) noexcept {
-    if (!websocket_protocol_token_valid(protocol)) {
-        return false;
-    }
-    websocket_subprotocol_set protocols;
-    bool present = false;
-    return append_websocket_subprotocol_offers(request, protocols, present) && present &&
-           !protocols.empty() && protocols.contains(protocol);
-}
-
 std::string_view choose_websocket_subprotocol(
-    const http_request& request, std::span<const std::string_view> supported) noexcept {
+    const websocket_subprotocol_set& offered,
+    std::span<const std::string_view> supported) noexcept {
     websocket_subprotocol_set configured;
     for (const auto protocol : supported) {
         if (!configured.append(protocol)) {
             return {};
         }
     }
-
-    websocket_subprotocol_set offered;
-    bool present = false;
-    if (!append_websocket_subprotocol_offers(request, offered, present) || !present ||
-        offered.empty()) {
+    if (offered.empty()) {
         return {};
     }
     for (const auto protocol : supported) {
@@ -299,16 +206,71 @@ std::string_view choose_websocket_subprotocol(
     return {};
 }
 
+std::string_view choose_websocket_subprotocol(
+    const http_request& request, std::span<const std::string_view> supported) noexcept {
+    websocket_subprotocol_set offered;
+    bool present = false;
+    if (!append_websocket_subprotocol_offers(request, offered, present) || !present ||
+        offered.empty()) {
+        return {};
+    }
+    return choose_websocket_subprotocol(offered, supported);
+}
+
+bool websocket_request_header_validator::observe_header(
+    request_header_kind kind, std::string_view value) noexcept {
+    if (kind == request_header_kind::sec_websocket_version) {
+        version_ = value;
+        ++version_count_;
+        if (version_count_ > 1) {
+            valid_ = false;
+        }
+    } else if (kind == request_header_kind::sec_websocket_protocol) {
+        protocols_present_ = true;
+        if (valid_ && !protocols_.append_list(value)) {
+            valid_ = false;
+        }
+    } else if (kind == request_header_kind::sec_websocket_extensions) {
+        extensions_present_ = true;
+        if (valid_ && !append_websocket_extension_list(value, has_extension_)) {
+            valid_ = false;
+        }
+    }
+    return valid_;
+}
+
+bool websocket_request_header_validator::offers_valid() const noexcept {
+    return valid_ && version_count_ == 1 && (!protocols_present_ || !protocols_.empty()) &&
+           (!extensions_present_ || has_extension_);
+}
+
+bool websocket_request_header_validator::client_offers_valid() const noexcept {
+    return offers_valid() && version_ == "13";
+}
+
+websocket_handshake_validation_result websocket_request_header_validator::finish(
+    websocket_handshake_validation_options options) const noexcept {
+    if (!offers_valid()) {
+        return websocket_handshake_validation_result::make_invalid_request();
+    }
+    if (http_trim_ows(version_) != "13") {
+        return websocket_handshake_validation_result::make_unsupported_version();
+    }
+    if (options.require_subprotocol_ &&
+        choose_websocket_subprotocol(protocols_, options.supported_subprotocols_).empty()) {
+        return websocket_handshake_validation_result::make_unsupported_subprotocol();
+    }
+    return websocket_handshake_validation_result::make_accepted();
+}
+
 websocket_server_negotiation::websocket_server_negotiation(std::string_view subprotocol,
     websocket_compression compression, std::span<const http_header_view> response_headers_value,
     std::pmr::memory_resource* resource)
     : subprotocol_(subprotocol, http_pmr_resource_or_default(resource)),
       compression_(compression),
-      extensions_(resource != nullptr ? resource : std::pmr::get_default_resource()),
-      response_headers_(copy_websocket_response_headers(response_headers_value, subprotocol, compression, http_pmr_resource_or_default(resource))) {
-    const websocket_compression_extension extension(compression);
-    extensions_.assign(extension.view());
-}
+      extensions_(compression),
+      response_headers_(copy_websocket_response_headers(response_headers_value, subprotocol,
+          extensions_.view(), http_pmr_resource_or_default(resource))) {}
 
 websocket_server_negotiation make_websocket_server_negotiation(
     const http_request& request, websocket_server_negotiation_options options) {
@@ -326,13 +288,15 @@ websocket_server_handshake make_websocket_server_handshake(
     detail::websocket_accept_key_type accept;
     detail::encode_websocket_accept(
         accept, detail::request_known_header(request, detail::request_header_kind::sec_websocket_key));
-    std::pmr::string subprotocol(
-        detail::choose_websocket_subprotocol(request, options.supported_subprotocols_),
-        detail::http_pmr_resource_or_default(options.resource_));
-    const auto compression = detail::websocket_negotiate_permessage_deflate(request, options.deflate_);
-    auto response_headers_value = detail::copy_websocket_response_headers(options.response_headers_,
-        subprotocol, compression, detail::http_pmr_resource_or_default(options.resource_));
-    return websocket_server_handshake(accept, std::move(subprotocol), compression, std::move(response_headers_value));
+    auto negotiation = detail::make_websocket_server_negotiation(request,
+        {
+            .supported_subprotocols_ = options.supported_subprotocols_,
+            .response_headers_ = options.response_headers_,
+            .resource_ = options.resource_,
+            .deflate_ = options.deflate_,
+        });
+    return websocket_server_handshake(accept, std::move(negotiation).take_subprotocol(),
+        negotiation.compression(), std::move(negotiation).take_response_headers());
 }
 
 }  // namespace ruvia

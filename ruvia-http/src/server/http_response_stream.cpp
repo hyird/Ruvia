@@ -4,8 +4,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
-#include "ruvia/http/detail/server/http_response_head_policy.h"
 
 namespace ruvia {
 

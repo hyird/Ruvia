@@ -3,8 +3,8 @@
 #include <stdexcept>
 
 #include "ruvia/web/detail/db/db_sql_scan.h"
-#include "ruvia/web/detail/db/db_utils.h"
 
+#include "db/db_pool_utils.h"
 namespace ruvia {
 
 prepared_db_statement prepare_db_statement(

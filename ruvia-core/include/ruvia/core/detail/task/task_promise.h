@@ -266,7 +266,7 @@ public:
     void unhandled_exception() noexcept {
         state_.fail();
     }
-    void result() {
+    void result() & {
         state_.result();
     }
 

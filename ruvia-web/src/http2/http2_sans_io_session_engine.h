@@ -72,6 +72,17 @@ public:
     [[nodiscard]] std::pmr::memory_resource* worker_resource() const noexcept;
 
 private:
+    struct tunnel_upgrade_operation;
+    struct websocket_upgrade_operation;
+
+    void reset_event_stream(std::uint32_t stream_id, http2_error_code error) noexcept;
+    [[nodiscard]] http2_sans_io_stream_runtime* resolve_stream_route(std::uint32_t stream_id);
+    void on_message_head(http2_request_head_event& message_head);
+    void on_body_chunk(http2_message_body_chunk_event& body_chunk);
+    void on_tunnel_data(http2_tunnel_data_event& tunnel_data);
+    void on_tunnel_end(const http2_tunnel_end_event& tunnel_end) noexcept;
+    void on_message_end(const http2_message_end_event& message_end);
+    void on_stream_closed(const http2_stream_closed_event& stream_closed) noexcept;
     [[nodiscard]] task<bool> push_request(std::uint32_t associated_stream_id, http_push_request_view request);
     [[nodiscard]] task<void> dispatch_one_inner(std::uint32_t stream_id);
     [[nodiscard]] task<void> dispatch_one(std::uint32_t stream_id);

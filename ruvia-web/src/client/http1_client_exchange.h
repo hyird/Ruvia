@@ -22,9 +22,11 @@ class http1_request_content_writer;
 namespace ruvia::detail {
 
 class http_client_connection;
+class http_client_output_queue;
 class http_client_pool;
 class http_client_request_storage;
 class http_client_response_state;
+class tls_tunnel_output;
 
 // One serialized HTTP/1 exchange on a connected http_client_connection: the
 // request head and content, a full-duplex streaming upload, the response head,
@@ -57,6 +59,9 @@ private:
     // Waits until the consumer drains the producer queue below the byte limit.
     [[nodiscard]] task<void> wait_for_body_space(
         http_client_response_state& state_value, const operation_timeout& timeout);
+    void expire_tunnel() noexcept;
+    [[nodiscard]] task<void> write_tunnel_output(http_client_output_queue& output, const operation_timeout& timeout,
+        tls_tunnel_output* tls, std::exception_ptr& failure);
     [[nodiscard]] task<void> run_tunnel(http_client_response_state& state_value, const operation_timeout& timeout);
     [[nodiscard]] task<void> write_upload(http_client_response_state& state_value, const operation_timeout& timeout,
         http1_request_content_writer writer, http1_client_response_parser& parser, std::exception_ptr& failure);

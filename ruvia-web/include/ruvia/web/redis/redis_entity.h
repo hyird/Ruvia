@@ -68,7 +68,7 @@ public:
     redis_entity(redis_entity&&) noexcept = default;
     redis_entity& operator=(redis_entity&&) = delete;
 
-    RUVIA_DETAIL_ENTITY_VALUE_API(values_, set_null, is_set, is_null)
+    RUVIA_DETAIL_ENTITY_VALUE_API(values_)
 };
 
 #define RUVIA_REDIS_COLUMN(name, type_type, ...) ::ruvia::redis_column<::ruvia::fixed_string{#name}, type_type __VA_OPT__(, ) __VA_ARGS__>
@@ -94,7 +94,7 @@ public:
         static ::ruvia::redis_field_reference<name, field_name> field() {                           \
             return {};                                                                              \
         }                                                                                           \
-        RUVIA_DETAIL_ENTITY_VALUE_API(entity_, set_null, is_set, is_null)                           \
+        RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                      \
     };
 
 }  // namespace ruvia

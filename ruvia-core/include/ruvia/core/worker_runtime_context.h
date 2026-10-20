@@ -8,7 +8,6 @@
 
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/core/worker_submission_view.h"
 
 namespace ruvia {
 
@@ -26,8 +25,6 @@ public:
 
     [[nodiscard]] asio::io_context& io_context() const noexcept;
     [[nodiscard]] const worker_handle& handle() const noexcept;
-    [[nodiscard]] worker_submission_view submission() const& noexcept;
-    worker_submission_view submission() const&& = delete;
 
     void run();
     void run(move_only_function<void()> startup_handler,
@@ -40,8 +37,9 @@ public:
     void detach() noexcept;
 
 private:
-    class impl_type;
-    std::unique_ptr<impl_type> impl_;
+    asio::io_context* io_context_;
+    std::shared_ptr<detail::worker_dispatcher> dispatcher_;
+    worker_handle handle_;
 };
 
 }  // namespace ruvia

@@ -1,14 +1,12 @@
 #pragma once
 
 #include <cstdint>
-#include <memory>
 #include <memory_resource>
 #include <span>
 #include <utility>
 #include <vector>
 
 #include "ruvia/http/attributes.h"
-#include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_version.h"
@@ -55,10 +53,7 @@ public:
     // Content-Encoding is also retained without interpreting coding-list syntax;
     // content-decoding APIs validate it independently of message framing.
     [[nodiscard]] std::span<const http_header> headers() const& noexcept RUVIA_LIFETIMEBOUND {
-        if (headers_ == nullptr) {
-            return {};
-        }
-        return *headers_;
+        return headers_;
     }
     [[nodiscard]] std::span<const http_header> headers() const&& = delete;
 
@@ -66,11 +61,8 @@ public:
     // metadata but needs to extend the fields' lifetime independently.
     // Repeated extraction, including after moving the head, returns an empty
     // vector in the original PMR resource, which must still be alive.
-    [[nodiscard]] std::pmr::vector<http_header> take_headers() && {
-        if (headers_ == nullptr) {
-            return std::pmr::vector<http_header>(headers_.get_deleter().resource_);
-        }
-        return std::pmr::vector<http_header>(std::move(*headers_), headers_->get_allocator());
+    [[nodiscard]] std::pmr::vector<http_header> take_headers() && noexcept {
+        return std::exchange(headers_, std::pmr::vector<http_header>(headers_.get_allocator()));
     }
 
 private:
@@ -85,11 +77,11 @@ private:
         http_protocol_version protocol_version, std::pmr::memory_resource* resource) noexcept
         : status_(status),
           protocol_version_(protocol_version),
-          headers_(nullptr, detail::http_pmr_object_deleter<std::pmr::vector<http_header>>{resource}) {}
+          headers_(resource) {}
 
     http_status_code status_;
     http_protocol_version protocol_version_;
-    std::unique_ptr<std::pmr::vector<http_header>, detail::http_pmr_object_deleter<std::pmr::vector<http_header>>> headers_;
+    std::pmr::vector<http_header> headers_;
 };
 
 }  // namespace ruvia

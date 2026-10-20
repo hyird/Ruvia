@@ -49,6 +49,7 @@ struct http2_connection_options final {
 struct http2_websocket_server_handshake_options final {
     std::span<const std::string_view> supported_subprotocols_{};
     std::span<const http_header_view> response_headers_{};
+    websocket_deflate_config deflate_{};
 };
 
 struct http2_regular_request_head_view final {
@@ -251,7 +252,8 @@ private:
     friend std::variant<http_request, http_protocol_error> make_http2_server_request(
         http2_connection&, std::uint32_t, std::pmr::memory_resource*, std::string_view);
     friend websocket_handshake_validation_result validate_http2_websocket_handshake(
-        http2_connection&, std::uint32_t, const http_request&) noexcept;
+        http2_connection&, std::uint32_t, const http_request&,
+        websocket_handshake_validation_options) noexcept;
     explicit http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push, bool receive_origin_advertisements);
     class impl_type;
     struct impl_deleter_type final {
@@ -272,6 +274,7 @@ private:
 // for the duration of the call.
 [[nodiscard]] websocket_handshake_validation_result validate_http2_websocket_handshake(
     http2_connection& connection, std::uint32_t stream_id,
-    const http_request& request) noexcept;
+    const http_request& request,
+    websocket_handshake_validation_options options = {}) noexcept;
 
 }  // namespace ruvia

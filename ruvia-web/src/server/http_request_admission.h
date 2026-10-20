@@ -108,12 +108,25 @@ private:
 
     explicit http_response_preparation(prepared_application_response ready) noexcept
         : ready_(ready),
-          first_pass_{http_response_compression_status::not_applicable, false} {}
-    explicit http_response_preparation(http_buffered_compression_step first_pass) noexcept
-        : first_pass_(first_pass) {}
+          first_pass_{http_response_compression_status::not_applicable, false},
+          policy_(http_response_coding_policy::disabled()) {}
+    http_response_preparation(http_buffered_compression_step first_pass,
+        http_response_coding_policy policy) noexcept
+        : first_pass_(first_pass),
+          policy_(policy) {}
+    http_response_preparation(http_buffered_compression_step first_pass,
+        http_response_coding_policy policy, buffered_response_recovery recovery,
+        buffered_response_recovery_step pending_step) noexcept
+        : first_pass_(first_pass),
+          policy_(policy),
+          recovery_(recovery),
+          pending_step_(pending_step) {}
 
     std::optional<prepared_application_response> ready_;
     http_buffered_compression_step first_pass_;
+    http_response_coding_policy policy_;
+    buffered_response_recovery recovery_;
+    std::optional<buffered_response_recovery_step> pending_step_;
 };
 
 // The post-response tail: final representation preparation (CORS,

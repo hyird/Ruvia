@@ -1,5 +1,3 @@
-#include "parser/http_serialized_origin.h"
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -9,12 +7,16 @@
 #include <variant>
 
 #include "ruvia/http/http_hex.h"
+#include "ruvia/http/http_origin.h"
 
 #include "parser/http_uri_grammar.h"
 
-namespace ruvia::detail {
-
+namespace ruvia {
 namespace {
+
+using detail::is_decimal_digit;
+using detail::parse_ipv4_address;
+using detail::parse_port_value;
 
 [[nodiscard]] bool is_lower_alpha(char value) noexcept {
     return value >= 'a' && value <= 'z';
@@ -349,4 +351,4 @@ bool is_valid_http_serialized_origin(std::string_view value) noexcept {
     return !default_port.has_value() || std::get<0>(port_value) != *default_port;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

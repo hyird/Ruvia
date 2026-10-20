@@ -7,7 +7,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 

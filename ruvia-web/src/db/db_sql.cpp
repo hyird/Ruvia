@@ -3,13 +3,16 @@
 #include <errmsg.h>
 #include <mysql.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/detail/db/db_sql_scan.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
@@ -107,11 +110,12 @@ db_error mysql_error(
             code == CR_ERR_NET_WRITE)) {
         error_code = db_error::code_type::io_error;
     }
-    std::pmr::string error(operation, process_resource());
+    std::string error(operation);
     error.append(" failed");
     if (code != 0) {
+        std::array<char, http_max_unsigned_decimal_size> digits;
         error.append(" [errno=");
-        append_db_number(error, static_cast<std::uint64_t>(code));
+        error.append(http_format_unsigned(digits, static_cast<std::uint64_t>(code)));
         error.push_back(']');
     }
     if (state_value != nullptr && state_value[0] != '\0') {
@@ -123,7 +127,7 @@ db_error mysql_error(
         error.append(": ");
         error.append(message);
     }
-    return db_error(error_code, db_driver::mariadb, std::string(error),
+    return db_error(error_code, db_driver::mariadb, std::move(error),
         code == 0 ? std::nullopt : std::optional<std::int64_t>(code),
         state_value == nullptr ? std::string{} : std::string(state_value));
 }

@@ -11,8 +11,9 @@
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/redis/redis_entity_key.h"
-#include "ruvia/web/detail/redis/redis_utils.h"
 #include "ruvia/web/redis/redis_predicate.h"
+
+#include "redis/redis_utils.h"
 
 namespace ruvia::detail {
 namespace {

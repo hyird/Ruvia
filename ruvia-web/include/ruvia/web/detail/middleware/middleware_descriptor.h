@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <memory_resource>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -8,6 +10,7 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/web/detail/router/route_handlers.h"
+#include "ruvia/web/detail/util/registration_resource.h"
 #include "ruvia/web/middleware.h"
 
 namespace ruvia {
@@ -126,7 +129,8 @@ public:
     owned_middleware_descriptor& operator=(const owned_middleware_descriptor&) = delete;
 
     owned_middleware_descriptor(owned_middleware_descriptor&& other) noexcept
-        : descriptor_(other.descriptor_),
+        : prefix_(std::move(other.prefix_)),
+          descriptor_(other.descriptor_.scoped_to(prefix_)),
           release_args_(std::exchange(other.release_args_, nullptr)) {}
     owned_middleware_descriptor& operator=(owned_middleware_descriptor&&) = delete;
 
@@ -140,12 +144,14 @@ public:
         return descriptor_;
     }
 
-    [[nodiscard]] owned_middleware_descriptor scoped_to(std::string_view prefix) && noexcept {
-        descriptor_ = descriptor_.scoped_to(prefix);
+    [[nodiscard]] owned_middleware_descriptor scoped_to(std::string_view prefix) && {
+        prefix_.assign(prefix);
+        descriptor_ = descriptor_.scoped_to(prefix_);
         return std::move(*this);
     }
 
 private:
+    std::pmr::string prefix_{registration_resource()};
     controller_middleware_descriptor descriptor_;
     release_args_type release_args_{nullptr};
 };

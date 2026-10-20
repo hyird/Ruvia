@@ -1,46 +1,30 @@
 #include "ruvia/core/worker_group.h"
 
+#include <cstddef>
 #include <exception>
 #include <stdexcept>
 #include <string>
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/worker_runtime.h"
 
 namespace ruvia {
-namespace {
-
-// The end of the tier that starts at `begin`.
-template <typename members_type>
-[[nodiscard]] std::size_t tier_end(const members_type& members, std::size_t begin) noexcept {
-    auto end = begin;
-    while (end < members.size() && members[end].tier_ == members[begin].tier_) {
-        ++end;
-    }
-    return end;
-}
-
-}  // namespace
-
 worker_group::worker_group(std::pmr::memory_resource* resource)
     : members_(pmr_resource_or_default(resource)) {}
 
 worker_group::~worker_group() {
-    for (const auto& member : members_) {
-        member.runtime_->unbind_group(*this);
+    for (auto* member : members_) {
+        member->unbind_group(*this);
     }
 }
 
-void worker_group::add(worker_runtime& member, std::size_t tier) {
+void worker_group::add(worker_runtime& member) {
     const std::lock_guard lock(mutex_);
     if (sealed_ || stopping_) {
         throw std::logic_error("worker group members must be added before start or stop");
     }
-    if (!members_.empty() &&
-        (tier < members_.back().tier_ || tier - members_.back().tier_ > 1)) {
-        throw std::invalid_argument("worker group tiers must be added in order");
-    }
-    members_.push_back({.runtime_ = &member, .tier_ = tier});
+    members_.push_back(&member);
     try {
         member.bind_group(*this);
     } catch (...) {
@@ -58,19 +42,15 @@ bool worker_group::start() {
         sealed_ = true;
     }
     try {
-        for (std::size_t begin = 0; begin < members_.size();) {
-            const auto end = tier_end(members_, begin);
-            for (auto index = begin; index != end; ++index) {
-                if (!launch(*members_[index].runtime_)) {
-                    return settle(false, "ready");
-                }
+        for (auto* member : members_) {
+            if (!launch(*member)) {
+                return settle(false, "ready");
             }
-            for (auto index = begin; index != end; ++index) {
-                if (!settle(members_[index].runtime_->wait_until_ready(), "ready")) {
-                    return false;
-                }
+        }
+        for (auto* member : members_) {
+            if (!settle(member->wait_until_ready(), "ready")) {
+                return false;
             }
-            begin = end;
         }
         const bool reached = settle(true, "ready");
         if (reached) {
@@ -95,23 +75,16 @@ bool worker_group::serve() {
         serve_requested_ = true;
     }
     try {
-        for (auto end = members_.size(); end != 0;) {
-            auto begin = end - 1;
-            while (begin != 0 && members_[begin - 1].tier_ == members_[end - 1].tier_) {
-                --begin;
+        for (auto* member : members_) {
+            if (stop_requested()) {
+                return settle(false, "serving");
             }
-            for (auto index = begin; index != end; ++index) {
-                if (stop_requested()) {
-                    return settle(false, "serving");
-                }
-                members_[index].runtime_->request_serve();
+            member->request_serve();
+        }
+        for (auto* member : members_) {
+            if (!settle(member->wait_until_serving(), "serving")) {
+                return false;
             }
-            for (auto index = begin; index != end; ++index) {
-                if (!settle(members_[index].runtime_->wait_until_serving(), "serving")) {
-                    return false;
-                }
-            }
-            end = begin;
         }
         return settle(true, "serving");
     } catch (...) {
@@ -153,8 +126,8 @@ void worker_group::request_stop() noexcept {
     // Publish group stop before notifying members, which can reenter it.
     // Every caller closes admission on all members; repeats are nonwaiting
     // even while the winning dispatch is notifying an earlier member.
-    for (const auto& member : members_) {
-        member.runtime_->request_stop();
+    for (auto* member : members_) {
+        member->request_stop();
     }
     if (!dispatch) {
         return;
@@ -176,31 +149,21 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
     }
     request_stop();
     wait_for_stop_dispatch();
-    for (std::size_t begin = 0; begin < members_.size();) {
-        const auto end = tier_end(members_, begin);
-        if (begin != 0) {
-            // Every producer feeding this tier has joined.
-            for (auto index = begin; index != end; ++index) {
-                members_[index].runtime_->finalize();
-            }
+    for (auto* member : members_) {
+        try {
+            member->join();
+        } catch (...) {
+            // join() only rejects a member's own thread, which can never
+            // own the lifecycle; a stranded owner cannot be recovered.
+            std::terminate();
         }
-        for (auto index = begin; index != end; ++index) {
-            try {
-                members_[index].runtime_->join();
-            } catch (...) {
-                // join() only rejects a member's own thread, which can never
-                // own the lifecycle; a stranded owner cannot be recovered.
-                std::terminate();
-            }
-        }
-        begin = end;
     }
     // The returned failure is settled before any report, so it is never also
     // reported here: the caller's primary, else the first member failure in
-    // tier order.
+    // registration order.
     if (primary == nullptr) {
-        for (const auto& member : members_) {
-            if (auto failure = member.runtime_->failure(); failure != nullptr) {
+        for (auto* member : members_) {
+            if (auto failure = member->failure(); failure != nullptr) {
                 primary = std::move(failure);
                 break;
             }
@@ -209,20 +172,20 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
     // Workers commonly fail for one shared cause (an unreachable dependency),
     // so equivalent failures collapse into a single line with their count.
     for (std::size_t index = 0; index != members_.size(); ++index) {
-        const auto failure = members_[index].runtime_->failure();
+        const auto failure = members_[index]->failure();
         if (failure == nullptr || equivalent_failures(failure, primary)) {
             continue;
         }
         bool reported = false;
         for (std::size_t earlier = 0; earlier != index && !reported; ++earlier) {
-            reported = equivalent_failures(members_[earlier].runtime_->failure(), failure);
+            reported = equivalent_failures(members_[earlier]->failure(), failure);
         }
         if (reported) {
             continue;
         }
         std::size_t occurrences = 1;
         for (auto later = index + 1; later != members_.size(); ++later) {
-            if (equivalent_failures(members_[later].runtime_->failure(), failure)) {
+            if (equivalent_failures(members_[later]->failure(), failure)) {
                 ++occurrences;
             }
         }

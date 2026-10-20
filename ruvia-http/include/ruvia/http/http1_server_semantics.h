@@ -6,7 +6,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/server/http_final_response_control_plan.h"
 #include "ruvia/http/http1_close_policy.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_response_head_plan.h"
@@ -100,26 +99,16 @@ inline void http1_mark_connection_close(http_response& response,
                                                                               : "close");
 }
 
+namespace detail {
+enum class http1_final_response_control_plan_error : std::uint8_t;
+}  // namespace detail
+
 class http1_final_response_commit_result;
 class http1_final_response_commit_failure;
 
 class http1_final_response_commit_error final : public std::exception {
 public:
-    [[nodiscard]] const char* what() const noexcept override {
-        switch (error_) {
-            case detail::http1_final_response_control_plan_error::invalid_status:
-                return "invalid final HTTP response status";
-            case detail::http1_final_response_control_plan_error::invalid_connection_field:
-                return "invalid HTTP Connection header";
-            case detail::http1_final_response_control_plan_error::invalid_upgrade_field:
-                return "invalid HTTP Upgrade header";
-            case detail::http1_final_response_control_plan_error::upgrade_required:
-                return "Upgrade Required response requires an Upgrade protocol";
-            case detail::http1_final_response_control_plan_error::te_field_forbidden:
-                return "TE is not a response field";
-        }
-        return "unknown HTTP final response commit failure";
-    }
+    [[nodiscard]] const char* what() const noexcept override;
 
 private:
     friend class http1_final_response_commit_failure;
@@ -140,8 +129,8 @@ private:
     friend class http1_final_response_commit_result;
 
     explicit http1_final_response_commit_failure(
-        const detail::http1_final_response_control_plan_failure& failure) noexcept
-        : error_(failure.error()) {}
+        detail::http1_final_response_control_plan_error error) noexcept
+        : error_(error) {}
 
     detail::http1_final_response_control_plan_error error_;
 };
@@ -180,8 +169,8 @@ private:
     }
 
     [[nodiscard]] static http1_final_response_commit_result failure(
-        const detail::http1_final_response_control_plan_failure& failure) noexcept {
-        return http1_final_response_commit_result(http1_final_response_commit_failure(failure));
+        detail::http1_final_response_control_plan_error error) noexcept {
+        return http1_final_response_commit_result(http1_final_response_commit_failure(error));
     }
 
     value_type value_;
@@ -192,45 +181,8 @@ private:
 // it honors an application-provided Connection: close and emits the version-
 // appropriate Connection field. Success retains the exact request version for
 // head serialization; wire-message failures remain typed.
-[[nodiscard]] inline http1_final_response_commit_result http1_commit_final_response(
-    http_response& response, http1_request_connection_plan plan) {
-    const auto control_result = detail::http1_final_response_control_plan(response);
-    if (const auto* failure = control_result.failure()) {
-        return http1_final_response_commit_result::failure(*failure);
-    }
-    const auto& http1_control = *control_result.control();
-    const auto response_options = http1_control.connection_options();
-    const auto upgrade_protocols = http1_control.upgrade_protocols();
-    const bool preserve_upgrade = upgrade_protocols.has_field();
-    const bool generate_upgrade_option = preserve_upgrade && !response_options.upgrade();
-    if (generate_upgrade_option) {
-        if (response_options.has_field()) {
-            response.header("Connection", "Upgrade",
-                http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
-        } else {
-            response.header_stable_view("Connection", "Upgrade");
-        }
-    }
-    // A failed CONNECT never becomes a tunnel. RFC 9931 section 8 requires
-    // closing instead of interpreting optimistic tunnel data as more requests.
-    if (response_options.close() || (plan.tunnel_request() && !response.status().is_successful())) {
-        plan = plan.require_close();
-    }
-    if (plan.disposition() == http1_close_policy::close_after_response) {
-        http1_mark_connection_close(response, preserve_upgrade
-                                                  ? http1_connection_close_field_policy::preserve_upgrade
-                                                  : http1_connection_close_field_policy::close_only);
-    } else if (plan.protocol_version() == http_protocol_version::http10 &&
-               !response_options.keep_alive()) {
-        if (response_options.has_field() || generate_upgrade_option) {
-            response.header("Connection", "keep-alive",
-                http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
-        } else {
-            response.header_stable_view("Connection", "keep-alive");
-        }
-    }
-    return http1_final_response_commit_result::committed(plan);
-}
+[[nodiscard]] http1_final_response_commit_result http1_commit_final_response(
+    http_response& response, http1_request_connection_plan plan);
 
 class prepared_http1_response_stream_result;
 
@@ -315,62 +267,16 @@ private:
     value_type value_;
 };
 
-[[nodiscard]] inline prepared_http1_response_stream_result prepare_http1_response_stream_head(
+[[nodiscard]] prepared_http1_response_stream_result prepare_http1_response_stream_head(
     http_response response, http_response_stream_kind kind, const http1_response_stream_plan& plan,
-    http_response_trailer_intent trailer_intent) {
-    auto commit_plan = plan_http_response_stream_commit(
-        plan.framing(), plan.request_method(), response.status(), trailer_intent);
-    const auto body_plan = commit_plan.body_plan();
-    // HTTP/1.0 cannot delimit an open-ended response stream without closing the
-    // connection, but a response whose method/status forbids payload is already
-    // self-delimited. Make this decision at head commit, when the response status is
-    // finally known, instead of pessimistically baking close into the pre-commit plan.
-    const auto planned_connection =
-        plan.request_connection_plan().disposition() == http1_close_policy::allow_reuse &&
-                plan.close_policy() == http1_close_policy::allow_reuse &&
-                (plan.framing() != http_response_stream_framing::http1_close_delimited ||
-                    body_plan.body_suppressed())
-            ? plan.request_connection_plan()
-            : plan.request_connection_plan().require_close();
-    const auto commit_result = http1_commit_final_response(response, planned_connection);
-    if (const auto* failure = commit_result.failure()) {
-        return prepared_http1_response_stream_result(*failure);
-    }
-    const auto connection_plan = *commit_result.committed();
-    auto head = prepare_http_response_stream_head(std::move(response), kind, std::move(commit_plan));
-    const auto response_head_plan =
-        plan.framing() == http_response_stream_framing::http1_chunked
-            ? http1_chunked_response_stream_head_plan(head.commit_plan().body_plan(), connection_plan)
-            : http1_close_delimited_response_stream_head_plan(
-                  head.commit_plan().body_plan(), connection_plan);
-    return prepared_http1_response_stream_result(
-        prepared_http1_response_stream(std::move(head), response_head_plan, connection_plan));
-}
+    http_response_trailer_intent trailer_intent);
 
 // Commit an incrementally written response whose decoded representation length
 // is already known from the upstream protocol. The shared body policy still
 // suppresses payload for HEAD/204/304, while the HTTP/1 head owns a canonical
 // length and the runtime may keep the connection reusable on either version.
-[[nodiscard]] inline prepared_http1_response_stream_result prepare_http1_known_length_response_stream_head(
+[[nodiscard]] prepared_http1_response_stream_result prepare_http1_known_length_response_stream_head(
     http_response response, std::uint64_t content_length, http_response_stream_kind kind,
-    const http1_response_stream_plan& plan) {
-    auto commit_plan = plan_http_response_stream_commit(http_response_stream_framing::http1_known_length,
-        plan.request_method(), response.status(), http_response_trailer_intent::none);
-    const auto planned_connection =
-        plan.request_connection_plan().disposition() == http1_close_policy::allow_reuse &&
-                plan.close_policy() == http1_close_policy::allow_reuse
-            ? plan.request_connection_plan()
-            : plan.request_connection_plan().require_close();
-    const auto commit_result = http1_commit_final_response(response, planned_connection);
-    if (const auto* failure = commit_result.failure()) {
-        return prepared_http1_response_stream_result(*failure);
-    }
-    const auto connection_plan = *commit_result.committed();
-    auto head = prepare_http_response_stream_head(std::move(response), kind, std::move(commit_plan));
-    const auto response_head_plan = http1_known_length_response_stream_head_plan(
-        head.commit_plan().body_plan(), connection_plan, content_length);
-    return prepared_http1_response_stream_result(
-        prepared_http1_response_stream(std::move(head), response_head_plan, connection_plan));
-}
+    const http1_response_stream_plan& plan);
 
 }  // namespace ruvia

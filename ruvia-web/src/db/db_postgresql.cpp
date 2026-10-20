@@ -8,8 +8,9 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/detail/db/db_utils.h"
+#include "ruvia/web/detail/db/db_value_access.h"
 
 namespace ruvia::detail {
 namespace {
@@ -27,7 +28,7 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
     if (error_code == db_error::code_type::statement_failed && PQstatus(&connection) == CONNECTION_BAD) {
         error_code = db_error::code_type::io_error;
     }
-    std::pmr::string error(operation, process_resource());
+    std::string error(operation);
     error.append(" failed");
     const char* state_value = result_value == nullptr
                                   ? nullptr
@@ -52,7 +53,7 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
             error.pop_back();
         }
     }
-    return db_error(error_code, db_driver::postgresql, std::string(error), std::nullopt,
+    return db_error(error_code, db_driver::postgresql, std::move(error), std::nullopt,
         state_value == nullptr ? std::string{} : std::string(state_value),
         constraint == nullptr ? std::string{} : std::string(constraint));
 }

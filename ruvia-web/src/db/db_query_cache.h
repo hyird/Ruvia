@@ -53,9 +53,6 @@ public:
     [[nodiscard]] task<db_rows> operator()(operation_options options) &&;
 
 private:
-    static task<db_rows> execute_owned(db_query_backend backend, std::pmr::string sql,
-        std::pmr::vector<db_value> params, operation_options options);
-
     db_query_backend backend_;
     std::pmr::string sql_;
     std::pmr::vector<db_value> params_;

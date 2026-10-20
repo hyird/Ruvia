@@ -7,6 +7,7 @@
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/core/detail/suspend_race_state.h"
@@ -16,7 +17,68 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait_result.h"
 
+namespace ruvia {
+template <typename t_type>
+class channel_sender;
+template <typename t_type>
+class one_shot_completion;
+}  // namespace ruvia
+
 namespace ruvia::detail {
+
+template <typename t_type, typename status_type, status_type accepted_status>
+class worker_delivery_result final {
+public:
+    worker_delivery_result(const worker_delivery_result&) = delete;
+    worker_delivery_result& operator=(const worker_delivery_result&) = delete;
+    worker_delivery_result(worker_delivery_result&&) noexcept(
+        std::is_nothrow_move_constructible_v<t_type>) = default;
+    worker_delivery_result& operator=(worker_delivery_result&&) noexcept(
+        std::is_nothrow_move_constructible_v<t_type> && std::is_nothrow_move_assignable_v<t_type>) = default;
+
+    [[nodiscard]] status_type status() const noexcept {
+        return status_;
+    }
+
+    [[nodiscard]] bool accepted() const noexcept {
+        return status_ == accepted_status;
+    }
+
+    [[nodiscard]] t_type* rejected() & noexcept {
+        return rejected_ ? &*rejected_ : nullptr;
+    }
+
+    [[nodiscard]] const t_type* rejected() const& noexcept {
+        return rejected_ ? &*rejected_ : nullptr;
+    }
+
+    t_type* rejected() && = delete;
+    const t_type* rejected() const&& = delete;
+
+private:
+    friend class ::ruvia::channel_sender<t_type>;
+    friend class ::ruvia::one_shot_completion<t_type>;
+
+    explicit worker_delivery_result(status_type status) noexcept
+        : status_(status) {}
+
+    worker_delivery_result(status_type status, t_type&& rejected) noexcept(
+        std::is_nothrow_move_constructible_v<t_type>)
+        : status_(status),
+          rejected_(std::move(rejected)) {}
+
+    [[nodiscard]] static worker_delivery_result accept() noexcept {
+        return worker_delivery_result(accepted_status);
+    }
+
+    [[nodiscard]] static worker_delivery_result reject(status_type status, t_type&& value) noexcept(
+        std::is_nothrow_move_constructible_v<t_type>) {
+        return worker_delivery_result(status, std::move(value));
+    }
+
+    status_type status_;
+    std::optional<t_type> rejected_;
+};
 
 // The worker wait completion race is the suspend_race_state pattern with a
 // worker_wait_result payload.
@@ -117,7 +179,8 @@ template <typename state_type, typename... arg_types>
     std::pmr::memory_resource* resource, arg_types&&... args) {
     auto state_value = std::allocate_shared<state_type>(
         std::pmr::polymorphic_allocator<state_type>(resource), std::forward<arg_types>(args)...);
-    worker_handle_access::register_shutdown_hook(state_value->worker_, state_value, &state_type::shutdown_hook_);
+    worker_handle_access::register_shutdown_hook(
+        state_value->worker_, state_value->shutdown_hook_, state_value, worker_shutdown_operations<state_type>);
     return state_value;
 }
 
@@ -188,18 +251,8 @@ public:
                 try {
                     status = owner_value.worker_.schedule_timer(timer_,
                         worker_timer_deadline_after(*timeout_),
-                        [&owner_value, waiter, completion = &completion_](worker_timer_outcome outcome) {
-                            {
-                                auto state_lock = owner_value.lock_state();
-                                // Still pending: a cancellation reaching a pending
-                                // wait comes only from stop_timers().
-                                if (owner_value.wait_slot_.detach(waiter)) {
-                                    (void)completion->complete(worker_wait_result_access::outcome<t_type>(
-                                        outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out
-                                                                                 : worker_wait_status::worker_stopping));
-                                }
-                            }
-                            completion->continuation().resume();
+                        [waiter](worker_timer_outcome outcome) noexcept {
+                            waiter->on_timer_completed(outcome);
                         });
                 } catch (...) {
                     (void)slot.detach(waiter);
@@ -257,18 +310,40 @@ private:
         completion_.continuation().resume();
     }
 
+    void on_timer_completed(worker_timer_outcome outcome) noexcept {
+        {
+            auto& owner_value = state();
+            auto state_lock = owner_value.lock_state();
+            // Still pending: a cancellation reaching a pending wait comes only
+            // from stop_timers().
+            if (owner_value.wait_slot_.detach(this)) {
+                (void)completion_.complete(worker_wait_result_access::outcome<t_type>(
+                    outcome == worker_timer_outcome::expired ? worker_wait_status::timed_out
+                                                             : worker_wait_status::worker_stopping));
+            }
+        }
+        completion_.continuation().resume();
+    }
+
+    static void cancel_generation_on_worker(state_type& state_value, std::uint64_t generation) {
+        auto lock = state_value.lock_state();
+        state_value.wait_slot_.cancel(generation);
+    }
+
+    static void request_cancellation(const std::shared_ptr<state_type>& state_value, std::uint64_t generation) {
+        (void)worker_handle_access::defer_if_attached(state_value->worker_,
+            [state_value, generation] { cancel_generation_on_worker(*state_value, generation); });
+    }
+
     // The callback only forwards (state, generation) to the worker, which
     // validates them under the state lock. The awaiter's state_ outlives the
     // registration, whose teardown waits for a running callback, so the
     // callback borrows it and copies the shared_ptr only into the posted work.
     void register_cancellation() {
-        stop_token_.register_callback(stop_registration_, [state_value = &state_, generation = generation_] {
-            (void)worker_handle_access::defer_if_attached((*state_value)->worker_,
-                [state_value = *state_value, generation] {
-                    auto lock = state_value->lock_state();
-                    state_value->wait_slot_.cancel(generation);
-                });
-        });
+        stop_token_.register_callback(stop_registration_,
+            [state_value = &state_, generation = generation_] {
+                request_cancellation(*state_value, generation);
+            });
     }
 
     std::shared_ptr<state_type> state_;

@@ -346,84 +346,101 @@ void add_file_headers(http_response& response, const file_response_source& sourc
     }
 }
 
+void apply_file_response_state(const context& context_value, const file_response_source& source_value,
+    http_response& response, std::optional<http_status_code> status_code) {
+    detail::context_access::apply_response_state(context_value, response, status_code);
+    // Declare the negotiation dimension after context response metadata is
+    // applied. A caller-provided Vary value must be merged, not allowed to
+    // overwrite Accept-Encoding and make differently encoded variants share
+    // one cache entry (RFC 9110 12.5.5 / RFC 9111 4.1). context::file does no
+    // Accept-Encoding negotiation and stays Vary-free.
+    if (source_value.negotiates_encoding_) {
+        response.add_vary_token("Accept-Encoding");
+    }
+}
+
+void set_file_body(const context& context_value, file_response_source& source_value,
+    http_response& response, std::uint64_t offset, std::uint64_t length) {
+    source_value.body_.set_body(response, context_value.arena(), source_value.size_, offset, length);
+}
+
+void set_full_file_body(const context& context_value, file_response_source& source_value,
+    http_response& response) {
+    source_value.body_.set_full_body(response, context_value.arena(), source_value.size_);
+}
+
+void validate_indexed_file_for_bodyless_response(
+    const file_response_source& source_value, bool& indexed_file_validated) {
+    if (source_value.validate_indexed_file_for_bodyless_response_ && !indexed_file_validated) {
+        source_value.body_.validate_current(source_value.size_);
+        indexed_file_validated = true;
+    }
+}
+
+[[nodiscard]] http_response make_not_modified_response(const context& context_value,
+    const file_response_source& source_value, const file_validators& validators,
+    bool& indexed_file_validated, http_status_code status_code) {
+    validate_indexed_file_for_bodyless_response(source_value, indexed_file_validated);
+    http_response response({.resource_ = context_value.arena()});
+    add_file_headers(response, source_value, validators, true);
+    apply_file_response_state(context_value, source_value, response, status_code);
+    return response;
+}
+
+[[nodiscard]] http_response make_full_file_response(const context& context_value,
+    file_response_source& source_value, const file_validators& validators,
+    std::optional<http_status_code> status_code) {
+    http_response response({.resource_ = context_value.arena()});
+    add_file_headers(response, source_value, validators);
+    set_full_file_body(context_value, source_value, response);
+    apply_file_response_state(context_value, source_value, response, status_code);
+    return response;
+}
+
+[[nodiscard]] http_response make_multipart_response(const context& context_value,
+    file_response_source& source_value, const file_validators& validators,
+    const http_byte_range_set& ranges) {
+    std::array<char, 48> boundary_token{};
+    const auto token_result = detail::generate_secure_token(boundary_token);
+    const auto* token = token_result.ready();
+    if (token == nullptr) {
+        throw std::runtime_error("secure multipart boundary generation failed");
+    }
+    std::pmr::string boundary(token->value(), context_value.arena());
+    http_response response({.resource_ = context_value.arena()});
+    add_file_headers(response, source_value, validators);
+    apply_file_response_state(context_value, source_value, response, http_status::partial_content);
+    const auto media_type = response.header("Content-Type");
+    const auto selected_media_type = media_type.value_or(source_value.body_.guessed_content_type());
+    const auto content_encoding = source_value.content_coding_ == http_content_coding::identity
+                                      ? std::string_view{}
+                                      : http_content_coding_token(source_value.content_coding_);
+    auto multipart_plan = make_http_multipart_byte_range_plan(ranges, source_value.size_,
+        selected_media_type, boundary, content_encoding, context_value.arena());
+
+    // The outer representation is multipart, not the encoded file bytes.
+    // Carry the selected representation's coding on each part instead.
+    response.header("Content-Type", multipart_plan.content_type());
+    response.remove_header("Content-Range");
+    response.remove_header("Content-Encoding");
+    response.remove_header("Content-Length");
+    source_value.body_.set_multipart_body(
+        response, context_value.arena(), source_value.size_, std::move(multipart_plan));
+    return response;
+}
+
 [[nodiscard]] http_response make_file_response(const context& context_value, file_response_source source_value) {
     const auto& request = detail::context_access::request(context_value);
     std::pmr::string etag_storage(context_value.pool());
     std::array<char, http_imf_fixdate_size> last_modified_storage{};
     const auto validators = compute_file_validators(source_value, etag_storage, last_modified_storage);
     const bool honor_range_requests = source_value.range_requests_ == static_range_request_policy::honor;
-    auto apply_file_response_state = [&](http_response& response,
-                                         std::optional<http_status_code> status_code) {
-        detail::context_access::apply_response_state(context_value, response, status_code);
-        // Declare the negotiation dimension after context response metadata is
-        // applied. A caller-provided Vary value must be merged, not allowed to
-        // overwrite Accept-Encoding and make differently encoded variants share
-        // one cache entry (RFC 9110 12.5.5 / RFC 9111 4.1). context::file does no
-        // Accept-Encoding negotiation and stays Vary-free.
-        if (source_value.negotiates_encoding_) {
-            response.add_vary_token("Accept-Encoding");
-        }
-    };
-    auto set_file_body = [&](http_response& response, std::uint64_t offset, std::uint64_t length) {
-        source_value.body_.set_body(response, context_value.arena(), source_value.size_, offset, length);
-    };
-    auto set_full_file_body = [&](http_response& response) {
-        source_value.body_.set_full_body(response, context_value.arena(), source_value.size_);
-    };
     // Body writes validate the indexed identity when opening the file. Responses
     // without file bytes (HEAD, 304, 412, 416) need that check here instead.
     bool indexed_file_validated = false;
-    auto validate_indexed_file_for_bodyless_response = [&] {
-        if (source_value.validate_indexed_file_for_bodyless_response_ && !indexed_file_validated) {
-            source_value.body_.validate_current(source_value.size_);
-            indexed_file_validated = true;
-        }
-    };
-    auto make_not_modified_response = [&](http_status_code status_code) {
-        validate_indexed_file_for_bodyless_response();
-        http_response response({.resource_ = context_value.arena()});
-        add_file_headers(response, source_value, validators, true);
-        apply_file_response_state(response, status_code);
-        return response;
-    };
-    auto make_full_file_response = [&](std::optional<http_status_code> status_code) {
-        http_response response({.resource_ = context_value.arena()});
-        add_file_headers(response, source_value, validators);
-        set_full_file_body(response);
-        apply_file_response_state(response, status_code);
-        return response;
-    };
-    auto make_multipart_response = [&](const http_byte_range_set& ranges) {
-        std::array<char, 48> boundary_token{};
-        const auto token_result = detail::generate_secure_token(boundary_token);
-        const auto* token = token_result.ready();
-        if (token == nullptr) {
-            throw std::runtime_error("secure multipart boundary generation failed");
-        }
-        std::pmr::string boundary(token->value(), context_value.arena());
-        http_response response({.resource_ = context_value.arena()});
-        add_file_headers(response, source_value, validators);
-        apply_file_response_state(response, http_status::partial_content);
-        const auto media_type = response.header("Content-Type");
-        const auto selected_media_type = media_type.value_or(source_value.body_.guessed_content_type());
-        const auto content_encoding = source_value.content_coding_ == http_content_coding::identity
-                                          ? std::string_view{}
-                                          : http_content_coding_token(source_value.content_coding_);
-        auto multipart_plan = make_http_multipart_byte_range_plan(ranges, source_value.size_,
-            selected_media_type, boundary, content_encoding, context_value.arena());
-
-        // The outer representation is multipart, not the encoded file bytes.
-        // Carry the selected representation's coding on each part instead.
-        response.header("Content-Type", multipart_plan.content_type());
-        response.remove_header("Content-Range");
-        response.remove_header("Content-Encoding");
-        response.remove_header("Content-Length");
-        source_value.body_.set_multipart_body(response, context_value.arena(), source_value.size_, std::move(multipart_plan));
-        return response;
-    };
 
     if (request.known_method() == http_known_method::head) {
-        validate_indexed_file_for_bodyless_response();
+        validate_indexed_file_for_bodyless_response(source_value, indexed_file_validated);
     }
     const auto plan = plan_http_representation_response(request,
         http_selected_representation_metadata{
@@ -441,34 +458,35 @@ void add_file_headers(http_response& response, const file_response_source& sourc
                                                   : http_range_request_policy::ignore,
         });
     if (plan.precondition_failed()) {
-        validate_indexed_file_for_bodyless_response();
+        validate_indexed_file_for_bodyless_response(source_value, indexed_file_validated);
         throw http_error({.status_ = plan.status(),
             .code_ = "precondition_failed",
             .message_ = "file precondition failed"});
     }
     if (plan.not_modified()) {
-        return make_not_modified_response(plan.status());
+        return make_not_modified_response(
+            context_value, source_value, validators, indexed_file_validated, plan.status());
     }
     if (plan.range_unsatisfiable()) {
-        validate_indexed_file_for_bodyless_response();
+        validate_indexed_file_for_bodyless_response(source_value, indexed_file_validated);
         http_response response({.resource_ = context_value.arena()});
         response.content_range_unsatisfied(source_value.size_);
         add_file_headers(response, source_value, validators);
-        apply_file_response_state(response, plan.status());
+        apply_file_response_state(context_value, source_value, response, plan.status());
         return response;
     }
     if (const auto* ranges = plan.multipart_ranges()) {
-        return make_multipart_response(*ranges);
+        return make_multipart_response(context_value, source_value, validators, *ranges);
     }
     if (const auto* range = plan.partial()) {
         http_response response({.resource_ = context_value.arena()});
         add_file_headers(response, source_value, validators);
         response.content_range(range->offset(), range->length(), source_value.size_);
-        set_file_body(response, range->offset(), range->length());
-        apply_file_response_state(response, plan.status());
+        set_file_body(context_value, source_value, response, range->offset(), range->length());
+        apply_file_response_state(context_value, source_value, response, plan.status());
         return response;
     }
-    return make_full_file_response(plan.status());
+    return make_full_file_response(context_value, source_value, validators, plan.status());
 }
 
 }  // namespace

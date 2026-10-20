@@ -1,14 +1,14 @@
 #pragma once
 
-#include <charconv>
 #include <cstdint>
 #include <optional>
-#include <system_error>
 #include <type_traits>
 #include <variant>
 
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/http_response.h"
+
+#include "coding/http_content_length.h"
 
 namespace ruvia::detail {
 
@@ -124,14 +124,13 @@ private:
         }
 
         const auto value = response.headers().header("content-length").value_or("");
-        std::uint64_t parsed_value = 0;
-        const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed_value);
-        if (value.empty() || ec != std::errc{} || ptr != value.data() + value.size()) {
+        http_content_length_state state;
+        if (state.parse_field(value) != http_content_length_parse_status::ok) {
             return http2_response_head_plan_result(
                 http2_response_head_plan_failure(http2_response_head_plan_error::invalid_content_length));
         }
         return http2_response_head_plan_result(http2_response_head_plan(
-            body_plan, http2_response_head_plan::content_length_mode_type::explicit_value, parsed_value));
+            body_plan, http2_response_head_plan::content_length_mode_type::explicit_value, *state.value()));
     }
 
     [[nodiscard]] static http2_response_head_plan_result omit(http_response_body_plan body_plan) noexcept {

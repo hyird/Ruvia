@@ -3,91 +3,21 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <utility>
-#include <variant>
 
+#include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/worker_wait_result.h"
 
 namespace ruvia::detail {
-
-struct pool_waiter_idle final {};
-struct pool_waiter_queued final {};
-
-using pool_waiter_result_type = worker_wait_result<std::size_t>;
-
-// One coroutine waiting for a free pool_lease_scheduler slot. The node lives
-// on the waiting coroutine's frame; the queue owns only the intrusive links,
-// so enqueuing costs no allocation.
-// pool_waiter is its own awaiter: the queue commits one typed result before it
-// resumes the coroutine, so callers never coordinate external readiness flags.
-class pool_waiter final {
-public:
-    explicit pool_waiter(std::uint64_t id) noexcept
-        : id_(id) {}
-
-    pool_waiter(const pool_waiter&) = delete;
-    pool_waiter& operator=(const pool_waiter&) = delete;
-
-    [[nodiscard]] bool await_ready() const noexcept {
-        return std::holds_alternative<pool_waiter_result_type>(state_);
-    }
-
-    void await_suspend(std::coroutine_handle<> handle) noexcept {
-        handle_ = handle;
-    }
-
-    [[nodiscard]] const pool_waiter_result_type& await_resume() const noexcept {
-        const auto* result_value = std::get_if<pool_waiter_result_type>(&state_);
-        if (result_value == nullptr) {
-            std::terminate();
-        }
-        return *result_value;
-    }
-
-private:
-    friend class pool_waiter_queue;
-
-    void complete(pool_waiter_result_type result_value) noexcept {
-        if (!std::holds_alternative<pool_waiter_idle>(state_)) {
-            std::terminate();
-        }
-        state_.template emplace<pool_waiter_result_type>(result_value);
-    }
-
-    void complete(worker_wait_status status) noexcept {
-        complete(worker_wait_result_access::outcome<std::size_t>(status));
-    }
-
-    void resume() noexcept {
-        auto handle = take_continuation();
-        if (handle) {
-            handle.resume();
-        }
-    }
-
-    [[nodiscard]] std::coroutine_handle<> take_continuation() noexcept {
-        return std::exchange(handle_, {});
-    }
-
-    using state_type = std::variant<pool_waiter_idle, pool_waiter_queued, pool_waiter_result_type>;
-
-    state_type state_;
-    std::uint64_t id_{0};
-    std::coroutine_handle<> handle_{};
-    pool_waiter* previous_{nullptr};
-    pool_waiter* next_{nullptr};
-};
 
 // Intrusive FIFO of one pool_lease_scheduler. The scheduler is only ever
 // touched from its worker thread, so the queue needs no synchronization.
 class pool_waiter_queue final {
 public:
-    // Only acquire_waiting() enqueues, with a freshly constructed idle waiter.
-    void enqueue(pool_waiter& waiter) noexcept {
+    void enqueue(pool_lease_acquire& waiter) noexcept {
         waiter.previous_ = tail_;
         waiter.next_ = nullptr;
-        waiter.state_.template emplace<pool_waiter_queued>();
+        waiter.queued_ = true;
         if (tail_ != nullptr) {
             tail_->next_ = &waiter;
         } else {
@@ -96,8 +26,8 @@ public:
         tail_ = &waiter;
     }
 
-    void remove(pool_waiter& waiter) noexcept {
-        if (!std::holds_alternative<pool_waiter_queued>(waiter.state_)) {
+    void remove(pool_lease_acquire& waiter) noexcept {
+        if (!waiter.queued_) {
             return;
         }
         if (waiter.previous_ != nullptr) {
@@ -112,7 +42,7 @@ public:
         }
         waiter.previous_ = nullptr;
         waiter.next_ = nullptr;
-        waiter.state_.template emplace<pool_waiter_idle>();
+        waiter.queued_ = false;
     }
 
     // Hand the freed slot `index` to the next waiter and resume it. Returns true
@@ -128,7 +58,7 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool cancel(pool_waiter& waiter) noexcept {
+    [[nodiscard]] bool cancel(pool_lease_acquire& waiter) noexcept {
         std::coroutine_handle<> continuation;
         if (!commit_cancellation(waiter, continuation)) {
             return false;
@@ -155,7 +85,7 @@ public:
 
     [[nodiscard]] bool expire(std::uint64_t id) noexcept {
         auto* waiter = find(id);
-        if (waiter == nullptr || !std::holds_alternative<pool_waiter_queued>(waiter->state_)) {
+        if (waiter == nullptr || !waiter->queued_) {
             return false;
         }
         remove(*waiter);
@@ -169,8 +99,8 @@ public:
     // time would let that continuation acquire a slot on behalf of a waiter
     // that should already have observed pool closure.
     void close_all() noexcept {
-        pool_waiter* closed_head = nullptr;
-        pool_waiter* closed_tail = nullptr;
+        pool_lease_acquire* closed_head = nullptr;
+        pool_lease_acquire* closed_tail = nullptr;
         while (head_ != nullptr) {
             auto* waiter = head_;
             remove(*waiter);
@@ -192,9 +122,9 @@ public:
 
 private:
     [[nodiscard]] bool commit_cancellation(
-        pool_waiter& waiter, std::coroutine_handle<>& continuation) noexcept {
+        pool_lease_acquire& waiter, std::coroutine_handle<>& continuation) noexcept {
         continuation = {};
-        if (!std::holds_alternative<pool_waiter_queued>(waiter.state_)) {
+        if (!waiter.queued_) {
             return false;
         }
         remove(waiter);
@@ -203,10 +133,10 @@ private:
         return true;
     }
 
-    [[nodiscard]] pool_waiter* find(std::uint64_t id) const noexcept {
+    [[nodiscard]] pool_lease_acquire* find(std::uint64_t id) const noexcept {
         auto* waiter = head_;
         while (waiter != nullptr) {
-            if (waiter->id_ == id) {
+            if (waiter->waiter_id_ == id) {
                 return waiter;
             }
             waiter = waiter->next_;
@@ -214,8 +144,8 @@ private:
         return nullptr;
     }
 
-    pool_waiter* head_{nullptr};
-    pool_waiter* tail_{nullptr};
+    pool_lease_acquire* head_{nullptr};
+    pool_lease_acquire* tail_{nullptr};
 };
 
 }  // namespace ruvia::detail

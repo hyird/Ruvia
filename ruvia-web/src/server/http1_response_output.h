@@ -124,6 +124,11 @@ public:
         asio::async_write(*stream_, remaining, http_write_progress(*progress_), std::forward<handler_type>(handler));
     }
 
+    [[nodiscard]] auto async_write_remaining() {
+        return async_asio<std::size_t>(
+            [this](auto handler) { this->write_remaining(std::move(handler)); });
+    }
+
     // Records the asynchronous remainder's outcome.
     void finish(std::error_code error, std::size_t bytes) noexcept {
         written_.error_ = error;
@@ -150,8 +155,7 @@ public:
         }
         if (!start()) {
             const connection_scanner::entry_type::phase_scope_type caller_phase(*progress_);
-            auto completion = co_await async_asio<std::size_t>(
-                [this](auto handler) { this->write_remaining(std::move(handler)); });
+            const auto completion = co_await async_write_remaining();
             finish(completion.error_code(), completion.result());
         }
         co_return complete().error_;

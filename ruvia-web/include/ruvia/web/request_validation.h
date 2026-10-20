@@ -43,39 +43,15 @@ template <validation_target target, typename body_t_type>
 }
 
 template <validation_target target, typename body_t_type>
-[[nodiscard]] task<body_t_type> parse_validated_body(context& c) {
-    if constexpr (target == validation_target::json) {
-        if (!detail::content_type_matches(
-                c.req().header("Content-Type").value_or(std::string_view{}), "application/json")) {
-            detail::throw_invalid_json_content_type();
-        }
-        const auto request_body = co_await c.req().text();
-        auto parsed_value =
-            detail::model_parse_access::parse_json_borrowed_partial<body_t_type>(request_body, c.arena());
-        if (!parsed_value) {
-            detail::throw_invalid_json_body();
-        }
-        co_return std::move(*parsed_value);
-    } else if constexpr (target == validation_target::form) {
-        if (!detail::content_type_matches(c.req().header("Content-Type").value_or(std::string_view{}),
-                "application/x-www-form-urlencoded")) {
-            detail::throw_invalid_form_content_type();
-        }
-        const auto request_body = co_await c.req().text();
-        auto parsed_value =
-            detail::model_parse_access::parse_form_borrowed_partial<body_t_type>(request_body, c.arena());
-        if (!parsed_value) {
-            detail::throw_invalid_form_body();
-        }
-        co_return std::move(*parsed_value);
-    } else if constexpr (target == validation_target::query) {
-        co_return parse_validated_fields<target, body_t_type>(c, c.req().query_fields());
+[[nodiscard]] body_t_type parse_validated_fields(context& c) {
+    if constexpr (target == validation_target::query) {
+        return parse_validated_fields<target, body_t_type>(c, c.req().query_fields());
     } else if constexpr (target == validation_target::param) {
-        co_return parse_validated_fields<target, body_t_type>(c, c.req().param_fields());
+        return parse_validated_fields<target, body_t_type>(c, c.req().param_fields());
     } else if constexpr (target == validation_target::header) {
-        co_return parse_validated_fields<target, body_t_type>(c, c.req().header_fields());
+        return parse_validated_fields<target, body_t_type>(c, c.req().header_fields());
     } else if constexpr (target == validation_target::cookie) {
-        co_return parse_validated_fields<target, body_t_type>(c, c.req().cookie_fields());
+        return parse_validated_fields<target, body_t_type>(c, c.req().cookie_fields());
     } else {
         static_assert(always_false<body_t_type>, "unsupported validator target");
     }
@@ -97,15 +73,45 @@ public:
     }
 
     [[nodiscard]] task<void> handle(context& c, next& next_value) {
-        body_t_type body = co_await parse_validated_body<target, body_t_type>(c);
-        validator validator_value({.resource_ = c.arena()});
-        validate(body, validator_value);
-        validator_value.throw_if_invalid();
         if constexpr (target == validation_target::json) {
+            if (!detail::content_type_matches(
+                    c.req().header("Content-Type").value_or(std::string_view{}), "application/json")) {
+                detail::throw_invalid_json_content_type();
+            }
             const auto raw_json = co_await c.req().text();
+            auto parsed_value =
+                detail::model_parse_access::parse_json_borrowed_partial<body_t_type>(raw_json, c.arena());
+            if (!parsed_value) {
+                detail::throw_invalid_json_body();
+            }
+            body_t_type body = std::move(*parsed_value);
+            validator validator_value({.resource_ = c.arena()});
+            validate(body, validator_value);
+            validator_value.throw_if_invalid();
             auto binding = bind_validated_json_model(c, body, raw_json);
             co_await next_value();
+        } else if constexpr (target == validation_target::form) {
+            if (!detail::content_type_matches(c.req().header("Content-Type").value_or(std::string_view{}),
+                    "application/x-www-form-urlencoded")) {
+                detail::throw_invalid_form_content_type();
+            }
+            const auto request_body = co_await c.req().text();
+            auto parsed_value =
+                detail::model_parse_access::parse_form_borrowed_partial<body_t_type>(request_body, c.arena());
+            if (!parsed_value) {
+                detail::throw_invalid_form_body();
+            }
+            body_t_type body = std::move(*parsed_value);
+            validator validator_value({.resource_ = c.arena()});
+            validate(body, validator_value);
+            validator_value.throw_if_invalid();
+            auto binding = bind_validated_model(c, body);
+            co_await next_value();
         } else {
+            body_t_type body = parse_validated_fields<target, body_t_type>(c);
+            validator validator_value({.resource_ = c.arena()});
+            validate(body, validator_value);
+            validator_value.throw_if_invalid();
             auto binding = bind_validated_model(c, body);
             co_await next_value();
         }

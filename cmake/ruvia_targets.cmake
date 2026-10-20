@@ -167,28 +167,3 @@ function(ruvia_install_public_header_closure component relative_dir)
         )
     endforeach()
 endfunction()
-
-function(ruvia_install_generated_public_header component generated_header relative_path)
-    set(_ruvia_expected_header_root "ruvia/${component}")
-    if(NOT relative_path MATCHES "^${_ruvia_expected_header_root}(/|$)")
-        message(FATAL_ERROR
-            "${component} cannot install a generated header outside ${_ruvia_expected_header_root}: ${relative_path}")
-    endif()
-
-    set(_ruvia_target_binary_dir "${CMAKE_CURRENT_BINARY_DIR}")
-    cmake_path(NORMAL_PATH _ruvia_target_binary_dir
-        OUTPUT_VARIABLE _ruvia_target_binary_root)
-    cmake_path(IS_PREFIX _ruvia_target_binary_root
-        "${generated_header}" NORMALIZE _ruvia_generated_header_is_owned)
-    if(NOT _ruvia_generated_header_is_owned)
-        message(FATAL_ERROR
-            "${component} generated header is outside its target build directory: ${generated_header}")
-    endif()
-
-    get_filename_component(_ruvia_header_install_subdir "${relative_path}" DIRECTORY)
-    install(
-        FILES "${generated_header}"
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${_ruvia_header_install_subdir}"
-        COMPONENT ${component}
-    )
-endfunction()

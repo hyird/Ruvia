@@ -66,12 +66,7 @@ std::pmr::string digest(std::string_view bytes_value, std::pmr::memory_resource*
 }  // namespace
 
 task<db_rows> db_cache_query::operator()(operation_options options) && {
-    return execute_owned(backend_, std::move(sql_), std::move(params_), std::move(options));
-}
-
-task<db_rows> db_cache_query::execute_owned(db_query_backend backend, std::pmr::string sql,
-    std::pmr::vector<db_value> params, operation_options options) {
-    co_return co_await query_db_backend(backend, std::move(sql), std::move(params), options);
+    return query_db_backend(backend_, std::move(sql_), std::move(params_), options);
 }
 
 // Format RUVIAQC2: row count, column count, the column names once, then for

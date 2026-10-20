@@ -40,7 +40,7 @@ struct jwt_clock_parts final {
     std::chrono::system_clock::duration fraction_{};
 };
 
-[[nodiscard]] jwt_clock_parts jwt_split_clock_time(std::chrono::system_clock::time_point value) noexcept {
+[[nodiscard]] constexpr jwt_clock_parts jwt_split_clock_time(std::chrono::system_clock::time_point value) noexcept {
     auto seconds = std::chrono::duration_cast<std::chrono::seconds>(value.time_since_epoch());
     auto remainder = value.time_since_epoch().count() % jwt_clock_second_ratio_type::num;
     if (remainder < 0) {
@@ -54,8 +54,8 @@ struct jwt_clock_parts final {
     std::chrono::system_clock::time_point value, std::chrono::seconds offset) noexcept {
     using clock_type = std::chrono::system_clock;
     const auto parts = jwt_split_clock_time(value);
-    const auto minimum = jwt_split_clock_time(clock_type::time_point::min());
-    const auto maximum = jwt_split_clock_time(clock_type::time_point::max());
+    constexpr auto minimum = jwt_split_clock_time(clock_type::time_point::min());
+    constexpr auto maximum = jwt_split_clock_time(clock_type::time_point::max());
     if (offset > maximum.whole_seconds_ - parts.whole_seconds_) {
         return clock_type::time_point::max();
     }
@@ -84,9 +84,8 @@ struct jwt_clock_parts final {
 // RFC 7519 §4.1.4: a token is valid only while the current time is *before*
 // "exp", so at now == exp (no leeway) it MUST be rejected. leeway widens the
 // accepted window past exp.
-[[nodiscard]] bool jwt_token_expired(std::chrono::system_clock::time_point now,
+[[nodiscard]] bool jwt_token_expired(jwt_clock_parts now_parts,
     std::chrono::system_clock::time_point expires_at, std::chrono::seconds leeway) noexcept {
-    const auto now_parts = jwt_split_clock_time(now);
     const auto expires_parts = jwt_split_clock_time(expires_at);
     // Subsecond clock resolution keeps the whole-second distance representable
     // even when subtracting time_points directly would overflow their duration.
@@ -98,9 +97,8 @@ struct jwt_clock_parts final {
 // RFC 7519 §4.1.5: a token is valid only when the current time is *after or
 // equal to* "nbf"; leeway widens the accepted window earlier. Rejected while
 // now (plus leeway) is still strictly before nbf.
-[[nodiscard]] bool jwt_token_not_yet_valid(std::chrono::system_clock::time_point now,
+[[nodiscard]] bool jwt_token_not_yet_valid(jwt_clock_parts now_parts,
     std::chrono::system_clock::time_point not_before, std::chrono::seconds leeway) noexcept {
-    const auto now_parts = jwt_split_clock_time(now);
     const auto not_before_parts = jwt_split_clock_time(not_before);
     const auto distance = not_before_parts.whole_seconds_ - now_parts.whole_seconds_;
     return distance > leeway ||
@@ -287,7 +285,7 @@ jwt_payload::jwt_payload(jwt_payload_options options)
       claims_(issuer_.get_allocator().resource()) {}
 
 jwt_payload::jwt_payload(const jwt_payload& other)
-    : jwt_payload(other, std::pmr::get_default_resource()) {}
+    : jwt_payload(other, other.issuer_.get_allocator().resource()) {}
 
 jwt_payload::jwt_payload(const jwt_payload& other, std::pmr::memory_resource* resource)
     : issuer_(other.issuer_, resource),
@@ -466,16 +464,19 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
     }
     const auto payload_json = detail::jwt_base64_url_decode(parts.payload_, resolved);
     auto payload_value = detail::jwt_payload_access::decode_payload_json(payload_json, resolved);
-    const auto now = std::chrono::system_clock::now();
     if (options.expiration_claim_ == jwt_expiration_claim_policy::require && !payload_value.expires_at()) {
         throw std::runtime_error("JWT token is missing exp claim");
     }
-    if (payload_value.expires_at() && detail::jwt_token_expired(now, *payload_value.expires_at(), options.leeway_)) {
-        throw std::runtime_error("JWT token is expired");
-    }
-    if (payload_value.not_before() &&
-        detail::jwt_token_not_yet_valid(now, *payload_value.not_before(), options.leeway_)) {
-        throw std::runtime_error("JWT token is not yet valid");
+    if (payload_value.expires_at() || payload_value.not_before()) {
+        const auto now_parts = detail::jwt_split_clock_time(std::chrono::system_clock::now());
+        if (payload_value.expires_at() &&
+            detail::jwt_token_expired(now_parts, *payload_value.expires_at(), options.leeway_)) {
+            throw std::runtime_error("JWT token is expired");
+        }
+        if (payload_value.not_before() &&
+            detail::jwt_token_not_yet_valid(now_parts, *payload_value.not_before(), options.leeway_)) {
+            throw std::runtime_error("JWT token is not yet valid");
+        }
     }
     if (!options.issuer_.empty() && payload_value.issuer() != options.issuer_) {
         throw std::runtime_error("JWT issuer mismatch");

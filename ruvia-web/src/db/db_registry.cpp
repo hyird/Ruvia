@@ -10,8 +10,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/db/db_utils.h"
-
+#include "db/db_pool_utils.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "db/db_query_cache_state.h"
 #include "redis/redis_registry.h"
@@ -36,6 +35,21 @@ void close_pool(detail::db_pool_ref_type pool) noexcept {
     detail::visit_db_pool_if_present(pool, [](auto& client) noexcept { client.close_now(); });
 }
 
+[[nodiscard]] std::pmr::memory_resource* validated_db_resource(
+    std::pmr::memory_resource* resource, std::span<const detail::db_definition> databases) {
+    detail::validate_capability_aliases(
+        databases, "database alias must not be empty", "duplicate database alias");
+    return pmr_resource_or_default(resource);
+}
+
+#ifdef RUVIA_ENABLE_REDIS
+[[nodiscard]] const detail::db_config_storage& pool_config(
+    const detail::db_registry::pool_owner_type& owner_value) noexcept {
+    return std::visit(
+        [](const auto& value) noexcept -> const detail::db_config_storage& { return value->config(); }, owner_value);
+}
+#endif
+
 }  // namespace
 
 detail::db_registry::db_registry(asio::io_context& io_context, const worker_handle& worker_value,
@@ -50,11 +64,9 @@ detail::db_registry::db_registry(asio::io_context& io_context, const worker_hand
 
 detail::db_registry::db_registry(asio::io_context& io_context, const worker_handle& worker_value,
     std::pmr::memory_resource* resource, std::span<const detail::db_definition> databases, redis_registry* redis)
-    : resource_(pmr_resource_or_default(resource)),
+    : resource_(validated_db_resource(resource, databases)),
       entries_(resource_),
       alias_index_(resource_) {
-    validate_capability_aliases(
-        databases, "database alias must not be empty", "duplicate database alias");
     alias_index_.build(databases);
     entries_.reserve(databases.size());
     for (const auto& definition : databases) {
@@ -80,7 +92,7 @@ detail::db_registry::db_registry(asio::io_context& io_context, const worker_hand
     const redis_handle& redis, const db_cache_config& policy)
     : db_registry(io_context, worker_value, resource, config) {
     attach_cache(0, worker_value, redis, db_cache_config_storage(policy, resource_),
-        db_config_storage(config, resource_), default_capability_alias);
+        pool_config(entries_[0].pool_), default_capability_alias);
 }
 
 void detail::db_registry::attach_cache(std::size_t index, const worker_handle& worker_value,

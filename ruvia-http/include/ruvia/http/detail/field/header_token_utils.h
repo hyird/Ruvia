@@ -135,4 +135,11 @@ std::optional<std::string_view> http_find_semicolon_parameter(value_type&&, std:
     }).empty();
 }
 
+[[nodiscard]] inline bool is_http_token_or_quoted_string(std::string_view value) noexcept {
+    if (value.empty()) {
+        return false;
+    }
+    return value.front() == '"' ? http_is_quoted_string(value) : is_valid_http_header_name(value);
+}
+
 }  // namespace ruvia::detail

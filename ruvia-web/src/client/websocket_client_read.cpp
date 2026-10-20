@@ -25,6 +25,27 @@ task<std::optional<websocket_message>> websocket_client_state::run_read(operatio
     operation_guard_type operation(*this, options);
     resume_pong_deadline();
     for (;;) {
+        const auto event =
+            co_await poll_protocol_event(config_.read_timeout_, "WebSocket peer violated the protocol");
+        if (const auto* message = event.message()) {
+            co_return websocket_message::borrow(message->opcode(), message->payload());
+        }
+        if (const auto* pong = event.pong()) {
+            if (websocket_heartbeat_pong_matches(liveness_state_, pong->payload())) {
+                liveness_state_ = websocket_liveness_idle{};
+                touch_activity();
+            }
+            continue;
+        }
+        if (event.close() != nullptr || event.transport_end() != nullptr) {
+            co_return std::nullopt;
+        }
+    }
+}
+
+task<websocket_event> websocket_client_state::poll_protocol_event(
+    std::optional<std::chrono::milliseconds> read_timeout, std::string_view protocol_error_message) {
+    for (;;) {
         std::optional<websocket_event> event;
         {
             co_await wait_for_write_idle(write_wait_type::reader);
@@ -35,7 +56,7 @@ task<std::optional<websocket_message>> websocket_client_state::run_read(operatio
             }
         }
         if (!event.has_value()) {
-            const auto count = co_await read_transport(input_, config_.read_timeout_);
+            const auto count = co_await read_transport(input_, read_timeout);
             if (count == 0) {
                 require_protocol().notify_transport_eof();
                 fail_transport();
@@ -45,26 +66,19 @@ task<std::optional<websocket_message>> websocket_client_state::run_read(operatio
             feed_input(std::string_view(input_.data(), count));
             continue;
         }
-        if (const auto* message = event->message()) {
-            co_return websocket_message::borrow(message->opcode(), message->payload());
-        }
-        if (const auto* pong = event->pong()) {
-            if (websocket_heartbeat_pong_matches(liveness_state_, pong->payload())) {
-                liveness_state_ = websocket_liveness_idle{};
-                touch_activity();
-            }
+        if (event->ping() != nullptr) {
             continue;
         }
         if (event->protocol_error() != nullptr) {
-            co_await throw_protocol_error_after_flush("WebSocket peer violated the protocol");
+            co_await throw_protocol_error_after_flush(protocol_error_message);
             std::terminate();
         }
         if (event->close() != nullptr || event->transport_end() != nullptr) {
             co_await wait_for_write_idle(write_wait_type::reader);
             write_guard_type write_guard(*this, write_phase_type::application);
             co_await flush_output();
-            co_return std::nullopt;
         }
+        co_return *event;
     }
 }
 

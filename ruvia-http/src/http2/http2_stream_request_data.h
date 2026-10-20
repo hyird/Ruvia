@@ -128,6 +128,8 @@ public:
         }
 
         if (has_existing_cookie) {
+            // Reserve the complete crumb before its separator can trigger a smaller growth.
+            cookie_.reserve(cookie_.size() + separator_bytes + value.size());
             cookie_.append(cookie_separator.data(), cookie_separator.size());
         }
         if (!value.empty()) {

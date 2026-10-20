@@ -108,34 +108,9 @@ task<void> websocket_client_state::run_close(websocket_close_options options, st
     // restart the deadline for the next transport read.
     arm(close_handshake_timer_, config_.close_handshake_timeout_, client_abort_reason::timeout);
     for (;;) {
-        std::optional<websocket_event> event;
-        {
-            co_await wait_for_write_idle(write_wait_type::reader);
-            write_guard_type write_guard(*this, write_phase_type::application);
-            event = require_protocol().next_event();
-            if (event.has_value() && event->ping() != nullptr) {
-                co_await flush_output();
-            }
-        }
-        if (!event.has_value()) {
-            const auto count = co_await read_transport(input_, std::nullopt);
-            if (count == 0) {
-                require_protocol().notify_transport_eof();
-                fail_transport();
-                throw websocket_client_error(websocket_client_error::code_type::protocol_error,
-                    "WebSocket transport ended before peer Close");
-            }
-            feed_input(std::string_view(input_.data(), count));
-            continue;
-        }
-        if (event->protocol_error() != nullptr) {
-            co_await throw_protocol_error_after_flush("WebSocket peer violated the protocol during close handshake");
-            std::terminate();
-        }
-        if (event->close() != nullptr || event->transport_end() != nullptr) {
-            co_await wait_for_write_idle(write_wait_type::reader);
-            write_guard_type write_guard(*this, write_phase_type::application);
-            co_await flush_output();
+        const auto event = co_await poll_protocol_event(
+            std::nullopt, "WebSocket peer violated the protocol during close handshake");
+        if (event.close() != nullptr || event.transport_end() != nullptr) {
             // The close handshake is complete: retire the connection.
             retire(client_abort_reason::closing);
             co_return;

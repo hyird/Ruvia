@@ -95,7 +95,7 @@ bool client_tcp_transport::idle_open() noexcept {
     return error == asio::error::would_block;
 }
 
-bool client_tcp_transport::arm(lane_deadline& lane, lane_type kind, const operation_timeout& timeout) {
+bool client_tcp_transport::arm(lane_deadline& lane, const operation_timeout& timeout) {
     lane.timer_.cancel();
     const auto remaining = timeout.remaining();
     if (!remaining) {
@@ -107,7 +107,7 @@ bool client_tcp_transport::arm(lane_deadline& lane, lane_type kind, const operat
         return false;
     }
     const auto deadline_value = *timeout.deadline();
-    lane.deadline_.arm(deadline_value, kind);
+    lane.deadline_.arm(deadline_value);
     (void)worker_.schedule_timer(lane.timer_, deadline_value, [this, &lane](worker_timer_outcome outcome) noexcept {
         if (outcome == worker_timer_outcome::expired && lane.deadline_.expire(std::chrono::steady_clock::now())) {
             abort(client_abort_reason::timeout);
@@ -153,7 +153,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
         std::swap(stream_, fresh);
         tls_started_ = false;
     }
-    if (!arm(read_, lane_type::read, timeout)) {
+    if (!arm(read_, timeout)) {
         co_return aborted();
     }
     std::array<char, http_max_unsigned_decimal_size> port_buffer;
@@ -200,7 +200,7 @@ std::string_view client_tcp_transport::alpn() noexcept {
 }
 
 task<client_transport_result> client_tcp_transport::read_some(std::span<char> bytes_value, const operation_timeout& timeout) {
-    if (abort_reason_ != client_abort_reason::none || !arm(read_, lane_type::read, timeout)) {
+    if (abort_reason_ != client_abort_reason::none || !arm(read_, timeout)) {
         co_return aborted();
     }
     const auto buffer = asio::buffer(bytes_value.data(), bytes_value.size());
@@ -228,7 +228,7 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
     if (asio::buffer_size(buffers) == 0) {
         co_return client_transport_result{};
     }
-    if (!arm(write_, lane_type::write, timeout)) {
+    if (!arm(write_, timeout)) {
         co_return aborted();
     }
     const auto completion = secure()

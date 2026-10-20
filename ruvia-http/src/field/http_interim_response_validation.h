@@ -29,22 +29,31 @@ enum class http_interim_response_header_validation_status : std::uint8_t {
 class http_interim_response_sender_validator final {
 public:
     [[nodiscard]] http_interim_response_header_validation_status validate(
-        std::string_view name, std::string_view value) noexcept {
+        std::string_view name, std::string_view value,
+        std::uint32_t* known_bit_out = nullptr) noexcept {
         if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
             return http_interim_response_header_validation_status::invalid_header;
         }
 
         const auto known_bit = classify_response_header_name(name);
+        if (known_bit_out != nullptr) {
+            *known_bit_out = known_bit;
+        }
         if (known_bit == response_header_content_length) {
             return http_interim_response_header_validation_status::content_length_forbidden;
         }
         if (known_bit == response_header_transfer_encoding) {
             return http_interim_response_header_validation_status::transfer_encoding_forbidden;
         }
-        if (http_ascii_equals_ignore_case(name, "Trailer")) {
+        if (known_bit == 0 && http_ascii_equals_ignore_case(name, "Trailer")) {
             return http_interim_response_header_validation_status::trailer_forbidden;
         }
-        switch (validate_response_field(classify_request_header(name), value, http_field_list_role::sender, fields_)) {
+        const auto kind = known_bit == response_header_content_type
+                              ? request_header_kind::content_type
+                              : (known_bit == response_header_content_encoding
+                                        ? request_header_kind::content_encoding
+                                        : request_header_kind::other);
+        switch (validate_response_field(kind, value, http_field_list_role::sender, fields_)) {
             case response_field_status::ok:
                 break;
             case response_field_status::invalid:

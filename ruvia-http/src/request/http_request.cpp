@@ -74,10 +74,11 @@ http_response_coding_selection_result http_response_coding_selection_for(
     if (detail::request_has_known_header(request, detail::request_header_kind::accept_encoding)) {
         // Every field line contributes: RFC 9110 section 5.3 combines repeated
         // list fields, and the request cache records only the last line.
-        for (const auto& field : request.headers()) {
-            if (detail::classify_request_header(field.name()) ==
-                detail::request_header_kind::accept_encoding) {
-                qualities.update(field.value());
+        const auto headers = request.headers();
+        for (std::size_t i = 0; i < headers.size(); ++i) {
+            if (detail::http_request_access::header_kind(request, i) ==
+                static_cast<std::uint8_t>(detail::request_header_kind::accept_encoding)) {
+                qualities.update(headers[i].value());
             }
         }
     }

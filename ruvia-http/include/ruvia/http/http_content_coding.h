@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -8,7 +9,6 @@
 #include <string_view>
 #include <utility>
 #include <variant>
-#include <vector>
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
@@ -73,14 +73,9 @@ public:
 // malformed field syntax. Codings are listed in the order they were applied.
 class http_content_coding_field_result final {
 public:
-    http_content_coding_field_result(const http_content_coding_field_result&) = delete;
-    http_content_coding_field_result& operator=(const http_content_coding_field_result&) = delete;
-    http_content_coding_field_result(http_content_coding_field_result&&) noexcept = default;
-    http_content_coding_field_result& operator=(http_content_coding_field_result&&) = delete;
-
     [[nodiscard]] std::span<const http_content_coding> codings() const& noexcept {
-        if (const auto* codings = std::get_if<std::pmr::vector<http_content_coding>>(&value_)) {
-            return *codings;
+        if (const auto* codings = std::get_if<content_coding_sequence>(&value_)) {
+            return std::span<const http_content_coding>(codings->values_.data(), codings->size_);
         }
         return {};
     }
@@ -99,8 +94,13 @@ public:
 private:
     friend struct detail::http_content_coding_field_result_access;
 
-    explicit http_content_coding_field_result(std::pmr::vector<http_content_coding> codings) noexcept
-        : value_(std::move(codings)) {}
+    struct content_coding_sequence final {
+        std::array<http_content_coding, max_content_codings> values_{};
+        std::uint8_t size_{0};
+    };
+
+    explicit constexpr http_content_coding_field_result(content_coding_sequence codings) noexcept
+        : value_(codings) {}
 
     explicit constexpr http_content_coding_field_result(
         http_unsupported_content_coding unsupported) noexcept
@@ -109,22 +109,22 @@ private:
     explicit constexpr http_content_coding_field_result(http_invalid_content_coding_field invalid) noexcept
         : value_(invalid) {}
 
-    std::variant<std::pmr::vector<http_content_coding>, http_unsupported_content_coding,
+    std::variant<content_coding_sequence, http_unsupported_content_coding,
         http_invalid_content_coding_field>
         value_;
 };
 
 // Parses one logical Content-Encoding field value using recipient list rules.
 // Empty list members are ignored; an empty value therefore means identity.
-[[nodiscard]] http_content_coding_field_result parse_http_content_coding(std::string_view value,
-    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+[[nodiscard]] http_content_coding_field_result parse_http_content_coding(
+    std::string_view value, std::pmr::memory_resource* resource = nullptr) noexcept;
 
 // Folds every Content-Encoding header line into one recipient-side decision.
 [[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(
     std::span<const http_header> headers,
-    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    std::pmr::memory_resource* resource = nullptr) noexcept;
 [[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(
     const http_response_headers& headers,
-    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    std::pmr::memory_resource* resource = nullptr) noexcept;
 
 }  // namespace ruvia

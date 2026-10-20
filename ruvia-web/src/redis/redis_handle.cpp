@@ -4,14 +4,13 @@
 #include <utility>
 
 #include "ruvia/web/detail/redis/redis_repository_commands.h"
-#include "ruvia/web/detail/redis/redis_utils.h"
 #include "ruvia/web/redis/redis.h"
 
 #include "redis/redis_handle_command_ops.h"
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_registry.h"
 #include "redis/redis_types_access.h"
-
+#include "redis/redis_utils.h"
 namespace ruvia {
 
 namespace {
@@ -219,10 +218,22 @@ scoped_operation<std::int64_t> redis_handle::del(std::string_view key) const {
         executor(), detail::own_redis_args({"DEL", key}, resource_), resource_));
 }
 
+scoped_operation<std::int64_t> redis_handle::del(std::span<const std::string_view> keys) const {
+    registration_.require_active();
+    return scoped(detail::redis_integer_command(
+        executor(), detail::redis_command_with_keys("DEL", keys, resource_), resource_));
+}
+
 scoped_operation<std::int64_t> redis_handle::unlink(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"UNLINK", key}, resource_), resource_));
+}
+
+scoped_operation<std::int64_t> redis_handle::unlink(std::span<const std::string_view> keys) const {
+    registration_.require_active();
+    return scoped(detail::redis_integer_command(
+        executor(), detail::redis_command_with_keys("UNLINK", keys, resource_), resource_));
 }
 
 scoped_operation<bool> redis_handle::exists(std::string_view key) const {

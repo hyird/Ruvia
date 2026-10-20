@@ -81,7 +81,9 @@ private:
         std::pmr::vector<http_header> result_value(resource);
         result_value.reserve(source_value.headers_.size());
         for (const auto& [name, value] : source_value.headers_) {
-            result_value.push_back(http_header::copy_of(name, value, resource));
+            result_value.push_back(source_value.protocol_ == websocket_client_protocol::http2
+                                       ? http_header::copy_with_lowercase_name(name, value, resource)
+                                       : http_header::copy_of(name, value, resource));
         }
         return result_value;
     }

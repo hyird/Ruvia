@@ -60,7 +60,6 @@
 #include "http2/http2_local_settings.h"
 #include "http2/http2_output_buffer.h"
 #include "http2/http2_peer_settings.h"
-#include "http2/http2_ready_queue.h"
 #include "http2/http2_receive_window_credit.h"
 #include "http2/http2_stream_lease_ledger.h"
 #include "http2/http2_stream_state.h"
@@ -204,7 +203,7 @@ public:
     // Only the submitted alternative exposes the negotiation committed on wire.
     [[nodiscard]] http2_websocket_handshake_submit_result submit_websocket_handshake(
         std::uint32_t stream_id, const websocket_handshake_validation_result& validation,
-        const websocket_server_negotiation& negotiation);
+        websocket_server_negotiation&& negotiation);
     // Accept a pending standard or extended CONNECT with a successful final response.
     // The head must be bodyless and contain neither Content-Length nor
     // Transfer-Encoding. DATA becomes opaque tunnel bytes only after this succeeds.
@@ -546,8 +545,8 @@ private:
 
     void reserve_event_slots(std::size_t count);
 
-    // Close a stream: drop it from the ready queue, mark closed, emit stream_closed
-    // (so the owner cancels any handler), remove it, and remember it as closed.
+    // Close a stream: mark closed, emit stream_closed (so the owner cancels any
+    // handler), remove it, and remember it as closed.
     enum class close_notification_type : std::uint8_t { emit_event,
         owner_already_knows };
     bool close_stream_impl(std::uint32_t stream_id, http2_stream_close_source source,
@@ -580,7 +579,6 @@ private:
     http2_stream_table streams_;
     std::pmr::unordered_map<std::uint32_t, http_priority_fields> priorities_;
     http2_closed_stream_history closed_streams_;
-    http2_ready_queue ready_queue_;
     hpack_decoder decoder_;
     http2_header_continuation header_continuation_;
     http2_peer_settings peer_settings_;

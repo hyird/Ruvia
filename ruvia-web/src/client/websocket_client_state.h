@@ -171,6 +171,8 @@ private:
     [[nodiscard]] std::chrono::milliseconds heartbeat_delay(std::int64_t now) const noexcept;
     [[nodiscard]] task<void> flush_output();
     [[nodiscard]] task<void> throw_protocol_error_after_flush(std::string_view message);
+    [[nodiscard]] task<websocket_event> poll_protocol_event(
+        std::optional<std::chrono::milliseconds> read_timeout, std::string_view protocol_error_message);
     [[nodiscard]] task<std::size_t> read_transport(std::span<char> output,
         std::optional<std::chrono::milliseconds> configured_timeout);
     void feed_input(std::string_view bytes);

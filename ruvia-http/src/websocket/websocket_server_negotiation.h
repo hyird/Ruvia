@@ -44,14 +44,23 @@ public:
         return compression_;
     }
 
-    [[nodiscard]] std::string_view extensions() const noexcept {
-        return extensions_;
+    [[nodiscard]] std::string_view extensions() const& noexcept {
+        return extensions_.view();
     }
+    std::string_view extensions() const&& = delete;
 
     [[nodiscard]] std::span<const http_header> response_headers() const& noexcept {
         return response_headers_;
     }
     std::span<const http_header> response_headers() const&& = delete;
+
+    [[nodiscard]] std::pmr::string take_subprotocol() && noexcept {
+        return std::move(subprotocol_);
+    }
+
+    [[nodiscard]] std::pmr::vector<http_header> take_response_headers() && noexcept {
+        return std::move(response_headers_);
+    }
 
 private:
     friend websocket_server_negotiation make_websocket_server_negotiation(
@@ -62,7 +71,7 @@ private:
 
     std::pmr::string subprotocol_;
     websocket_compression compression_;
-    std::pmr::string extensions_;
+    websocket_compression_extension extensions_;
     std::pmr::vector<http_header> response_headers_;
 };
 

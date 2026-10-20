@@ -1,9 +1,13 @@
 #include "ruvia/core/worker_handle.h"
 
+#include <exception>
 #include <stdexcept>
+#include <utility>
 
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/worker_timer.h"
+
+#include "worker_dispatcher_impl.h"
+
 namespace ruvia {
 
 worker_handle::worker_handle(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept
@@ -50,6 +54,23 @@ bool detail::worker_handle_access::defer_if_attached(
     const worker_handle& worker_value, move_only_function<void()> task_value) {
     const auto& dispatcher = worker_value.dispatcher_;
     return dispatcher && dispatcher->defer_if_attached(std::move(task_value));
+}
+
+void detail::worker_handle_access::defer_or_terminate(
+    const worker_handle& worker_value, move_only_function<void()> task_value) noexcept {
+    if (!worker_value.dispatcher_) {
+        std::terminate();
+    }
+    worker_value.dispatcher_->defer_or_terminate(std::move(task_value));
+}
+
+void detail::worker_handle_access::register_shutdown_hook(const worker_handle& worker_value,
+    worker_shutdown_hook& hook, std::weak_ptr<void> owner,
+    const worker_shutdown_hook::operations_type& operations) {
+    if (!worker_value.dispatcher_) {
+        throw std::runtime_error("cannot register state on a stopped worker");
+    }
+    worker_value.dispatcher_->register_shutdown_hook(hook, std::move(owner), operations);
 }
 
 void detail::worker_handle_access::when_shutdown_notifications_complete(

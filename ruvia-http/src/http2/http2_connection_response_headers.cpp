@@ -36,6 +36,7 @@ struct http2_response_decode_context final {
     response_field_state fields_;
     std::pmr::vector<http_header> informational_fields_;
     std::optional<http_status_code> status_;
+    http_response_content_semantics content_semantics_{http_response_content_semantics::with_content};
     bool saw_regular_{false};
 };
 
@@ -65,6 +66,8 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
             return false;
         }
         context_value->status_ = *status;
+        context_value->content_semantics_ =
+            classify_http_response_content_semantics(stream.request_known_method(), *status);
         return true;
     }
     if (!context_value->status_ || !http2_is_valid_decoded_response_header(name, value)) {
@@ -82,10 +85,8 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
     }
     const auto kind = classify_request_header(name);
     const auto response_known_bit = classify_response_header_name(name);
-    const auto response_content_semantics =
-        classify_http_response_content_semantics(stream.request_known_method(), *context_value->status_);
     const bool successful_connect =
-        response_content_semantics == http_response_content_semantics::connect_tunnel;
+        context_value->content_semantics_ == http_response_content_semantics::connect_tunnel;
     if (response_known_bit == response_header_content_length && successful_connect) {
         // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
         // response. It describes neither HTTP content nor the following tunnel DATA.
@@ -169,8 +170,7 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
     if (!stream.set_response_status(*context_value.status_)) {
         return header_decode_status::protocol_error;
     }
-    const auto content_semantics =
-        classify_http_response_content_semantics(stream.request_known_method(), *context_value.status_);
+    const auto content_semantics = context_value.content_semantics_;
     // Ordinary 205 responses have a zero-length content phase (RFC 9110 15.3.6).
     // HEAD keeps representation metadata, and successful CONNECT carries a tunnel;
     // neither uses the ordinary response-content length constraint.

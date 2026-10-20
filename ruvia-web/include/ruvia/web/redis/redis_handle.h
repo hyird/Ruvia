@@ -26,6 +26,7 @@ namespace ruvia {
 
 namespace detail {
 class redis_client_runtime;
+struct redis_command_executor;
 class redis_pool;
 struct redis_orm_script;
 }  // namespace detail
@@ -70,7 +71,9 @@ public:
     scoped_operation<std::int64_t> decr(std::string_view key) const;
     scoped_operation<std::int64_t> decr_by(std::string_view key, std::int64_t value) const;
     scoped_operation<std::int64_t> del(std::string_view key) const;
+    [[nodiscard]] scoped_operation<std::int64_t> del(std::span<const std::string_view> keys) const;
     scoped_operation<std::int64_t> unlink(std::string_view key) const;
+    [[nodiscard]] scoped_operation<std::int64_t> unlink(std::span<const std::string_view> keys) const;
     scoped_operation<bool> exists(std::string_view key) const;
     scoped_operation<bool> touch(std::string_view key) const;
     scoped_operation<std::pmr::string> type(std::string_view key) const;

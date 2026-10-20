@@ -41,7 +41,7 @@ public:
 
 private:
     struct impl_type;
-    std::unique_ptr<impl_type> impl_;
+    std::shared_ptr<impl_type> impl_;
 };
 
 }  // namespace ruvia

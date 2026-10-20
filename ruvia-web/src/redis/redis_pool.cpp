@@ -7,10 +7,10 @@
 #include <utility>
 
 #include "ruvia/core/async.h"
-#include "ruvia/web/detail/redis/redis_utils.h"
 
 #include "redis/redis_protocol.h"
 #include "redis/redis_registry.h"
+#include "redis/redis_utils.h"
 
 namespace ruvia::detail {
 namespace {

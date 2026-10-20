@@ -1,10 +1,6 @@
 #ifndef _WIN32
 
 #include <fcntl.h>
-#ifdef __linux__
-#include <sys/eventfd.h>
-#endif
-#include <unistd.h>
 
 #include <array>
 #include <cerrno>
@@ -15,6 +11,10 @@
 #include <utility>
 
 #include "worker_notification.h"
+#ifdef __linux__
+#include <sys/eventfd.h>
+#endif
+#include <unistd.h>
 
 namespace ruvia::detail {
 

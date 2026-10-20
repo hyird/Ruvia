@@ -45,74 +45,26 @@ void http2_buffered_response_writer::wake_writer() noexcept {
 
 task<http2_buffered_response_writer::data_write_result_type> http2_buffered_response_writer::write_data(
     std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream) {
-    // queued transfers the unsent suffix to the core; backpressured retains
-    // caller ownership and must retry this exact stable view after the older
-    // queued input drains.
-    for (;;) {
-        auto* runtime = stream_runtimes_.find(stream_id);
-        auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
-        if (signal != nullptr && signal->terminated()) {
-            co_return data_write_result_type::failed;
-        }
-        if (signal == nullptr) {
-            co_return data_write_result_type::peer_aborted;
-        }
-        // Empty END_STREAM needs no flow-control credit (RFC 9113 section
-        // 6.9.1), but must not overtake older core-owned DATA.
-        if (chunk.empty() && end_stream == http2_end_stream::end_stream &&
-            connection_.has_queued_data(stream_id)) {
-            const auto wait_result = co_await await_http2_send_window(connection_, stream_id, signal);
-            if (wait_result.aborted() != nullptr) {
-                co_return data_write_result_type::peer_aborted;
-            }
-            continue;
-        }
-        if (!chunk.empty()) {
-            for (;;) {
-                const auto window = connection_.send_window_state(stream_id);
-                if (!window) {
-                    co_return data_write_result_type::peer_aborted;
-                }
-                if (window->available_ != 0) {
-                    break;
-                }
-                co_await output_budget_.wait_for_change();
-                if (signal->terminated()) {
-                    co_return data_write_result_type::peer_aborted;
-                }
-            }
-            if (!(co_await output_budget_.acquire(stream_id, *signal))) {
-                co_return data_write_result_type::peer_aborted;
-            }
-        }
-        const auto result_value = connection_.submit_data(stream_id, chunk, end_stream);
-        if (result_value == http2_data_submit_status::accepted || result_value == http2_data_submit_status::queued) {
-            output_budget_.note_data_submitted(stream_id, chunk.size());
-        }
-        wake_writer();
-        if (!chunk.empty() &&
-            result_value != http2_data_submit_status::accepted && result_value != http2_data_submit_status::queued) {
-            output_budget_.release(stream_id);
-        }
-        if (result_value == http2_data_submit_status::accepted) {
-            co_return data_write_result_type::completed;
-        }
-        if (result_value == http2_data_submit_status::closed) {
-            co_return data_write_result_type::peer_aborted;
-        }
-        if (result_value == http2_data_submit_status::invalid_state ||
-            result_value == http2_data_submit_status::content_length_exceeded ||
-            result_value == http2_data_submit_status::content_length_incomplete) {
-            co_return data_write_result_type::failed;
-        }
-        const auto wait_result = co_await await_http2_send_window(connection_, stream_id, signal);
-        if (wait_result.aborted() != nullptr) {
-            co_return data_write_result_type::peer_aborted;
-        }
-        if (result_value == http2_data_submit_status::queued) {
-            co_return data_write_result_type::completed;
-        }
+    auto* runtime = stream_runtimes_.find(stream_id);
+    auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
+    if (signal != nullptr && signal->terminated()) {
+        co_return data_write_result_type::failed;
     }
+    const auto status = co_await write_http2_stream_data_chunk(
+        connection_, stream_id, signal, write_signal_, output_budget_, chunk, end_stream);
+    switch (status) {
+        case http2_stream_data_write_status::completed:
+            co_return data_write_result_type::completed;
+        case http2_stream_data_write_status::local_aborted:
+        case http2_stream_data_write_status::session_terminated:
+        case http2_stream_data_write_status::peer_closed:
+            co_return data_write_result_type::peer_aborted;
+        case http2_stream_data_write_status::invalid_state:
+        case http2_stream_data_write_status::content_length_exceeded:
+        case http2_stream_data_write_status::content_length_incomplete:
+            co_return data_write_result_type::failed;
+    }
+    co_return data_write_result_type::failed;
 }
 
 task<http2_buffered_response_write_result> http2_buffered_response_writer::write(

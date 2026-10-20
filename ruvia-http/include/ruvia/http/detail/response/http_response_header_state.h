@@ -17,8 +17,13 @@ struct http_response_header_state_access final {
 }
 
 [[nodiscard]] inline bool response_has_known_header(
+    const http_response_headers& headers, std::uint32_t bit) noexcept {
+    return (http_response_header_state_access::known_bits(headers) & bit) != 0;
+}
+
+[[nodiscard]] inline bool response_has_known_header(
     const http_response& response, std::uint32_t bit) noexcept {
-    return (http_response_header_state_access::known_bits(response.headers()) & bit) != 0;
+    return response_has_known_header(response.headers(), bit);
 }
 
 }  // namespace ruvia::detail

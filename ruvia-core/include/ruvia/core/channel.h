@@ -41,57 +41,8 @@ struct channel_options final {
 };
 
 template <typename t_type>
-class channel_send_result final {
-public:
-    channel_send_result(const channel_send_result&) = delete;
-    channel_send_result& operator=(const channel_send_result&) = delete;
-    channel_send_result(channel_send_result&&) noexcept(
-        std::is_nothrow_move_constructible_v<t_type>) = default;
-    channel_send_result& operator=(channel_send_result&&) noexcept(
-        std::is_nothrow_move_constructible_v<t_type> && std::is_nothrow_move_assignable_v<t_type>) = default;
-
-    [[nodiscard]] channel_send_status status() const noexcept {
-        return status_;
-    }
-
-    [[nodiscard]] bool accepted() const noexcept {
-        return status_ == channel_send_status::sent;
-    }
-
-    [[nodiscard]] t_type* rejected() & noexcept {
-        return rejected_ ? &*rejected_ : nullptr;
-    }
-
-    [[nodiscard]] const t_type* rejected() const& noexcept {
-        return rejected_ ? &*rejected_ : nullptr;
-    }
-
-    t_type* rejected() && = delete;
-    const t_type* rejected() const&& = delete;
-
-private:
-    friend class channel_sender<t_type>;
-
-    explicit channel_send_result(channel_send_status status) noexcept
-        : status_(status) {}
-
-    channel_send_result(channel_send_status status, t_type&& rejected) noexcept(
-        std::is_nothrow_move_constructible_v<t_type>)
-        : status_(status),
-          rejected_(std::move(rejected)) {}
-
-    [[nodiscard]] static channel_send_result accept() noexcept {
-        return channel_send_result(channel_send_status::sent);
-    }
-
-    [[nodiscard]] static channel_send_result reject(channel_send_status status, t_type&& value) noexcept(
-        std::is_nothrow_move_constructible_v<t_type>) {
-        return channel_send_result(status, std::move(value));
-    }
-
-    channel_send_status status_;
-    std::optional<t_type> rejected_;
-};
+using channel_send_result =
+    detail::worker_delivery_result<t_type, channel_send_status, channel_send_status::sent>;
 
 namespace detail {
 

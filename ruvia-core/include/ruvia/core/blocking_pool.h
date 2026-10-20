@@ -119,9 +119,7 @@ public:
 
 private:
     struct impl_type;
-    struct thread_state_type;
     std::shared_ptr<impl_type> impl_;
-    std::unique_ptr<thread_state_type> threads_;
 };
 
 enum class blocking_status : std::uint8_t {
@@ -324,6 +322,9 @@ template <typename fn_type>
     }
     if (timeout.has_value() && *timeout <= std::chrono::steady_clock::duration::zero()) {
         co_return blocking_result_access::rejected<result_type>(blocking_status::timed_out);
+    }
+    if (!worker_value.accepting()) {
+        co_return blocking_result_access::rejected<result_type>(blocking_status::worker_stopping);
     }
 
     // The one-shot outlives the request that started it: a worker that stops

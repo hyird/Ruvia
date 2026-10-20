@@ -61,13 +61,6 @@ blocking_operation_rejected::blocking_operation_rejected(blocking_status status)
     : std::runtime_error(std::string(describe_blocking_status(status))),
       status_(status) {}
 
-struct blocking_pool::thread_state_type final {
-    explicit thread_state_type()
-        : threads_(process_resource()) {}
-
-    std::pmr::vector<std::thread> threads_;
-};
-
 struct blocking_pool::impl_type final {
     struct node_type final {
         move_only_function<void()> task_;
@@ -78,7 +71,8 @@ struct blocking_pool::impl_type final {
         : thread_count_(resolve_thread_count(options.thread_count_)),
           queue_capacity_(resolve_queue_capacity(options.queue_capacity_, thread_count_)),
           queue_(queue_capacity_, process_resource()),
-          nodes_(process_resource()) {
+          nodes_(process_resource()),
+          threads_(process_resource()) {
         if (thread_count_ > std::numeric_limits<std::size_t>::max() - queue_capacity_) {
             throw std::invalid_argument("blocking pool storage capacity is out of range");
         }
@@ -97,18 +91,18 @@ struct blocking_pool::impl_type final {
         free_head_ = &node;
     }
 
-    void start(const std::shared_ptr<impl_type>& self, std::pmr::vector<std::thread>& threads) {
-        threads.reserve(thread_count_);
+    void start(const std::shared_ptr<impl_type>& self) {
+        threads_.reserve(thread_count_);
         try {
             for (std::size_t i = 0; i < thread_count_; ++i) {
-                threads.emplace_back([self] { self->run(); });
+                threads_.emplace_back([self] { self->run(); });
             }
         } catch (...) {
             // A pool that could not start all of its threads is not a pool the
             // caller asked for. Unwind the ones that did start before the
             // exception leaves construction.
             stop();
-            join(threads);
+            join_threads();
             throw;
         }
     }
@@ -179,24 +173,24 @@ struct blocking_pool::impl_type final {
         }
     }
 
-    static void throw_if_current(const std::pmr::vector<std::thread>& threads) {
-        if (std::ranges::any_of(threads, [](const std::thread& thread) {
+    void throw_if_current() const {
+        if (std::ranges::any_of(threads_, [](const std::thread& thread) {
                 return thread.joinable() && thread.get_id() == std::this_thread::get_id();
             })) {
             throw std::logic_error("cannot join a blocking pool from one of its threads");
         }
     }
 
-    static void join(std::pmr::vector<std::thread>& threads) {
-        for (auto& thread : threads) {
+    void join_threads() {
+        for (auto& thread : threads_) {
             if (thread.joinable()) {
                 thread.join();
             }
         }
     }
 
-    static void detach(std::pmr::vector<std::thread>& threads) noexcept {
-        for (auto& thread : threads) {
+    void detach_threads() noexcept {
+        for (auto& thread : threads_) {
             if (thread.joinable()) {
                 thread.detach();
             }
@@ -211,6 +205,7 @@ struct blocking_pool::impl_type final {
     // exclusive while user callable moves/destruction run outside the lock.
     local_ring_queue<node_type*> queue_;
     std::pmr::vector<node_type> nodes_;
+    std::pmr::vector<std::thread> threads_;
     node_type* free_head_{nullptr};
     std::size_t queued_{0};
     std::size_t reserved_{0};
@@ -222,18 +217,18 @@ struct blocking_pool::impl_type final {
 };
 
 blocking_pool::blocking_pool(blocking_pool_options options)
-    : impl_(std::make_shared<impl_type>(options)),
-      threads_(std::make_unique<thread_state_type>()) {
-    impl_->start(impl_, threads_->threads_);
+    : impl_(std::allocate_shared<impl_type>(
+          std::pmr::polymorphic_allocator<impl_type>(process_resource()), options)) {
+    impl_->start(impl_);
 }
 
 blocking_pool::~blocking_pool() {
     stop();
-    impl_type::detach(threads_->threads_);
+    impl_->detach_threads();
 }
 
 std::size_t blocking_pool::thread_count() const noexcept {
-    return threads_->threads_.size();
+    return impl_->thread_count_;
 }
 
 std::size_t blocking_pool::queue_capacity() const noexcept {
@@ -300,9 +295,9 @@ void blocking_pool::stop() noexcept {
 }
 
 void blocking_pool::join() {
-    impl_type::throw_if_current(threads_->threads_);
+    impl_->throw_if_current();
     stop();
-    impl_type::join(threads_->threads_);
+    impl_->join_threads();
 }
 
 }  // namespace ruvia

@@ -5,11 +5,14 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/response/http_response_header_bits.h"
+#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_response.h"
 
 #include "coding/http_content_codec.h"
+#include "response/http_response_header_access.h"
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token
 // each coding is spelled with, the list-grammar accumulator across field lines,
@@ -87,7 +90,7 @@ template <typename visitor_type>
 
 }  // namespace
 
-void http_content_coding_field_parser::update(std::string_view value) {
+void http_content_coding_field_parser::update(std::string_view value) noexcept {
     if (invalid_) {
         return;
     }
@@ -97,23 +100,23 @@ void http_content_coding_field_parser::update(std::string_view value) {
             unsupported_ = true;
             return;
         }
-        if (codings_.size() == max_content_codings) {
+        if (codings_.size_ == max_content_codings) {
             // Keep scanning: later malformed members still invalidate the field.
             unsupported_ = true;
         } else {
-            codings_.push_back(*coding);
+            codings_.values_[codings_.size_++] = *coding;
         }
     });
 }
 
-http_content_coding_field_result http_content_coding_field_parser::finish() && {
+http_content_coding_field_result http_content_coding_field_parser::finish() const noexcept {
     if (invalid_) {
         return http_content_coding_field_result_access::invalid();
     }
     if (unsupported_) {
         return http_content_coding_field_result_access::unsupported();
     }
-    return http_content_coding_field_result_access::coding(std::move(codings_));
+    return http_content_coding_field_result_access::coding(codings_);
 }
 
 bool is_valid_http_content_encoding_field_value(std::string_view value, http_field_list_role role) noexcept {
@@ -127,20 +130,30 @@ bool is_valid_http_content_encoding_field_value(std::string_view value, http_fie
 namespace ruvia {
 
 http_content_coding_field_result parse_http_content_coding(
-    std::string_view value, std::pmr::memory_resource* resource) {
-    detail::http_content_coding_field_parser parser(resource);
+    std::string_view value, std::pmr::memory_resource*) noexcept {
+    detail::http_content_coding_field_parser parser;
     parser.update(value);
-    return std::move(parser).finish();
+    return parser.finish();
 }
 
 http_content_coding_field_result parse_http_content_coding_headers(
-    std::span<const http_header> headers, std::pmr::memory_resource* resource) {
-    return detail::http_content_coding_from_headers(headers, resource);
+    std::span<const http_header> headers, std::pmr::memory_resource*) noexcept {
+    return detail::http_content_coding_from_headers(headers);
 }
 
 http_content_coding_field_result parse_http_content_coding_headers(
-    const http_response_headers& headers, std::pmr::memory_resource* resource) {
-    return detail::http_content_coding_from_headers(headers, resource);
+    const http_response_headers& headers, std::pmr::memory_resource*) noexcept {
+    detail::http_content_coding_field_parser parser;
+    if (!detail::response_has_known_header(headers, detail::response_header_content_encoding)) {
+        return parser.finish();
+    }
+    for (const auto& header : headers) {
+        if (detail::http_response_header_access::known_bit(header) ==
+            detail::response_header_content_encoding) {
+            parser.update(header.value());
+        }
+    }
+    return parser.finish();
 }
 
 http_content_decode_result decode_http_content(

@@ -35,9 +35,11 @@ constexpr std::pmr::pool_options worker_pool_options{
 // of the alignment, and libstdc++ aligns each chunk to at least its block
 // size. Alignments above std::max_align_t bypass the pools entirely.
 template <typename pool_type>
-class aligned_pool_resource final : public pool_type {
+class aligned_pool_resource final : public std::pmr::memory_resource {
 public:
-    using pool_type::pool_type;
+    aligned_pool_resource(
+        const std::pmr::pool_options& options, std::pmr::memory_resource* upstream)
+        : pool_(options, upstream) {}
 
 private:
     [[nodiscard]] static constexpr bool pooled_alignment(std::size_t alignment) noexcept {
@@ -54,18 +56,24 @@ private:
 
     void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
         if (!pooled_alignment(alignment)) {
-            return this->upstream_resource()->allocate(bytes_value, alignment);
+            return pool_.upstream_resource()->allocate(bytes_value, alignment);
         }
-        return pool_type::do_allocate(pool_bytes(bytes_value, alignment), alignment);
+        return pool_.allocate(pool_bytes(bytes_value, alignment), alignment);
     }
 
     void do_deallocate(void* block, std::size_t bytes_value, std::size_t alignment) override {
         if (!pooled_alignment(alignment)) {
-            this->upstream_resource()->deallocate(block, bytes_value, alignment);
+            pool_.upstream_resource()->deallocate(block, bytes_value, alignment);
             return;
         }
-        pool_type::do_deallocate(block, pool_bytes(bytes_value, alignment), alignment);
+        pool_.deallocate(block, pool_bytes(bytes_value, alignment), alignment);
     }
+
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+
+    pool_type pool_;
 };
 
 }  // namespace
@@ -177,14 +185,14 @@ private:
     std::size_t cached_bytes_{0};
 };
 
-thread_local task_frame_cache task_frame_cache;
+thread_local task_frame_cache frame_cache;
 
 }  // namespace
 
 void* task_frame_allocate(std::size_t bytes_value) {
     const std::size_t class_bytes = task_frame_class_bytes(bytes_value == 0 ? 1 : bytes_value);
     if (!task_frame_cache_destroyed && class_bytes <= task_frame_cache_max_block_bytes) {
-        if (void* cached = task_frame_cache.take_block(class_bytes)) {
+        if (void* cached = frame_cache.take_block(class_bytes)) {
             return cached;
         }
     }
@@ -194,19 +202,19 @@ void* task_frame_allocate(std::size_t bytes_value) {
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept {
     const std::size_t class_bytes = task_frame_class_bytes(bytes_value == 0 ? 1 : bytes_value);
     if (!task_frame_cache_destroyed && class_bytes <= task_frame_cache_max_block_bytes &&
-        task_frame_cache.store_block(pointer, class_bytes)) {
+        frame_cache.store_block(pointer, class_bytes)) {
         return;
     }
     ::operator delete(pointer);
 }
 
 std::size_t task_frame_cached_bytes() noexcept {
-    return task_frame_cache_destroyed ? 0 : task_frame_cache.cached_bytes();
+    return task_frame_cache_destroyed ? 0 : frame_cache.cached_bytes();
 }
 
 void task_frame_cache_release() noexcept {
     if (!task_frame_cache_destroyed) {
-        task_frame_cache.release_all();
+        frame_cache.release_all();
     }
 }
 

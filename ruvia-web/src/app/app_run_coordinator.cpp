@@ -254,7 +254,7 @@ private:
         }
 
         for (auto& slot : runtime->workers_) {
-            runtime->group_.add(slot.runtime_->runtime(), 0);
+            runtime->group_.add(slot.runtime_->runtime());
         }
 
         std::lock_guard lock(state_.mutex_);

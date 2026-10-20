@@ -486,7 +486,6 @@ private:
 namespace detail {
 
 class redis_pool;
-struct redis_command_executor;
 
 }  // namespace detail
 

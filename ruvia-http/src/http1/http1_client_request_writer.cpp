@@ -172,11 +172,34 @@ struct request_head_write_plan final {
     return result;
 }
 
+[[nodiscard]] std::optional<http1_client_request_prepare_error> validate_non_connect_request_line(
+    std::string_view method, std::string_view target, http1_client_request_wire_policy policy,
+    http_known_method& known_method) noexcept {
+    if (!is_valid_http1_close_policy(policy.close_policy_)) {
+        return http1_client_request_prepare_error::invalid_close_policy;
+    }
+    if (!is_valid_http_client_request_expectation(policy.expectation_)) {
+        return http1_client_request_prepare_error::invalid_expectation;
+    }
+    if (!is_valid_http_method_token(method)) {
+        return http1_client_request_prepare_error::invalid_method;
+    }
+    known_method = classify_http_method(method);
+    if (known_method == http_known_method::connect) {
+        return http1_client_request_prepare_error::connect_requires_dedicated_entry;
+    }
+    if (!detail::is_valid_origin_or_asterisk_form_target(known_method, target)) {
+        return http1_client_request_prepare_error::invalid_target;
+    }
+    return std::nullopt;
+}
+
 [[nodiscard]] http1_client_request_prepare_result prepare_request(const http_origin_view& origin,
-    std::string_view method, std::string_view target, bool connect,
+    std::string_view method, http_known_method known_method, std::string_view target,
     std::span<const http_header_view> headers, http_client_request_content_view content,
     std::span<char> head_buffer, http1_client_request_wire_policy policy,
     std::pmr::memory_resource* resource, const http1_client_request_head_view* streaming = nullptr) {
+    const bool connect = known_method == http_known_method::connect;
     request_header_facts header_facts;
     http1_client_request_prepare_error error = http1_client_request_prepare_error::invalid_header;
     const auto* content_bytes = content.borrowed_bytes();
@@ -271,8 +294,7 @@ struct request_head_write_plan final {
                                              ? detail::http1_client_initial_content_state::pending
                                              : detail::http1_client_initial_content_state::complete);
     auto exchange_state = detail::http1_client_request_prepare_result_access::exchange_state(
-        connect ? http_known_method::connect : classify_http_method(method),
-        header_facts.connection_options_, effective_close_policy, content_state,
+        known_method, header_facts.connection_options_, effective_close_policy, content_state,
         std::move(offered_upgrade_protocols));
     const request_head_write_plan write_plan{origin.host(), port_value, method, target, headers, content_length_value,
         connect, explicit_content, expect_continue, generate_connection_close};
@@ -359,28 +381,12 @@ http1_client_request_writer::http1_client_request_writer(options_type options) n
 http1_client_request_prepare_result http1_client_request_writer::prepare(const http_origin_view& origin,
     const http_client_request_view& request, std::span<char> head_buffer,
     http1_client_request_wire_policy policy) const {
-    if (!is_valid_http1_close_policy(policy.close_policy_)) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_close_policy);
+    http_known_method known_method = http_known_method::unknown;
+    if (const auto error = validate_non_connect_request_line(
+            request.method_, request.target_, policy, known_method)) {
+        return detail::http1_client_request_prepare_result_access::failure(*error);
     }
-    if (!is_valid_http_client_request_expectation(policy.expectation_)) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_expectation);
-    }
-    if (!is_valid_http_method_token(request.method_)) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_method);
-    }
-    if (request.method_ == "CONNECT") {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::connect_requires_dedicated_entry);
-    }
-    if (!detail::is_valid_origin_or_asterisk_form_target(
-            classify_http_method(request.method_), request.target_)) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_target);
-    }
-    return prepare_request(origin, request.method_, request.target_, false,
+    return prepare_request(origin, request.method_, known_method, request.target_,
         static_cast<std::span<const http_header_view>>(request.headers_), request.content_, head_buffer,
         policy, resource_);
 }
@@ -388,23 +394,13 @@ http1_client_request_prepare_result http1_client_request_writer::prepare(const h
 http1_client_request_prepare_result http1_client_request_writer::prepare_streaming(const http_origin_view& origin,
     const http1_client_request_head_view& request, std::span<char> head_buffer,
     http1_client_request_wire_policy policy) const {
-    using access_type = detail::http1_client_request_prepare_result_access;
-    if (!is_valid_http1_close_policy(policy.close_policy_)) {
-        return access_type::failure(http1_client_request_prepare_error::invalid_close_policy);
+    http_known_method known_method = http_known_method::unknown;
+    if (const auto error = validate_non_connect_request_line(
+            request.method_, request.target_, policy, known_method)) {
+        return detail::http1_client_request_prepare_result_access::failure(*error);
     }
-    if (!is_valid_http_client_request_expectation(policy.expectation_)) {
-        return access_type::failure(http1_client_request_prepare_error::invalid_expectation);
-    }
-    if (!is_valid_http_method_token(request.method_)) {
-        return access_type::failure(http1_client_request_prepare_error::invalid_method);
-    }
-    if (request.method_ == "CONNECT") {
-        return access_type::failure(http1_client_request_prepare_error::connect_requires_dedicated_entry);
-    }
-    if (!detail::is_valid_origin_or_asterisk_form_target(classify_http_method(request.method_), request.target_)) {
-        return access_type::failure(http1_client_request_prepare_error::invalid_target);
-    }
-    return prepare_request(origin, request.method_, request.target_, false, request.headers_, http_client_request_content_view::none(), head_buffer, policy, resource_, &request);
+    return prepare_request(origin, request.method_, known_method, request.target_, request.headers_,
+        http_client_request_content_view::none(), head_buffer, policy, resource_, &request);
 }
 
 http1_client_request_prepare_result http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
@@ -442,7 +438,7 @@ http1_client_request_prepare_result http1_client_request_writer::prepare_connect
         return detail::http1_client_request_prepare_result_access::failure(
             http1_client_request_prepare_error::invalid_connect_origin);
     }
-    return prepare_request(tunnel_origin, "CONNECT", {}, true, headers,
+    return prepare_request(tunnel_origin, "CONNECT", http_known_method::connect, {}, headers,
         http_client_request_content_view::none(), head_buffer, policy, resource_);
 }
 

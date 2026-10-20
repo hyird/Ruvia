@@ -175,7 +175,7 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
         if (error_handler == nullptr) {
             co_return make_default_error_response(terminal_context.arena(), error);
         }
-        co_return co_await handle_error(terminal_context, error);
+        co_return co_await handle_error(terminal_context, error, error_handler);
     };
     // Drivers call this to answer a rejection or a recovery outcome, so it must
     // always produce a response: a failure escaping the wrapping middleware
@@ -189,13 +189,20 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
     } catch (...) {
         exception = std::current_exception();
     }
-    co_return co_await handle_exception(request, memory, exception, services);
+    co_return co_await handle_exception(request, memory, exception, services, error_handler);
 }
 
 task<http_response> detail::route_table::handle_exception(const http_request& request,
     request_memory& memory, std::exception_ptr exception, context_services services) const {
+    return handle_exception(request, memory, std::move(exception), std::move(services),
+        error_handler_for(request.path()));
+}
+
+task<http_response> detail::route_table::handle_exception(const http_request& request,
+    request_memory& memory, std::exception_ptr exception, context_services services,
+    http_error_handler_ref_type error_handler) const {
     rethrow_inbound_transport_error(exception);
-    if (error_handler_for(request.path()) == nullptr) {
+    if (error_handler == nullptr) {
         owned_http_error_info error_info(memory.resource(), exception);
         report_unexpected_failure(error_info, exception, nullptr);
         auto response = make_default_error_response(memory.resource(), error_info.info_);
@@ -204,12 +211,12 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
     }
 
     auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
-    co_return co_await handle_exception(context_value, exception);
+    co_return co_await handle_exception(context_value, exception, error_handler);
 }
 
-task<http_response> detail::route_table::handle_error(context& context_value, http_error_info error) const {
-    auto response = co_await invoke_error_handler(
-        context_value, error, error_handler_for(detail::context_access::request(context_value).path()));
+task<http_response> detail::route_table::handle_error(
+    context& context_value, http_error_info error, http_error_handler_ref_type error_handler) const {
+    auto response = co_await invoke_error_handler(context_value, error, error_handler);
     co_return response;
 }
 
@@ -247,13 +254,18 @@ task<http_response> detail::route_table::handle_not_found(
 
 task<http_response> detail::route_table::handle_exception(
     context& context_value, std::exception_ptr exception) const {
+    return handle_exception(context_value, std::move(exception),
+        error_handler_for(detail::context_access::request(context_value).path()));
+}
+
+task<http_response> detail::route_table::handle_exception(context& context_value,
+    std::exception_ptr exception, http_error_handler_ref_type error_handler) const {
     rethrow_inbound_transport_error(exception);
     detail::context_access::set_error(context_value, exception);
     owned_http_error_info error_info(context_value.arena(), exception);
-    report_unexpected_failure(
-        error_info, exception, error_handler_for(detail::context_access::request(context_value).path()));
+    report_unexpected_failure(error_info, exception, error_handler);
 
-    auto response = co_await handle_error(context_value, error_info.info_);
+    auto response = co_await handle_error(context_value, error_info.info_, error_handler);
     apply_exception_response_metadata(response, exception);
     co_return response;
 }

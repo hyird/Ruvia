@@ -278,27 +278,33 @@ struct permessage_deflate_params final {
     if (config.mem_level_ < 1 || config.mem_level_ > 9) {
         throw std::invalid_argument("WebSocket deflate memory level must be between 1 and 9");
     }
-    if (!config.enabled_ || !websocket_extension_offers_valid(request)) {
+    if (!config.enabled_) {
         return (websocket_compression{});
     }
     // RFC 6455 §9.1: extension declarations may be split across multiple
-    // Sec-websocket-Extensions field lines, which RFC 9110 §5.3 makes equivalent to
+    // Sec-WebSocket-Extensions field lines, which RFC 9110 §5.3 makes equivalent to
     // one comma-joined list. request.header() returns only the last line, so scan
-    // every line in order and honor the first acceptable offer. Offers are resolved
-    // independently (first honorable wins), so first-honorable-across-lines is the
-    // same result as scanning the joined list.
+    // every line in order, validating the whole extension list while honoring the
+    // first acceptable permessage-deflate offer.
+    bool present = false;
+    bool has_extension = false;
+    websocket_compression negotiated{};
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
         if (http_request_access::header_kind(request, i) !=
             static_cast<std::uint8_t>(request_header_kind::sec_websocket_extensions)) {
             continue;
         }
-        const auto negotiation = websocket_scan_deflate_offers(headers[i].value(), config.context_takeover_);
-        if (websocket_deflate_negotiated(negotiation)) {
-            return negotiation;
+        present = true;
+        const auto value = headers[i].value();
+        if (!append_websocket_extension_list(value, has_extension)) {
+            return (websocket_compression{});
+        }
+        if (!websocket_deflate_negotiated(negotiated)) {
+            negotiated = websocket_scan_deflate_offers(value, config.context_takeover_);
         }
     }
-    return (websocket_compression{});
+    return (!present || has_extension) ? negotiated : (websocket_compression{});
 }
 
 }  // namespace ruvia::detail

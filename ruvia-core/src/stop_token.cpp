@@ -7,15 +7,14 @@ namespace ruvia {
 
 namespace detail {
 
-stop_state_ref stop_state::create(std::pmr::memory_resource& resource) {
-    void* storage = resource.allocate(sizeof(stop_state), alignof(stop_state));
-    return stop_state_ref(::new (storage) stop_state(resource));
+stop_state_ref stop_state::create() {
+    void* storage = std::pmr::new_delete_resource()->allocate(sizeof(stop_state), alignof(stop_state));
+    return stop_state_ref(::new (storage) stop_state());
 }
 
 void stop_state::destroy() noexcept {
-    auto* const resource = resource_;
     this->~stop_state();
-    resource->deallocate(this, sizeof(stop_state), alignof(stop_state));
+    std::pmr::new_delete_resource()->deallocate(this, sizeof(stop_state), alignof(stop_state));
 }
 
 void stop_state::request_stop() noexcept {
@@ -100,6 +99,6 @@ void stop_state::unlink(stop_callback_node& node) noexcept {
 // from new/delete, whose small-object path is thread-local. The resource is
 // never destroyed, so a state may retire on any thread at any time.
 stop_source::stop_source()
-    : state_(detail::stop_state::create(*std::pmr::new_delete_resource())) {}
+    : state_(detail::stop_state::create()) {}
 
 }  // namespace ruvia

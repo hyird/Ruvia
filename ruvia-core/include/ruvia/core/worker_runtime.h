@@ -12,12 +12,12 @@ namespace ruvia {
 
 class worker_group;
 
-enum class worker_io_policy { synchronized_value,
+enum class worker_io_policy { synchronized,
     single_owner };
 
 struct worker_runtime_options final {
     std::size_t queue_capacity_{4096};
-    worker_io_policy io_policy_{worker_io_policy::synchronized_value};
+    worker_io_policy io_policy_{worker_io_policy::synchronized};
 };
 
 struct worker_runtime_hooks final {

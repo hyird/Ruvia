@@ -67,25 +67,36 @@ void websocket_handshake_failure::apply_required_response_headers(http_response&
 
 websocket_handshake_validation_result validate_websocket_handshake(const http_request& request,
     const http1_request_body_plan& body_plan, websocket_handshake_validation_options options) noexcept {
+    if (request.known_method() != http_known_method::get ||
+        request.protocol_version() != http_protocol_version::http11 ||
+        // RFC 6455 does not forbid Content-Length on the HTTP Upgrade request.
+        // The parser-owned framing plan is the authoritative distinction:
+        // Content-Length: 0 carries no content, while a positive length or
+        // chunked coding still has bytes that must be consumed before the
+        // connection can change protocols.
+        body_plan.requires_consumption()) {
+        return websocket_handshake_validation_result::make_invalid_request();
+    }
+
     detail::http_connection_options connection_options;
     detail::http_upgrade_protocols upgrade_protocols;
+    detail::websocket_request_header_validator websocket_headers;
     std::string_view key;
-    std::string_view version;
     std::size_t key_count = 0;
-    std::size_t version_count = 0;
     bool websocket_upgrade = false;
 
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
-        const auto kind = detail::http_request_access::header_kind(request, i);
+        const auto kind =
+            static_cast<detail::request_header_kind>(detail::http_request_access::header_kind(request, i));
         const auto& header_value = headers[i];
-        if (kind == static_cast<std::uint8_t>(detail::request_header_kind::connection)) {
+        if (kind == detail::request_header_kind::connection) {
             if (connection_options.parse_field(
                     header_value.value(), detail::http_field_list_role::recipient) !=
                 detail::http_field_list_parse_status::ok) {
                 return websocket_handshake_validation_result::make_invalid_request();
             }
-        } else if (kind == static_cast<std::uint8_t>(detail::request_header_kind::upgrade)) {
+        } else if (kind == detail::request_header_kind::upgrade) {
             if (upgrade_protocols.parse_field(header_value.value(), detail::http_field_list_role::recipient,
                     [&websocket_upgrade](const detail::http_upgrade_protocol& protocol) noexcept {
                         if (protocol.version_.empty() &&
@@ -96,36 +107,19 @@ websocket_handshake_validation_result validate_websocket_handshake(const http_re
                     }) != detail::http_field_list_parse_status::ok) {
                 return websocket_handshake_validation_result::make_invalid_request();
             }
-        } else if (kind == static_cast<std::uint8_t>(detail::request_header_kind::sec_websocket_key)) {
+        } else if (kind == detail::request_header_kind::sec_websocket_key) {
             key = header_value.value();
             ++key_count;
-        } else if (kind == static_cast<std::uint8_t>(detail::request_header_kind::sec_websocket_version)) {
-            version = header_value.value();
-            ++version_count;
+        } else if (!websocket_headers.observe_header(kind, header_value.value())) {
+            return websocket_handshake_validation_result::make_invalid_request();
         }
     }
 
-    if (request.known_method() != http_known_method::get ||
-        request.protocol_version() != http_protocol_version::http11 || !connection_options.upgrade() ||
-        !upgrade_protocols.has_protocol() || !websocket_upgrade ||
-        // RFC 6455 does not forbid Content-Length on the HTTP Upgrade request.
-        // The parser-owned framing plan is the authoritative distinction:
-        // Content-Length: 0 carries no content, while a positive length or
-        // chunked coding still has bytes that must be consumed before the
-        // connection can change protocols.
-        body_plan.requires_consumption() || !detail::websocket_subprotocol_offers_valid(request) ||
-        !detail::websocket_extension_offers_valid(request) || key_count != 1 ||
-        !detail::decode_websocket_key(key).has_value() || version_count != 1) {
+    if (!connection_options.upgrade() || !upgrade_protocols.has_protocol() || !websocket_upgrade ||
+        key_count != 1 || !detail::decode_websocket_key(key).has_value()) {
         return websocket_handshake_validation_result::make_invalid_request();
     }
-    if (!http_ascii_equals_ignore_case(http_trim_ows(version), "13")) {
-        return websocket_handshake_validation_result::make_unsupported_version();
-    }
-    if (options.require_subprotocol_ &&
-        detail::choose_websocket_subprotocol(request, options.supported_subprotocols_).empty()) {
-        return websocket_handshake_validation_result::make_unsupported_subprotocol();
-    }
-    return websocket_handshake_validation_result::make_accepted();
+    return websocket_headers.finish(options);
 }
 
 }  // namespace ruvia

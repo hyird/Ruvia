@@ -22,6 +22,7 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/websocket_protocol_types.h"
 
 #include "http/http_stream_read_result.h"
 #include "http2/http2_data_output_budget.h"
@@ -43,19 +44,8 @@ public:
           body_queue_(body_queue),
           signal_(signal),
           write_signal_(write_signal),
-          output_budget_(&output_budget),
+          output_budget_(output_budget),
           executor_(executor) {}
-
-    http2_sans_io_tunnel_transport(ruvia::http2_connection& connection, std::uint32_t stream_id,
-        http2_sans_io_body_queue& body_queue, http2_sans_io_stream_signal& signal, worker_signal& write_signal,
-        executor_type executor) noexcept
-        : connection_(connection),
-          stream_id_(stream_id),
-          body_queue_(body_queue),
-          signal_(signal),
-          write_signal_(write_signal),
-          executor_(executor) {}
-
     [[nodiscard]] executor_type executor() const noexcept {
         return executor_;
     }
@@ -103,97 +93,30 @@ public:
         const auto terminal = disposition == http_stream_end::end
                                   ? http2_end_stream::end_stream
                                   : http2_end_stream::keep_open;
-        constexpr std::size_t submit_chunk_bytes = http2_data_output_credit_bytes;
-        std::size_t offset = 0;
-        bool submitted_empty_terminal = false;
-        do {
-            const auto count = bytes_value.empty() ? 0 : std::min(submit_chunk_bytes, bytes_value.size() - offset);
-            const auto chunk = bytes_value.substr(offset, count);
-            const bool last = offset + count == bytes_value.size();
-            const auto end = last ? terminal : http2_end_stream::keep_open;
-            for (;;) {
-                if (aborted_ || signal_.terminated()) {
-                    co_return aborted_ ? std::make_error_code(std::errc::operation_canceled)
-                                       : signal_.terminal_error();
-                }
-                if (chunk.empty() && end == http2_end_stream::end_stream &&
-                    connection_.has_queued_data(stream_id_)) {
-                    const auto wait_result = co_await wait_for_send_window();
-                    if (wait_result.aborted() != nullptr) {
-                        co_return signal_.terminated() ? signal_.terminal_error()
-                                                       : std::make_error_code(std::errc::connection_reset);
-                    }
-                    continue;
-                }
-                if (output_budget_ != nullptr && !chunk.empty()) {
-                    for (;;) {
-                        const auto window = connection_.send_window_state(stream_id_);
-                        if (!window) {
-                            co_return std::make_error_code(std::errc::connection_reset);
-                        }
-                        if (aborted_ || signal_.terminated()) {
-                            co_return aborted_ ? std::make_error_code(std::errc::operation_canceled)
-                                               : signal_.terminal_error();
-                        }
-                        if (window->available_ != 0) {
-                            break;
-                        }
-                        co_await output_budget_->wait_for_change();
-                        if (aborted_ || signal_.terminated()) {
-                            co_return aborted_ ? std::make_error_code(std::errc::operation_canceled)
-                                               : signal_.terminal_error();
-                        }
-                    }
-                    if (!(co_await output_budget_->acquire(stream_id_, signal_)) || aborted_ ||
-                        signal_.terminated()) {
-                        co_return aborted_ ? std::make_error_code(std::errc::operation_canceled)
-                                           : signal_.terminal_error();
-                    }
-                }
-                const auto result_value = connection_.submit_data(stream_id_, chunk, end);
-                if (output_budget_ != nullptr &&
-                    (result_value == http2_data_submit_status::accepted ||
-                        result_value == http2_data_submit_status::queued)) {
-                    output_budget_->note_data_submitted(stream_id_, chunk.size());
-                }
-                wake_writer();
-                if (result_value != http2_data_submit_status::accepted &&
-                    result_value != http2_data_submit_status::queued) {
-                    if (output_budget_ != nullptr && !chunk.empty()) {
-                        output_budget_->release(stream_id_);
-                    }
-                }
-                if (result_value == http2_data_submit_status::accepted) {
-                    break;
-                }
-                if (result_value == http2_data_submit_status::closed) {
-                    co_return std::make_error_code(std::errc::connection_reset);
-                }
-                if (result_value == http2_data_submit_status::invalid_state ||
-                    result_value == http2_data_submit_status::content_length_exceeded ||
-                    result_value == http2_data_submit_status::content_length_incomplete) {
-                    co_return std::make_error_code(std::errc::protocol_error);
-                }
-                const auto wait_result = co_await wait_for_send_window();
-                if (wait_result.aborted() != nullptr) {
-                    co_return signal_.terminated() ? signal_.terminal_error()
-                                                   : std::make_error_code(std::errc::connection_reset);
-                }
-                if (result_value == http2_data_submit_status::queued) {
-                    break;  // core owns this bounded chunk; wait before next submit
-                }
-            }
-            offset += count;
-            submitted_empty_terminal = bytes_value.empty();
-            if (!bytes_value.empty() && offset < bytes_value.size()) {
-                const auto wait_result = co_await wait_for_send_window();
-                if (wait_result.aborted() != nullptr) {
-                    co_return signal_.terminated() ? signal_.terminal_error()
-                                                   : std::make_error_code(std::errc::connection_reset);
-                }
-            }
-        } while (offset < bytes_value.size() || (!submitted_empty_terminal && bytes_value.empty()));
-        co_return std::error_code{};
+        const auto status = co_await write_http2_stream_data(connection_, stream_id_, &signal_,
+            write_signal_, output_budget_, bytes_value, terminal, &aborted_);
+        switch (status) {
+            case http2_stream_data_write_status::completed:
+                co_return std::error_code{};
+            case http2_stream_data_write_status::local_aborted:
+                co_return std::make_error_code(std::errc::operation_canceled);
+            case http2_stream_data_write_status::session_terminated:
+                co_return signal_.terminal_error();
+            case http2_stream_data_write_status::peer_closed:
+                co_return std::make_error_code(std::errc::connection_reset);
+            case http2_stream_data_write_status::invalid_state:
+            case http2_stream_data_write_status::content_length_exceeded:
+            case http2_stream_data_write_status::content_length_incomplete:
+                co_return std::make_error_code(std::errc::protocol_error);
+        }
+        co_return std::make_error_code(std::errc::protocol_error);
+    }
+
+    [[nodiscard]] task<std::error_code> write_bytes(
+        std::string_view bytes_value, websocket_transport_disposition disposition) {
+        return write_bytes(bytes_value, disposition == websocket_transport_disposition::end_transport
+                                            ? http_stream_end::end
+                                            : http_stream_end::keep_open);
     }
 
     void abort() noexcept {
@@ -201,10 +124,8 @@ public:
             return;
         }
         aborted_ = true;
-        if (output_budget_ != nullptr) {
-            output_budget_->release(stream_id_);
-            output_budget_->wake();
-        }
+        output_budget_.release(stream_id_);
+        output_budget_.wake();
         try {
             (void)connection_.submit_reset(stream_id_, http2_error_code::cancel);
         } catch (...) {
@@ -216,19 +137,6 @@ public:
     }
 
 private:
-    [[nodiscard]] task<http2_send_window_wait_result> wait_for_send_window() {
-        for (;;) {
-            if (aborted_ || signal_.terminated() ||
-                connection_.stream_receive_status(stream_id_) == http2_stream_receive_status::closed) {
-                co_return http2_send_window_wait_result::make_aborted();
-            }
-            if (!connection_.has_queued_data(stream_id_)) {
-                co_return http2_send_window_wait_result::make_ready();
-            }
-            co_await signal_.wait();
-        }
-    }
-
     void wake_writer() noexcept {
         write_signal_.notify();
     }
@@ -238,7 +146,7 @@ private:
     http2_sans_io_body_queue& body_queue_;
     http2_sans_io_stream_signal& signal_;
     worker_signal& write_signal_;
-    http2_data_output_budget* output_budget_{nullptr};
+    http2_data_output_budget& output_budget_;
     executor_type executor_;
     bool aborted_{false};
 };

@@ -84,6 +84,9 @@ struct buffered_compression_attempt final {
 
 [[nodiscard]] cache_control response_cache_control(const http_response& response) noexcept {
     cache_control_field_parser parser;
+    if (!response.header("Cache-Control").has_value()) {
+        return parser.finish();
+    }
     for (const auto& header : response.headers()) {
         if (http_ascii_equals_ignore_case(header.name(), "Cache-Control")) {
             parser.update(header.value());

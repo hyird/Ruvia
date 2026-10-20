@@ -33,10 +33,12 @@ std::optional<static_file_representation> select_static_file_representation(cons
     }
 
     http_response_coding_qualities qualities;
-    const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
-        if (http_ascii_equals_ignore_case(headers[i].name(), "Accept-Encoding")) {
-            qualities.update(headers[i].value());
+    if (request.header("Accept-Encoding").has_value()) {
+        const auto headers = request.headers();
+        for (std::size_t i = 0; i < headers.size(); ++i) {
+            if (http_ascii_equals_ignore_case(headers[i].name(), "Accept-Encoding")) {
+                qualities.update(headers[i].value());
+            }
         }
     }
 

@@ -139,17 +139,14 @@ public:
     }
 
 private:
-    enum class lane_type : std::uint8_t { read,
-        write };
-
     struct lane_deadline final {
-        operation_deadline<lane_type> deadline_;
+        operation_deadline<> deadline_;
         worker_timer_registration timer_;
     };
 
     template <typename buffers_type>
     [[nodiscard]] task<client_transport_result> write_buffers(buffers_type buffers, const operation_timeout& timeout);
-    [[nodiscard]] bool arm(lane_deadline& lane, lane_type kind, const operation_timeout& timeout);
+    [[nodiscard]] bool arm(lane_deadline& lane, const operation_timeout& timeout);
     [[nodiscard]] bool clear(lane_deadline& lane) noexcept;
     [[nodiscard]] client_transport_result finish(lane_deadline& lane, const operation_timeout& timeout,
         const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept;

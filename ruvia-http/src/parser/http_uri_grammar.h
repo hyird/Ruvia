@@ -10,7 +10,7 @@
 // RFC 3986 syntax, one level below any HTTP-specific rule: which byte sequences
 // form a legal URI component, userinfo, port, IPv4 / IPv6 / IPvFuture literal or
 // reg-name. Nothing here knows about request targets, Host fields or origins --
-// those rules live in http_request_target.h and http_serialized_origin.h.
+// those rules live in http_request_target.h and http_serialized_origin.cpp.
 
 namespace ruvia::detail {
 

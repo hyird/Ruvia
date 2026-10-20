@@ -25,6 +25,7 @@
 
 namespace ruvia::detail {
 
+class http_client_output_queue;
 class http_client_request_storage;
 class http_client_pool;
 class http_client_response_state;
@@ -140,6 +141,9 @@ private:
     void publish_http2_head(http2_stream& stream, http2_response_head_event& event);
     void consume_http2_data(std::uint32_t stream_id, std::string_view bytes, http2_received_data_credit credit);
     void finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end);
+    [[nodiscard]] task<void> wait_for_http2_queued_data(http2_stream& stream, const http_client_output_queue& upload);
+    [[nodiscard]] task<void> stream_http2_upload(const http_client_request_storage& request, http2_stream& stream,
+        http_client_output_queue& upload);
     [[nodiscard]] task<void> wait_for_http2_session_stop(const operation_timeout& timeout, stop_token stop_token_value);
 
     http_client_pool& pool_;

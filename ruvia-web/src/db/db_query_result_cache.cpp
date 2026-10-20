@@ -59,20 +59,32 @@ value_type require_redis_cache_value(redis_cache_outcome<value_type> outcome) {
     return std::get<0>(std::move(outcome));
 }
 
+task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr::string> keys,
+    std::pmr::memory_resource* resource, const operation_options& options, const operation_timeout& deadline_value) {
+    if (keys.empty()) {
+        co_return;
+    }
+    std::pmr::vector<std::string_view> views(resource);
+    views.reserve(keys.size());
+    for (const auto& key : keys) {
+        views.emplace_back(key);
+    }
+    (void)require_redis_cache_value(co_await run_redis_cache_command(
+        [&] { return redis.with_options(db_required_options(options, deadline_value)).del(views); },
+        deadline_value));
+    if (deadline_value.expired()) {
+        throw_db_query_timeout();
+    }
+}
+
 task<void> remove_keys(redis_handle redis, std::pmr::vector<std::pmr::string> keys, operation_options options) {
     const operation_timeout deadline_value(options.timeout_);
-    for (const auto& key : keys) {
-        (void)require_redis_cache_value(co_await run_redis_cache_command(
-            [&] { return redis.with_options(db_required_options(options, deadline_value)).del(key); },
-            deadline_value));
-        if (deadline_value.expired()) {
-            throw_db_query_timeout();
-        }
-    }
+    co_await delete_key_batch(redis, keys, keys.get_allocator().resource(), options, deadline_value);
 }
 
 task<void> clear_keys(redis_handle redis, std::pmr::string pattern, operation_options options) {
     const operation_timeout deadline_value(options.timeout_);
+    auto* const resource = pattern.get_allocator().resource();
     std::optional<redis_scan_cursor> cursor;
     do {
         auto result = require_redis_cache_value(co_await run_redis_cache_command(
@@ -84,14 +96,7 @@ task<void> clear_keys(redis_handle redis, std::pmr::string pattern, operation_op
         if (deadline_value.expired()) {
             throw_db_query_timeout();
         }
-        for (const auto& key : result.values()) {
-            (void)require_redis_cache_value(co_await run_redis_cache_command(
-                [&] { return redis.with_options(db_required_options(options, deadline_value)).del(key); },
-                deadline_value));
-            if (deadline_value.expired()) {
-                throw_db_query_timeout();
-            }
-        }
+        co_await delete_key_batch(redis, result.values(), resource, options, deadline_value);
         cursor = result.next_cursor();
     } while (cursor);
 }

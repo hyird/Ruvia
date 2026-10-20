@@ -8,14 +8,24 @@
 
 namespace ruvia::detail {
 
+namespace {
+
+[[nodiscard]] std::pmr::memory_resource* select_file_read_resource(const response_file_io& io) noexcept {
+    return io.pool_ == nullptr && io.resource_ != nullptr ? io.resource_ : process_resource();
+}
+
+}  // namespace
+
 response_file_source::read_buffer::read_buffer(read_buffer&& other) noexcept
-    : data_(std::exchange(other.data_, nullptr)) {}
+    : resource_(other.resource_),
+      data_(std::exchange(other.data_, nullptr)) {}
 
 response_file_source::read_buffer& response_file_source::read_buffer::operator=(read_buffer&& other) noexcept {
     if (this != &other) {
         if (data_ != nullptr) {
-            process_resource()->deallocate(data_, response_file_read_ahead_bytes, alignof(std::max_align_t));
+            resource_->deallocate(data_, response_file_read_ahead_bytes, alignof(std::max_align_t));
         }
+        resource_ = other.resource_;
         data_ = std::exchange(other.data_, nullptr);
     }
     return *this;
@@ -23,14 +33,14 @@ response_file_source::read_buffer& response_file_source::read_buffer::operator=(
 
 response_file_source::read_buffer::~read_buffer() {
     if (data_ != nullptr) {
-        process_resource()->deallocate(data_, response_file_read_ahead_bytes, alignof(std::max_align_t));
+        resource_->deallocate(data_, response_file_read_ahead_bytes, alignof(std::max_align_t));
     }
 }
 
 char* response_file_source::read_buffer::data() {
     if (data_ == nullptr) {
         data_ = static_cast<char*>(
-            process_resource()->allocate(response_file_read_ahead_bytes, alignof(std::max_align_t)));
+            resource_->allocate(response_file_read_ahead_bytes, alignof(std::max_align_t)));
     }
     return data_;
 }
@@ -38,7 +48,7 @@ char* response_file_source::read_buffer::data() {
 response_file_source::response_file_source(const http_response& response, response_file_io io)
     : response_(response),
       io_(std::move(io)),
-      state_(process_resource()),
+      state_(select_file_read_resource(io_)),
       segment_count_(response.body_segment_count()) {}
 
 void response_file_source::select_file(http_response_file_view file) {

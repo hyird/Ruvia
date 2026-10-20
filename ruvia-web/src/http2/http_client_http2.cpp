@@ -85,12 +85,8 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
         state_value.tunnel_->accepted_ =
             state_value.response_body_plan_->content_semantics() == http_response_content_semantics::connect_tunnel;
         if (state_value.tunnel_->accepted_ && state_value.tunnel_->udp_) {
-            std::pmr::vector<http_header_view> fields(state_value.resource_);
-            fields.reserve(state_value.headers_.size());
-            for (const auto& field : state_value.headers_) {
-                fields.emplace_back(field.name(), field.value());
-            }
-            if (validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.value(), fields)
+            if (validate_http_connect_udp_response(
+                    state_value.protocol_version_, state_value.status_.value(), state_value.headers_)
                     .index() != 0) {
                 throw http_client_error(http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
             }
@@ -511,100 +507,7 @@ task<void> http_client_connection::execute_http2(const http_client_request_stora
 
         if (auto* upload = request.output();
             upload != nullptr && stream.stream_id_ != 0 && !stream.failed() && !stream.retryable_) {
-            upload->wake_target_ = &stream.signal_;
-            upload->wake_ = [](void* target) noexcept { static_cast<worker_signal*>(target)->notify(); };
-            struct upload_wake_guard final {
-                http_client_output_queue& upload_;
-                ~upload_wake_guard() {
-                    upload_.wake_ = nullptr;
-                    upload_.wake_target_ = nullptr;
-                }
-            } wake_guard{*upload};
-            worker_timer_registration continue_timer;
-            if (request.upload() != nullptr && !request.upload()->content_released_) {
-                (void)pool_.worker().schedule_timer(continue_timer,
-                    worker_timer_deadline_after(request.upload()->config_.continue_timeout_),
-                    [upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
-                        if (outcome == worker_timer_outcome::expired && !upload->stopped_) {
-                            policy->content_released_ = true;
-                            upload->notify_data();
-                        }
-                    });
-            }
-            const auto streaming = [&] {
-                return !upload->ended_ && !upload->stopped_ && !stream.failed() && !stream.retryable_;
-            };
-            // Accepted submissions need no child coroutine frame; only a queued
-            // remainder instantiates this wait task.
-            const auto wait_queued = [&]() -> task<void> {
-                while (http2_.has_connection() && http2_.connection().has_queued_data(stream.stream_id_) &&
-                       !stream.failed() && !stream.retryable_ && !upload->stopped_) {
-                    co_await stream.signal_.wait();
-                }
-            };
-            while (streaming()) {
-                if (request.is_tunnel() ? !request.tunnel()->accepted_ : !request.upload()->content_released_) {
-                    co_await stream.signal_.wait();
-                    continue;
-                }
-                continue_timer.cancel();
-                if (!request.is_tunnel() && connection.release_request_content(stream.stream_id_) ==
-                                                http2_request_content_release_status::closed) {
-                    break;
-                }
-                if (upload->chunk_ready_) {
-                    const auto submitted =
-                        connection.submit_data(stream.stream_id_, upload->chunk_, http2_end_stream::keep_open);
-                    if (submitted == http2_data_submit_status::backpressured ||
-                        submitted == http2_data_submit_status::expectation_pending) {
-                        co_await stream.signal_.wait();
-                        continue;
-                    }
-                    if (submitted != http2_data_submit_status::accepted && submitted != http2_data_submit_status::queued) {
-                        stream.error_ = http_client_error::code_type::invalid_request;
-                        http2_.submit_reset(stream.stream_id_);
-                        break;
-                    }
-                    http2_.wake_writer();
-                    if (submitted == http2_data_submit_status::queued) {
-                        co_await wait_queued();
-                    }
-                    if (!stream.failed() && !stream.retryable_ && !upload->stopped_) {
-                        upload->acknowledge_chunk();
-                    }
-                } else if (upload->end_requested_) {
-                    bool finish_accepted{};
-                    bool finish_queued{};
-                    if (request.is_tunnel()) {
-                        const auto finished = connection.submit_data(stream.stream_id_, {}, http2_end_stream::end_stream);
-                        finish_queued = finished == http2_data_submit_status::queued;
-                        finish_accepted = finished == http2_data_submit_status::accepted || finish_queued;
-                    } else {
-                        std::pmr::vector<http_header_view> trailers(state_value.resource_);
-                        trailers.reserve(request.upload()->trailers_.size());
-                        for (const auto& field : request.upload()->trailers_) {
-                            trailers.emplace_back(field.name(), field.value());
-                        }
-                        const auto finished = connection.finish_request(stream.stream_id_, trailers);
-                        finish_queued = finished == http2_finish_request_status::queued;
-                        finish_accepted = finished == http2_finish_request_status::accepted || finish_queued;
-                    }
-                    if (!finish_accepted) {
-                        stream.error_ = http_client_error::code_type::invalid_request;
-                        http2_.submit_reset(stream.stream_id_);
-                        break;
-                    }
-                    http2_.wake_writer();
-                    if (finish_queued) {
-                        co_await wait_queued();
-                    }
-                    if (!stream.failed() && !stream.retryable_ && !upload->stopped_) {
-                        upload->finish();
-                    }
-                } else {
-                    co_await stream.signal_.wait();
-                }
-            }
+            co_await stream_http2_upload(request, stream, *upload);
         }
         while ((!stream.complete_ || (request.output() == nullptr && connection.has_queued_data(stream.stream_id_))) &&
                !stream.failed() && !stream.retryable_) {
@@ -653,6 +556,103 @@ task<void> http_client_connection::execute_http2(const http_client_request_stora
         co_return;
     }
     throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/2 request retry exhausted");
+}
+
+task<void> http_client_connection::wait_for_http2_queued_data(
+    http2_stream& stream, const http_client_output_queue& upload) {
+    while (http2_.has_connection() && http2_.connection().has_queued_data(stream.stream_id_) && !stream.failed() &&
+           !stream.retryable_ && !upload.stopped_) {
+        co_await stream.signal_.wait();
+    }
+}
+
+task<void> http_client_connection::stream_http2_upload(
+    const http_client_request_storage& request, http2_stream& stream, http_client_output_queue& upload) {
+    auto& connection = http2_.connection();
+    auto& state_value = *stream.state_;
+    upload.wake_target_ = &stream.signal_;
+    upload.wake_ = [](void* target) noexcept { static_cast<worker_signal*>(target)->notify(); };
+    struct upload_wake_guard final {
+        http_client_output_queue& upload_;
+        ~upload_wake_guard() {
+            upload_.wake_ = nullptr;
+            upload_.wake_target_ = nullptr;
+        }
+    } wake_guard{upload};
+    worker_timer_registration continue_timer;
+    if (request.upload() != nullptr && !request.upload()->content_released_) {
+        (void)pool_.worker().schedule_timer(continue_timer,
+            worker_timer_deadline_after(request.upload()->config_.continue_timeout_),
+            [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired && !upload.stopped_) {
+                    policy->content_released_ = true;
+                    upload.notify_data();
+                }
+            });
+    }
+    while (!upload.ended_ && !upload.stopped_ && !stream.failed() && !stream.retryable_) {
+        if (request.is_tunnel() ? !request.tunnel()->accepted_ : !request.upload()->content_released_) {
+            co_await stream.signal_.wait();
+            continue;
+        }
+        continue_timer.cancel();
+        if (!request.is_tunnel() &&
+            connection.release_request_content(stream.stream_id_) == http2_request_content_release_status::closed) {
+            break;
+        }
+        if (upload.chunk_ready_) {
+            const auto submitted =
+                connection.submit_data(stream.stream_id_, upload.chunk_, http2_end_stream::keep_open);
+            if (submitted == http2_data_submit_status::backpressured ||
+                submitted == http2_data_submit_status::expectation_pending) {
+                co_await stream.signal_.wait();
+                continue;
+            }
+            if (submitted != http2_data_submit_status::accepted && submitted != http2_data_submit_status::queued) {
+                stream.error_ = http_client_error::code_type::invalid_request;
+                http2_.submit_reset(stream.stream_id_);
+                break;
+            }
+            http2_.wake_writer();
+            if (submitted == http2_data_submit_status::queued) {
+                co_await wait_for_http2_queued_data(stream, upload);
+            }
+            if (!stream.failed() && !stream.retryable_ && !upload.stopped_) {
+                upload.acknowledge_chunk();
+            }
+        } else if (upload.end_requested_) {
+            bool finish_accepted{};
+            bool finish_queued{};
+            if (request.is_tunnel()) {
+                const auto finished = connection.submit_data(stream.stream_id_, {}, http2_end_stream::end_stream);
+                finish_queued = finished == http2_data_submit_status::queued;
+                finish_accepted = finished == http2_data_submit_status::accepted || finish_queued;
+            } else {
+                std::pmr::vector<http_header_view> trailers(state_value.resource_);
+                trailers.reserve(request.upload()->trailers_.size());
+                for (const auto& field : request.upload()->trailers_) {
+                    trailers.emplace_back(field.name(), field.value());
+                }
+                const auto finished = connection.finish_request(stream.stream_id_, trailers);
+                finish_queued = finished == http2_finish_request_status::queued;
+                finish_accepted = finished == http2_finish_request_status::accepted || finish_queued;
+            }
+            if (!finish_accepted) {
+                stream.error_ = http_client_error::code_type::invalid_request;
+                http2_.submit_reset(stream.stream_id_);
+                break;
+            }
+            http2_.wake_writer();
+            if (finish_queued) {
+                co_await wait_for_http2_queued_data(stream, upload);
+            }
+            if (!stream.failed() && !stream.retryable_ && !upload.stopped_) {
+                upload.finish();
+            }
+        } else {
+            co_await stream.signal_.wait();
+        }
+    }
 }
 
 // --- server push: pool policy over a connection's stream registry ---------------

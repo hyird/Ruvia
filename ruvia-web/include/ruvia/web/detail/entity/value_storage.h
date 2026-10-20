@@ -254,39 +254,39 @@ struct entity_storage_from_tuple<std::tuple<columns...>> {
 }  // namespace ruvia::detail
 
 // Public value facades only forward; state transitions belong to the owner.
-#define RUVIA_DETAIL_ENTITY_VALUE_API(member, null_method, set_method, is_null_method) \
-    template <::ruvia::fixed_string name>                                              \
-    auto& get() & {                                                                    \
-        return member.template get<name>();                                            \
-    }                                                                                  \
-    template <::ruvia::fixed_string name>                                              \
-    const auto& get() const& {                                                         \
-        return member.template get<name>();                                            \
-    }                                                                                  \
-    template <::ruvia::fixed_string name>                                              \
-    const auto& get() const&& = delete;                                                \
-    template <::ruvia::fixed_string name, typename value_type>                         \
-    void set(value_type&& value) {                                                     \
-        member.template set<name>(std::forward<value_type>(value));                    \
-    }                                                                                  \
-    template <::ruvia::fixed_string name>                                              \
-    void set_null()                                                                    \
-        requires requires { member.template null_method<name>(); }                     \
-    {                                                                                  \
-        member.template null_method<name>();                                           \
-    }                                                                                  \
-    template <::ruvia::fixed_string name>                                              \
-    void reset() {                                                                     \
-        member.template reset<name>();                                                 \
-    }                                                                                  \
-    template <::ruvia::fixed_string name>                                              \
-    bool is_set() const {                                                              \
-        return member.template set_method<name>();                                     \
-    }                                                                                  \
-    template <::ruvia::fixed_string name>                                              \
-    bool is_null() const {                                                             \
-        return member.template is_null_method<name>();                                 \
-    }                                                                                  \
-    std::pmr::memory_resource* resource() const noexcept {                             \
-        return member.resource();                                                      \
+#define RUVIA_DETAIL_ENTITY_VALUE_API(member)                       \
+    template <::ruvia::fixed_string name>                           \
+    auto& get() & {                                                 \
+        return member.template get<name>();                         \
+    }                                                               \
+    template <::ruvia::fixed_string name>                           \
+    const auto& get() const& {                                      \
+        return member.template get<name>();                         \
+    }                                                               \
+    template <::ruvia::fixed_string name>                           \
+    const auto& get() const&& = delete;                             \
+    template <::ruvia::fixed_string name, typename value_type>      \
+    void set(value_type&& value) {                                  \
+        member.template set<name>(std::forward<value_type>(value)); \
+    }                                                               \
+    template <::ruvia::fixed_string name>                           \
+    void set_null()                                                 \
+        requires requires { member.template set_null<name>(); }     \
+    {                                                               \
+        member.template set_null<name>();                           \
+    }                                                               \
+    template <::ruvia::fixed_string name>                           \
+    void reset() {                                                  \
+        member.template reset<name>();                              \
+    }                                                               \
+    template <::ruvia::fixed_string name>                           \
+    bool is_set() const {                                           \
+        return member.template is_set<name>();                      \
+    }                                                               \
+    template <::ruvia::fixed_string name>                           \
+    bool is_null() const {                                          \
+        return member.template is_null<name>();                     \
+    }                                                               \
+    std::pmr::memory_resource* resource() const noexcept {          \
+        return member.resource();                                   \
     }

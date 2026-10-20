@@ -3,13 +3,13 @@
 #include <algorithm>
 #include <exception>
 #include <limits>
+#include <memory_resource>
 #include <stdexcept>
 #include <utility>
 #include <variant>
 
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/process_resource.h"
 
 #include "client/http_client_advertisement_queue.h"
 
@@ -18,8 +18,7 @@ namespace ruvia::detail {
 class http_client_advertisement_memory final {
 public:
     explicit http_client_advertisement_memory(const worker_handle& worker_value)
-        : memory_(*process_resource()),
-          worker_(worker_value) {}
+        : worker_(worker_value) {}
 
     void retain(std::size_t bytes_value) noexcept {
         require_current();
@@ -70,7 +69,7 @@ private:
         if (retained_bytes_ != 0 || references_ != 1) {
             std::terminate();
         }
-        destroy_pmr_object(this, process_resource());
+        destroy_pmr_object(this, std::pmr::new_delete_resource());
     }
     worker_memory memory_;
     worker_handle worker_;
@@ -137,7 +136,7 @@ http_client_advertisement_queue::http_client_advertisement_queue(const worker_ha
         throw std::invalid_argument("HTTP advertisement queue requires worker, memory and positive bounds");
     }
     if (config.receive_origins_ || config.receive_alternative_services_) {
-        memory_ = make_pmr_object<http_client_advertisement_memory>(process_resource(), worker_value).release();
+        memory_ = make_pmr_object<http_client_advertisement_memory>(std::pmr::new_delete_resource(), worker_value).release();
     }
 }
 http_client_advertisement_queue::~http_client_advertisement_queue() {

@@ -176,59 +176,73 @@ private:
         return value;
     }
 
+    template <typename slot_t_type>
+    [[nodiscard]] static bool parse_json_field_slot(slot_t_type& slot, std::string_view& value_input,
+        std::pmr::memory_resource* resource, std::size_t depth,
+        model_string_storage string_storage, json_parse_budget& budget) {
+        if (slot.is_present()) {
+            slot.mark_duplicate();
+            return budget.skip_value(value_input, depth + 1);
+        }
+        const auto original_input = value_input;
+        using slot_type = std::remove_cvref_t<slot_t_type>;
+        using value_type = typename slot_type::value_type;
+        auto null_input = value_input;
+        if (consume_json_literal(null_input, "null")) {
+            value_input = null_input;
+            if constexpr (slot_type::nullable) {
+                slot.mark_null();
+            } else {
+                slot.mark_invalid_type();
+            }
+            return true;
+        }
+        const auto element_checkpoint = budget.element_checkpoint();
+        if (auto parsed_value =
+                parse_json_value<value_type>(value_input, resource, depth + 1, string_storage, budget);
+            parsed_value) {
+            model_value_factory::emplace_parsed(slot, std::move(*parsed_value));
+            return true;
+        }
+        if (budget.exhausted()) {
+            return false;
+        }
+        // Wrong-type values need a structural skip only when the
+        // value parser did not consume a complete JSON token.
+        if (value_input.data() == original_input.data()) {
+            // The fallback rescans the entire value. Count its
+            // elements once, while retaining byte charges for
+            // allocations that an arena may still own.
+            budget.restore_elements(element_checkpoint);
+            if (!budget.skip_value(value_input, depth + 1)) {
+                return false;
+            }
+        }
+        slot.mark_invalid_type();
+        return true;
+    }
+
+    template <typename model_type>
+    [[nodiscard]] static bool visit_json_field(model_type& value, std::string_view key,
+        std::string_view& value_input, std::pmr::memory_resource* resource, std::size_t depth,
+        model_string_storage string_storage, json_parse_budget& budget) {
+        const auto key_hash = model::model_field_name_hash(key);
+        bool field_result = true;
+        const bool matched = model::visit_model_field_by_wire_name(value,
+            model::model_access::schema<model_type>(), key_hash, key, field_result,
+            [&](auto& slot) -> bool {
+                return parse_json_field_slot(slot, value_input, resource, depth, string_storage, budget);
+            });
+        return matched ? field_result : budget.skip_value(value_input, depth + 1);
+    }
+
     template <typename model_type>
     static bool materialize_json(model_type& value, std::string_view& input, std::size_t depth,
         model_string_storage string_storage, json_parse_budget& budget) {
         auto* const resource = value.resource();
         const auto visit_field = [&value, resource, depth, string_storage, &budget](
                                      std::string_view key, std::string_view& value_input) -> bool {
-            const auto key_hash = model::model_field_name_hash(key);
-            bool field_result = true;
-            const bool matched = model::visit_model_field_by_wire_name(value,
-                model::model_access::schema<model_type>(), key_hash, key, field_result,
-                [&](auto& slot) -> bool {
-                    if (slot.is_present()) {
-                        slot.mark_duplicate();
-                        return budget.skip_value(value_input, depth + 1);
-                    }
-                    const auto original_input = value_input;
-                    using slot_type = std::remove_cvref_t<decltype(slot)>;
-                    using value_type = typename slot_type::value_type;
-                    auto null_input = value_input;
-                    if (consume_json_literal(null_input, "null")) {
-                        value_input = null_input;
-                        if constexpr (slot_type::nullable) {
-                            slot.mark_null();
-                        } else {
-                            slot.mark_invalid_type();
-                        }
-                        return true;
-                    }
-                    const auto element_checkpoint = budget.element_checkpoint();
-                    if (auto parsed_value = parse_json_value<value_type>(
-                            value_input, resource, depth + 1, string_storage, budget);
-                        parsed_value) {
-                        model_value_factory::emplace_parsed(slot, std::move(*parsed_value));
-                        return true;
-                    }
-                    if (budget.exhausted()) {
-                        return false;
-                    }
-                    // Wrong-type values need a structural skip only when the
-                    // value parser did not consume a complete JSON token.
-                    if (value_input.data() == original_input.data()) {
-                        // The fallback rescans the entire value. Count its
-                        // elements once, while retaining byte charges for
-                        // allocations that an arena may still own.
-                        budget.restore_elements(element_checkpoint);
-                        if (!budget.skip_value(value_input, depth + 1)) {
-                            return false;
-                        }
-                    }
-                    slot.mark_invalid_type();
-                    return true;
-                });
-            return matched ? field_result : budget.skip_value(value_input, depth + 1);
+            return visit_json_field(value, key, value_input, resource, depth, string_storage, budget);
         };
         const auto consume_key_allocation = [&budget](std::size_t bytes_value) noexcept {
             return budget.consume_bytes(bytes_value) && budget.consume_bytes(sizeof(std::pmr::string));
@@ -239,6 +253,55 @@ private:
             apply_defaults(value);
         }
         return valid;
+    }
+
+    template <typename slot_t_type>
+    static void bind_form_field_slot(slot_t_type& slot, std::string_view field_value,
+        form_value_encoding encoding, std::pmr::memory_resource* resource,
+        model_string_storage string_storage) {
+        if (slot.is_present()) {
+            slot.mark_duplicate();
+            return;
+        }
+        using value_type = typename std::remove_cvref_t<slot_t_type>::value_type;
+        // Name/value inputs only carry strings and scalars. A value for any
+        // other field is a type error, never an absence that a default fills.
+        if constexpr (is_form_field<value_type>) {
+            auto parsed_value = parse_form_value<value_type>(
+                resolved_pmr_resource_tag{}, field_value, encoding, resource, string_storage);
+            if (parsed_value) {
+                model_value_factory::emplace_parsed(slot, std::move(*parsed_value));
+                return;
+            }
+        }
+        slot.mark_invalid_type();
+    }
+
+    template <typename model_type>
+    [[nodiscard]] static bool visit_form_field(model_type& value, std::string_view key,
+        std::string_view field_value, form_value_encoding encoding,
+        const request_name_value_list* fields_value, bool case_insensitive,
+        std::pmr::memory_resource* resource, model_string_storage string_storage) {
+        if (case_insensitive) {
+            bool matched = false;
+            model::visit_model_fields(value, model::model_access::schema<model_type>(),
+                [&](const auto&, auto& slot) {
+                    if (matched || !request_name_value_list_access::names_equal(
+                                       *fields_value, key, slot.wire_name())) {
+                        return;
+                    }
+                    matched = true;
+                    bind_form_field_slot(slot, field_value, encoding, resource, string_storage);
+                });
+            return true;
+        }
+        bool field_result = true;
+        (void)model::visit_model_field_by_wire_name(value, model::model_access::schema<model_type>(),
+            model::model_field_name_hash(key), key, field_result, [&](auto& slot) -> bool {
+                bind_form_field_slot(slot, field_value, encoding, resource, string_storage);
+                return true;
+            });
+        return field_result;
     }
 
     template <typename model_type>
@@ -254,44 +317,8 @@ private:
         const bool valid = visit_model_input_form_fields(input,
             [&value, resource, encoding, fields_value, case_insensitive, string_storage](
                 std::string_view key, std::string_view field_value) {
-                auto bind = [&](auto& slot) {
-                    if (slot.is_present()) {
-                        slot.mark_duplicate();
-                        return;
-                    }
-                    using value_type = typename std::remove_cvref_t<decltype(slot)>::value_type;
-                    // Name/value inputs only carry strings and scalars. A value for any
-                    // other field is a type error, never an absence that a default fills.
-                    if constexpr (is_form_field<value_type>) {
-                        auto parsed_value = parse_form_value<value_type>(resolved_pmr_resource_tag{},
-                            field_value, encoding, resource, string_storage);
-                        if (parsed_value) {
-                            model_value_factory::emplace_parsed(slot, std::move(*parsed_value));
-                            return;
-                        }
-                    }
-                    slot.mark_invalid_type();
-                };
-                if (case_insensitive) {
-                    bool matched = false;
-                    model::visit_model_fields(value, model::model_access::schema<model_type>(),
-                        [&](const auto&, auto& slot) {
-                            if (matched || !request_name_value_list_access::names_equal(
-                                               *fields_value, key, slot.wire_name())) {
-                                return;
-                            }
-                            matched = true;
-                            bind(slot);
-                        });
-                    return true;
-                }
-                bool field_result = true;
-                (void)model::visit_model_field_by_wire_name(value, model::model_access::schema<model_type>(),
-                    model::model_field_name_hash(key), key, field_result, [&](auto& slot) -> bool {
-                        bind(slot);
-                        return true;
-                    });
-                return field_result;
+                return visit_form_field(value, key, field_value, encoding, fields_value,
+                    case_insensitive, resource, string_storage);
             });
         if (valid) {
             apply_defaults(value);

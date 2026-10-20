@@ -11,9 +11,8 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/redis/redis_utils.h"
-
 #include "redis/redis_types_access.h"
+#include "redis/redis_utils.h"
 
 namespace ruvia::detail {
 namespace {
