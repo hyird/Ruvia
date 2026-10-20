@@ -348,5 +348,37 @@ RUVIA_TEST(db_transaction_advisory_locks_notify_cursors_and_large_objects_execut
         RUVIA_CHECK_EQ(statements[12].sql_, "SELECT (\"lo_unlink\"($1::oid) = 1)");
     }
 }
+
+RUVIA_TEST(db_transaction_scalar_decode_failure_releases_slot_for_next_transaction) {
+    using namespace ruvia;
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::reaccept,
+        {{.column_ = "", .command_ = "BEGIN", .status_ = 'T'},
+            {.rows_ = {"invalid-bool"}, .status_ = 'T'},
+            {.column_ = "", .command_ = "BEGIN", .status_ = 'T'},
+            {.rows_ = {"t"}, .status_ = 'T'},
+            {.column_ = "", .command_ = "COMMIT"}});
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    auto config = peer.config();
+    config.pool_size_per_worker_ = 1;
+    db_client client(attachment.loop(), config);
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        {
+            auto transaction = co_await connected.handle().begin_transaction();
+            bool failed = false;
+            try {
+                (void)co_await transaction.try_advisory_lock(7001);
+            } catch (const db_conversion_error&) {
+                failed = true;
+            }
+            RUVIA_CHECK(failed);
+            RUVIA_CHECK(!transaction.active());
+        }
+        auto next = co_await connected.handle().begin_transaction();
+        RUVIA_CHECK(co_await next.try_advisory_lock(7001));
+        co_await next.commit();
+    });
+}
 }  // namespace db_transaction_operation_test
 #endif
