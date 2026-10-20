@@ -14,6 +14,27 @@ void require_sql_state(std::string_view state_value) {
         throw std::invalid_argument("SQLSTATE must have five uppercase alphanumeric characters and indicate failure");
     }
 }
+std::string_view table_lock_mode_name(db_table_lock_mode mode) {
+    switch (mode) {
+        case db_table_lock_mode::access_share:
+            return "ACCESS SHARE";
+        case db_table_lock_mode::row_share:
+            return "ROW SHARE";
+        case db_table_lock_mode::row_exclusive:
+            return "ROW EXCLUSIVE";
+        case db_table_lock_mode::share_update_exclusive:
+            return "SHARE UPDATE EXCLUSIVE";
+        case db_table_lock_mode::share:
+            return "SHARE";
+        case db_table_lock_mode::share_row_exclusive:
+            return "SHARE ROW EXCLUSIVE";
+        case db_table_lock_mode::exclusive:
+            return "EXCLUSIVE";
+        case db_table_lock_mode::access_exclusive:
+            return "ACCESS EXCLUSIVE";
+    }
+    throw std::invalid_argument("unknown table lock mode");
+}
 }  // namespace
 
 db_procedure::db_procedure(std::pmr::memory_resource* resource)
@@ -170,6 +191,66 @@ void db_procedure::end_block() {
     }
     statements_ += "END;\n";
     blocks_.pop_back();
+}
+void db_procedure::begin_for_query(std::string_view target, const db_query& query) {
+    if (!query.returns_rows()) {
+        throw std::invalid_argument("FOR IN query loop requires a row-returning query");
+    }
+    const auto statement = query.compile(pg, resource_, db_parameter_mode::literal);
+    std::pmr::string sql("FOR ", resource_);
+    detail::append_db_identifier(sql, target, pg);
+    sql += " IN ";
+    sql += statement.sql();
+    sql += " LOOP\n";
+    blocks_.push_back(block_type::loop);
+    statements_ += sql;
+}
+void db_procedure::begin_foreach(std::string_view target, db_expression array, unsigned slice) {
+    std::pmr::string sql("FOREACH ", resource_);
+    detail::append_db_identifier(sql, target, pg);
+    if (slice > 0) {
+        sql += " SLICE ";
+        detail::append_db_number(sql, static_cast<std::uint64_t>(slice));
+    }
+    sql += " IN ARRAY ";
+    append_expression(sql, array);
+    sql += " LOOP\n";
+    blocks_.push_back(block_type::loop);
+    statements_ += sql;
+}
+void db_procedure::end_loop() {
+    if (blocks_.empty() || blocks_.back() != block_type::loop) {
+        throw std::invalid_argument("END LOOP requires an open FOR or FOREACH loop");
+    }
+    statements_ += "END LOOP;\n";
+    blocks_.pop_back();
+}
+void db_procedure::execute_dynamic(db_expression command, std::span<const db_expression> using_args) {
+    std::pmr::string sql("EXECUTE ", resource_);
+    append_expression(sql, command);
+    if (!using_args.empty()) {
+        sql += " USING ";
+        for (std::size_t i = 0; i < using_args.size(); ++i) {
+            if (i != 0) {
+                sql += ", ";
+            }
+            append_expression(sql, using_args[i]);
+        }
+    }
+    sql += ";\n";
+    statements_ += sql;
+}
+void db_procedure::lock_table(std::string_view table, db_table_lock_mode mode, bool nowait) {
+    std::pmr::string sql("LOCK TABLE ", resource_);
+    detail::append_db_qualified_identifier(sql, table, pg);
+    sql += " IN ";
+    sql += table_lock_mode_name(mode);
+    sql += " MODE";
+    if (nowait) {
+        sql += " NOWAIT";
+    }
+    sql += ";\n";
+    statements_ += sql;
 }
 void db_procedure::return_value(db_expression expression) {
     std::pmr::string sql("RETURN", resource_);

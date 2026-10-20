@@ -858,3 +858,59 @@ RUVIA_TEST(db_schema_trigger_transition_tables_and_read_only_columns_render_and_
         invalid.create_table<invalid_read_only_entity>();
     }));
 }
+
+RUVIA_TEST(db_schema_and_procedure_functions_loops_dynamic_sql_and_table_locks) {
+    using versioned_entity = ruvia::db_entity<"versioned_articles",
+        ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
+        ruvia::db_column<"revision", std::int64_t, ruvia::db_column_options{.version_ = true}>,
+        ruvia::db_column<"created_at", std::pmr::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .create_date_ = true}>,
+        ruvia::db_column<"updated_at", std::pmr::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .update_date_ = true}>,
+        ruvia::db_column<"deleted_at", std::pmr::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .delete_date_ = true}>>;
+
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_table<versioned_entity>();
+    schema.lock_table("versioned_articles", ruvia::db_table_lock_mode::access_exclusive, true);
+
+    ruvia::db_query sql_fn_body;
+    sql_fn_body.select(sql_fn_body.value(true));
+    schema.create_function(
+        {
+            .name_ = "is_article_ready",
+            .parameters_ = {{.name_ = "article_id", .type_ = {.data_type_ = db_data_type::big_int}}},
+            .return_type_ = {.data_type_ = db_data_type::boolean},
+            .volatility_ = ruvia::db_function_volatility::stable,
+            .strict_ = true,
+            .replace_ = true,
+        },
+        sql_fn_body);
+
+    ruvia::db_query loop_query;
+    loop_query.select(loop_query.column("id")).from("versioned_articles");
+    ruvia::db_query expressions;
+    db_procedure proc;
+    proc.declare_record("rec");
+    proc.declare_variable({.name_ = "op", .type_ = {.data_type_ = db_data_type::text}});
+    proc.lock_table("versioned_articles", ruvia::db_table_lock_mode::share);
+    proc.begin_for_query("rec", loop_query);
+    proc.begin_foreach("op", expressions.array({expressions.value("INSERT"), expressions.value("UPDATE")}));
+    proc.execute_dynamic(
+        expressions.call("format", {expressions.value("SELECT %L, %L"), expressions.column("id", "rec"), expressions.column("op")}));
+    proc.end_loop();
+    proc.end_loop();
+    schema.run(proc);
+    const std::array<ruvia::db_type_definition, 1> drop_params{{{.data_type_ = db_data_type::big_int}}};
+    schema.drop_function("is_article_ready", drop_params, ruvia::db_drop_behavior::cascade, true);
+
+    const auto migrations = schema.compile("functions_and_loops");
+    RUVIA_CHECK_EQ(migrations.size(), std::size_t{1});
+    const auto sql = migrations[0].sql();
+    RUVIA_CHECK(sql.find("\"revision\" BIGINT NOT NULL DEFAULT 1") != std::string_view::npos);
+    RUVIA_CHECK(sql.find("\"created_at\" TIMESTAMPTZ NOT NULL DEFAULT \"now\"()") != std::string_view::npos);
+    RUVIA_CHECK(sql.find("\"deleted_at\" TIMESTAMPTZ") != std::string_view::npos);
+    RUVIA_CHECK(sql.find("LOCK TABLE \"versioned_articles\" IN ACCESS EXCLUSIVE MODE NOWAIT") != std::string_view::npos);
+    RUVIA_CHECK(sql.find("CREATE OR REPLACE FUNCTION \"is_article_ready\"(\"article_id\" BIGINT) RETURNS BOOLEAN LANGUAGE sql STABLE STRICT AS") != std::string_view::npos);
+    RUVIA_CHECK(sql.find("FOR \"rec\" IN SELECT \"id\" FROM \"versioned_articles\" LOOP") != std::string_view::npos);
+    RUVIA_CHECK(sql.find("FOREACH \"op\" IN ARRAY ARRAY[E'INSERT', E'UPDATE'] LOOP") != std::string_view::npos);
+    RUVIA_CHECK(sql.find("EXECUTE \"format\"(E'SELECT %L, %L', \"rec\".\"id\", \"op\");") != std::string_view::npos);
+    RUVIA_CHECK(sql.find("DROP FUNCTION IF EXISTS \"is_article_ready\"(BIGINT) CASCADE") != std::string_view::npos);
+}

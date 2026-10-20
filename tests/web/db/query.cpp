@@ -1709,4 +1709,61 @@ RUVIA_TEST(db_field_reference_and_predicate_cover_aliases_columns_json_and_owned
         "\"revision\" = (\"users\".\"revision\" + $4), \"updated_at\" = \"now\"() WHERE \"users\".\"id\"");
 }
 
+RUVIA_TEST(db_expr_db_tuple_and_db_brackets_compose_without_external_query) {
+    using alert_entity = db_entity<"alert_state",
+        db_column<"device_id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
+        db_column<"observed_at_ms", std::int64_t>,
+        db_column<"message_id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid}>,
+        db_column<"data", std::pmr::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
+        db_column<"previous_data", std::pmr::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
+        db_column<"tags", std::pmr::vector<std::pmr::string>>>;
+
+    const auto newer_tuple =
+        db_tuple{alert_entity::column<"observed_at_ms">().excluded_expr(), alert_entity::column<"message_id">().excluded_expr()} >
+        db_tuple{alert_entity::column<"observed_at_ms">(), alert_entity::column<"message_id">()};
+    const auto prev_expr = db_expr::case_when(
+        {{newer_tuple, alert_entity::column<"data">()}},
+        alert_entity::column<"previous_data">());
+    const auto json_patched = db_expr::jsonb_set(
+        alert_entity::column<"data">(),
+        {"meta", "updated"},
+        db_expr::jsonb_build_object({db_expr::value("at"), db_expr::now(), db_expr::value("first_tag"), alert_entity::column<"tags">()[1]}));
+    const auto filtered_agg = db_expr::jsonb_agg(
+        alert_entity::column<"device_id">().cast(db_data_type::text),
+        {alert_entity::column<"observed_at_ms">().desc()})
+                                  .filter(alert_entity::column<"observed_at_ms">() > 0);
+    const auto windowed = db_expr::call("lag", {alert_entity::column<"observed_at_ms">()})
+                              .over({
+                                  .partition_by_ = {alert_entity::column<"device_id">()},
+                                  .order_by_ = {alert_entity::column<"observed_at_ms">().asc()},
+                              });
+    const auto bracket_where = db_brackets([](db_where_builder& qb) {
+        qb.where(alert_entity::column<"observed_at_ms">() > 100)
+            .and_where([](db_where_builder& inner) {
+                inner.where(alert_entity::column<"device_id">() == "a")
+                    .or_where(alert_entity::column<"device_id">() == "b");
+            });
+    }) && db_tuple{alert_entity::column<"device_id">(), alert_entity::column<"message_id">()}.in({
+              db_tuple{db_expr::value("a"), db_expr::value("m1")},
+              db_tuple{db_expr::value("b"), db_expr::value("m2")},
+          });
+
+    db_query query;
+    query.select({
+                     query.alias(prev_expr.expression(query), "prev"),
+                     query.alias(json_patched.expression(query), "patched"),
+                     query.alias(filtered_agg.expression(query), "devices"),
+                     query.alias(windowed.expression(query), "prev_ms"),
+                 })
+        .from("alert_state")
+        .where(bracket_where.expression(query));
+    const auto compiled = query.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK(compiled.sql().find("CASE WHEN (ROW(excluded.\"observed_at_ms\", excluded.\"message_id\") > ROW(\"alert_state\".\"observed_at_ms\", \"alert_state\".\"message_id\")) THEN \"alert_state\".\"data\" ELSE \"alert_state\".\"previous_data\" END AS \"prev\"") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("\"jsonb_set\"(\"alert_state\".\"data\", CAST(ARRAY[") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("(\"alert_state\".\"tags\")[") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("\"jsonb_agg\"(CAST(\"alert_state\".\"device_id\" AS TEXT) ORDER BY \"alert_state\".\"observed_at_ms\" DESC) FILTER (WHERE (\"alert_state\".\"observed_at_ms\" > ") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("\"lag\"(\"alert_state\".\"observed_at_ms\") OVER (PARTITION BY \"alert_state\".\"device_id\" ORDER BY \"alert_state\".\"observed_at_ms\" ASC) AS \"prev_ms\"") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("ROW(\"alert_state\".\"device_id\", \"alert_state\".\"message_id\") IN (ROW(") != std::string_view::npos);
+}
+
 }  // namespace

@@ -54,6 +54,10 @@ task<db_transaction> begin_pool_transaction(
         });
 }
 
+task<void> discard_rows_task(task<db_rows> rows_task) {
+    (void)co_await std::move(rows_task);
+}
+
 }  // namespace
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -205,6 +209,20 @@ task<db_transaction> db_handle::begin_transaction_prepared(detail::db_query_back
         backend.pool_, backend.resource_, std::move(operation_options_value), std::move(transaction_options));
     transaction.bind_operation_scope(operation_scope);
     co_return transaction;
+}
+
+scoped_operation<void> db_handle::notify(std::string_view channel, std::string_view payload) const {
+    registration_.require_active();
+    if (query_driver() != db_driver::postgresql) {
+        throw std::invalid_argument("database notify requires PostgreSQL");
+    }
+    if (channel.empty()) {
+        throw std::invalid_argument("database notify channel must not be empty");
+    }
+    const std::array<db_value, 2> params{db_value(channel), db_value(payload)};
+    auto statement = prepare_db_statement("SELECT \"pg_notify\"($1::text, $2::text)", params, resource_);
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        discard_rows_task(query_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_)));
 }
 
 }  // namespace ruvia

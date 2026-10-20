@@ -286,5 +286,67 @@ RUVIA_TEST(db_transaction_savepoint_commands_quote_identifiers_and_keep_transact
         RUVIA_CHECK_EQ(statements[3].sql_, "RELEASE SAVEPOINT \"stage_1\"");
     }
 }
+
+RUVIA_TEST(db_transaction_advisory_locks_notify_cursors_and_large_objects_execute_in_order) {
+    using namespace ruvia;
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle,
+        {{.column_ = "", .command_ = "BEGIN", .status_ = 'T'},
+            {.rows_ = {""}, .status_ = 'T'},
+            {.rows_ = {""}, .status_ = 'T'},
+            {.rows_ = {""}, .status_ = 'T'},
+            {.rows_ = {"t"}, .status_ = 'T'},
+            {.rows_ = {""}, .status_ = 'T'},
+            {.column_ = "", .command_ = "DECLARE CURSOR", .status_ = 'T'},
+            {.column_ = "v", .rows_ = {"chunk-1", "chunk-2"}, .status_ = 'T'},
+            {.column_ = "", .command_ = "CLOSE CURSOR", .status_ = 'T'},
+            {.rows_ = {"12345"}, .status_ = 'T'},
+            {.rows_ = {""}, .status_ = 'T'},
+            {.rows_ = {"sealed-payload"}, .status_ = 'T'},
+            {.rows_ = {"t"}, .status_ = 'T'},
+            {.column_ = "", .command_ = "COMMIT"}});
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto transaction = co_await connected.handle().begin_transaction();
+        co_await transaction.advisory_lock(7001);
+        co_await transaction.advisory_lock(17, 1);
+        co_await transaction.advisory_lock("resource-key", 99);
+        RUVIA_CHECK(co_await transaction.try_advisory_lock(7001));
+        co_await transaction.notify("iot_outbox_pending", "ready");
+
+        db_query cursor_query;
+        cursor_query.select(cursor_query.column("v")).from("records");
+        co_await transaction.declare_cursor("chunk_cursor", cursor_query);
+        const auto fetched = co_await transaction.fetch_cursor("chunk_cursor", 8);
+        RUVIA_CHECK_EQ(fetched.size(), std::size_t{2});
+        co_await transaction.close_cursor("chunk_cursor");
+
+        const auto oid = co_await transaction.lo_create();
+        RUVIA_CHECK_EQ(oid, std::uint32_t{12345});
+        co_await transaction.lo_put(oid, 0, "sealed-payload");
+        const auto content = co_await transaction.lo_get_text(oid);
+        RUVIA_CHECK_EQ(content, "sealed-payload");
+        RUVIA_CHECK(co_await transaction.lo_unlink(oid));
+        co_await transaction.commit();
+    });
+    const auto statements = peer.postgres_parses();
+    RUVIA_CHECK_EQ(statements.size(), std::size_t{14});
+    if (statements.size() == 14) {
+        RUVIA_CHECK_EQ(statements[1].sql_, "SELECT \"pg_advisory_xact_lock\"($1::bigint)");
+        RUVIA_CHECK_EQ(statements[2].sql_, "SELECT \"pg_advisory_xact_lock\"($1::integer, $2::integer)");
+        RUVIA_CHECK_EQ(statements[3].sql_, "SELECT \"pg_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))");
+        RUVIA_CHECK_EQ(statements[4].sql_, "SELECT \"pg_try_advisory_xact_lock\"($1::bigint)");
+        RUVIA_CHECK_EQ(statements[5].sql_, "SELECT \"pg_notify\"($1::text, $2::text)");
+        RUVIA_CHECK_EQ(statements[6].sql_, "DECLARE \"chunk_cursor\" NO SCROLL CURSOR FOR SELECT \"v\" FROM \"records\"");
+        RUVIA_CHECK_EQ(statements[7].sql_, "FETCH FORWARD 8 FROM \"chunk_cursor\"");
+        RUVIA_CHECK_EQ(statements[8].sql_, "CLOSE \"chunk_cursor\"");
+        RUVIA_CHECK_EQ(statements[9].sql_, "SELECT \"lo_create\"($1::oid)::bigint");
+        RUVIA_CHECK_EQ(statements[10].sql_, "SELECT \"lo_put\"($1::oid, $2::bigint, \"convert_to\"($3::text, 'UTF8'))");
+        RUVIA_CHECK_EQ(statements[11].sql_, "SELECT \"convert_from\"(\"lo_get\"($1::oid), $2::text)");
+        RUVIA_CHECK_EQ(statements[12].sql_, "SELECT (\"lo_unlink\"($1::oid) = 1)");
+    }
+}
 }  // namespace db_transaction_operation_test
 #endif

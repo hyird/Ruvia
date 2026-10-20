@@ -44,6 +44,29 @@ enum class db_trigger_event : std::uint8_t { insert,
     update,
     delete_value,
     truncate };
+enum class db_function_language : std::uint8_t { plpgsql,
+    sql };
+enum class db_function_volatility : std::uint8_t { volatile_value,
+    stable,
+    immutable };
+
+struct db_function_parameter final {
+    std::string name_{};
+    db_type_definition type_{};
+    db_expression default_value_{};
+};
+
+struct db_function_definition final {
+    std::string name_{};
+    std::vector<db_function_parameter> parameters_{};
+    db_type_definition return_type_{};
+    bool returns_set_{false};
+    db_function_language language_{db_function_language::plpgsql};
+    db_function_volatility volatility_{db_function_volatility::volatile_value};
+    bool strict_{false};
+    bool replace_{false};
+    std::string body_{};
+};
 
 struct db_trigger_definition final {
     std::string name_{};
@@ -203,6 +226,12 @@ public:
     void drop_trigger_function(std::string_view name, db_drop_behavior behavior = db_drop_behavior::restrict, bool if_exists = false);
     void create_trigger(const db_trigger_definition& trigger);
     void drop_trigger(std::string_view table, std::string_view name, bool if_exists = false);
+    void create_function(const db_function_definition& function);
+    void create_function(const db_function_definition& function, const db_procedure& body);
+    void create_function(const db_function_definition& function, const db_query& sql_body);
+    void drop_function(std::string_view name, std::span<const db_type_definition> parameter_types = {},
+        db_drop_behavior behavior = db_drop_behavior::restrict, bool if_exists = false);
+    void lock_table(std::string_view table, db_table_lock_mode mode = db_table_lock_mode::access_exclusive, bool nowait = false);
     void set_table_options(std::string_view table, std::span<const db_table_option> options);
     void set_database_option(std::string_view database, std::string_view name, std::string_view value);
     void create_hypertable(const db_hypertable_options& options);
@@ -271,7 +300,7 @@ void db_schema::create_table(const db_entity_table_options& options) {
         conflicting_read_only |= c_type::options.read_only_ && (c_type::options.generated_ || c_type::options.generated_type_ != db_generated_type::none);
         db_schema_column column{.name_ = std::string(c_type::name.view()),
             .type_ = entity_column_type<c_type>(),
-            .nullable_ = c_type::options.nullable_,
+            .nullable_ = c_type::options.nullable_ || c_type::options.delete_date_,
             .generated_type_ = c_type::options.generated_type_};
         if constexpr (!c_type::options.enum_name_.view().empty()) {
             if (driver_ != db_driver::postgresql) {
@@ -280,6 +309,10 @@ void db_schema::create_table(const db_entity_table_options& options) {
         }
         if constexpr (!c_type::options.default_expression_.view().empty()) {
             column.default_value_ = defaults.sql(c_type::options.default_expression_.view());
+        } else if constexpr (c_type::options.create_date_ || c_type::options.update_date_) {
+            column.default_value_ = defaults.call("now");
+        } else if constexpr (c_type::options.version_) {
+            column.default_value_ = defaults.value(1);
         }
         if constexpr (c_type::options.primary_key_) {
             primary.push_back(column.name_);

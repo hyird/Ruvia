@@ -17,6 +17,7 @@ struct db_find_order final {
 };
 
 struct db_find_options final {
+    std::vector<std::string> select_{};
     db_predicate where_{};
     std::vector<std::string> relations_{};
     std::vector<db_find_order> order_{};
@@ -24,6 +25,7 @@ struct db_find_options final {
     std::optional<std::uint64_t> take_{};
     std::optional<db_lock_options> lock_{};
     db_cache_setting_type cache_{};
+    bool with_deleted_{false};
 };
 
 }  // namespace ruvia

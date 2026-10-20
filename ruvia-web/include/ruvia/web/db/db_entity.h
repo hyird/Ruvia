@@ -179,6 +179,10 @@ struct db_column_options final {
     db_generated_type generated_type_{db_generated_type::none};
     bool nullable_{false};
     bool read_only_{false};
+    bool create_date_{false};
+    bool update_date_{false};
+    bool delete_date_{false};
+    bool version_{false};
     std::size_t length_{0};
     unsigned precision_{0};
     unsigned scale_{0};
@@ -306,7 +310,13 @@ struct db_column final {
     static_assert(!detail::is_optional<t_type>::value, "use nullable column options and set_null for entity fields; optional is only for array elements");
     static constexpr auto name = field_name;
     using value_type = t_type;
-    static constexpr auto options = options_type;
+    static consteval auto normalize_options(auto opts) noexcept {
+        if (opts.delete_date_) {
+            opts.nullable_ = true;
+        }
+        return opts;
+    }
+    static constexpr auto options = normalize_options(options_type);
     static_assert(!std::is_same_v<t_type, char> && !std::is_same_v<t_type, std::string_view>,
         "database entity columns must own their values");
     static constexpr db_data_type data_type = options_type.data_type_ == db_data_type::inferred

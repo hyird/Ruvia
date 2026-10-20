@@ -270,6 +270,193 @@ task<void> db_transaction::savepoint_task(std::pmr::string sql, operation_guard_
     operation.finish_active();
 }
 
+void db_transaction::require_postgresql_transaction(std::string_view feature) const {
+    if (query_driver() != db_driver::postgresql) {
+        throw std::invalid_argument(std::string(feature) + " requires PostgreSQL");
+    }
+}
+
+scoped_operation<void> db_transaction::query_void_prepared(std::string_view sql, std::span<const db_value> params) {
+    registration_.require_active();
+    operation_guard_type operation(state_->operation_);
+    auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        query_void_task(std::move(statement.sql_), std::move(statement.params_), std::move(operation)));
+}
+
+scoped_operation<bool> db_transaction::query_bool_prepared(std::string_view sql, std::span<const db_value> params) {
+    registration_.require_active();
+    operation_guard_type operation(state_->operation_);
+    auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        query_bool_task(std::move(statement.sql_), std::move(statement.params_), std::move(operation)));
+}
+
+task<void> db_transaction::query_void_task(
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    (void)co_await query_prepared(std::move(sql), std::move(params), std::move(pending));
+}
+
+task<void> db_transaction::execute_void_task(
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    (void)co_await execute_prepared(std::move(sql), std::move(params), std::move(pending));
+}
+
+task<bool> db_transaction::query_bool_task(
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    const auto rows = co_await query_prepared(std::move(sql), std::move(params), std::move(pending));
+    if (rows.size() != 1) {
+        throw std::runtime_error("database boolean scalar query did not return one row");
+    }
+    co_return rows.front()[std::size_t{0}].as<bool>().value();
+}
+
+task<std::uint32_t> db_transaction::query_oid_task(
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    const auto rows = co_await query_prepared(std::move(sql), std::move(params), std::move(pending));
+    if (rows.size() != 1) {
+        throw std::runtime_error("database OID query did not return one row");
+    }
+    const auto val = rows.front()[std::size_t{0}].as<std::uint64_t>().value();
+    if (val > (std::numeric_limits<std::uint32_t>::max)()) {
+        throw std::out_of_range("PostgreSQL OID exceeds 32-bit range");
+    }
+    co_return static_cast<std::uint32_t>(val);
+}
+
+task<std::pmr::string> db_transaction::query_text_task(
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    auto* resource = sql.get_allocator().resource();
+    const auto rows = co_await query_prepared(std::move(sql), std::move(params), std::move(pending));
+    if (rows.size() != 1) {
+        throw std::runtime_error("database text query did not return one row");
+    }
+    const auto view = rows.front()[std::size_t{0}].as<std::string_view>();
+    if (!view) {
+        throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database large object text is NULL");
+    }
+    co_return std::pmr::string(*view, resource);
+}
+
+scoped_operation<void> db_transaction::notify(std::string_view channel, std::string_view payload) & {
+    require_postgresql_transaction("database notify");
+    if (channel.empty()) {
+        throw std::invalid_argument("database notify channel must not be empty");
+    }
+    const std::array<db_value, 2> params{db_value(channel), db_value(payload)};
+    return query_void_prepared("SELECT \"pg_notify\"($1::text, $2::text)", params);
+}
+
+scoped_operation<void> db_transaction::advisory_lock(std::int64_t key) & {
+    require_postgresql_transaction("advisory_lock");
+    const std::array<db_value, 1> params{db_value(key)};
+    return query_void_prepared("SELECT \"pg_advisory_xact_lock\"($1::bigint)", params);
+}
+
+scoped_operation<void> db_transaction::advisory_lock(std::int32_t class_id, std::int32_t object_id) & {
+    require_postgresql_transaction("advisory_lock");
+    const std::array<db_value, 2> params{db_value(class_id), db_value(object_id)};
+    return query_void_prepared("SELECT \"pg_advisory_xact_lock\"($1::integer, $2::integer)", params);
+}
+
+scoped_operation<void> db_transaction::advisory_lock(std::string_view key, std::int64_t seed) & {
+    require_postgresql_transaction("advisory_lock");
+    const std::array<db_value, 2> params{db_value(key), db_value(seed)};
+    return query_void_prepared("SELECT \"pg_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))", params);
+}
+
+scoped_operation<bool> db_transaction::try_advisory_lock(std::int64_t key) & {
+    require_postgresql_transaction("try_advisory_lock");
+    const std::array<db_value, 1> params{db_value(key)};
+    return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"($1::bigint)", params);
+}
+
+scoped_operation<bool> db_transaction::try_advisory_lock(std::int32_t class_id, std::int32_t object_id) & {
+    require_postgresql_transaction("try_advisory_lock");
+    const std::array<db_value, 2> params{db_value(class_id), db_value(object_id)};
+    return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"($1::integer, $2::integer)", params);
+}
+
+scoped_operation<bool> db_transaction::try_advisory_lock(std::string_view key, std::int64_t seed) & {
+    require_postgresql_transaction("try_advisory_lock");
+    const std::array<db_value, 2> params{db_value(key), db_value(seed)};
+    return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))", params);
+}
+
+scoped_operation<void> db_transaction::declare_cursor(std::string_view name, const db_query& query, bool scroll) & {
+    require_postgresql_transaction("declare_cursor");
+    if (!query.returns_rows()) {
+        throw std::invalid_argument("declare_cursor requires a row-returning query");
+    }
+    operation_guard_type operation(state_->operation_);
+    const auto& lease_value = state_->operation_.preparation_payload();
+    auto compiled = query.compile(db_driver::postgresql, lease_value.resource_);
+    std::pmr::string sql("DECLARE ", lease_value.resource_);
+    detail::append_db_identifier(sql, name, db_driver::postgresql);
+    sql += scroll ? " SCROLL CURSOR FOR " : " NO SCROLL CURSOR FOR ";
+    sql += compiled.sql();
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        execute_void_task(std::move(sql), std::move(compiled.params_), std::move(operation)));
+}
+
+scoped_operation<db_rows> db_transaction::fetch_cursor(std::string_view name, std::uint64_t count) & {
+    require_postgresql_transaction("fetch_cursor");
+    if (count > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
+        throw std::invalid_argument("cursor fetch count exceeds signed 64-bit range");
+    }
+    operation_guard_type operation(state_->operation_);
+    const auto& lease_value = state_->operation_.preparation_payload();
+    std::pmr::string sql("FETCH FORWARD ", lease_value.resource_);
+    detail::append_db_number(sql, count);
+    sql += " FROM ";
+    detail::append_db_identifier(sql, name, db_driver::postgresql);
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        query_prepared(std::move(sql), {}, std::move(operation)));
+}
+
+scoped_operation<void> db_transaction::close_cursor(std::string_view name) & {
+    require_postgresql_transaction("close_cursor");
+    return run_savepoint_command("CLOSE ", name);
+}
+
+scoped_operation<std::uint32_t> db_transaction::lo_create(std::uint32_t oid) & {
+    require_postgresql_transaction("lo_create");
+    operation_guard_type operation(state_->operation_);
+    const std::array<db_value, 1> params{db_value(static_cast<std::uint64_t>(oid))};
+    auto statement = prepare_db_statement("SELECT \"lo_create\"($1::oid)::bigint", params,
+        state_->operation_.preparation_payload().resource_);
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        query_oid_task(std::move(statement.sql_), std::move(statement.params_), std::move(operation)));
+}
+
+scoped_operation<void> db_transaction::lo_put(std::uint32_t oid, std::int64_t offset, std::string_view utf8_bytes) & {
+    require_postgresql_transaction("lo_put");
+    if (offset < 0) {
+        throw std::invalid_argument("large object offset must be non-negative");
+    }
+    const std::array<db_value, 3> params{db_value(static_cast<std::uint64_t>(oid)), db_value(offset), db_value(utf8_bytes)};
+    return query_void_prepared("SELECT \"lo_put\"($1::oid, $2::bigint, \"convert_to\"($3::text, 'UTF8'))", params);
+}
+
+scoped_operation<std::pmr::string> db_transaction::lo_get_text(std::uint32_t oid, std::string_view encoding) & {
+    require_postgresql_transaction("lo_get_text");
+    if (encoding.empty()) {
+        throw std::invalid_argument("large object encoding must not be empty");
+    }
+    operation_guard_type operation(state_->operation_);
+    const std::array<db_value, 2> params{db_value(static_cast<std::uint64_t>(oid)), db_value(encoding)};
+    auto statement = prepare_db_statement("SELECT \"convert_from\"(\"lo_get\"($1::oid), $2::text)", params,
+        state_->operation_.preparation_payload().resource_);
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        query_text_task(std::move(statement.sql_), std::move(statement.params_), std::move(operation)));
+}
+
+scoped_operation<bool> db_transaction::lo_unlink(std::uint32_t oid) & {
+    require_postgresql_transaction("lo_unlink");
+    const std::array<db_value, 1> params{db_value(static_cast<std::uint64_t>(oid))};
+    return query_bool_prepared("SELECT (\"lo_unlink\"($1::oid) = 1)", params);
+}
+
 void db_transaction::reset() noexcept {
     if (state_ != nullptr) {
         state_->operation_.reset(

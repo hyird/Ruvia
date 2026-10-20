@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <stdexcept>
 
+#include "db/db_sql_format.h"
+
 namespace ruvia::detail {
 
 std::pmr::vector<std::pmr::string> apply_projection(db_query& query, std::span<const db_selection> selection,
@@ -29,6 +31,12 @@ std::pmr::vector<std::pmr::string> apply_projection(db_query& query, std::span<c
         query.select(values);
     }
     return columns;
+}
+
+std::pmr::string format_truncate_table(std::string_view table, db_driver driver, std::pmr::memory_resource* resource) {
+    std::pmr::string sql("TRUNCATE TABLE ", pmr_resource_or_default(resource));
+    append_db_qualified_identifier(sql, table, driver);
+    return sql;
 }
 
 }  // namespace ruvia::detail

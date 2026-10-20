@@ -12,6 +12,17 @@ namespace ruvia {
 
 class db_schema;
 
+enum class db_table_lock_mode : std::uint8_t {
+    access_share,
+    row_share,
+    row_exclusive,
+    share_update_exclusive,
+    share,
+    share_row_exclusive,
+    exclusive,
+    access_exclusive,
+};
+
 struct db_variable_definition final {
     std::string name_{};
     db_type_definition type_{};
@@ -43,6 +54,14 @@ public:
     void begin_block();
     void catch_sql_state(std::string_view state);
     void end_block();
+    void begin_for_query(std::string_view target, const db_query& query);
+    void begin_foreach(std::string_view target, db_expression array, unsigned slice = 0);
+    void end_loop();
+    void execute_dynamic(db_expression command, std::span<const db_expression> using_args = {});
+    void execute_dynamic(db_expression command, std::initializer_list<db_expression> using_args) {
+        execute_dynamic(command, std::span<const db_expression>(using_args.begin(), using_args.size()));
+    }
+    void lock_table(std::string_view table, db_table_lock_mode mode = db_table_lock_mode::access_exclusive, bool nowait = false);
     void return_value(db_expression expression = {});
     void raise_exception(std::string_view message, std::string_view sql_state = "P0001");
     [[nodiscard]] std::pmr::string body(std::pmr::memory_resource* resource = nullptr) const;
@@ -51,7 +70,8 @@ private:
     enum class block_type : std::uint8_t { if_value,
         else_value,
         begin,
-        exception };
+        exception,
+        loop };
     void register_variable(std::string_view name);
     void append_expression(std::pmr::string& output, db_expression value) const;
     std::pmr::memory_resource* resource_;

@@ -762,6 +762,139 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
         co_return;
     });
 }
+
+RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_joins_and_raw_queries) {
+    using soft_entity = db_entity<"articles",
+        db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
+        db_column<"title", std::pmr::string>,
+        db_column<"views", std::int64_t>,
+        db_column<"revision", std::int64_t, db_column_options{.version_ = true}>,
+        db_column<"updated_at", std::pmr::string, db_column_options{.update_date_ = true}>,
+        db_column<"deleted_at", std::pmr::string, db_column_options{.delete_date_ = true}>>;
+
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
+        auto repo = client.handle().get_repository<soft_entity>();
+
+        auto active_qb = repo.create_query_builder("a");
+        active_qb.select({"id", "title"})
+            .add_select("views")
+            .add_select(db_expr::count(), "total_count")
+            .where(soft_entity::column<"views">() >= 10)
+            .and_where([](db_where_builder& sub) {
+                sub.where(soft_entity::column<"title">().ilike("%ruvia%"))
+                    .or_where(soft_entity::column<"id">() == 1);
+            })
+            .group_by({"id", "title", "views"})
+            .having(soft_entity::column<"views">() > 0)
+            .or_having(soft_entity::column<"id">() == 1)
+            .limit(20)
+            .offset(5);
+        const auto active_sql = active_qb.get_query_and_parameters();
+        RUVIA_CHECK(active_sql.sql().find("SELECT \"a\".\"id\" AS \"id\", \"a\".\"title\" AS \"title\", \"a\".\"views\" AS \"views\", \"count\"(*) AS \"total_count\" FROM \"articles\" AS \"a\"") == 0);
+        RUVIA_CHECK(active_sql.sql().find("(\"a\".\"deleted_at\" IS NULL)") != std::string_view::npos);
+        RUVIA_CHECK(active_sql.sql().find("HAVING ((\"a\".\"views\" > $4) OR (\"a\".\"id\" = $5))") != std::string_view::npos);
+        RUVIA_CHECK(active_sql.sql().find("LIMIT $6 OFFSET $7") != std::string_view::npos);
+
+        active_qb.with_deleted();
+        const auto with_deleted_sql = active_qb.get_query_and_parameters();
+        RUVIA_CHECK(with_deleted_sql.sql().find("deleted_at") == std::string_view::npos);
+
+        auto parents = client.handle().get_repository<parent>();
+        auto rel_join = parents.create_query_builder("p");
+        rel_join.left_join("children", "c", child::column<"id">("c") > 0)
+            .add_select(db_expr::count(child::column<"id">("c")), "child_count")
+            .group_by({"id"});
+        const auto rel_join_sql = rel_join.get_query_and_parameters();
+        RUVIA_CHECK_EQ(rel_join_sql.sql(),
+            "SELECT \"p\".\"id\", \"count\"(\"c\".\"id\") AS \"child_count\" FROM \"parents\" AS \"p\" "
+            "LEFT JOIN \"children\" AS \"c\" ON ((\"p\".\"id\" = \"c\".\"parent_id\") AND (\"c\".\"id\" > $1)) "
+            "GROUP BY \"p\".\"id\"");
+
+        db_values_builder incoming({"id", "title", "views"});
+        incoming.row({db_expr::value(1), db_expr::value("Hello"), db_expr::value(10)});
+        auto values_select = repo.create_query_builder("v");
+        values_select.with_deleted()
+            .with("incoming", incoming, db_materialization::materialized)
+            .from_cte("incoming")
+            .select({"id", "title", "views"});
+        const auto values_sql = values_select.get_query_and_parameters();
+        RUVIA_CHECK(values_sql.sql().find("WITH \"incoming\" (\"id\", \"title\", \"views\") AS MATERIALIZED (VALUES ($1, $2, $3))") == 0);
+
+        soft_entity item;
+        item.set<"id">(1);
+        item.set<"title">("Ruvia ORM");
+        item.set<"views">(100);
+        auto ins_ignore = repo.create_query_builder().insert();
+        ins_ignore.values(item).or_ignore().returning({"id"});
+        const auto ins_ignore_sql = ins_ignore.get_query_and_parameters();
+        RUVIA_CHECK_EQ(ins_ignore_sql.sql(),
+            "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING \"articles\".\"id\" AS \"id\"");
+
+        auto ins_update = repo.create_query_builder().insert();
+        ins_update.values(item).or_update({"title", "views"}, {"id"}).returning({"id"});
+        const auto ins_update_sql = ins_update.get_query_and_parameters();
+        RUVIA_CHECK_EQ(ins_update_sql.sql(),
+            "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT (\"id\") DO UPDATE SET \"title\" = excluded.\"title\", \"views\" = excluded.\"views\" RETURNING \"articles\".\"id\" AS \"id\"");
+
+        auto soft_del_qb = repo.create_query_builder("a").soft_delete();
+        soft_del_qb.where(soft_entity::column<"id">() == 1);
+        const auto soft_del_sql = soft_del_qb.get_query_and_parameters();
+        RUVIA_CHECK_EQ(soft_del_sql.sql(),
+            "UPDATE \"articles\" AS \"a\" SET \"deleted_at\" = \"now\"(), \"updated_at\" = \"now\"(), \"revision\" = (\"a\".\"revision\" + $1) WHERE (\"a\".\"id\" = $2)");
+
+        auto restore_qb = repo.create_query_builder("a").restore();
+        restore_qb.where(soft_entity::column<"id">() == 1);
+        const auto restore_sql = restore_qb.get_query_and_parameters();
+        RUVIA_CHECK_EQ(restore_sql.sql(),
+            "UPDATE \"articles\" AS \"a\" SET \"deleted_at\" = NULL, \"updated_at\" = \"now\"() WHERE (\"a\".\"id\" = $1)");
+        {
+            auto op1 = repo.find_by(soft_entity::column<"id">() == 1);
+            auto op2 = repo.find_one_by(soft_entity::column<"id">() == 1);
+            auto op3 = repo.find_and_count_by(soft_entity::column<"id">() == 1);
+            auto op4 = repo.count_by(soft_entity::column<"id">() == 1);
+            auto op5 = repo.exists_by(soft_entity::column<"id">() == 1);
+            auto op6 = repo.save(item);
+            auto op7 = repo.soft_delete(soft_entity::column<"id">() == 1);
+            auto op8 = repo.restore(soft_entity::column<"id">() == 1);
+            auto op9 = repo.sum("views", soft_entity::column<"id">() == 1);
+            auto op10 = repo.average("views");
+            auto op11 = repo.minimum("views");
+            auto op12 = repo.maximum("views");
+            auto op13 = repo.clear();
+            auto op14 = active_qb.get_raw_one();
+            auto op15 = active_qb.get_raw_many();
+            auto op16 = rel_join.get_raw_and_entities();
+            auto op17 = active_qb.get_scalar<std::int64_t>();
+            auto op18 = active_qb.get_scalars<std::int64_t>();
+            auto op19 = ins_update.get_scalar<std::int64_t>();
+            auto op20 = repo.insert_returning_scalar<std::int64_t>(item, "id");
+            auto op21 = repo.update_returning_scalar<std::int64_t>(soft_entity::column<"id">() == 1, item, "revision");
+            (void)op1;
+            (void)op2;
+            (void)op3;
+            (void)op4;
+            (void)op5;
+            (void)op6;
+            (void)op7;
+            (void)op8;
+            (void)op9;
+            (void)op10;
+            (void)op11;
+            (void)op12;
+            (void)op13;
+            (void)op14;
+            (void)op15;
+            (void)op16;
+            (void)op17;
+            (void)op18;
+            (void)op19;
+            (void)op20;
+            (void)op21;
+        }
+        co_return;
+    });
+}
 #endif
 }  // namespace db_repository_test
 

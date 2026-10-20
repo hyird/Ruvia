@@ -118,6 +118,7 @@ public:
 
     scoped_operation<db_transaction> begin_transaction(
         db_transaction_options options = {}) const;
+    scoped_operation<void> notify(std::string_view channel, std::string_view payload = {}) const;
 
 private:
     friend class detail::db_registry;

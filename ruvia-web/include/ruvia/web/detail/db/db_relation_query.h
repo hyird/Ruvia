@@ -70,7 +70,7 @@ public:
 
     template <typename entity_type>
     void add(db_query& query, std::string_view root_alias, std::string_view path,
-        std::string_view alias = {}, db_join_type join = db_join_type::left) {
+        std::string_view alias = {}, db_join_type join = db_join_type::left, db_expression condition = {}) {
         if constexpr (db_primary_key_count<entity_type>() == 0) {
             throw std::invalid_argument("relation loading requires a primary key on the root entity");
         } else {
@@ -84,7 +84,7 @@ public:
             if (!alias.empty() && uses_source_name(query, alias)) {
                 bool same = false;
                 for (const auto& node : nodes_) {
-                    same |= node.path_ == normalized && node.alias_ == alias && node.join_ == join;
+                    same |= node.path_ == normalized && node.alias_ == alias && node.join_ == join && condition.empty();
                 }
                 if (!same) {
                     throw std::invalid_argument("relation join alias is already in use");
@@ -93,8 +93,65 @@ public:
             if (nodes_.empty()) {
                 column_count_ = std::tuple_size_v<typename entity_type::columns_type>;
             }
-            add_path<entity_type>(
-                query, root_alias, std::span<const std::string_view>(components.data(), component_count), root, alias, join);
+            add_path<entity_type>(query, root_alias,
+                std::span<const std::string_view>(components.data(), component_count), root, alias, join, condition);
+        }
+    }
+
+    template <typename entity_type>
+    static void join_relation(db_query& query, std::string_view root_alias, std::string_view relation_path,
+        std::string_view alias, db_join_type join, db_expression condition = {}) {
+        if (alias.empty() || alias.find('.') != std::string_view::npos || alias.find('\0') != std::string_view::npos) {
+            throw std::invalid_argument("a relation join alias must be one identifier");
+        }
+        auto source_alias = root_alias;
+        auto relation_name = relation_path;
+        if (const auto dot = relation_path.find('.'); dot != std::string_view::npos) {
+            source_alias = relation_path.substr(0, dot);
+            relation_name = relation_path.substr(dot + 1);
+        }
+        if (source_alias.empty() || relation_name.empty() || relation_name.find('.') != std::string_view::npos) {
+            throw std::invalid_argument("relation join path requires a direct relation or alias.relation");
+        }
+        bool found = false;
+        for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t> {
+            if (relation_name != relation_type::name.view()) {
+                return;
+            }
+            found = true;
+            validate_db_relation<entity_type, relation_type>();
+            using mapping_type = db_relation_mapping<entity_type, relation_type>;
+            using target_type = typename relation_type::target_entity_type;
+            db_expression predicate;
+            if constexpr (mapping_type::through_join_table) {
+                std::pmr::string junction(alias, query.resource());
+                junction.append("_junction");
+                for_each_descriptor<typename mapping_type::source_columns_type>([&]<typename column_type, std::size_t> {
+                    conjunction(query, predicate,
+                        query.binary(query.column(column_type::referenced.view(), source_alias),
+                            db_binary_operator::equal, query.column(column_type::local.view(), junction)));
+                });
+                query.join(join, mapping_type::table_name(), predicate, junction);
+                predicate = {};
+                for_each_descriptor<typename mapping_type::target_columns_type>([&]<typename column_type, std::size_t> {
+                    conjunction(query, predicate,
+                        query.binary(query.column(column_type::local.view(), junction),
+                            db_binary_operator::equal, query.column(column_type::referenced.view(), alias)));
+                });
+            } else {
+                for_each_descriptor<typename mapping_type::join_columns_type>([&]<typename column_type, std::size_t> {
+                    conjunction(query, predicate,
+                        query.binary(query.column(column_type::local.view(), source_alias),
+                            db_binary_operator::equal, query.column(column_type::referenced.view(), alias)));
+                });
+            }
+            if (!condition.empty()) {
+                conjunction(query, predicate, query.import_expression(condition));
+            }
+            query.join(join, target_type::table_name(), predicate, alias);
+        });
+        if (!found) {
+            throw std::invalid_argument("unknown database entity relation");
         }
     }
 
@@ -153,7 +210,7 @@ private:
 
     template <typename entity_type, typename relation_type>
     void append_join(db_query& query, std::string_view source_alias, node_type& node_value,
-        std::string_view reserved_alias) {
+        std::string_view reserved_alias, db_expression extra_condition) {
         using mapping_type = db_relation_mapping<entity_type, relation_type>;
         using target_type = typename relation_type::target_entity_type;
         db_expression predicate;
@@ -177,6 +234,9 @@ private:
                 conjunction(query, predicate, query.binary(query.column(column_type::local.view(), source_alias), db_binary_operator::equal, query.column(column_type::referenced.view(), node_value.alias_)));
             });
         }
+        if (!extra_condition.empty()) {
+            conjunction(query, predicate, query.import_expression(extra_condition));
+        }
         query.join(node_value.join_, target_type::table_name(), predicate, node_value.alias_);
         for_each_descriptor<typename target_type::columns_type>([&]<typename column_type, std::size_t> {
             auto name = unique_projection(query);
@@ -187,7 +247,7 @@ private:
 
     template <typename entity_type>
     void add_path(db_query& query, std::string_view root_alias, std::span<const std::string_view> components,
-        std::size_t parent_value, std::string_view requested_alias, db_join_type requested_join) {
+        std::size_t parent_value, std::string_view requested_alias, db_join_type requested_join, db_expression condition) {
         const auto name = components.front();
         const auto rest = components.subspan(1);
         for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t i> {
@@ -210,15 +270,17 @@ private:
                                   ? std::pmr::string(requested_alias, resource_)
                                   : unique_alias(query, requested_alias);
                 const auto source_alias = parent_value == root ? root_alias : std::string_view(nodes_[parent_value].alias_);
-                append_join<entity_type, relation_type>(query, source_alias, node, requested_alias);
+                append_join<entity_type, relation_type>(
+                    query, source_alias, node, requested_alias, rest.empty() ? condition : db_expression{});
                 column_count_ += node.columns_.size();
                 index = nodes_.size();
                 nodes_.push_back(std::move(node));
-            } else if (rest.empty() && ((!requested_alias.empty() && nodes_[index].alias_ != requested_alias) || nodes_[index].join_ != requested_join)) {
+            } else if (rest.empty() && ((!requested_alias.empty() && nodes_[index].alias_ != requested_alias) || nodes_[index].join_ != requested_join || !condition.empty())) {
                 throw std::invalid_argument("relation path was already loaded with another alias or join kind");
             }
             if (!rest.empty()) {
-                add_path<typename relation_type::target_entity_type>(query, root_alias, rest, index, requested_alias, requested_join);
+                add_path<typename relation_type::target_entity_type>(
+                    query, root_alias, rest, index, requested_alias, requested_join, condition);
             }
         });
     }

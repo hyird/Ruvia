@@ -248,6 +248,15 @@ struct db_selection final {
     db_expression expression_{};
     detail::db_owned_expression owned_{};
 
+    db_selection() = default;
+    db_selection(const char* column)
+        : column_(column != nullptr ? column : "") {}
+    db_selection(std::string_view column)
+        : column_(column) {}
+    db_selection(std::string column, db_expression expression, detail::db_owned_expression owned = {})
+        : column_(std::move(column)),
+          expression_(expression),
+          owned_(std::move(owned)) {}
     [[nodiscard]] bool has_expression() const noexcept {
         return !owned_.empty() || !expression_.empty();
     }
@@ -457,6 +466,7 @@ public:
     db_query& from(std::string_view table, std::string_view alias = {});
     db_query& from(const db_query& query, std::string_view alias, const db_source_options& options = {});
     db_query& from_function(expr_type function, std::string_view alias, const db_source_options& options = {});
+    db_query& clear_source();
     db_query& join(db_join_type type, std::string_view table, expr_type on = {}, std::string_view alias = {}, std::span<const std::string_view> using_columns = {});
     db_query& join(db_join_type type, std::string_view table_value, expr_type on, std::string_view alias, std::initializer_list<std::string_view> using_columns) {
         return join(type, table_value, on, alias, std::span<const std::string_view>(using_columns.begin(), using_columns.size()));
@@ -473,6 +483,7 @@ public:
     db_query& add_group_by(expr_type expression);
     db_query& having(expr_type predicate);
     db_query& and_having(expr_type predicate);
+    db_query& or_having(expr_type predicate);
     db_query& order_by(expr_type expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value);
     db_query& add_order_by(expr_type expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value);
     db_query& clear_order();

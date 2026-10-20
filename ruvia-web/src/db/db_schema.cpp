@@ -638,6 +638,125 @@ void db_schema::drop_trigger_function(std::string_view name, db_drop_behavior be
     }
     append(std::move(sql));
 }
+void db_schema::create_function(const db_function_definition& function) {
+    require_postgresql();
+    if (function.name_.empty() || function.body_.empty() ||
+        function.body_.find('\0') != std::string_view::npos) {
+        throw std::invalid_argument("function name and non-NUL body are required");
+    }
+    std::pmr::string sql(function.replace_ ? "CREATE OR REPLACE FUNCTION " : "CREATE FUNCTION ", resource_);
+    append_db_qualified_identifier(sql, function.name_, driver_);
+    sql += '(';
+    for (std::size_t i = 0; i < function.parameters_.size(); ++i) {
+        if (i != 0) {
+            sql += ", ";
+        }
+        const auto& param = function.parameters_[i];
+        if (!param.name_.empty()) {
+            append_db_identifier(sql, param.name_, driver_);
+            sql += ' ';
+        }
+        append_type(sql, param.type_);
+        if (!param.default_value_.empty()) {
+            sql += " DEFAULT ";
+            append_expression(sql, param.default_value_);
+        }
+    }
+    sql += ") RETURNS ";
+    if (function.returns_set_) {
+        sql += "SETOF ";
+    }
+    append_type(sql, function.return_type_);
+    sql += " LANGUAGE ";
+    sql += function.language_ == db_function_language::sql ? "sql" : "plpgsql";
+    switch (function.volatility_) {
+        case db_function_volatility::volatile_value:
+            break;
+        case db_function_volatility::stable:
+            sql += " STABLE";
+            break;
+        case db_function_volatility::immutable:
+            sql += " IMMUTABLE";
+            break;
+    }
+    if (function.strict_) {
+        sql += " STRICT";
+    }
+    sql += " AS ";
+    detail::append_db_dollar_body(sql, function.body_);
+    append(std::move(sql));
+}
+void db_schema::create_function(const db_function_definition& function, const db_procedure& body) {
+    auto copy = function;
+    copy.language_ = db_function_language::plpgsql;
+    copy.body_ = std::string(body.body(resource_));
+    create_function(copy);
+}
+void db_schema::create_function(const db_function_definition& function, const db_query& sql_body) {
+    auto copy = function;
+    copy.language_ = db_function_language::sql;
+    const auto compiled = sql_body.compile(driver_, resource_, db_parameter_mode::literal);
+    copy.body_ = std::string(compiled.sql());
+    create_function(copy);
+}
+void db_schema::drop_function(std::string_view name, std::span<const db_type_definition> parameter_types,
+    db_drop_behavior behavior, bool if_exists) {
+    require_postgresql();
+    std::pmr::string sql("DROP FUNCTION ", resource_);
+    if (if_exists) {
+        sql += "IF EXISTS ";
+    }
+    append_db_qualified_identifier(sql, name, driver_);
+    sql += '(';
+    for (std::size_t i = 0; i < parameter_types.size(); ++i) {
+        if (i != 0) {
+            sql += ", ";
+        }
+        append_type(sql, parameter_types[i]);
+    }
+    sql += ')';
+    if (behavior == db_drop_behavior::cascade) {
+        sql += " CASCADE";
+    }
+    append(std::move(sql));
+}
+void db_schema::lock_table(std::string_view table_value, db_table_lock_mode mode, bool nowait) {
+    require_postgresql();
+    std::pmr::string sql("LOCK TABLE ", resource_);
+    append_db_qualified_identifier(sql, table_value, driver_);
+    sql += " IN ";
+    switch (mode) {
+        case db_table_lock_mode::access_share:
+            sql += "ACCESS SHARE";
+            break;
+        case db_table_lock_mode::row_share:
+            sql += "ROW SHARE";
+            break;
+        case db_table_lock_mode::row_exclusive:
+            sql += "ROW EXCLUSIVE";
+            break;
+        case db_table_lock_mode::share_update_exclusive:
+            sql += "SHARE UPDATE EXCLUSIVE";
+            break;
+        case db_table_lock_mode::share:
+            sql += "SHARE";
+            break;
+        case db_table_lock_mode::share_row_exclusive:
+            sql += "SHARE ROW EXCLUSIVE";
+            break;
+        case db_table_lock_mode::exclusive:
+            sql += "EXCLUSIVE";
+            break;
+        case db_table_lock_mode::access_exclusive:
+            sql += "ACCESS EXCLUSIVE";
+            break;
+    }
+    sql += " MODE";
+    if (nowait) {
+        sql += " NOWAIT";
+    }
+    append(std::move(sql));
+}
 void db_schema::create_trigger(const db_trigger_definition& trigger) {
     require_postgresql();
     if (trigger.events_.empty()) {

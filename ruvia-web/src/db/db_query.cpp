@@ -777,6 +777,10 @@ db_query& db_query::from_function(expr_type function, std::string_view alias, co
     s.source_ = std::move(source_value);
     return *this;
 }
+db_query& db_query::clear_source() {
+    storage().source_.reset();
+    return *this;
+}
 db_query& db_query::join(db_join_type type, std::string_view table_value, expr_type on, std::string_view alias, std::span<const std::string_view> using_columns) {
     detail::require_name(table_value, true);
     if (!alias.empty()) {
@@ -853,6 +857,10 @@ db_query& db_query::having(expr_type predicate) {
 db_query& db_query::and_having(expr_type predicate) {
     const auto previous = storage().having_;
     return having(previous == no_db_node ? predicate : binary(expr_type(storage_.get(), previous), db_binary_operator::and_value, predicate));
+}
+db_query& db_query::or_having(expr_type predicate) {
+    const auto previous = storage().having_;
+    return having(previous == no_db_node ? predicate : binary(expr_type(storage_.get(), previous), db_binary_operator::or_value, predicate));
 }
 db_query& db_query::order_by(expr_type expression, db_order_direction direction, db_nulls_order nulls) {
     const auto index = require_expression(expression);
