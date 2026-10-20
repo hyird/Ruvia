@@ -149,6 +149,13 @@ private:                                                                        
         ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this),        \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
+// SSE over POST: the request body is buffered like RUVIA_POST, the response
+// is a Server-Sent Events stream.
+#define RUVIA_POST_SSE(path, handler, ...)                                                                 \
+    ruvia_controller_access_type::add_sse_route(ruvia_route_scope, ::ruvia::http_known_method::post, path, \
+        ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this),         \
+        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+
 // Ordinary CONNECT uses an exact host:port authority or "*". The only
 // upgrade protocol is "connect-udp"; any other fails registration with
 // std::invalid_argument. Group prefixes apply only to upgrade-protocol tunnel

@@ -216,6 +216,7 @@ for (const auto& worker : ruvia::app().workers()) {
 | 流式请求体路由 | `RUVIA_PATCH_STREAM(path, handler, ...)` | `task<http_response> handler(context&)` | 流式消费 `PATCH` 请求体 |
 | 流式响应 / SSE | `RUVIA_GET_STREAM(path, handler, ...)` | `task<void> handler(context&)` | 通过 `c.stream()` 或 `c.stream_text()` 流式写出响应 |
 | 流式响应 / SSE | `RUVIA_GET_SSE(path, handler, ...)` | `task<void> handler(context&)` | 通过 `c.stream_sse()` 推送 Server-Sent Events |
+| 流式响应 / SSE | `RUVIA_POST_SSE(path, handler, ...)` | `task<void> handler(context&)` | 缓冲读取 `POST` 请求体后通过 `c.stream_sse()` 推送 Server-Sent Events |
 | WebSocket | `RUVIA_GET_WS(path, handler, ...)` | `task<void> handler(context&)` | WebSocket 路由（默认配置） |
 | WebSocket | `RUVIA_GET_WS_OPTIONS(path, handler, opts, ...)` | `task<void> handler(context&)` | 带 `websocket_route_config` 的 WebSocket 路由 |
 | HTTP 隧道 | `RUVIA_CONNECT(authority, handler, ...)` | `task<void> handler(context&)` | `CONNECT` 字节流隧道（`authority` 为 `"host:port"` 或 `"*"`） |

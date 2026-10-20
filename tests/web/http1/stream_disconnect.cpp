@@ -51,6 +51,7 @@ class routes final {
     RUVIA_GET_STREAM("/disconnect/pipeline", pipeline);
     RUVIA_GET_STREAM("/disconnect/body", body);
     RUVIA_POST("/disconnect/echo", echo);
+    RUVIA_POST_SSE("/disconnect/post-sse", post_sse);
     RUVIA_GET("/disconnect/health", health);
     RUVIA_ROUTES_END
 
@@ -109,6 +110,12 @@ class routes final {
         (void)writer.cancel_on_peer_eof();
         body_complete.fetch_add(1);
         co_await writer.write(received);
+    }
+
+    ruvia::task<void> post_sse(ruvia::context& c) {
+        const auto received = co_await c.req().text();
+        auto writer = c.stream_sse();
+        co_await writer.write({.data_ = received});
     }
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
@@ -330,6 +337,11 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
                 body_client.send("hello-world");
                 RUVIA_CHECK(body_client.read_until("0\r\n\r\n").find("hello-world") != std::string::npos);
                 RUVIA_CHECK_EQ(body_complete.load(), complete_before + 1);
+                peer post_sse_client(io, endpoint, tls);
+                post_sse_client.send("POST /disconnect/post-sse HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"id\":\"1\"}");
+                const auto post_sse_output = post_sse_client.read_until("0\r\n\r\n");
+                RUVIA_CHECK(post_sse_output.find("text/event-stream") != std::string::npos);
+                RUVIA_CHECK(post_sse_output.find("data: {\"id\":\"1\"}") != std::string::npos);
                 peer early_client(io, endpoint, tls);
                 early_client.send("GET /disconnect/body?early=1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\n\r\n");
                 RUVIA_CHECK(early_client.read_until("early").find("early") != std::string::npos);
