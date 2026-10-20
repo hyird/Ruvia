@@ -992,6 +992,17 @@ private:
                 output_.qualified(n.text_);
                 output_.sql_ += ')';
                 break;
+            case db_node_kind::at_time_zone: {
+                output_.require_pg("AT TIME ZONE");
+                const auto& zone = s.nodes_.at(n.right_);
+                const auto zone_cast = is_untyped_value(zone) ? pg_parameter_cast::value_category : pg_parameter_cast::context;
+                output_.sql_ += '(';
+                child_value(n.left_);
+                output_.sql_ += " AT TIME ZONE ";
+                expr(s, n.right_, depth + 1, false, zone_cast);
+                output_.sql_ += ')';
+                break;
+            }
         }
     }
     void binary(const db_query_storage& s, const db_query_node& n, std::size_t depth) {

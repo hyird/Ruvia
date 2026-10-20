@@ -254,5 +254,37 @@ RUVIA_TEST(db_stream_cold_reads_and_close_wait_for_the_started_read_to_finish) {
     });
 }
 
+RUVIA_TEST(db_transaction_savepoint_commands_quote_identifiers_and_keep_transaction_active) {
+    using namespace ruvia;
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle,
+        {{.column_ = "", .command_ = "BEGIN", .status_ = 'T'},
+            {.column_ = "", .command_ = "SAVEPOINT", .status_ = 'T'},
+            {.column_ = "", .command_ = "ROLLBACK", .status_ = 'T'},
+            {.column_ = "", .command_ = "RELEASE", .status_ = 'T'},
+            {.column_ = "", .command_ = "COMMIT"}});
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto transaction = co_await connected.handle().begin_transaction();
+        RUVIA_CHECK(testing::throws_on([&] { (void)transaction.savepoint(""); }));
+        co_await transaction.savepoint("stage_1");
+        RUVIA_CHECK(transaction.active());
+        co_await transaction.rollback_to_savepoint("stage_1");
+        RUVIA_CHECK(transaction.active());
+        co_await transaction.release_savepoint("stage_1");
+        RUVIA_CHECK(transaction.active());
+        co_await transaction.commit();
+        RUVIA_CHECK(!transaction.active());
+    });
+    const auto statements = peer.postgres_parses();
+    RUVIA_CHECK_EQ(statements.size(), std::size_t{5});
+    if (statements.size() == 5) {
+        RUVIA_CHECK_EQ(statements[1].sql_, "SAVEPOINT \"stage_1\"");
+        RUVIA_CHECK_EQ(statements[2].sql_, "ROLLBACK TO SAVEPOINT \"stage_1\"");
+        RUVIA_CHECK_EQ(statements[3].sql_, "RELEASE SAVEPOINT \"stage_1\"");
+    }
+}
 }  // namespace db_transaction_operation_test
 #endif

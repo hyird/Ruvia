@@ -663,6 +663,21 @@ void db_schema::create_trigger(const db_trigger_definition& trigger) {
     if (trigger.timing_ == db_trigger_timing::instead_of && (!trigger.for_each_row_ || !trigger.when_.empty() || !trigger.update_columns_.empty())) {
         throw std::invalid_argument("INSTEAD OF requires a row trigger without WHEN or UPDATE OF");
     }
+    if (!trigger.old_table_.empty() || !trigger.new_table_.empty()) {
+        if (trigger.timing_ != db_trigger_timing::after || trigger.events_.size() != 1 || !trigger.update_columns_.empty()) {
+            throw std::invalid_argument("trigger transition tables require an AFTER trigger for one event without UPDATE OF");
+        }
+        const auto event = trigger.events_.front();
+        if (!trigger.old_table_.empty() && event != db_trigger_event::update && event != db_trigger_event::delete_value) {
+            throw std::invalid_argument("trigger OLD TABLE requires an UPDATE or DELETE event");
+        }
+        if (!trigger.new_table_.empty() && event != db_trigger_event::insert && event != db_trigger_event::update) {
+            throw std::invalid_argument("trigger NEW TABLE requires an INSERT or UPDATE event");
+        }
+        if (!trigger.old_table_.empty() && trigger.old_table_ == trigger.new_table_) {
+            throw std::invalid_argument("trigger OLD TABLE and NEW TABLE must have distinct names");
+        }
+    }
     std::pmr::string sql("CREATE TRIGGER ", resource_);
     append_db_identifier(sql, trigger.name_, driver_);
     switch (trigger.timing_) {
@@ -708,6 +723,17 @@ void db_schema::create_trigger(const db_trigger_definition& trigger) {
     }
     sql += " ON ";
     append_db_qualified_identifier(sql, trigger.table_, driver_);
+    if (!trigger.old_table_.empty() || !trigger.new_table_.empty()) {
+        sql += " REFERENCING";
+        if (!trigger.old_table_.empty()) {
+            sql += " OLD TABLE AS ";
+            append_db_identifier(sql, trigger.old_table_, driver_);
+        }
+        if (!trigger.new_table_.empty()) {
+            sql += " NEW TABLE AS ";
+            append_db_identifier(sql, trigger.new_table_, driver_);
+        }
+    }
     sql += trigger.for_each_row_ ? " FOR EACH ROW" : " FOR EACH STATEMENT";
     if (!trigger.when_.empty()) {
         sql += " WHEN (";

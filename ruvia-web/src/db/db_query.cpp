@@ -41,6 +41,61 @@ using detail::db_query_kind;
 using detail::db_source_kind;
 using detail::no_db_node;
 
+namespace detail {
+
+db_owned_expression::db_owned_expression(db_query&& query, db_expression expression, std::string_view table, bool aliased) noexcept
+    : query_(std::make_unique<db_query>(std::move(query))),
+      expression_(expression),
+      table_(table),
+      aliased_(aliased) {}
+
+db_owned_expression::db_owned_expression(const db_owned_expression& other)
+    : table_(other.table_),
+      aliased_(other.aliased_) {
+    if (other.query_ && !other.expression_.empty()) {
+        query_ = std::make_unique<db_query>(other.query_->resource());
+        expression_ = query_->import_expression(other.expression_);
+    }
+}
+
+db_owned_expression& db_owned_expression::operator=(const db_owned_expression& other) {
+    if (this != &other) {
+        *this = db_owned_expression(other);
+    }
+    return *this;
+}
+
+db_owned_expression::db_owned_expression(db_owned_expression&& other) noexcept
+    : query_(std::move(other.query_)),
+      expression_(std::exchange(other.expression_, db_expression{})),
+      table_(std::exchange(other.table_, std::string_view{})),
+      aliased_(std::exchange(other.aliased_, false)) {}
+
+db_owned_expression& db_owned_expression::operator=(db_owned_expression&& other) noexcept {
+    if (this != &other) {
+        query_ = std::move(other.query_);
+        expression_ = std::exchange(other.expression_, db_expression{});
+        table_ = std::exchange(other.table_, std::string_view{});
+        aliased_ = std::exchange(other.aliased_, false);
+    }
+    return *this;
+}
+
+db_owned_expression::~db_owned_expression() = default;
+
+db_expression db_owned_expression::import_into(db_query& target, std::string_view table, std::string_view alias) const {
+    if (expression_.empty()) {
+        return {};
+    }
+    const auto source_table = !table_.empty() ? table_ : table;
+    if (!aliased_ && !source_table.empty() && !alias.empty()) {
+        return target.import_expression(expression_, source_table, alias);
+    }
+    return target.import_expression(expression_);
+}
+
+}  // namespace detail
+
 void db_query::storage_deleter_type::operator()(detail::db_query_storage* storage) const noexcept {
     if (storage != nullptr) {
         std::destroy_at(storage);
@@ -461,6 +516,12 @@ db_query::expr_type db_query::collate(expr_type value, std::string_view collatio
     auto node_value = make_node(db_node_kind::collate);
     node_value.left_ = require_expression(value);
     node_value.text_ = collation;
+    return push_node(std::move(node_value));
+}
+db_query::expr_type db_query::at_time_zone(expr_type value, expr_type zone) {
+    auto node_value = make_node(db_node_kind::at_time_zone);
+    node_value.left_ = require_expression(value);
+    node_value.right_ = require_expression(zone);
     return push_node(std::move(node_value));
 }
 
@@ -888,7 +949,8 @@ db_query& db_query::on_conflict(const db_conflict_options& conflict) {
         if (std::ranges::any_of(owned.assignments_, [&](const auto& existing) { return std::string_view(existing.column_) == assignment.column_; })) {
             throw std::invalid_argument("duplicate conflict update column");
         }
-        owned.assignments_.emplace_back(assignment.column_, require_expression(assignment.value_), s.resource_);
+        const auto expression = !assignment.owned_.empty() ? assignment.owned_.import_into(*this) : assignment.value_;
+        owned.assignments_.emplace_back(assignment.column_, require_expression(expression), s.resource_);
     }
     s.conflict_ = std::move(owned);
     return *this;
@@ -918,6 +980,16 @@ db_query& db_query::set(std::string_view column, expr_type value) {
         }
     }
     s.assignments_.emplace_back(column, expression, s.resource_);
+    return *this;
+}
+db_query& db_query::set(const db_assignment& assignment) {
+    const auto expression = !assignment.owned_.empty() ? assignment.owned_.import_into(*this) : assignment.value_;
+    return set(assignment.column_, expression);
+}
+db_query& db_query::set(std::span<const db_assignment> assignments) {
+    for (const auto& assignment : assignments) {
+        set(assignment);
+    }
     return *this;
 }
 db_query& db_query::update_from(std::string_view table_value, std::string_view alias) {

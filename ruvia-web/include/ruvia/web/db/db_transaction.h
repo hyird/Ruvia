@@ -122,6 +122,12 @@ public:
     scoped_operation<void> commit() && = delete;
     scoped_operation<void> rollback() &;
     scoped_operation<void> rollback() && = delete;
+    scoped_operation<void> savepoint(std::string_view name) &;
+    scoped_operation<void> savepoint(std::string_view) && = delete;
+    scoped_operation<void> rollback_to_savepoint(std::string_view name) &;
+    scoped_operation<void> rollback_to_savepoint(std::string_view) && = delete;
+    scoped_operation<void> release_savepoint(std::string_view name) &;
+    scoped_operation<void> release_savepoint(std::string_view) && = delete;
 
 private:
     friend class db_handle;
@@ -179,6 +185,8 @@ private:
         std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type operation);
     static task<void> commit_task(operation_guard_type operation);
     static task<void> rollback_task(operation_guard_type operation);
+    scoped_operation<void> run_savepoint_command(std::string_view prefix, std::string_view name);
+    static task<void> savepoint_task(std::pmr::string sql, operation_guard_type operation);
     void reset() noexcept;
     void bind_operation_scope(operation_scope& scope) noexcept;
     static void expire_capability(void* target) noexcept;

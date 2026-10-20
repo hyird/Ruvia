@@ -178,6 +178,7 @@ struct db_column_options final {
     bool generated_{false};
     db_generated_type generated_type_{db_generated_type::none};
     bool nullable_{false};
+    bool read_only_{false};
     std::size_t length_{0};
     unsigned precision_{0};
     unsigned scale_{0};
@@ -393,7 +394,11 @@ public:
         return index<name>();
     }
     template <fixed_string name>
-    static db_field_reference<db_entity, name> column();
+    static consteval std::string_view column_name() noexcept {
+        return std::tuple_element_t<index<name>(), columns_type>::name.view();
+    }
+    template <fixed_string name>
+    static constexpr db_field_reference<db_entity, name> column(std::string_view alias = {}) noexcept;
     explicit db_entity(std::pmr::memory_resource* resource = nullptr)
         : columns_(resource),
           relation_slots_(make_relation_slots(columns_.resource(), std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{})) {}
@@ -503,35 +508,39 @@ concept sql_projection = requires(const projection& value) {
 #define RUVIA_DB_ONE_TO_ONE(name, target, ...) ::ruvia::db_one_to_one<::ruvia::fixed_string{#name}, target, __VA_ARGS__>
 #define RUVIA_DB_ONE_TO_MANY(name, target, inverse) ::ruvia::db_one_to_many<::ruvia::fixed_string{#name}, target, ::ruvia::fixed_string{#inverse}>
 #define RUVIA_DB_MANY_TO_MANY(name, target, mapping_type) ::ruvia::db_many_to_many<::ruvia::fixed_string{#name}, target, mapping_type>
-#define RUVIA_DB_ENTITY(name, table, ...)                                                   \
-    struct name final {                                                                     \
-    private:                                                                                \
-        using storage_type = ::ruvia::db_entity<::ruvia::fixed_string{table}, __VA_ARGS__>; \
-        storage_type entity_;                                                               \
-        template <typename>                                                                 \
-        friend struct ::ruvia::detail::db_entity_access;                                    \
-        storage_type& sql_storage() noexcept {                                              \
-            return entity_;                                                                 \
-        }                                                                                   \
-                                                                                            \
-    public:                                                                                 \
-        using sql_entity_type = name;                                                       \
-        using columns_type = typename storage_type::columns_type;                           \
-        using relations_type = typename storage_type::relations_type;                       \
-        explicit name(std::pmr::memory_resource* resource = nullptr)                        \
-            : entity_(resource) {}                                                          \
-        static constexpr std::string_view table_name() noexcept {                           \
-            return storage_type::table_name();                                              \
-        }                                                                                   \
-        template <::ruvia::fixed_string field_name>                                         \
-        static consteval std::size_t column_index() {                                       \
-            return storage_type::template column_index<field_name>();                       \
-        }                                                                                   \
-        template <::ruvia::fixed_string field_name>                                         \
-        static ::ruvia::db_field_reference<name, field_name> column() {                     \
-            return {};                                                                      \
-        }                                                                                   \
-        RUVIA_DETAIL_ENTITY_VALUE_API(entity_, set_null, is_set, is_null)                   \
+#define RUVIA_DB_ENTITY(name, table, ...)                                                                             \
+    struct name final {                                                                                               \
+    private:                                                                                                          \
+        using storage_type = ::ruvia::db_entity<::ruvia::fixed_string{table}, __VA_ARGS__>;                           \
+        storage_type entity_;                                                                                         \
+        template <typename>                                                                                           \
+        friend struct ::ruvia::detail::db_entity_access;                                                              \
+        storage_type& sql_storage() noexcept {                                                                        \
+            return entity_;                                                                                           \
+        }                                                                                                             \
+                                                                                                                      \
+    public:                                                                                                           \
+        using sql_entity_type = name;                                                                                 \
+        using columns_type = typename storage_type::columns_type;                                                     \
+        using relations_type = typename storage_type::relations_type;                                                 \
+        explicit name(std::pmr::memory_resource* resource = nullptr)                                                  \
+            : entity_(resource) {}                                                                                    \
+        static constexpr std::string_view table_name() noexcept {                                                     \
+            return storage_type::table_name();                                                                        \
+        }                                                                                                             \
+        template <::ruvia::fixed_string field_name>                                                                   \
+        static consteval std::size_t column_index() {                                                                 \
+            return storage_type::template column_index<field_name>();                                                 \
+        }                                                                                                             \
+        template <::ruvia::fixed_string field_name>                                                                   \
+        static consteval std::string_view column_name() noexcept {                                                    \
+            return storage_type::template column_name<field_name>();                                                  \
+        }                                                                                                             \
+        template <::ruvia::fixed_string field_name>                                                                   \
+        static constexpr ::ruvia::db_field_reference<name, field_name> column(std::string_view alias = {}) noexcept { \
+            return ::ruvia::db_field_reference<name, field_name>(alias);                                              \
+        }                                                                                                             \
+        RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                                        \
     };
 
 }  // namespace ruvia

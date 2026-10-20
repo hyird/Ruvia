@@ -639,6 +639,130 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
     }
 }
 
+#ifdef RUVIA_ENABLE_POSTGRESQL
+RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete_using_and_read_only_columns) {
+    using role_entity = db_entity<"roles",
+        db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
+        db_column<"name", std::pmr::string>>;
+    using user_role_entity = db_entity<"user_roles",
+        db_column<"user_id", std::int64_t, db_column_options{.primary_key_ = true}>,
+        db_column<"role_id", std::int64_t, db_column_options{.primary_key_ = true}>>;
+    using trigger_populated_entity = db_entity<"devices",
+        db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
+        db_column<"name", std::pmr::string, db_column_options{.nullable_ = true}>,
+        db_column<"revision", std::int64_t>,
+        db_column<"protocol_address", std::pmr::string, db_column_options{.read_only_ = true}>,
+        db_column<"updated_at", std::pmr::string>>;
+
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
+        auto roles = client.handle().get_repository<role_entity>();
+        auto query = roles.create_query_builder("r");
+        query.join<user_role_entity>(db_join_type::inner, "ur", user_role_entity::column<"role_id">() == role_entity::column<"id">())
+            .where(user_role_entity::column<"user_id">("ur") == 42)
+            .distinct_on({"id"})
+            .order_by(role_entity::column<"id">())
+            .add_order_by(user_role_entity::column<"role_id">("ur"), db_order_direction::desc);
+        const auto role_sql = query.get_query_and_parameters();
+        RUVIA_CHECK_EQ(role_sql.sql(),
+            "SELECT DISTINCT ON (\"r\".\"id\") \"r\".\"id\", \"r\".\"name\" FROM \"roles\" AS \"r\" "
+            "INNER JOIN \"user_roles\" AS \"ur\" ON (\"ur\".\"role_id\" = \"r\".\"id\") "
+            "WHERE (\"ur\".\"user_id\" = $1) ORDER BY \"r\".\"id\" ASC, \"ur\".\"role_id\" DESC");
+
+        auto clean_grouped = roles.create_query_builder("r");
+        clean_grouped.select({{"id"}, role_entity::column<"name">().coalesce("fallback", "label")})
+            .group_by({"id"})
+            .add_group_by(role_entity::column<"name">())
+            .having(role_entity::column<"id">() > 0)
+            .and_having(query.exists());
+        const auto grouped_sql = clean_grouped.get_query_and_parameters();
+        RUVIA_CHECK(grouped_sql.sql().find("GROUP BY \"r\".\"id\", \"r\".\"name\" HAVING ((\"r\".\"id\" > $2) AND EXISTS (SELECT") != std::string_view::npos);
+
+        auto devices = client.handle().get_repository<trigger_populated_entity>();
+        trigger_populated_entity dev;
+        dev.set<"id">(1);
+        dev.set<"name">("sensor-1");
+        dev.set<"revision">(1);
+        dev.set<"protocol_address">("ignored-by-orm-writes");
+        dev.set<"updated_at">("2026-01-01T00:00:00Z");
+
+        auto insert_dev = devices.create_insert_builder(dev);
+        insert_dev.on_conflict({.conflict_paths_ = {"id"}, .skip_update_if_no_values_changed_ = true}).returning();
+        const auto insert_dev_sql = insert_dev.get_query_and_parameters();
+        RUVIA_CHECK(insert_dev_sql.sql().find("protocol_address\") VALUES") == std::string_view::npos);
+        RUVIA_CHECK(insert_dev_sql.sql().find("DO UPDATE SET \"name\" = excluded.\"name\"") != std::string_view::npos);
+        RUVIA_CHECK(insert_dev_sql.sql().find("RETURNING \"devices\".\"id\", \"devices\".\"name\", \"devices\".\"revision\", \"devices\".\"protocol_address\", \"devices\".\"updated_at\"") != std::string_view::npos);
+        auto one_inserted = insert_dev.get_one();
+        (void)one_inserted;
+
+        RUVIA_CHECK(testing::throws_on([&] {
+            auto bad = devices.create_update_builder();
+            bad.set("protocol_address", "x");
+        }));
+
+        db_query incoming;
+        incoming.values({incoming.value(10), incoming.value("edge-a"), incoming.value(1), incoming.value("now")});
+        auto from_cte = devices.create_query_builder("inc");
+        from_cte.from_cte("incoming")
+            .select({
+                {"id", incoming.column("id", "inc")},
+                {"name", incoming.column("name", "inc")},
+                {"revision", incoming.column("revision", "inc")},
+                {"updated_at", incoming.column("updated_at", "inc")},
+            });
+        auto pipeline = devices.create_insert_builder();
+        pipeline.with("incoming", incoming, {.columns_ = {"id", "name", "revision", "updated_at"}})
+            .insert_from({"id", "name", "revision", "updated_at"}, from_cte)
+            .on_conflict({
+                .conflict_paths_ = {"id"},
+                .skip_update_if_no_values_changed_ = true,
+                .update_expressions_ = {trigger_populated_entity::column<"revision">().increment(1)},
+                .update_predicate_ = trigger_populated_entity::column<"revision">() < 100,
+            })
+            .returning({{"id"}});
+        const auto pipeline_sql = pipeline.get_query_and_parameters();
+        RUVIA_CHECK(pipeline_sql.sql().find("WITH \"incoming\" (\"id\", \"name\", \"revision\", \"updated_at\") AS (VALUES ($1, $2, $3, $4))") == 0);
+        RUVIA_CHECK(pipeline_sql.sql().find("ON CONFLICT (\"id\") DO UPDATE SET") != std::string_view::npos);
+        RUVIA_CHECK(pipeline_sql.sql().find("\"revision\" = (\"devices\".\"revision\" + $5)") != std::string_view::npos);
+
+        auto update_builder = devices.create_update_builder("d");
+        update_builder.set("name", "renamed")
+            .set_null("name")
+            .increment("revision", 2)
+            .set_now("updated_at")
+            .update_from<role_entity>("r")
+            .join<user_role_entity>(db_join_type::inner, "ur", user_role_entity::column<"role_id">("ur") == role_entity::column<"id">("r"))
+            .where(trigger_populated_entity::column<"id">() == user_role_entity::column<"user_id">("ur"))
+            .returning({{"id"}});
+        const auto update_sql = update_builder.get_query_and_parameters();
+        RUVIA_CHECK_EQ(update_sql.sql(),
+            "UPDATE \"devices\" AS \"d\" SET \"name\" = NULL, \"revision\" = (\"d\".\"revision\" + $1), \"updated_at\" = \"now\"() "
+            "FROM \"roles\" AS \"r\" INNER JOIN \"user_roles\" AS \"ur\" ON (\"ur\".\"role_id\" = \"r\".\"id\") "
+            "WHERE (\"d\".\"id\" = \"ur\".\"user_id\") RETURNING \"d\".\"id\" AS \"id\"");
+
+        auto delete_builder = devices.create_delete_builder("d");
+        delete_builder.delete_using<role_entity>("r")
+            .join_cte(db_join_type::inner, "expired", "e", role_entity::column<"id">("r") == role_entity::column<"id">("e"))
+            .where(trigger_populated_entity::column<"id">() == role_entity::column<"id">("r"))
+            .returning({{"id"}});
+        const auto delete_sql = delete_builder.get_query_and_parameters();
+        RUVIA_CHECK_EQ(delete_sql.sql(),
+            "DELETE FROM \"devices\" AS \"d\" USING \"roles\" AS \"r\" INNER JOIN \"expired\" AS \"e\" ON (\"r\".\"id\" = \"e\".\"id\") "
+            "WHERE (\"d\".\"id\" = \"r\".\"id\") RETURNING \"d\".\"id\" AS \"id\"");
+
+        auto ret_one = devices.update_returning_one<item_summary>(
+            trigger_populated_entity::column<"id">() == 1,
+            {
+                trigger_populated_entity::column<"name">() = "next",
+                trigger_populated_entity::column<"revision">() += 1,
+                trigger_populated_entity::column<"updated_at">().set_now(),
+            },
+            {{"id"}, trigger_populated_entity::column<"name">().coalesce("", "label"), {"rank", trigger_populated_entity::column<"revision">().select().expression()}});
+        (void)ret_one;
+        co_return;
+    });
+}
+#endif
 }  // namespace db_repository_test
 
 #ifdef RUVIA_ENABLE_POSTGRESQL

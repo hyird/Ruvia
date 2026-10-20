@@ -1605,4 +1605,108 @@ RUVIA_TEST(db_query_import_expression_rewrites_deep_correlated_references) {
         "SELECT \"u\".\"id\" FROM \"users\" AS \"u\" WHERE EXISTS (SELECT \"o\".\"id\" FROM \"orders\" AS \"o\" WHERE EXISTS (SELECT \"u\".\"id\" FROM \"items\" AS \"i\"))");
 }
 
+RUVIA_TEST(db_query_at_time_zone_and_using_join_render_and_validate) {
+    db_query query;
+    const auto local_ts = query.at_time_zone(query.column("created_at", "e"), "Asia/Shanghai");
+    const auto offset_ts = query.at_time_zone(
+        query.column("created_at", "e"),
+        query.cast(query.value("08:00:00"), db_data_type::interval));
+    query.select({local_ts, offset_ts})
+        .from("events", "e")
+        .join(db_join_type::left, "hourly_totals", {}, "h", {"hour"})
+        .group_by({local_ts, offset_ts});
+    const auto statement = query.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK_EQ(statement.sql(),
+        "SELECT (\"e\".\"created_at\" AT TIME ZONE $1::text), (\"e\".\"created_at\" AT TIME ZONE CAST($2 AS INTERVAL)) "
+        "FROM \"events\" AS \"e\" LEFT JOIN \"hourly_totals\" AS \"h\" USING (\"hour\") "
+        "GROUP BY (\"e\".\"created_at\" AT TIME ZONE $1::text), (\"e\".\"created_at\" AT TIME ZONE CAST($2 AS INTERVAL))");
+    RUVIA_CHECK_EQ(statement.params().size(), std::size_t{2});
+
+    const auto literal = query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+    RUVIA_CHECK(literal.sql().find("(\"e\".\"created_at\" AT TIME ZONE E'Asia/Shanghai')") != std::string_view::npos);
+    RUVIA_CHECK(testing::throws_on([&] { (void)query.compile(db_driver::mariadb, nullptr); }));
+}
+
+RUVIA_TEST(db_field_reference_and_predicate_cover_aliases_columns_json_and_owned_assignments) {
+    using user_entity = db_entity<"users",
+        db_column<"id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
+        db_column<"department_id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .nullable_ = true}>,
+        db_column<"nickname", std::pmr::string, db_column_options{.nullable_ = true}>,
+        db_column<"active", bool>,
+        db_column<"revision", std::int64_t>,
+        db_column<"config", std::pmr::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
+        db_column<"updated_at", std::pmr::string, db_column_options{.data_type_ = db_data_type::timestamp_tz}>>;
+    using dept_entity = db_entity<"departments",
+        db_column<"id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
+        db_column<"name", std::pmr::string>>;
+
+    static_assert(user_entity::column_name<"department_id">() == "department_id");
+    RUVIA_CHECK_EQ(user_entity::column<"id">("u").alias(), std::string_view("u"));
+    RUVIA_CHECK_EQ(user_entity::column<"id">().with_alias("u").alias(), std::string_view("u"));
+    RUVIA_CHECK_EQ(user_entity::column<"id">().table_name(), std::string_view("users"));
+
+    db_predicate dynamic_where;
+    RUVIA_CHECK(dynamic_where.empty());
+    dynamic_where.and_where(user_entity::column<"department_id">("u") == dept_entity::column<"id">("d"))
+        .and_where(user_entity::column<"revision">("u").is_distinct_from(0))
+        .and_where(user_entity::column<"nickname">("u").not_like("tmp%"))
+        .and_where(user_entity::column<"nickname">("u").not_ilike("bot%"))
+        .and_where(user_entity::column<"nickname">("u").regex("^[a-z]+$"))
+        .and_where(user_entity::column<"nickname">("u").iregex("^[a-z0-9]+$"))
+        .and_where(user_entity::column<"revision">("u").not_between(10, 20))
+        .and_where(user_entity::column<"revision">("u").not_in({11, 12}))
+        .and_where(user_entity::column<"active">("u").is_true())
+        .and_where(user_entity::column<"config">("u").json_contains("{\"enabled\":true}"))
+        .and_where(user_entity::column<"config">("u").json_has_key("mode"))
+        .and_where(user_entity::column<"config">("u").json_has_any_key({"a", "b"}))
+        .and_where(user_entity::column<"config">("u").json_has_all_keys({"c", "d"}))
+        .and_where(user_entity::column<"config">("u").json_text_equals("env", "prod"))
+        .and_where(user_entity::column<"config">("u").json_path_text_equals({"limits", "tier"}, "gold"));
+
+    db_query sub;
+    sub.select(sub.column("id")).from("departments");
+    dynamic_where.or_where(user_entity::column<"department_id">("u").in(sub) && db_predicate::exists(sub) && db_predicate::not_exists(sub));
+
+    db_query query;
+    query.select({
+                     user_entity::column<"id">("u").select().expression(query),
+                     dept_entity::column<"name">("d").as("dept_name").expression(query),
+                     user_entity::column<"nickname">("u").coalesce("anon").expression(query),
+                     user_entity::column<"department_id">("u").coalesce_text("").expression(query),
+                 })
+        .from("users", "u")
+        .where(dynamic_where.expression(query));
+    const auto compiled = query.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK(compiled.sql().find("(\"u\".\"department_id\" = \"d\".\"id\")") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("(\"u\".\"revision\" IS DISTINCT FROM $3)") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("NOT LIKE") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("NOT ILIKE") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find(" ~ ") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find(" ~* ") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("NOT BETWEEN") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("NOT IN") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("(\"u\".\"active\" IS TRUE)") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("@> CAST(") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find(" ? ") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find(" ?| CAST(ARRAY[") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find(" ?& CAST(ARRAY[") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("((\"u\".\"config\" ->> ") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("((\"u\".\"config\" #>> CAST(ARRAY[") != std::string_view::npos);
+    RUVIA_CHECK(compiled.sql().find("COALESCE(CAST(\"u\".\"department_id\" AS TEXT), ") != std::string_view::npos);
+
+    std::vector<db_assignment> assignments{
+        user_entity::column<"nickname">() = "Ada",
+        user_entity::column<"department_id">().set_null_if_empty(""),
+        user_entity::column<"revision">() += 1,
+        user_entity::column<"updated_at">().set_now(),
+    };
+    const auto copy_of_assignments = assignments;
+    db_query update_query;
+    update_query.update("users").set(copy_of_assignments).where(user_entity::column<"id">().expression(update_query));
+    const auto update_compiled = update_query.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK_EQ(update_compiled.sql(),
+        "UPDATE \"users\" SET \"nickname\" = $1, \"department_id\" = CAST(NULLIF($2::text, $3::text) AS UUID), "
+        "\"revision\" = (\"users\".\"revision\" + $4), \"updated_at\" = \"now\"() WHERE \"users\".\"id\"");
+}
+
 }  // namespace

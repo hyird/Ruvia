@@ -53,6 +53,8 @@ struct db_trigger_definition final {
     std::vector<db_trigger_event> events_{};
     bool for_each_row_{true};
     std::vector<std::string> update_columns_{};
+    std::string old_table_{};
+    std::string new_table_{};
     db_expression when_{};
     std::vector<std::string> arguments_{};
 };
@@ -263,8 +265,10 @@ void db_schema::create_table(const db_entity_table_options& options) {
     db_query defaults(resource_);
     std::vector<std::string> primary;
     bool conflicting_generation = false;
+    bool conflicting_read_only = false;
     detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
         conflicting_generation |= c_type::options.generated_ && c_type::options.generated_type_ != db_generated_type::none;
+        conflicting_read_only |= c_type::options.read_only_ && (c_type::options.generated_ || c_type::options.generated_type_ != db_generated_type::none);
         db_schema_column column{.name_ = std::string(c_type::name.view()),
             .type_ = entity_column_type<c_type>(),
             .nullable_ = c_type::options.nullable_,
@@ -303,6 +307,9 @@ void db_schema::create_table(const db_entity_table_options& options) {
     });
     if (conflicting_generation) {
         throw std::invalid_argument("computed columns cannot also request generated identity values");
+    }
+    if (conflicting_read_only) {
+        throw std::invalid_argument("read-only columns cannot also request generated values");
     }
     for (const auto& value : options.generated_columns_) {
         bool found = false;

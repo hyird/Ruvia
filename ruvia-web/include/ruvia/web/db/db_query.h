@@ -28,6 +28,7 @@ enum class db_node_kind : std::uint8_t;
 class db_query_compiler;
 class db_relation_plan;
 struct db_query_plan;
+struct qualified_expression_importer;
 #ifdef RUVIA_ENABLE_REDIS
 class db_query_cache_state;
 #endif
@@ -213,9 +214,61 @@ struct db_lock_options final {
     bool skip_locked_{false};
     std::vector<std::string> tables_{};
 };
+class db_query;
+
+namespace detail {
+class db_owned_expression final {
+public:
+    db_owned_expression() noexcept = default;
+    db_owned_expression(db_query&& query, db_expression expression, std::string_view table = {}, bool aliased = false) noexcept;
+    db_owned_expression(const db_owned_expression& other);
+    db_owned_expression& operator=(const db_owned_expression& other);
+    db_owned_expression(db_owned_expression&& other) noexcept;
+    db_owned_expression& operator=(db_owned_expression&& other) noexcept;
+    ~db_owned_expression();
+
+    [[nodiscard]] bool empty() const noexcept {
+        return expression_.empty();
+    }
+    [[nodiscard]] db_expression expression() const noexcept {
+        return expression_;
+    }
+    [[nodiscard]] db_expression import_into(db_query& target, std::string_view table = {}, std::string_view alias = {}) const;
+
+private:
+    std::unique_ptr<db_query> query_{};
+    db_expression expression_{};
+    std::string_view table_{};
+    bool aliased_{false};
+};
+}  // namespace detail
+
+struct db_selection final {
+    std::string column_{};
+    db_expression expression_{};
+    detail::db_owned_expression owned_{};
+
+    [[nodiscard]] bool has_expression() const noexcept {
+        return !owned_.empty() || !expression_.empty();
+    }
+    [[nodiscard]] db_expression expression() const noexcept {
+        return owned_.empty() ? expression_ : owned_.expression();
+    }
+    [[nodiscard]] inline db_expression expression(db_query& target, std::string_view table = {}, std::string_view alias = {}) const;
+};
+
 struct db_assignment final {
     std::string column_{};
     db_expression value_{};
+    detail::db_owned_expression owned_{};
+
+    [[nodiscard]] bool empty() const noexcept {
+        return owned_.empty() && value_.empty();
+    }
+    [[nodiscard]] db_expression expression() const noexcept {
+        return owned_.empty() ? value_ : owned_.expression();
+    }
+    [[nodiscard]] inline db_expression expression(db_query& target, std::string_view table = {}, std::string_view alias = {}) const;
 };
 struct db_conflict_options final {
     std::vector<std::string> columns_{};
@@ -377,6 +430,10 @@ public:
     expr_type extract(db_date_part part, expr_type value);
     expr_type subscript(expr_type array, expr_type index);
     expr_type collate(expr_type value, std::string_view collation);
+    expr_type at_time_zone(expr_type value, expr_type zone);
+    expr_type at_time_zone(expr_type value, std::string_view zone) {
+        return at_time_zone(value, this->value(zone));
+    }
     // Copies the expression and its referenced subqueries into this query's resource;
     // the source must remain alive during import, but is unchanged and need not outlive the result.
     // Both qualifiers must be empty or valid nonempty names. A mapping rewrites exact
@@ -401,6 +458,9 @@ public:
     db_query& from(const db_query& query, std::string_view alias, const db_source_options& options = {});
     db_query& from_function(expr_type function, std::string_view alias, const db_source_options& options = {});
     db_query& join(db_join_type type, std::string_view table, expr_type on = {}, std::string_view alias = {}, std::span<const std::string_view> using_columns = {});
+    db_query& join(db_join_type type, std::string_view table_value, expr_type on, std::string_view alias, std::initializer_list<std::string_view> using_columns) {
+        return join(type, table_value, on, alias, std::span<const std::string_view>(using_columns.begin(), using_columns.size()));
+    }
     db_query& join(db_join_type type, const db_query& query, expr_type on, std::string_view alias, const db_source_options& options = {});
     db_query& join_function(db_join_type type, expr_type function, expr_type on, std::string_view alias, const db_source_options& options = {});
     db_query& where(expr_type predicate);
@@ -439,6 +499,11 @@ public:
     db_query& on_conflict(const db_conflict_options& conflict);
     db_query& update(std::string_view table, std::string_view alias = {});
     db_query& set(std::string_view column, expr_type value);
+    db_query& set(const db_assignment& assignment);
+    db_query& set(std::span<const db_assignment> assignments);
+    db_query& set(std::initializer_list<db_assignment> assignments) {
+        return set(std::span<const db_assignment>(assignments.begin(), assignments.size()));
+    }
     db_query& update_from(std::string_view table, std::string_view alias = {});
     db_query& update_from(const db_query& query, std::string_view alias);
     db_query& delete_from(std::string_view table, std::string_view alias = {});
@@ -455,6 +520,7 @@ public:
 private:
     friend class detail::db_query_compiler;
     friend class detail::db_relation_plan;
+    friend struct detail::qualified_expression_importer;
     friend class db_schema;
 #ifdef RUVIA_ENABLE_REDIS
     // The result cache reads each statement's cache options.
@@ -489,5 +555,19 @@ private:
     [[nodiscard]] std::size_t add_subquery(const db_query& query);
     storage_owner_type storage_;
 };
+
+inline db_expression db_selection::expression(db_query& target, std::string_view table, std::string_view alias) const {
+    if (!owned_.empty()) {
+        return owned_.import_into(target, table, alias);
+    }
+    return expression_.empty() ? db_expression{} : target.import_expression(expression_);
+}
+
+inline db_expression db_assignment::expression(db_query& target, std::string_view table, std::string_view alias) const {
+    if (!owned_.empty()) {
+        return owned_.import_into(target, table, alias);
+    }
+    return value_.empty() ? db_expression{} : target.import_expression(value_);
+}
 
 }  // namespace ruvia

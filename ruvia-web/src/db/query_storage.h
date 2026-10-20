@@ -47,6 +47,7 @@ enum class db_node_kind : std::uint8_t {
     extract,
     subscript,
     collate,
+    at_time_zone,
 };
 enum class db_query_kind : std::uint8_t { select,
     values,

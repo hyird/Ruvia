@@ -111,11 +111,15 @@ task<void> demonstrate(db_client& db) {
     for (const auto& item : summaries) {
         std::cout << item.get<"rank">() << ": " << item.get<"label">() << '\n';
     }
-    const std::array changes{db_assignment{"name", expressions.call("upper", {expressions.column("name")})}};
-    const std::array returning{db_selection{"id"}, db_selection{"label", expressions.column("name")}};
-    const auto changed = co_await devices.update_returning<device_summary>(device::column<"id">() == 1, changes, returning);
-    for (const auto& item : changed) {
-        std::cout << "updated=" << item.get<"label">() << '\n';
+    const auto changed = co_await devices.update_returning_one<device_summary>(
+        device::column<"id">() == 1,
+        {
+            {"name", expressions.call("upper", {expressions.column("name")})},
+            device::column<"revision">() += 1,
+        },
+        {{"id"}, device::column<"name">().as("label")});
+    if (changed) {
+        std::cout << "updated=" << changed->get<"label">() << '\n';
     }
 
     auto transaction = co_await handle.begin_transaction();
@@ -124,8 +128,8 @@ task<void> demonstrate(db_client& db) {
     candidates.where(device::column<"id">() == 1).take(1).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
     auto claim = transactional.create_update_builder("target");
     claim.update_from_cte("candidates", "candidate")
-        .set("name", expressions.value("Claimed device"))
-        .where(expressions.binary(expressions.column("id", "target"), db_binary_operator::equal, expressions.column("id", "candidate")))
+        .set("name", "Claimed device")
+        .where(device::column<"id">("target") == device::column<"id">("candidate"))
         .returning();
     auto claimed = transactional.create_query_builder("claimed");
     claimed.with("candidates", candidates).with("claimed", claim).from_cte("claimed");

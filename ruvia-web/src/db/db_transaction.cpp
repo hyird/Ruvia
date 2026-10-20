@@ -8,6 +8,7 @@
 #include "db/db_pool.h"
 #include "db/db_prepared_statement.h"
 #include "db/db_query_execution.h"
+#include "db/db_sql_format.h"
 
 // An open transaction: it owns a pooled connection until commit, rollback, or
 // destruction, and a transaction abandoned by an unwinding scope must roll back
@@ -237,6 +238,37 @@ task<void> db_transaction::rollback_task(operation_guard_type pending) {
     auto& lease_value = operation.lease();
     co_await rollback_pool_transaction(lease_value.client_, lease_value.slot_, lease_value.resource_, lease_value.options_);
     operation.finish_closed();
+}
+
+scoped_operation<void> db_transaction::savepoint(std::string_view name) & {
+    return run_savepoint_command("SAVEPOINT ", name);
+}
+
+scoped_operation<void> db_transaction::rollback_to_savepoint(std::string_view name) & {
+    return run_savepoint_command("ROLLBACK TO SAVEPOINT ", name);
+}
+
+scoped_operation<void> db_transaction::release_savepoint(std::string_view name) & {
+    return run_savepoint_command("RELEASE SAVEPOINT ", name);
+}
+
+scoped_operation<void> db_transaction::run_savepoint_command(std::string_view prefix, std::string_view name) {
+    registration_.require_active();
+    operation_guard_type operation(state_->operation_);
+    const auto& lease_value = state_->operation_.preparation_payload();
+    std::pmr::string sql(prefix, lease_value.resource_);
+    detail::append_db_identifier(sql, name, detail::db_pool_driver(lease_value.client_));
+    return ::ruvia::make_scoped_operation(
+        registration_.scope(), savepoint_task(std::move(sql), std::move(operation)));
+}
+
+task<void> db_transaction::savepoint_task(std::pmr::string sql, operation_guard_type pending) {
+    operation_guard_type operation(std::move(pending));
+    operation.start();
+    auto& lease_value = operation.lease();
+    (void)co_await execute_transaction_pool(
+        lease_value.client_, lease_value.slot_, std::move(sql), {}, lease_value.resource_, lease_value.options_);
+    operation.finish_active();
 }
 
 void db_transaction::reset() noexcept {

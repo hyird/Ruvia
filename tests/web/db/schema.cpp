@@ -776,3 +776,85 @@ RUVIA_TEST(db_procedure_public_helpers_render_and_validate) {
         invalid.raise_exception("bad", "00000");
     }));
 }
+
+RUVIA_TEST(db_schema_trigger_transition_tables_and_read_only_columns_render_and_validate) {
+    using read_only_entity = ruvia::db_entity<"devices",
+        ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
+        ruvia::db_column<"protocol_address", std::pmr::string, ruvia::db_column_options{.read_only_ = true}>>;
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_table<read_only_entity>();
+    schema.create_trigger({
+        .name_ = "devices_live_update",
+        .table_ = "devices",
+        .function_ = "publish_query_change",
+        .timing_ = ruvia::db_trigger_timing::after,
+        .events_ = {ruvia::db_trigger_event::update},
+        .for_each_row_ = false,
+        .old_table_ = "old_rows",
+        .new_table_ = "new_rows",
+        .arguments_ = {"device"},
+    });
+    const auto migrations = schema.compile("transition_trigger");
+    RUVIA_CHECK_EQ(migrations.size(), std::size_t{1});
+    RUVIA_CHECK(migrations[0].sql().find("\"protocol_address\" TEXT NOT NULL") != std::string_view::npos);
+    RUVIA_CHECK(migrations[0].sql().find(
+                    "CREATE TRIGGER \"devices_live_update\" AFTER UPDATE ON \"devices\" "
+                    "REFERENCING OLD TABLE AS \"old_rows\" NEW TABLE AS \"new_rows\" "
+                    "FOR EACH STATEMENT EXECUTE FUNCTION \"publish_query_change\"(E'device')") != std::string_view::npos);
+
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_trigger({
+            .name_ = "bad_before",
+            .table_ = "devices",
+            .function_ = "fn",
+            .timing_ = ruvia::db_trigger_timing::before,
+            .events_ = {ruvia::db_trigger_event::insert},
+            .for_each_row_ = false,
+            .new_table_ = "new_rows",
+        });
+    }));
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_trigger({
+            .name_ = "bad_multi_event",
+            .table_ = "devices",
+            .function_ = "fn",
+            .timing_ = ruvia::db_trigger_timing::after,
+            .events_ = {ruvia::db_trigger_event::insert, ruvia::db_trigger_event::update},
+            .for_each_row_ = false,
+            .new_table_ = "new_rows",
+        });
+    }));
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_trigger({
+            .name_ = "bad_old_insert",
+            .table_ = "devices",
+            .function_ = "fn",
+            .timing_ = ruvia::db_trigger_timing::after,
+            .events_ = {ruvia::db_trigger_event::insert},
+            .for_each_row_ = false,
+            .old_table_ = "old_rows",
+        });
+    }));
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_trigger({
+            .name_ = "bad_same_name",
+            .table_ = "devices",
+            .function_ = "fn",
+            .timing_ = ruvia::db_trigger_timing::after,
+            .events_ = {ruvia::db_trigger_event::update},
+            .for_each_row_ = false,
+            .old_table_ = "rows",
+            .new_table_ = "rows",
+        });
+    }));
+    using invalid_read_only_entity = ruvia::db_entity<"invalid_ro",
+        ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.generated_ = true, .read_only_ = true}>>;
+    RUVIA_CHECK(throws_on([&] {
+        db_schema invalid({.driver_ = db_driver::postgresql});
+        invalid.create_table<invalid_read_only_entity>();
+    }));
+}
