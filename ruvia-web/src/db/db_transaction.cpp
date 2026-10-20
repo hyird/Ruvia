@@ -294,26 +294,46 @@ scoped_operation<bool> db_transaction::query_bool_prepared(std::string_view sql,
 
 task<void> db_transaction::query_void_task(
     std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
-    (void)co_await query_prepared(std::move(sql), std::move(params), std::move(pending));
+    operation_guard_type operation(std::move(pending));
+    operation.start();
+    auto& lease_value = operation.lease();
+    (void)co_await query_transaction_pool(
+        lease_value.client_, lease_value.slot_, std::move(sql), std::move(params), lease_value.resource_, lease_value.options_);
+    operation.finish_active();
 }
 
 task<void> db_transaction::execute_void_task(
     std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
-    (void)co_await execute_prepared(std::move(sql), std::move(params), std::move(pending));
+    operation_guard_type operation(std::move(pending));
+    operation.start();
+    auto& lease_value = operation.lease();
+    (void)co_await execute_transaction_pool(
+        lease_value.client_, lease_value.slot_, std::move(sql), std::move(params), lease_value.resource_, lease_value.options_);
+    operation.finish_active();
 }
 
 task<bool> db_transaction::query_bool_task(
     std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
-    const auto rows = co_await query_prepared(std::move(sql), std::move(params), std::move(pending));
+    operation_guard_type operation(std::move(pending));
+    operation.start();
+    auto& lease_value = operation.lease();
+    const auto rows = co_await query_transaction_pool(
+        lease_value.client_, lease_value.slot_, std::move(sql), std::move(params), lease_value.resource_, lease_value.options_);
     if (rows.size() != 1) {
         throw std::runtime_error("database boolean scalar query did not return one row");
     }
-    co_return rows.front()[std::size_t{0}].as<bool>().value();
+    const bool result = rows.front()[std::size_t{0}].as<bool>().value();
+    operation.finish_active();
+    co_return result;
 }
 
 task<std::uint32_t> db_transaction::query_oid_task(
     std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
-    const auto rows = co_await query_prepared(std::move(sql), std::move(params), std::move(pending));
+    operation_guard_type operation(std::move(pending));
+    operation.start();
+    auto& lease_value = operation.lease();
+    const auto rows = co_await query_transaction_pool(
+        lease_value.client_, lease_value.slot_, std::move(sql), std::move(params), lease_value.resource_, lease_value.options_);
     if (rows.size() != 1) {
         throw std::runtime_error("database OID query did not return one row");
     }
@@ -321,13 +341,18 @@ task<std::uint32_t> db_transaction::query_oid_task(
     if (val > (std::numeric_limits<std::uint32_t>::max)()) {
         throw std::out_of_range("PostgreSQL OID exceeds 32-bit range");
     }
+    operation.finish_active();
     co_return static_cast<std::uint32_t>(val);
 }
 
 task<std::pmr::string> db_transaction::query_text_task(
     std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    operation_guard_type operation(std::move(pending));
+    operation.start();
+    auto& lease_value = operation.lease();
     auto* resource = sql.get_allocator().resource();
-    const auto rows = co_await query_prepared(std::move(sql), std::move(params), std::move(pending));
+    const auto rows = co_await query_transaction_pool(
+        lease_value.client_, lease_value.slot_, std::move(sql), std::move(params), lease_value.resource_, lease_value.options_);
     if (rows.size() != 1) {
         throw std::runtime_error("database text query did not return one row");
     }
@@ -335,7 +360,9 @@ task<std::pmr::string> db_transaction::query_text_task(
     if (!view) {
         throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database large object text is NULL");
     }
-    co_return std::pmr::string(*view, resource);
+    std::pmr::string result(*view, resource);
+    operation.finish_active();
+    co_return result;
 }
 
 scoped_operation<void> db_transaction::notify(std::string_view channel, std::string_view payload) & {
