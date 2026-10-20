@@ -219,7 +219,7 @@ class db_query;
 namespace detail {
 class db_owned_expression final {
 public:
-    db_owned_expression() noexcept = default;
+    db_owned_expression() noexcept;
     db_owned_expression(db_query&& query, db_expression expression, std::string_view table = {}, bool aliased = false) noexcept;
     db_owned_expression(const db_owned_expression& other);
     db_owned_expression& operator=(const db_owned_expression& other);

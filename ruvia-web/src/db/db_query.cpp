@@ -224,6 +224,8 @@ using detail::no_db_node;
 
 namespace detail {
 
+db_owned_expression::db_owned_expression() noexcept = default;
+
 db_owned_expression::db_owned_expression(db_query&& query, db_expression expression, std::string_view table, bool aliased) noexcept
     : query_(std::make_unique<db_query>(std::move(query))),
       expression_(expression),
