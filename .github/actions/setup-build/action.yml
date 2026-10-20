@@ -8,6 +8,9 @@ inputs:
   toolchain-sha256:
     description: Official SHA256 for the resolved musl toolchain archive.
     required: true
+  vcpkg-commit:
+    description: Latest microsoft/vcpkg commit SHA resolved once for this workflow run.
+    required: true
   compiler-cache:
     description: Compiler cache namespace; empty for assembly-only jobs.
     default: ''
@@ -39,7 +42,7 @@ runs:
         echo "VCPKG_MAX_CONCURRENCY=$(nproc)" >> "$GITHUB_ENV"
 
     - name: Setup mise
-      uses: jdx/mise-action@v5.2.0
+      uses: jdx/mise-action@v5.2.1
       with:
         install: false
         cache: false
@@ -96,14 +99,18 @@ runs:
       uses: actions/cache/restore@v6.1.0
       with:
         path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
-        key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('vcpkg.json', 'CMakeLists.txt', '.github/actions/setup-build/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}
+        key: vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-${{ inputs.vcpkg-commit }}-${{ hashFiles('vcpkg.json', 'CMakeLists.txt', '.github/actions/setup-build/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}
         restore-keys: |
-          vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-${{ env.VCPKG_COMMIT }}-${{ hashFiles('.github/actions/setup-build/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}-
+          vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-${{ inputs.vcpkg-commit }}-${{ hashFiles('.github/actions/setup-build/action.yml', 'cmake/llvm.cmake', 'cmake/triplets/x64-linux-musl.cmake') }}-
+          vcpkg-binaries-${{ runner.os }}-${{ runner.arch }}-clang-musl-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}-
 
     - name: Bootstrap vcpkg
       shell: bash
+      env:
+        VCPKG_COMMIT: ${{ inputs.vcpkg-commit }}
       run: |
         set -euo pipefail
+        [[ "$VCPKG_COMMIT" =~ ^[[:xdigit:]]{40}$ ]]
         mkdir -p "$VCPKG_DEFAULT_BINARY_CACHE"
         git init "$VCPKG_ROOT"
         git -C "$VCPKG_ROOT" remote add origin https://github.com/microsoft/vcpkg.git
