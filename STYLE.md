@@ -3,7 +3,7 @@
 Mechanical rules for C++ in this repository. Architecture, layering, and
 performance contracts live in `AGENTS.md`; do not repeat them here.
 
-Format with clang-format 21 using the root `.clang-format` (`Standard: c++20`). Do not re-wrap to a
+Format with `clang-format` (managed by `mise`) using the root `.clang-format` (`Standard: c++20`). Do not re-wrap to a
 column limit: `ColumnLimit` stays 0.
 
 ```bash

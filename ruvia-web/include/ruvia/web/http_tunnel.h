@@ -41,13 +41,13 @@ public:
     scoped_operation<void> write(std::string_view) && = delete;
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type &&>)
+                 std::constructible_from<std::string_view, text_type&&>)
     [[nodiscard]] scoped_operation<void> write(text_type&& bytes_value) & {
         return write(std::string_view(std::forward<text_type>(bytes_value)));
     }
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type &&>)
+                    std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> write(text_type&&) && = delete;
     [[nodiscard]] scoped_operation<void> write(std::span<const std::byte> bytes) &;
     scoped_operation<void> write(std::span<const std::byte>) && = delete;

@@ -57,7 +57,7 @@ template <std::size_t n>
 class ruvia_path_list final {
 public:
     template <typename... paths_type>
-        requires(std::constructible_from<borrowed_text, paths_type &&> && ...)
+        requires(std::constructible_from<borrowed_text, paths_type&&> && ...)
     constexpr explicit ruvia_path_list(paths_type&&... paths) noexcept
         : paths_{borrowed_text(std::forward<paths_type>(paths)).view()...} {
         static_assert(sizeof...(paths_type) > 0, "RUVIA_ON requires at least one path");
@@ -65,8 +65,8 @@ public:
     }
 
     template <typename... paths_type>
-        requires((std::convertible_to<paths_type &&, std::string_view> && ...) &&
-                    (!std::constructible_from<borrowed_text, paths_type &&> || ...))
+        requires((std::convertible_to<paths_type&&, std::string_view> && ...) &&
+                    (!std::constructible_from<borrowed_text, paths_type&&> || ...))
     explicit ruvia_path_list(paths_type&&...) = delete;
 
     [[nodiscard]] constexpr const std::string_view* begin() const& noexcept {

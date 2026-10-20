@@ -36,10 +36,17 @@ jobs:
         uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - name: Install latest clang-format
+      - name: Setup mise
+        uses: jdx/mise-action@v5.2.1
+        with:
+          install: false
+          cache: false
+      - name: Install latest clang-format with mise
+        env:
+          MISE_GITHUB_TOKEN: ${{ github.token }}
         run: |
-          python3 -m pip install --user --upgrade clang-format
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          mise use --global uv@latest "pipx:clang-format@latest"
+          echo "$HOME/.local/share/mise/shims" >> "$GITHUB_PATH"
       - name: Check formatting
         run: |
           set -euo pipefail

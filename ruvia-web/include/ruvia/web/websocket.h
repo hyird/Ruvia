@@ -90,13 +90,13 @@ public:
 
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type &&>)
+                 std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> text(text_type&& payload_value, websocket_send_options options = {}) & {
         return text(std::string_view(std::forward<text_type>(payload_value)), options);
     }
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type &&>)
+                    std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> text(text_type&&, websocket_send_options = {}) && = delete;
 
     /// Zero-copy text frame: takes ownership of an already-allocated payload.
@@ -108,13 +108,13 @@ public:
 
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type &&>)
+                 std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> binary(text_type&& payload_value, websocket_send_options options = {}) & {
         return binary(std::string_view(std::forward<text_type>(payload_value)), options);
     }
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type &&>)
+                    std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> binary(text_type&&, websocket_send_options = {}) && = delete;
 
     /// Zero-copy binary frame.
@@ -126,13 +126,13 @@ public:
 
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type &&>)
+                 std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> pong(text_type&& payload_value) & {
         return pong(std::string_view(std::forward<text_type>(payload_value)));
     }
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type &&>)
+                    std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> pong(text_type&&) && = delete;
 
     /// Zero-copy pong frame.
@@ -144,13 +144,13 @@ public:
 
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type &&>)
+                 std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> ping(text_type&& payload_value) & {
         return ping(std::string_view(std::forward<text_type>(payload_value)));
     }
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type &&>)
+                    std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> ping(text_type&&) && = delete;
 
     /// Zero-copy ping frame.

@@ -85,13 +85,13 @@ public:
 
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type &&>)
+                 std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> write(text_type&& chunk) & {
         return write(std::string_view(std::forward<text_type>(chunk)));
     }
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type &&>)
+                    std::constructible_from<std::string_view, text_type&&>)
     scoped_operation<void> write(text_type&&) && = delete;
 
     /// Takes ownership of an already-allocated chunk and transfers it into the

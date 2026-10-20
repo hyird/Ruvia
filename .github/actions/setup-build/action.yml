@@ -32,13 +32,14 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Install host build utilities
+    - name: Ensure host parser generators for vcpkg source builds
       shell: bash
       run: |
         set -euo pipefail
-        sudo apt-get update
-        sudo apt-get install -y ninja-build python3 ccache binutils gdb upx-ucl clang lld \
-          make bison flex perl pkg-config autoconf automake libtool zip unzip curl xz-utils
+        if ! command -v bison >/dev/null || ! command -v flex >/dev/null; then
+          sudo apt-get update
+          sudo apt-get install -y bison flex
+        fi
         echo "VCPKG_MAX_CONCURRENCY=$(nproc)" >> "$GITHUB_ENV"
 
     - name: Setup mise
@@ -47,14 +48,17 @@ runs:
         install: false
         cache: false
 
-    - name: Restore native musl toolchain
+    - name: Restore mise tools and musl toolchain cache
       id: musl-toolchain
       uses: actions/cache@v6.1.0
       with:
         path: ~/.local/share/mise/installs
-        key: musl-toolchain-v2-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}
+        key: mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ inputs.toolchain-release }}-${{ inputs.toolchain-sha256 }}
+        restore-keys: |
+          mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-clang-cross-${{ inputs.toolchain-release }}-
+          mise-tools-v3-${{ runner.os }}-${{ runner.arch }}-
 
-    - name: Install resolved LLVM musl toolchain globally with mise
+    - name: Install build tools and LLVM musl toolchain globally with mise
       shell: bash
       env:
         TOOLCHAIN_RELEASE: ${{ inputs.toolchain-release }}
@@ -64,7 +68,13 @@ runs:
         set -euo pipefail
         [[ "$TOOLCHAIN_RELEASE" =~ ^[A-Za-z0-9._-]+$ ]]
         [[ "$TOOLCHAIN_SHA256" =~ ^[[:xdigit:]]{64}$ ]]
-        mise use --global "github:cross-tools/clang-cross[asset_pattern=x86_64-unknown-linux-musl.tar.xz,strip_components=0,bin_path=x86_64-unknown-linux-musl/bin,checksum=sha256:$TOOLCHAIN_SHA256]@$TOOLCHAIN_RELEASE"
+        mise use --global \
+          cmake@latest \
+          ninja@latest \
+          ccache@latest \
+          python@latest \
+          uv@latest \
+          "github:cross-tools/clang-cross[asset_pattern=x86_64-unknown-linux-musl.tar.xz,strip_components=0,bin_path=x86_64-unknown-linux-musl/bin,checksum=sha256:$TOOLCHAIN_SHA256]@$TOOLCHAIN_RELEASE"
         root="$(mise where github:cross-tools/clang-cross)/x86_64-unknown-linux-musl"
         {
           echo "RUVIA_MUSL_ROOT=$root"
@@ -73,11 +83,18 @@ runs:
           echo "CXX=$root/bin/x86_64-unknown-linux-musl-clang++"
           echo "CCACHE_EXTRAFILES=$root/bin/clang"
         } >> "$GITHUB_ENV"
-        echo "$root/bin" >> "$GITHUB_PATH"
+        {
+          echo "$HOME/.local/share/mise/shims"
+          echo "$root/bin"
+        } >> "$GITHUB_PATH"
 
     - name: Show toolchain and compiler cache configuration
       shell: bash
       run: |
+        cmake --version
+        ninja --version
+        python3 --version
+        uv --version
         "$CC" --version
         "$CXX" --version
         ld.lld --version

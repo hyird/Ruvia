@@ -178,8 +178,8 @@ private:
     std::string_view authorization) noexcept;
 
 template <typename authorization_type>
-    requires(std::convertible_to<authorization_type &&, std::string_view> &&
-                !std::constructible_from<borrowed_text, authorization_type &&>)
+    requires(std::convertible_to<authorization_type&&, std::string_view> &&
+                !std::constructible_from<borrowed_text, authorization_type&&>)
 std::optional<std::string_view> jwt_bearer_token(authorization_type&&) = delete;
 
 }  // namespace ruvia
