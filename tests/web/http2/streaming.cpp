@@ -48,9 +48,17 @@ class sleeping_stream_routes final {
     RUVIA_GET_STREAM("/http2-sleeping-stream", sleeping);
     RUVIA_POST_STREAM("/http2-count-upload", count_upload);
     RUVIA_GET_STREAM("/http2-quiet-sse", quiet_sse);
+    RUVIA_POST_SSE("/http2-post-sse", post_sse);
     RUVIA_ROUTES_END
 
     // Streams the request body and answers with the byte count.
+    // A buffered POST body is readable before the SSE response starts.
+    ruvia::task<void> post_sse(ruvia::context& context_value) {
+        const auto received = co_await context_value.req().text();
+        auto writer = context_value.stream_sse();
+        co_await writer.write({.data_ = received});
+    }
+
     ruvia::task<ruvia::http_response> count_upload(ruvia::context& context_value) {
         std::size_t bytes_value = 0;
         auto& reader_value = context_value.req().get_body_reader();
@@ -284,6 +292,17 @@ RUVIA_TEST(http2_response_stream_sleep_ends_when_the_peer_disconnects) {
     server.finish();
     // The peer going away is a normal end of the connection, not a fault.
     RUVIA_CHECK_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
+}
+
+RUVIA_TEST(http2_post_sse_reads_the_request_body_before_streaming) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    std::pmr::unsynchronized_pool_resource resource;
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    const auto wire = request_wire(&resource, "POST", "/http2-post-sse", "{\"id\":\"1\"}");
+    asio::write(client, asio::buffer(wire));
+    RUVIA_CHECK_EQ(read_first_data(client), std::string("data: {\"id\":\"1\"}\n\n"));
 }
 
 // A quiet SSE producer waits on the public opt-in token, not on a transport
