@@ -1,6 +1,9 @@
 #pragma once
 
+#include <optional>
+
 #include "ruvia/core/async.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
 
@@ -20,6 +23,26 @@ public:
 
     void wake() noexcept {
         signal_.notify();
+    }
+
+    // Only opt-in streaming consumers allocate a stop state. Other stream
+    // readers retain the existing worker-local wake/termination path.
+    [[nodiscard]] stop_token terminal_stop_token() {
+        if (!stop_source_) {
+            stop_source_.emplace();
+        }
+        if (stopped_ || terminated()) {
+            stop_source_->request_stop();
+        }
+        return stop_source_->token();
+    }
+
+    void stop() noexcept {
+        stopped_ = true;
+        if (stop_source_) {
+            stop_source_->request_stop();
+        }
+        wake();
     }
 
     [[nodiscard]] bool terminated() const noexcept {
@@ -44,6 +67,8 @@ public:
 private:
     worker_signal signal_;
     http2_sans_io_termination& termination_;
+    std::optional<stop_source> stop_source_;
+    bool stopped_{false};
 };
 
 }  // namespace ruvia::detail

@@ -50,9 +50,9 @@ private:
 
 }  // namespace
 
-task<void> close_http_connection_gracefully(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
+task<void> close_http_connection_gracefully(server_tls_stream& stream,
     connection_scanner& scanner, const worker_handle& worker_value) {
-    const tls_close_bounds bounds(stream.next_layer(), scanner, worker_value);
+    const tls_close_bounds bounds(stream.lowest_layer(), scanner, worker_value);
     if (!bounds.armed()) {
         co_return;
     }

@@ -84,7 +84,7 @@ struct http1_tunnel_upgrade_operation final {
         }
         tail_.record_access(dispatch_.options_.access_log_, head_response.status());
         if constexpr (requires { dispatch_.stream_.next_layer(); }) {
-            tls_output_.emplace(*dispatch_.stream_.native_handle(), dispatch_.stream_.next_layer(),
+            tls_output_.emplace(*dispatch_.stream_.native_handle(), dispatch_.stream_.lowest_layer(),
                 dispatch_.base_route_services_.worker(), *dispatch_.memory_.resource());
             tls_output_->start();
         }

@@ -204,7 +204,7 @@ void http2_sans_io_session_engine::terminate(std::error_code error) noexcept {
     socket_.cancel(ignored);
     stream_runtimes_.for_each([](http2_sans_io_stream_runtime& runtime) {
         if (auto* signal = runtime.signal()) {
-            signal->wake();
+            signal->stop();
         }
     });
     write_signal_.notify();
@@ -214,6 +214,9 @@ void http2_sans_io_session_engine::reset_stream_no_throw(
     std::uint32_t stream_id, http2_error_code error) noexcept {
     try {
         (void)connection_.submit_reset(stream_id, error);
+        if (auto* signal = stream_runtimes_.signal_for(stream_id)) {
+            signal->stop();
+        }
     } catch (...) {
         terminate(std::make_error_code(std::errc::not_enough_memory));
     }
@@ -855,7 +858,11 @@ void http2_sans_io_session_engine::on_stream_closed(const http2_stream_closed_ev
     auto* stream_runtime = stream_runtimes_.find(stream_id);
     auto* signal = stream_runtime != nullptr ? stream_runtime->signal() : nullptr;
     if (signal != nullptr) {
-        signal->wake();
+        if (connection_.stream_aborted(stream_id)) {
+            signal->stop();
+        } else {
+            signal->wake();
+        }
     } else {
         remove_stream_runtime(stream_id);
     }

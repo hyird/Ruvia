@@ -2,12 +2,11 @@
 
 #include <cstring>
 
-#include <asio/ip/tcp.hpp>
-#include <asio/ssl.hpp>
+#include "server/server_tls_stream.h"
 
 namespace ruvia::detail {
 
-inline bool is_http2_alpn_selected(asio::ssl::stream<asio::ip::tcp::socket&>& tls_stream) noexcept {
+inline bool is_http2_alpn_selected(server_tls_stream& tls_stream) noexcept {
     const unsigned char* selected = nullptr;
     unsigned int selected_length = 0;
     SSL_get0_alpn_selected(tls_stream.native_handle(), &selected, &selected_length);

@@ -82,6 +82,14 @@ public:
                stream_signal_.terminated();
     }
 
+    [[nodiscard]] stop_token cancel_on_peer_eof() {
+        auto token = stream_signal_.terminal_stop_token();
+        if (connection_.stream_aborted(stream_id_)) {
+            stream_signal_.stop();
+        }
+        return token;
+    }
+
     void bind_context(context* context_value) {
         interim_output_ = context_value != nullptr ? context_access::interim_output(*context_value) : nullptr;
         state_.bind_context(context_value);
@@ -161,8 +169,13 @@ public:
     }
 
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
-        co_return co_await http2_sans_io_sleep_awaiter(
+        const auto result = co_await http2_sans_io_sleep_awaiter(
             write_signal_.worker(), stream_signal_.termination(), duration, stop_token_value);
+        if (connection_.stream_aborted(stream_id_)) {
+            throw inbound_transport_error(
+                std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset during sleep");
+        }
+        co_return result;
     }
 
     task<void> end(std::span<const http_header_view> trailers) {

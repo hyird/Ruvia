@@ -17,6 +17,7 @@
 
 #include "http/streaming_access.h"
 #include "router/route_table.h"
+#include "server/inbound_transport_error.h"
 
 namespace ruvia {
 class context;  // only used as context* in a type-erased bind thunk; web supplies the definition
@@ -63,12 +64,18 @@ bool response_stream_committed_thunk(void* target) noexcept {
 }
 
 template <typename sink>
+stop_token response_stream_cancel_on_peer_eof_thunk(void* target) {
+    return static_cast<sink*>(target)->cancel_on_peer_eof();
+}
+
+template <typename sink>
 [[nodiscard]] response_stream_writer make_response_stream_writer(
     sink& sink_value, std::pmr::memory_resource& resource) noexcept {
     return streaming_access::make_response_stream_writer(resource, &sink_value, &response_stream_write_thunk<sink>,
         &response_stream_end_thunk<sink>, &response_stream_sleep_thunk<sink>,
         &response_stream_bind_context_thunk<sink>, &response_stream_release_context_thunk<sink>,
-        &response_stream_committed_thunk<sink>, &response_stream_aborted_thunk<sink>);
+        &response_stream_committed_thunk<sink>, &response_stream_aborted_thunk<sink>,
+        &response_stream_cancel_on_peer_eof_thunk<sink>);
 }
 
 class response_stream_completed final {
@@ -292,6 +299,15 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
             throw std::logic_error("buffered stream result followed a committed response head");
         }
         co_return response_stream_dispatch_result::make_route_response(std::move(*result_value));
+    } catch (const inbound_transport_error&) {
+        if (peer_aborted()) {
+            if (!sink_value.committed()) {
+                co_return response_stream_dispatch_result::make_peer_aborted_before_commit();
+            }
+            co_return response_stream_dispatch_result::make_peer_aborted_after_commit(
+                committed_response_stream_status(sink_value));
+        }
+        exception = std::current_exception();
     } catch (...) {
         exception = std::current_exception();
     }

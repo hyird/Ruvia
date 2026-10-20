@@ -62,9 +62,14 @@ public:
     }
     // Hands the pipelined suffix over and drops this reader's claim on it. The
     // connection read buffer is deliberately untouched: every view in the
-    // request being served still borrows it. `stash` receives bytes only when
-    // the suffix lives in this reader's own buffer.
-    [[nodiscard]] body_pipeline_handover take_pipeline(std::pmr::string& stash);
+    // request being served still borrows it. `stash` receives bytes when the
+    // suffix lives in this reader's own buffer or a later reader supplies
+    // `additional_pipeline`; those later bytes follow both existing sources.
+    [[nodiscard]] body_pipeline_handover take_pipeline(
+        std::pmr::string& stash, std::string_view additional_pipeline = {});
+    [[nodiscard]] std::size_t pipeline_size() const noexcept {
+        return initial_pipeline_remainder().size() + buffered_pipeline_remainder().size();
+    }
 
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read();
     task<std::string_view> read_all(std::pmr::string& body);

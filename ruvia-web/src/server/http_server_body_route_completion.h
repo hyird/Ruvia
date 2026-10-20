@@ -49,8 +49,9 @@ struct http_lazy_buffered_body_route_state final {
         return body_->loader().consumption();
     }
 
-    [[nodiscard]] body_pipeline_handover take_pipeline(std::pmr::string& stash) {
-        return body_->loader().take_pipeline(stash);
+    [[nodiscard]] body_pipeline_handover take_pipeline(
+        std::pmr::string& stash, std::string_view additional_pipeline = {}) {
+        return body_->loader().take_pipeline(stash, additional_pipeline);
     }
 };
 

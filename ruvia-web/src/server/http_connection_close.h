@@ -4,12 +4,12 @@
 #include <system_error>
 
 #include <asio/ip/tcp.hpp>
-#include <asio/ssl/stream.hpp>
 
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 
 #include "server/connection_scanner.h"
+#include "server/server_tls_stream.h"
 
 namespace ruvia::detail {
 
@@ -44,7 +44,7 @@ inline void close_plain_http_connection(asio::ip::tcp::socket& socket, bool send
 // scanner bound the attempt. The caller closes TCP after completion and must
 // not start this operation once the worker is stopping.
 // The returned task borrows the stream, scanner and worker until completion.
-[[nodiscard]] task<void> close_http_connection_gracefully(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
+[[nodiscard]] task<void> close_http_connection_gracefully(server_tls_stream& stream,
     connection_scanner& scanner, const worker_handle& worker_value);
 
 }  // namespace ruvia::detail

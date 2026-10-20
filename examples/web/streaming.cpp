@@ -84,8 +84,10 @@ private:
 
     ruvia::task<void> events_value(ruvia::context& c) {
         auto events_value = c.stream_sse();
+        // 显式接受 HTTP/1 写半关闭也结束 SSE；把同一 token 传给业务订阅等待。
+        const auto stop = events_value.cancel_on_peer_eof();
         co_await events_value.write({.data_ = "connected", .event_ = "open", .id_ = "1"});
-        if (co_await events_value.sleep(std::chrono::milliseconds(20)) ==
+        if (co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(20), stop) ==
             ruvia::timer_sleep_result::stop_requested) {
             co_return;
         }

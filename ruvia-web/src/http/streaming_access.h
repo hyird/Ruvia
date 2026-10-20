@@ -17,6 +17,7 @@ struct streaming_access final {
     using stream_release_context_type = response_stream_writer::release_context_type;
     using stream_committed_type = response_stream_writer::committed_type;
     using stream_aborted_type = response_stream_writer::aborted_type;
+    using stream_cancel_on_peer_eof_type = response_stream_writer::cancel_on_peer_eof_type;
 
     [[nodiscard]] static body_reader make_body_reader(void* target, body_read_type read) noexcept {
         return body_reader(body_reader::token_type{}, target, read);
@@ -25,9 +26,9 @@ struct streaming_access final {
     [[nodiscard]] static response_stream_writer make_response_stream_writer(std::pmr::memory_resource& resource, void* target,
         stream_write_type write, stream_end_type end, stream_sleep_type sleep, stream_bind_context_type bind_context,
         stream_release_context_type release_context, stream_committed_type committed,
-        stream_aborted_type aborted) noexcept {
+        stream_aborted_type aborted, stream_cancel_on_peer_eof_type cancel_on_peer_eof) noexcept {
         return response_stream_writer(
-            resource, target, write, end, sleep, bind_context, release_context, committed, aborted);
+            resource, target, write, end, sleep, bind_context, release_context, committed, aborted, cancel_on_peer_eof);
     }
 
     // The token is supplied by the caller rather than read from `context`:

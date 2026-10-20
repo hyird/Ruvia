@@ -10,6 +10,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
+#include "server/server_tls_stream.h"
 #include "server/web_worker_runtime.h"
 
 // The two pieces the TLS half of a session needs: how a server-side handshake
@@ -50,7 +51,7 @@ inline void extract_tls_client_certificate(SSL* ssl, std::pmr::string& out) {
 }
 
 struct tls_server_handshake_initiator final {
-    asio::ssl::stream<tcp_socket_type&>* stream_;
+    server_tls_stream* stream_;
 
     template <typename handler_type>
     void operator()(handler_type handler) const {

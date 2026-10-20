@@ -260,7 +260,7 @@ void websocket_connection<stream_type>::close_stream() noexcept {
     if constexpr (!native_stream) {
         stream_.abort();
     } else if constexpr (requires(stream_type& value) { value.next_layer(); }) {
-        ruvia::close_socket(stream_.next_layer());
+        ruvia::close_socket(stream_.lowest_layer());
     } else {
         ruvia::close_socket(stream_);
     }

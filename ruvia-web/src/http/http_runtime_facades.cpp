@@ -207,6 +207,12 @@ scoped_operation<timer_sleep_result> response_stream_writer::sleep(
     return ::ruvia::make_scoped_operation(operation_scope_, sleep_(target_, duration, stop_token_));
 }
 
+stop_token response_stream_writer::cancel_on_peer_eof() & {
+    require_active();
+    stop_token_ = combine_stop_tokens(stop_token_, cancel_on_peer_eof_(target_));
+    return stop_token_;
+}
+
 scoped_operation<void> response_stream_writer::end(std::span<const http_header_view> trailers) & {
     require_active();
     auto owned_trailers_value = owned_trailers(trailers, resource_);
@@ -216,6 +222,10 @@ scoped_operation<void> response_stream_writer::end(std::span<const http_header_v
 
 scoped_operation<timer_sleep_result> sse_writer::sleep(std::chrono::milliseconds duration) {
     return writer().sleep(duration);
+}
+
+stop_token sse_writer::cancel_on_peer_eof() {
+    return writer().cancel_on_peer_eof();
 }
 
 scoped_operation<void> sse_writer::end(std::span<const http_header_view> trailers) {

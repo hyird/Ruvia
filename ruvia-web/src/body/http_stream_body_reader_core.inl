@@ -60,21 +60,22 @@ http1_request_body_consumption stream_body_reader<stream_type>::consumption() co
 }
 
 template <typename stream_type>
-body_pipeline_handover stream_body_reader<stream_type>::take_pipeline(std::pmr::string& stash) {
-    // The reader fills its own buffer only after the borrowed initial segment
-    // is exhausted as body (or materialized into that buffer), so the suffix
-    // is either the tail of the connection read buffer or entirely over-read
-    // bytes. Only the latter must outlive this reader.
+body_pipeline_handover stream_body_reader<stream_type>::take_pipeline(
+    std::pmr::string& stash, std::string_view additional_pipeline) {
+    // The body reader's suffix is either the tail of the connection read
+    // buffer or its own over-read. A passive reader can add a later suffix:
+    // in that case all three sources must outlive their readers, in order.
     const auto initial_pipeline = initial_pipeline_remainder();
     const auto buffered_pipeline = buffered_pipeline_remainder();
     body_pipeline_handover handover;
-    if (buffered_pipeline.empty()) {
+    if (buffered_pipeline.empty() && additional_pipeline.empty()) {
         handover.read_buffer_suffix_bytes_ = initial_pipeline.size();
     } else {
         stash.clear();
-        stash.reserve(initial_pipeline.size() + buffered_pipeline.size());
+        stash.reserve(initial_pipeline.size() + buffered_pipeline.size() + additional_pipeline.size());
         stash.append(initial_pipeline);
         stash.append(buffered_pipeline);
+        stash.append(additional_pipeline);
         handover.stashed_ = stash;
     }
     reset_pipeline_state();

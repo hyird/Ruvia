@@ -259,9 +259,9 @@ public:
     // observe this token; CPU work and raw Asio waits without it are not preempted.
     // Connection phase timeouts close the socket independently.
     //
-    // HTTP/1 cannot observe a peer FIN while a handler is suspended without a
-    // concurrent transport read, so this is not a promise of immediate
-    // client-disconnect detection.
+    // HTTP/1 默认不会在 handler 挂起时检测 peer FIN。长驻 SSE 可显式调用
+    // sse_writer::cancel_on_peer_eof()，并把其返回的组合 token 传给业务等待；
+    // 此处返回的原 token 不变。该选项将合法写半关闭也视作放弃响应。
     //
     [[nodiscard]] stop_token get_stop_token() const noexcept {
         return capabilities_.stop_token();

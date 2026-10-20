@@ -165,6 +165,8 @@ if(RUVIA_BUILD_WEB)
     # observe no peer reset.
     ruvia_add_web_standalone_test(ruvia_peer_reset_tests 60
         web/http1/peer_reset.cpp)
+    ruvia_add_web_standalone_test(ruvia_stream_disconnect_tests 120
+        web/http1/stream_disconnect.cpp)
     # Owns an application with a document root shadowing a guarded route.
     ruvia_add_web_standalone_test(ruvia_document_root_tests 60
         web/http/document_root.cpp)

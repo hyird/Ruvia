@@ -3,6 +3,7 @@
 #include <array>
 #include <chrono>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -30,6 +31,7 @@
 #include "context/http_interim_response_output.h"
 #include "http/http_cors.h"
 #include "server/connection_scanner.h"
+#include "server/http1_peer_eof_monitor.h"
 #include "server/http_response_stream_state.h"
 #include "server/http_response_writer.h"
 #include "server/http_streaming_response_compression.h"
@@ -56,7 +58,8 @@ public:
         const worker_handle& worker_value, const http_request& request, const cors_options* cors,
         http_response_stream_kind kind, http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
         const lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
-        http_response_coding_availability response_coding_availability) noexcept
+        http_response_coding_availability response_coding_availability,
+        std::pmr::memory_resource* inbound_resource = nullptr) noexcept
         : stream_(stream),
           head_(head),
           trailers_(memory.resource()),
@@ -69,13 +72,14 @@ public:
           consumed_plan_(consumed_plan),
           request_body_(request_body),
           connection_plan_(plan.request_connection_plan().require_close()),
-          compression_(memory.resource(), codecs, response_coding, response_coding_availability) {}
+          compression_(memory.resource(), codecs, response_coding, response_coding_availability),
+          inbound_resource_(inbound_resource != nullptr ? inbound_resource : memory.resource()) {}
 
     response_stream_sink(stream_type&, worker_memory&, worker_codecs&, http_response_head_buffer&,
         connection_scanner::entry_type&, worker_handle&&, const http_request&, const cors_options*,
         http_response_stream_kind, http1_response_stream_plan, http1_response_stream_plan,
         const lazy_buffered_body<stream_type>&, http_response_coding_selection,
-        http_response_coding_availability) = delete;
+        http_response_coding_availability, std::pmr::memory_resource* = nullptr) = delete;
 
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
@@ -87,11 +91,53 @@ public:
     const http_response_stream_commit_plan* commit_plan() const&& = delete;
 
     [[nodiscard]] bool aborted() const noexcept {
-        return state_.aborted();
+        return state_.aborted() || peer_aborted();
     }
 
     [[nodiscard]] http1_request_connection_plan connection_plan() const noexcept {
         return connection_plan_;
+    }
+
+    [[nodiscard]] stop_token cancel_on_peer_eof() {
+        if (!worker_.is_current()) {
+            throw std::logic_error("peer EOF monitoring must start on the connection worker");
+        }
+        if (peer_monitor_) {
+            return peer_monitor_->token();
+        }
+        if (state_.ended() || state_.aborted()) {
+            throw std::logic_error("peer EOF monitoring cannot start on a finished response stream");
+        }
+        if (request_body_.consumption() != http1_request_body_consumption::complete) {
+            throw std::logic_error("peer EOF monitoring requires a fully consumed request body");
+        }
+        peer_monitor_.emplace(stream_, worker_, inbound_resource_, request_body_.pipeline_size());
+        try {
+            peer_monitor_->start();
+        } catch (...) {
+            peer_monitor_.reset();
+            throw;
+        }
+        return peer_monitor_->token();
+    }
+
+    [[nodiscard]] bool peer_aborted() const noexcept {
+        return peer_monitor_ && peer_monitor_->peer_aborted();
+    }
+
+    [[nodiscard]] bool peer_eof_monitoring() const noexcept {
+        return peer_monitor_.has_value();
+    }
+
+    task<void> finish_peer_monitor() {
+        if (peer_monitor_) {
+            peer_monitor_->cancel();
+            co_await peer_monitor_->join();
+        }
+    }
+
+    [[nodiscard]] std::string_view monitored_pipeline() const noexcept {
+        return peer_monitor_ ? peer_monitor_->pipeline() : std::string_view{};
     }
 
     template <typename sink>
@@ -107,6 +153,19 @@ public:
     friend void response_stream_release_context_thunk(void*) noexcept;
 
 private:
+    void ensure_peer_writable() const {
+        if (peer_monitor_) {
+            peer_monitor_->ensure_writable();
+        }
+    }
+
+    void mark_write_failure(const std::error_code& error) noexcept {
+        if (peer_monitor_) {
+            peer_monitor_->write_failed(error);
+        }
+        state_.mark_aborted();
+    }
+
     void bind_context(context* context_value) {
         interim_output_ = context_value != nullptr ? context_access::interim_output(*context_value) : nullptr;
         state_.bind_context(context_value);
@@ -121,11 +180,13 @@ private:
     template <typename buffers_type>
     [[nodiscard]] auto write_to_stream(const buffers_type& buffers) {
         return ruvia::async_asio([this, &buffers](auto handler) mutable {
+            ensure_peer_writable();
             asio::async_write(stream_, buffers, http_write_progress(scanner_entry_), std::move(handler));
         });
     }
 
     task<void> commit(http_response_trailer_intent trailer_intent) {
+        ensure_peer_writable();
         if (state_.committed()) {
             if (trailer_intent == http_response_trailer_intent::present) {
                 state_.ensure_trailers_allowed();
@@ -135,6 +196,7 @@ private:
 
         try {
             auto response = co_await context_access::commit_streaming_head(state_.bound_context());
+            ensure_peer_writable();
             // The same final-representation order as a buffered response: the
             // application CORS policy first, then content coding.
             if (cors_ != nullptr) {
@@ -183,7 +245,7 @@ private:
             ec = completion.error_code();
         }
         if (ec) {
-            state_.mark_aborted();
+            mark_write_failure(ec);
             throw inbound_transport_error(ec, "failed to write HTTP response stream head");
         }
     }
@@ -193,6 +255,7 @@ private:
     }
 
     task<void> write(std::string_view chunk) {
+        ensure_peer_writable();
         if (chunk.empty()) {
             co_return;
         }
@@ -200,6 +263,7 @@ private:
         if (!state_.committed()) {
             co_await commit(http_response_trailer_intent::none);
         }
+        ensure_peer_writable();
         if (state_.body_suppressed_complete()) {
             // ensure_body_allowed() is about to throw response_stream_head_only_complete
             // synchronously for an already body-suppressed head. Suspend once so a
@@ -209,6 +273,7 @@ private:
             // positive delay is required because a zero duration is await_ready.
             static_cast<void>(co_await sleep_for(worker_, std::chrono::steady_clock::duration(1)));
         }
+        ensure_peer_writable();
         state_.ensure_body_allowed();
 
         if (compression_.active()) {
@@ -244,7 +309,7 @@ private:
                 raw_ec = completion.error_code();
             }
             if (raw_ec) {
-                state_.mark_aborted();
+                mark_write_failure(raw_ec);
                 throw inbound_transport_error(raw_ec, "failed to write HTTP response stream body");
             }
             co_return;
@@ -261,12 +326,13 @@ private:
             write_ec = completion.error_code();
         }
         if (write_ec) {
-            state_.mark_aborted();
+            mark_write_failure(write_ec);
             throw inbound_transport_error(write_ec, "failed to write HTTP response stream body");
         }
     }
 
     task<void> end(std::span<const http_header_view> trailers) {
+        ensure_peer_writable();
         if (state_.ended()) {
             if (!trailers.empty()) {
                 throw std::logic_error("response stream is already ended");
@@ -284,6 +350,7 @@ private:
         }
 
         co_await commit(trailer_intent);
+        ensure_peer_writable();
         if (state_.ended()) {
             co_return;
         }
@@ -296,6 +363,7 @@ private:
             }
             co_await write_encoded(compression_.output());
         }
+        ensure_peer_writable();
         if (plan_.framing() == http_response_stream_framing::http1_close_delimited) {
             // No last-chunk terminator: the connection close delimits the body.
             state_.mark_ended();
@@ -314,7 +382,7 @@ private:
             ec = completion.error_code();
         }
         if (ec) {
-            state_.mark_aborted();
+            mark_write_failure(ec);
             throw inbound_transport_error(ec, "failed to write HTTP response stream end");
         }
         state_.mark_ended();
@@ -337,6 +405,8 @@ private:
     http_streaming_response_compression compression_;
     response_stream_state state_;
     http_interim_response_output* interim_output_{};
+    std::pmr::memory_resource* inbound_resource_;
+    std::optional<http1_peer_eof_monitor<stream_type>> peer_monitor_;
 };
 
 }  // namespace ruvia::detail

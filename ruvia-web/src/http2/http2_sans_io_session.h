@@ -3,7 +3,6 @@
 #include <string_view>
 
 #include <asio/ip/tcp.hpp>
-#include <asio/ssl/stream.hpp>
 
 #include "ruvia/core/task.h"
 
@@ -26,7 +25,7 @@ class route_table;
     const route_table& routes_value, worker_memory& worker_value, http2_sans_io_session_context session_value,
     std::string_view initial_bytes = {});
 
-[[nodiscard]] task<http_connection_close> run_http2_sans_io_session(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
+[[nodiscard]] task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream,
     const route_table& routes_value, worker_memory& worker_value, http2_sans_io_session_context session_value,
     std::string_view initial_bytes = {});
 

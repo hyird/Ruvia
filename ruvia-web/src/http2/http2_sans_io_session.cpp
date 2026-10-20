@@ -170,11 +170,11 @@ task<http_connection_close> run_http2_sans_io_session(asio::ip::tcp::socket& str
         stream, stream, routes_value, worker_value, std::move(session_value), initial_bytes);
 }
 
-task<http_connection_close> run_http2_sans_io_session(asio::ssl::stream<asio::ip::tcp::socket&>& stream,
+task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream,
     const route_table& routes_value, worker_memory& worker_value, http2_sans_io_session_context session_value,
     std::string_view initial_bytes) {
     return run_http2_sans_io_session_impl(
-        stream, stream.next_layer(), routes_value, worker_value, std::move(session_value), initial_bytes);
+        stream, stream.lowest_layer(), routes_value, worker_value, std::move(session_value), initial_bytes);
 }
 
 }  // namespace ruvia::detail

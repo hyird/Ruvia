@@ -406,7 +406,7 @@ task<void> worker_connections::run_tls_session(
         if (!http_server_worker_running(state_)) {
             co_return;
         }
-        asio::ssl::stream<tcp_socket_type&> tls_stream(socket, *listener_value.tls_context_);
+        server_tls_stream tls_stream(socket, *listener_value.tls_context_);
         {
             // The TLS handshake has its own initial-read deadline. It must be
             // released the moment the handshake resolves and before the

@@ -56,8 +56,9 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 | `scoped_operation<void> write(std::string_view chunk) &` | 写入一段字符串视图 |
 | `scoped_operation<void> write(std::pmr::string&& chunk) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
 | `scoped_operation<void> writeln(std::string_view chunk) &` | 写入文本并追加 `\n` |
-| `scoped_operation<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 在当前流上挂起等待指定时长（若对端断开或服务停机则提前返回 `stop_requested`） |
+| `scoped_operation<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 等待指定时长；请求取消或停机返回 `stop_requested`。HTTP/1 默认不主动检测断开；HTTP/2 流终止抛入站传输异常 |
 | `bool aborted() const noexcept` | 检查客户端连接或流是否已中止 |
+| `stop_token cancel_on_peer_eof() &` | 显式启用读侧终止取消，返回供业务等待使用的组合 token，语义见下文 |
 | `scoped_operation<void> end(std::span<const http_header_view> trailers = {}) &` | 正常结束流式响应，可选附带响应 Trailer 字段 |
 
 ---
@@ -86,7 +87,49 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 | `scoped_operation<void> write(const sse_message& message)` | 格式化并发送一条 SSE 事件（自动处理多行 `data:` 切分与 UTF-8 校验） |
 | `scoped_operation<timer_sleep_result> sleep(std::chrono::milliseconds duration)` | 挂起等待指定时长 |
 | `bool aborted() const noexcept` | 检查客户端是否已断开 |
+| `stop_token cancel_on_peer_eof()` | 与 `response_stream_writer` 同名方法相同 |
 | `scoped_operation<void> end(std::span<const http_header_view> trailers = {})` | 结束 SSE 流 |
+
+#### 空闲 SSE 的断连取消
+
+普通 HTTP/1 响应和 SSE **默认不改变 TCP 半关闭语义**。[RFC 9112 §9.6](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6) 明确指出：客户端的 TCP 半关闭既不界定请求消息的结束，也不表示客户端不再关心响应。业务选择 `cancel_on_peer_eof()` 后，明确接受将读侧 EOF 视为放弃当前响应；这适用于不使用写半关闭的 SSE 客户端，不适用于发送完请求后 `shutdown(SHUT_WR)`、仍要完整读取响应的客户端。
+
+- HTTP/1 明文和 TLS 均使用连接所属事件循环上的异步 transport read。没有探测写入、心跳依赖或 socket 状态轮询。
+- 请求体必须已完整消费。没有请求体的 GET 可立即启用；带请求体时先 `co_await c.req().text()` 等完整读取，再启用。提前返回响应而未读完请求体时，调用抛出 `std::logic_error`；不自动排空、不抢占请求体读取。响应头提交后才读完请求体的情况仍遵守原先确定的关闭计划，不因此恢复连接复用。
+- HTTP/1 流已结束或中止后不能首次启用；有效启用后重复调用幂等。
+- 读到后续请求字节时保留原字节与顺序，不将“可读”误判为断开。预读达到既有请求头大小上限时暂停检测，直到当前响应结束；不支持在任意长度的待处理 pipeline 后仍保证即时发现 EOF，也不为此无限缓冲。
+- EOF、TLS `close_notify`、异常 TCP 断开及超时关闭触发当前流的取消。正常结束与异常退出都先取消并等待检测结束，再释放连接资源。HTTP/2 不新增读操作，返回的 token 观察对应 stream 的终止，不取消同连接其他 stream。
+- HTTP/2 请求方向正常的 `END_STREAM` 不取消响应；`RST_STREAM` 或使该流终止的连接关闭才取消。`GOAWAY` 仍遵循原有排空规则。
+- 网络黑洞、客户端断电等没有 FIN/RST 到达的情况不能保证即时识别，仍由既有超时策略处理。本 API 不新增保活探测。
+- 返回值合并当前请求的原取消信号，`sse.sleep()` / `stream.sleep()` 也使用它；`c.get_stop_token()` 和此前取得的 token 不变。数据库、Redis、HTTP client 及自定义订阅继续使用各自已有的显式 token 参数，无第二套取消协议。
+- 取消是协作式的。必须将返回 token 传给正在等待的操作，并在取消后返回、释放订阅；不会抢占 CPU 循环或无取消支持的等待。
+
+FlexEdge 的最小接入是：取得 SSE writer 后启用选项，将返回 token 传给订阅的异步接收。下面以公开的 `channel_receiver` 表示订阅接收端，不假定 FlexEdge 私有 API 名称：
+
+```cpp
+#include <string>
+#include "ruvia/core/channel.h"
+#include "ruvia/web/context.h"
+#include "ruvia/web/streaming.h"
+
+ruvia::task<void> stream_subscription(
+    ruvia::context& c,
+    ruvia::channel_receiver<std::string>& subscription,
+    std::string_view initial_snapshot) {
+    auto sse = c.stream_sse();
+    const auto stop = sse.cancel_on_peer_eof();
+    co_await sse.write({.data_ = initial_snapshot, .event_ = "snapshot"});
+    while (!stop.stop_requested()) {
+        auto message = co_await subscription.receive(stop);
+        if (!message.has_value()) {
+            co_return;  // cancelled、closed 或 worker_stopping
+        }
+        co_await sse.write({.data_ = message.value(), .event_ = "update"});
+    }
+}
+```
+
+在 handler 中持有订阅的 RAII owner 并 `co_await stream_subscription(...)`；返回后销毁订阅。若已有额外取消源，使用 `combine_stop_tokens(stop, extra_stop)` 后传给同一个等待。不要调用 Worker 的停止入口来取消单个 SSE。可运行的基本用法见 [streaming.cpp](../examples/web/streaming.cpp)。
 
 ---
 
