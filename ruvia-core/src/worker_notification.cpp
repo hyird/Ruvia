@@ -28,19 +28,26 @@ void* worker_notification_wait_resource::do_allocate(std::size_t bytes_value, st
     if (allocated_ || bytes_value > buffer_size || alignment > max_alignment) {
         throw std::bad_alloc();
     }
+    void* pointer = buffer_storage_.data();
+    std::size_t space = buffer_storage_.size();
+    if (std::align(alignment, bytes_value, pointer, space) == nullptr) {
+        throw std::bad_alloc();
+    }
     allocated_ = true;
+    allocated_pointer_ = pointer;
     allocated_bytes_ = bytes_value;
     allocated_alignment_ = alignment;
-    return buffer_storage_.data();
+    return pointer;
 }
 
 void worker_notification_wait_resource::do_deallocate(
     void* pointer, std::size_t bytes_value, std::size_t alignment) noexcept {
-    if (!allocated_ || pointer != buffer_storage_.data() || bytes_value != allocated_bytes_ ||
+    if (!allocated_ || pointer != allocated_pointer_ || bytes_value != allocated_bytes_ ||
         alignment != allocated_alignment_) {
         std::terminate();
     }
     allocated_ = false;
+    allocated_pointer_ = nullptr;
     allocated_bytes_ = 0;
     allocated_alignment_ = 0;
 }

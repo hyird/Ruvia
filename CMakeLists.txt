@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.28)
 
+if(POLICY CMP0167)
+    cmake_policy(SET CMP0167 NEW)
+endif()
+
 option(RUVIA_BUILD_CORE "Build ruvia-core" ON)
 option(RUVIA_BUILD_HTTP "Build ruvia-http" ON)
 option(RUVIA_BUILD_WEB "Build ruvia-web" ON)
@@ -51,7 +55,7 @@ string(JSON _ruvia_version GET "${_ruvia_manifest}" version-string)
 set(CMAKE_MSVC_RUNTIME_LIBRARY
     "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-project(ruvia VERSION ${_ruvia_version} LANGUAGES CXX)
+project(ruvia VERSION ${_ruvia_version} LANGUAGES C CXX)
 
 if(WIN32 AND NOT MSVC)
     message(FATAL_ERROR "Ruvia Windows builds require MSVC")
@@ -60,6 +64,8 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+include(cmake/release.cmake)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_link_options(-static-libgcc -static-libstdc++)
 endif()
@@ -105,8 +111,16 @@ if(RUVIA_BUILD_WEB)
         # vcpkg's static libpq splits frontend symbols between the cyclic
         # pgcommon/pgport pair, which GNU linkers must rescan.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            set(_ruvia_pgcommon_debug "${PostgreSQL_pgcommon_LIBRARY_DEBUG}")
+            if(NOT _ruvia_pgcommon_debug)
+                set(_ruvia_pgcommon_debug "${PostgreSQL_pgcommon_LIBRARY_RELEASE}")
+            endif()
+            set(_ruvia_pgport_debug "${PostgreSQL_pgport_LIBRARY_DEBUG}")
+            if(NOT _ruvia_pgport_debug)
+                set(_ruvia_pgport_debug "${PostgreSQL_pgport_LIBRARY_RELEASE}")
+            endif()
             list(APPEND RUVIA_WEB_DEPENDENCIES
-                "$<LINK_GROUP:RESCAN,$<$<CONFIG:Debug>:${PostgreSQL_pgcommon_LIBRARY_DEBUG}>$<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgcommon_LIBRARY_RELEASE}>,$<$<CONFIG:Debug>:${PostgreSQL_pgport_LIBRARY_DEBUG}>$<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgport_LIBRARY_RELEASE}>>")
+                "$<LINK_GROUP:RESCAN,$<$<CONFIG:Debug>:${_ruvia_pgcommon_debug}>$<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgcommon_LIBRARY_RELEASE}>,$<$<CONFIG:Debug>:${_ruvia_pgport_debug}>$<$<NOT:$<CONFIG:Debug>>:${PostgreSQL_pgport_LIBRARY_RELEASE}>>")
         endif()
     endif()
     if(RUVIA_ENABLE_REDIS)

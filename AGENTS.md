@@ -111,7 +111,7 @@
 | 单元测试边界 | 只经非 `detail` 公开 API 验证行为、边界、状态转换、优先级与错误语义；保持确定性、隔离性和全套运行安全，不测试内部实现、源码文本、安装、API guard、错误措辞或单纯转发 |
 | 缺陷与生命周期 | 缺陷先复现再确认修复，可确定性复现的公开 API 缺陷补充功能回归；生命周期改动覆盖成功、异常、取消和内存回收。不新增长期 integration、conformance、benchmark 或 probe，临时验证完成即清理 |
 | 格式与行尾 | 源文件使用 LF（见 `.gitattributes`）；改动的 C++ 源码用 `clang-format 21` 格式化并检查（`--dry-run --Werror`） |
-| CI 门槛 | Linux（GCC 13）与 Windows（MSVC、`x64-windows-static`）均以 `-DCMAKE_COMPILE_WARNING_AS_ERROR=ON`、全功能配置构建并通过全部测试与格式检查；本地不重复搭建另一平台，如实区分已通过、失败、未运行和待 CI 验证 |
+| CI 门槛 | Linux Musl（`x64-linux-musl`、`clang-cross` 经 `mise` 管理 + `ccache`）以 `Release`、`-DCMAKE_COMPILE_WARNING_AS_ERROR=ON`、全功能配置构建并通过全部测试与 `clang-format 21` 检查，完成后自动清理旧运行记录；如实区分已通过、失败、未运行和待 CI 验证 |
 | 纯文档与性能 | 纯文档本地只做文档校验，不主动运行代码构建和测试；性能测试只在专用主机运行，结论必须可复核 |
 
 - 示例和测试按 target、协议层级归档，`core` 单测平铺；`build/`、依赖缓存及本地工具目录保持 ignored，不修改父项目配置。
