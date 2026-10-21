@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_request.h"
@@ -145,6 +146,10 @@ public:
         return coding_policy_;
     }
 
+    [[nodiscard]] operation_scope_io_metrics& io_metrics() const noexcept {
+        return io_metrics_;
+    }
+
     // A generated terminal response must not inherit the negotiated coding
     // promise (and must not be transformed again).
     void disable_response_coding() noexcept {
@@ -178,6 +183,7 @@ private:
     http_response_coding_policy coding_policy_;
     std::string_view client_address_;
     std::chrono::steady_clock::time_point start_;
+    mutable operation_scope_io_metrics io_metrics_{};
 };
 
 enum class http_request_endpoint : std::uint8_t {
@@ -234,14 +240,74 @@ public:
         return tail_;
     }
 
+    http_request_admission(const http_request_admission& other) noexcept
+        : tail_(other.tail_),
+          services_(other.services_.with_io_metrics(
+              other.services_.io_metrics() == &other.tail_.io_metrics()
+                  ? &tail_.io_metrics()
+                  : other.services_.io_metrics())),
+          rejection_(other.rejection_),
+          resolved_(other.resolved_),
+          body_limit_(other.body_limit_),
+          coding_availability_(other.coding_availability_),
+          endpoint_(other.endpoint_),
+          udp_tunnel_(other.udp_tunnel_) {}
+
+    http_request_admission& operator=(const http_request_admission& other) noexcept {
+        if (this != &other) {
+            tail_ = other.tail_;
+            services_ = other.services_.with_io_metrics(
+                other.services_.io_metrics() == &other.tail_.io_metrics()
+                    ? &tail_.io_metrics()
+                    : other.services_.io_metrics());
+            rejection_ = other.rejection_;
+            resolved_ = other.resolved_;
+            body_limit_ = other.body_limit_;
+            coding_availability_ = other.coding_availability_;
+            endpoint_ = other.endpoint_;
+            udp_tunnel_ = other.udp_tunnel_;
+        }
+        return *this;
+    }
+
+    http_request_admission(http_request_admission&& other) noexcept
+        : tail_(std::move(other.tail_)),
+          services_(other.services_.with_io_metrics(
+              other.services_.io_metrics() == &other.tail_.io_metrics()
+                  ? &tail_.io_metrics()
+                  : other.services_.io_metrics())),
+          rejection_(std::move(other.rejection_)),
+          resolved_(other.resolved_),
+          body_limit_(other.body_limit_),
+          coding_availability_(other.coding_availability_),
+          endpoint_(other.endpoint_),
+          udp_tunnel_(other.udp_tunnel_) {}
+
+    http_request_admission& operator=(http_request_admission&& other) noexcept {
+        if (this != &other) {
+            tail_ = std::move(other.tail_);
+            services_ = other.services_.with_io_metrics(
+                other.services_.io_metrics() == &other.tail_.io_metrics()
+                    ? &tail_.io_metrics()
+                    : other.services_.io_metrics());
+            rejection_ = std::move(other.rejection_);
+            resolved_ = other.resolved_;
+            body_limit_ = other.body_limit_;
+            coding_availability_ = other.coding_availability_;
+            endpoint_ = other.endpoint_;
+            udp_tunnel_ = other.udp_tunnel_;
+        }
+        return *this;
+    }
+
 private:
     friend http_request_admission admit_http_request(const http_request_admission_input& input,
         const http_request_admission_policy& policy, const context_services& services);
 
     http_request_admission(http_response_tail tail, const context_services& services) noexcept
         : tail_(tail),
-          services_(services) {}
-
+          services_(services.with_io_metrics(
+              services.io_metrics() != nullptr ? services.io_metrics() : &tail_.io_metrics())) {}
     http_response_tail tail_;
     context_services services_;
     std::optional<http_request_rejection> rejection_;

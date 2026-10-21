@@ -10,6 +10,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_limits.h"
@@ -76,6 +77,7 @@ struct context_request_services final {
     std::size_t dispatch_depth_{};
     // The matched route's declared body_limit; 0 when it declares none.
     std::size_t route_body_limit_{};
+    operation_scope_io_metrics* io_metrics_{nullptr};
 };
 
 class context_services final {
@@ -132,6 +134,16 @@ public:
     [[nodiscard]] context_services with_route_body_limit(std::size_t limit) const noexcept {
         auto services = *this;
         services.request_services_.route_body_limit_ = limit;
+        return services;
+    }
+
+    [[nodiscard]] operation_scope_io_metrics* io_metrics() const noexcept {
+        return request_services_.io_metrics_;
+    }
+
+    [[nodiscard]] context_services with_io_metrics(operation_scope_io_metrics* metrics) const noexcept {
+        auto services = *this;
+        services.request_services_.io_metrics_ = metrics;
         return services;
     }
 
@@ -233,6 +245,7 @@ public:
         context_services services(worker_services_, stop_token_value);
         services.connection_services_.info_ = connection_services_.info_;
         services.request_services_.dispatch_depth_ = request_services_.dispatch_depth_ + 1;
+        services.request_services_.io_metrics_ = request_services_.io_metrics_;
         return services;
     }
 

@@ -240,10 +240,12 @@ void db_query_result_cache::expire_capability(void* target) noexcept {
 }
 scoped_operation<void> db_query_result_cache::remove(std::span<const std::string_view> ids) const {
     registration_.require_active();
-    return make_scoped_operation(registration_.scope(), state_->remove(ids, options_));
+    return make_scoped_operation(
+        registration_.scope(), state_->remove(ids, options_), scoped_operation_io_kind::redis);
 }
 scoped_operation<void> db_query_result_cache::clear() const {
     registration_.require_active();
-    return make_scoped_operation(registration_.scope(), state_->clear(options_));
+    return make_scoped_operation(
+        registration_.scope(), state_->clear(options_), scoped_operation_io_kind::redis);
 }
 }  // namespace ruvia

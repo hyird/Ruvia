@@ -270,6 +270,22 @@ public:
         return duration_micros_;
     }
 
+
+    [[nodiscard]] constexpr std::uint64_t db_count() const noexcept {
+        return db_count_;
+    }
+
+    [[nodiscard]] constexpr std::uint64_t db_duration_micros() const noexcept {
+        return db_duration_micros_;
+    }
+
+    [[nodiscard]] constexpr std::uint64_t redis_count() const noexcept {
+        return redis_count_;
+    }
+
+    [[nodiscard]] constexpr std::uint64_t redis_duration_micros() const noexcept {
+        return redis_duration_micros_;
+    }
     [[nodiscard]] constexpr http_protocol_version protocol_version() const noexcept {
         return protocol_version_;
     }
@@ -285,6 +301,10 @@ private:
         std::string_view remote_address_;
         http_status_code status_;
         std::uint64_t duration_micros_;
+        std::uint64_t db_count_{0};
+        std::uint64_t db_duration_micros_{0};
+        std::uint64_t redis_count_{0};
+        std::uint64_t redis_duration_micros_{0};
     };
 
     explicit constexpr access_log_record(const fields_type& fields) noexcept
@@ -292,6 +312,10 @@ private:
           path_(fields.path_),
           remote_address_(fields.remote_address_),
           duration_micros_(fields.duration_micros_),
+          db_count_(fields.db_count_),
+          db_duration_micros_(fields.db_duration_micros_),
+          redis_count_(fields.redis_count_),
+          redis_duration_micros_(fields.redis_duration_micros_),
           status_(fields.status_),
           known_method_(fields.known_method_),
           protocol_version_(fields.protocol_version_) {}
@@ -300,6 +324,10 @@ private:
     std::string_view path_;
     std::string_view remote_address_;
     std::uint64_t duration_micros_;
+    std::uint64_t db_count_{0};
+    std::uint64_t db_duration_micros_{0};
+    std::uint64_t redis_count_{0};
+    std::uint64_t redis_duration_micros_{0};
     http_status_code status_;
     http_known_method known_method_;
     http_protocol_version protocol_version_;

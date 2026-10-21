@@ -56,6 +56,10 @@ void http_response_tail::record_access(const access_log_sink& access_log, http_s
         .remote_address_ = client_address_,
         .status_ = status,
         .duration_micros_ = access_log_record_access::duration_since(start_),
+        .db_count_ = io_metrics_.db_count_,
+        .db_duration_micros_ = io_metrics_.db_duration_micros_,
+        .redis_count_ = io_metrics_.redis_count_,
+        .redis_duration_micros_ = io_metrics_.redis_duration_micros_,
     }));
 }
 
@@ -64,7 +68,7 @@ void http_response_tail::defer_access(const access_log_sink& access_log, http1_d
     if (!access_log.callback_) {
         return;
     }
-    deferred.defer(head_end, *request_, client_address_, start_, status);
+    deferred.defer(head_end, *request_, client_address_, start_, status, io_metrics_);
 }
 
 http_request_admission admit_http_request(const http_request_admission_input& input,

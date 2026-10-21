@@ -321,7 +321,7 @@ private:
 
     template <typename t_type>
     [[nodiscard]] scoped_operation<t_type> scoped(ruvia::task<t_type> task_value) const {
-        return make_scoped_operation(registration_.scope(), std::move(task_value));
+        return make_scoped_operation(registration_.scope(), std::move(task_value), scoped_operation_io_kind::redis);
     }
 
     static void expire_capability(void* target) noexcept;

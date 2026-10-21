@@ -147,7 +147,8 @@ task<std::pair<db_rows, db_rows>> db_handle::query_and_count_task(const db_query
 
 scoped_operation<db_rows> db_handle::query(const db_query& query) const {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(registration_.scope(), query_task(query));
+    return ::ruvia::make_scoped_operation(
+        registration_.scope(), query_task(query), scoped_operation_io_kind::db);
 }
 
 scoped_operation<db_exec_result> db_handle::execute(const db_query& query) const {
@@ -157,7 +158,8 @@ scoped_operation<db_exec_result> db_handle::execute(const db_query& query) const
         throw std::invalid_argument("execute requires a statement without returned rows");
     }
     return ::ruvia::make_scoped_operation(registration_.scope(),
-        execute_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_));
+        execute_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_),
+        scoped_operation_io_kind::db);
 }
 
 scoped_operation<db_rows> db_handle::query(
@@ -166,7 +168,8 @@ scoped_operation<db_rows> db_handle::query(
     auto statement = prepare_db_statement(sql, params, resource_);
     return ::ruvia::make_scoped_operation(
         registration_.scope(), query_pool(client_, std::move(statement.sql_), std::move(statement.params_),
-                                   resource_, options_));
+                                   resource_, options_),
+        scoped_operation_io_kind::db);
 }
 
 scoped_operation<db_exec_result> db_handle::execute(
@@ -175,7 +178,8 @@ scoped_operation<db_exec_result> db_handle::execute(
     auto statement = prepare_db_statement(sql, params, resource_);
     return ::ruvia::make_scoped_operation(
         registration_.scope(), execute_pool(client_, std::move(statement.sql_),
-                                   std::move(statement.params_), resource_, options_));
+                                   std::move(statement.params_), resource_, options_),
+        scoped_operation_io_kind::db);
 }
 
 scoped_operation<db_stream_result> db_handle::query_stream(
@@ -184,7 +188,8 @@ scoped_operation<db_stream_result> db_handle::query_stream(
     auto statement = prepare_db_statement(sql, params, resource_);
     return ::ruvia::make_scoped_operation(
         registration_.scope(), query_stream_prepared(client_, std::move(statement.sql_),
-                                   std::move(statement.params_), resource_, registration_.scope(), options_));
+                                   std::move(statement.params_), resource_, registration_.scope(), options_),
+        scoped_operation_io_kind::db);
 }
 
 task<db_stream_result> db_handle::query_stream_prepared(detail::db_pool_ref_type client, std::pmr::string sql,
@@ -199,7 +204,8 @@ task<db_stream_result> db_handle::query_stream_prepared(detail::db_pool_ref_type
 scoped_operation<db_transaction> db_handle::begin_transaction(db_transaction_options options) const {
     registration_.require_active();
     return ::ruvia::make_scoped_operation(registration_.scope(),
-        begin_transaction_prepared(query_backend(), registration_.scope(), options_, std::move(options)));
+        begin_transaction_prepared(query_backend(), registration_.scope(), options_, std::move(options)),
+        scoped_operation_io_kind::db);
 }
 
 task<db_transaction> db_handle::begin_transaction_prepared(detail::db_query_backend backend,
@@ -222,7 +228,8 @@ scoped_operation<void> db_handle::notify(std::string_view channel, std::string_v
     const std::array<db_value, 2> params{db_value(channel), db_value(payload)};
     auto statement = prepare_db_statement("SELECT \"pg_notify\"($1::text, $2::text)", params, resource_);
     return ::ruvia::make_scoped_operation(registration_.scope(),
-        discard_rows_task(query_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_)));
+        discard_rows_task(query_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_)),
+        scoped_operation_io_kind::db);
 }
 
 }  // namespace ruvia

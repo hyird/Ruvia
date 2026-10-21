@@ -138,14 +138,16 @@ private:
         registration_.require_active();
         auto task_value = query_and_count_task(query, count);
         return make_scoped_operation(registration_.scope(),
-            detail::map_db_query_and_count<result_type>(std::move(task_value), resource_, std::move(mapper)));
+            detail::map_db_query_and_count<result_type>(std::move(task_value), resource_, std::move(mapper)),
+            scoped_operation_io_kind::db);
     }
     template <typename result_type, typename mapper_type>
     [[nodiscard]] scoped_operation<result_type> query_mapped(const db_query& query, mapper_type mapper) const {
         registration_.require_active();
         auto task_value = query_task(query);
         return make_scoped_operation(registration_.scope(),
-            detail::map_db_query<result_type>(std::move(task_value), resource_, std::move(mapper)));
+            detail::map_db_query<result_type>(std::move(task_value), resource_, std::move(mapper)),
+            scoped_operation_io_kind::db);
     }
 
 #ifdef RUVIA_ENABLE_REDIS

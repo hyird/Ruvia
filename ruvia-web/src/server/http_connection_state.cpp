@@ -99,7 +99,8 @@ http1_deferred_access_log::http1_deferred_access_log(std::pmr::polymorphic_alloc
       text_(allocator) {}
 
 void http1_deferred_access_log::defer(std::size_t head_end, const http_request& request,
-    std::string_view client_address, std::chrono::steady_clock::time_point start, http_status_code status) {
+    std::string_view client_address, std::chrono::steady_clock::time_point start, http_status_code status,
+    const operation_scope_io_metrics& io_metrics) {
     const auto method = request.method();
     const auto path = request.path();
     const auto text_begin = text_.size();
@@ -113,6 +114,7 @@ void http1_deferred_access_log::defer(std::size_t head_end, const http_request& 
         .path_bytes_ = path.size(),
         .address_bytes_ = client_address.size(),
         .start_ = start,
+        .io_metrics_ = io_metrics,
         .known_method_ = request.known_method(),
         .protocol_version_ = request.protocol_version(),
         .status_ = status,
@@ -134,6 +136,10 @@ void http1_deferred_access_log::complete(const access_log_sink& access_log, std:
             .remote_address_ = fields.substr(entry.method_bytes_ + entry.path_bytes_, entry.address_bytes_),
             .status_ = entry.status_,
             .duration_micros_ = access_log_record_access::duration_since(entry.start_),
+            .db_count_ = entry.io_metrics_.db_count_,
+            .db_duration_micros_ = entry.io_metrics_.db_duration_micros_,
+            .redis_count_ = entry.io_metrics_.redis_count_,
+            .redis_duration_micros_ = entry.io_metrics_.redis_duration_micros_,
         }));
     }
     reset();

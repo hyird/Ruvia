@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <coroutine>
 #include <cstdint>
 #include <memory>
@@ -10,6 +11,19 @@
 #include "ruvia/core/task.h"
 
 namespace ruvia {
+
+enum class scoped_operation_io_kind : std::uint8_t {
+    none = 0,
+    db = 1,
+    redis = 2,
+};
+
+struct operation_scope_io_metrics final {
+    std::uint64_t db_count_{0};
+    std::uint64_t db_duration_micros_{0};
+    std::uint64_t redis_count_{0};
+    std::uint64_t redis_duration_micros_{0};
+};
 
 template <typename t_type>
 class scoped_operation;
@@ -43,6 +57,24 @@ public:
     [[nodiscard]] bool has_pending_operations() const noexcept {
         return head_ != nullptr;
     }
+    void bind_io_metrics(operation_scope_io_metrics* metrics) noexcept {
+        io_metrics_ = metrics;
+    }
+    [[nodiscard]] operation_scope_io_metrics* io_metrics() const noexcept {
+        return io_metrics_;
+    }
+    void record_io(scoped_operation_io_kind kind, std::uint64_t duration_micros) noexcept {
+        if (io_metrics_ == nullptr) {
+            return;
+        }
+        if (kind == scoped_operation_io_kind::db) {
+            ++io_metrics_->db_count_;
+            io_metrics_->db_duration_micros_ += duration_micros;
+        } else if (kind == scoped_operation_io_kind::redis) {
+            ++io_metrics_->redis_count_;
+            io_metrics_->redis_duration_micros_ += duration_micros;
+        }
+    }
 
 private:
     friend class detail::scoped_operation_registration;
@@ -58,6 +90,7 @@ private:
 
     detail::scoped_operation_registration* head_{nullptr};
     scoped_capability_registration* capability_head_{nullptr};
+    operation_scope_io_metrics* io_metrics_{nullptr};
     std::coroutine_handle<> join_continuation_{};
     bool active_{true};
     bool join_started_{false};
@@ -100,10 +133,12 @@ private:
 };
 
 template <typename t_type>
-[[nodiscard]] scoped_operation<t_type> make_scoped_operation(operation_scope& scope, task<t_type> task_value);
+[[nodiscard]] scoped_operation<t_type> make_scoped_operation(operation_scope& scope, task<t_type> task_value,
+    scoped_operation_io_kind io_kind = scoped_operation_io_kind::none);
 template <typename t_type>
 [[nodiscard]] scoped_operation<t_type> make_scoped_operation(
-    operation_scope& scope, task<t_type> task_value, void (*check_affinity)(void*) noexcept, void* target);
+    operation_scope& scope, task<t_type> task_value, void (*check_affinity)(void*) noexcept, void* target,
+    scoped_operation_io_kind io_kind = scoped_operation_io_kind::none);
 
 namespace detail {
 
@@ -111,7 +146,8 @@ namespace detail {
 // obligation. The list never relies on inheritance or a downcast to that owner.
 class scoped_operation_registration final {
 public:
-    explicit scoped_operation_registration(operation_scope& scope) noexcept;
+    explicit scoped_operation_registration(
+        operation_scope& scope, scoped_operation_io_kind io_kind = scoped_operation_io_kind::none) noexcept;
     ~scoped_operation_registration();
 
     scoped_operation_registration(const scoped_operation_registration&) = delete;
@@ -146,6 +182,8 @@ private:
     void (*retire_cold_)(void*) noexcept {nullptr};
     void (*check_affinity_)(void*) noexcept {nullptr};
     void* affinity_target_{nullptr};
+    scoped_operation_io_kind io_kind_{scoped_operation_io_kind::none};
+    std::chrono::steady_clock::time_point started_at_{};
 };
 
 }  // namespace detail
@@ -222,15 +260,17 @@ public:
 
 private:
     template <typename u_type>
-    friend scoped_operation<u_type> make_scoped_operation(operation_scope&, task<u_type>);
+    friend scoped_operation<u_type> make_scoped_operation(
+        operation_scope&, task<u_type>, scoped_operation_io_kind);
     template <typename u_type>
     friend scoped_operation<u_type> make_scoped_operation(
-        operation_scope&, task<u_type>, void (*)(void*) noexcept, void*);
+        operation_scope&, task<u_type>, void (*)(void*) noexcept, void*, scoped_operation_io_kind);
 
     scoped_operation(operation_scope& scope, task<t_type> task_value,
-        void (*check_affinity)(void*) noexcept = nullptr, void* affinity_target = nullptr)
+        void (*check_affinity)(void*) noexcept = nullptr, void* affinity_target = nullptr,
+        scoped_operation_io_kind io_kind = scoped_operation_io_kind::none)
         : task_(std::move(task_value)),
-          registration_(scope) {
+          registration_(scope, io_kind) {
         registration_.bind_frame(std::addressof(task_), [](void* target) noexcept { static_cast<std::optional<task<t_type>>*>(target)->reset(); }, check_affinity, affinity_target);
     }
 
@@ -239,14 +279,16 @@ private:
 };
 
 template <typename t_type>
-[[nodiscard]] scoped_operation<t_type> make_scoped_operation(operation_scope& scope, task<t_type> task_value) {
-    return scoped_operation<t_type>(scope, std::move(task_value));
+[[nodiscard]] scoped_operation<t_type> make_scoped_operation(
+    operation_scope& scope, task<t_type> task_value, scoped_operation_io_kind io_kind) {
+    return scoped_operation<t_type>(scope, std::move(task_value), nullptr, nullptr, io_kind);
 }
 
 template <typename t_type>
 [[nodiscard]] scoped_operation<t_type> make_scoped_operation(
-    operation_scope& scope, task<t_type> task_value, void (*check_affinity)(void*) noexcept, void* target) {
-    return scoped_operation<t_type>(scope, std::move(task_value), check_affinity, target);
+    operation_scope& scope, task<t_type> task_value, void (*check_affinity)(void*) noexcept, void* target,
+    scoped_operation_io_kind io_kind) {
+    return scoped_operation<t_type>(scope, std::move(task_value), check_affinity, target, io_kind);
 }
 
 }  // namespace ruvia

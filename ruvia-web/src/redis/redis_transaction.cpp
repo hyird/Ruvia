@@ -63,7 +63,7 @@ task<std::pmr::vector<redis_value>> redis_transaction::execute_owned(detail::red
 scoped_operation<std::pmr::vector<redis_value>> redis_transaction::exec() && {
     auto& scope = registration_.scope();
     auto payload_value = batch_.consume();
-    return make_scoped_operation(scope, execute_owned(std::move(payload_value)));
+    return make_scoped_operation(scope, execute_owned(std::move(payload_value)), scoped_operation_io_kind::redis);
 }
 
 }  // namespace ruvia

@@ -81,7 +81,8 @@ void db_stream_result::expire_capability(void* target) noexcept {
 scoped_operation<std::optional<db_row>> db_stream_result::read() & {
     registration_.require_active();
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), read_task(operation_guard_type(state_->operation_)));
+        registration_.scope(), read_task(operation_guard_type(state_->operation_)),
+        scoped_operation_io_kind::db);
 }
 
 task<std::optional<db_row>> db_stream_result::read_task(operation_guard_type pending) {
@@ -101,7 +102,8 @@ task<std::optional<db_row>> db_stream_result::read_task(operation_guard_type pen
 scoped_operation<void> db_stream_result::close() & {
     registration_.require_active();
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), close_task(operation_guard_type(state_->operation_)));
+        registration_.scope(), close_task(operation_guard_type(state_->operation_)),
+        scoped_operation_io_kind::db);
 }
 
 task<void> db_stream_result::close_task(operation_guard_type pending) {
