@@ -270,7 +270,6 @@ public:
         return duration_micros_;
     }
 
-
     [[nodiscard]] constexpr std::uint64_t db_count() const noexcept {
         return db_count_;
     }

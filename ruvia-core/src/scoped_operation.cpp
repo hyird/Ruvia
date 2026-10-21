@@ -339,7 +339,8 @@ void scoped_operation_registration::complete() noexcept {
         auto* scope = scope_;
         if (io_kind_ != scoped_operation_io_kind::none && scope->io_metrics() != nullptr) {
             const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - started_at_).count();
+                std::chrono::steady_clock::now() - started_at_)
+                                     .count();
             scope->record_io(io_kind_, elapsed < 0 ? 0 : static_cast<std::uint64_t>(elapsed));
         }
         scope->unlink(*this);

@@ -189,8 +189,7 @@ scoped_operation<db_exec_result> db_transaction::execute(
     auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
     operation_guard_type operation(state_->operation_);
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), execute_prepared(std::move(statement.sql_), std::move(statement.params_),
-                                   std::move(operation)),
+        registration_.scope(), execute_prepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation)),
         scoped_operation_io_kind::db);
 }
 
