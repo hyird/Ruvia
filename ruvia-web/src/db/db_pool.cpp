@@ -127,7 +127,7 @@ db_pool<driver_type>::db_pool(asio::io_context& io_context, const worker_handle&
     }
     slots_.reserve(config_.pool_size_per_worker_);
     for (std::size_t index = 0; index < config_.pool_size_per_worker_; ++index) {
-        slots_.emplace_back(io_context_);
+        slots_.emplace_back(io_context_, resource_);
     }
 }
 

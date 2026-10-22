@@ -28,6 +28,7 @@
 
 #include "db/db_config_storage.h"
 #include "db/db_host_resolution.h"
+#include "db/db_postgresql.h"
 #include "db/db_slot_socket.h"
 #include "integration/slot_pool.h"
 
@@ -76,6 +77,10 @@ class db_pool;
 // throwing -- so the pool keeps the connection; any other failure closes it.
 struct mariadb_driver final {
     using connection_type = st_mysql;
+    // Statements are sent as text; a connection keeps no statement state.
+    struct statement_cache_type final {
+        explicit statement_cache_type(std::pmr::memory_resource*) noexcept {}
+    };
     using pool_type = db_pool<mariadb_driver>;
     static constexpr db_driver driver = db_driver::mariadb;
     static constexpr std::string_view name{"MariaDB"};
@@ -98,6 +103,8 @@ struct mariadb_driver final {
 
 struct postgresql_driver final {
     using connection_type = pg_conn;
+    // Cleared by connect(): a new connection holds no server statements.
+    using statement_cache_type = postgresql_statement_cache;
     using pool_type = db_pool<postgresql_driver>;
     static constexpr db_driver driver = db_driver::postgresql;
     static constexpr std::string_view name{"PostgreSQL"};
@@ -122,9 +129,10 @@ struct postgresql_driver final {
 // waits on a Ruvia-owned duplicate of it.
 template <typename driver_type>
 struct db_slot final {
-    explicit db_slot(asio::io_context& io_context)
+    db_slot(asio::io_context& io_context, std::pmr::memory_resource* resource)
         : resolver_(io_context),
-          wait_socket_(io_context) {}
+          wait_socket_(io_context),
+          statements_(resource) {}
 
     ~db_slot() {
         if (wait_active_) {
@@ -138,6 +146,8 @@ struct db_slot final {
     asio::ip::tcp::resolver resolver_;
     typename driver_type::connection_type* connection_{nullptr};
     db_slot_socket wait_socket_;
+    // Driver statement state of the current connection, owned by the lease.
+    [[no_unique_address]] typename driver_type::statement_cache_type statements_;
     // A sleep wait parks here until its deadline or a close resumes it.
     std::coroutine_handle<> deadline_continuation_{};
     bool connected_{false};

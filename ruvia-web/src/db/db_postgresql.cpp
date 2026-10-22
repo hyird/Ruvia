@@ -2,13 +2,19 @@
 
 #include <libpq-fe.h>
 
+#include <algorithm>
 #include <charconv>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
+#include <utility>
+
+#include <openssl/sha.h>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/db/db_utils.h"
 #include "ruvia/web/detail/db/db_value_access.h"
 
@@ -17,6 +23,39 @@ namespace {
 
 // pg_type OID of float8 (double precision); libpq's headers name no type OIDs.
 constexpr unsigned int postgresql_float8_oid = 701;
+
+[[nodiscard]] std::size_t postgresql_statement_hash(std::string_view sql, std::span<const unsigned int> types) noexcept {
+    auto hash = std::hash<std::string_view>{}(sql) ^ types.size();
+    for (const auto type : types) {
+        hash = (hash ^ type) * 0x100000001b3ULL;
+    }
+    return hash;
+}
+
+// The digest covers the SQL, a NUL that SQL never contains, and every type
+// OID as four big-endian bytes, so no two keys share an encoding.
+[[nodiscard]] postgresql_statement_cache::name_type postgresql_statement_name(
+    std::string_view sql, std::span<const unsigned int> types, std::pmr::memory_resource* resource) {
+    std::pmr::string key(resource);
+    key.reserve(sql.size() + 1 + types.size() * 4);
+    key.append(sql);
+    key.push_back('\0');
+    for (const auto type : types) {
+        for (int shift = 24; shift >= 0; shift -= 8) {
+            key.push_back(static_cast<char>((type >> shift) & 0xffU));
+        }
+    }
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
+    if (SHA256(reinterpret_cast<const unsigned char*>(key.data()), key.size(), digest.data()) == nullptr) {
+        throw std::runtime_error("PostgreSQL statement name digest failed");
+    }
+    constexpr std::string_view prefix{"ruvia_"};
+    postgresql_statement_cache::name_type name{};
+    prefix.copy(name.data(), prefix.size());
+    // Zero initialization leaves the terminating NUL after the hex digits.
+    http_encode_lower_hex(name.data() + prefix.size(), std::span(digest.data(), (name.size() - prefix.size()) / 2));
+    return name;
+}
 
 }  // namespace
 
@@ -128,6 +167,54 @@ std::uint64_t postgresql_affected_rows(const pg_result& result_value) noexcept {
     }
     const auto parsed_value = std::from_chars(text, end, value);
     return parsed_value.ec == std::errc{} && parsed_value.ptr == end ? value : 0;
+}
+
+postgresql_statement_cache::postgresql_statement_cache(std::pmr::memory_resource* resource)
+    : entries_(pmr_resource_or_default(resource)) {}
+
+postgresql_statement_cache::lookup postgresql_statement_cache::find_or_insert(
+    std::string_view sql, std::span<const unsigned int> types) {
+    const auto hash = postgresql_statement_hash(sql, types);
+    ++clock_;
+    for (std::size_t index = 0; index < entries_.size(); ++index) {
+        auto& existing = entries_[index];
+        if (existing.hash_ == hash && existing.sql_ == sql && std::ranges::equal(existing.types_, types)) {
+            existing.last_use_ = clock_;
+            return {index};
+        }
+    }
+    const auto first_use = std::ranges::find(first_uses_, hash);
+    if (first_use == first_uses_.end()) {
+        first_uses_[next_first_use_] = hash;
+        next_first_use_ = (next_first_use_ + 1) % first_uses_.size();
+        return {};
+    }
+    *first_use = 0;
+    // Build the whole entry before touching the table, so a failed allocation
+    // leaves every entry, and the server statement it names, intact.
+    auto* resource = entries_.get_allocator().resource();
+    entry added{std::pmr::string(sql, resource), std::pmr::vector<unsigned int>(types.begin(), types.end(), resource),
+        hash, clock_, postgresql_statement_name(sql, types, resource)};
+    if (entries_.size() < capacity) {
+        entries_.push_back(std::move(added));
+        return {entries_.size() - 1, true, std::nullopt};
+    }
+    const auto oldest = std::ranges::min_element(entries_, {}, &entry::last_use_);
+    lookup result{static_cast<std::size_t>(oldest - entries_.begin()), true, oldest->name_};
+    *oldest = std::move(added);
+    return result;
+}
+
+void postgresql_statement_cache::forget(std::size_t index) {
+    if (index + 1 != entries_.size()) {
+        entries_[index] = std::move(entries_.back());
+    }
+    entries_.pop_back();
+}
+
+void postgresql_statement_cache::clear() noexcept {
+    entries_.clear();
+    first_uses_.fill(0);
 }
 
 }  // namespace ruvia::detail

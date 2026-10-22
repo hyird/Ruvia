@@ -54,6 +54,10 @@ struct db_transaction_options final {
 
 // Each worker owns a fixed pool per database alias. Standalone db_client uses
 // one pool on its bound event loop; db_migrator uses a dedicated connection.
+// PostgreSQL query() and execute() keep a bounded set of named server-side
+// prepared statements per connection, so the server may reuse a generic plan
+// (see its plan_cache_mode); a pooler between client and server must support
+// protocol-level prepared statements. Streams run as unnamed statements.
 struct db_config final {
     db_driver driver_{db_driver::unspecified};
     // Host name or unbracketed address only; keep the port in port.

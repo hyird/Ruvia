@@ -7,6 +7,7 @@
 #include <exception>
 #include <future>
 #include <limits>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -68,16 +69,18 @@ public:
         std::string command_{"SELECT 1"};
         char status_{'I'};
         bool deferred_{false};
-        // Non-empty: the statement is answered with ErrorResponse carrying
-        // this message and sql_state_ instead of a result.
+        // Non-empty: Bind is answered with ErrorResponse carrying this
+        // message, sql_state_ and, when non-empty, routine_ instead of a result.
         std::string error_;
         std::string sql_state_{"42601"};
+        std::string routine_;
         // COPY keeps the connection in transfer state; no ReadyForQuery follows.
         postgres_copy_direction copy_{postgres_copy_direction::none};
     };
 
-    // One extended-protocol Parse message: the statement text and the
-    // parameter type OIDs the client declared (0 leaves a type unknown).
+    // One extended-protocol Parse message: the statement text, the parameter
+    // type OIDs the client declared (0 leaves a type unknown), and the values
+    // of every Bind that named this statement.
     struct postgres_parse final {
         std::string sql_;
         std::vector<std::uint32_t> parameter_types_;
@@ -264,8 +267,12 @@ private:
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
     }
 
-    asio::awaitable<bool> postgres_statement(asio::ip::tcp::socket& socket) {
-        std::optional<std::size_t> statement;
+    // Reads one flight of extended-protocol messages up to its Sync and
+    // returns their types in order; nullopt when the client terminates.
+    // Parse, Bind and Close keep the connection's named statements, as a
+    // server does.
+    asio::awaitable<std::optional<std::string>> postgres_flight(asio::ip::tcp::socket& socket) {
+        std::string messages;
         for (;;) {
             std::array<unsigned char, 5> header{};
             co_await asio::async_read(socket, asio::buffer(header), asio::use_awaitable);
@@ -275,39 +282,42 @@ private:
             }
             std::vector<unsigned char> body(size - 4);
             co_await asio::async_read(socket, asio::buffer(body), asio::use_awaitable);
-            if (header[0] == 'P') {
+            const char type = static_cast<char>(header[0]);
+            if (type == 'X') {
+                co_return std::nullopt;
+            }
+            if (type == 'P') {
                 record_postgres_parse(body);
-                statement = postgres_parses_.size() - 1;
-            } else if (header[0] == 'B') {
-                if (!statement) {
-                    throw std::runtime_error("PostgreSQL Bind without Parse");
+            } else if (type == 'B') {
+                record_postgres_bind(body);
+            } else if (type == 'C') {
+                if (!body.empty() && body[0] == 'S') {
+                    postgres_statements_.erase(text_at(body, 1).first);
                 }
-                record_postgres_bind(*statement, body);
             }
-            if (header[0] == 'X') {
-                co_return false;
-            }
-            if (header[0] == 'S') {
-                co_return true;
+            messages.push_back(type);
+            if (type == 'S') {
+                co_return messages;
             }
         }
     }
 
+    // The NUL-terminated string at `start` and the offset just past it.
+    static std::pair<std::string, std::size_t> text_at(const std::vector<unsigned char>& body, std::size_t start) {
+        for (auto index = start; index < body.size(); ++index) {
+            if (body[index] == 0) {
+                return {std::string(reinterpret_cast<const char*>(body.data()) + start, index - start), index + 1};
+            }
+        }
+        throw std::runtime_error("unterminated PostgreSQL string");
+    }
+
     // Parse: statement name, query text, Int16 count, then one Int32 OID each.
     void record_postgres_parse(const std::vector<unsigned char>& body) {
-        const auto text_end = [&body](std::size_t start) {
-            for (auto index = start; index < body.size(); ++index) {
-                if (body[index] == 0) {
-                    return index;
-                }
-            }
-            throw std::runtime_error("unterminated PostgreSQL Parse string");
-        };
-        const auto query_start = text_end(0) + 1;
-        const auto query_end = text_end(query_start);
+        auto [name, query_start] = text_at(body, 0);
+        auto [sql, offset] = text_at(body, query_start);
         postgres_parse parsed;
-        parsed.sql_.assign(reinterpret_cast<const char*>(body.data()) + query_start, query_end - query_start);
-        auto offset = query_end + 1;
+        parsed.sql_ = std::move(sql);
         if (offset + 2 > body.size()) {
             throw std::runtime_error("truncated PostgreSQL Parse parameter count");
         }
@@ -319,20 +329,23 @@ private:
         for (std::size_t index = 0; index < count; ++index, offset += 4) {
             parsed.parameter_types_.push_back(integer(body.data() + offset));
         }
+        if (!name.empty() && postgres_statements_.contains(name)) {
+            throw std::runtime_error("PostgreSQL Parse reuses a prepared statement name");
+        }
         postgres_parses_.push_back(std::move(parsed));
+        postgres_statements_[name] = postgres_parses_.size() - 1;
     }
 
-    // Bind follows Parse in the unnamed extended-query exchange used here.
-    void record_postgres_bind(std::size_t statement, const std::vector<unsigned char>& body) {
-        const std::string_view bytes(reinterpret_cast<const char*>(body.data()), body.size());
-        std::size_t offset = 0;
-        for (int i = 0; i < 2; ++i) {
-            const auto end = bytes.find('\0', offset);
-            if (end == std::string_view::npos) {
-                throw std::runtime_error("unterminated PostgreSQL Bind name");
-            }
-            offset = end + 1;
+    // Bind: portal name, statement name, formats, then the values.
+    void record_postgres_bind(const std::vector<unsigned char>& body) {
+        const auto portal_end = text_at(body, 0).second;
+        auto [name, offset] = text_at(body, portal_end);
+        const auto statement = postgres_statements_.find(name);
+        if (statement == postgres_statements_.end()) {
+            throw std::runtime_error("PostgreSQL Bind names no prepared statement");
         }
+        const std::string_view bytes(reinterpret_cast<const char*>(body.data()), body.size());
+
         const auto read_short = [&]() {
             if (body.size() - offset < 2) {
                 throw std::runtime_error("truncated PostgreSQL Bind count");
@@ -347,7 +360,7 @@ private:
         }
         offset += formats * 2;
         const auto count = read_short();
-        auto& values = postgres_parses_[statement].parameter_values_;
+        auto& values = postgres_parses_[statement->second].parameter_values_;
         for (std::size_t i = 0; i < count; ++i) {
             if (body.size() - offset < 4) {
                 throw std::runtime_error("truncated PostgreSQL Bind length");
@@ -366,13 +379,93 @@ private:
         }
     }
 
-    static void postgres_result(std::string& response, const postgres_reply& reply) {
-        message(response, '1', {});
-        message(response, '2', {});
-        if (reply.column_.empty()) {
-            message(response, 'n', {});
-            return;
+    static void postgres_error(std::string& response, const postgres_reply& reply) {
+        std::string fields;
+        for (const auto& [code, value] : std::array{std::pair{'S', std::string_view("ERROR")},
+                 std::pair{'C', std::string_view(reply.sql_state_)}, std::pair{'M', std::string_view(reply.error_)},
+                 std::pair{'R', std::string_view(reply.routine_)}}) {
+            if (value.empty()) {
+                continue;
+            }
+            fields.push_back(code);
+            fields.append(value);
+            fields.push_back('\0');
         }
+        fields.push_back('\0');
+        message(response, 'E', fields);
+    }
+
+    // Answers each message of a flight in order, with `reply` supplying the
+    // statement's outcome. An incomplete answer stops after the first row,
+    // before CommandComplete and ReadyForQuery.
+    static void postgres_flight_response(
+        std::string& response, std::string_view messages, const postgres_reply& reply, bool complete = true) {
+        for (const char type : messages) {
+            switch (type) {
+                case 'C':
+                    message(response, '3', {});
+                    break;
+                case 'P':
+                    message(response, '1', {});
+                    break;
+                case 'B':
+                    if (!reply.error_.empty()) {
+                        // The server skips the rest of the flight up to Sync.
+                        postgres_error(response, reply);
+                        message(response, 'Z', std::string_view(&reply.status_, 1));
+                        return;
+                    }
+                    message(response, '2', {});
+                    break;
+                case 'D':
+                    if (reply.copy_ != postgres_copy_direction::none) {
+                        break;
+                    }
+                    if (reply.column_.empty()) {
+                        message(response, 'n', {});
+                        break;
+                    }
+                    postgres_description(response, reply);
+                    break;
+                case 'E':
+                    if (reply.copy_ != postgres_copy_direction::none) {
+                        // Text format, one column in text format.
+                        std::string copy;
+                        copy.push_back('\0');
+                        append_short(copy, 1);
+                        append_short(copy, 0);
+                        message(response, reply.copy_ == postgres_copy_direction::input ? 'G' : 'H', copy);
+                        return;
+                    }
+                    for (const auto& value : reply.rows_) {
+                        std::string row;
+                        append_short(row, 1);
+                        append_integer(row, static_cast<std::uint32_t>(value.size()));
+                        row.append(value);
+                        message(response, 'D', row);
+                        if (!complete) {
+                            return;
+                        }
+                    }
+                    if (!complete) {
+                        return;
+                    }
+                    {
+                        std::string command(reply.command_);
+                        command.push_back('\0');
+                        message(response, 'C', command);
+                    }
+                    break;
+                case 'S':
+                    message(response, 'Z', std::string_view(&reply.status_, 1));
+                    break;
+                default:
+                    break;
+            }
+        }
+    }
+
+    static void postgres_description(std::string& response, const postgres_reply& reply) {
         std::string description;
         append_short(description, 1);
         description.append(reply.column_);
@@ -384,28 +477,23 @@ private:
         append_integer(description, 0xffffffff);
         append_short(description, 0);
         message(response, 'T', description);
-        for (const auto& value : reply.rows_) {
-            std::string row;
-            append_short(row, 1);
-            append_integer(row, static_cast<std::uint32_t>(value.size()));
-            row.append(value);
-            message(response, 'D', row);
-        }
     }
 
     // CommandComplete and ReadyForQuery never follow the partial row set.
     asio::awaitable<void> postgres_drop_mid_result(asio::ip::tcp::socket& socket) {
-        if (!(co_await postgres_statement(socket))) {
+        const auto messages = co_await postgres_flight(socket);
+        if (!messages) {
             co_return;
         }
         std::string response;
-        postgres_result(response, {.rows_ = {"x"}});
+        postgres_flight_response(response, *messages, {.rows_ = {"x"}}, false);
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
     }
 
     asio::awaitable<void> postgres_script(asio::ip::tcp::socket& socket) {
         while (next_reply_ < postgres_replies_.size()) {
-            if (!(co_await postgres_statement(socket))) {
+            const auto messages = co_await postgres_flight(socket);
+            if (!messages) {
                 co_return;
             }
             if (next_reply_ == postgres_replies_.size()) {
@@ -420,34 +508,7 @@ private:
                 }
             }
             std::string response;
-            if (!reply.error_.empty()) {
-                std::string fields;
-                for (const auto& [code, value] : std::array{std::pair{'S', std::string_view("ERROR")},
-                         std::pair{'C', std::string_view(reply.sql_state_)},
-                         std::pair{'M', std::string_view(reply.error_)}}) {
-                    fields.push_back(code);
-                    fields.append(value);
-                    fields.push_back('\0');
-                }
-                fields.push_back('\0');
-                message(response, 'E', fields);
-                message(response, 'Z', std::string_view(&reply.status_, 1));
-            } else if (reply.copy_ != postgres_copy_direction::none) {
-                // Text format, one column in text format.
-                std::string copy;
-                copy.push_back('\0');
-                append_short(copy, 1);
-                append_short(copy, 0);
-                message(response, '1', {});
-                message(response, '2', {});
-                message(response, reply.copy_ == postgres_copy_direction::input ? 'G' : 'H', copy);
-            } else {
-                postgres_result(response, reply);
-                std::string command(reply.command_);
-                command.push_back('\0');
-                message(response, 'C', command);
-                message(response, 'Z', std::string_view(&reply.status_, 1));
-            }
+            postgres_flight_response(response, *messages, reply);
             co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
         }
     }
@@ -547,6 +608,8 @@ private:
 
     asio::awaitable<void> serve_connection(protocol selected, asio::ip::tcp::socket& socket) {
         co_await acceptor_.async_accept(socket, asio::use_awaitable);
+        // Named statements belong to one server session.
+        postgres_statements_.clear();
         if (selected == protocol::postgresql) {
             co_await postgres_startup(socket);
         } else if (selected == protocol::mariadb) {
@@ -579,6 +642,8 @@ private:
     after_startup after_startup_;
     std::vector<postgres_reply> postgres_replies_;
     std::vector<postgres_parse> postgres_parses_;
+    // Named statements of the current session, by name, as postgres_parses_ indices.
+    std::map<std::string, std::size_t> postgres_statements_;
     std::size_t next_reply_{0};
     std::size_t startup_count_{0};
     bool replies_released_{false};
