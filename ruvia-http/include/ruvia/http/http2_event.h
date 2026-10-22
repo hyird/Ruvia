@@ -94,6 +94,7 @@ private:
 // already parsed them.
 struct http2_server_request_snapshot final {
     http_request_content_indication content_{http_request_content_indication::no_content};
+    std::optional<std::size_t> declared_content_length_{};
     bool body_open_{false};
     bool connect_pending_{false};
 };

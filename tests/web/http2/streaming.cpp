@@ -50,7 +50,13 @@ class sleeping_stream_routes final {
     RUVIA_GET("/http2-quiet-sse", quiet_sse);
     RUVIA_POST("/http2-post-sse", post_sse);
     RUVIA_GET("/http2-paced-sse", paced_sse);
+    RUVIA_POST("/http2-bounded-buffered", bounded_buffered, ruvia::body_limit<16>);
+    RUVIA_POST("/http2-bounded-stream", count_upload, ruvia::stream_body, ruvia::body_limit<16>);
     RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> bounded_buffered(ruvia::context& context_value) {
+        co_return context_value.text(co_await context_value.req().text());
+    }
 
     // Streams the request body and answers with the byte count.
     // A buffered POST body is readable before the SSE response starts.
@@ -544,5 +550,45 @@ RUVIA_TEST(http2_sse_response_is_not_killed_by_request_body_completion_timeout) 
     RUVIA_CHECK_EQ(status, std::string("200"));
     RUVIA_CHECK_EQ(body, std::string("data: tick\n\ndata: tick\n\ndata: tick\n\ndata: tick\n\n"));
     client.close();
+    server.finish();
+}
+
+RUVIA_TEST(http2_oversized_request_body_answers_413_without_100_continue) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const std::string oversized(64, 'x');
+
+    // 1. Declared Content-Length exceeding route body_limit<16> with Expect: 100-continue
+    //    must answer 413 immediately without sending 100 Continue first.
+    for (const std::string_view path : {"/http2-bounded-buffered", "/http2-bounded-stream"}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        asio::write(client, asio::buffer(request_wire(&resource, "POST", path, oversized, true)));
+        RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("413"));
+        client.close();
+    }
+
+    // 2. Unannounced (no Content-Length) DATA exceeding route body_limit<16> on both
+    //    buffered and stream_body routes must answer 413 rather than RST_STREAM(CANCEL).
+    for (const std::string_view path : {"/http2-bounded-buffered", "/http2-bounded-stream"}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        std::string wire(ruvia::http2_client_preface);
+        append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "POST");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
+        ruvia::hpack_encoder::encode_header(block, ":path", path);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
+        append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, oversized);
+        asio::write(client, asio::buffer(wire));
+        RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("413"));
+        client.close();
+    }
     server.finish();
 }

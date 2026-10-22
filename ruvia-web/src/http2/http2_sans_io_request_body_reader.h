@@ -22,11 +22,13 @@ public:
     // 100-continue expectation: the first read sends it, as the HTTP/1 reader
     // does, so an unread content never prompts the client to send it.
     http2_sans_io_request_body_reader(ruvia::http2_connection& connection, std::uint32_t stream_id,
-        http2_sans_io_body_queue& body_queue, http2_sans_io_stream_signal& signal,
-        worker_signal& write_signal, http_interim_response_output* continue_output) noexcept
+        http2_sans_io_body_queue& body_queue, const std::optional<http_request_body_failure>& body_failure,
+        http2_sans_io_stream_signal& signal, worker_signal& write_signal,
+        http_interim_response_output* continue_output) noexcept
         : connection_(connection),
           stream_id_(stream_id),
           body_queue_(body_queue),
+          body_failure_(body_failure),
           signal_(signal),
           write_signal_(write_signal),
           continue_output_(continue_output) {}
@@ -36,6 +38,9 @@ public:
             co_await continue_output->send_continue();
         }
         for (;;) {
+            if (body_failure_.has_value()) {
+                throw http_request_body_protocol_error(*body_failure_);
+            }
             if (signal_.terminated()) {
                 throw inbound_transport_error(signal_.terminal_error(), "HTTP/2 connection ended during body read");
             }
@@ -70,6 +75,7 @@ private:
     ruvia::http2_connection& connection_;
     std::uint32_t stream_id_;
     http2_sans_io_body_queue& body_queue_;
+    const std::optional<http_request_body_failure>& body_failure_;
     http2_sans_io_stream_signal& signal_;
     worker_signal& write_signal_;
     http_interim_response_output* continue_output_;

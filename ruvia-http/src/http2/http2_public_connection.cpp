@@ -106,8 +106,13 @@ public:
         const auto& remote = stream->remote_receive();
         const bool connect_pending =
             remote.connect_pending() != nullptr || remote.connect_pending_end_stream() != nullptr;
+        std::optional<std::size_t> declared_content_length;
+        if (const auto* known = stream->remote_content().allowed_known_length(); known != nullptr) {
+            declared_content_length = known->declared_length();
+        }
         const http2_server_request_snapshot snapshot{
             .content_ = content,
+            .declared_content_length_ = declared_content_length,
             .body_open_ = value.body_open_,
             .connect_pending_ = connect_pending,
         };

@@ -33,6 +33,12 @@ namespace ruvia::detail {
 // Pending DATA is concatenated so each frame is copied once, not into a new
 // string per frame. pop() swaps the pending buffer aside so enqueue cannot
 // invalidate the borrowed view.
+enum class http2_request_body_store_status : std::uint8_t {
+    stored,
+    too_large,
+    backlog_overflow,
+};
+
 class http2_sans_io_body_queue final {
 public:
     explicit http2_sans_io_body_queue(std::pmr::memory_resource* resource = nullptr)
@@ -139,19 +145,20 @@ public:
     explicit http2_buffered_request_body(std::pmr::memory_resource* resource) noexcept
         : bytes_(pmr_resource_or_default(resource)) {}
 
-    [[nodiscard]] bool store(std::string_view data, protocol_byte_limit total_limit) {
+    [[nodiscard]] http2_request_body_store_status store(
+        std::string_view data, protocol_byte_limit total_limit) {
         if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
-            return false;
+            return http2_request_body_store_status::too_large;
         }
         try {
             if (!data.empty()) {
                 bytes_.append(data.data(), data.size());
             }
         } catch (const inbound_buffer_limit_error&) {
-            return false;
+            return http2_request_body_store_status::backlog_overflow;
         }
         received_bytes_ += data.size();
-        return true;
+        return http2_request_body_store_status::stored;
     }
 
     [[nodiscard]] std::size_t received_bytes() const noexcept {
@@ -173,16 +180,16 @@ public:
     explicit http2_streaming_request_body(std::pmr::memory_resource* resource) noexcept
         : queue_(pmr_resource_or_default(resource)) {}
 
-    [[nodiscard]] bool store(std::string_view data, protocol_byte_limit total_limit,
-        std::size_t backlog_limit, http2_received_data_credit&& credit) {
+    [[nodiscard]] http2_request_body_store_status store(std::string_view data,
+        protocol_byte_limit total_limit, std::size_t backlog_limit, http2_received_data_credit&& credit) {
         if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
-            return false;
+            return http2_request_body_store_status::too_large;
         }
         if (!queue_.enqueue_bounded(data, std::move(credit), backlog_limit)) {
-            return false;
+            return http2_request_body_store_status::backlog_overflow;
         }
         received_bytes_ += data.size();
-        return true;
+        return http2_request_body_store_status::stored;
     }
 
     [[nodiscard]] std::size_t received_bytes() const noexcept {
@@ -235,15 +242,15 @@ public:
     }
     const http2_streaming_request_body* streaming() const&& = delete;
 
-    [[nodiscard]] bool store(
+    [[nodiscard]] http2_request_body_store_status store(
         std::string_view data, protocol_byte_limit total_limit) {
         if (auto* value = buffered()) {
             return value->store(data, total_limit);
         }
-        return false;
+        return http2_request_body_store_status::backlog_overflow;
     }
 
-    [[nodiscard]] bool store(std::string_view data,
+    [[nodiscard]] http2_request_body_store_status store(std::string_view data,
         protocol_byte_limit total_limit, std::size_t streaming_backlog_limit,
         http2_received_data_credit&& credit) {
         if (auto* value = buffered()) {

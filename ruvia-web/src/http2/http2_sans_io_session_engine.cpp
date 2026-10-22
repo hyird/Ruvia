@@ -506,9 +506,11 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
     const auto* resolved = admission.resolved();
 
     std::optional<body_reader_binding<http2_sans_io_request_body_reader>> body_reader_storage;
-    if (streaming_body != nullptr && !request_head->snapshot().connect_pending_) {
+    if (streaming_body != nullptr && !request_head->snapshot().connect_pending_ &&
+        !stream_runtime->body_failure().has_value()) {
         const bool continue_on_read = expectation_plan == http_server_expectation_plan::send_continue && resolved != nullptr;
-        body_reader_storage.emplace(connection_, stream_id, streaming_body->queue(), *stream_signal, write_signal_,
+        body_reader_storage.emplace(connection_, stream_id, streaming_body->queue(),
+            stream_runtime->body_failure(), *stream_signal, write_signal_,
             continue_on_read ? &interim_output : nullptr);
     }
     auto dispatch_services = request_services;
@@ -516,115 +518,126 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
         dispatch_services.bind_streaming_request_body(body_reader_storage->facade());
     }
 
-    switch (admission.endpoint()) {
-        case http_request_endpoint::rejection:
-        case http_request_endpoint::not_acceptable:
-            admission.tail().disable_response_coding();
-            response = co_await respond_http_request_rejection(
-                routes_, request, request_memory_value, *admission.rejection(), request_services);
-            break;
-        case http_request_endpoint::tunnel: {
-            if (streaming_body == nullptr || !request_head->snapshot().connect_pending_) {
-                reset_stream_no_throw(stream_id, http2_error_code::internal_error);
-                wake_writer();
-                co_return;
-            }
-            const auto& tunnel_endpoint = *resolved->route().endpoint().tunnel();
-            std::optional<tunnel_upgrade_operation::session_type> tunnel_session;
-            tunnel_upgrade_operation upgrade{
-                .engine_ = *this,
-                .stream_id_ = stream_id,
-                .udp_ = admission.udp_tunnel(),
-                .streaming_body_ = *streaming_body,
-                .stream_signal_ = *stream_signal,
-                .resolved_ = *resolved,
-                .tunnel_endpoint_ = tunnel_endpoint,
-                .base_services_ = base_services,
-                .tunnel_session_ = tunnel_session,
-            };
-            auto buffered = co_await run_http_upgrade_route(
-                routes_, request, *resolved, request_memory_value, dispatch_services, tunnel_session, upgrade, upgrade);
-            if (!buffered) {
-                co_return;
-            }
-            response = std::move(*buffered);
-            break;
-        }
-        case http_request_endpoint::websocket: {
-            const auto& websocket_endpoint = *resolved->route().endpoint().websocket();
-            const auto handshake_validation = ruvia::validate_http2_websocket_handshake(
-                connection_, stream_id, request, websocket_endpoint.handshake_validation());
-            if (handshake_validation.accepted() == nullptr) {
-                const auto* failure = handshake_validation.failure();
-                if (failure == nullptr) {
-                    throw std::logic_error("HTTP/2 WebSocket validation returned no outcome");
-                }
-                response = co_await routes_.handle_error(request, request_memory_value,
-                    copy_http_protocol_error_info(request_memory_value.resource(), failure->protocol_error()),
-                    request_services);
-                failure->apply_required_response_headers(response);
+    if (const auto& body_failure = stream_runtime->body_failure();
+        body_failure.has_value() &&
+        admission.endpoint() != http_request_endpoint::rejection &&
+        admission.endpoint() != http_request_endpoint::not_acceptable) {
+        admission.tail().disable_response_coding();
+        response = co_await respond_http_request_rejection(routes_, request, request_memory_value,
+            http_request_rejection::error(copy_http_protocol_error_info(
+                request_memory_value.resource(), http_request_body_protocol_error(*body_failure))),
+            request_services);
+    } else {
+        switch (admission.endpoint()) {
+            case http_request_endpoint::rejection:
+            case http_request_endpoint::not_acceptable:
+                admission.tail().disable_response_coding();
+                response = co_await respond_http_request_rejection(
+                    routes_, request, request_memory_value, *admission.rejection(), request_services);
                 break;
-            }
-            if (streaming_body == nullptr) {
-                reset_stream_no_throw(stream_id, http2_error_code::internal_error);
-                wake_writer();
-                co_return;
-            }
-            std::optional<websocket_upgrade_operation::session_type> websocket_session;
-            websocket_upgrade_operation upgrade{
-                .engine_ = *this,
-                .stream_id_ = stream_id,
-                .request_ = request,
-                .handshake_validation_ = handshake_validation,
-                .streaming_body_ = *streaming_body,
-                .stream_signal_ = *stream_signal,
-                .resolved_ = *resolved,
-                .websocket_endpoint_ = websocket_endpoint,
-                .base_services_ = base_services,
-                .websocket_session_ = websocket_session,
-            };
-            auto buffered = co_await run_http_upgrade_route(routes_, request, *resolved,
-                request_memory_value, dispatch_services, websocket_session, upgrade, upgrade);
-            if (!buffered) {
-                co_return;
-            }
-            response = std::move(*buffered);
-            break;
-        }
-        case http_request_endpoint::response_stream: {
-            http2_sans_io_response_stream_sink sink_value(connection_, stream_id,
-                write_signal_, *stream_signal, output_budget_,
-                worker_resource(), request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
-                admission.coding_availability(), options.cors_ ? &*options.cors_ : nullptr);
-            auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved,
-                request_memory_value, dispatch_services,
-                [this, stream_id]() noexcept { return connection_.stream_aborted(stream_id); });
-            if (result_value.peer_aborted_before_commit() != nullptr) {
-                co_return;
-            }
-            if (const auto committed_status = result_value.committed_status()) {
-                if (const auto* failed = result_value.failed_after_commit()) {
+            case http_request_endpoint::tunnel: {
+                if (streaming_body == nullptr || !request_head->snapshot().connect_pending_) {
                     reset_stream_no_throw(stream_id, http2_error_code::internal_error);
                     wake_writer();
-                    options.connection_failure_.invoke(remote_address_, failed->exception());
+                    co_return;
                 }
-                admission.tail().record_access(options.access_log_, *committed_status);
-                co_return;
+                const auto& tunnel_endpoint = *resolved->route().endpoint().tunnel();
+                std::optional<tunnel_upgrade_operation::session_type> tunnel_session;
+                tunnel_upgrade_operation upgrade{
+                    .engine_ = *this,
+                    .stream_id_ = stream_id,
+                    .udp_ = admission.udp_tunnel(),
+                    .streaming_body_ = *streaming_body,
+                    .stream_signal_ = *stream_signal,
+                    .resolved_ = *resolved,
+                    .tunnel_endpoint_ = tunnel_endpoint,
+                    .base_services_ = base_services,
+                    .tunnel_session_ = tunnel_session,
+                };
+                auto buffered = co_await run_http_upgrade_route(
+                    routes_, request, *resolved, request_memory_value, dispatch_services, tunnel_session, upgrade, upgrade);
+                if (!buffered) {
+                    co_return;
+                }
+                response = std::move(*buffered);
+                break;
             }
-            if (auto* route_response = result_value.route_response()) {
-                response = std::move(*route_response).take_response();
-            } else if (auto* recovered = result_value.recovered_failure()) {
-                response = std::move(*recovered).take_response();
-            } else {
-                throw std::logic_error("response stream dispatch returned no HTTP/2 terminal alternative");
+            case http_request_endpoint::websocket: {
+                const auto& websocket_endpoint = *resolved->route().endpoint().websocket();
+                const auto handshake_validation = ruvia::validate_http2_websocket_handshake(
+                    connection_, stream_id, request, websocket_endpoint.handshake_validation());
+                if (handshake_validation.accepted() == nullptr) {
+                    const auto* failure = handshake_validation.failure();
+                    if (failure == nullptr) {
+                        throw std::logic_error("HTTP/2 WebSocket validation returned no outcome");
+                    }
+                    response = co_await routes_.handle_error(request, request_memory_value,
+                        copy_http_protocol_error_info(request_memory_value.resource(), failure->protocol_error()),
+                        request_services);
+                    failure->apply_required_response_headers(response);
+                    break;
+                }
+                if (streaming_body == nullptr) {
+                    reset_stream_no_throw(stream_id, http2_error_code::internal_error);
+                    wake_writer();
+                    co_return;
+                }
+                std::optional<websocket_upgrade_operation::session_type> websocket_session;
+                websocket_upgrade_operation upgrade{
+                    .engine_ = *this,
+                    .stream_id_ = stream_id,
+                    .request_ = request,
+                    .handshake_validation_ = handshake_validation,
+                    .streaming_body_ = *streaming_body,
+                    .stream_signal_ = *stream_signal,
+                    .resolved_ = *resolved,
+                    .websocket_endpoint_ = websocket_endpoint,
+                    .base_services_ = base_services,
+                    .websocket_session_ = websocket_session,
+                };
+                auto buffered = co_await run_http_upgrade_route(routes_, request, *resolved,
+                    request_memory_value, dispatch_services, websocket_session, upgrade, upgrade);
+                if (!buffered) {
+                    co_return;
+                }
+                response = std::move(*buffered);
+                break;
             }
-            break;
+            case http_request_endpoint::response_stream: {
+                http2_sans_io_response_stream_sink sink_value(connection_, stream_id,
+                    write_signal_, *stream_signal, output_budget_,
+                    worker_resource(), request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
+                    admission.coding_availability(), options.cors_ ? &*options.cors_ : nullptr);
+                auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved,
+                    request_memory_value, dispatch_services,
+                    [this, stream_id]() noexcept { return connection_.stream_aborted(stream_id); });
+                if (result_value.peer_aborted_before_commit() != nullptr) {
+                    co_return;
+                }
+                if (const auto committed_status = result_value.committed_status()) {
+                    if (const auto* failed = result_value.failed_after_commit()) {
+                        reset_stream_no_throw(stream_id, http2_error_code::internal_error);
+                        wake_writer();
+                        options.connection_failure_.invoke(remote_address_, failed->exception());
+                    }
+                    admission.tail().record_access(options.access_log_, *committed_status);
+                    co_return;
+                }
+                if (auto* route_response = result_value.route_response()) {
+                    response = std::move(*route_response).take_response();
+                } else if (auto* recovered = result_value.recovered_failure()) {
+                    response = std::move(*recovered).take_response();
+                } else {
+                    throw std::logic_error("response stream dispatch returned no HTTP/2 terminal alternative");
+                }
+                break;
+            }
+            case http_request_endpoint::stream_body:
+            case http_request_endpoint::buffered:
+                co_await routes_.dispatch_buffered_response(request, resolution, request_memory_value,
+                    options.document_root_.binding(), dispatch_services, admission.static_file_mode(), response);
+                break;
         }
-        case http_request_endpoint::stream_body:
-        case http_request_endpoint::buffered:
-            co_await routes_.dispatch_buffered_response(request, resolution, request_memory_value,
-                options.document_root_.binding(), dispatch_services, admission.static_file_mode(), response);
-            break;
     }
 
     const auto first_preparation = admission.tail().prepare(response, options);
@@ -740,13 +753,26 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     const bool streaming_body = !connect_request && selected_route != nullptr &&
                                 selected_route->body().streaming() != nullptr &&
                                 snapshot.body_open_;
+    const bool body_limit_exceeded = [&]() noexcept {
+        if (!resolved_route || connect_request || !snapshot.declared_content_length_.has_value()) {
+            return false;
+        }
+        const auto total_limit = http_request_body_limit(
+            selected_route->resolution(), selected_route->body().mode(), admission_policy_);
+        const auto failure = http_request_body_size_failure(*snapshot.declared_content_length_, total_limit);
+        if (!failure.has_value()) {
+            return false;
+        }
+        stream_runtime->mark_body_failure(*failure);
+        return true;
+    }();
     // Same policy as HTTP/1: 100 Continue is sent when the server starts
     // consuming the content. A buffered route consumes it before dispatch, so
     // it is sent now; a streaming handler's first body read sends it; an
-    // unresolved request (404, 405, document root) never reads the content
-    // and answers with its final status alone (RFC 9110 §10.1.1).
+    // unresolved or already-oversized request never reads the content and
+    // answers with its final status alone (RFC 9110 §10.1.1).
     if (expectation_plan == http_server_expectation_plan::send_continue && resolved_route && !connect_request &&
-        selected_route->body().buffered() != nullptr) {
+        !body_limit_exceeded && selected_route->body().buffered() != nullptr) {
         const auto status = connection_.submit_interim_response_head(
             stream_id, http_interim_response_head(ruvia::http_status::continue_value));
         if (status == http2_submit_status::accepted) {
@@ -760,9 +786,11 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
             return;
         }
     }
-    // An unresolved request is answered from its head alone; waiting for
-    // content the client may withhold (Expect) would stall the stream.
-    if (expectation_plan == http_server_expectation_plan::reject_unsupported || connect_request || streaming_body || !resolved_route) {
+    // An unresolved or already-oversized request is answered from its head
+    // alone; waiting for content the client may withhold (Expect) would stall
+    // the stream.
+    if (expectation_plan == http_server_expectation_plan::reject_unsupported || connect_request ||
+        streaming_body || !resolved_route || body_limit_exceeded) {
         if (!admit_stream(stream_id)) {
             reset_event_stream(stream_id, http2_error_code::internal_error);
         }
@@ -782,25 +810,41 @@ void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event&
         return;
     }
     auto& request_body = selected_route->body();
-    if (request_body.buffered() != nullptr && stream_runtime->dispatched()) {
+    if (stream_runtime->body_failure().has_value() ||
+        (request_body.buffered() != nullptr && stream_runtime->dispatched())) {
         // A buffered body is dispatched before its end only when its
-        // expectation was rejected or its route is unresolved: the handler
-        // never receives that content and the request borrows the buffered
-        // bytes as they were at dispatch. Appending would reallocate under
-        // that borrowed view, so later DATA is discarded and only its
-        // flow-control credit returned.
-        (void)connection_.acknowledge(body_chunk.take_credit());
+        // expectation was rejected, its body limit was exceeded, or its route
+        // is unresolved: the handler never receives that content and the
+        // request borrows the buffered bytes as they were at dispatch.
+        // Appending would reallocate under that borrowed view, so later DATA
+        // is discarded and only its flow-control credit returned.
+        if (auto credit = body_chunk.take_credit(); credit.valid()) {
+            (void)connection_.acknowledge(std::move(credit));
+        }
         wake_writer();
         return;
     }
     const auto total_limit =
         http_request_body_limit(selected_route->resolution(), request_body.mode(), admission_policy_);
-    const bool stored = request_body.streaming() != nullptr
-                            ? request_body.store(body_chunk.bytes(), total_limit,
-                                  options.server_.max_buffered_body_bytes_, body_chunk.take_credit())
-                            : request_body.store(body_chunk.bytes(), total_limit);
-    if (!stored) {
+    const auto store_status = request_body.streaming() != nullptr
+                                  ? request_body.store(body_chunk.bytes(), total_limit,
+                                        options.server_.max_buffered_body_bytes_, body_chunk.take_credit())
+                                  : request_body.store(body_chunk.bytes(), total_limit);
+    if (store_status == http2_request_body_store_status::backlog_overflow) {
         reset_event_stream(stream_id, http2_error_code::cancel);
+        return;
+    }
+    if (store_status == http2_request_body_store_status::too_large) {
+        stream_runtime->mark_body_failure(http_request_body_failure::too_large);
+        if (auto credit = body_chunk.take_credit(); credit.valid()) {
+            (void)connection_.acknowledge(std::move(credit));
+        }
+        wake_writer();
+        if (auto* signal = stream_runtime->signal()) {
+            signal->wake();
+        } else if (!admit_stream(stream_id)) {
+            reset_event_stream(stream_id, http2_error_code::internal_error);
+        }
         return;
     }
     if (request_body.streaming() != nullptr) {

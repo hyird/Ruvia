@@ -108,6 +108,15 @@ public:
     void reprioritize(http_priority priority) noexcept {
         priority_update_ = priority;
     }
+    void mark_body_failure(http_request_body_failure failure) noexcept {
+        if (!body_failure_.has_value()) {
+            body_failure_ = failure;
+        }
+    }
+    [[nodiscard]] const std::optional<http_request_body_failure>& body_failure() const& noexcept {
+        return body_failure_;
+    }
+    const std::optional<http_request_body_failure>& body_failure() const&& = delete;
 
     [[nodiscard]] std::uint32_t stream_id() const noexcept {
         return stream_id_;
@@ -197,6 +206,7 @@ private:
     std::optional<http_priority> priority_update_{};
     std::optional<http2_sans_io_selected_route> selected_route_;
     std::optional<http2_request_head_event> request_head_;
+    std::optional<http_request_body_failure> body_failure_{};
     bool tunnel_{false};
     bool request_body_open_{false};
 };
