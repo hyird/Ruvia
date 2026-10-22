@@ -94,6 +94,9 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
         co_return std::nullopt;
     }
 
+    if (runtime != nullptr) {
+        runtime->mark_response_committed();
+    }
     wake_writer();
     const auto committed_status = submitted_head->response_status();
     const auto fail_after_commit = [this, stream_id, committed_status]() noexcept -> std::optional<http_status_code> {

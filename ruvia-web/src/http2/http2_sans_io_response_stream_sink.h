@@ -53,6 +53,7 @@ namespace ruvia::detail {
 class http2_sans_io_response_stream_sink final {
 public:
     http2_sans_io_response_stream_sink(ruvia::http2_connection& connection, std::uint32_t stream_id,
+        http2_sans_io_stream_runtime& stream_runtime,
         worker_signal& write_signal, http2_sans_io_stream_signal& stream_signal,
         http2_data_output_budget& output_budget, std::pmr::memory_resource* resource,
         http_known_method request_method, worker_codecs& codecs,
@@ -60,6 +61,7 @@ public:
         http_response_coding_availability response_coding_availability, const cors_options* cors) noexcept
         : connection_(connection),
           stream_id_(stream_id),
+          stream_runtime_(stream_runtime),
           write_signal_(write_signal),
           stream_signal_(stream_signal),
           output_budget_(output_budget),
@@ -99,12 +101,14 @@ public:
 
     task<void> write(std::string_view chunk) {
         throw_if_terminated();
+        throw_if_body_failed();
         if (chunk.empty()) {
             co_return;
         }
         if (!state_.committed()) {
             co_await commit(http_response_trailer_intent::none);
         }
+        throw_if_body_failed();
         if (state_.body_suppressed_complete()) {
             // Same head-only guard as the HTTP/1 sink: suspend once before the
             // synchronous response_stream_head_only_complete throw so a handler that
@@ -187,6 +191,7 @@ public:
             co_return;
         }
         throw_if_terminated();
+        throw_if_body_failed();
 
         const auto trailer_section = validate_http_response_trailers(trailers);
         const auto trailer_intent = response_trailer_intent(trailer_section);
@@ -195,6 +200,7 @@ public:
         if (!state_.committed()) {
             co_await commit(trailer_intent);
         }
+        throw_if_body_failed();
         if (state_.ended()) {
             co_return;
         }
@@ -238,12 +244,14 @@ private:
     // Callers check committed() before constructing this head-commit task.
     task<void> commit(http_response_trailer_intent trailer_intent) {
         throw_if_terminated();
+        throw_if_body_failed();
         try {
             auto response = co_await context_access::commit_streaming_head(state_.bound_context());
             if (cors_ != nullptr) {
                 apply_cors_headers(context_access::request(state_.bound_context()), response, *cors_);
             }
             throw_if_terminated();
+            throw_if_body_failed();
             compression_.prepare(request_method_, response);
             const auto commit_body_plan = plan_http_response_body(request_method_, response.status());
             compression_.activate(commit_body_plan);
@@ -260,6 +268,7 @@ private:
             if (interim_output_ != nullptr) {
                 interim_output_->commit_final();
             }
+            stream_runtime_.mark_response_committed();
             state_.mark_committed(*submitted_head);
             wake_writer();
         } catch (...) {
@@ -284,8 +293,18 @@ private:
         }
     }
 
+    void throw_if_body_failed() {
+        if (const auto& body_failure = stream_runtime_.body_failure(); body_failure.has_value()) {
+            if (state_.committed()) {
+                state_.mark_aborted();
+            }
+            throw http_request_body_protocol_error(*body_failure);
+        }
+    }
+
     ruvia::http2_connection& connection_;
     std::uint32_t stream_id_;
+    http2_sans_io_stream_runtime& stream_runtime_;
     response_stream_state state_;
     http_interim_response_output* interim_output_{};
     worker_signal& write_signal_;

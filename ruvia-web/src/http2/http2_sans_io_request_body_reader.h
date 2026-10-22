@@ -34,6 +34,9 @@ public:
           continue_output_(continue_output) {}
 
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() {
+        if (body_failure_.has_value()) {
+            throw http_request_body_protocol_error(*body_failure_);
+        }
         if (auto* continue_output = std::exchange(continue_output_, nullptr)) {
             co_await continue_output->send_continue();
         }

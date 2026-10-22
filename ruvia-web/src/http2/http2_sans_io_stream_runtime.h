@@ -118,6 +118,12 @@ public:
     }
     const std::optional<http_request_body_failure>& body_failure() const&& = delete;
 
+    void mark_response_committed() noexcept {
+        response_committed_ = true;
+    }
+    [[nodiscard]] bool response_committed() const noexcept {
+        return response_committed_;
+    }
     [[nodiscard]] std::uint32_t stream_id() const noexcept {
         return stream_id_;
     }
@@ -209,6 +215,7 @@ private:
     std::optional<http_request_body_failure> body_failure_{};
     bool tunnel_{false};
     bool request_body_open_{false};
+    bool response_committed_{false};
 };
 
 // Stable per-stream Web runtime storage. The common multiplexing case uses inline

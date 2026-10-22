@@ -52,10 +52,19 @@ class sleeping_stream_routes final {
     RUVIA_GET("/http2-paced-sse", paced_sse);
     RUVIA_POST("/http2-bounded-buffered", bounded_buffered, ruvia::body_limit<16>);
     RUVIA_POST("/http2-bounded-stream", count_upload, ruvia::stream_body, ruvia::body_limit<16>);
+    RUVIA_POST("/http2-bounded-delayed-stream", bounded_delayed_stream, ruvia::stream_body, ruvia::body_limit<16>);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> bounded_buffered(ruvia::context& context_value) {
         co_return context_value.text(co_await context_value.req().text());
+    }
+
+    ruvia::task<ruvia::http_response> bounded_delayed_stream(ruvia::context& context_value) {
+        (void)co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(40));
+        if (context_value.req().query("read").has_value()) {
+            static_cast<void>(co_await context_value.req().body_reader().read());
+        }
+        co_return context_value.text("accepted");
     }
 
     // Streams the request body and answers with the byte count.
@@ -584,6 +593,36 @@ RUVIA_TEST(http2_oversized_request_body_answers_413_without_100_continue) {
         ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
         ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
         ruvia::hpack_encoder::encode_header(block, ":path", path);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
+        append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, oversized);
+        asio::write(client, asio::buffer(wire));
+        RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("413"));
+        client.close();
+    }
+
+    // 3. Post-dispatch oversized DATA while stream_body handler is awaiting another
+    //    async operation:
+    //    - when the handler returns 200 without reading the body, the server still
+    //      answers 413 instead of committing 200;
+    //    - when the request carries Expect: 100-continue (without Content-Length) and
+    //      the handler performs its first read after oversized DATA arrived, 100 Continue
+    //      is skipped and 413 is returned directly.
+    for (const bool read_after_wait : {false, true}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        std::string wire(ruvia::http2_client_preface);
+        append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "POST");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
+        ruvia::hpack_encoder::encode_header(
+            block, ":path", read_after_wait ? "/http2-bounded-delayed-stream?read=1" : "/http2-bounded-delayed-stream");
+        if (read_after_wait) {
+            ruvia::hpack_encoder::encode_header(block, "expect", "100-continue");
+        }
         append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
         append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, oversized);
         asio::write(client, asio::buffer(wire));
