@@ -118,7 +118,7 @@ class surface_res_slot_only_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next&) {
         c.header("X-Surface-Res-Slot-Only", "true");
-        c.respond(c.body(nullptr));
+        c.respond(c.body());
         co_return;
     }
 };
@@ -142,7 +142,7 @@ public:
     RUVIA_GET("/redirect-prepared-location", redirect_prepared_location);
     RUVIA_GET("/error", app_error);
     RUVIA_GET("/throw", throw_error);
-    RUVIA_GET_STREAM("/stream-throw", stream_throw);
+    RUVIA_GET("/stream-throw", stream_throw);
     RUVIA_GET("/missing", missing);
     RUVIA_GET("/middleware-return", middleware_return_handler, surface_return_middleware);
     RUVIA_GET("/pre-direct-res", pre_direct_response, surface_pre_direct_response_middleware);
@@ -163,8 +163,8 @@ public:
     RUVIA_ON((::ruvia::http_known_method::put, ::ruvia::http_known_method::delete_value),
         ("/on-item/:id", "/on-legacy/:id"), on_item);
     RUVIA_GET("/manual/body", manual_body);
-    RUVIA_PUT_STREAM("/upload/:id", stream_put);
-    RUVIA_PATCH_STREAM("/upload/:id", stream_patch);
+    RUVIA_PUT("/upload/:id", stream_put, ruvia::stream_body);
+    RUVIA_PATCH("/upload/:id", stream_patch, ruvia::stream_body);
     RUVIA_ROUTES_END
 
 private:
@@ -256,7 +256,7 @@ private:
     ruvia::task<ruvia::http_response> null_body(ruvia::context& c) {
         c.status(ruvia::http_status::accepted);
         c.header("X-Null-Body", "true");
-        co_return c.body(nullptr);
+        co_return c.body();
     }
 
     ruvia::task<ruvia::http_response> binary_body(ruvia::context& c) {
@@ -363,11 +363,12 @@ private:
     }
 
     ruvia::task<ruvia::http_response> json_message(ruvia::context& c) {
-        const auto json = c.req().validated_json<surface_json_message>();
+        const auto& json = c.req().validated<surface_json_message>();
+        const auto raw = co_await c.req().text();
         std::pmr::string body(c.allocator<char>());
         body.append("json-value bytes=");
-        append_unsigned(body, json.raw().size());
-        if (const auto& message = json.value().get<"message">()) {
+        append_unsigned(body, raw.size());
+        if (const auto& message = json.get<"message">()) {
             body.append("\nmessage=");
             body.append(message->view());
         }
@@ -498,7 +499,7 @@ private:
     static ruvia::task<ruvia::http_response> count_streaming_body(
         ruvia::context& c, std::string_view verb) {
         std::uint64_t bytes_value = 0;
-        auto& reader_value = c.req().get_body_reader();
+        auto& reader_value = c.req().body_reader();
         while (auto chunk = co_await reader_value.read()) {
             bytes_value += chunk->size();
         }

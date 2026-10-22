@@ -416,7 +416,7 @@ task<std::string_view> context::request_body() const {
         throw std::logic_error("unexpected request content decode result");
     }
     auto& decoded = decoded_body();
-    decoded = std::move(*decoded_content).take_bytes();
+    decoded = std::move(*decoded_content);
     body_decoded_ = true;
     co_return std::string_view(decoded);
 }
@@ -451,15 +451,7 @@ bool context::request_content_type_matches(std::string_view expected) const noex
 task<std::pmr::vector<multipart_part>> context::request_multipart() const {
     const auto boundary = get_multipart_boundary();
     const auto request_body = co_await this->request_body();
-    auto parsed_value = parse_multipart_body(request_body, {.boundary_ = boundary, .resource_ = arena()});
-    if (const auto* failure = parsed_value.failure()) {
-        throw failure->protocol_error();
-    }
-    auto* body = parsed_value.body();
-    if (body == nullptr) {
-        throw std::logic_error("unexpected multipart body parse result");
-    }
-    co_return std::move(*body).take_parts();
+    co_return parse_multipart_body(request_body, {.boundary_ = boundary, .resource_ = arena()});
 }
 
 task<void> context::request_discard_body() const {

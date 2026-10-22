@@ -76,13 +76,7 @@ http_response context::body(std::string_view body) const {
     return response;
 }
 
-http_response context::body(std::nullptr_t) const {
-    http_response response({.resource_ = arena()});
-    apply_response_state(response, std::nullopt);
-    return response;
-}
-
-http_response context::body(std::pmr::string&& body) const {
+http_response context::body_owned(std::pmr::string&& body) const {
     http_response response({.resource_ = arena()});
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
@@ -111,7 +105,7 @@ http_response context::text(std::string_view body) const {
     return response;
 }
 
-http_response context::text(std::pmr::string&& body) const {
+http_response context::text_owned(std::pmr::string&& body) const {
     http_response response({.resource_ = arena()});
     response.content_type(http_content_type::text_plain_utf8);
     response.owned_body(std::move(body));
@@ -143,7 +137,7 @@ http_response context::html(std::string_view body) const {
     return response;
 }
 
-http_response context::html(std::pmr::string&& body) const {
+http_response context::html_owned(std::pmr::string&& body) const {
     http_response response({.resource_ = arena()});
     response.content_type(http_content_type::text_html_utf8);
     response.owned_body(std::move(body));

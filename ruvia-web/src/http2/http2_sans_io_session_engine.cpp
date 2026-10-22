@@ -88,12 +88,7 @@ void http2_sans_io_session_engine::take_output(std::pmr::string& output) {
     // core batch operation only consumes output and invokes its observer after the
     // copy succeeds, so allocation failure leaves protocol bytes and budget intact.
     output.clear();
-    const auto result_value = connection_.take_output_batch(http2_data_output_credit_bytes, output, [](void* context_value, std::uint32_t stream_id, std::size_t payload_bytes) noexcept { static_cast<http2_data_output_budget*>(context_value)->note_data_output(stream_id, payload_bytes); }, &output_budget_);
-    if (result_value.status_ == http2_output_batch_status::unaligned) {
-        // This driver exclusively consumes complete batches; an unaligned cursor
-        // would mean another consumer violated that ownership contract.
-        std::terminate();
-    }
+    (void)connection_.take_output_batch(http2_data_output_credit_bytes, output, [](void* context_value, std::uint32_t stream_id, std::size_t payload_bytes) noexcept { static_cast<http2_data_output_budget*>(context_value)->note_data_output(stream_id, payload_bytes); }, &output_budget_);
     output_write_in_flight_ = !output.empty();
 }
 
@@ -234,10 +229,10 @@ task<bool> http2_sans_io_session_engine::push_request(std::uint32_t associated_s
     if (head == nullptr || (associated_stream_id & 1U) == 0) {
         co_return false;
     }
-    const auto& original = head->request();
-    if (!http_ascii_equals_ignore_case(original.scheme(), request.scheme_) ||
-        !http_authorities_equal(borrowed_text(original.authority()), borrowed_text(request.authority_),
-            original.scheme() == "https" ? 443 : 80)) {
+    const auto original = head->request_view();
+    if (!http_ascii_equals_ignore_case(original.scheme_, request.scheme_) ||
+        !http_authorities_equal(borrowed_text(original.authority_), borrowed_text(request.authority_),
+            http_ascii_equals_ignore_case(original.scheme_, "https") ? 443 : 80)) {
         throw std::invalid_argument("push request must use its associated request origin");
     }
     auto promised = connection_.submit_push_request(associated_stream_id, request);
@@ -247,12 +242,12 @@ task<bool> http2_sans_io_session_engine::push_request(std::uint32_t associated_s
         }
         co_return false;
     }
-    const auto id = std::get<0>(promised).stream_id();
+    auto& promised_event = std::get<0>(promised);
+    const auto id = promised_event.stream_id();
     http2_sans_io_stream_runtime* runtime = nullptr;
     try {
-        const auto request_view = connection_.server_request_view(id);
-        runtime = request_view ? http2_select_stream_route(routes_, *request_view, stream_runtimes_, id) : nullptr;
-        if (runtime == nullptr || !runtime->hold_request_head(std::move(std::get<0>(promised)))) {
+        runtime = http2_select_stream_route(routes_, promised_event.request_view(), stream_runtimes_, id);
+        if (runtime == nullptr || !runtime->hold_request_head(std::move(promised_event))) {
             throw std::logic_error("HTTP/2 push dispatch admission failed");
         }
     } catch (...) {
@@ -321,7 +316,7 @@ struct http2_sans_io_session_engine::tunnel_upgrade_operation final {
 
 struct http2_sans_io_session_engine::websocket_upgrade_operation final {
     using transport_type = http2_sans_io_tunnel_transport<asio::any_io_executor>;
-    using session_type = websocket_connection<transport_type>;
+    using session_type = server_websocket_connection<transport_type>;
 
     http2_sans_io_session_engine& engine_;
     std::uint32_t stream_id_;
@@ -342,7 +337,7 @@ struct http2_sans_io_session_engine::websocket_upgrade_operation final {
             {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
                 .response_headers_ = response_headers_value,
                 .deflate_ = websocket_endpoint_.deflate()});
-        const auto* submitted_handshake = handshake_result.submitted();
+        const auto* submitted_handshake = std::get_if<http2_websocket_negotiation>(&handshake_result);
         if (submitted_handshake == nullptr) {
             // The handshake is not started, so stream dispatch still
             // answers this pending CONNECT with an error response.
@@ -360,7 +355,7 @@ struct http2_sans_io_session_engine::websocket_upgrade_operation final {
             base_services_.worker(), engine_.session_.scanner_entry(), websocket_endpoint_.lifecycle(),
             protocol_byte_limit::limited(options.server_.max_websocket_message_bytes_),
             &engine_.inbound_buffers_, std::string_view{},
-            websocket_server_protocol_options{.compression_ = submitted_handshake->compression(),
+            websocket_connection_options{.compression_ = submitted_handshake->compression(),
                 .compression_level_ = websocket_endpoint_.deflate().compression_level_,
                 .mem_level_ = websocket_endpoint_.deflate().mem_level_,
                 .shared_deflate_ = &options.codecs_->websocket_deflate()});
@@ -388,7 +383,6 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
     if (request_head == nullptr) {
         co_return;
     }
-    const auto request_method = request_head->request().known_method();
     auto* selected_route = stream_runtime->selected_route();
     if (selected_route == nullptr) {
         reset_stream_no_throw(stream_id, http2_error_code::internal_error);
@@ -404,21 +398,8 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
         wake_writer();
         co_return;
     }
-    auto request_build = make_http2_server_request(connection_, stream_id, request_memory_value.resource(),
+    http_request request = request_head->build_request(request_memory_value.resource(),
         buffered_body == nullptr ? std::string_view{} : buffered_body->bytes());
-    if ((request_build.index() != 0)) {
-        auto request = make_parsed_http_request(
-            "GET", "/", {}, {}, request_memory_value.resource())
-                           .first;
-        auto response = co_await routes_.handle_error(request, request_memory_value,
-            copy_http_protocol_error_info(request_memory_value.resource(), std::get<1>(request_build)),
-            base_services);
-        (void)co_await buffered_response_writer_.write(stream_id, response,
-            plan_buffered_http_response_write(request_method, response));
-        co_return;
-    }
-
-    http_request request = std::move(std::get<0>(request_build));
     http_response response({.resource_ = request_memory_value.resource()});
     struct response_output_target {
         ::ruvia::http2_connection& connection_;
@@ -524,7 +505,7 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
             break;
         }
         case http_request_endpoint::websocket: {
-            const auto& websocket_endpoint = *resolved->route().endpoint().get_websocket();
+            const auto& websocket_endpoint = *resolved->route().endpoint().websocket();
             const auto handshake_validation = ruvia::validate_http2_websocket_handshake(
                 connection_, stream_id, request, websocket_endpoint.handshake_validation());
             if (handshake_validation.accepted() == nullptr) {
@@ -567,7 +548,7 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
         }
         case http_request_endpoint::response_stream: {
             http2_sans_io_response_stream_sink sink_value(connection_, stream_id,
-                resolved->route().endpoint().response_stream()->kind(), write_signal_, *stream_signal, output_budget_,
+                write_signal_, *stream_signal, output_budget_,
                 worker_resource(), request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
                 admission.coding_availability(), options.cors_ ? &*options.cors_ : nullptr);
             auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved,
@@ -678,12 +659,13 @@ void http2_sans_io_session_engine::reset_event_stream(
     wake_writer();
 }
 
-http2_sans_io_stream_runtime* http2_sans_io_session_engine::resolve_stream_route(std::uint32_t stream_id) {
-    const auto request_view = connection_.server_request_view(stream_id);
-    if (!request_view.has_value()) {
+http2_sans_io_stream_runtime* http2_sans_io_session_engine::resolve_stream_route(
+    const http2_request_head_event& message_head) {
+    const auto request_view = message_head.request_view();
+    if (request_view.method_.empty()) {
         return nullptr;
     }
-    return http2_select_stream_route(routes_, *request_view, stream_runtimes_, stream_id);
+    return http2_select_stream_route(routes_, request_view, stream_runtimes_, message_head.stream_id());
 }
 
 void http2_sans_io_session_engine::on_message_head(http2_request_head_event& message_head) {
@@ -698,7 +680,7 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     const auto expectation_plan =
         message_head.expectation_plan(http_unsupported_expectation_policy::reject);
     const auto snapshot = message_head.snapshot();
-    auto* stream_runtime = resolve_stream_route(stream_id);
+    auto* stream_runtime = resolve_stream_route(message_head);
     if (stream_runtime == nullptr || !stream_runtime->hold_request_head(std::move(message_head))) {
         reset_event_stream(stream_id, http2_error_code::internal_error);
         return;

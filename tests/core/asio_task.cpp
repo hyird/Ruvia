@@ -1,5 +1,3 @@
-#include "ruvia/core/asio_task.h"
-
 #include <concepts>
 #include <future>
 #include <memory>
@@ -7,6 +5,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/async.h"
 #include "ruvia/core/event_loop_pool.h"
 
 namespace {

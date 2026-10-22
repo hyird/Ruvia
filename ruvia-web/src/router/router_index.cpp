@@ -85,7 +85,7 @@ detail::route_resolution detail::route_table::resolve(route_request_view request
         if (request.extended_protocol_ == "websocket") {
             auto websocket = resolve(http_known_method::get, path);
             const auto* route = websocket.resolved();
-            return route != nullptr && route->route().endpoint().get_websocket() != nullptr
+            return route != nullptr && route->route().endpoint().websocket() != nullptr
                        ? websocket
                        : route_resolution::reject();
         }

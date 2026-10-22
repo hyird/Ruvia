@@ -8,7 +8,7 @@
 #include <asio/co_spawn.hpp>
 #include <asio/recycling_allocator.hpp>
 
-#include "ruvia/core/asio_task.h"
+#include "ruvia/core/async.h"
 
 #include "app/web_worker_dispatch.h"
 #include "router/route_table.h"
@@ -25,17 +25,16 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
     http_server_options validated_options)
     : runtime_({.queue_capacity_ = validated_options.server_.worker_queue_capacity_,
           .io_policy_ = ruvia::worker_io_policy::single_owner}),
-      io_context_(runtime_.context().io_context()),
-      worker_runtime_(runtime_.context()),
-      finalize_signal_(worker_runtime_.handle()),
+      io_context_(runtime_.io_context()),
+      finalize_signal_(runtime_.handle()),
       routes_(routes_value),
       memory_(validated_options.server_.memory_pool_),
       inbound_budget_(*memory_.resource(), validated_options.server_.max_inbound_buffer_bytes_per_worker_),
       codecs_(memory_.resource()),
-      background_tasks_(worker_runtime_.handle(), {.resource_ = memory_.resource()}),
+      background_tasks_(runtime_.handle(), {.resource_ = memory_.resource()}),
       options_(std::move(validated_options)),
-      static_roots_(options_, worker_runtime_.handle(), worker_state_, memory_.resource()),
-      capabilities_(io_context_, worker_runtime_.handle(), memory_.resource(), capabilities,
+      static_roots_(options_, runtime_.handle(), worker_state_, memory_.resource()),
+      capabilities_(io_context_, runtime_.handle(), memory_.resource(), capabilities,
           worker_capability_options{
               .default_rate_limit_ = options_.default_rate_limit_per_worker_,
               .route_rate_limits_ = routes_.has_route_rate_limit() ? route_rate_limit_presence::present
@@ -49,7 +48,7 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
                   options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
               .precompressed_static_files_ = options_.compression_.has_value(),
           }),
-      connections_(io_context_, worker_runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_),
+      connections_(io_context_, runtime_.handle(), memory_, routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners, runtime_),
       web_worker_dispatch_(std::make_shared<web_worker_dispatch>(
           runtime_, memory_.resource(), capabilities_, background_tasks_, stop_token_)) {
     options_.inbound_budget_ = &inbound_budget_;
@@ -114,7 +113,7 @@ web_worker_handle web_worker_runtime::web_worker() const {
 }
 #if defined(_WIN32)
 void web_worker_runtime::attach_windows_accept(windows_accept_domain& domain, std::size_t origin) {
-    connections_.attach_windows_accept(domain, origin, worker_runtime_);
+    connections_.attach_windows_accept(domain, origin, detail::worker_runtime_access::context(runtime_));
     windows_accept_ = &domain;
     windows_origin_ = origin;
 }

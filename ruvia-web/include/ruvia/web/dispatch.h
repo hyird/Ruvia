@@ -38,6 +38,10 @@ public:
         return body_;
     }
     std::string_view body() const&& = delete;
+    [[nodiscard]] std::span<const http_header> headers() const& noexcept {
+        return headers_;
+    }
+    std::span<const http_header> headers() const&& = delete;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
     std::optional<std::string_view> header(std::string_view) const&& = delete;
 

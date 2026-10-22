@@ -97,7 +97,7 @@ detail::redis_command_executor redis_handle::executor() const {
 }
 
 detail::redis_command_executor redis_handle::executor(detail::redis_pool& pool_value) const {
-    return detail::redis_command_executor{&pool_value, operation_options_};
+    return detail::redis_command_executor{&pool_value, &registration_.scope(), operation_options_};
 }
 
 void redis_handle::expire_capability(void* target) noexcept {
@@ -117,22 +117,23 @@ scoped_operation<redis_value> redis_handle::command(std::span<const std::string_
             "raw blocking redis command requires a stop_token or finite operation timeout");
     }
     return scoped(detail::execute_owned_redis_command(
-        selected_pool, detail::own_redis_args(args, resource_), operation_options_, resource_));
+        executor(selected_pool), detail::own_redis_args(args, resource_), resource_));
 }
 
 task<redis_value> redis_handle::command_owned(std::pmr::vector<std::pmr::string>&& args) const {
     registration_.require_active();
     if (args.get_allocator().resource() == resource_) {
-        return detail::execute_owned_redis_command(pool(), std::move(args), operation_options_, resource_);
+        return detail::execute_owned_redis_command(executor(), std::move(args), resource_);
     }
-    return detail::execute_owned_redis_command(pool(),
-        std::pmr::vector<std::pmr::string>(args.begin(), args.end(), resource_), operation_options_, resource_);
+    return detail::execute_owned_redis_command(executor(),
+        std::pmr::vector<std::pmr::string>(args.begin(), args.end(), resource_), resource_);
 }
 
 task<redis_value> redis_handle::script_owned(
     const detail::redis_orm_script& script, std::pmr::vector<std::pmr::string>&& args) const {
     registration_.require_active();
-    return detail::execute_redis_orm_script(pool(), script, std::move(args), operation_options_, resource_);
+    return detail::execute_redis_orm_script(
+        pool(), script, std::move(args), registration_.scope(), operation_options_, resource_);
 }
 
 scoped_operation<void> redis_handle::ping() const {

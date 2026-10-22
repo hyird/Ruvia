@@ -65,10 +65,10 @@ public:
         }
     }
 
-    [[nodiscard]] http2_output_consume_status consume(std::size_t bytes_value) noexcept {
+    [[nodiscard]] http2_output_consume_status consume(std::size_t bytes_value) {
         const auto remaining = bytes_.size() - consumed_;
         if (bytes_value > remaining) {
-            return http2_output_consume_status::out_of_range;
+            throw std::out_of_range("HTTP/2 output consume byte count exceeds pending output");
         }
         if (bytes_value < remaining) {
             consumed_ += bytes_value;
@@ -162,14 +162,14 @@ public:
             return {http2_output_batch_status::empty, 0};
         }
         if (segment_offset_ == segments_.size() || segments_[segment_offset_].begin_ != consumed_) {
-            return {http2_output_batch_status::unaligned, 0};
+            throw std::logic_error("HTTP/2 output batch cursor is not aligned to a frame boundary");
         }
         std::size_t end = consumed_;
         std::size_t segment_count = 0;
         for (std::size_t index = segment_offset_; index < segments_.size(); ++index) {
             const auto& segment = segments_[index];
             if (segment.begin_ != end) {
-                return {http2_output_batch_status::unaligned, 0};
+                throw std::logic_error("HTTP/2 output batch cursor is not aligned to a frame boundary");
             }
             if (segment_count != 0 && segment.end_ - consumed_ > max_bytes) {
                 break;
@@ -181,7 +181,7 @@ public:
             }
         }
         if (segment_count == 0) {
-            return {http2_output_batch_status::unaligned, 0};
+            throw std::logic_error("HTTP/2 output batch cursor is not aligned to a frame boundary");
         }
         const auto batch_bytes = end - consumed_;
         const bool transfer_storage = consumed_ == 0 && end == bytes_.size() &&
@@ -224,10 +224,7 @@ public:
     }
 
     void consume_batch(std::size_t bytes_value) noexcept {
-        const auto status = consume(bytes_value);
-        if (status == http2_output_consume_status::out_of_range) {
-            std::terminate();
-        }
+        (void)consume(bytes_value);
     }
 
 private:

@@ -105,6 +105,7 @@ enum class http1_final_response_control_plan_error : std::uint8_t;
 
 class http1_final_response_commit_result;
 class http1_final_response_commit_failure;
+class prepared_http1_response_stream;
 
 class http1_final_response_commit_error final : public std::exception {
 public:
@@ -112,6 +113,8 @@ public:
 
 private:
     friend class http1_final_response_commit_failure;
+    friend prepared_http1_response_stream prepare_http1_response_stream_head(
+        http_response, const http1_response_stream_plan&, http_response_trailer_intent);
 
     explicit http1_final_response_commit_error(detail::http1_final_response_control_plan_error error) noexcept
         : error_(error) {}
@@ -184,8 +187,6 @@ private:
 [[nodiscard]] http1_final_response_commit_result http1_commit_final_response(
     http_response& response, http1_request_connection_plan plan);
 
-class prepared_http1_response_stream_result;
-
 // Commit-time result. This object combines request/version/runtime constraints with
 // the response method/status and Connection options, then binds the exact header
 // bytes to the authoritative connection disposition.
@@ -216,11 +217,8 @@ public:
     }
 
 private:
-    friend class prepared_http1_response_stream_result;
-    friend prepared_http1_response_stream_result prepare_http1_response_stream_head(
-        http_response, http_response_stream_kind, const http1_response_stream_plan&, http_response_trailer_intent);
-    friend prepared_http1_response_stream_result prepare_http1_known_length_response_stream_head(
-        http_response, std::uint64_t, http_response_stream_kind, const http1_response_stream_plan&);
+    friend prepared_http1_response_stream prepare_http1_response_stream_head(
+        http_response, const http1_response_stream_plan&, http_response_trailer_intent);
 
     prepared_http1_response_stream(http_response_stream_head head, http1_response_head_plan response_head_plan,
         http1_request_connection_plan connection_plan) noexcept
@@ -233,50 +231,8 @@ private:
     http1_request_connection_plan connection_plan_;
 };
 
-class prepared_http1_response_stream_result final {
-public:
-    [[nodiscard]] const prepared_http1_response_stream* prepared() const& noexcept {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    [[nodiscard]] const prepared_http1_response_stream* prepared() const&& = delete;
-
-    [[nodiscard]] prepared_http1_response_stream* prepared() & noexcept {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    [[nodiscard]] prepared_http1_response_stream* prepared() && = delete;
-
-    [[nodiscard]] const http1_final_response_commit_failure* failure() const& noexcept {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    [[nodiscard]] const http1_final_response_commit_failure* failure() const&& = delete;
-
-private:
-    friend prepared_http1_response_stream_result prepare_http1_response_stream_head(
-        http_response, http_response_stream_kind, const http1_response_stream_plan&, http_response_trailer_intent);
-    friend prepared_http1_response_stream_result prepare_http1_known_length_response_stream_head(
-        http_response, std::uint64_t, http_response_stream_kind, const http1_response_stream_plan&);
-
-    using value_type = std::variant<prepared_http1_response_stream, http1_final_response_commit_failure>;
-
-    explicit prepared_http1_response_stream_result(prepared_http1_response_stream prepared) noexcept
-        : value_(std::move(prepared)) {}
-
-    explicit prepared_http1_response_stream_result(http1_final_response_commit_failure failure) noexcept
-        : value_(failure) {}
-
-    value_type value_;
-};
-
-[[nodiscard]] prepared_http1_response_stream_result prepare_http1_response_stream_head(
-    http_response response, http_response_stream_kind kind, const http1_response_stream_plan& plan,
-    http_response_trailer_intent trailer_intent);
-
-// Commit an incrementally written response whose decoded representation length
-// is already known from the upstream protocol. The shared body policy still
-// suppresses payload for HEAD/204/304, while the HTTP/1 head owns a canonical
-// length and the runtime may keep the connection reusable on either version.
-[[nodiscard]] prepared_http1_response_stream_result prepare_http1_known_length_response_stream_head(
-    http_response response, std::uint64_t content_length, http_response_stream_kind kind,
-    const http1_response_stream_plan& plan);
+[[nodiscard]] prepared_http1_response_stream prepare_http1_response_stream_head(
+    http_response response, const http1_response_stream_plan& plan,
+    http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
 
 }  // namespace ruvia

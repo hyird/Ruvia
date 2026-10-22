@@ -9,6 +9,7 @@
 
 #include "ruvia/web/detail/model/parse/json_parser.h"
 #include "ruvia/web/model_json.h"
+#include "ruvia/web/validation.h"
 
 namespace ruvia {
 
@@ -19,14 +20,18 @@ task<std::optional<t_type>> context_request::json_if_model_task(const context* c
         co_return std::nullopt;
     }
     const auto request_body = co_await context_text_task(context_value);
+    auto* const resource = context_resource(context_value);
     auto parsed_value =
-        detail::model_parse_access::parse_json_borrowed<t_type>(request_body, context_resource(context_value));
+        detail::model_parse_access::parse_json_borrowed_partial<t_type>(request_body, resource);
     if (!parsed_value) {
         // Once Content-Type selects JSON, malformed JSON is a 400 rather than
         // an absent optional format. This keeps json_if<T>() from turning an
         // explicitly JSON request into a successful fallback.
         detail::throw_invalid_json_body();
     }
+    validator validator_value({.resource_ = resource});
+    detail::model_validation_access::validate_model(*parsed_value, validator_value);
+    validator_value.throw_if_invalid();
     co_return std::move(*parsed_value);
 }
 
@@ -43,13 +48,17 @@ task<std::optional<t_type>> context_request::form_if_model_task(const context* c
         co_return std::nullopt;
     }
     const auto request_body = co_await context_text_task(context_value);
+    auto* const resource = context_resource(context_value);
     auto parsed_value =
-        detail::model_parse_access::parse_form_borrowed<t_type>(request_body, context_resource(context_value));
+        detail::model_parse_access::parse_form_borrowed_partial<t_type>(request_body, resource);
     if (!parsed_value) {
         // The selected form media type makes a malformed body a client error;
         // nullopt is reserved for a different Content-Type.
         detail::throw_invalid_form_body();
     }
+    validator validator_value({.resource_ = resource});
+    detail::model_validation_access::validate_model(*parsed_value, validator_value);
+    validator_value.throw_if_invalid();
     co_return std::move(*parsed_value);
 }
 
@@ -62,11 +71,6 @@ scoped_operation<std::optional<t_type>> context_request::form_if() const {
 template <typename t_type>
 inline const t_type& context_request::validated() const {
     return request_bindings().get_validated<t_type>();
-}
-
-template <typename t_type>
-inline validated_json<t_type> context_request::validated_json() const {
-    return request_bindings().get_validated_json<t_type>();
 }
 
 }  // namespace ruvia

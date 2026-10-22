@@ -15,7 +15,7 @@ inline constexpr std::size_t max_transfer_codings = 8;
 
 // A bounded inline sequence. It owns no memory resource, so a parsed framing
 // plan may outlive the per-request storage its head was parsed from.
-class transfer_coding_sequence final {
+class http_transfer_codings final {
 public:
     void push_back(http_transfer_coding coding) {
         if (size_ == max_transfer_codings) {
@@ -59,13 +59,4 @@ private:
     std::array<http_transfer_coding, max_transfer_codings> data_{};
     std::size_t size_{0};
 };
-
-struct http_transfer_codings final {
-    [[nodiscard]] bool empty() const noexcept {
-        return values_.empty();
-    }
-
-    transfer_coding_sequence values_;
-};
-
 }  // namespace ruvia

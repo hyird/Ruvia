@@ -161,12 +161,12 @@ public:
                         malformed = true;
                         return false;
                     }
-                    if (next_codings.values_.size() == max_transfer_codings) {
+                    if (next_codings.size() == max_transfer_codings) {
                         unsupported = true;
                         return true;
                     }
-                    next_codings.values_.push_back(gzip ? http_transfer_coding::gzip
-                                                        : http_transfer_coding::deflate);
+                    next_codings.push_back(gzip ? http_transfer_coding::gzip
+                                                : http_transfer_coding::deflate);
                     return true;
                 }
                 unsupported = true;

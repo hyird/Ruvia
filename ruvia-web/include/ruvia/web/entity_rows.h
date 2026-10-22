@@ -34,8 +34,28 @@ public:
         return rows_[i];
     }
     const entity_type& operator[](std::size_t) const&& = delete;
+    const entity_type& front() const& noexcept {
+        return rows_.front();
+    }
+    entity_type& front() & noexcept {
+        return rows_.front();
+    }
+    const entity_type& front() const&& = delete;
+    const entity_type& back() const& noexcept {
+        return rows_.back();
+    }
+    entity_type& back() & noexcept {
+        return rows_.back();
+    }
+    const entity_type& back() const&& = delete;
+    entity_type* begin() & noexcept {
+        return rows_.data();
+    }
     const entity_type* begin() const& noexcept {
         return rows_.data();
+    }
+    entity_type* end() & noexcept {
+        return rows_.data() + rows_.size();
     }
     const entity_type* end() const& noexcept {
         return rows_.data() + rows_.size();

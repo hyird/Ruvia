@@ -27,16 +27,16 @@ public:
     RUVIA_CONTROLLER_GROUP("/streaming")
 
     RUVIA_ROUTES_BEGIN(streaming_controller)
-    RUVIA_POST_STREAM("/upload/raw", upload_raw);
-    RUVIA_POST_STREAM("/upload/multipart", upload_multipart);
-    RUVIA_GET_STREAM("/chunks", chunks);
-    RUVIA_GET_SSE("/events", events_value);
+    RUVIA_POST("/upload/raw", upload_raw, ruvia::stream_body);
+    RUVIA_POST("/upload/multipart", upload_multipart, ruvia::stream_body);
+    RUVIA_GET("/chunks", chunks);
+    RUVIA_GET("/events", events_value);
     RUVIA_ROUTES_END
 
 private:
     ruvia::task<ruvia::http_response> upload_raw(ruvia::context& c) {
         std::size_t bytes_value = 0;
-        auto& reader_value = c.req().get_body_reader();
+        auto& reader_value = c.req().body_reader();
         while (auto chunk = co_await reader_value.read()) {
             bytes_value += chunk->size();
         }
@@ -51,7 +51,7 @@ private:
     ruvia::task<ruvia::http_response> upload_multipart(ruvia::context& c) {
         std::size_t parts = 0;
         std::size_t bytes_value = 0;
-        auto reader_value = c.req().get_multipart_reader();
+        auto reader_value = c.req().multipart_reader();
         while (auto part = co_await reader_value.read()) {
             if (part->phase() == ruvia::multipart_chunk_phase::first ||
                 part->phase() == ruvia::multipart_chunk_phase::complete) {

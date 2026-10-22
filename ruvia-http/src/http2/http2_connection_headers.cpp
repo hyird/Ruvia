@@ -75,7 +75,7 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
         return header_decode_status::protocol_error;
     }
     if (role_ == http2_role::server && stream.request_known_method() != http_known_method::connect) {
-        const auto content_semantics = http_request_content_semantics(stream.request_method());
+        const auto content_semantics = classify_http_request_content_semantics(stream.request_method());
         if (content_semantics == http_request_content_semantics::forbidden) {
             // Zero-length framing carries no content. Keep the remote half open
             // for an empty DATA(END_STREAM), but forbid every non-empty DATA.

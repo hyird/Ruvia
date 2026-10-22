@@ -1709,7 +1709,7 @@ RUVIA_TEST(db_field_reference_and_predicate_cover_aliases_columns_json_and_owned
         "\"revision\" = (\"users\".\"revision\" + $4), \"updated_at\" = \"now\"() WHERE \"users\".\"id\"");
 }
 
-RUVIA_TEST(db_expr_db_tuple_and_db_brackets_compose_without_external_query) {
+RUVIA_TEST(db_expr_and_db_tuple_compose_without_external_query) {
     using alert_entity = db_entity<"alert_state",
         db_column<"device_id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
         db_column<"observed_at_ms", std::int64_t>,
@@ -1727,26 +1727,23 @@ RUVIA_TEST(db_expr_db_tuple_and_db_brackets_compose_without_external_query) {
     const auto json_patched = db_expr::jsonb_set(
         alert_entity::column<"data">(),
         {"meta", "updated"},
-        db_expr::jsonb_build_object({db_expr::value("at"), db_expr::now(), db_expr::value("first_tag"), alert_entity::column<"tags">()[1]}));
+        db_expr::jsonb_build_object({db_expr::value("at"), db_expr::now(), db_expr::value("first_tag"), alert_entity::column<"tags">().to_expr()[1]}));
     const auto filtered_agg = db_expr::jsonb_agg(
-        alert_entity::column<"device_id">().cast(db_data_type::text),
-        {alert_entity::column<"observed_at_ms">().desc()})
+        alert_entity::column<"device_id">().to_expr().cast(db_data_type::text),
+        {alert_entity::column<"observed_at_ms">().to_expr().desc()})
                                   .filter(alert_entity::column<"observed_at_ms">() > 0);
     const auto windowed = db_expr::call("lag", {alert_entity::column<"observed_at_ms">()})
                               .over({
                                   .partition_by_ = {alert_entity::column<"device_id">()},
-                                  .order_by_ = {alert_entity::column<"observed_at_ms">().asc()},
+                                  .order_by_ = {alert_entity::column<"observed_at_ms">().to_expr().asc()},
                               });
-    const auto bracket_where = db_brackets([](db_where_builder& qb) {
-        qb.where(alert_entity::column<"observed_at_ms">() > 100)
-            .and_where([](db_where_builder& inner) {
-                inner.where(alert_entity::column<"device_id">() == "a")
-                    .or_where(alert_entity::column<"device_id">() == "b");
-            });
-    }) && db_tuple{alert_entity::column<"device_id">(), alert_entity::column<"message_id">()}.in({
-              db_tuple{db_expr::value("a"), db_expr::value("m1")},
-              db_tuple{db_expr::value("b"), db_expr::value("m2")},
-          });
+    const auto bracket_where =
+        ((alert_entity::column<"observed_at_ms">() > 100) &&
+            ((alert_entity::column<"device_id">() == "a") || (alert_entity::column<"device_id">() == "b"))) &&
+        db_tuple{alert_entity::column<"device_id">(), alert_entity::column<"message_id">()}.in({
+            db_tuple{db_expr::value("a"), db_expr::value("m1")},
+            db_tuple{db_expr::value("b"), db_expr::value("m2")},
+        });
 
     db_query query;
     query.select({

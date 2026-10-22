@@ -6,12 +6,12 @@
 #include <span>
 #include <string>
 
+#include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_response_trailer_section.h"
-
 namespace ruvia {
 
 // Serialize a finalized HTTP/1 response head into caller-owned reusable scratch.
@@ -33,4 +33,6 @@ void append_http1_response_trailers(
 [[nodiscard]] http_response_trailer_section validate_http_response_trailers(
     std::span<const http_header_view> trailers);
 
+template <detail::http_temporary_owning_range<http_header_view> headers_type>
+http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
 }  // namespace ruvia

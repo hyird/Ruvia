@@ -86,12 +86,15 @@ private:
 
     struct lease_type final {
         lease_type(detail::db_pool_ref_type client, std::size_t slot, void* result_value,
-            std::pmr::memory_resource* resource, operation_options options) noexcept;
+            std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
+            operation_options options) noexcept;
 
         detail::db_pool_ref_type client_;
         std::size_t slot_;
         void* result_;
         std::pmr::memory_resource* resource_;
+        std::pmr::vector<db_field> fields_;
+        std::pmr::vector<std::pmr::string> column_names_;
         operation_options options_;
     };
 
@@ -103,12 +106,13 @@ private:
 
     db_stream_result() noexcept = default;
     db_stream_result(detail::db_pool_ref_type client, std::size_t slot, void* result_value,
-        std::pmr::memory_resource* resource, operation_options options);
+        std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
+        operation_options options);
     void reset() noexcept;
     void bind_operation_scope(::ruvia::operation_scope& scope) noexcept;
     static void expire_capability(void* target) noexcept;
-    static task<std::optional<db_row>> read_task(operation_guard_type operation);
-    static task<void> close_task(operation_guard_type operation);
+    static task<std::optional<db_row>> read_task(operation_scope& scope, operation_guard_type operation);
+    static task<void> close_task(operation_scope& scope, operation_guard_type operation);
 
     state_owner_type state_;
     scoped_capability_registration registration_;

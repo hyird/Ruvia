@@ -144,13 +144,13 @@ constexpr std::size_t worker_budget = 10000;
 
 class inbound_memory_routes final {
     RUVIA_ROUTES_BEGIN(inbound_memory_routes)
-    RUVIA_POST_STREAM("/inbound-stream", stream_body);
+    RUVIA_POST("/inbound-stream", stream_body, ruvia::stream_body);
     RUVIA_GET("/inbound-trim", trim);
     RUVIA_CONNECT("inbound-tunnel.test:443", tunnel);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> stream_body(ruvia::context& context_value) {
-        auto& reader = context_value.req().get_body_reader();
+        auto& reader = context_value.req().body_reader();
         std::size_t received = 0;
         while (const auto chunk = co_await reader.read()) {
             received += chunk->size();

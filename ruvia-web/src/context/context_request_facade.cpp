@@ -144,11 +144,11 @@ scoped_operation<std::pmr::vector<multipart_part>> context_request::multipart() 
     return ::ruvia::make_scoped_operation(context_->operation_scope_, context_->request_multipart());
 }
 
-body_reader& context_request::get_body_reader() const {
+body_reader& context_request::body_reader() const {
     return context_->request_body_reader();
 }
 
-multipart_reader context_request::get_multipart_reader() const {
+multipart_reader context_request::multipart_reader() const {
     return context_->request_multipart_reader();
 }
 

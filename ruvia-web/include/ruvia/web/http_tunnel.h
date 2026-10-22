@@ -63,6 +63,8 @@ public:
     // with this tunnel. Capsule Protocol limits apply to encoded datagrams.
     [[nodiscard]] http_datagram_stream datagrams(http_capsule_config config = {}) &;
     http_datagram_stream datagrams(http_capsule_config = {}) && = delete;
+    [[nodiscard]] http_udp_tunnel udp(http_capsule_config config = {}) &;
+    http_udp_tunnel udp(http_capsule_config = {}) && = delete;
     [[nodiscard]] http_capsule_stream capsules(http_capsule_config config = {}) &;
     http_capsule_stream capsules(http_capsule_config = {}) && = delete;
 

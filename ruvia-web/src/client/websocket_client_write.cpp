@@ -117,6 +117,13 @@ scoped_operation<void> websocket_client_state::write(websocket_opcode opcode, st
     const operation_options& options, websocket_send_options send_options) {
     require_current();
     std::pmr::string owned(payload_value, memory_.resource());
+    return write(opcode, std::move(owned), options, send_options);
+}
+
+scoped_operation<void> websocket_client_state::write(websocket_opcode opcode, std::pmr::string&& payload_value,
+    const operation_options& options, websocket_send_options send_options) {
+    require_current();
+    std::pmr::string owned(std::move(payload_value), memory_.resource());
     return ::ruvia::make_scoped_operation(lifecycle_.operation_scope(),
         run_write(opcode, std::move(owned), options, send_options),
         &websocket_client_state::check_operation_affinity, &worker_);

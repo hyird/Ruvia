@@ -12,13 +12,25 @@ class websocket_connection::impl_type final {
 public:
     impl_type(std::pmr::memory_resource* memory, websocket_connection_options options)
         : resource_(memory),
-          input_(std::pmr::polymorphic_allocator<char>(memory)),
+          owned_input_(std::in_place, std::pmr::polymorphic_allocator<char>(memory)),
+          input_(&*owned_input_),
           max_buffered_input_bytes_(options.max_buffered_input_bytes_),
-          connection_(input_, options.message_limit_, options.compression_, options.role_,
+          connection_(*input_, options.message_limit_, options.compression_, options.role_,
               options.mask_key_generator_, options.mask_key_context_, options.compression_level_,
               options.mem_level_, options.shared_deflate_) {}
+
+    impl_type(std::pmr::memory_resource* memory, http_io_buffer& input,
+        websocket_connection_options options)
+        : resource_(memory),
+          input_(&input),
+          max_buffered_input_bytes_(options.max_buffered_input_bytes_),
+          connection_(input, options.message_limit_, options.compression_, options.role_,
+              options.mask_key_generator_, options.mask_key_context_, options.compression_level_,
+              options.mem_level_, options.shared_deflate_) {}
+
     std::pmr::memory_resource* resource_;
-    http_io_buffer input_;
+    std::optional<http_io_buffer> owned_input_;
+    http_io_buffer* input_;
     const std::size_t max_buffered_input_bytes_;
     detail::ws_connection connection_;
 };
@@ -38,6 +50,17 @@ websocket_connection::websocket_connection(websocket_connection_options options)
     impl_.reset(detail::construct_http_pmr_object<impl_type>(resource, resource, options));
 }
 
+websocket_connection::websocket_connection(
+    http_io_buffer& input, websocket_connection_options options) {
+    if (options.max_buffered_input_bytes_ == 0) {
+        throw std::invalid_argument("WebSocket input buffer limit must be greater than zero");
+    }
+    auto* resource = options.resource_ != nullptr
+                         ? options.resource_
+                         : detail::http_pmr_resource_or_default(input.get_allocator().resource());
+    impl_.reset(detail::construct_http_pmr_object<impl_type>(resource, resource, input, options));
+}
+
 websocket_connection::~websocket_connection() = default;
 websocket_connection::websocket_connection(websocket_connection&&) noexcept = default;
 websocket_connection& websocket_connection::operator=(websocket_connection&&) noexcept = default;
@@ -46,7 +69,7 @@ websocket_feed_status websocket_connection::feed(std::string_view input) {
     if (impl_->connection_.liveness_mode() == websocket_liveness_mode::inactive) {
         return websocket_feed_status::inactive;
     }
-    if (input.size() > impl_->max_buffered_input_bytes_ - impl_->input_.size()) {
+    if (input.size() > impl_->max_buffered_input_bytes_ - impl_->input_->size()) {
         if (input.size() > impl_->max_buffered_input_bytes_ - impl_->connection_.pending_input_bytes()) {
             return websocket_feed_status::backpressured;
         }
@@ -55,12 +78,16 @@ websocket_feed_status websocket_connection::feed(std::string_view input) {
         // copies an `input` aliasing the buffer before it moves any byte.
         impl_->connection_.release_consumed_input();
     }
-    impl_->input_.append(input);
+    impl_->input_->append(input);
     return websocket_feed_status::accepted;
 }
 
 std::optional<websocket_event> websocket_connection::next_event() & {
     return impl_->connection_.poll();
+}
+
+std::size_t websocket_connection::needed_input_bytes() const noexcept {
+    return impl_->connection_.needed_input_bytes();
 }
 
 websocket_output_plan websocket_connection::output_plan() const& noexcept {
@@ -83,11 +110,17 @@ websocket_abort_disposition websocket_connection::abort() noexcept {
 websocket_liveness_mode websocket_connection::liveness_mode() const noexcept {
     return impl_->connection_.liveness_mode();
 }
-websocket_frame_submit_status websocket_connection::submit_frame(websocket_opcode opcode, std::string_view payload_value, bool compress) {
+websocket_frame_submit_status websocket_connection::submit_frame(
+    websocket_opcode opcode, std::string_view payload_value, bool compress) {
     return impl_->connection_.submit_frame(opcode, payload_value, compress);
 }
-websocket_close_submit_status websocket_connection::submit_close(std::uint16_t code, std::string_view reason) {
+websocket_frame_submit_status websocket_connection::submit_borrowed_frame(
+    websocket_opcode opcode, std::string_view payload_value, bool compress) {
+    return impl_->connection_.submit_frame(
+        opcode, payload_value, compress, detail::ws_payload_storage::borrow);
+}
+websocket_close_submit_status websocket_connection::submit_close(
+    std::uint16_t code, std::string_view reason) {
     return impl_->connection_.submit_close(code, reason);
 }
-
 }  // namespace ruvia

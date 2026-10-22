@@ -40,17 +40,18 @@ inline http1_client_response_parse_result parse_wire(std::string_view method, st
     ruvia::http_client_request_view request;
     request.method_ = method;
     request.headers_ = request_headers;
-    const auto prepared_result =
+    auto prepared_result =
         method == "CONNECT"
             ? ruvia::http1_client_request_writer().prepare_connect(origin, request_headers, request_head,
                   http1_client_request_wire_policy{.close_policy_ = close_policy})
             : ruvia::http1_client_request_writer().prepare(origin, request, request_head,
                   http1_client_request_wire_policy{.close_policy_ = close_policy});
-    const auto* prepared = prepared_result.prepared();
+    auto* prepared = prepared_result.prepared();
     if (prepared == nullptr) {
         throw std::runtime_error("test request could not be prepared");
     }
-    auto parser = http1_client_response_parser(prepared->exchange_state(), {.resource_ = resource});
+    auto parser = http1_client_response_parser(
+        std::move(*prepared).take_exchange_state(), {.resource_ = resource});
     return parser.parse(wire);
 }
 

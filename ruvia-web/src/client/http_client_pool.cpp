@@ -351,7 +351,7 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
             pool_lease_scheduler& scheduler_;
             std::size_t slot_;
             ~http1_release() {
-                (void)scheduler_.release(slot_);
+                scheduler_.release(slot_);
             }
         } release{connection_value.http1_scheduler_, slot};
 

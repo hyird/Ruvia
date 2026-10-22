@@ -34,6 +34,9 @@ public:
     // Cold setup before start() or stop. Each member belongs to one group and
     // may be added once.
     void add(worker_runtime& member);
+    // Launches every member without waiting for readiness; a thread creation
+    // failure stops and joins the group before rethrowing.
+    void launch();
     // Phase one. Returns false when the group was stopped first; rethrows the
     // first member failure; throws std::runtime_error when a member stopped on
     // its own before readiness.

@@ -58,7 +58,7 @@ ruvia::task<ruvia::http_response> counted_error(ruvia::context& c, ruvia::http_e
 }
 
 [[maybe_unused]] const bool application_configured = [] {
-    ruvia::app().get_rate_limit(ruvia::rate_limit_config{
+    ruvia::app().rate_limit(ruvia::rate_limit_config{
         .rule_ = {.max_requests_ = admitted_requests, .window_ = std::chrono::minutes(10)}});
     ruvia::app().on_error(&counted_error);
     return true;
@@ -68,7 +68,7 @@ class admission_routes final {
     RUVIA_ROUTES_BEGIN(admission_routes)
     RUVIA_GET("/plain", plain);
     RUVIA_POST("/upload", upload);
-    RUVIA_GET_STREAM("/events", events);
+    RUVIA_GET("/events", events);
     RUVIA_GET("/boom", boom);
     RUVIA_ROUTES_END
 

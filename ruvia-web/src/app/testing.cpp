@@ -1,11 +1,13 @@
 #include "ruvia/web/testing.h"
 
+#include <bit>
 #include <chrono>
 #include <exception>
 #include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/event_loop_pool.h"
@@ -23,6 +25,9 @@
 #include "router/router_impl.h"
 #include "server/http_request_admission.h"
 #include "server/http_server_options.h"
+#include "server/http_server_options_validation.h"
+#include "server/worker_codecs.h"
+#include "util/config_validation.h"
 
 namespace ruvia {
 
@@ -41,6 +46,7 @@ struct test_app::impl_type final {
     detail::compiled_route_plan_ptr_type route_plan_{nullptr, pmr_object_deleter<detail::compiled_route_plan>{}};
     std::optional<detail::route_table> routes_;
     env env_;
+    detail::worker_codecs codecs_{memory_.resource()};
     // The defaults a server starts from: no listener-specific policy applies.
     detail::http_server_options options_{};
     event_loop_pool event_loop_pool_{{.loop_count_ = 1}};
@@ -51,6 +57,10 @@ struct test_app::impl_type final {
     std::optional<detail::worker_capabilities> capabilities_;
     lifecycle_type lifecycle_{lifecycle_type::configuring};
     std::exception_ptr startup_failure_{};
+
+    impl_type() {
+        options_.codecs_ = &codecs_;
+    }
 
     ~impl_type() {
         if (lifecycle_ == lifecycle_type::ready) {
@@ -123,9 +133,14 @@ struct test_app::impl_type final {
         if (!request.cookies_.empty()) {
             headers.emplace_back("Cookie", request.cookies_);
         }
-        auto [parsed_value, parse_error] = make_parsed_http_request(request.method_, request.target_, headers,
+        auto parsed_request = make_parsed_http_request(request.method_, request.target_, headers,
             std::as_bytes(std::span(request.body_.data(), request.body_.size())),
             request_memory_value.resource());
+        const auto* parse_error = std::get_if<http_parse_error>(&parsed_request);
+        auto parsed_value = parse_error == nullptr
+                                ? std::move(std::get<http_request>(parsed_request))
+                                : std::get<http_request>(make_parsed_http_request(
+                                      "GET", "/", {}, {}, request_memory_value.resource()));
 
         const auto& routes_value = *routes_;
         const auto resolution = routes_value.resolve(parsed_value);
@@ -135,7 +150,7 @@ struct test_app::impl_type final {
         // promise, exactly as a server answers a malformed head.
         std::optional<detail::http_request_admission> admission;
         std::optional<detail::http_request_rejection> rejection;
-        if (parse_error.has_value()) {
+        if (parse_error != nullptr) {
             rejection = detail::http_request_rejection::error(detail::copy_http_protocol_error_info(
                 request_memory_value.resource(), http_parse_protocol_error(*parse_error)));
         } else {
@@ -198,6 +213,87 @@ test_app::test_app()
     : impl_(std::make_unique<impl_type>()) {}
 
 test_app::~test_app() = default;
+
+test_app& test_app::server(server_config config) {
+    impl_->require_configurable();
+    detail::validate_server_limits(config);
+    impl_->options_.server_ = config;
+    return *this;
+}
+
+test_app& test_app::compression(compression_config config) {
+    impl_->require_configurable();
+    detail::ensure_positive_size(
+        config.min_bytes_, "compression minimum size must be greater than zero");
+    if (config.sync_bytes_ < config.min_bytes_) {
+        throw std::invalid_argument(
+            "compression synchronous size must not be smaller than the minimum size");
+    }
+    if (config.max_bytes_ < config.sync_bytes_) {
+        throw std::invalid_argument(
+            "compression maximum size must not be smaller than the synchronous size");
+    }
+    impl_->options_.compression_ = std::move(config);
+    return *this;
+}
+
+test_app& test_app::compression(std::nullptr_t) {
+    impl_->require_configurable();
+    impl_->options_.compression_.reset();
+    return *this;
+}
+
+test_app& test_app::cors(cors_config config) {
+    impl_->require_configurable();
+    impl_->options_.cors_ = detail::make_cors_options(config, process_resource());
+    return *this;
+}
+
+test_app& test_app::cors(std::nullptr_t) {
+    impl_->require_configurable();
+    impl_->options_.cors_.reset();
+    return *this;
+}
+
+test_app& test_app::rate_limit(rate_limit_config config) {
+    impl_->require_configurable();
+    detail::validate_rate_limit_rule(config.rule_);
+    if (!std::has_single_bit(config.capacity_per_worker_)) {
+        throw std::invalid_argument(
+            "rate-limit capacity per worker must be a power of two");
+    }
+    impl_->options_.default_rate_limit_per_worker_ = config.rule_;
+    impl_->options_.rate_limit_capacity_per_worker_ = config.capacity_per_worker_;
+    return *this;
+}
+
+test_app& test_app::rate_limit(std::nullptr_t) {
+    impl_->require_configurable();
+    impl_->options_.default_rate_limit_per_worker_.reset();
+    return *this;
+}
+
+test_app& test_app::trusted_proxies(trusted_proxy_config config) {
+    impl_->require_configurable();
+    detail::trusted_proxy_set parsed(process_resource());
+    parsed.trust_x_forwarded_proto(config.trust_x_forwarded_proto_);
+    for (const auto& cidr : config.cidrs_) {
+        const auto block = detail::parse_trusted_proxy_block(cidr);
+        if (block.index() != 0) {
+            throw std::invalid_argument(
+                "trusted proxy must be an IP address or CIDR block");
+        }
+        parsed.add(std::get<0>(block));
+    }
+    impl_->options_.trusted_proxies_ = std::move(parsed);
+    return *this;
+}
+
+test_app& test_app::trusted_proxies(std::nullptr_t) {
+    impl_->require_configurable();
+    impl_->options_.trusted_proxies_ = detail::trusted_proxy_set(process_resource());
+    return *this;
+}
 
 test_app& test_app::on_error(http_error_handler_type handler) {
     impl_->require_configurable();

@@ -51,8 +51,8 @@ class interim_phase_routes final {
     RUVIA_ROUTES_BEGIN(interim_phase_routes)
     RUVIA_GET("/interim-phase/item", item);
     RUVIA_GET("/interim-phase/hinted", hinted);
-    RUVIA_GET_STREAM("/interim-phase/stream", stream);
-    RUVIA_GET_STREAM("/interim-phase/bulk", bulk);
+    RUVIA_GET("/interim-phase/stream", stream);
+    RUVIA_GET("/interim-phase/bulk", bulk);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> item(ruvia::context& c) {

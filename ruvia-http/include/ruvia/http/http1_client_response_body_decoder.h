@@ -19,7 +19,7 @@ enum class http1_client_response_body_error : unsigned char {
     invalid_framing,
     invalid_transfer_coding,
     incomplete_body,
-    non_empty205,
+    non_empty_205,
 };
 
 [[nodiscard]] std::string_view http1_client_response_body_error_message(

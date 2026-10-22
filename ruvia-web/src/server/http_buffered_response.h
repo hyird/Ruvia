@@ -41,11 +41,10 @@ public:
     [[nodiscard]] static http_response_coding_policy no_acceptable_coding() noexcept {
         http_response_coding_qualities absent_header;
         const auto fallback = http_response_coding_selection::select(absent_header);
-        const auto* selection = fallback.selected();
-        if (selection == nullptr) {
+        if (!fallback.has_value()) {
             std::terminate();
         }
-        return http_response_coding_policy(*selection, true);
+        return http_response_coding_policy(*fallback, true);
     }
 
     [[nodiscard]] const http_response_coding_selection* selection() const& noexcept {

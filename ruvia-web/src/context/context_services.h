@@ -10,12 +10,12 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/web/conn_info.h"
+#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "context/context_capabilities.h"
 #include "integration/worker_client_registry_view.h"
@@ -77,7 +77,7 @@ struct context_request_services final {
     std::size_t dispatch_depth_{};
     // The matched route's declared body_limit; 0 when it declares none.
     std::size_t route_body_limit_{};
-    operation_scope_io_metrics* io_metrics_{nullptr};
+    request_io_metrics* io_metrics_{nullptr};
 };
 
 class context_services final {
@@ -137,11 +137,11 @@ public:
         return services;
     }
 
-    [[nodiscard]] operation_scope_io_metrics* io_metrics() const noexcept {
+    [[nodiscard]] request_io_metrics* io_metrics() const noexcept {
         return request_services_.io_metrics_;
     }
 
-    [[nodiscard]] context_services with_io_metrics(operation_scope_io_metrics* metrics) const noexcept {
+    [[nodiscard]] context_services with_io_metrics(request_io_metrics* metrics) const noexcept {
         auto services = *this;
         services.request_services_.io_metrics_ = metrics;
         return services;

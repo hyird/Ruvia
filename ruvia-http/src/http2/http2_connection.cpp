@@ -68,7 +68,7 @@ std::string_view http2_connection::pending_output() const& noexcept {
     return output_.pending();
 }
 
-http2_output_consume_status http2_connection::consume_output(std::size_t bytes_value) noexcept {
+http2_output_consume_status http2_connection::consume_output(std::size_t bytes_value) {
     const auto status = output_.consume(bytes_value);
     if (status == http2_output_consume_status::drained) {
         consecutive_pings_ = 0;     // outbound (incl. PING ACKs) fully flushed

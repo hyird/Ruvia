@@ -61,20 +61,20 @@ public:
         return invoke_;
     }
 
-    [[nodiscard]] http_response_stream_kind kind() const noexcept {
-        return kind_;
+    [[nodiscard]] detail::request_body_mode request_body_mode() const noexcept {
+        return request_body_mode_;
     }
 
 private:
     friend class route_endpoint;
 
-    response_stream_route_endpoint(
-        route_stream_handler_type::invoke_type invoke, http_response_stream_kind kind) noexcept
+    explicit response_stream_route_endpoint(route_stream_handler_type::invoke_type invoke,
+        detail::request_body_mode request_body_mode_value = detail::request_body_mode::buffered) noexcept
         : invoke_(invoke),
-          kind_(kind) {}
+          request_body_mode_(request_body_mode_value) {}
 
     route_stream_handler_type::invoke_type invoke_;
-    http_response_stream_kind kind_;
+    detail::request_body_mode request_body_mode_;
 };
 
 class tunnel_route_endpoint final {
@@ -171,11 +171,12 @@ public:
     }
 
     [[nodiscard]] static route_endpoint response_stream(
-        route_stream_handler_type::invoke_type invoke, http_response_stream_kind kind) {
-        return route_endpoint(response_stream_route_endpoint(invoke, kind));
+        route_stream_handler_type::invoke_type invoke,
+        request_body_mode request_body_mode_value = request_body_mode::buffered) {
+        return route_endpoint(response_stream_route_endpoint(invoke, request_body_mode_value));
     }
 
-    [[nodiscard]] static route_endpoint get_websocket(std::pmr::memory_resource* resource,
+    [[nodiscard]] static route_endpoint websocket(std::pmr::memory_resource* resource,
         route_stream_handler_type::invoke_type invoke, websocket_route_config options) {
         if (options.lifecycle_.close_handshake_timeout_.has_value() &&
             options.lifecycle_.close_handshake_timeout_->count() <= 0) {
@@ -239,16 +240,19 @@ public:
     }
     [[nodiscard]] const response_stream_route_endpoint* response_stream() const&& = delete;
 
-    [[nodiscard]] const websocket_route_endpoint* get_websocket() const& noexcept {
+    [[nodiscard]] const websocket_route_endpoint* websocket() const& noexcept {
         return std::get_if<websocket_route_endpoint>(&value_);
     }
-    [[nodiscard]] const websocket_route_endpoint* get_websocket() const&& = delete;
+    [[nodiscard]] const websocket_route_endpoint* websocket() const&& = delete;
 
-    // Every non-buffered endpoint has a buffered request body contract. Only a
-    // buffered-response endpoint may opt into the explicit stream-body route.
     [[nodiscard]] ruvia::detail::request_body_mode request_body_mode() const noexcept {
-        const auto* endpoint = buffered();
-        return endpoint == nullptr ? request_body_mode::buffered : endpoint->request_body_mode();
+        if (const auto* endpoint = buffered()) {
+            return endpoint->request_body_mode();
+        }
+        if (const auto* endpoint = response_stream()) {
+            return endpoint->request_body_mode();
+        }
+        return request_body_mode::buffered;
     }
 
     // The streaming handler thunk, or null for a buffered-response endpoint.
@@ -256,7 +260,7 @@ public:
         if (const auto* endpoint = response_stream()) {
             return endpoint->invoke();
         }
-        if (const auto* endpoint = get_websocket()) {
+        if (const auto* endpoint = websocket()) {
             return endpoint->invoke();
         }
         if (const auto* endpoint = tunnel()) {

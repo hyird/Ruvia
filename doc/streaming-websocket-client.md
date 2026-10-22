@@ -10,9 +10,9 @@
 
 ### 1.1 流式消费请求体（`body_reader` 与 `multipart_reader`）
 
-使用 `RUVIA_POST_STREAM`、`RUVIA_PUT_STREAM` 或 `RUVIA_PATCH_STREAM` 注册流式请求体路由。此类路由不会预先缓冲整个请求体，而是由处理器按块拉取。
+在 `RUVIA_POST`、`RUVIA_PUT` 或 `RUVIA_PATCH` 路由宏中附加 `ruvia::stream_body` 策略即可注册流式请求体路由。此类路由不会预先缓冲整个请求体，而是由处理器按块拉取。
 
-#### `ruvia::body_reader`（通过 `c.req().get_body_reader()` 获取）
+#### `ruvia::body_reader`（通过 `c.req().body_reader()` 获取）
 
 | 方法签名 | 说明 |
 | --- | --- |
@@ -21,7 +21,7 @@
 
 > **生命周期约束**：每次 `read()` 或 `text()` 返回的视图仅在下一次调用 `read()` / `text()` 启动前有效；同一 `body_reader` 上同一时刻只能有一个运行中的读取操作。
 
-#### `ruvia::multipart_reader`（通过 `c.req().get_multipart_reader()` 获取）
+#### `ruvia::multipart_reader`（通过 `c.req().multipart_reader()` 获取）
 
 | 方法签名 | 说明 |
 | --- | --- |
@@ -32,10 +32,10 @@
 - `phase()`：返回 `multipart_chunk_phase`（`complete` 表示单块完整字段，`first` / `middle` / `last` 表示跨多块的大文件分片阶段）
 
 ```cpp
-RUVIA_POST_STREAM("/upload", upload_stream);
+RUVIA_POST("/upload", upload_stream, ruvia::stream_body);
 
 ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
-    auto& reader = c.req().get_body_reader();
+    auto& reader = c.req().body_reader();
     std::size_t total = 0;
     while (auto chunk = co_await reader.read()) {
         total += chunk->size();
@@ -48,7 +48,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 ### 1.2 流式响应写入（`response_stream_writer`）
 
-使用 `RUVIA_GET_STREAM(path, handler, ...)` 注册流式响应路由（处理器返回 `ruvia::task<void>`）。通过 `c.stream()`（默认二进制流）或 `c.stream_text()`（自动设置 `text/plain; charset=utf-8`）获取 `response_stream_writer&`：
+使用 `RUVIA_GET(path, handler, ...)`（或 `RUVIA_POST` 等）且处理器返回 `ruvia::task<void>` 时，框架自动将其推导为流式响应路由。通过 `c.stream()`（默认二进制流）或 `c.stream_text()`（自动设置 `text/plain; charset=utf-8`）获取 `response_stream_writer&`：
 
 | 方法签名 | 说明 |
 | --- | --- |
@@ -65,10 +65,10 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 ### 1.3 Server-Sent Events（`sse_writer`）
 
-使用 `RUVIA_GET_SSE(path, handler, ...)` 注册 SSE 路由（处理器返回 `ruvia::task<void>`）。通过 `c.stream_sse()` 获取 `sse_writer`：
+使用 `RUVIA_GET(path, handler, ...)` 或 `RUVIA_POST(path, handler, ...)`（处理器返回 `ruvia::task<void>`）注册 SSE 路由。通过 `c.stream_sse()` 获取 `sse_writer`：
 
 ```cpp
-RUVIA_GET_SSE("/events", stream_events);
+RUVIA_GET("/events", stream_events);
 
 ruvia::task<void> stream_events(ruvia::context& c) {
     auto sse = c.stream_sse();
@@ -101,7 +101,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 - EOF、TLS `close_notify`、异常 TCP 断开及超时关闭触发当前流的取消。正常结束与异常退出都先取消并等待检测结束，再释放连接资源。HTTP/2 不新增读操作，返回的 token 观察对应 stream 的终止，不取消同连接其他 stream。
 - HTTP/2 请求方向正常的 `END_STREAM` 不取消响应；`RST_STREAM` 或使该流终止的连接关闭才取消。`GOAWAY` 仍遵循原有排空规则。
 - 网络黑洞、客户端断电等没有 FIN/RST 到达的情况不能保证即时识别，仍由既有超时策略处理。本 API 不新增保活探测。
-- 返回值合并当前请求的原取消信号，`sse.sleep()` / `stream.sleep()` 也使用它；`c.get_stop_token()` 和此前取得的 token 不变。数据库、Redis、HTTP client 及自定义订阅继续使用各自已有的显式 token 参数，无第二套取消协议。
+- 返回值合并当前请求的原取消信号，`sse.sleep()` / `stream.sleep()` 也使用它；`c.stop_token()` 和此前取得的 token 不变。数据库、Redis、HTTP client 及自定义订阅继续使用各自已有的显式 token 参数，无第二套取消协议。
 - 取消是协作式的。必须将返回 token 传给正在等待的操作，并在取消后返回、释放订阅；不会抢占 CPU 循环或无取消支持的等待。
 
 FlexEdge 的最小接入是：取得 SSE writer 后启用选项，将返回 token 传给订阅的异步接收。下面以公开的 `channel_receiver` 表示订阅接收端，不假定 FlexEdge 私有 API 名称：
@@ -181,12 +181,12 @@ class ws_controller final {
 public:
     RUVIA_ROUTES_BEGIN(ws_controller)
     RUVIA_GET_WS("/ws/echo", echo);
-    RUVIA_GET_WS_OPTIONS("/ws/chat", chat, chat_ws_options);
+    RUVIA_GET_WS("/ws/chat", chat, chat_ws_options);
     RUVIA_ROUTES_END
 
 private:
     ruvia::task<void> echo(ruvia::context& c) {
-        auto& ws = c.get_websocket();
+        auto& ws = c.websocket();
         while (auto message = co_await ws.read()) {
             // 零拷贝原样回显当前消息（保持 opcode）：
             co_await ws.send(std::move(*message));
@@ -195,7 +195,7 @@ private:
     }
 
     ruvia::task<void> chat(ruvia::context& c) {
-        auto& ws = c.get_websocket();
+        auto& ws = c.websocket();
         co_await ws.text("welcome");
         co_await ws.close();
     }
@@ -223,12 +223,12 @@ private:
 
 ## 4. HTTP `CONNECT` 与 `CONNECT-UDP` 隧道
 
-头文件：`"ruvia/web/http_tunnel.h"`、`"ruvia/web/http_tunnel_route_config.h"`、`"ruvia/web/http_capsule_stream.h"`、`"ruvia/web/http_datagram_stream.h"`、`"ruvia/web/http_udp_tunnel.h"`。
+头文件：`"ruvia/web/http_tunnel.h"`、`"ruvia/web/http_tunnel_route_config.h"`、`"ruvia/web/http_capsule_stream.h"`、`"ruvia/web/http_datagram_stream.h"`。
 参考示例：[examples/web/tunnels.cpp](../examples/web/tunnels.cpp)。
 
 ### 4.1 服务端 `CONNECT` 字节流隧道
 
-使用 `RUVIA_CONNECT(authority, handler, ...)` 或 `RUVIA_CONNECT_OPTIONS(authority, handler, options, ...)` 注册普通 `CONNECT` 隧道（支持 HTTP/1.1 `CONNECT` 与 HTTP/2 `CONNECT`）：
+使用 `RUVIA_CONNECT(authority, handler, ...)` 注册普通 `CONNECT` 隧道（支持可选的 `http_tunnel_route_config` 首参，兼容 HTTP/1.1 `CONNECT` 与 HTTP/2 `CONNECT`）：
 
 ```cpp
 RUVIA_CONNECT("example.com:443", handle_connect);
@@ -244,17 +244,17 @@ ruvia::task<void> handle_connect(ruvia::context& c) {
 
 ### 4.2 服务端 `CONNECT-UDP`（RFC 9298）与 Capsule 数据报隧道
 
-使用 `RUVIA_CONNECT_PROTOCOL_OPTIONS("connect-udp", path, handler, options, ...)`（设置 `http_tunnel_route_config{.datagrams_ = true}`）注册 RFC 9298 UDP 代理隧道：
+使用 `RUVIA_CONNECT_PROTOCOL("connect-udp", path, handler, options, ...)`（设置 `http_tunnel_route_config{.datagrams_ = true}`）注册 RFC 9298 UDP 代理隧道：
 
 ```cpp
 inline constexpr ruvia::http_tunnel_route_config udp_tunnel_options{
     .datagrams_ = true,
 };
 
-RUVIA_CONNECT_PROTOCOL_OPTIONS("connect-udp", "/proxy/udp", handle_udp, udp_tunnel_options);
+RUVIA_CONNECT_PROTOCOL("connect-udp", "/proxy/udp", handle_udp, udp_tunnel_options);
 
 ruvia::task<void> handle_udp(ruvia::context& c) {
-    ruvia::http_udp_tunnel udp(c.tunnel().datagrams());
+    auto udp = c.tunnel().udp();
     while (auto datagram = co_await udp.read()) {
         co_await udp.send(datagram->payload());
     }
@@ -264,22 +264,22 @@ ruvia::task<void> handle_udp(ruvia::context& c) {
 
 | 类名 | 核心方法 |
 | --- | --- |
-| `ruvia::http_tunnel` | `read()`（返回 `std::optional<std::pmr::string>`）、`write(bytes)`、`finish()`、`abort()`、`datagrams(config = {})`、`capsules(config = {})` |
+| `ruvia::http_tunnel` | `read()`（返回 `std::optional<std::pmr::string>`）、`write(bytes)`、`finish()`、`abort()`、`udp(config = {})`、`datagrams(config = {})`、`capsules(config = {})` |
 | `ruvia::http_capsule_stream` | `read()`（返回 `std::optional<http_capsule>`）、`write(type, payload)`、`finish()`、`abort()` |
 | `ruvia::http_datagram_stream` | `read()`（返回 `std::optional<http_datagram>`）、`send(payload)`、`finish()`、`abort()` |
-| `ruvia::http_udp_tunnel` | `read()`（返回 `std::optional<http_udp_datagram>`，自动剥离/封装 `context_id = 0`）、`send(payload)`、`finish()`、`abort()` |
+| `ruvia::http_udp_tunnel` | `read()`（返回 `std::optional<http_datagram>`，自动剥离/封装 `context_id = 0`）、`send(payload)`、`finish()`、`abort()` |
 
 ---
 
 ## 5. 出站 HTTP/1.1 & HTTP/2 客户端（`http_client`）
 
-头文件：`"ruvia/web/http_client.h"`、`"ruvia/web/http_client_handle.h"`、`"ruvia/web/http_client_types.h"`、`"ruvia/web/http_client_response.h"`、`"ruvia/web/http_client_exchange.h"`、`"ruvia/web/http_client_tunnel.h"`。
+头文件：`"ruvia/web/http_client.h"`、`"ruvia/web/http_client_handle.h"`、`"ruvia/web/http_client_types.h"`、`"ruvia/web/http_client_response.h"`、`"ruvia/web/http_client_tunnel.h"`。
 参考示例：[examples/web/http_client.cpp](../examples/web/http_client.cpp)、[examples/web/http_client_advanced.cpp](../examples/web/http_client_advanced.cpp)。
 
 ### 5.1 两种使用模式
 
 1. **绑定到 `ruvia::application` Worker（在路由与 Worker 任务中使用）**：
-   启动前通过 `app().get_http_client({.alias_ = "upstream", .config_ = config})` 注册，每个业务 worker 自动维护独立的到该 origin 的连接池；在路由中通过 `c.get_http_client("upstream")`（默认别名为 `c.get_http_client()`）获取 `http_client_handle`。
+   启动前通过 `app().http_client({.alias_ = "upstream", .config_ = config})` 注册，每个业务 worker 自动维护独立的到该 origin 的连接池；在路由中通过 `c.http_client("upstream")`（默认别名为 `c.http_client()`）获取 `http_client_handle`。
 2. **独立绑定到 `ruvia::event_loop`（脱离 Web Server 独立运行）**：
    构造 `ruvia::http_client client(loop, config)`，在使用完毕后于所属事件循环协程中调用 `co_await client.shutdown()`。
 
@@ -302,7 +302,7 @@ ruvia::task<void> handle_udp(ruvia::context& c) {
 ### 5.3 发送请求、读取响应与流式代理
 
 ```cpp
-auto client = c.get_http_client().with_options({
+auto client = c.http_client().with_options({
     .timeout_ = std::chrono::seconds(5),
 });
 
@@ -315,9 +315,9 @@ auto response = co_await client.send({
 
 // 方式 A：一次性读取完整响应体字节
 auto body_bytes = co_await response.body().read_all();
-std::string_view text = ruvia::as_chars(body_bytes.bytes());
+std::string_view text = body_bytes.text();
 
-// 方式 B：在 RUVIA_GET_STREAM 路由中零拷贝流式转发给下游客户端
+// 方式 B：在返回 task<void> 的流式路由中零拷贝转发给下游客户端
 // co_await response.body().pipe_to(c.stream());
 ```
 
@@ -377,6 +377,6 @@ co_await client.shutdown();
 | `scoped_operation<std::optional<websocket_message>> read()` | 读取下一条消息；对端关闭时返回 `std::nullopt` |
 | `scoped_operation<void> text(payload, options = {})` / `binary(payload, options = {})` | 发送文本或二进制消息 |
 | `scoped_operation<void> ping(payload = {})` / `pong(payload)` | 发送 `Ping` 或 `Pong` 控制帧 |
-| `scoped_operation<void> close(websocket_close_options options = {})` | 发起优雅关闭握手 |
-| `void abort() noexcept` | 立即中止连接 |
+| `scoped_operation<void> close(websocket_close_options options = {})` | 句柄方法：发起优雅关闭握手 |
+| `void close() noexcept` / `void abort() noexcept` | 客户端 `client.close()`（或句柄 `peer.abort()`）请求立即中止连接 |
 | `task<void> shutdown() &` | 关闭并等待底层全部挂起 I/O 安全退役 |

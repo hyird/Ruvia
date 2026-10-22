@@ -3,7 +3,7 @@
 #include <vector>
 
 #include "ruvia/http/http_header.h"
-#include "ruvia/web/http_client_upload_config.h"
+#include "ruvia/web/http_client_types.h"
 
 #include "client/http_client_output_queue.h"
 

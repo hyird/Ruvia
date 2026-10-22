@@ -47,9 +47,9 @@ void check_encoder_alias(ruvia::testing::test_context& ruvia_ctx, ruvia::http_co
             const auto decoded = ruvia::decode_http_content(coding,
                 std::string_view(output).substr(prefix_size),
                 {.max_decoded_bytes_ = input.size(), .resource_ = &resource});
-            RUVIA_CHECK(decoded.decoded() != nullptr);
-            if (const auto* content = decoded.decoded()) {
-                RUVIA_CHECK_EQ(content->bytes(), std::string_view(input));
+            RUVIA_CHECK(std::holds_alternative<std::pmr::string>(decoded));
+            if (const auto* content = std::get_if<std::pmr::string>(&decoded)) {
+                RUVIA_CHECK_EQ(std::string_view(*content), std::string_view(input));
             }
         }
         RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});

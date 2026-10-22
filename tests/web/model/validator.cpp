@@ -82,8 +82,7 @@ void check_character_class_rule(ruvia::testing::test_context& ruvia_ctx, std::st
     character_class_rules model;
     model.set<field_name>(value);
     validator result;
-    ruvia::json_body<character_class_rules> rules;
-    rules.validate(model, result);
+    ruvia::validate_model(model, result);
     RUVIA_CHECK_EQ(result.ok(), matches);
     RUVIA_CHECK_EQ(result.issues().size(), matches ? std::size_t{0} : std::size_t{1});
     if (!result.issues().empty()) {
@@ -124,11 +123,13 @@ void check_character_class_rule(ruvia::testing::test_context& ruvia_ctx, std::st
 }  // namespace
 
 RUVIA_TEST(request_model_required_and_optional_fields_are_structural) {
-    RUVIA_CHECK(!ruvia::from_json<required_optional_model>("{}").has_value());
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<required_optional_model>("{}");
+    }));
 
-    RUVIA_CHECK(
-        !ruvia::from_form<required_optional_model>("", {.resource_ = std::pmr::get_default_resource()})
-            .has_value());
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_form<required_optional_model>("", {.resource_ = std::pmr::get_default_resource()});
+    }));
 }
 
 RUVIA_TEST(validator_required_flags_absent_values) {
@@ -310,18 +311,13 @@ RUVIA_TEST(validator_range_compares_fractional_bounds_and_nonfinite_values) {
 }
 
 RUVIA_TEST(model_numeric_rules_compare_float_fields_and_integer_bounds_exactly) {
-    const ruvia::json_body<precise_numeric_bounds> rules;
     for (const auto body : {R"({"unsigned_limit":18446744073709549568})",
              R"({"signed_limit":9223372036854774784})",
              R"({"signed_limit":-9223372036854774784})",
              R"({"exact_minimum":9007199254740994})"}) {
         auto value = ruvia::from_json<precise_numeric_bounds>(body);
-        RUVIA_CHECK(value.has_value());
-        if (!value) {
-            return;
-        }
         validator result;
-        rules.validate(*value, result);
+        ruvia::validate_model(value, result);
         RUVIA_CHECK(result.ok());
     }
     for (const auto& [body, code] : {
@@ -329,18 +325,17 @@ RUVIA_TEST(model_numeric_rules_compare_float_fields_and_integer_bounds_exactly) 
              std::pair{R"({"signed_limit":9223372036854775808})", "too_big"},
              std::pair{R"({"signed_limit":-9223372036854775808})", "too_small"},
              std::pair{R"({"exact_minimum":9007199254740992})", "too_small"}}) {
-        auto value = ruvia::from_json<precise_numeric_bounds>(body);
-        RUVIA_CHECK(value.has_value());
-        if (!value) {
-            return;
+        bool rejected = false;
+        try {
+            (void)ruvia::from_json<precise_numeric_bounds>(body);
+        } catch (const ruvia::validation_error& error) {
+            rejected = true;
+            RUVIA_CHECK_EQ(error.issues().size(), std::size_t{1});
+            if (!error.issues().empty()) {
+                RUVIA_CHECK_EQ(error.issues()[0].code(), std::string_view(code));
+            }
         }
-        validator result;
-        rules.validate(*value, result);
-        RUVIA_CHECK_EQ(result.issues().size(), std::size_t{1});
-        if (result.issues().empty()) {
-            continue;
-        }
-        RUVIA_CHECK_EQ(result.issues()[0].code(), std::string_view(code));
+        RUVIA_CHECK(rejected);
     }
 }
 
@@ -384,17 +379,16 @@ RUVIA_TEST(model_pattern_rules_preserve_class_escapes_and_literal_hyphens) {
 
 RUVIA_TEST(model_pattern_rules_bound_negated_class_matching_work) {
     bounded_character_class_rules model;
-    ruvia::json_body<bounded_character_class_rules> rules;
     model.set<"value">("bbbb");
     validator short_result;
-    rules.validate(model, short_result);
+    ruvia::validate_model(model, short_result);
     RUVIA_CHECK(short_result.ok());
 
     // This input is within RUVIA_REGEX's byte limit, but inspecting all 250
     // repeated members per byte exceeds the shared matching work limit.
     model.set<"value">(std::string(4096, 'b'));
     validator long_result;
-    rules.validate(model, long_result);
+    ruvia::validate_model(model, long_result);
     RUVIA_CHECK_EQ(long_result.issues().size(), std::size_t{2});
     if (long_result.issues().size() == 2) {
         RUVIA_CHECK_EQ(long_result.issues()[0].field(), std::string_view("value"));
@@ -407,7 +401,7 @@ RUVIA_TEST(model_pattern_rules_bound_negated_class_matching_work) {
 
     model.set<"value">("b");
     validator repeated_result;
-    rules.validate(model, repeated_result);
+    ruvia::validate_model(model, repeated_result);
     RUVIA_CHECK(repeated_result.ok());
 }
 
@@ -833,24 +827,18 @@ RUVIA_TEST(validator_model_paths_are_built_only_for_emitted_issues) {
     }
     body.append(R"(],"boxed":[{"value":1},{"value":2}]})");
     auto model = ruvia::from_json<lazy_path_envelope>(body);
-    RUVIA_CHECK(model.has_value());
-    if (!model) {
-        return;
-    }
-
-    ruvia::json_body<lazy_path_envelope> rules;
     counting_memory_resource resource;
     {
         validator result({.resource_ = &resource});
         const auto baseline = resource.allocation_count();
-        rules.validate(*model, result);
+        ruvia::validate_model(model, result);
         RUVIA_CHECK(result.ok());
         RUVIA_CHECK_EQ(resource.allocation_count(), baseline);
 
-        model->set<"label">("");
-        model->ensure<"items">()[700].set<"value">(-1);
-        model->ensure<"boxed">()[1].set<"value">(-2);
-        rules.validate(*model, result);
+        model.set<"label">("");
+        model.ensure<"items">()[700].set<"value">(-1);
+        model.ensure<"boxed">()[1].set<"value">(-2);
+        ruvia::validate_model(model, result);
         RUVIA_CHECK_EQ(result.issues().size(), std::size_t{3});
         if (result.issues().size() == 3) {
             RUVIA_CHECK_EQ(result.issues()[0].field(), std::string_view("field_name_longer_than_small_string_storage"));

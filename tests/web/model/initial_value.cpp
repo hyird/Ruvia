@@ -95,13 +95,10 @@ RUVIA_TEST(model_initial_values_only_run_for_explicit_construction) {
     RUVIA_CHECK(!model.is_present<"name">());
 
     auto parsed_value = ruvia::from_json<initial_model>(R"({"required":1})");
-    RUVIA_CHECK(parsed_value.has_value());
-    if (parsed_value) {
-        RUVIA_CHECK(parsed_value->get<"number">()->value_ == 9);
-        RUVIA_CHECK(!parsed_value->get<"name">());
-        RUVIA_CHECK(!parsed_value->is_present<"number">());
-        RUVIA_CHECK(!parsed_value->is_null<"name">());
-    }
+    RUVIA_CHECK(parsed_value.get<"number">()->value_ == 9);
+    RUVIA_CHECK(!parsed_value.get<"name">());
+    RUVIA_CHECK(!parsed_value.is_present<"number">());
+    RUVIA_CHECK(!parsed_value.is_null<"name">());
     RUVIA_CHECK_EQ(evaluations, std::size_t{2});
 }
 
@@ -113,12 +110,8 @@ RUVIA_TEST(model_initial_values_do_not_recur_through_moves_or_rebind) {
     RUVIA_CHECK_EQ(evaluations, std::size_t{2});
     auto parsed_value = ruvia::from_json<initial_model>(R"({"required":1,"number":3})",
         {.resource_ = &source});
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
-    }
     RUVIA_CHECK_EQ(evaluations, std::size_t{2});
-    retained = std::move(*parsed_value);
+    retained = std::move(parsed_value);
     RUVIA_CHECK_EQ(evaluations, std::size_t{2});
     RUVIA_CHECK_EQ(retained.get<"number">()->value_, 3);
 }
@@ -148,8 +141,8 @@ RUVIA_TEST(model_null_initial_is_a_value_state_without_allocation) {
 RUVIA_TEST(model_required_initial_is_not_used_by_parsing) {
     evaluations = 0;
     RUVIA_CHECK_EQ(evaluations, std::size_t{0});
-    RUVIA_CHECK(!ruvia::from_json<required_initial_model>("{}").has_value());
-    RUVIA_CHECK(!ruvia::from_form<required_initial_model>("").has_value());
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<required_initial_model>("{}"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_form<required_initial_model>(""); }));
     RUVIA_CHECK_EQ(evaluations, std::size_t{0});
 }
 
@@ -186,16 +179,12 @@ RUVIA_TEST(model_initial_and_default_modes_are_evaluated_once_across_codecs_and_
 
     auto json = ruvia::from_json<counted_lifecycle>("{}", {.resource_ = &source});
     auto form = ruvia::from_form<counted_lifecycle>("", {.resource_ = &source});
-    RUVIA_CHECK(json && form);
-    if (!json || !form) {
-        return;
-    }
     RUVIA_CHECK_EQ(evaluations, std::size_t{1});
     RUVIA_CHECK_EQ(default_evaluations, std::size_t{2});
-    counted_lifecycle moved(std::move(*json));
-    RUVIA_CHECK(!json->get<"value">());
+    counted_lifecycle moved(std::move(json));
+    RUVIA_CHECK(!json.get<"value">());
     RUVIA_CHECK_EQ(moved.get<"value">()->value_, 11);
-    RUVIA_CHECK_EQ(form->get<"value">()->value_, 11);
+    RUVIA_CHECK_EQ(form.get<"value">()->value_, 11);
     RUVIA_CHECK(!moved.is_present<"value">());
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(moved)), std::string_view(R"({"value":11})"));
     RUVIA_CHECK_EQ(evaluations, std::size_t{1});
@@ -211,7 +200,7 @@ RUVIA_TEST(model_initial_fresh_container_elements_are_built_once_on_the_containe
         boxed.reserve(4);
         for (std::size_t index = 0; index != 4; ++index) {
             (void)dense.emplace_back();
-            (void)boxed.emplace();
+            (void)boxed.emplace_back();
         }
         RUVIA_CHECK_EQ(resource.payload_allocations_, std::size_t{8});
         dense.resize(6);

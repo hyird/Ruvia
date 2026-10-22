@@ -266,18 +266,21 @@ struct entity_storage_from_tuple<std::tuple<columns...>> {
     template <::ruvia::fixed_string name>                           \
     const auto& get() const&& = delete;                             \
     template <::ruvia::fixed_string name, typename value_type>      \
-    void set(value_type&& value) {                                  \
+    auto& set(value_type&& value) {                                 \
         member.template set<name>(std::forward<value_type>(value)); \
+        return *this;                                               \
     }                                                               \
     template <::ruvia::fixed_string name>                           \
-    void set_null()                                                 \
+    auto& set_null()                                                \
         requires requires { member.template set_null<name>(); }     \
     {                                                               \
         member.template set_null<name>();                           \
+        return *this;                                               \
     }                                                               \
     template <::ruvia::fixed_string name>                           \
-    void reset() {                                                  \
+    auto& reset() {                                                 \
         member.template reset<name>();                              \
+        return *this;                                               \
     }                                                               \
     template <::ruvia::fixed_string name>                           \
     bool is_set() const {                                           \

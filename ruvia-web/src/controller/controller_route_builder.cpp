@@ -1,4 +1,5 @@
 #include "ruvia/web/detail/util/registration_resource.h"
+#include "ruvia/web/streaming.h"
 
 #include "router/router_impl.h"
 
@@ -59,8 +60,23 @@ std::pmr::string join_controller_paths(std::string_view prefix, std::string_view
     return middlewares;
 }
 
+[[nodiscard]] request_body_mode declared_request_body_mode(
+    std::span<const controller_middleware_descriptor> controller_middlewares,
+    std::span<const controller_middleware_descriptor> route_middlewares) noexcept {
+    for (const auto descriptors : {controller_middlewares, route_middlewares}) {
+        for (const auto& descriptor : descriptors) {
+            if (descriptor.stream_request_body()) {
+                return request_body_mode::stream;
+            }
+        }
+    }
+    return request_body_mode::buffered;
+}
 }  // namespace
 
+task<void> stream_body::handle(context&, next& next_value) {
+    co_await next_value();
+}
 void detail::controller_route_builder::impl_deleter_type::operator()(impl_type* impl) const noexcept {
     destroy_pmr_object(impl, registration_resource());
 }
@@ -78,37 +94,41 @@ detail::controller_route_builder::controller_route_builder(router& router_value,
 detail::controller_route_builder::~controller_route_builder() = default;
 
 void detail::controller_route_builder::register_route(http_known_method method, std::string_view path,
-    route_handler_type handler, request_body_mode body_mode,
-    std::span<const controller_middleware_descriptor> middlewares) const {
+    route_handler_type handler, std::span<const controller_middleware_descriptor> middlewares) const {
+    const auto body_mode = declared_request_body_mode(impl_->middlewares(), middlewares);
     router_impl::from(impl_->router())
         .register_endpoint(method, {}, join_controller_paths(impl_->prefix(), path),
             route_endpoint::buffered(callback_access::invoke(handler), body_mode), callback_access::target(handler),
             impl_->middlewares(), middlewares);
 }
 
-void detail::controller_route_builder::register_extension_method_route(std::string_view method_token,
-    std::string_view path, route_handler_type handler, request_body_mode body_mode,
+void detail::controller_route_builder::register_route(http_known_method method, std::string_view path,
+    route_stream_handler_type handler,
     std::span<const controller_middleware_descriptor> middlewares) const {
+    const auto body_mode = declared_request_body_mode(impl_->middlewares(), middlewares);
+    router_impl::from(impl_->router())
+        .register_endpoint(method, {}, join_controller_paths(impl_->prefix(), path),
+            route_endpoint::response_stream(callback_access::invoke(handler), body_mode),
+            callback_access::target(handler), impl_->middlewares(), middlewares);
+}
+
+void detail::controller_route_builder::register_extension_method_route(std::string_view method_token,
+    std::string_view path, route_handler_type handler,
+    std::span<const controller_middleware_descriptor> middlewares) const {
+    const auto body_mode = declared_request_body_mode(impl_->middlewares(), middlewares);
     router_impl::from(impl_->router())
         .register_endpoint(http_known_method::unknown, method_token, join_controller_paths(impl_->prefix(), path),
             route_endpoint::buffered(callback_access::invoke(handler), body_mode), callback_access::target(handler),
             impl_->middlewares(), middlewares);
 }
 
-void detail::controller_route_builder::register_response_stream_route(http_known_method method,
+void detail::controller_route_builder::register_extension_method_route(std::string_view method_token,
     std::string_view path, route_stream_handler_type handler,
     std::span<const controller_middleware_descriptor> middlewares) const {
+    const auto body_mode = declared_request_body_mode(impl_->middlewares(), middlewares);
     router_impl::from(impl_->router())
-        .register_endpoint(method, {}, join_controller_paths(impl_->prefix(), path),
-            route_endpoint::response_stream(callback_access::invoke(handler), http_response_stream_kind::generic),
-            callback_access::target(handler), impl_->middlewares(), middlewares);
-}
-
-void detail::controller_route_builder::register_sse_route(http_known_method method, std::string_view path,
-    route_stream_handler_type handler, std::span<const controller_middleware_descriptor> middlewares) const {
-    router_impl::from(impl_->router())
-        .register_endpoint(method, {}, join_controller_paths(impl_->prefix(), path),
-            route_endpoint::response_stream(callback_access::invoke(handler), http_response_stream_kind::sse),
+        .register_endpoint(http_known_method::unknown, method_token, join_controller_paths(impl_->prefix(), path),
+            route_endpoint::response_stream(callback_access::invoke(handler), body_mode),
             callback_access::target(handler), impl_->middlewares(), middlewares);
 }
 
@@ -129,7 +149,7 @@ void detail::controller_route_builder::register_websocket_route(http_known_metho
     websocket_route_config websocket_config) const {
     auto& routes = router_impl::from(impl_->router());
     routes.register_endpoint(method, {}, join_controller_paths(impl_->prefix(), path),
-        route_endpoint::get_websocket(routes.resource(), callback_access::invoke(handler), std::move(websocket_config)),
+        route_endpoint::websocket(routes.resource(), callback_access::invoke(handler), std::move(websocket_config)),
         callback_access::target(handler), impl_->middlewares(), middlewares);
 }
 

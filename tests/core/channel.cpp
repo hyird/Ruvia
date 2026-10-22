@@ -98,10 +98,13 @@ bool test_rejected_payload_moves_can_close_the_channel() {
             {
                 auto rejected = sender.send(rejection_payload(42, &state));
                 closer.join();
-                success = rejected.status() == expected && !rejected.accepted() &&
+                success = rejected == expected && expected == rejected &&
+                          rejected != channel_send_status::sent && !rejected.accepted() &&
                           rejected.rejected() != nullptr && rejected.rejected()->value_ &&
                           *rejected.rejected()->value_ == 42 && state.close_completed_during_move_ &&
                           state.same_thread_close_completed_ && state.destroyed_ == 0 && success;
+                auto taken = std::move(rejected).take_rejected();
+                success = rejected.rejected() == nullptr && taken.value_ && *taken.value_ == 42 && success;
             }
             success = state.destroyed_ == 1 && success;
             receiver.close();

@@ -74,7 +74,7 @@ RUVIA_TEST(response_public_server_plans_preserve_head_representation_length) {
     RUVIA_CHECK(write_plan.matches_response(response));
 
     constexpr std::array framings{
-        ruvia::http_response_stream_framing::http1_known_length,
+        ruvia::http_response_stream_framing::http1_chunked,
         ruvia::http_response_stream_framing::http2_frames};
     for (const auto framing : framings) {
         const auto stream_plan = ruvia::plan_http_response_stream_commit(

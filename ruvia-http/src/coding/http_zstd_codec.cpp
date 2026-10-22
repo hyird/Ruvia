@@ -14,12 +14,12 @@
 
 namespace ruvia::detail {
 
-http_content_decode_result decode_zstd_content(
+std::variant<std::pmr::string, http_content_decode_error> decode_zstd_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(http_pmr_resource_or_default(resource));
     zstd_decoder_stream decoder(output.get_allocator().resource());
     if (!decoder.initialized()) {
-        return http_content_decode_result_access::failure(http_content_decode_error::decoder_failure);
+        return http_content_decode_error::decoder_failure;
     }
     auto* stream = decoder.native();
 
@@ -31,25 +31,26 @@ http_content_decode_result decode_zstd_content(
         const auto result_value = ZSTD_decompressStream(stream, &out, &in);
         if (ZSTD_isError(result_value) != 0) {
             decoder.rethrow_allocation_failure();
-            return http_content_decode_result_access::failure(ZSTD_getErrorCode(result_value) == ZSTD_error_memory_allocation
-                                                                  ? http_content_decode_error::decoder_failure
-                                                                  : http_content_decode_error::invalid_content);
+            return ZSTD_getErrorCode(result_value) == ZSTD_error_memory_allocation
+                       ? http_content_decode_error::decoder_failure
+                       : http_content_decode_error::invalid_content;
         }
         if (!append_decoded_bytes(output, buffer, out.pos, max_decoded_bytes)) {
-            return http_content_decode_result_access::failure(http_content_decode_error::decoded_size_exceeded);
+            return http_content_decode_error::decoded_size_exceeded;
         }
         if (result_value == 0 && in.pos == in.size) {
-            return http_content_decode_result_access::decoded(std::move(output));
+            return output;
         }
         // A zero result with remaining input completed one RFC 8878 frame;
         // ZSTD_decompressStream is ready to consume the next concatenated frame.
         if (out.pos == 0 && in.pos == before_input) {
-            return http_content_decode_result_access::failure(http_content_decode_error::invalid_content);
+            return http_content_decode_error::invalid_content;
         }
     }
 }
 
-http_content_encode_result encode_zstd_content(zstd_encoder_stream& encoder, std::string_view input,
+std::variant<std::pmr::string, http_content_encode_error> encode_zstd_content(
+    zstd_encoder_stream& encoder, std::string_view input,
     std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
     std::pmr::string output(http_pmr_resource_or_default(output_resource));
     auto* context_value = encoder.native();
@@ -64,12 +65,12 @@ http_content_encode_result encode_zstd_content(zstd_encoder_stream& encoder, std
             const auto result_value = ZSTD_compressStream2(context_value, &out, &in, ZSTD_e_end);
             if (ZSTD_isError(result_value) != 0) {
                 encoder.rethrow_allocation_failure();
-                return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+                return http_content_encode_error::encoder_failure;
             }
             if (result_value == 0 && out.pos == 0 && in.pos == in.size) {
-                return http_content_encode_result_access::encoded(std::move(output));
+                return output;
             }
-            return http_content_encode_result_access::failure(http_content_encode_error::encoded_size_exceeded);
+            return http_content_encode_error::encoded_size_exceeded;
         }
 
         const auto offset = output.size();
@@ -80,23 +81,23 @@ http_content_encode_result encode_zstd_content(zstd_encoder_stream& encoder, std
         output.append(buffer, out.pos);
         if (ZSTD_isError(result_value) != 0) {
             encoder.rethrow_allocation_failure();
-            return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+            return http_content_encode_error::encoder_failure;
         }
         if (result_value == 0 && in.pos == in.size) {
-            return http_content_encode_result_access::encoded(std::move(output));
+            return output;
         }
         if (output.size() == offset && in.pos == before_input) {
-            return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+            return http_content_encode_error::encoder_failure;
         }
     }
 }
 
-http_content_encode_result encode_zstd_content(
+std::variant<std::pmr::string, http_content_encode_error> encode_zstd_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
     auto* const state_resource = http_pmr_resource_or_default(resource);
     zstd_encoder_stream encoder(state_resource);
     if (!encoder.initialized()) {
-        return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+        return http_content_encode_error::encoder_failure;
     }
     return encode_zstd_content(encoder, input, max_encoded_bytes, state_resource);
 }

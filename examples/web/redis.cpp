@@ -111,7 +111,7 @@ public:
 
     ruvia::task<ruvia::http_response> ping(ruvia::context& c) {
         co_await c.redis()
-            .with_options({.timeout_ = std::chrono::seconds(2), .stop_token_ = c.get_stop_token()})
+            .with_options({.timeout_ = std::chrono::seconds(2), .stop_token_ = c.stop_token()})
             .ping();
         auto message = co_await c.redis().ping("hello");
         co_return c.text(std::move(message));

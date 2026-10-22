@@ -37,13 +37,13 @@ struct websocket_write_progress final {
 };
 
 template <typename stream_type>
-task<void> websocket_connection<stream_type>::write(websocket_opcode opcode, std::string_view payload_value, bool compress) {
+task<void> server_websocket_connection<stream_type>::write(websocket_opcode opcode, std::string_view payload_value, bool compress) {
     require_current_worker();
     return write_owned(opcode, payload_value, write_operation_lease_type(*this), compress);
 }
 
 template <typename stream_type>
-task<void> websocket_connection<stream_type>::write_owned(websocket_opcode opcode, std::string_view payload_value, write_operation_lease_type write_lease, bool compress) {
+task<void> server_websocket_connection<stream_type>::write_owned(websocket_opcode opcode, std::string_view payload_value, write_operation_lease_type write_lease, bool compress) {
     require_current_worker();
     {
         write_operation_lease_type active_write(std::move(write_lease));
@@ -63,7 +63,7 @@ task<void> websocket_connection<stream_type>::write_owned(websocket_opcode opcod
 }
 
 template <typename stream_type>
-task<void> websocket_connection<stream_type>::close(::ruvia::websocket_close_options options) {
+task<void> server_websocket_connection<stream_type>::close(::ruvia::websocket_close_options options) {
     require_current_worker();
     if (read_phase_ == read_phase_type::reserved) {
         throw std::logic_error("websocket close cannot overlap a pending read");
@@ -72,7 +72,7 @@ task<void> websocket_connection<stream_type>::close(::ruvia::websocket_close_opt
 }
 
 template <typename stream_type>
-task<void> websocket_connection<stream_type>::close_owned(::ruvia::websocket_close_options options, write_operation_lease_type write_lease) {
+task<void> server_websocket_connection<stream_type>::close_owned(::ruvia::websocket_close_options options, write_operation_lease_type write_lease) {
     require_current_worker();
     {
         write_operation_lease_type active_write(std::move(write_lease));
@@ -126,7 +126,7 @@ task<void> websocket_connection<stream_type>::close_owned(::ruvia::websocket_clo
 }
 
 template <typename stream_type>
-task<void> websocket_connection<stream_type>::detach_and_drain_writes() {
+task<void> server_websocket_connection<stream_type>::detach_and_drain_writes() {
     require_current_worker();
     periodic_check_.reset();
     // Teardown first cancels the transport operation that owns a suspended
@@ -147,19 +147,19 @@ task<void> websocket_connection<stream_type>::detach_and_drain_writes() {
 }
 
 template <typename stream_type>
-task<void> websocket_connection<stream_type>::wait_for_write_idle() {
+task<void> server_websocket_connection<stream_type>::wait_for_write_idle() {
     while (write_phase_ != write_phase_type::idle) {
         co_await background_write_signal_.wait();
     }
 }
 
 template <typename stream_type>
-void websocket_connection<stream_type>::notify_write_idle() noexcept {
+void server_websocket_connection<stream_type>::notify_write_idle() noexcept {
     background_write_signal_.notify();
 }
 
 template <typename stream_type>
-bool websocket_connection<stream_type>::accept_submitted_frame(websocket_frame_submit_status status) {
+bool server_websocket_connection<stream_type>::accept_submitted_frame(websocket_frame_submit_status status) {
     switch (status) {
         case websocket_frame_submit_status::accepted:
             return true;
@@ -178,7 +178,7 @@ bool websocket_connection<stream_type>::accept_submitted_frame(websocket_frame_s
 }
 
 template <typename stream_type>
-task<void> websocket_connection<stream_type>::flush_protocol_output_exclusive() {
+task<void> server_websocket_connection<stream_type>::flush_protocol_output_exclusive() {
     if (write_phase_ != write_phase_type::idle) {
         co_await wait_for_write_idle();
     }
@@ -187,7 +187,7 @@ task<void> websocket_connection<stream_type>::flush_protocol_output_exclusive() 
 }
 
 template <typename stream_type>
-auto websocket_connection<stream_type>::write_bytes(const websocket_output_plan& plan) {
+auto server_websocket_connection<stream_type>::write_bytes(const websocket_output_plan& plan) {
     if constexpr (!native_stream) {
         return write_adapted(plan);
     } else {
@@ -204,7 +204,7 @@ auto websocket_connection<stream_type>::write_bytes(const websocket_output_plan&
 }
 
 template <typename stream_type>
-task<std::error_code> websocket_connection<stream_type>::write_adapted(const websocket_output_plan& plan) {
+task<std::error_code> server_websocket_connection<stream_type>::write_adapted(const websocket_output_plan& plan) {
     if (const auto error = co_await stream_.write_bytes(plan.bytes(), websocket_transport_disposition::keep_open)) {
         co_return error;
     }
@@ -212,7 +212,7 @@ task<std::error_code> websocket_connection<stream_type>::write_adapted(const web
 }
 
 template <typename stream_type>
-task<void> websocket_connection<stream_type>::flush_protocol_output_now() {
+task<void> server_websocket_connection<stream_type>::flush_protocol_output_now() {
     for (;;) {
         const auto plan = protocol_.output_plan();
         const auto disposition = plan.disposition();
@@ -246,7 +246,7 @@ task<void> websocket_connection<stream_type>::flush_protocol_output_now() {
 }
 
 template <typename stream_type>
-void websocket_connection<stream_type>::abort_transport(bool force_transport) noexcept {
+void server_websocket_connection<stream_type>::abort_transport(bool force_transport) noexcept {
     liveness_state_ = websocket_liveness_idle{};
     const auto disposition = protocol_.abort();
     if (force_transport || disposition == websocket_abort_disposition::abort_transport) {
@@ -256,7 +256,7 @@ void websocket_connection<stream_type>::abort_transport(bool force_transport) no
 }
 
 template <typename stream_type>
-void websocket_connection<stream_type>::close_stream() noexcept {
+void server_websocket_connection<stream_type>::close_stream() noexcept {
     if constexpr (!native_stream) {
         stream_.abort();
     } else if constexpr (requires(stream_type& value) { value.next_layer(); }) {

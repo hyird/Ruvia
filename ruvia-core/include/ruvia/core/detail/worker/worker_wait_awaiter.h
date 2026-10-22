@@ -55,6 +55,26 @@ public:
     t_type* rejected() && = delete;
     const t_type* rejected() const&& = delete;
 
+    [[nodiscard]] t_type take_rejected() && {
+        if (status_ == accepted_status || !rejected_) {
+            throw std::logic_error("accepted delivery result has no rejected value");
+        }
+        struct clear_rejected final {
+            std::optional<t_type>& rejected_;
+            ~clear_rejected() {
+                rejected_.reset();
+            }
+        } clear{rejected_};
+        return std::move(*rejected_);
+    }
+
+    friend bool operator==(const worker_delivery_result& outcome, status_type status) noexcept {
+        return outcome.status_ == status;
+    }
+    friend bool operator==(status_type status, const worker_delivery_result& outcome) noexcept {
+        return outcome == status;
+    }
+
 private:
     friend class ::ruvia::channel_sender<t_type>;
     friend class ::ruvia::one_shot_completion<t_type>;

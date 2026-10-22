@@ -88,10 +88,10 @@ public:
     RUVIA_ROUTES_BEGIN(connect_routes)
     const ruvia::http_tunnel_route_config options{
         .peer_transport_fin_timeout_ = std::chrono::milliseconds(40)};
-    RUVIA_CONNECT_OPTIONS("target.test:443", echo, options);
+    RUVIA_CONNECT("target.test:443", echo, options);
     RUVIA_CONNECT_PROTOCOL("test-tunnel", "/udp/:host/:port", echo);
     RUVIA_CONNECT_PROTOCOL("slow-tunnel", "/slow-tunnel", slow_tunnel);
-    RUVIA_POST_STREAM("/slow-upload", slow_upload);
+    RUVIA_POST("/slow-upload", slow_upload, ruvia::stream_body);
     RUVIA_GET("/after", after);
     RUVIA_POST("/expect-rejected", expect_rejected);
     RUVIA_GET_WS("/late-fin-websocket", late_fin_websocket, hold_off_middleware);
@@ -150,7 +150,7 @@ ruvia::task<void> connect_routes::slow_tunnel(ruvia::context& context_value) {
 ruvia::task<ruvia::http_response> connect_routes::slow_upload(ruvia::context& context_value) {
     co_await hold_off(context_value);
     std::size_t total = 0;
-    auto& reader = context_value.req().get_body_reader();
+    auto& reader = context_value.req().body_reader();
     while (auto chunk = co_await reader.text()) {
         total += chunk->size();
     }
@@ -215,10 +215,11 @@ RUVIA_TEST(http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_requ
                 observation_value.return_early_ = round == 2;
                 const auto request = round != 1 ? peer.submit_request_head(ruvia::http2_connect_request_head_view{.authority_ = "TARGET.TEST:443"})
                                                 : peer.submit_request_head(ruvia::http2_extended_connect_request_head_view{.protocol_ = "test-tunnel", .scheme_ = "https", .authority_ = "proxy.test", .target_ = "/udp/target.test/443"});
-                if (!request.submitted()) {
+                const auto* id_ptr = std::get_if<std::uint32_t>(&request);
+                if (id_ptr == nullptr) {
                     throw std::runtime_error("CONNECT request submission rejected");
                 }
-                const auto id = request.submitted()->stream_id();
+                const auto id = *id_ptr;
                 co_await flush_peer(socket, peer, memory.resource());
                 bool established = false;
                 while (!established) {
@@ -294,7 +295,7 @@ RUVIA_TEST(http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_requ
                 observation_value.saw_eof_ = false;
             }
             auto sibling = peer.submit_request_head(ruvia::http2_regular_request_head_view{.authority_ = "proxy.test", .target_ = "/after"});
-            if (!sibling.submitted()) {
+            if (!std::holds_alternative<std::uint32_t>(sibling)) {
                 throw std::runtime_error("sibling request failed");
             }
             co_await flush_peer(socket, peer, memory.resource());
@@ -373,10 +374,11 @@ RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_pe
             const auto expected = std::to_string(payload_value.size());
 
             const auto tunnel = peer.submit_request_head(ruvia::http2_extended_connect_request_head_view{.protocol_ = "slow-tunnel", .scheme_ = "https", .authority_ = "proxy.test", .target_ = "/slow-tunnel"});
-            if (!tunnel.submitted()) {
+            const auto* tunnel_id_ptr = std::get_if<std::uint32_t>(&tunnel);
+            if (tunnel_id_ptr == nullptr) {
                 throw std::runtime_error("slow tunnel request submission rejected");
             }
-            const auto tunnel_id = tunnel.submitted()->stream_id();
+            const auto tunnel_id = *tunnel_id_ptr;
             co_await flush_peer(socket, peer, memory.resource());
             bool established = false;
             while (!established) {
@@ -416,10 +418,11 @@ RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_pe
             RUVIA_CHECK(tunnel_reply == expected);
 
             const auto upload = peer.submit_request_head(ruvia::http2_regular_request_head_view{.method_ = "POST", .authority_ = "proxy.test", .target_ = "/slow-upload", .content_ = ruvia::http2_request_content::streaming()});
-            if (!upload.submitted()) {
+            const auto* upload_id_ptr = std::get_if<std::uint32_t>(&upload);
+            if (upload_id_ptr == nullptr) {
                 throw std::runtime_error("slow upload request submission rejected");
             }
-            const auto upload_id = upload.submitted()->stream_id();
+            const auto upload_id = *upload_id_ptr;
             const auto upload_submitted = peer.submit_data(upload_id, payload_value, ruvia::http2_end_stream::end_stream);
             RUVIA_CHECK(upload_submitted == ruvia::http2_data_submit_status::accepted || upload_submitted == ruvia::http2_data_submit_status::queued);
             co_await flush_peer(socket, peer, memory.resource());
@@ -502,10 +505,11 @@ RUVIA_TEST(http2_websocket_request_half_closed_before_handshake_receives_error_r
             }
             const std::array<ruvia::http_header_view, 1> headers{ruvia::http_header_view("sec-websocket-version", "13")};
             const auto request = peer.submit_request_head(ruvia::http2_extended_connect_request_head_view{.protocol_ = "websocket", .scheme_ = "https", .authority_ = "proxy.test", .target_ = "/late-fin-websocket", .headers_ = headers});
-            if (!request.submitted()) {
+            const auto* id_ptr = std::get_if<std::uint32_t>(&request);
+            if (id_ptr == nullptr) {
                 throw std::runtime_error("websocket request submission rejected");
             }
-            const auto id = request.submitted()->stream_id();
+            const auto id = *id_ptr;
             co_await flush_peer(socket, peer, memory.resource());
             // The client API cannot half-close before the handshake decision, so
             // write the empty DATA(END_STREAM) frame directly. The route

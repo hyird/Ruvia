@@ -9,12 +9,12 @@
 
 namespace ruvia {
 
-enum class redis_order_direction : std::uint8_t { ascending,
-    descending };
+enum class redis_order_direction : std::uint8_t { asc,
+    desc };
 
 struct redis_find_order final {
     std::string field_{};
-    redis_order_direction direction_{redis_order_direction::ascending};
+    redis_order_direction direction_{redis_order_direction::asc};
 };
 
 // RediSearch always pages results; this page size applies when `take_` is unset.

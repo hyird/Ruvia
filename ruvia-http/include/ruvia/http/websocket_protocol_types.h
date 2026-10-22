@@ -48,7 +48,7 @@ using websocket_mask_key_generator_type = bool (*)(void*, websocket_mask_key_typ
 
 // The pending transport output: bytes() followed by borrowed_bytes(), written in
 // that order. borrowed_bytes() is a payload the driver submitted by reference
-// (websocket_server_protocol::submit_borrowed_frame); it is empty otherwise.
+// (websocket_connection::submit_borrowed_frame); it is empty otherwise.
 class websocket_output_plan final {
 public:
     [[nodiscard]] constexpr std::string_view bytes() const noexcept {

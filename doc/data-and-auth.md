@@ -53,9 +53,9 @@ ruvia::app().database({
 | `ruvia::db_handle` 方法 | 说明 |
 | --- | --- |
 | `db_handle with_options(operation_options options) const` | 绑定单次查询的 `timeout_` 与 `stop_token_` |
-| `scoped_operation<db_rows> query(std::string_view sql, Args&&... params) const` | 执行参数化查询并返回缓冲结果集 `db_rows`（亦支持传入 `std::span<const db_value>` 或 `const db_query&`） |
+| `scoped_operation<db_rows> query(std::string_view sql, Args&&... params) const` | 执行参数化查询并返回缓冲结果集 `db_rows`（亦支持传入 `std::span<const db_value>`） |
 | `template <fixed_string Sql, db_driver Driver = db_driver::mariadb, typename... Params> scoped_operation<db_rows> query(Params&&... params) const` | **编译期校验 SQL 占位符数量**与方言语法的参数化查询（MariaDB 用 `?`，PostgreSQL 用 `$1, $2`） |
-| `scoped_operation<db_stream_result> query_stream(...) const` | 流式拉取大结果集（同上支持运行期 SQL、编译期 `fixed_string` 模板与 `db_query`） |
+| `scoped_operation<db_stream_result> query_stream(...) const` | 流式拉取大结果集（同上支持运行期 SQL 与编译期 `fixed_string` 模板） |
 | `scoped_operation<db_exec_result> execute(...) const` | 执行 `INSERT` / `UPDATE` / `DELETE` / DDL，返回 `db_exec_result`（提供 `.affected_rows()` 与 `.last_insert_id()`） |
 | `scoped_operation<db_transaction> begin_transaction(db_transaction_options options = {}) const` | 开启事务（可指定隔离级别 `.isolation_` 与读写模式 `.access_mode_`） |
 | `scoped_operation<void> notify(std::string_view channel, std::string_view payload = {}) const` | （PostgreSQL）发送 `NOTIFY` 通知 |
@@ -100,7 +100,7 @@ co_await tx.commit();
 
 PostgreSQL 事务还额外支持：
 - **咨询锁（Advisory Locks）**：`co_await tx.advisory_lock(key)` / `try_advisory_lock(key)`
-- **服务端游标**：`declare_cursor(name, query, scroll)`、`fetch_cursor(name, count)`、`close_cursor(name)`
+- **服务端游标**：`declare_cursor(name, sql, params, scroll)`、`fetch_cursor(name, count)`、`close_cursor(name)`
 - **大对象（Large Objects）**：`lo_create`、`lo_put`、`lo_get_text`、`lo_unlink`
 
 ### 1.4 启动期数据库迁移（`"ruvia/web/db/db_migration.h"`）
@@ -127,7 +127,7 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 
 ### 2.1 `ruvia::db_query`（跨方言 SQL AST 构建器）
 
-`db_query` 可脱离数据库连接独立构建并编译为目标方言的参数化语句（`query.compile(driver, resource)`），也可直接传给 `db.query(q)` / `db.execute(q)`：
+`db_query` 可脱离数据库连接独立构建并编译为目标方言的参数化语句（`auto stmt = query.compile(driver, resource);`，再通过 `db.query(stmt.sql(), stmt.params())` 执行）：
 
 - **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`（Upsert）、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`。
@@ -186,7 +186,7 @@ RUVIA_DB_PROJECTION(device_summary,
 
 每个 `RUVIA_DB_ENTITY` 自动生成静态方法 `Entity::column<"field">(alias = {})`，返回强类型字段引用：
 
-- **比较与逻辑组合**：支持 `==`、`!=`、`<`、`<=`、`>`、`>=`、`like`、`ilike`、`between`、`in`、`not_in`、`is_null()`、`is_not_null()`、PostgreSQL 数组操作（`array_contains`、`array_overlap`）与 JSONB 操作（`json_contains`、`json_has_key`、`json_path_text_equals`）；多个谓词使用 `&&`、`||`、`!` 或 `ruvia::db_brackets([](auto& w) { ... })` 组合。
+- **比较与逻辑组合**：支持 `==`、`!=`、`<`、`<=`、`>`、`>=`、`like`、`ilike`、`between`、`in`、`not_in`、`is_null()`、`is_not_null()`、PostgreSQL 数组操作（`array_contains`、`array_overlap`）与 JSONB 操作（`json_contains`、`json_has_key`、`json_path_text_equals`）；多个谓词使用 `&&`、`||`、`!` 组合。
 - **更新赋值（生成 `db_assignment`）**：`device::column<"name">() = "edge-1"`、`device::column<"notes">().set_null()`、`device::column<"version">() += 1`、`device::column<"name">().set_excluded()`。
 
 ### 3.3 `ruvia::db_repository<Entity, Executor>` 核心操作
@@ -195,15 +195,14 @@ RUVIA_DB_PROJECTION(device_summary,
 
 | 分类 | 方法 | 说明 |
 | --- | --- | --- |
-| 查询 | `find(db_find_options = {})` / `find_by(db_predicate)` | 查询实体列表 `entity_rows<Entity>`（支持 `.where_`、`.relations_` 关联预加载、`.order_`、`.skip_`、`.take_`、`.lock_`、`.cache_`） |
-| 查询 | `find_one(options)` / `find_one_by(where)` | 查询单条实体 `std::optional<Entity>` |
-| 查询 | `find_and_count(options)` / `find_and_count_by(where)` | 分页查询并同时返回总行数 `std::pair<entity_rows<Entity>, std::uint64_t>` |
-| 统计与聚合 | `count` / `exists` / `sum` / `average` / `minimum` / `maximum` | 计数、存在性判断与数值列聚合计算 |
-| 写入与变更 | `save` / `insert` / `upsert(entity, db_upsert_options)` | 保存、插入（自动回填生成列/主键）或冲突更新 Upsert（支持单条与批量 `std::span`） |
+| 查询 | `find(db_find_options = {})` | 查询实体列表 `entity_rows<Entity>`（支持 `.where_`、`.relations_` 关联预加载、`.order_`、`.skip_`、`.take_`、`.lock_`、`.cache_`） |
+| 查询 | `find_one(db_find_options)` | 查询单条实体 `std::optional<Entity>` |
+| 查询 | `find_and_count(db_find_options = {})` | 分页查询并同时返回总行数 `std::pair<entity_rows<Entity>, std::uint64_t>` |
+| 统计与存在性 | `count(db_find_options = {})` / `exists(db_find_options = {})` | 按条件统计行数或判断是否存在匹配行 |
+| 写入与变更 | `save` / `insert` / `upsert(entity, db_upsert_options)` | 保存、插入或冲突更新 Upsert（支持单条与批量 `std::span`） |
 | 更新与删除 | `update(where, changes)` / `increment` / `decrement` | 按条件更新指定字段或原子自增/自减 |
 | 删除与软删 | `delete_by(where)` / `remove(entity)` / `soft_delete(where)` / `restore(where)` / `clear()` | 硬删除、按软删列（`.delete_date_ = true`）软删除与恢复、清空表 |
-| `RETURNING` | `insert_returning*` / `update_returning*` / `delete_returning*` / `upsert_returning*` | 执行写入并直接将 `RETURNING` 结果映射为实体、自定义 `RUVIA_DB_PROJECTION` 或标量 |
-| 构建器 | `create_query_builder(alias)` / `create_update_builder` / `create_delete_builder` / `create_insert_builder` | 链式构建复杂 JOIN（`left_join_and_select`）、CTE、窗口函数与子查询 |
+| 构建器与 `RETURNING` | `create_query_builder(alias)` / `create_update_builder` / `create_delete_builder` / `create_insert_builder` | 链式构建复杂 JOIN（`left_join_and_select`）、`offset`/`limit`、CTE、窗口函数与子查询；写构建器通过 `.returning(...)` + `.get_many()` / `.get_one()` / `.get_scalar<T>()` 映射 `RETURNING` 结果 |
 
 ---
 
@@ -250,11 +249,11 @@ ruvia::app()
 
 ### 4.3 Pub/Sub 独占订阅连接（`redis_subscription`）
 
-Pub/Sub 订阅不共享常规连接池：每次调用 `co_await c.redis().subscription()` 都会打开一条独占的 Redis 连接，直到调用 `abort()`、取消或析构：
+Pub/Sub 订阅不共享常规连接池：每次调用 `c.redis().subscription()` 都会创建一条独占的 Redis 订阅通道（在首次 `subscribe` 时打开连接），直到调用 `abort()`、取消或析构：
 
 ```cpp
-auto sub = co_await c.redis().with_options({.stop_token_ = c.get_stop_token()}).subscription();
-co_await sub.subscribe(std::array<std::string_view, 1>{"news"});
+auto sub = c.redis().with_options({.stop_token_ = c.stop_token()}).subscription();
+co_await sub.subscribe("news");
 while (auto event = co_await sub.read()) {
     if (event->kind() == ruvia::redis_pubsub_event_kind::message) {
         // event->channel(), event->payload()
@@ -287,8 +286,8 @@ auto repo = c.redis().get_repository<cached_user>(user_repo_config);
 // 带 TTL 插入：co_await repo.insert(entity, {.ttl_ = std::chrono::minutes(10)});
 // 条件查询：
 auto rows = co_await repo.find({
-    .where_ = (cached_user::field<"role">() == "admin") && (cached_user::field<"score">() >= 80),
-    .order_ = {{.field_ = "score", .direction_ = ruvia::redis_order_direction::descending}},
+    .where_ = (cached_user::column<"role">() == "admin") && (cached_user::column<"score">() >= 80),
+    .order_ = {{.field_ = "score", .direction_ = ruvia::redis_order_direction::desc}},
     .take_ = 20,
 });
 ```
@@ -305,6 +304,9 @@ auto rows = co_await repo.find({
 #include "ruvia/web/auth/jwt.h"
 
 // 1. 签发 Token：
+inline constexpr std::array<ruvia::jwt_claim_view, 1> custom_claims{{
+    {.name_ = "role", .value_ = "admin"},
+}};
 std::pmr::string token = ruvia::jwt_sign({
     .algorithm_ = ruvia::jwt_algorithm::hs256,
     .secret_ = secret_key_32_bytes_minimum,
@@ -312,9 +314,7 @@ std::pmr::string token = ruvia::jwt_sign({
     .subject_ = "user-42",
     .audience_ = "ruvia-api",
     .expires_in_ = std::chrono::hours(1),
-    .claims_ = {
-        ruvia::jwt_claim({.name_ = "role", .value_ = "admin"}),
-    },
+    .claims_ = custom_claims,
     .resource_ = c.arena(),
 });
 

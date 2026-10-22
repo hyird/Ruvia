@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory>
 
@@ -12,7 +13,11 @@ namespace ruvia {
 
 class worker_group;
 
-enum class worker_io_policy { synchronized,
+namespace detail {
+struct worker_runtime_access;
+}
+
+enum class worker_io_policy : std::uint8_t { synchronized,
     single_owner };
 
 struct worker_runtime_options final {
@@ -92,19 +97,31 @@ public:
     void join();
     [[nodiscard]] std::exception_ptr failure() const noexcept;
     [[nodiscard]] runtime_lifecycle::state_type state() const noexcept;
-    [[nodiscard]] worker_runtime_context& context() & noexcept;
-    worker_runtime_context& context() && = delete;
+    [[nodiscard]] asio::io_context& io_context() noexcept;
+    [[nodiscard]] const worker_handle& handle() const noexcept;
 
 private:
     friend class worker_group;
+    friend struct detail::worker_runtime_access;
+    [[nodiscard]] worker_runtime_context& context() & noexcept;
     void bind_group(worker_group& group);
     void unbind_group(worker_group& group) noexcept;
 
-    class impl;
+    class impl_type;
     struct impl_deleter final {
-        void operator()(impl* value) const noexcept;
+        void operator()(impl_type* value) const noexcept;
     };
-    std::unique_ptr<impl, impl_deleter> impl_;
+    std::unique_ptr<impl_type, impl_deleter> impl_;
 };
+
+namespace detail {
+
+struct worker_runtime_access final {
+    [[nodiscard]] static worker_runtime_context& context(worker_runtime& runtime) noexcept {
+        return runtime.context();
+    }
+};
+
+}  // namespace detail
 
 }  // namespace ruvia

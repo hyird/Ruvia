@@ -118,9 +118,14 @@ task<void> exercise_payload_retirement(worker_handle worker, bool& success) {
         receiver.close();
         state.query_on_move_ = true;
         {
-            const auto rejected = completion.complete(payload(state));
-            if (rejected.status() != one_shot_complete_status::receiver_closed ||
+            auto rejected = completion.complete(payload(state));
+            if (rejected != one_shot_complete_status::receiver_closed ||
+                rejected == one_shot_complete_status::completed ||
                 rejected.rejected() == nullptr || !rejected.rejected()->value_) {
+                co_return;
+            }
+            auto taken = std::move(rejected).take_rejected();
+            if (rejected.rejected() != nullptr || !taken.value_ || *taken.value_ != 42) {
                 co_return;
             }
         }

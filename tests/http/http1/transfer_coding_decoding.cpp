@@ -327,12 +327,12 @@ RUVIA_TEST(transfer_coded_chunked_request_plan_drives_decode_order) {
     if (chunked_body == nullptr) {
         return;
     }
-    RUVIA_CHECK_EQ(chunked_body->transfer_codings().values_.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(chunked_body->transfer_codings().size(), std::size_t{1});
 
     auto* resource = std::pmr::get_default_resource();
     http1_chunked_body_decoder chunks({.body_limit_ = protocol_byte_limit::limited(1u << 20)});
     http_transfer_coding_stack_decoder transfer(
-        chunked_body->transfer_codings().values_, resource, protocol_byte_limit::limited(1u << 20));
+        chunked_body->transfer_codings(), resource, protocol_byte_limit::limited(1u << 20));
     std::pmr::string output(resource);
     std::string_view pending(wire_body);
     bool complete_value = false;
@@ -376,7 +376,7 @@ RUVIA_TEST(transfer_coded_chunked_request_accepts_empty_coded_body) {
     RUVIA_CHECK_EQ(terminal.consumed_bytes(), wire_body.size());
 
     http_transfer_coding_stack_decoder transfer(
-        chunked_body->transfer_codings().values_, resource, protocol_byte_limit::limited(1024));
+        chunked_body->transfer_codings(), resource, protocol_byte_limit::limited(1024));
     const auto finish_result = transfer.finish_input();
     RUVIA_CHECK(finish_result.complete() != nullptr);
 

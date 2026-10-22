@@ -164,7 +164,7 @@ std::pmr::string jwt_parse_jose_algorithm(std::string_view json, std::pmr::memor
             }
         });
     if (!valid || !algorithm_seen || !algorithm_valid || unsupported_extension) {
-        throw std::runtime_error("JWT JOSE header is invalid");
+        throw jwt_error(jwt_error::code_type::invalid_header, "JWT JOSE header is invalid");
     }
     return algorithm;
 }
@@ -287,7 +287,8 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
             }
         });
     if (!valid || claim_invalid) {
-        throw std::runtime_error("JWT payload is not a valid unique claims object");
+        throw jwt_error(
+            jwt_error::code_type::invalid_payload, "JWT payload is not a valid unique claims object");
     }
     return payload_value;
 }

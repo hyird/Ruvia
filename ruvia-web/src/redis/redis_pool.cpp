@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "ruvia/core/async.h"
+#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "redis/redis_protocol.h"
 #include "redis/redis_registry.h"
@@ -59,8 +60,9 @@ void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) no
 
 task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource, operation_options options,
-    std::optional<std::chrono::milliseconds> reply_timeout) {
-    return execute_commands<redis_value>(std::move(args), std::move(options), reply_timeout, resource, std::nullopt);
+    std::optional<std::chrono::milliseconds> reply_timeout, operation_scope* scope) {
+    return execute_commands<redis_value>(
+        std::move(args), std::move(options), reply_timeout, resource, std::nullopt, scope);
 }
 
 task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
@@ -74,7 +76,8 @@ task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
 template <typename result_type, typename command_source_type>
 task<result_type> redis_pool::execute_commands(command_source_type source, operation_options options,
     std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
-    std::optional<operation_timeout> deadline) {
+    std::optional<operation_timeout> deadline, operation_scope* scope) {
+    scoped_request_io_timer timer(scope, request_io_kind::redis);
     constexpr bool single_reply = std::is_same_v<result_type, redis_value>;
     const auto commands = [&] {
         if constexpr (single_reply) {

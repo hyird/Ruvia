@@ -172,7 +172,7 @@ task<void> http_client_connection::ensure_connected(
         pool_lease_scheduler& scheduler_;
         std::size_t slot_;
         ~connect_lease() {
-            (void)scheduler_.release(slot_);
+            scheduler_.release(slot_);
         }
     } connect_lease_value{connect_scheduler_, connect_slot};
     if (response.abandoned_) {

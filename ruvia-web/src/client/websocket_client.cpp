@@ -8,6 +8,7 @@
 
 #include <openssl/rand.h>
 
+#include "ruvia/core/bytes.h"
 #include "ruvia/core/error_text.h"
 #include "ruvia/core/worker_handle.h"
 
@@ -36,11 +37,7 @@ websocket_client_state::websocket_client_state(event_loop loop, const websocket_
               .alpn_ = config.protocol_ == websocket_client_protocol::http2 ? client_alpn::http2 : client_alpn::http11},
           wire_counters_),
       write_signal_(worker_),
-      input_([&] {
-          std::pmr::string input(memory_.allocator<char>());
-          input.reserve(websocket_client_transport_buffer_bytes);
-          return input;
-      }()),
+      input_(memory_.allocator<char>()),
       selected_subprotocol_(memory_.allocator<char>()),
       heartbeat_tasks_(worker_, {.resource_ = memory_.resource()}),
       lifecycle_(*this, loop_, worker_) {}
@@ -224,9 +221,23 @@ scoped_operation<void> websocket_client_handle::text(std::string_view payload_va
     return state_->write(websocket_opcode::text, payload_value, options_, options);
 }
 
+scoped_operation<void> websocket_client_handle::text_owned(std::pmr::string&& payload_value, websocket_send_options options) const {
+    registration_.require_active();
+    return state_->write(websocket_opcode::text, std::move(payload_value), options_, options);
+}
+
 scoped_operation<void> websocket_client_handle::binary(std::string_view payload_value, websocket_send_options options) const {
     registration_.require_active();
     return state_->write(websocket_opcode::binary, payload_value, options_, options);
+}
+
+scoped_operation<void> websocket_client_handle::binary(std::span<const std::byte> payload_value, websocket_send_options options) const {
+    return binary(as_chars(payload_value), options);
+}
+
+scoped_operation<void> websocket_client_handle::binary_owned(std::pmr::string&& payload_value, websocket_send_options options) const {
+    registration_.require_active();
+    return state_->write(websocket_opcode::binary, std::move(payload_value), options_, options);
 }
 
 scoped_operation<void> websocket_client_handle::ping(std::string_view payload_value) const {
@@ -234,9 +245,19 @@ scoped_operation<void> websocket_client_handle::ping(std::string_view payload_va
     return state_->write(websocket_opcode::ping, payload_value, options_);
 }
 
+scoped_operation<void> websocket_client_handle::ping_owned(std::pmr::string&& payload_value) const {
+    registration_.require_active();
+    return state_->write(websocket_opcode::ping, std::move(payload_value), options_);
+}
+
 scoped_operation<void> websocket_client_handle::pong(std::string_view payload_value) const {
     registration_.require_active();
     return state_->write(websocket_opcode::pong, payload_value, options_);
+}
+
+scoped_operation<void> websocket_client_handle::pong_owned(std::pmr::string&& payload_value) const {
+    registration_.require_active();
+    return state_->write(websocket_opcode::pong, std::move(payload_value), options_);
 }
 
 scoped_operation<void> websocket_client_handle::close(websocket_close_options options) const {
@@ -271,7 +292,7 @@ websocket_client_handle websocket_client::handle() const& {
     return state_->handle({});
 }
 
-void websocket_client::abort() noexcept {
+void websocket_client::close() noexcept {
     state_->abort();
 }
 

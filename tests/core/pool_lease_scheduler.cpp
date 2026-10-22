@@ -53,20 +53,18 @@ ruvia::task<void> exercise_lease_and_close(
         co_return;
     }
     const auto index = first.value();
-    if (scheduler.release(index) != ruvia::pool_lease_release_status::released ||
-        scheduler.release(index) != ruvia::pool_lease_release_status::already_released ||
-        scheduler.release(index + 1) != ruvia::pool_lease_release_status::invalid_slot) {
-        co_return;
-    }
+    scheduler.release(index);
 
     const auto reacquired = co_await scheduler.acquire(std::nullopt);
     if (!reacquired.has_value() || reacquired.value() != index) {
         co_return;
     }
 
-    auto handoff_status = ruvia::pool_lease_release_status::invalid_slot;
-    asio::post(io_context,
-        [&scheduler, &handoff_status, index] { handoff_status = scheduler.release(index); });
+    bool handoff_released = false;
+    asio::post(io_context, [&scheduler, &handoff_released, index] {
+        scheduler.release(index);
+        handoff_released = true;
+    });
     const auto handed_off = co_await scheduler.acquire(std::nullopt);
     if (!handed_off.has_value() || handed_off.value() != index) {
         co_return;
@@ -74,14 +72,12 @@ ruvia::task<void> exercise_lease_and_close(
 
     asio::post(io_context, [&scheduler] { (void)scheduler.close(); });
     const auto waiting_at_close = co_await scheduler.acquire(std::nullopt);
-    if (handoff_status != ruvia::pool_lease_release_status::transferred_to_waiter ||
+    if (!handoff_released ||
         waiting_at_close.status() != ruvia::worker_wait_status::closed ||
         !scheduler.closing() || scheduler.close()) {
         co_return;
     }
-    if (scheduler.release(index) != ruvia::pool_lease_release_status::released) {
-        co_return;
-    }
+    scheduler.release(index);
     const auto after_close = co_await scheduler.acquire(std::nullopt);
     success = after_close.status() == ruvia::worker_wait_status::closed;
     auto moved_acquire = scheduler.acquire(std::nullopt);
@@ -146,9 +142,7 @@ ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
         co_return;
     }
     for (std::size_t i = 0; i < 32; ++i) {
-        if (scheduler.release(held.value()) != ruvia::pool_lease_release_status::released) {
-            co_return;
-        }
+        scheduler.release(held.value());
         const auto acquired = co_await scheduler.acquire(std::nullopt);
         if (!acquired.has_value() || acquired.value() != held.value() ||
             resource.live_blocks_ != baseline_blocks) {
@@ -171,8 +165,8 @@ ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
         }
     }
 
-    success = scheduler.release(held.value()) == ruvia::pool_lease_release_status::released &&
-              resource.live_blocks_ == baseline_blocks && retained_result.has_value() &&
+    scheduler.release(held.value());
+    success = resource.live_blocks_ == baseline_blocks && retained_result.has_value() &&
               retained_result->has_value() && retained_result->value() == held.value();
 }
 

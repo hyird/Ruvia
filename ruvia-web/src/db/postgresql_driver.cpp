@@ -94,20 +94,24 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::p
                 resource));
         }
         rows.push_back(db_result_access::borrowed_row(
-            fields_value.data() + row_start, field_count, column_names.data(), column_names.size(), resource));
+            fields_value.data() + row_start, field_count, column_names.data(), column_names.size()));
     }
 }
 
-[[nodiscard]] db_row materialize_owned_single_row(PGresult& result_value, std::pmr::memory_resource* resource) {
-    auto row = db_result_access::owned_row(resource);
-    auto& fields_value = db_result_access::owned_fields(row);
-    auto& column_names = db_result_access::owned_column_names(row);
+[[nodiscard]] db_row materialize_stream_single_row(PGresult& result_value,
+    std::pmr::vector<db_field>& fields_value, std::pmr::vector<std::pmr::string>& column_names,
+    std::pmr::memory_resource* resource) {
     const auto field_count = static_cast<std::size_t>(PQnfields(&result_value));
+    if (column_names.empty()) {
+        column_names.reserve(field_count);
+        for (std::size_t field = 0; field < field_count; ++field) {
+            column_names.emplace_back(PQfname(&result_value, static_cast<int>(field)));
+        }
+    }
+    fields_value.clear();
     fields_value.reserve(field_count);
-    column_names.reserve(field_count);
     for (std::size_t field = 0; field < field_count; ++field) {
         const auto field_index = static_cast<int>(field);
-        column_names.emplace_back(PQfname(&result_value, field_index));
         if (PQgetisnull(&result_value, 0, field_index) != 0) {
             fields_value.push_back(db_result_access::null_field(resource));
             continue;
@@ -117,7 +121,8 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::p
                 static_cast<std::size_t>(PQgetlength(&result_value, 0, field_index))),
             resource));
     }
-    return row;
+    return db_result_access::borrowed_row(
+        fields_value.data(), fields_value.size(), column_names.data(), column_names.size());
 }
 
 [[nodiscard]] std::optional<std::chrono::milliseconds> earlier_timeout(
@@ -426,14 +431,15 @@ task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t ind
 // first result, so the stream starts optimistically and read_stream_row()
 // refuses a statement without a row set.
 task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource*, const operation_timeout& deadline_value) {
+    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
     if (send_query(pool, index, sql, params, true)) {
         co_await flush_output(pool, index, deadline_value);
     }
-    co_return db_stream_start{};
+    co_return db_stream_start(resource);
 }
 
 task<std::optional<db_row>> postgresql_driver::read_stream_row(pool_type& pool, std::size_t index, void*,
+    std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_options& options) {
     auto* connection = pool.slot(index).connection_;
     typename pool_type::leases_type::cancellation_guard cancellation(pool.leases(), index, options.stop_token_);
@@ -451,7 +457,7 @@ task<std::optional<db_row>> postgresql_driver::read_stream_row(pool_type& pool, 
         }
         const auto status = PQresultStatus(result_value.get());
         if (status == PGRES_SINGLE_TUPLE) {
-            co_return materialize_owned_single_row(*result_value, resource);
+            co_return materialize_stream_single_row(*result_value, fields, column_names, resource);
         }
         if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK || status == PGRES_EMPTY_QUERY) {
             result_value.reset();

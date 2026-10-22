@@ -72,17 +72,17 @@ class http1_websocket_routes final {
         .lifecycle_ = {.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(100),
                            .pong_timeout_ = std::chrono::milliseconds(150)}}};
     RUVIA_GET_WS("/http1-websocket-eof", read_until_eof);
-    RUVIA_GET_WS_OPTIONS("/http1-websocket-longest-heartbeat", write_stalled, longest_heartbeat);
-    RUVIA_GET_WS_OPTIONS("/http1-websocket-write-only-heartbeat", write_without_reading, short_heartbeat);
-    RUVIA_GET_WS_OPTIONS("/http1-websocket-required-subprotocol", accept_only, required_subprotocol);
+    RUVIA_GET_WS("/http1-websocket-longest-heartbeat", write_stalled, longest_heartbeat);
+    RUVIA_GET_WS("/http1-websocket-write-only-heartbeat", write_without_reading, short_heartbeat);
+    RUVIA_GET_WS("/http1-websocket-required-subprotocol", accept_only, required_subprotocol);
     RUVIA_GET_WS("/http1-websocket-upstream-reset", fail_on_upstream_reset);
     RUVIA_GET_WS("/http1-websocket-echo-send", echo_send);
     RUVIA_GET_WS("/http1-websocket-deflate-echo", echo_all);
-    RUVIA_GET_WS_OPTIONS("/http1-websocket-deflate-takeover", echo_all, takeover_deflate);
+    RUVIA_GET_WS("/http1-websocket-deflate-takeover", echo_all, takeover_deflate);
     RUVIA_ROUTES_END
 
     ruvia::task<void> echo_all(ruvia::context& context_value) {
-        auto& websocket_value = context_value.get_websocket();
+        auto& websocket_value = context_value.websocket();
         for (;;) {
             auto message = co_await websocket_value.read();
             if (!message.has_value()) {
@@ -99,21 +99,21 @@ class http1_websocket_routes final {
     // Fails the way an awaited upstream request whose connection was reset
     // does; the inbound websocket itself is healthy.
     ruvia::task<void> fail_on_upstream_reset(ruvia::context& context_value) {
-        const auto message = co_await context_value.get_websocket().read();
+        const auto message = co_await context_value.websocket().read();
         if (message.has_value()) {
             throw std::system_error(asio::error::make_error_code(asio::error::connection_reset), "upstream request");
         }
     }
 
     ruvia::task<void> write_stalled(ruvia::context& context_value) {
-        co_await context_value.get_websocket().binary(std::string(stalled_payload_size, 'w'));
+        co_await context_value.websocket().binary(std::string(stalled_payload_size, 'w'));
     }
 
     // Never reads, so no Pong is ever polled. Idle long enough for a Ping to
     // go out and its Pong window to lapse unobserved, then keep writing; the
     // peer answers every Ping.
     ruvia::task<void> write_without_reading(ruvia::context& context_value) {
-        auto& websocket_value = context_value.get_websocket();
+        auto& websocket_value = context_value.websocket();
         if (co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(300)) !=
             ruvia::timer_sleep_result::elapsed) {
             co_return;
@@ -132,7 +132,7 @@ class http1_websocket_routes final {
     // lane at the call and holds it until the frame is written or dropped.
     ruvia::task<void> echo_send(ruvia::context& context_value) {
         auto& observed_value = *context_value.worker_state<std::shared_ptr<websocket_eof_observation>>();
-        auto& websocket_value = context_value.get_websocket();
+        auto& websocket_value = context_value.websocket();
         try {
             auto first = co_await websocket_value.read();
             if (!first.has_value()) {
@@ -183,7 +183,7 @@ class http1_websocket_routes final {
 
     ruvia::task<void> read_until_eof(ruvia::context& context_value) {
         auto& observed_value = *context_value.worker_state<std::shared_ptr<websocket_eof_observation>>();
-        auto& websocket_value = context_value.get_websocket();
+        auto& websocket_value = context_value.websocket();
         // The 101 head is committed: a 1xx head written now would land inside
         // the frame stream.
         try {

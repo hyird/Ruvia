@@ -26,13 +26,6 @@ class http2_connection;
 class http2_connection_owner_endpoint;
 }  // namespace detail
 
-enum class http2_received_data_credit_merge_status : std::uint8_t {
-    merged,
-    invalid_credit,
-    different_stream,
-    overflow,
-};
-
 class http2_received_data_credit final {
 public:
     // A credit is linear. acknowledge() consumes it explicitly; destroying a
@@ -43,9 +36,8 @@ public:
     http2_received_data_credit(http2_received_data_credit&& other) noexcept;
     http2_received_data_credit& operator=(http2_received_data_credit&&) = delete;
     // Combine credits from one stream without returning any bytes. Success
-    // consumes other; failure leaves both tokens unchanged.
-    [[nodiscard]] http2_received_data_credit_merge_status merge(
-        http2_received_data_credit&& other) noexcept;
+    // consumes other; invalid/mismatched/overflowing tokens throw.
+    void merge(http2_received_data_credit&& other);
     [[nodiscard]] bool valid() const noexcept {
         return endpoint_ != nullptr && stream_id_ != 0 && bytes_ != 0;
     }
@@ -64,9 +56,7 @@ private:
 enum class http2_received_data_acknowledge_status : std::uint8_t {
     acknowledged,
     closed,
-    invalid_credit
 };
-
 class http2_informational_head_event final {
 public:
     [[nodiscard]] std::uint32_t stream_id() const noexcept {
@@ -122,10 +112,10 @@ public:
         return snapshot_;
     }
     const http2_server_request_snapshot& snapshot() const&& = delete;
-    [[nodiscard]] const http_request& request() const& noexcept {
-        return request_;
-    }
-    const http_request& request() const&& = delete;
+    [[nodiscard]] http2_server_request_view request_view() const& noexcept;
+    http2_server_request_view request_view() const&& = delete;
+    [[nodiscard]] http_request build_request(
+        std::pmr::memory_resource* resource = nullptr, std::string_view body = {}) const;
     [[nodiscard]] http_server_expectation_plan expectation_plan(
         http_unsupported_expectation_policy policy) const noexcept {
         return expectations_.server_plan(content_, policy);
@@ -135,10 +125,9 @@ private:
     friend class http2_connection;
     friend class http2_event;
     http2_request_head_event(detail::http2_connection_owner_endpoint* endpoint, std::uint32_t stream_id,
-        http_request request, http_request_expectations expectations,
+        http_request_expectations expectations,
         http_request_content_indication content, http2_server_request_snapshot snapshot) noexcept;
     std::uint32_t stream_id_;
-    http_request request_;
     http2_server_request_snapshot snapshot_;
     http_request_expectations expectations_;
     http_request_content_indication content_;
@@ -420,10 +409,10 @@ private:
     explicit http2_event(event_type event) noexcept
         : value_(std::move(event)) {}
     [[nodiscard]] static http2_event request_head(detail::http2_connection_owner_endpoint* endpoint,
-        std::uint32_t id, http_request request, http_request_expectations expectations,
+        std::uint32_t id, http_request_expectations expectations,
         http_request_content_indication content, http2_server_request_snapshot snapshot) noexcept {
         return http2_event(http2_request_head_event(
-            endpoint, id, std::move(request), expectations, content, snapshot));
+            endpoint, id, expectations, content, snapshot));
     }
     [[nodiscard]] static http2_event response_head(std::uint32_t id, http_client_response_head head,
         std::optional<http_client_request_content_signal> signal) noexcept {

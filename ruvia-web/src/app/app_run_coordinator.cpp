@@ -54,7 +54,7 @@ class process_signal_handling final {
 public:
     explicit process_signal_handling(application& owner)
         : runtime_({.queue_capacity_ = 128}),
-          signals_(runtime_.context().io_context()) {
+          signals_(runtime_.io_context()) {
         runtime_.configure({
             .stop_admission_ = [this] {
                 std::error_code ignored;

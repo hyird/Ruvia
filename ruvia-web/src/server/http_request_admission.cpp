@@ -80,7 +80,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // preparation instead of pruning the client's choices here. A failed
     // negotiation stays typed until the response status is known: a buffered
     // 204/205/304 carries no representation and must not become 406.
-    const auto* selection = input.coding_.selected();
+    const auto* selection = input.coding_ ? &*input.coding_ : nullptr;
     auto coding_policy = selection != nullptr ? http_response_coding_policy::selected(*selection)
                                               : http_response_coding_policy::no_acceptable_coding();
     // Keyed on the client, not the hop: behind a trusted proxy every request
@@ -141,7 +141,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         admission.endpoint_ = http_request_endpoint::tunnel;
         return admission;
     }
-    if (endpoint->get_websocket() != nullptr) {
+    if (endpoint->websocket() != nullptr) {
         // An upgrade selects no HTTP response representation.
         admission.endpoint_ = http_request_endpoint::websocket;
         return admission;

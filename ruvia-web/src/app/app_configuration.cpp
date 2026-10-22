@@ -56,6 +56,9 @@ void app_configuration::add_middleware(owned_middleware_descriptor descriptor) {
     if (value.request_body_limit() != 0) {
         throw std::invalid_argument("body_limit binds to a route or controller and cannot be app-wide");
     }
+    if (value.stream_request_body()) {
+        throw std::invalid_argument("stream_body binds to a route or controller and cannot be app-wide");
+    }
     middlewares_.push_back(std::move(descriptor));
 }
 

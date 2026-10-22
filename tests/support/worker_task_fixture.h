@@ -7,7 +7,7 @@
 
 #include <asio/co_spawn.hpp>
 
-#include "ruvia/core/asio_task.h"
+#include "ruvia/core/async.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_runtime_context.h"
 

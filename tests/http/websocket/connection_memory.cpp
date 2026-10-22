@@ -11,7 +11,6 @@
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_deflate_codecs.h"
-#include "ruvia/http/websocket_server_protocol.h"
 
 #include "test_harness.h"
 
@@ -96,9 +95,9 @@ template <typename sender_type>
 
 // Delivers one client frame to a server protocol and returns its message.
 [[nodiscard]] std::optional<std::string> receive(
-    ruvia::testing::test_context& ruvia_ctx, http_io_buffer& input, websocket_server_protocol& protocol, std::string_view wire) {
+    ruvia::testing::test_context& ruvia_ctx, http_io_buffer& input, websocket_connection& protocol, std::string_view wire) {
     input.append(wire);
-    const auto event = protocol.poll();
+    const auto event = protocol.next_event();
     RUVIA_CHECK(event && event->message());
     if (!event || !event->message()) {
         return std::nullopt;
@@ -107,13 +106,16 @@ template <typename sender_type>
 }
 
 struct server_endpoint final {
-    explicit server_endpoint(websocket_server_protocol_options options)
+    explicit server_endpoint(websocket_connection_options options)
         : input_(&memory_),
-          protocol_(input_, protocol_byte_limit::unlimited(), options) {}
+          protocol_(input_, [&] {
+              options.message_limit_ = protocol_byte_limit::unlimited();
+              return options;
+          }()) {}
 
     counting_resource memory_;
     http_io_buffer input_;
-    websocket_server_protocol protocol_;
+    websocket_connection protocol_;
 };
 
 }  // namespace
@@ -186,7 +188,7 @@ RUVIA_TEST(ws_shared_deflate_resets_after_a_failed_connection_message) {
     // A corrupt compressed message fails only its own connection.
     const std::string garbage("\xc2\x84\x00\x00\x00\x00\xff\xff\xff\xff", 10);
     failing.input_.append(garbage);
-    const auto failure = failing.protocol_.poll();
+    const auto failure = failing.protocol_.next_event();
     RUVIA_CHECK(failure && failure->protocol_error() && failure->protocol_error()->close_code() == 1002);
     auto peer = client(compression);
     RUVIA_CHECK(peer.submit_frame(websocket_opcode::binary, message) == websocket_frame_submit_status::accepted);
@@ -209,7 +211,7 @@ RUVIA_TEST(ws_connection_buffers_keep_bounded_storage_after_a_large_message) {
         const auto event = peer.next_event();
         RUVIA_CHECK(event && event->message() && event->message()->payload() == outbound);
         // Releases the delivered message and its input.
-        RUVIA_CHECK(!server.protocol_.poll().has_value());
+        RUVIA_CHECK(!server.protocol_.next_event().has_value());
     };
 
     const auto small = sample_message(32, 5);
@@ -303,7 +305,7 @@ RUVIA_TEST(ws_deflate_mem_level_is_validated) {
         }));
         http_io_buffer input;
         RUVIA_CHECK(ruvia::testing::throws_on([&] {
-            websocket_server_protocol invalid(input, protocol_byte_limit::unlimited(), websocket_server_protocol_options{.mem_level_ = mem_level});
+            websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(), .mem_level_ = mem_level});
         }));
     }
     for (const int mem_level : {1, 9}) {
@@ -318,17 +320,17 @@ RUVIA_TEST(ws_server_protocol_reports_bytes_missing_from_a_partial_frame) {
     RUVIA_CHECK(peer.submit_frame(websocket_opcode::binary, message) == websocket_frame_submit_status::accepted);
     const auto wire = drain(ruvia_ctx, peer);
     http_io_buffer input;
-    websocket_server_protocol protocol(input, protocol_byte_limit::unlimited());
+    websocket_connection protocol(input, {.message_limit_ = protocol_byte_limit::unlimited()});
     RUVIA_CHECK_EQ(protocol.needed_input_bytes(), std::size_t{0});
     // 2 + 8 length + 4 mask header bytes; the length is not complete yet.
     input.append(std::string_view(wire).substr(0, 5));
-    RUVIA_CHECK(!protocol.poll().has_value());
+    RUVIA_CHECK(!protocol.next_event().has_value());
     RUVIA_CHECK_EQ(protocol.needed_input_bytes(), std::size_t{0});
     input.append(std::string_view(wire).substr(5, 995));
-    RUVIA_CHECK(!protocol.poll().has_value());
+    RUVIA_CHECK(!protocol.next_event().has_value());
     RUVIA_CHECK_EQ(protocol.needed_input_bytes(), wire.size() - 1000);
     input.append(std::string_view(wire).substr(1000));
-    const auto event = protocol.poll();
+    const auto event = protocol.next_event();
     RUVIA_CHECK(event && event->message() && event->message()->payload() == message);
     RUVIA_CHECK_EQ(protocol.needed_input_bytes(), std::size_t{0});
 }

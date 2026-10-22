@@ -96,7 +96,28 @@ task<http2_stream_data_write_status> write_http2_stream_data_chunk(
                 co_return classify_aborted_write(signal, aborted);
             }
         }
-        const auto result_value = connection.submit_data(stream_id, chunk, end_stream);
+        http2_data_submit_status result_value{};
+        try {
+            result_value = connection.submit_data(stream_id, chunk, end_stream);
+        } catch (const std::invalid_argument&) {
+            write_signal.notify();
+            if (!chunk.empty()) {
+                output_budget.release(stream_id);
+            }
+            co_return http2_stream_data_write_status::content_length_exceeded;
+        } catch (const std::logic_error&) {
+            write_signal.notify();
+            if (!chunk.empty()) {
+                output_budget.release(stream_id);
+            }
+            co_return http2_stream_data_write_status::invalid_state;
+        } catch (...) {
+            write_signal.notify();
+            if (!chunk.empty()) {
+                output_budget.release(stream_id);
+            }
+            throw;
+        }
         if (result_value == http2_data_submit_status::accepted ||
             result_value == http2_data_submit_status::queued) {
             output_budget.note_data_submitted(stream_id, chunk.size());
@@ -111,15 +132,6 @@ task<http2_stream_data_write_status> write_http2_stream_data_chunk(
         }
         if (result_value == http2_data_submit_status::closed) {
             co_return http2_stream_data_write_status::peer_closed;
-        }
-        if (result_value == http2_data_submit_status::invalid_state) {
-            co_return http2_stream_data_write_status::invalid_state;
-        }
-        if (result_value == http2_data_submit_status::content_length_exceeded) {
-            co_return http2_stream_data_write_status::content_length_exceeded;
-        }
-        if (result_value == http2_data_submit_status::content_length_incomplete) {
-            co_return http2_stream_data_write_status::content_length_incomplete;
         }
         const auto wait_result = co_await await_http2_send_window(connection, stream_id, signal, aborted);
         if (wait_result.aborted() != nullptr) {

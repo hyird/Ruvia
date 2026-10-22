@@ -48,8 +48,8 @@ class pipelining_routes final {
     RUVIA_GET("/pipelining/too-many-fields", too_many_fields);
     RUVIA_GET("/pipelining/file", file);
     RUVIA_POST("/pipelining/echo", echo);
-    RUVIA_GET_STREAM("/pipelining/stream", stream);
-    RUVIA_GET_STREAM("/pipelining/stream-echo", stream_echo);
+    RUVIA_GET("/pipelining/stream", stream);
+    RUVIA_GET("/pipelining/stream-echo", stream_echo);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> item(ruvia::context& c) {

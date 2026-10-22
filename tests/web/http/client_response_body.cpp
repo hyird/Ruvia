@@ -32,7 +32,6 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/asio_task.h"
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/task_scope.h"
@@ -50,7 +49,7 @@
 #include "ruvia/web/http_client_response.h"
 #include "ruvia/web/http_client_tunnel.h"
 #include "ruvia/web/http_client_types.h"
-#include "ruvia/web/http_udp_tunnel.h"
+#include "ruvia/web/http_datagram_stream.h"
 #include "ruvia/web/model.h"
 
 #include "test_harness.h"
@@ -429,8 +428,8 @@ private:
                             throw std::runtime_error("cookie test interim head rejected");
                         }
                         response.header("set-cookie", "session=ready; Path=/");
-                        if (connection.submit_streaming_response_head(stream_id, std::move(response)) !=
-                            ruvia::http2_submit_status::accepted) {
+                        if (!std::holds_alternative<ruvia::http_response_stream_commit_plan>(
+                                connection.submit_streaming_response_head(stream_id, std::move(response)))) {
                             throw std::runtime_error("cookie test streaming head rejected");
                         }
                         streaming_request.emplace(std::move(*request));
@@ -438,8 +437,11 @@ private:
                         if (received == requests_.size()) {
                             throw std::runtime_error("unexpected cookie test request");
                         }
-                        requests_[received++].assign(request->request().header("cookie").value_or(std::string_view{}));
-                        if (connection.submit_buffered_response(stream_id, response) != ruvia::http2_submit_status::accepted ||
+                        const auto built = request->build_request();
+                        requests_[received++].assign(built.header("cookie").value_or(std::string_view{}));
+                        const auto head = connection.submit_response_head(stream_id, response,
+                            ruvia::plan_buffered_http_response_write(built.known_method(), response));
+                        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) ||
                             connection.release(std::move(*request)) != ruvia::http2_server_request_release_status::released) {
                             throw std::runtime_error("cookie test response rejected");
                         }
@@ -529,11 +531,11 @@ private:
     const std::string body(128 * 1024, 'z');
     auto result_value = ruvia::encode_http_content(ruvia::http_content_coding::gzip, body,
         {.max_encoded_bytes_ = body.size()});
-    if (result_value.encoded() == nullptr) {
+    auto* encoded = std::get_if<std::pmr::string>(&result_value);
+    if (encoded == nullptr) {
         throw std::runtime_error("could not encode fake HTTP response body");
     }
-    auto encoded = std::move(*result_value.encoded()).take_bytes();
-    return std::string(encoded.data(), encoded.size());
+    return std::string(encoded->data(), encoded->size());
 }
 
 class http1_chunked_response_peer final {
@@ -1085,7 +1087,7 @@ RUVIA_TEST(http1_full_response_queue_cancellation_and_deadline_finish_without_re
             });
             auto response = co_await handle.send({.target_ = "/backpressure"});
             RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
-            RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{1});
+            RUVIA_CHECK_EQ(client.handle().stats().in_flight_requests_, std::size_t{1});
             // Keep the response alive without reading or abandoning it. The
             // producer must leave its full-queue wait using the terminal event.
             if (deadline) {
@@ -1100,8 +1102,8 @@ RUVIA_TEST(http1_full_response_queue_cancellation_and_deadline_finish_without_re
                     asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
                 });
             }
-            RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{1});
-            RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{0});
+            RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{1});
+            RUVIA_CHECK_EQ(client.handle().stats().in_flight_requests_, std::size_t{0});
             co_await client.shutdown();
             try {
                 co_await server.wait();
@@ -1160,13 +1162,13 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_cancel_and_deadline_without_reading) {
             });
             auto response = co_await handle.send({.target_ = "/transfer-gzip-backpressure"});
             RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
-            RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{1});
+            RUVIA_CHECK_EQ(client.handle().stats().in_flight_requests_, std::size_t{1});
             for (unsigned turn = 0; turn != 4; ++turn) {
                 (void)co_await ruvia::async_asio([&io](auto done) {
                     asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
                 });
             }
-            RUVIA_CHECK(client.stats().bytes_received_ >= encoded.size());
+            RUVIA_CHECK(client.handle().stats().bytes_received_ >= encoded.size());
 
             if (deadline) {
                 (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(300));
@@ -1178,8 +1180,8 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_cancel_and_deadline_without_reading) {
                     asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
                 });
             }
-            RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{1});
-            RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{0});
+            RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{1});
+            RUVIA_CHECK_EQ(client.handle().stats().in_flight_requests_, std::size_t{0});
             // Keep response alive through join. No body read or response
             // destruction may be what releases the producer's full queue.
             co_await client.shutdown();
@@ -1204,13 +1206,13 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_loop_stop_joins_without_reading) {
     auto operation = [&]() -> ruvia::task<void> {
         auto response = co_await client.handle().send({.target_ = "/transfer-gzip-stop"});
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
-        RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{1});
+        RUVIA_CHECK_EQ(client.handle().stats().in_flight_requests_, std::size_t{1});
         for (unsigned turn = 0; turn != 4; ++turn) {
             (void)co_await ruvia::async_asio([&io](auto done) {
                 asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
             });
         }
-        RUVIA_CHECK(client.stats().bytes_received_ >= encoded.size());
+        RUVIA_CHECK(client.handle().stats().bytes_received_ >= encoded.size());
         worker.attachment_.stop();
         co_await client.shutdown();
         joined = true;
@@ -1228,9 +1230,9 @@ RUVIA_TEST(http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds_
     const std::string expected(128 * 1024, 'z');
     auto encoded_result = ruvia::encode_http_content(ruvia::http_content_coding::gzip, expected,
         {.max_encoded_bytes_ = expected.size()});
-    RUVIA_CHECK(encoded_result.encoded() != nullptr);
-    auto encoded = std::move(*encoded_result.encoded()).take_bytes();
-    http1_chunked_response_peer peer(io, std::string(encoded.data(), encoded.size()));
+    auto* encoded = std::get_if<std::pmr::string>(&encoded_result);
+    RUVIA_CHECK(encoded != nullptr);
+    http1_chunked_response_peer peer(io, std::string(encoded->data(), encoded->size()));
     auto config = local_http_client_config(peer.port());
     config.max_response_bytes_ = 1024;
     ruvia::http_client client(worker.attachment_.loop(), config);
@@ -1240,7 +1242,7 @@ RUVIA_TEST(http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds_
     auto operation = [&]() -> ruvia::task<void> {
         auto response = co_await client.handle().send({.target_ = "/transfer-gzip"});
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
-        RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{1});
+        RUVIA_CHECK_EQ(client.handle().stats().in_flight_requests_, std::size_t{1});
 
         const auto first = co_await response.body().read();
         RUVIA_CHECK(first.has_value());
@@ -1267,7 +1269,7 @@ RUVIA_TEST(http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds_
         }
         RUVIA_CHECK(response.body().complete());
         RUVIA_CHECK_EQ(response.trailer("x-end"), std::optional<std::string_view>("retained"));
-        RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{0});
+        RUVIA_CHECK_EQ(client.handle().stats().in_flight_requests_, std::size_t{0});
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -1559,7 +1561,8 @@ RUVIA_TEST(http_client_connect_failure_message_is_utf8) {
     // text/plain; charset=UTF-8 body. The strict JSON parser rejects ill-formed
     // UTF-8, and the message holds no characters that need escaping.
     RUVIA_CHECK(message.find_first_of("\"\\") == std::string::npos);
-    RUVIA_CHECK(ruvia::from_json<ruvia::string>("\"" + message + "\"").has_value());
+    const auto decoded = ruvia::from_json<ruvia::string>("\"" + message + "\"");
+    RUVIA_CHECK_EQ(decoded.view(), std::string_view(message));
 }
 
 RUVIA_TEST(http_client_upload_exchange_owns_chunks_and_trailers_and_drives_continue) {
@@ -1948,12 +1951,12 @@ void exercise_tls_response_retirement(ruvia::testing::test_context& ruvia_ctx, b
             RUVIA_CHECK(std::ranges::all_of(*first, [](char value) { return value == 'b'; }));
         }
         if (join_before_reuse) {
-            while (client.stats().in_flight_requests_ != 0) {
+            while (client.handle().stats().in_flight_requests_ != 0) {
                 (void)co_await ruvia::async_asio([&io](auto handler) {
                     asio::post(io, [handler = std::move(handler)]() mutable { handler(std::error_code{}); });
                 });
             }
-            RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{1});
+            RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{1});
         }
         for (const auto body : expected) {
             auto response = co_await client.handle().send({.target_ = "/next?exact=body"});
@@ -1966,7 +1969,7 @@ void exercise_tls_response_retirement(ruvia::testing::test_context& ruvia_ctx, b
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
-        RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{1});
+        RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{1});
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -2099,7 +2102,7 @@ RUVIA_TEST(http1_response_on_a_closing_connection_discards_trailing_bytes) {
             }
         }
         co_await peer.wait();
-        RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{0});
+        RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{0});
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -2160,7 +2163,7 @@ RUVIA_TEST(http_client_replaces_a_keep_alive_connection_the_peer_closed_while_id
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
-        RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{0});
+        RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{0});
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -2251,7 +2254,7 @@ RUVIA_TEST(http_client_tls_idle_probe_retires_a_connection_with_unread_peer_reco
             if (peer_failure) {
                 std::rethrow_exception(peer_failure);
             }
-            RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{0});
+            RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{0});
             co_await client.shutdown();
         };
         run_operation(worker, io, operation);
@@ -2370,12 +2373,12 @@ RUVIA_TEST(http_client_abandoned_request_cancels_its_connect_in_progress) {
             auto abandoned = co_await client.handle().open_request({.method_ = "POST", .target_ = "/abandoned"}, {});
             // Let the driver reach the TLS handshake.
             (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(100));
-            const auto stats = client.stats();
+            const auto stats = client.handle().stats();
             RUVIA_CHECK_EQ(stats.in_flight_requests_ + stats.buffered_requests_, std::size_t{1});
         }
         const auto started = std::chrono::steady_clock::now();
         for (;;) {
-            const auto stats = client.stats();
+            const auto stats = client.handle().stats();
             if (stats.in_flight_requests_ + stats.buffered_requests_ == 0) {
                 break;
             }
@@ -2384,7 +2387,7 @@ RUVIA_TEST(http_client_abandoned_request_cancels_its_connect_in_progress) {
             }
             (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(10));
         }
-        RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{1});
+        RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{1});
         while (!peer_finished) {
             co_await peer_done.wait();
         }
@@ -2477,7 +2480,7 @@ RUVIA_TEST(http_client_finishes_upload_after_an_early_persistent_response_before
                 RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(early_body.bytes().data()), early_body.size()), "ok");
                 RUVIA_CHECK(response.body().complete());
                 RUVIA_CHECK(!exchange.body().complete());
-                RUVIA_CHECK_EQ(client.stats().in_flight_requests_, std::size_t{1});
+                RUVIA_CHECK_EQ(client.handle().stats().in_flight_requests_, std::size_t{1});
                 co_await exchange.body().write(timeout_release ? "bc" : "abc");
                 const ruvia::http_header_view trailers[] = {{"X-End", "retained"}};
                 co_await exchange.body().end(known_length ? std::span<const ruvia::http_header_view>{}
@@ -2629,7 +2632,7 @@ RUVIA_TEST(http_client_bounds_unfinished_upload_after_response_body_completion) 
         auto next = co_await client.handle().send({.target_ = "/after-timeout"});
         const auto next_body = co_await next.body().read_all();
         RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(next_body.bytes().data()), next_body.size()), "next");
-        RUVIA_CHECK_EQ(client.stats().failed_requests_, std::size_t{1});
+        RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{1});
         while (!peer_finished) {
             co_await peer_done.wait();
         }

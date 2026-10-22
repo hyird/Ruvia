@@ -85,7 +85,7 @@ std::optional<static_file_representation> select_static_file_representation(cons
     }
 
     const auto selection_result = http_response_coding_selection::select(qualities, available);
-    if (const auto* selection = selection_result.selected()) {
+    if (const auto* selection = selection_result ? &*selection_result : nullptr) {
         if (selection->coding() == http_content_coding::identity) {
             return static_file_representation(identity, http_content_coding::identity);
         }

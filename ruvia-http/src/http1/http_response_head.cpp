@@ -148,7 +148,6 @@ void append_response_head(
         throw std::invalid_argument("HTTP/1 response plan status does not match response");
     }
     const auto* buffered = plan.buffered();
-    const auto* known_length_stream = plan.known_length_stream();
     if (buffered != nullptr &&
         buffered->content_length() != body_plan.buffered_representation_length(response)) {
         throw std::invalid_argument("HTTP/1 response plan representation does not match response");
@@ -162,7 +161,7 @@ void append_response_head(
     const bool emit_chunked_transfer_encoding = chunked_payload_plan;
     const bool auto_content_length_owned_by_writer =
         body_plan.auto_content_length_allowed() && !emit_chunked_transfer_encoding &&
-        (buffered != nullptr || known_length_stream != nullptr || !body_plan.status_allows_body());
+        (buffered != nullptr || !body_plan.status_allows_body());
     const bool explicit_content_length_allowed =
         body_plan.explicit_content_length_allowed() && !emit_chunked_transfer_encoding &&
         !auto_content_length_owned_by_writer &&
@@ -188,10 +187,7 @@ void append_response_head(
         // canonicalized to zero for both buffered and streaming heads.
         .canonical_content_length_ = declared_content_length.value_or(
             body_plan.status_allows_body()
-                ? (buffered != nullptr
-                          ? buffered->content_length()
-                          : (known_length_stream != nullptr ? known_length_stream->content_length()
-                                                            : std::uint64_t{0}))
+                ? (buffered != nullptr ? buffered->content_length() : std::uint64_t{0})
                 : std::uint64_t{0})};
 
     const auto reason_phrase = http_reason_phrase(response_status);
@@ -295,8 +291,17 @@ void append_http1_response_trailers(
 
 http_response_trailer_section validate_http_response_trailers(
     std::span<const http_header_view> trailers) {
-    auto result_value = detail::validated_response_trailer_section(trailers);
-    return *result_value.section();
+    if (trailers.size() > max_http_header_fields) {
+        throw std::invalid_argument("too many HTTP response trailers");
+    }
+    auto section_size = http_trailer_section_budget();
+    for (const auto& trailer : trailers) {
+        if (!detail::response_trailer_field_valid(trailer.name(), trailer.value()) ||
+            !section_size.add_field(trailer.name(), trailer.value())) {
+            throw std::invalid_argument("invalid HTTP response trailer section");
+        }
+    }
+    return http_response_trailer_section(trailers);
 }
 
 const char* http1_final_response_commit_error::what() const noexcept {
@@ -355,8 +360,8 @@ http1_final_response_commit_result http1_commit_final_response(
     return http1_final_response_commit_result::committed(plan);
 }
 
-prepared_http1_response_stream_result prepare_http1_response_stream_head(
-    http_response response, http_response_stream_kind kind, const http1_response_stream_plan& plan,
+prepared_http1_response_stream prepare_http1_response_stream_head(
+    http_response response, const http1_response_stream_plan& plan,
     http_response_trailer_intent trailer_intent) {
     auto commit_plan = plan_http_response_stream_commit(
         plan.framing(), plan.request_method(), response.status(), trailer_intent);
@@ -374,39 +379,16 @@ prepared_http1_response_stream_result prepare_http1_response_stream_head(
             : plan.request_connection_plan().require_close();
     const auto commit_result = http1_commit_final_response(response, planned_connection);
     if (const auto* failure = commit_result.failure()) {
-        return prepared_http1_response_stream_result(*failure);
+        throw failure->exception();
     }
     const auto connection_plan = *commit_result.committed();
-    auto head = prepare_http_response_stream_head(std::move(response), kind, std::move(commit_plan));
+    auto head = prepare_http_response_stream_head(std::move(response), std::move(commit_plan));
     const auto response_head_plan =
         plan.framing() == http_response_stream_framing::http1_chunked
             ? http1_chunked_response_stream_head_plan(head.commit_plan().body_plan(), connection_plan)
             : http1_close_delimited_response_stream_head_plan(
                   head.commit_plan().body_plan(), connection_plan);
-    return prepared_http1_response_stream_result(
-        prepared_http1_response_stream(std::move(head), response_head_plan, connection_plan));
-}
-
-prepared_http1_response_stream_result prepare_http1_known_length_response_stream_head(
-    http_response response, std::uint64_t content_length, http_response_stream_kind kind,
-    const http1_response_stream_plan& plan) {
-    auto commit_plan = plan_http_response_stream_commit(http_response_stream_framing::http1_known_length,
-        plan.request_method(), response.status(), http_response_trailer_intent::none);
-    const auto planned_connection =
-        plan.request_connection_plan().disposition() == http1_close_policy::allow_reuse &&
-                plan.close_policy() == http1_close_policy::allow_reuse
-            ? plan.request_connection_plan()
-            : plan.request_connection_plan().require_close();
-    const auto commit_result = http1_commit_final_response(response, planned_connection);
-    if (const auto* failure = commit_result.failure()) {
-        return prepared_http1_response_stream_result(*failure);
-    }
-    const auto connection_plan = *commit_result.committed();
-    auto head = prepare_http_response_stream_head(std::move(response), kind, std::move(commit_plan));
-    const auto response_head_plan = http1_known_length_response_stream_head_plan(
-        head.commit_plan().body_plan(), connection_plan, content_length);
-    return prepared_http1_response_stream_result(
-        prepared_http1_response_stream(std::move(head), response_head_plan, connection_plan));
+    return prepared_http1_response_stream(std::move(head), response_head_plan, connection_plan);
 }
 
 }  // namespace ruvia

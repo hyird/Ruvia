@@ -18,6 +18,7 @@
 #include <asio/error.hpp>
 
 #include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_runtime_context.h"
 
 #include "worker_notification.h"
@@ -64,10 +65,10 @@ void throw_native_wake_error(const char* operation, int error) {
     throw std::system_error(error, std::system_category(), operation);
 }
 
-worker_notification_state::worker_notification_state(
-    ::ruvia::worker_runtime_context& runtime, worker_notification_options options)
-    : io_context_(runtime.io_context()),
-      worker_(runtime.handle()) {
+worker_notification_state::worker_notification_state(asio::io_context& io_context,
+    const worker_handle& worker, worker_notification_options options)
+    : io_context_(io_context),
+      worker_(worker) {
     if (!worker_.valid() || !worker_.accepting()) {
         throw std::invalid_argument("worker notification requires an accepting worker runtime");
     }
@@ -354,9 +355,15 @@ worker_notification_wait_status worker_notification::wait_awaiter_type::await_re
 }
 
 worker_notification::worker_notification(
+    worker_runtime& runtime, worker_notification_options options)
+    : state_(make_pmr_object<detail::worker_notification_state>(
+          process_resource(), runtime.io_context(), runtime.handle(), options)),
+      wait_awaiter_(*this) {}
+
+worker_notification::worker_notification(
     worker_runtime_context& runtime, worker_notification_options options)
     : state_(make_pmr_object<detail::worker_notification_state>(
-          process_resource(), runtime, options)),
+          process_resource(), runtime.io_context(), runtime.handle(), options)),
       wait_awaiter_(*this) {}
 
 worker_notification::~worker_notification() = default;

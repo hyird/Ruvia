@@ -2,10 +2,12 @@
 
 #include <chrono>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -105,6 +107,9 @@ public:
 
     scoped_operation<void> binary(std::string_view payload, websocket_send_options options = {}) &;
     scoped_operation<void> binary(std::string_view, websocket_send_options = {}) && = delete;
+
+    scoped_operation<void> binary(std::span<const std::byte> payload, websocket_send_options options = {}) &;
+    scoped_operation<void> binary(std::span<const std::byte>, websocket_send_options = {}) && = delete;
 
     template <typename text_type>
         requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&

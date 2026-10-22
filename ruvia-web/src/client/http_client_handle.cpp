@@ -475,11 +475,11 @@ http_scheme http_client_handle::scheme() const {
     return pool_->scheme();
 }
 
-http_client_handle context::get_http_client() const {
+http_client_handle context::http_client() const {
     return services().client_registries().get_http_client(operation_scope_, capabilities_.stop_token());
 }
 
-http_client_handle context::get_http_client(std::string_view alias) const {
+http_client_handle context::http_client(std::string_view alias) const {
     return services().client_registries().get_http_client(alias, operation_scope_, capabilities_.stop_token());
 }
 

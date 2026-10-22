@@ -1452,6 +1452,7 @@ RUVIA_TEST(static_file_directory_root_index_and_403) {
     // A directory root with no configured index is forbidden (never a listing).
     {
         static_root_options options;
+        options.index_file_.clear();
         options.file_types_ =
             ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind_type::all};
         static_root root(dir, std::move(options));

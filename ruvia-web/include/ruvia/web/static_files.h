@@ -45,7 +45,7 @@ enum class static_dotfile_policy : std::uint8_t {
 
 struct static_root_options final {
     std::string cache_control_{};
-    std::string index_file_{};
+    std::string index_file_{"index.html"};
     std::string default_content_type_{"application/octet-stream"};
     std::vector<static_mime_type> mime_types_{};
     static_file_type_policy file_types_{};

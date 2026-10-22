@@ -40,14 +40,6 @@ using ruvia::http1_chunked_body_decoder;
 using ruvia::http1_request_body_plan;
 using ruvia::http_content_coding;
 using ruvia::http_content_decode_error;
-using ruvia::http_content_decode_failure;
-using ruvia::http_content_decode_result;
-using ruvia::http_content_encode_error;
-using ruvia::http_content_encode_failure;
-using ruvia::http_content_encode_options;
-using ruvia::http_content_encode_result;
-using ruvia::http_decoded_content;
-using ruvia::http_encoded_content;
 using ruvia::http_request_content_decode_protocol_failure;
 using ruvia::http_request_content_decode_result;
 using ruvia::http_request_content_decoder_failure;
@@ -186,22 +178,22 @@ inline std::string zstd_compress_with_window(std::string_view data, int window_l
 inline std::string decoded(http_content_coding coding, std::string_view input, std::size_t max_bytes) {
     auto result_value = decode_http_content(
         coding, input, {.max_decoded_bytes_ = max_bytes, .resource_ = std::pmr::get_default_resource()});
-    const auto* content = result_value.decoded();
+    const auto* content = std::get_if<std::pmr::string>(&result_value);
     if (content == nullptr) {
         throw std::runtime_error("test content decode failed");
     }
-    return std::string(content->bytes());
+    return std::string(*content);
 }
 
 inline http_content_decode_error decode_error(
     http_content_coding coding, std::string_view input, std::size_t max_bytes = decoded_body_limit) {
     const auto result_value = decode_http_content(
         coding, input, {.max_decoded_bytes_ = max_bytes, .resource_ = std::pmr::get_default_resource()});
-    const auto* failure = result_value.failure();
+    const auto* failure = std::get_if<http_content_decode_error>(&result_value);
     if (failure == nullptr) {
         throw std::runtime_error("test content decode unexpectedly succeeded");
     }
-    return failure->error();
+    return *failure;
 }
 
 inline std::string chunked(std::string_view body) {
@@ -230,11 +222,11 @@ inline std::optional<std::string> zstd_round_trip(std::string_view plain, std::s
     const auto result_value = ruvia::decode_http_content(http_content_coding::zstd, compressed,
         {.max_decoded_bytes_ = ruvia::default_max_buffered_body_bytes,
             .resource_ = std::pmr::get_default_resource()});
-    const auto* decoded = result_value.decoded();
+    const auto* decoded = std::get_if<std::pmr::string>(&result_value);
     if (decoded == nullptr) {
         return std::nullopt;
     }
-    return std::string(decoded->bytes());
+    return std::string(*decoded);
 }
 
 }  // namespace content_decoding_test

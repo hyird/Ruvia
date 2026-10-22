@@ -34,8 +34,7 @@ std::string owned_default_value() {
 
 ruvia::json_value dynamic_null_default() {
     ++evaluations;
-    auto value = ruvia::json_value::parse("null");
-    return std::move(*value);
+    return ruvia::json_value::parse("null");
 }
 
 RUVIA_MODEL(optional_default,
@@ -63,38 +62,33 @@ RUVIA_TEST(model_default_expression_is_not_evaluated_for_supplied_or_invalid_inp
     optional_default constructed;
     RUVIA_CHECK(!constructed.get<"value">());
     RUVIA_CHECK_EQ(evaluations, std::size_t{0});
-    for (auto input : {R"({"value":9})", R"({"value":null})", R"({"value":"wrong"})",
+    const auto valid_json = ruvia::from_json<optional_default>(R"({"value":9})");
+    RUVIA_CHECK_EQ(evaluations, std::size_t{0});
+    RUVIA_CHECK_EQ(valid_json.get<"value">()->value_, 9);
+    for (auto input : {R"({"value":null})", R"({"value":"wrong"})",
              R"({"value":8,"value":9})", R"({"value":)"}) {
-        auto parsed_value = ruvia::from_json<optional_default>(input);
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<optional_default>(input); }));
         RUVIA_CHECK_EQ(evaluations, std::size_t{0});
-        if (input == std::string_view(R"({"value":9})")) {
-            RUVIA_CHECK(parsed_value && parsed_value->get<"value">()->value_ == 9);
-        } else {
-            RUVIA_CHECK(!parsed_value);
-        }
     }
     auto null = ruvia::from_json<nullable_default>(R"({"value":null})");
-    RUVIA_CHECK(null && null->is_null<"value">());
-    RUVIA_CHECK(!ruvia::from_json<required_default>("{}"));
+    RUVIA_CHECK(null.is_null<"value">());
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<required_default>("{}"); }));
     RUVIA_CHECK_EQ(evaluations, std::size_t{0});
-    RUVIA_CHECK(ruvia::from_form<optional_default>("value=9").has_value());
-    RUVIA_CHECK(!ruvia::from_form<optional_default>("value=wrong"));
-    RUVIA_CHECK(!ruvia::from_form<optional_default>("value=8&value=9"));
-    RUVIA_CHECK(!ruvia::from_form<required_default>(""));
+    const auto valid_form = ruvia::from_form<optional_default>("value=9");
+    RUVIA_CHECK_EQ(valid_form.get<"value">()->value_, 9);
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_form<optional_default>("value=wrong"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_form<optional_default>("value=8&value=9"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_form<required_default>(""); }));
     RUVIA_CHECK_EQ(evaluations, std::size_t{0});
 }
 
 RUVIA_TEST(model_default_expression_runs_once_for_absence_not_for_moves) {
     evaluations = 0;
     auto parsed_value = ruvia::from_json<optional_default>("{}");
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
-    }
     RUVIA_CHECK_EQ(evaluations, std::size_t{1});
-    RUVIA_CHECK(!parsed_value->is_present<"value">());
-    RUVIA_CHECK_EQ(parsed_value->get<"value">()->value_, std::int32_t{7});
-    optional_default moved(std::move(*parsed_value));
+    RUVIA_CHECK(!parsed_value.is_present<"value">());
+    RUVIA_CHECK_EQ(parsed_value.get<"value">()->value_, std::int32_t{7});
+    optional_default moved(std::move(parsed_value));
     optional_default assigned;
     assigned = std::move(moved);
     RUVIA_CHECK_EQ(evaluations, std::size_t{1});
@@ -103,7 +97,7 @@ RUVIA_TEST(model_default_expression_runs_once_for_absence_not_for_moves) {
     RUVIA_CHECK(!assigned.get<"value">());
     RUVIA_CHECK_EQ(evaluations, std::size_t{1});
     const auto form = ruvia::from_form<optional_default>("");
-    RUVIA_CHECK(form && !form->is_present<"value">() && form->get<"value">()->value_ == 7);
+    RUVIA_CHECK(!form.is_present<"value">() && form.get<"value">()->value_ == 7);
     RUVIA_CHECK_EQ(evaluations, std::size_t{2});
 }
 
@@ -113,7 +107,7 @@ RUVIA_TEST(model_default_expression_exceptions_unwind_partial_owned_fields) {
     const std::string prefix = "{\"name\":\"" + std::string(128, 'n') + "\"";
     {
         auto supplied = ruvia::from_json<failing_default_model>(prefix + ",\"value\":9}", {.resource_ = &memory});
-        RUVIA_CHECK(supplied.has_value());
+        RUVIA_CHECK_EQ(supplied.get<"value">()->value_, 9);
         RUVIA_CHECK_EQ(evaluations, std::size_t{0});
     }
     RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
@@ -135,14 +129,14 @@ RUVIA_TEST(model_default_expression_exceptions_unwind_partial_owned_fields) {
 RUVIA_TEST(model_default_assignment_obeys_field_nullability) {
     evaluations = 0;
     auto null = ruvia::from_json<null_default>("{}");
-    RUVIA_CHECK(null && null->is_null<"value">() && !null->is_present<"value">());
+    RUVIA_CHECK(null.is_null<"value">() && !null.is_present<"value">());
     auto supplied = ruvia::from_json<null_default>(R"({"value":9})");
-    RUVIA_CHECK(supplied && !supplied->is_null<"value">() && supplied->get<"value">()->value_ == 9);
+    RUVIA_CHECK(!supplied.is_null<"value">() && supplied.get<"value">()->value_ == 9);
     auto dynamic = ruvia::from_json<nullable_dynamic_default>("{}");
-    RUVIA_CHECK(dynamic && dynamic->is_null<"value">() && !dynamic->is_present<"value">());
+    RUVIA_CHECK(dynamic.is_null<"value">() && !dynamic.is_present<"value">());
     RUVIA_CHECK_EQ(evaluations, std::size_t{1});
     auto valid = ruvia::from_json<nonnullable_dynamic_default>(R"({"value":1})");
-    RUVIA_CHECK(valid && !valid->is_null<"value">());
+    RUVIA_CHECK(!valid.is_null<"value">());
     RUVIA_CHECK_EQ(evaluations, std::size_t{1});
     bool rejected = false;
     try {
@@ -162,12 +156,8 @@ RUVIA_TEST(model_owned_default_is_normalized_to_the_model_resource) {
         owned_default_model retained({.resource_ = &destination});
         {
             auto parsed_value = ruvia::from_json<owned_default_model>("{}", {.resource_ = &source});
-            RUVIA_CHECK(parsed_value.has_value());
-            if (!parsed_value) {
-                return;
-            }
             RUVIA_CHECK_EQ(evaluations, std::size_t{1});
-            retained = std::move(*parsed_value);
+            retained = std::move(parsed_value);
         }
         RUVIA_CHECK_EQ(source.live_allocations(), std::size_t{0});
         RUVIA_CHECK_EQ(evaluations, std::size_t{1});

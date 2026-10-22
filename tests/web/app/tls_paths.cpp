@@ -40,7 +40,7 @@ class tls_path_controller final {
 public:
     RUVIA_ROUTES_BEGIN(tls_path_controller)
     RUVIA_GET("/tls", secure);
-    RUVIA_GET_STREAM("/tls-truncated", truncated);
+    RUVIA_GET("/tls-truncated", truncated);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> secure(ruvia::context& context) {

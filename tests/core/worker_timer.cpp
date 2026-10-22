@@ -20,7 +20,7 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
-#include "ruvia/core/asio_task.h"
+#include "ruvia/core/async.h"
 #include "ruvia/core/channel.h"
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/one_shot.h"

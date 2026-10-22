@@ -5,18 +5,20 @@
 
 namespace ruvia::detail {
 
-void http2_connection::lease_submitted_request(const http2_request_head_submit_result& result) {
-    const auto* submitted = result.submitted();
+void http2_connection::lease_submitted_request(
+    const std::variant<std::uint32_t, http2_request_head_submit_error>& result) {
+    const auto* submitted = std::get_if<std::uint32_t>(&result);
     if (submitted == nullptr) {
-        if (result.failure()->error() == http2_request_head_submit_error::connection_not_started) {
+        if (std::get<http2_request_head_submit_error>(result) ==
+            http2_request_head_submit_error::connection_not_started) {
             std::terminate();
         }
         return;
     }
     try {
-        pin_stream(submitted->stream_id());
+        pin_stream(*submitted);
     } catch (...) {
-        abandon_stream_lease(submitted->stream_id());
+        abandon_stream_lease(*submitted);
         throw;
     }
 }

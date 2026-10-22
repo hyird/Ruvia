@@ -45,10 +45,10 @@ const auto sleeping_stream_observed = std::make_shared<sleeping_stream_observati
 
 class sleeping_stream_routes final {
     RUVIA_ROUTES_BEGIN(sleeping_stream_routes)
-    RUVIA_GET_STREAM("/http2-sleeping-stream", sleeping);
-    RUVIA_POST_STREAM("/http2-count-upload", count_upload);
-    RUVIA_GET_STREAM("/http2-quiet-sse", quiet_sse);
-    RUVIA_POST_SSE("/http2-post-sse", post_sse);
+    RUVIA_GET("/http2-sleeping-stream", sleeping);
+    RUVIA_POST("/http2-count-upload", count_upload, ruvia::stream_body);
+    RUVIA_GET("/http2-quiet-sse", quiet_sse);
+    RUVIA_POST("/http2-post-sse", post_sse);
     RUVIA_ROUTES_END
 
     // Streams the request body and answers with the byte count.
@@ -61,7 +61,7 @@ class sleeping_stream_routes final {
 
     ruvia::task<ruvia::http_response> count_upload(ruvia::context& context_value) {
         std::size_t bytes_value = 0;
-        auto& reader_value = context_value.req().get_body_reader();
+        auto& reader_value = context_value.req().body_reader();
         while (auto chunk = co_await reader_value.read()) {
             bytes_value += chunk->size();
         }
@@ -73,7 +73,7 @@ class sleeping_stream_routes final {
     ruvia::task<void> quiet_sse(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto writer = context_value.stream_sse();
-        const auto context_stop = context_value.get_stop_token();
+        const auto context_stop = context_value.stop_token();
         const auto stop = writer.cancel_on_peer_eof();
         co_await writer.write({.data_ = "ready"});
         if (context_value.req().query("writer").has_value()) {

@@ -100,7 +100,7 @@ http1_deferred_access_log::http1_deferred_access_log(std::pmr::polymorphic_alloc
 
 void http1_deferred_access_log::defer(std::size_t head_end, const http_request& request,
     std::string_view client_address, std::chrono::steady_clock::time_point start, http_status_code status,
-    const operation_scope_io_metrics& io_metrics) {
+    const request_io_metrics& io_metrics) {
     const auto method = request.method();
     const auto path = request.path();
     const auto text_begin = text_.size();

@@ -119,7 +119,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_upgrade(const h
     const resolved_route& resolved, request_memory& memory, const route_stream_handler_type& handler,
     context_services services) const {
     const auto& endpoint = resolved.route().endpoint();
-    if (endpoint.tunnel() == nullptr && endpoint.get_websocket() == nullptr) {
+    if (endpoint.tunnel() == nullptr && endpoint.websocket() == nullptr) {
         throw std::logic_error("route is not an upgrade route");
     }
     return dispatch_stream_route(request, resolved, memory, handler, services);

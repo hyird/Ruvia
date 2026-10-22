@@ -564,7 +564,7 @@ RUVIA_TEST(redis_repository_pre_cancelled_operations_report_cancellation) {
             for (int index = 0; index != 64; ++index) {
                 bool cancelled = false;
                 try {
-                    auto operation = repository.exists({.where_ = test_redis_user::field<"name">() == id});
+                    auto operation = repository.exists({.where_ = test_redis_user::column<"name">() == id});
                     (void)co_await std::move(operation);
                 } catch (const ruvia::redis_error& error) {
                     cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
@@ -627,7 +627,7 @@ RUVIA_TEST(redis_repository_inflight_operation_observes_cancellation) {
                                         .get_repository<test_redis_user>(test_redis_repository_config);
             try {
                 auto operation = repository.exists(
-                    {.where_ = test_redis_user::field<"name">() == "Alice"});
+                    {.where_ = test_redis_user::column<"name">() == "Alice"});
                 (void)co_await std::move(operation);
             } catch (const ruvia::redis_error& error) {
                 observed_error = error.code();
@@ -673,7 +673,7 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
             [&] { (void)repository.insert(make_user(std::pmr::get_default_resource()),
                       {.ttl_ = std::chrono::milliseconds(10), .persist_ = true}); }));
         RUVIA_CHECK(throws_invalid_argument([&] {
-            (void)repository.find_one({.where_ = test_redis_user::field<"id">() == ""});
+            (void)repository.find_one({.where_ = test_redis_user::column<"id">() == ""});
         }));
         RUVIA_CHECK(throws_invalid_argument([&] {
             (void)repository.find_one({.take_ = std::numeric_limits<std::uint64_t>::max()});

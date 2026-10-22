@@ -24,7 +24,6 @@ namespace {
 using ruvia::http1_buffered_response_plan;
 using ruvia::http1_chunked_response_stream_head_plan;
 using ruvia::http1_close_delimited_response_stream_head_plan;
-using ruvia::http1_known_length_response_stream_head_plan;
 using ruvia::http1_request_connection_plan;
 using ruvia::http1_response_head_plan;
 using ruvia::http_known_method;
@@ -61,14 +60,6 @@ std::string emit_chunked_stream_head(http_response& response,
     return emit_head(response,
         http1_chunked_response_stream_head_plan(plan_http_response_body(request_method, response.status()),
             connection_plan_for(protocol_version)));
-}
-
-std::string emit_known_length_stream_head(http_response& response, std::uint64_t content_length,
-    http_known_method request_method = http_known_method::get,
-    ruvia::http_protocol_version protocol_version = ruvia::http_protocol_version::http11) {
-    return emit_head(response, http1_known_length_response_stream_head_plan(
-                                   plan_http_response_body(request_method, response.status()),
-                                   connection_plan_for(protocol_version), content_length));
 }
 
 std::string emit_close_delimited_stream_head(http_response& response,
@@ -359,10 +350,6 @@ RUVIA_TEST(http1_response_head_rejects_non_empty_trailer_without_chunked_framing
     buffered.header("Trailer", "ETag");
     RUVIA_CHECK(throws_invalid([&] { (void)emit_buffered_head(buffered); }));
 
-    http_response known_length({.resource_ = std::pmr::new_delete_resource()});
-    known_length.header("Trailer", "ETag");
-    RUVIA_CHECK(throws_invalid([&] { (void)emit_known_length_stream_head(known_length, 5); }));
-
     http_response close_delimited({.resource_ = std::pmr::new_delete_resource()});
     close_delimited.header("Trailer", "ETag");
     RUVIA_CHECK(throws_invalid([&] { (void)emit_close_delimited_stream_head(close_delimited); }));
@@ -486,27 +473,6 @@ RUVIA_TEST(http1_response_head_rejects_http10_chunked_payload_plan) {
         connection_plan_for(ruvia::http_protocol_version::http10));
 
     RUVIA_CHECK(throws_invalid([&] { (void)emit_head(response, plan); }));
-}
-
-RUVIA_TEST(http1_known_length_stream_owns_canonical_length_and_status_semantics) {
-    http_response get({.resource_ = std::pmr::new_delete_resource()});
-    get.header("Content-Length", "999");
-    get.header("Transfer-Encoding", "chunked");
-    const auto get_head = emit_known_length_stream_head(get, 5);
-    RUVIA_CHECK_EQ(count_occurrences(get_head, "Content-Length: "), std::size_t{1});
-    RUVIA_CHECK((get_head.find("Content-Length: 5\r\n") != std::string_view::npos));
-    RUVIA_CHECK(!(get_head.find("Transfer-Encoding:") != std::string_view::npos));
-
-    http_response head({.resource_ = std::pmr::new_delete_resource()});
-    const auto head_wire = emit_known_length_stream_head(head, 5, http_known_method::head);
-    RUVIA_CHECK((head_wire.find("Content-Length: 5\r\n") != std::string_view::npos));
-
-    http_response no_content({.resource_ = std::pmr::new_delete_resource()});
-    no_content.status(ruvia::http_status::no_content);
-    no_content.header("Content-Length", "5");
-    const auto no_content_wire = emit_known_length_stream_head(no_content, 5);
-    RUVIA_CHECK(!(no_content_wire.find("Content-Length:") != std::string_view::npos));
-    RUVIA_CHECK(!(no_content_wire.find("Transfer-Encoding:") != std::string_view::npos));
 }
 
 RUVIA_TEST(http1_chunked_stream_does_not_invent_framing_for_head) {

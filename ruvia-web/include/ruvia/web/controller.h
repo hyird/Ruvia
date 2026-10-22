@@ -12,7 +12,7 @@
 #include "ruvia/web/detail/controller/controller_runtime.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/request_validation.h"
-
+#include "ruvia/web/streaming.h"
 namespace ruvia::detail {
 
 // Methods covered by RUVIA_ALL. HEAD is intentionally omitted: buffered GET
@@ -136,93 +136,104 @@ private:                                                                        
 #define RUVIA_GET(path, handler, ...)                                                                 \
     ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::get, path, \
         ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),           \
-        ::ruvia::detail::request_body_mode::buffered,                                                 \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
-#define RUVIA_GET_STREAM(path, handler, ...)                                                                    \
-    ruvia_controller_access_type::add_response_stream_route(ruvia_route_scope, ::ruvia::http_known_method::get, \
-        path, ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this),        \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+#define RUVIA_DETAIL_SELECT_SECOND(first, second, ...) second
+#define RUVIA_DETAIL_CHOOSE_VA_MACRO(with_args, without_args, ...) \
+    RUVIA_DETAIL_SELECT_SECOND(__VA_OPT__(, ) with_args, without_args)
 
-#define RUVIA_GET_SSE(path, handler, ...)                                                                 \
-    ruvia_controller_access_type::add_sse_route(ruvia_route_scope, ::ruvia::http_known_method::get, path, \
-        ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this),        \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+#define RUVIA_DETAIL_ADD_TUNNEL_ROUTE_NO_ARGS(protocol, target, handler)                           \
+    ruvia_controller_access_type::add_tunnel_route(ruvia_route_scope, protocol, target,            \
+        ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \
+        ruvia_controller_access_type::template make_middlewares<>())
 
-// SSE over POST: the request body is buffered like RUVIA_POST, the response
-// is a Server-Sent Events stream.
-#define RUVIA_POST_SSE(path, handler, ...)                                                                 \
-    ruvia_controller_access_type::add_sse_route(ruvia_route_scope, ::ruvia::http_known_method::post, path, \
-        ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this),         \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+#define RUVIA_DETAIL_ADD_TUNNEL_ROUTE_WITH_ARGS(protocol, target, handler, first, ...)                     \
+    [&](auto ruvia_route_probe) {                                                                          \
+        using ruvia_first_arg_type = ::std::conditional_t<sizeof(ruvia_route_probe) != 0,                  \
+            ::std::remove_cvref_t<decltype((first) + ruvia_route_probe)>, void>;                           \
+        if constexpr (::std::is_same_v<ruvia_first_arg_type, ::ruvia::http_tunnel_route_config>) {         \
+            ruvia_controller_access_type::add_tunnel_route(ruvia_route_scope, protocol, target,            \
+                ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \
+                static_cast<ruvia_first_arg_type>((first) + ruvia_route_probe),                            \
+                ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>());                   \
+        } else {                                                                                           \
+            ruvia_controller_access_type::add_tunnel_route(ruvia_route_scope, protocol, target,            \
+                ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \
+                ruvia_controller_access_type::template make_middlewares<                                   \
+                    ruvia_first_arg_type __VA_OPT__(, ) __VA_ARGS__>());                                   \
+        }                                                                                                  \
+    }(::ruvia::detail::route_arg_probe{})
 
 // Ordinary CONNECT uses an exact host:port authority or "*". The only
 // upgrade protocol is "connect-udp"; any other fails registration with
 // std::invalid_argument. Group prefixes apply only to upgrade-protocol tunnel
 // paths; controller/group middleware always runs.
-#define RUVIA_CONNECT(authority, handler, ...)                                                     \
-    ruvia_controller_access_type::add_tunnel_route(ruvia_route_scope, {}, authority,               \
-        ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
-#define RUVIA_CONNECT_PROTOCOL(protocol, path, handler, ...)                                       \
-    ruvia_controller_access_type::add_tunnel_route(ruvia_route_scope, protocol, path,              \
-        ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+#define RUVIA_CONNECT(authority, handler, ...)                            \
+    RUVIA_DETAIL_CHOOSE_VA_MACRO(RUVIA_DETAIL_ADD_TUNNEL_ROUTE_WITH_ARGS, \
+        RUVIA_DETAIL_ADD_TUNNEL_ROUTE_NO_ARGS, __VA_ARGS__)({}, authority, handler __VA_OPT__(, ) __VA_ARGS__)
 
-#define RUVIA_CONNECT_OPTIONS(authority, handler, options, ...)                                    \
-    ruvia_controller_access_type::add_tunnel_route(ruvia_route_scope, {}, authority,               \
-        ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>(), options)
+#define RUVIA_CONNECT_PROTOCOL(protocol, path, handler, ...)              \
+    RUVIA_DETAIL_CHOOSE_VA_MACRO(RUVIA_DETAIL_ADD_TUNNEL_ROUTE_WITH_ARGS, \
+        RUVIA_DETAIL_ADD_TUNNEL_ROUTE_NO_ARGS, __VA_ARGS__)(protocol, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
-#define RUVIA_CONNECT_PROTOCOL_OPTIONS(protocol, path, handler, options, ...)                      \
-    ruvia_controller_access_type::add_tunnel_route(ruvia_route_scope, protocol, path,              \
-        ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>(), options)
-
-#define RUVIA_GET_WS(path, handler, ...)                                                                  \
+#define RUVIA_DETAIL_ADD_WS_ROUTE_NO_ARGS(path, handler)                                                  \
     ruvia_controller_access_type::add_websocket_route(ruvia_route_scope, ::ruvia::http_known_method::get, \
         path, ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this),  \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+        ruvia_controller_access_type::template make_middlewares<>())
 
-#define RUVIA_GET_WS_OPTIONS(path, handler, options, ...)                                                 \
-    ruvia_controller_access_type::add_websocket_route(ruvia_route_scope, ::ruvia::http_known_method::get, \
-        path, ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this),  \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>(), options)
+#define RUVIA_DETAIL_ADD_WS_ROUTE_WITH_ARGS(path, handler, first, ...)                                     \
+    [&](auto ruvia_route_probe) {                                                                          \
+        using ruvia_first_arg_type = ::std::conditional_t<sizeof(ruvia_route_probe) != 0,                  \
+            ::std::remove_cvref_t<decltype((first) + ruvia_route_probe)>, void>;                           \
+        if constexpr (::std::is_same_v<ruvia_first_arg_type, ::ruvia::websocket_route_config>) {           \
+            ruvia_controller_access_type::add_websocket_route(ruvia_route_scope,                           \
+                ::ruvia::http_known_method::get, path,                                                     \
+                ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \
+                static_cast<ruvia_first_arg_type>((first) + ruvia_route_probe),                            \
+                ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>());                   \
+        } else {                                                                                           \
+            ruvia_controller_access_type::add_websocket_route(ruvia_route_scope,                           \
+                ::ruvia::http_known_method::get, path,                                                     \
+                ruvia_controller_access_type::template bind_stream<&ruvia_controller_type::handler>(this), \
+                ruvia_controller_access_type::template make_middlewares<                                   \
+                    ruvia_first_arg_type __VA_OPT__(, ) __VA_ARGS__>());                                   \
+        }                                                                                                  \
+    }(::ruvia::detail::route_arg_probe{})
+
+#define RUVIA_GET_WS(path, handler, ...)                              \
+    RUVIA_DETAIL_CHOOSE_VA_MACRO(RUVIA_DETAIL_ADD_WS_ROUTE_WITH_ARGS, \
+        RUVIA_DETAIL_ADD_WS_ROUTE_NO_ARGS, __VA_ARGS__)(path, handler __VA_OPT__(, ) __VA_ARGS__)
+
+#define RUVIA_WS(path, handler, ...) RUVIA_GET_WS(path, handler __VA_OPT__(, ) __VA_ARGS__)
 
 #define RUVIA_POST(path, handler, ...)                                                                 \
     ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::post, path, \
         ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),            \
-        ::ruvia::detail::request_body_mode::buffered,                                                  \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
 #define RUVIA_PUT(path, handler, ...)                                                                 \
     ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::put, path, \
         ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),           \
-        ::ruvia::detail::request_body_mode::buffered,                                                 \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
 #define RUVIA_DELETE(path, handler, ...)                                                                       \
     ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::delete_value, path, \
         ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),                    \
-        ::ruvia::detail::request_body_mode::buffered,                                                          \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
 #define RUVIA_PATCH(path, handler, ...)                                                                 \
     ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::patch, path, \
         ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),             \
-        ::ruvia::detail::request_body_mode::buffered,                                                   \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
 #define RUVIA_HEAD(path, handler, ...)                                                                 \
     ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::head, path, \
         ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),            \
-        ::ruvia::detail::request_body_mode::buffered,                                                  \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
 #define RUVIA_OPTIONS(path, handler, ...)                                                                 \
     ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::options, path, \
         ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),               \
-        ::ruvia::detail::request_body_mode::buffered,                                                     \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
 // An extension method, routed by its exact wire token: PROPFIND, PURGE, LOCK.
@@ -237,7 +248,6 @@ private:                                                                        
 #define RUVIA_METHOD(method_token, path, handler, ...)                                              \
     ruvia_controller_access_type::add_extension_method_route(ruvia_route_scope, method_token, path, \
         ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),         \
-        ::ruvia::detail::request_body_mode::buffered,                                               \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
 // Hono app.all: registers the handler for GET/POST/PUT/PATCH/DELETE/OPTIONS.
@@ -248,7 +258,6 @@ private:                                                                        
             ruvia_controller_access_type::add_route(ruvia_route_scope, ruvia_route_method,          \
                 ruvia_route_path,                                                                   \
                 ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this), \
-                ::ruvia::detail::request_body_mode::buffered,                                       \
                 ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>());            \
         }                                                                                           \
     }
@@ -265,30 +274,10 @@ private:                                                                        
                 ruvia_controller_access_type::add_route(ruvia_route_scope, ruvia_route_method,          \
                     ruvia_route_path,                                                                   \
                     ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this), \
-                    ::ruvia::detail::request_body_mode::buffered,                                       \
                     ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>());            \
             }                                                                                           \
         }                                                                                               \
     }
-
-#define RUVIA_POST_STREAM(path, handler, ...)                                                          \
-    ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::post, path, \
-        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),            \
-        ::ruvia::detail::request_body_mode::stream,                                                    \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
-
-#define RUVIA_PUT_STREAM(path, handler, ...)                                                          \
-    ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::put, path, \
-        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),           \
-        ::ruvia::detail::request_body_mode::stream,                                                   \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
-
-#define RUVIA_PATCH_STREAM(path, handler, ...)                                                          \
-    ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::patch, path, \
-        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),             \
-        ::ruvia::detail::request_body_mode::stream,                                                     \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
-
 #define RUVIA_GROUP_BEGIN(prefix, ...)                                                               \
     {                                                                                                \
         static_assert(::std::constructible_from<::ruvia::borrowed_text, decltype((prefix))>,         \

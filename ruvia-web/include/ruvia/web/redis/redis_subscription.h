@@ -9,7 +9,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
-
+#include "ruvia/web/detail/redis/redis_argument_pack.h"
 namespace ruvia {
 
 namespace detail {
@@ -107,10 +107,49 @@ public:
     scoped_operation<void> psubscribe(std::span<const std::string_view>) && = delete;
     // An empty list unsubscribes from every channel (pattern) of this connection.
     scoped_operation<void> unsubscribe(std::span<const std::string_view> channels = {}) &;
-    scoped_operation<void> unsubscribe(std::span<const std::string_view>) && = delete;
+    scoped_operation<void> unsubscribe(std::span<const std::string_view> = {}) && = delete;
     scoped_operation<void> punsubscribe(std::span<const std::string_view> patterns = {}) &;
-    scoped_operation<void> punsubscribe(std::span<const std::string_view>) && = delete;
+    scoped_operation<void> punsubscribe(std::span<const std::string_view> = {}) && = delete;
 
+    template <typename... channels_type>
+        requires detail::redis_argument_pack<channels_type...>
+    [[nodiscard]] scoped_operation<void> subscribe(channels_type&&... channels) & {
+        const std::string_view views[]{std::string_view(channels)...};
+        return subscribe(std::span<const std::string_view>(views));
+    }
+    template <typename... channels_type>
+        requires detail::redis_argument_pack<channels_type...>
+    scoped_operation<void> subscribe(channels_type&&...) && = delete;
+
+    template <typename... patterns_type>
+        requires detail::redis_argument_pack<patterns_type...>
+    [[nodiscard]] scoped_operation<void> psubscribe(patterns_type&&... patterns) & {
+        const std::string_view views[]{std::string_view(patterns)...};
+        return psubscribe(std::span<const std::string_view>(views));
+    }
+    template <typename... patterns_type>
+        requires detail::redis_argument_pack<patterns_type...>
+    scoped_operation<void> psubscribe(patterns_type&&...) && = delete;
+
+    template <typename... channels_type>
+        requires detail::redis_argument_pack<channels_type...>
+    [[nodiscard]] scoped_operation<void> unsubscribe(channels_type&&... channels) & {
+        const std::string_view views[]{std::string_view(channels)...};
+        return unsubscribe(std::span<const std::string_view>(views));
+    }
+    template <typename... channels_type>
+        requires detail::redis_argument_pack<channels_type...>
+    scoped_operation<void> unsubscribe(channels_type&&...) && = delete;
+
+    template <typename... patterns_type>
+        requires detail::redis_argument_pack<patterns_type...>
+    [[nodiscard]] scoped_operation<void> punsubscribe(patterns_type&&... patterns) & {
+        const std::string_view views[]{std::string_view(patterns)...};
+        return punsubscribe(std::span<const std::string_view>(views));
+    }
+    template <typename... patterns_type>
+        requires detail::redis_argument_pack<patterns_type...>
+    scoped_operation<void> punsubscribe(patterns_type&&...) && = delete;
     // The next confirmation or message. std::nullopt once the subscription is
     // closed by abort(), its stop token or worker shutdown. The server ending
     // the connection throws redis_error(io_error); an error reply (for example

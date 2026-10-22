@@ -80,9 +80,9 @@ task<http2_buffered_response_write_result> http2_buffered_response_writer::write
 
     const auto head_result =
         connection_.submit_response_head(stream_id, response, std::move(write_plan));
-    const auto* submitted_head = head_result.submitted();
+    const auto* submitted_head = std::get_if<http_buffered_response_write_plan>(&head_result);
     if (submitted_head == nullptr) {
-        if (head_result.failure()->error() == http2_response_head_submit_error::closed) {
+        if (std::get<http2_response_head_submit_error>(head_result) == http2_response_head_submit_error::closed) {
             co_return http2_buffered_response_write_result::make_peer_aborted_before_commit();
         }
         // Invalid final metadata cannot leave an open peer stream waiting for a

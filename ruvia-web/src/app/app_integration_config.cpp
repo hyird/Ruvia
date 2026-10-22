@@ -50,7 +50,7 @@ application& application::redis(std::nullptr_t) {
 }
 #endif
 
-application& application::get_http_client(http_client_registration_config config) {
+application& application::http_client(http_client_registration_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure HTTP client while app is running", [&](detail::app_state& state_value) {
             detail::upsert_named_capability_definition(state_value.http_clients_, config.alias_, config.config_,
@@ -58,7 +58,7 @@ application& application::get_http_client(http_client_registration_config config
         });
 }
 
-application& application::get_http_client(std::nullptr_t) {
+application& application::http_client(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure HTTP client while app is running",
         [](detail::app_state& state_value) { state_value.http_clients_.clear(); });

@@ -41,9 +41,9 @@ int main() {
 | `application& cors(cors_config config)` / `cors(std::nullptr_t)` | 启用或禁用全局 CORS 策略与自动预检处理 |
 | `application& document_root(document_root_config config)` / `document_root(std::nullptr_t)` | 启用或禁用后台定时刷新的静态文档根目录服务 |
 | `application& trusted_proxies(trusted_proxy_config config)` / `trusted_proxies(std::nullptr_t)` | 配置可信反向代理 CIDR 列表与 `X-Forwarded-Proto` 信任策略 |
-| `application& get_rate_limit(rate_limit_config config)` / `get_rate_limit(std::nullptr_t)` | 启用或禁用全局按客户端 IP 限流 |
-| `application& get_blocking_pool(blocking_pool_options config)` / `get_blocking_pool(std::nullptr_t)` | 配置常驻阻塞卸载线程池 |
-| `application& get_http_client(http_client_registration_config config)` / `get_http_client(std::nullptr_t)` | 注册绑定到每个 worker 的出站 HTTP 客户端池（支持命名 `alias_`，默认 `"default"`） |
+| `application& rate_limit(rate_limit_config config)` / `rate_limit(std::nullptr_t)` | 启用或禁用全局按客户端 IP 限流 |
+| `application& blocking_pool(blocking_pool_options config)` / `blocking_pool(std::nullptr_t)` | 配置常驻阻塞卸载线程池 |
+| `application& http_client(http_client_registration_config config)` / `http_client(std::nullptr_t)` | 注册绑定到每个 worker 的出站 HTTP 客户端池（支持命名 `alias_`，默认 `"default"`） |
 | `application& database(db_registration_config config)` / `database(std::nullptr_t)` | 注册 per-worker SQL 数据库连接池（需 `RUVIA_ENABLE_DATABASE`） |
 | `application& redis(redis_registration_config config)` / `redis(std::nullptr_t)` | 注册 per-worker Redis 连接池（需 `RUVIA_ENABLE_REDIS`） |
 | `application& on_error(http_error_handler_type handler)` | 注册全局错误处理器（另有 `scoped_error_handler_options` 重载支持按路径前缀注册） |
@@ -54,7 +54,7 @@ int main() {
 | `void run()` | 启动所有业务 worker 并阻塞，直到调用 `stop()` 或收到停止信号；排空完成后返回 |
 | `void stop()` | 线程安全地请求停机：停止接入新连接 → 在 `drain_timeout_` 内排空已接纳请求并发送 WebSocket `1001` 关闭帧 → 强制关闭超时连接 → 退役退出 |
 | `http_server_stats http_stats() const` | 线程安全地汇总所有 worker 的连接与故障统计 |
-| `blocking_pool_stats get_blocking_pool_stats() const` | 线程安全地读取阻塞线程池统计 |
+| `blocking_pool_stats blocking_pool_stats() const` | 线程安全地读取阻塞线程池统计 |
 | `std::vector<web_worker_handle> workers() const` | 获取全部业务 worker 的跨线程派发句柄 |
 | `web_worker_handle worker_for(std::uint64_t key) const` / `worker_for(std::string_view key) const` | 按哈希键确定性选择单个业务 worker 句柄 |
 
@@ -178,7 +178,7 @@ for (const auto& worker : ruvia::app().workers()) {
 }
 ```
 
-`ruvia::web_worker_context` 提供与控制器一致的 worker 级能力访问：`worker()`、`pool()`、`get_stop_token()`、`worker_state<T>()`、`run_blocking(...)`、`db()`、`redis()`、`get_http_client()`。
+`ruvia::web_worker_context` 提供与控制器一致的 worker 级能力访问：`worker()`、`pool()`、`stop_token()`、`worker_state<T>()`、`run_blocking(...)`、`db()`、`redis()`、`http_client()`。
 
 ---
 
@@ -201,28 +201,19 @@ for (const auto& worker : ruvia::app().workers()) {
 
 | 类别 | 宏名称 | 处理器成员函数签名 | 说明 |
 | --- | --- | --- | --- |
-| 缓冲请求路由 | `RUVIA_GET(path, handler, ...)` | `task<http_response> handler(context&)` | 注册 `GET` 路由（未显式注册同路径 `HEAD` 时自动提供 `HEAD` 回退） |
-| 缓冲请求路由 | `RUVIA_POST(path, handler, ...)` | `task<http_response> handler(context&)` | 注册 `POST` 路由 |
-| 缓冲请求路由 | `RUVIA_PUT(path, handler, ...)` | `task<http_response> handler(context&)` | 注册 `PUT` 路由 |
-| 缓冲请求路由 | `RUVIA_DELETE(path, handler, ...)` | `task<http_response> handler(context&)` | 注册 `DELETE` 路由 |
-| 缓冲请求路由 | `RUVIA_PATCH(path, handler, ...)` | `task<http_response> handler(context&)` | 注册 `PATCH` 路由 |
+| 缓冲或流式响应路由 | `RUVIA_GET(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `GET` 路由（返回 `task<http_response>` 时为缓冲响应并自动提供 `HEAD` 回退；返回 `task<void>` 时自动推导为 `c.stream()` / `c.stream_text()` / `c.stream_sse()` 流式响应） |
+| 缓冲或流式路由 | `RUVIA_POST(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `POST` 路由（附加 `ruvia::stream_body` 时流式消费请求体；返回 `task<void>` 时流式写出响应/SSE） |
+| 缓冲或流式路由 | `RUVIA_PUT(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `PUT` 路由（可附加 `ruvia::stream_body` 流式消费请求体） |
+| 缓冲或流式路由 | `RUVIA_DELETE(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `DELETE` 路由 |
+| 缓冲或流式路由 | `RUVIA_PATCH(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `PATCH` 路由（可附加 `ruvia::stream_body` 流式消费请求体） |
 | 缓冲请求路由 | `RUVIA_HEAD(path, handler, ...)` | `task<http_response> handler(context&)` | 注册显式 `HEAD` 路由 |
 | 缓冲请求路由 | `RUVIA_OPTIONS(path, handler, ...)` | `task<http_response> handler(context&)` | 注册显式 `OPTIONS` 路由 |
 | 缓冲请求路由 | `RUVIA_METHOD(token, path, handler, ...)` | `task<http_response> handler(context&)` | 注册自定义扩展方法（如 `"PROPFIND"`，要求静态路径） |
 | 缓冲请求路由 | `RUVIA_ALL(path, handler, ...)` | `task<http_response> handler(context&)` | 同时注册 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`OPTIONS` |
 | 缓冲请求路由 | `RUVIA_ON(methods, paths, handler, ...)` | `task<http_response> handler(context&)` | 方法元组与路径元组的笛卡尔积批量注册 |
-| 流式请求体路由 | `RUVIA_POST_STREAM(path, handler, ...)` | `task<http_response> handler(context&)` | 流式消费 `POST` 请求体（`get_body_reader()` / `get_multipart_reader()`） |
-| 流式请求体路由 | `RUVIA_PUT_STREAM(path, handler, ...)` | `task<http_response> handler(context&)` | 流式消费 `PUT` 请求体 |
-| 流式请求体路由 | `RUVIA_PATCH_STREAM(path, handler, ...)` | `task<http_response> handler(context&)` | 流式消费 `PATCH` 请求体 |
-| 流式响应 / SSE | `RUVIA_GET_STREAM(path, handler, ...)` | `task<void> handler(context&)` | 通过 `c.stream()` 或 `c.stream_text()` 流式写出响应 |
-| 流式响应 / SSE | `RUVIA_GET_SSE(path, handler, ...)` | `task<void> handler(context&)` | 通过 `c.stream_sse()` 推送 Server-Sent Events |
-| 流式响应 / SSE | `RUVIA_POST_SSE(path, handler, ...)` | `task<void> handler(context&)` | 缓冲读取 `POST` 请求体后通过 `c.stream_sse()` 推送 Server-Sent Events |
-| WebSocket | `RUVIA_GET_WS(path, handler, ...)` | `task<void> handler(context&)` | WebSocket 路由（默认配置） |
-| WebSocket | `RUVIA_GET_WS_OPTIONS(path, handler, opts, ...)` | `task<void> handler(context&)` | 带 `websocket_route_config` 的 WebSocket 路由 |
-| HTTP 隧道 | `RUVIA_CONNECT(authority, handler, ...)` | `task<void> handler(context&)` | `CONNECT` 字节流隧道（`authority` 为 `"host:port"` 或 `"*"`） |
-| HTTP 隧道 | `RUVIA_CONNECT_OPTIONS(authority, handler, opts, ...)` | `task<void> handler(context&)` | 带 `http_tunnel_route_config` 的 `CONNECT` 隧道 |
-| 扩展 CONNECT 隧道 | `RUVIA_CONNECT_PROTOCOL(proto, path, handler, ...)` | `task<void> handler(context&)` | Extended `CONNECT` 路由（如 `"connect-udp"`） |
-| 扩展 CONNECT 隧道 | `RUVIA_CONNECT_PROTOCOL_OPTIONS(proto, path, handler, opts, ...)` | `task<void> handler(context&)` | 带 `http_tunnel_route_config` 的 Extended `CONNECT` 路由 |
+| WebSocket | `RUVIA_GET_WS(path, handler, ...)` / `RUVIA_WS(path, handler, ...)` | `task<void> handler(context&)` | WebSocket 路由（首参可传可选的 `websocket_route_config`，后接中间件） |
+| HTTP 隧道 | `RUVIA_CONNECT(authority, handler, ...)` | `task<void> handler(context&)` | `CONNECT` 字节流隧道（`authority` 为 `"host:port"` 或 `"*"`，首参可传可选的 `http_tunnel_route_config`） |
+| 扩展 CONNECT 隧道 | `RUVIA_CONNECT_PROTOCOL(proto, path, handler, ...)` | `task<void> handler(context&)` | Extended `CONNECT` 路由（如 `"connect-udp"`，首参可传可选的 `http_tunnel_route_config`） |
 
 ### 2.3 路径模式与反向链接生成（`url_for`）
 
@@ -252,8 +243,8 @@ for (const auto& worker : ruvia::app().workers()) {
 | `co_await c.req().text()` / `co_await c.req().bytes()` | 读取完整缓冲请求体视图（`std::string_view` / `std::span<const std::byte>`） |
 | `co_await c.req().discard_body()` | 丢弃剩余请求体字节 |
 | `co_await c.req().multipart()` | 解析缓冲式 `multipart/form-data`，返回 `std::pmr::vector<multipart_part>` |
-| `c.req().validated<T>()` / `c.req().validated_json<T>()` | 获取由校验中间件（`json_body<T>` 等）已完成解析和校验的模型常量引用 |
-| `co_await c.req().json_if<T>()` / `co_await c.req().form_if<T>()` | 按需结构化解析 JSON 或 Form 为 `std::optional<T>`（不运行声明式字段校验规则） |
+| `c.req().validated<T>()` | 获取由校验中间件（`json_body<T>` 等）已完成解析和校验的模型常量引用 |
+| `co_await c.req().json_if<T>()` / `co_await c.req().form_if<T>()` | 按需结构化解析并校验 JSON 或 Form 为 `std::optional<T>`（仅当 `Content-Type` 不匹配时返回 `std::nullopt`） |
 | `c.conn().remote()` / `c.conn().client()` | 直连对端地址端口（`.address()` / `.port()`）与经过 `trusted_proxies` 解析后的真实客户端地址 |
 | `c.conn().via_trusted_proxy()` / `c.conn().scheme()` / `c.conn().tls()` | 是否经过可信代理、连接有效 scheme（`http` / `https`）及 TLS 传输信息指针 |
 
@@ -311,7 +302,7 @@ auto sub = co_await c.dispatch({
 
 ### 3.4 阻塞任务卸载（`c.run_blocking`）
 
-需先通过 `app().get_blocking_pool({...})` 启用阻塞池。在请求中卸载耗时同步计算：
+需先通过 `app().blocking_pool({...})` 配置（或使用默认启用的有界阻塞池）。在请求中卸载耗时同步计算：
 
 ```cpp
 std::string input_copy(c.req().query("data").value_or(""));
@@ -379,7 +370,7 @@ const auto& user = c.request_state<current_user>();
 | 组件 / 头文件 | 用法与说明 |
 | --- | --- |
 | `ruvia::body_limit<MaxBytes>` (`"ruvia/web/body_limit.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
-| `ruvia::rate_limit<MaxReqs, WindowMs>` (`"ruvia/web/rate_limit.h"`) | 控制器或路由级固定窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数）；全局限流使用 `app().get_rate_limit({...})` |
+| `ruvia::rate_limit<MaxReqs, WindowMs>` (`"ruvia/web/rate_limit.h"`) | 控制器或路由级固定窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数）；全局限流使用 `app().rate_limit({...})` |
 | `ruvia::security_headers_middleware` (`"ruvia/web/security_headers.h"`) | 自动注入 `X-Content-Type-Options`、`X-Frame-Options`、`Strict-Transport-Security`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头（对 404 响应同样生效） |
 | `ruvia::csrf_protection` (`"ruvia/web/csrf.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件 |
 | `ruvia::session_middleware` (`"ruvia/web/session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话 |
@@ -453,7 +444,7 @@ RUVIA_MODEL(create_user_request,
 
 | 校验中间件类型 | 数据源 | 路由内提取方式 |
 | --- | --- | --- |
-| `ruvia::json_body<T>` | JSON 请求体（`application/json`） | `c.req().validated<T>()` 或 `c.req().validated_json<T>()` |
+| `ruvia::json_body<T>` | JSON 请求体（`application/json`） | `c.req().validated<T>()` |
 | `ruvia::form_body<T>` | URL 编码表单请求体（`application/x-www-form-urlencoded`） | `c.req().validated<T>()` |
 | `ruvia::query_model<T>` | URL 查询参数（Query String） | `c.req().validated<T>()` |
 | `ruvia::path_model<T>` | 路由路径参数（`:param`） | `c.req().validated<T>()` |
@@ -475,12 +466,12 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
 不依赖 HTTP 请求上下文时，可直接使用以下工具：
 
 - **JSON / Form 编解码**：
-  - `std::optional<T> ruvia::from_json<T>(std::string_view json, model_parse_options options = {})`
+  - `T ruvia::from_json<T>(std::string_view json, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，模型字段校验失败抛 `ruvia::validation_error`）
   - `std::pmr::string ruvia::to_json(const T& value, model_serialize_options options = {})`
-  - `std::optional<T> ruvia::from_form<T>(std::string_view form, model_parse_options options = {})`
+  - `T ruvia::from_form<T>(std::string_view form, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，字段校验失败抛 `ruvia::validation_error`）
 - **零拷贝动态 JSON 视图（`"ruvia/web/model_object.h"`）**：
-  - `ruvia::json_object::parse(std::string_view body)` / `ruvia::json_value::parse(std::string_view body)`
-  - 支持 `obj->get<std::string_view>("key")`、`obj->get<std::int64_t>("count")`、`obj->for_each_field([](std::string_view key, ruvia::json_value val) { ... })`、`val.for_each_element([](ruvia::json_value item) { ... })`。
+  - `ruvia::json_object::parse(std::string_view body, model_parse_options options = {})` / `ruvia::json_value::parse(std::string_view body, model_parse_options options = {})`（直接返回值，语法非法抛 `std::invalid_argument`）
+  - 支持 `obj.get<ruvia::string>("key")`、`obj.get<ruvia::int64>("count")`、`obj.for_each_field([](std::string_view key, const ruvia::json_value& val) { ... })`、`val.for_each_element([](const ruvia::json_value& item) { ... })`。
 - **命令式校验器 `ruvia::validator`（`"ruvia/web/validation.h"`）**：
   - 提供 `.required(opt, field)`、`.min_length(opt, field, n)`、`.max_length(opt, field, n)`、`.range(opt, field, low, high)`、`.one_of(opt, field, list)`、`.add(field, code, message)`，最后调用 `.throw_if_invalid()` 抛出 `ruvia::validation_error`。
 

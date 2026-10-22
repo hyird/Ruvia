@@ -37,8 +37,6 @@ struct http2_known_header_encoding final {
     std::uint32_t hpack_name_index_{0};
 };
 
-inline constexpr std::size_t http2_lower_header_stack_bytes = 64;
-
 [[nodiscard]] inline http2_known_header_encoding get_http2_known_header_encoding(
     std::uint32_t known_bit) noexcept {
     switch (known_bit) {
@@ -87,32 +85,6 @@ inline constexpr std::size_t http2_lower_header_stack_bytes = 64;
         default:
             return {};
     }
-}
-
-// Stack-backed results expose only fully written prefixes; an already-lowercase
-// name continues to borrow the input, so unused scratch bytes are never read.
-[[nodiscard]] inline std::string_view http2_lower_header_name(std::string_view name,
-    std::array<char, http2_lower_header_stack_bytes>& stack, std::pmr::string& scratch) {
-    const auto write_lower = [](std::string_view source_value, char* target) noexcept {
-        for (std::size_t i = 0; i < source_value.size(); ++i) {
-            target[i] = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(source_value[i])));
-        }
-    };
-
-    for (const auto ch : name) {
-        const auto byte = static_cast<unsigned char>(ch);
-        if (byte < 'A' || byte > 'Z') {
-            continue;
-        }
-        if (name.size() <= stack.size()) {
-            write_lower(name, stack.data());
-            return std::string_view(stack.data(), name.size());
-        }
-        scratch.resize(name.size());
-        write_lower(name, scratch.data());
-        return scratch;
-    }
-    return name;
 }
 
 inline void append_http2_encoded_response_header(std::pmr::string& header_block, std::string_view name,

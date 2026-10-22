@@ -66,10 +66,7 @@ public:
             queued_credit_.emplace(std::move(credit));
             return;
         }
-        if (queued_credit_->merge(std::move(credit)) !=
-            http2_received_data_credit_merge_status::merged) {
-            std::terminate();
-        }
+        queued_credit_->merge(std::move(credit));
     }
 
     [[nodiscard]] bool enqueue_bounded(std::string_view data,

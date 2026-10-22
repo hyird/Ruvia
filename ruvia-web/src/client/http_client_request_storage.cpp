@@ -24,7 +24,7 @@ http_client_request_storage::http_client_request_storage(std::string_view method
     headers_.reserve(fields.size());
     auto* const field_resource = this->resource();
     for (const auto& field : fields) {
-        headers_.push_back(http_header::copy_with_lowercase_name(field.name(), field.value(), field_resource));
+        headers_.push_back(http_header::copy_of(field.name(), field.value(), field_resource));
     }
 }
 

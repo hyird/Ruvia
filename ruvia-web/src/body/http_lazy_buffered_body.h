@@ -20,6 +20,9 @@ public:
     [[nodiscard]] http1_request_body_consumption consumption() const noexcept {
         return reader_.consumption();
     }
+    [[nodiscard]] stream_body_reader<stream_type>& reader() noexcept {
+        return reader_;
+    }
     [[nodiscard]] const http_request_trailers& trailers() const& noexcept {
         return reader_.trailers();
     }

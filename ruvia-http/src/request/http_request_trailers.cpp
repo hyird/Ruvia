@@ -19,7 +19,8 @@ std::variant<std::monostate, http_request_trailer_error> http_request_trailers::
     if (fields_.size() == max_http_header_fields || !budget.add_field(name, value)) {
         return http_request_trailer_error::section_too_large;
     }
-    fields_.push_back(http_header::copy_of(name, value, fields_.get_allocator().resource()));
+    fields_.push_back(
+        http_header::copy_with_lowercase_name(name, value, fields_.get_allocator().resource()));
     budget_ = budget;
     return {};
 }

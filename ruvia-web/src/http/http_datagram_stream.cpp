@@ -18,6 +18,9 @@ http_datagram_stream::http_datagram_stream(http_capsule_stream&& stream)
 http_datagram_stream http_tunnel::datagrams(http_capsule_config config) & {
     return http_datagram_stream(capsules(config));
 }
+http_udp_tunnel http_tunnel::udp(http_capsule_config config) & {
+    return http_udp_tunnel(datagrams(config));
+}
 http_datagram_stream http_client_tunnel::datagrams(http_capsule_config config) && {
     if (!response_.state_ || !response_.state_->tunnel_ || !response_.state_->tunnel_->udp_ || !response_.state_->tunnel_->accepted_) {
         throw std::logic_error("HTTP Datagrams require an accepted datagram tunnel");
@@ -123,5 +126,20 @@ scoped_operation<void> http_datagram_stream::send_payload(std::string_view paylo
         throw std::length_error("HTTP Datagram exceeds capsule bound");
     }
     return stream_.write_frame(std::string_view(prefix.data(), size), payload_value);
+}
+scoped_operation<std::optional<http_datagram>> http_udp_tunnel::read() & {
+    auto* state_value = stream_.stream_.state_;
+    if (!state_value) {
+        throw std::logic_error("UDP tunnel is empty");
+    }
+    state_value->require();
+    return ::ruvia::make_scoped_operation(
+        state_value->read_scope_, http_datagram_stream::read_owned(detail::capsule_state_pin(*state_value), true));
+}
+scoped_operation<void> http_udp_tunnel::send(std::span<const std::byte> payload_value) & {
+    return send(std::string_view(reinterpret_cast<const char*>(payload_value.data()), payload_value.size()));
+}
+scoped_operation<void> http_udp_tunnel::send(std::string_view payload_value) & {
+    return stream_.send_payload(payload_value, true);
 }
 }  // namespace ruvia

@@ -1,7 +1,7 @@
 // Worker-local state and blocking work: use_worker_state<T> per-worker
 // instances shared by the HTTP and dispatch paths, cross-worker task posting
 // via application::worker_for / web_worker_handle::post, and context::run_blocking() --
-// the escape hatch for calls that block, which run on application::get_blocking_pool()'s
+// the escape hatch for calls that block, which run on application::blocking_pool()'s
 // threads so the worker stays free to serve its other connections.
 // Run ruvia_example_workers_blocking on port 8090; inspect its route macros
 // for stats, awaited dispatch, fanout and overload shedding endpoints.
@@ -135,9 +135,9 @@ int main() {
             .use_worker_state<worker_stats>()
             // One pool for the whole process, shared by every worker. application provides
             // a bounded pool by default; this overrides its size for the example.
-            // application::get_blocking_pool_stats() reports queue depth and rejections for
+            // application::blocking_pool_stats() reports queue depth and rejections for
             // production tuning.
-            .get_blocking_pool({
+            .blocking_pool({
                 .thread_count_ = 4,
                 .queue_capacity_ = 128,
             })

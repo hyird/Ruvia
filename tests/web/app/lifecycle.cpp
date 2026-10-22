@@ -62,7 +62,7 @@ public:
     ruvia::task<void> handle(ruvia::context& context, ruvia::next& next_value) {
         auto& state_value = state();
         state_value.upgrade_held_ = true;
-        const auto stop = context.get_stop_token();
+        const auto stop = context.stop_token();
         while (!state_value.release_upgrade_.load() && !stop.stop_requested()) {
             (void)co_await ruvia::sleep_for(context.worker(), 1ms, stop);
         }
@@ -81,8 +81,8 @@ public:
     const auto unbounded_close =
         ruvia::websocket_route_config{.lifecycle_ = {.close_handshake_timeout_ = std::nullopt}};
     RUVIA_GET_WS("/socket", open_socket);
-    RUVIA_GET_WS_OPTIONS("/short-close-socket", open_socket, short_close);
-    RUVIA_GET_WS_OPTIONS("/unbounded-close-socket", open_socket, unbounded_close);
+    RUVIA_GET_WS("/short-close-socket", open_socket, short_close);
+    RUVIA_GET_WS("/unbounded-close-socket", open_socket, unbounded_close);
     RUVIA_CONNECT("lifecycle-target.test:443", echo_tunnel);
     RUVIA_ROUTES_END
 
@@ -95,7 +95,7 @@ public:
     ruvia::task<ruvia::http_response> slow(ruvia::context& context) {
         auto& state_value = state();
         state_value.slow_entered_ = true;
-        const auto stop = context.get_stop_token();
+        const auto stop = context.stop_token();
         while (!state_value.release_slow_.load() && !stop.stop_requested()) {
             (void)co_await ruvia::sleep_for(context.worker(), 1ms, stop);
         }
@@ -108,7 +108,7 @@ public:
     ruvia::task<ruvia::http_response> stuck(ruvia::context& context) {
         auto& state_value = state();
         state_value.stuck_entered_ = true;
-        const auto result = co_await ruvia::sleep_for(context.worker(), 1h, context.get_stop_token());
+        const auto result = co_await ruvia::sleep_for(context.worker(), 1h, context.stop_token());
         state_value.stuck_cancelled_ = result == ruvia::timer_sleep_result::stop_requested;
         co_return context.text(std::string_view("stuck-done"));
     }
@@ -116,7 +116,7 @@ public:
     // Lives until the peer ends the session.
     ruvia::task<void> held_socket(ruvia::context& context) {
         state().upgrade_handler_ran_ = true;
-        auto& websocket_value = context.get_websocket();
+        auto& websocket_value = context.websocket();
         try {
             while (co_await websocket_value.read()) {
             }
@@ -127,7 +127,7 @@ public:
     // Reads until the session ends, recording whether its reads ended cleanly.
     ruvia::task<void> open_socket(ruvia::context& context) {
         auto& state_value = state();
-        auto& websocket_value = context.get_websocket();
+        auto& websocket_value = context.websocket();
         state_value.socket_open_ = true;
         try {
             while (co_await websocket_value.read()) {

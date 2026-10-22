@@ -210,7 +210,7 @@ RUVIA_TEST(worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
     }
 
     ruvia::worker_runtime runtime;
-    const auto owner = runtime.context().handle();
+    const auto owner = runtime.handle();
     // Off its owner thread, or with no owner at all, trim is rejected and
     // releases nothing.
     bool rejected = false;
@@ -242,8 +242,8 @@ RUVIA_TEST(worker_memory_trim_rejects_a_worker_other_than_its_bound_owner) {
     ruvia::worker_memory memory;
     ruvia::worker_runtime first;
     ruvia::worker_runtime second;
-    const auto first_owner = first.context().handle();
-    const auto second_owner = second.context().handle();
+    const auto first_owner = first.handle();
+    const auto second_owner = second.handle();
     bool bound = false;
     bool rejected = false;
     bool rebound = false;

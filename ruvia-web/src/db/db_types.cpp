@@ -13,15 +13,6 @@ db_field::db_field(std::pmr::memory_resource* resource)
     : resource_(pmr_resource_or_default(resource)),
       storage_(std::monostate{}) {}
 
-db_field::db_field(const db_field& other, std::pmr::memory_resource* resource)
-    : db_field(resource) {
-    if (const auto* owned = std::get_if<std::pmr::string>(&other.storage_)) {
-        storage_.emplace<std::pmr::string>(*owned, resource_);
-    } else if (const auto* borrowed = std::get_if<borrowed_text>(&other.storage_)) {
-        storage_.emplace<borrowed_text>(*borrowed);
-    }
-}
-
 db_field::db_field(std::nullptr_t, std::pmr::memory_resource* resource)
     : db_field(resource) {}
 
@@ -74,128 +65,55 @@ std::optional<std::string_view> db_field::value() const& noexcept {
     return std::nullopt;
 }
 
-db_row::db_row(std::pmr::memory_resource* resource)
-    : resource_(pmr_resource_or_default(resource)),
-      storage_(std::in_place_type<owned_fields_type>, resource_),
-      column_names_(std::in_place_type<owned_column_names_type>, resource_) {}
-
 db_row::db_row(const db_field* fields_value, std::size_t size, const std::pmr::string* column_names,
-    std::size_t column_count, std::pmr::memory_resource* resource)
-    : resource_(pmr_resource_or_default(resource)),
-      storage_(std::in_place_type<borrowed_fields_type>, fields_value, size),
-      column_names_(std::in_place_type<borrowed_column_names_type>, column_names, column_count) {}
+    std::size_t column_count) noexcept
+    : fields_(fields_value, size),
+      column_names_(column_names, column_count) {}
 
 db_row::db_row(db_row&& other) noexcept
-    : resource_(other.resource_),
-      storage_([&other]() noexcept -> storage_type {
-          if (auto* owned = std::get_if<owned_fields_type>(&other.storage_)) {
-              return storage_type(std::in_place_type<owned_fields_type>, std::move(*owned));
-          }
-          return storage_type(
-              std::in_place_type<borrowed_fields_type>, std::get<borrowed_fields_type>(other.storage_));
-      }()),
-      column_names_([&other]() noexcept -> column_name_storage_type {
-          if (auto* owned = std::get_if<owned_column_names_type>(&other.column_names_)) {
-              return column_name_storage_type(std::in_place_type<owned_column_names_type>, std::move(*owned));
-          }
-          return column_name_storage_type(std::in_place_type<borrowed_column_names_type>,
-              std::get<borrowed_column_names_type>(other.column_names_));
-      }()) {
-    other.storage_.emplace<borrowed_fields_type>();
-    other.column_names_.emplace<borrowed_column_names_type>();
-}
+    : fields_(std::exchange(other.fields_, {})),
+      column_names_(std::exchange(other.column_names_, {})) {}
 
-// NOLINTNEXTLINE(performance-noexcept-move-constructor)
-db_row& db_row::operator=(db_row&& other) {
-    if (this == &other) {
-        return *this;
+db_row& db_row::operator=(db_row&& other) noexcept {
+    if (this != &other) {
+        fields_ = std::exchange(other.fields_, {});
+        column_names_ = std::exchange(other.column_names_, {});
     }
-    if (resource_ == other.resource_) {
-        storage_.swap(other.storage_);
-        column_names_.swap(other.column_names_);
-    } else {
-        // Prepare both halves before changing either row. Moving vector elements
-        // across allocators would retain each db_field's source resource.
-        auto fields_value = [&]() -> storage_type {
-            if (const auto* owned = std::get_if<owned_fields_type>(&other.storage_)) {
-                owned_fields_type replacement(resource_);
-                replacement.reserve(owned->size());
-                for (const auto& field : *owned) {
-                    replacement.push_back(db_field(field, resource_));
-                }
-                return storage_type(std::in_place_type<owned_fields_type>, std::move(replacement));
-            }
-            return storage_type(std::in_place_type<borrowed_fields_type>, std::get<borrowed_fields_type>(other.storage_));
-        }();
-        auto names = [&]() -> column_name_storage_type {
-            if (const auto* owned = std::get_if<owned_column_names_type>(&other.column_names_)) {
-                return column_name_storage_type(std::in_place_type<owned_column_names_type>, *owned, resource_);
-            }
-            return column_name_storage_type(std::in_place_type<borrowed_column_names_type>,
-                std::get<borrowed_column_names_type>(other.column_names_));
-        }();
-        storage_.swap(fields_value);
-        column_names_.swap(names);
-    }
-    other.storage_.emplace<borrowed_fields_type>();
-    other.column_names_.emplace<borrowed_column_names_type>();
     return *this;
 }
 
 bool db_row::empty() const noexcept {
-    return size() == 0;
+    return fields_.empty();
 }
 
 std::size_t db_row::size() const noexcept {
-    if (const auto* owned = std::get_if<owned_fields_type>(&storage_)) {
-        return owned->size();
-    }
-    return std::get<borrowed_fields_type>(storage_).size();
+    return fields_.size();
 }
 
 const db_field& db_row::operator[](std::size_t index) const& noexcept {
-    if (const auto* owned = std::get_if<owned_fields_type>(&storage_)) {
-        return (*owned)[index];
-    }
-    return std::get<borrowed_fields_type>(storage_)[index];
+    return fields_[index];
 }
 
 const db_field& db_row::operator[](std::string_view column) const& {
-    const auto names = column_names();
-    for (std::size_t index = 0; index < names.size(); ++index) {
-        if (names[index] == column) {
-            return (*this)[index];
+    for (std::size_t index = 0; index < column_names_.size(); ++index) {
+        if (column_names_[index] == column) {
+            return fields_[index];
         }
     }
     throw std::out_of_range("database result has no such column");
 }
 
 const db_field* db_row::begin() const& noexcept {
-    if (const auto* owned = std::get_if<owned_fields_type>(&storage_)) {
-        return owned->data();
-    }
-    return std::get<borrowed_fields_type>(storage_).data();
+    return fields_.data();
 }
 
 const db_field* db_row::end() const& noexcept {
     const auto* first = begin();
-    const auto count = size();
-    return count == 0 ? first : first + count;
-}
-
-db_row::owned_fields_type& db_row::owned_fields() noexcept {
-    return std::get<owned_fields_type>(storage_);
-}
-
-db_row::owned_column_names_type& db_row::owned_column_names() noexcept {
-    return std::get<owned_column_names_type>(column_names_);
+    return fields_.empty() ? first : first + fields_.size();
 }
 
 std::span<const std::pmr::string> db_row::column_names() const noexcept {
-    if (const auto* owned = std::get_if<owned_column_names_type>(&column_names_)) {
-        return *owned;
-    }
-    return std::get<borrowed_column_names_type>(column_names_);
+    return column_names_;
 }
 
 db_rows::db_rows(std::pmr::memory_resource* resource)

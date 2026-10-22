@@ -59,7 +59,8 @@ public:
     std::span<const http_header> request_fields() const&& = delete;
     [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_negotiation_error>
     validate_fields(std::span<const http_header> fields) const;
-    [[nodiscard]] http2_request_head_submit_result submit_http2_request(http2_connection& connection,
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>
+    submit_http2_request(http2_connection& connection,
         std::string_view scheme, std::string_view authority, std::string_view target,
         std::span<const http_header_view> headers = {}) const;
     [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_negotiation_error>

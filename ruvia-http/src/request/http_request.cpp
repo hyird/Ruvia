@@ -68,7 +68,7 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
     return std::nullopt;
 }
 
-http_response_coding_selection_result http_response_coding_selection_for(
+std::optional<http_response_coding_selection> http_response_coding_selection_for(
     const http_request& request) noexcept {
     http_response_coding_qualities qualities;
     if (detail::request_has_known_header(request, detail::request_header_kind::accept_encoding)) {

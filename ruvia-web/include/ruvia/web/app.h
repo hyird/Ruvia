@@ -122,8 +122,8 @@ public:
     // run() starts the threads before the first request; after workers stop,
     // running callables are not awaited and may finish on the pool's detached
     // state.
-    application& get_blocking_pool(blocking_pool_options config);
-    application& get_blocking_pool(std::nullptr_t);
+    application& blocking_pool(blocking_pool_options config);
+    application& blocking_pool(std::nullptr_t);
 
     application& on_error(http_error_handler_type handler);
     application& on_not_found(http_not_found_handler_type handler);
@@ -159,8 +159,8 @@ public:
     //
     // Worker-local: each worker counts independently, so a deployment with N
     // workers admits up to N times this rule. Size it accordingly.
-    application& get_rate_limit(rate_limit_config config);
-    application& get_rate_limit(std::nullptr_t);
+    application& rate_limit(rate_limit_config config);
+    application& rate_limit(std::nullptr_t);
     application& on_access(access_log_callback_type callback);
     // Observes connections lost to an exception that escaped their session --
     // the failures on_error cannot answer because the response is already
@@ -185,8 +185,8 @@ public:
     application& redis(redis_registration_config config);
     application& redis(std::nullptr_t);
 #endif
-    application& get_http_client(http_client_registration_config config);
-    application& get_http_client(std::nullptr_t);
+    application& http_client(http_client_registration_config config);
+    application& http_client(std::nullptr_t);
     // Serves until stop(); returns after every worker retired. May run again
     // after it returns. The first preparation, startup, or worker failure is
     // rethrown to the caller, who is responsible for printing it; run() does
@@ -211,7 +211,7 @@ public:
     // The blocking pool's counters, or all zero when no pool is configured or
     // the app is not running. Queue depth and the rejected count are what a
     // deployment sizes thread_count/queue_capacity from. Safe from any thread.
-    [[nodiscard]] blocking_pool_stats get_blocking_pool_stats() const;
+    [[nodiscard]] ::ruvia::blocking_pool_stats blocking_pool_stats() const;
     // Worker handles, published once every worker is ready (before on_start
     // hooks run) and until run() returns. Empty or invalid otherwise.
     [[nodiscard]] std::vector<web_worker_handle> workers() const;

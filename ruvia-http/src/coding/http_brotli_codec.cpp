@@ -31,12 +31,12 @@ namespace {
 
 }  // namespace
 
-http_content_decode_result decode_brotli_content(
+std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
     std::pmr::string output(http_pmr_resource_or_default(resource));
     brotli_decoder_stream decoder(output.get_allocator().resource());
     if (!decoder.initialized()) {
-        return http_content_decode_result_access::failure(http_content_decode_error::decoder_failure);
+        return http_content_decode_error::decoder_failure;
     }
     auto* state_value = decoder.native();
 
@@ -55,7 +55,7 @@ http_content_decode_result decode_brotli_content(
             const auto* bytes_value = BrotliDecoderTakeOutput(state_value, &produced);
             if (!append_decoded_bytes(
                     output, reinterpret_cast<const char*>(bytes_value), produced, max_decoded_bytes)) {
-                return http_content_decode_result_access::failure(http_content_decode_error::decoded_size_exceeded);
+                return http_content_decode_error::decoded_size_exceeded;
             }
             produced_output = produced_output || produced != 0;
         }
@@ -63,25 +63,26 @@ http_content_decode_result decode_brotli_content(
             // RFC 7932 defines one Brotli stream. Its decoder deliberately does
             // not over-consume, so remaining bytes are not part of this content.
             if (available_input == 0) {
-                return http_content_decode_result_access::decoded(std::move(output));
+                return output;
             }
-            return http_content_decode_result_access::failure(http_content_decode_error::invalid_content);
+            return http_content_decode_error::invalid_content;
         }
         if (result_value == BROTLI_DECODER_RESULT_ERROR) {
             decoder.rethrow_allocation_failure();
-            return http_content_decode_result_access::failure(brotli_allocation_failure(BrotliDecoderGetErrorCode(state_value))
-                                                                  ? http_content_decode_error::decoder_failure
-                                                                  : http_content_decode_error::invalid_content);
+            return brotli_allocation_failure(BrotliDecoderGetErrorCode(state_value))
+                       ? http_content_decode_error::decoder_failure
+                       : http_content_decode_error::invalid_content;
         }
         const bool progressed = produced_output || available_input != before_input;
         if (!progressed ||
             (result_value == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT && available_input == 0)) {
-            return http_content_decode_result_access::failure(http_content_decode_error::invalid_content);
+            return http_content_decode_error::invalid_content;
         }
     }
 }
 
-http_content_encode_result encode_brotli_content(brotli_encoder_stream& encoder, std::string_view input,
+std::variant<std::pmr::string, http_content_encode_error> encode_brotli_content(
+    brotli_encoder_stream& encoder, std::string_view input,
     std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
     std::pmr::string output(http_pmr_resource_or_default(output_resource));
     auto* state_value = encoder.native();
@@ -95,12 +96,12 @@ http_content_encode_result encode_brotli_content(brotli_encoder_stream& encoder,
             &available_input, &next_input, &available_output, nullptr, nullptr);
         encoder.rethrow_allocation_failure();
         if (compressed != BROTLI_TRUE) {
-            return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+            return http_content_encode_error::encoder_failure;
         }
         std::size_t produced = 0;
         const auto* bytes_value = BrotliEncoderTakeOutput(state_value, &produced);
         if (output.size() > max_encoded_bytes || produced > max_encoded_bytes - output.size()) {
-            return http_content_encode_result_access::failure(http_content_encode_error::encoded_size_exceeded);
+            return http_content_encode_error::encoded_size_exceeded;
         }
         // The borrowed block expires on the next encoder call. Copy it directly
         // into the result before checking or advancing the encoder state.
@@ -108,20 +109,20 @@ http_content_encode_result encode_brotli_content(brotli_encoder_stream& encoder,
             output.append(reinterpret_cast<const char*>(bytes_value), produced);
         }
         if (BrotliEncoderIsFinished(state_value) == BROTLI_TRUE) {
-            return http_content_encode_result_access::encoded(std::move(output));
+            return output;
         }
         if (produced == 0 && available_input == before_input) {
-            return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+            return http_content_encode_error::encoder_failure;
         }
     }
 }
 
-http_content_encode_result encode_brotli_content(
+std::variant<std::pmr::string, http_content_encode_error> encode_brotli_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
     auto* const state_resource = http_pmr_resource_or_default(resource);
     brotli_encoder_stream encoder(state_resource);
     if (!encoder.initialized()) {
-        return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+        return http_content_encode_error::encoder_failure;
     }
     return encode_brotli_content(encoder, input, max_encoded_bytes, state_resource);
 }

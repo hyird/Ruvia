@@ -374,8 +374,8 @@ void detail::static_root_access::install_precompressed_variants(
             }
             auto encoded = encode_http_content(
                 coding, *plain, {.max_encoded_bytes_ = plain->size() - 1, .resource_ = resource});
-            if (auto* content = encoded.encoded(); content != nullptr) {
-                store_precompressed_variant(entry, coding, std::move(*content).take_bytes(),
+            if (auto* content = std::get_if<std::pmr::string>(&encoded); content != nullptr) {
+                store_precompressed_variant(entry, coding, std::move(*content),
                     emit_response_validators, resource);
             }
         }

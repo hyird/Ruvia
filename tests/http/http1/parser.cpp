@@ -7,7 +7,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http1_chunk_decode_error.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
@@ -773,8 +772,8 @@ RUVIA_TEST(http1_parse_transfer_coding_before_final_chunked) {
         "3\r\nraw\r\n0\r\n\r\n");
     RUVIA_CHECK(result_value.complete());
     const auto& chunked = require_chunked(result_value.state_.body_plan_);
-    RUVIA_CHECK_EQ(chunked.transfer_codings().values_.size(), std::size_t{1});
-    RUVIA_CHECK(chunked.transfer_codings().values_[0] == ruvia::http_transfer_coding::gzip);
+    RUVIA_CHECK_EQ(chunked.transfer_codings().size(), std::size_t{1});
+    RUVIA_CHECK(chunked.transfer_codings()[0] == ruvia::http_transfer_coding::gzip);
 }
 
 RUVIA_TEST(http1_parse_transfer_encoding_ignores_empty_members_without_losing_framing) {
@@ -816,7 +815,7 @@ RUVIA_TEST(http1_parse_transfer_codings_do_not_retain_request_resource) {
             "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n", state, 0, &request_resource);
         RUVIA_CHECK(state.head_ready() != nullptr);
         const auto& chunked = require_chunked(state.body_plan_);
-        RUVIA_CHECK_EQ(chunked.transfer_codings().values_.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(chunked.transfer_codings().size(), std::size_t{1});
         state.request_.reset();
         RUVIA_CHECK_EQ(request_resource.live_allocations(), std::size_t{0});
     }
@@ -1399,9 +1398,9 @@ RUVIA_TEST(http1_response_coding_folds_all_accept_encoding_field_lines) {
         "Accept-Encoding: br;q=0.8\r\n\r\n");
     RUVIA_CHECK(parsed_value.complete());
     const auto response_coding = parsed_value.state_.response_coding_selection();
-    RUVIA_CHECK(response_coding.selected() != nullptr);
-    if (const auto* selected = response_coding.selected()) {
-        RUVIA_CHECK(selected->coding() == ruvia::http_content_coding::brotli);
+    RUVIA_CHECK(response_coding.has_value());
+    if (response_coding.has_value()) {
+        RUVIA_CHECK(response_coding->coding() == ruvia::http_content_coding::brotli);
     }
 }
 
@@ -1411,8 +1410,7 @@ RUVIA_TEST(http1_response_coding_rejects_when_every_coding_is_forbidden) {
         "Accept-Encoding: identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n");
     RUVIA_CHECK(parsed_value.complete());
     const auto response_coding = parsed_value.state_.response_coding_selection();
-    RUVIA_CHECK(response_coding.selected() == nullptr);
-    RUVIA_CHECK(response_coding.failure() != nullptr);
+    RUVIA_CHECK(!response_coding.has_value());
 }
 
 RUVIA_TEST(http1_parse_header_block_too_large_rejected) {

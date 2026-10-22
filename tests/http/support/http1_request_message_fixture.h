@@ -6,7 +6,6 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/http1_chunk_decode_error.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_server_request_parser.h"
 

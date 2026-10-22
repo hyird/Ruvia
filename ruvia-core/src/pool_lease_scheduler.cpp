@@ -95,19 +95,15 @@ public:
         return waiter_id;
     }
 
-    [[nodiscard]] pool_lease_release_status release(std::size_t slot) noexcept {
-        if (slot >= busy_.size()) {
-            return pool_lease_release_status::invalid_slot;
-        }
-        if (busy_[slot] == 0) {
-            return pool_lease_release_status::already_released;
+    void release(std::size_t slot) noexcept {
+        if (slot >= busy_.size() || busy_[slot] == 0) {
+            std::terminate();
         }
         if (!closing_ && waiter_state_->queue_.resume_next(slot)) {
-            return pool_lease_release_status::transferred_to_waiter;
+            return;
         }
         busy_[slot] = 0;
         free_slots_.push_back(slot);
-        return pool_lease_release_status::released;
     }
 
     [[nodiscard]] bool close() noexcept {
@@ -256,8 +252,8 @@ worker_wait_result<std::size_t> pool_lease_acquire::await_resume() {
     return *result_;
 }
 
-pool_lease_release_status pool_lease_scheduler::release(std::size_t slot) noexcept {
-    return impl_->release(slot);
+void pool_lease_scheduler::release(std::size_t slot) noexcept {
+    impl_->release(slot);
 }
 
 bool pool_lease_scheduler::close() noexcept {

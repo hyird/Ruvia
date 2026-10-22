@@ -228,15 +228,16 @@ RUVIA_TEST(context_character_array_builders_copy_until_terminator) {
         RUVIA_CHECK(written > 0);
         const auto text_response = context.text(buffer);
         const auto html_response = context.html(buffer);
-        const char unterminated[3] = {'a', 'b', 'c'};
-        const auto body_response = context.body(unterminated);
+        std::string owned_string = "abc";
+        const auto body_response = context.body(owned_string);
+        owned_string[0] = 'Z';
         buffer[0] = 'X';
 
         RUVIA_CHECK_EQ(text_response.body_bytes(), std::string_view("count=7"));
         RUVIA_CHECK(text_response.body_bytes().data() != buffer);
         RUVIA_CHECK_EQ(html_response.body_bytes(), std::string_view("count=7"));
         RUVIA_CHECK_EQ(body_response.body_bytes(), std::string_view("abc"));
-        RUVIA_CHECK(body_response.body_bytes().data() != unterminated);
+        RUVIA_CHECK(body_response.body_bytes().data() != owned_string.data());
 
         const auto literal_response = context.text("literal");
         RUVIA_CHECK_EQ(literal_response.body_bytes(), std::string_view("literal"));
@@ -383,7 +384,7 @@ RUVIA_TEST(context_metadata_preserves_repeated_set_cookie_headers) {
 RUVIA_TEST(context_body_null_gives_empty_body_with_status) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         context.status(ruvia::http_status::no_content);
-        const auto response = context.body(nullptr);
+        const auto response = context.body();
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::no_content);
         RUVIA_CHECK(response.body_bytes().empty());
         co_return;

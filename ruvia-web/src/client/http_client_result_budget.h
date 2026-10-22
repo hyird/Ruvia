@@ -42,6 +42,9 @@ public:
 
     [[nodiscard]] static std::optional<http_client_result_budget_lease> try_acquire(
         const std::shared_ptr<http_client_result_budget_domain>& domain, std::size_t bytes) noexcept;
+    [[nodiscard]] std::pair<std::shared_ptr<http_client_result_budget_domain>, std::size_t> release() && noexcept {
+        return {std::move(domain_), std::exchange(bytes_, 0)};
+    }
 
 private:
     http_client_result_budget_lease(

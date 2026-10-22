@@ -56,8 +56,8 @@ class peer_reset_routes final {
     RUVIA_ROUTES_BEGIN(peer_reset_routes)
     RUVIA_GET("/peer-reset/inform", inform);
     RUVIA_POST("/peer-reset/body", body);
-    RUVIA_GET_STREAM("/peer-reset/idle-stream", idle_stream);
-    RUVIA_GET_STREAM("/peer-reset/head-only", head_only);
+    RUVIA_GET("/peer-reset/idle-stream", idle_stream);
+    RUVIA_GET("/peer-reset/head-only", head_only);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> inform(ruvia::context& c) {

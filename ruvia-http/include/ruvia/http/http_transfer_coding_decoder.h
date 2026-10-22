@@ -9,11 +9,14 @@
 #include <variant>
 
 #include "ruvia/http/http_transfer_coding.h"
-#include "ruvia/http/http_transfer_coding_decode_error.h"
 #include "ruvia/http/protocol_byte_limit.h"
 
 namespace ruvia {
 
+enum class http_transfer_coding_decode_error : std::uint8_t {
+    invalid_content,
+    decoded_size_exceeded,
+};
 namespace detail {
 class transfer_coding_decoder;
 }

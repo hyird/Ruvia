@@ -38,7 +38,7 @@ bool throws_invalid(fn_type&& fn) {
 RUVIA_TEST(app_http_client_rejects_invalid_hosts_with_distinct_messages) {
     const auto register_client = [](ruvia::http_client_config config) {
         return caught_message([&config] {
-            ruvia::app().get_http_client({.alias_ = "config-validation", .config_ = std::move(config)});
+            ruvia::app().http_client({.alias_ = "config-validation", .config_ = std::move(config)});
         });
     };
     const auto with_host = [](std::string host) {

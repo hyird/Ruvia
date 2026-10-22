@@ -31,26 +31,6 @@ http_client_handle http_client_state::handle(operation_options options) {
     return clients_.get(lifecycle_.operation_scope(), lifecycle_.options(std::move(options)));
 }
 
-http_client_stats http_client_state::stats() {
-    lifecycle_.require_ready();
-    return clients_.default_pool().stats();
-}
-
-std::string_view http_client_state::host() {
-    lifecycle_.require_ready();
-    return clients_.default_pool().host();
-}
-
-std::uint16_t http_client_state::port() {
-    lifecycle_.require_ready();
-    return clients_.default_pool().port();
-}
-
-http_scheme http_client_state::scheme() {
-    lifecycle_.require_ready();
-    return clients_.default_pool().scheme();
-}
-
 }  // namespace ruvia::detail
 
 namespace ruvia {
@@ -79,30 +59,6 @@ void http_client::close() noexcept {
 
 task<void> http_client::shutdown() & {
     return state_->shutdown();
-}
-
-http_client_stats http_client::stats() const {
-    return state_->stats();
-}
-
-std::optional<http_client_push> http_client::next_push() const& {
-    return with_options({}).next_push();
-}
-
-std::optional<http_client_advertisement> http_client::next_advertisement() const& {
-    return with_options({}).next_advertisement();
-}
-
-std::string_view http_client::host() const& {
-    return state_->host();
-}
-
-std::uint16_t http_client::port() const {
-    return state_->port();
-}
-
-http_scheme http_client::scheme() const {
-    return state_->scheme();
 }
 
 const worker_handle& http_client::worker() const& noexcept {

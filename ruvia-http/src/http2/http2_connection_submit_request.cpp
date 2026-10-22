@@ -43,7 +43,7 @@ namespace {
     websocket_request_header_validator websocket_headers;
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto& header = headers[i];
-        if (!http2_is_valid_regular_header(header.name(), header.value()) ||
+        if (!http2_is_valid_outbound_regular_header(header.name(), header.value()) ||
             !section_size.add(header.name(), header.value())) {
             return false;
         }
@@ -69,7 +69,8 @@ namespace {
         // check (:authority is the sole target authority there).
         if (websocket_connect &&
             (kind == request_header_kind::sec_websocket_key ||
-                (kind == request_header_kind::other && header.name() == "sec-websocket-accept") ||
+                (kind == request_header_kind::other &&
+                    http_ascii_equals_ignore_case(header.name(), "sec-websocket-accept")) ||
                 !websocket_headers.observe_header(kind, header.value()))) {
             return false;
         }
@@ -122,7 +123,7 @@ namespace {
     if (content_indication == http_request_content_indication::no_content) {
         return true;
     }
-    const auto content_semantics = http_request_content_semantics(method);
+    const auto content_semantics = classify_http_request_content_semantics(method);
     return content_semantics != http_request_content_semantics::forbidden &&
            (content_semantics != http_request_content_semantics::content_type_required ||
                fields.seen(request_header_kind::content_type));
@@ -130,19 +131,24 @@ namespace {
 
 void http2_encode_outbound_request_headers(
     std::pmr::string& block, std::span<const http_header_view> headers) {
+    std::array<char, http2_lower_header_stack_bytes> lower_name_stack{};
+    std::pmr::string lower_name_scratch(block.get_allocator().resource());
     for (const auto& header : headers) {
-        hpack_encoder::encode_header(block, header.name(), header.value());
+        hpack_encoder::encode_header(block,
+            http2_lower_header_name(header.name(), lower_name_stack, lower_name_scratch),
+            header.value());
     }
 }
 
 }  // namespace
 
-http2_request_head_submit_result http2_connection::submit_regular_request_head(std::string_view method,
+std::variant<std::uint32_t, http2_request_head_submit_error>
+http2_connection::submit_regular_request_head(std::string_view method,
     std::string_view scheme, std::optional<std::string_view> authority, std::string_view path,
     std::span<const http_header_view> headers, http2_request_content content,
     http_client_request_expectation expectation) {
     if (const auto error = local_request_admission_error()) {
-        return http2_request_head_submit_result::make_failure(*error);
+        return *error;
     }
     const bool without_content = content.without_content() != nullptr;
     const auto* known_length_content = content.known_length_content();
@@ -150,8 +156,7 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
     const auto expected_length = known_length_content != nullptr ? std::optional{known_length_content->length()} : streaming_content ? content.streaming_content()->expected_length()
                                                                                                                                      : std::nullopt;
     if (!without_content && known_length_content == nullptr && !streaming_content) {
-        return http2_request_head_submit_result::make_failure(
-            http2_request_head_submit_error::invalid_message);
+        return http2_request_head_submit_error::invalid_message;
     }
     const bool content_will_follow = !without_content && (!expected_length || *expected_length != 0);
     const auto content_indication = content_will_follow ? http_request_content_indication::will_follow
@@ -177,8 +182,7 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
             ec == std::errc{}) {
             length_bytes = static_cast<std::size_t>(end - length_buffer.data());
         } else {
-            return http2_request_head_submit_result::make_failure(
-                http2_request_head_submit_error::invalid_message);
+            return http2_request_head_submit_error::invalid_message;
         }
     }
 
@@ -187,8 +191,7 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
     // HPACK storage, outbound bytes, stream metadata, or lifecycle state.
     if (!http2_is_valid_outbound_regular_request_head(method, known_method, scheme, default_port,
             authority, path, headers, content_indication, content_length_value, expectation)) {
-        return http2_request_head_submit_result::make_failure(
-            http2_request_head_submit_error::invalid_message);
+        return http2_request_head_submit_error::invalid_message;
     }
     return submit_local_request_head([&](http2_stream_state& stream) {
         stream.assign_request_method(method);
@@ -231,10 +234,11 @@ http2_request_head_submit_result http2_connection::submit_regular_request_head(s
     });
 }
 
-http2_request_head_submit_result http2_connection::submit_connect_request_head(
+std::variant<std::uint32_t, http2_request_head_submit_error>
+http2_connection::submit_connect_request_head(
     std::string_view authority, std::span<const http_header_view> headers) {
     if (const auto error = local_request_admission_error()) {
-        return http2_request_head_submit_result::make_failure(*error);
+        return *error;
     }
 
     request_target_view target;
@@ -245,8 +249,7 @@ http2_request_head_submit_result http2_connection::submit_connect_request_head(
         !http2_are_valid_outbound_request_headers(authority, 0, headers,
             /*allow_host=*/false,
             /*allow_trailers=*/false, section_size, fields)) {
-        return http2_request_head_submit_result::make_failure(
-            http2_request_head_submit_error::invalid_message);
+        return http2_request_head_submit_error::invalid_message;
     }
 
     return submit_local_request_head([&](http2_stream_state& stream) {
@@ -264,15 +267,15 @@ http2_request_head_submit_result http2_connection::submit_connect_request_head(
     });
 }
 
-http2_request_head_submit_result http2_connection::submit_extended_connect_request_head(
+std::variant<std::uint32_t, http2_request_head_submit_error>
+http2_connection::submit_extended_connect_request_head(
     std::string_view protocol, std::string_view scheme, std::string_view authority,
     std::string_view path, std::span<const http_header_view> headers) {
     if (const auto error = local_request_admission_error()) {
-        return http2_request_head_submit_result::make_failure(*error);
+        return *error;
     }
     if (!peer_settings_.enable_connect_protocol()) {
-        return http2_request_head_submit_result::make_failure(
-            http2_request_head_submit_error::peer_capability_unavailable);
+        return http2_request_head_submit_error::peer_capability_unavailable;
     }
 
     const bool websocket_value = http_ascii_equals_ignore_case(protocol, "websocket");
@@ -289,8 +292,7 @@ http2_request_head_submit_result http2_connection::submit_extended_connect_reque
             /*allow_host=*/!websocket_value,
             /*allow_trailers=*/false, section_size, fields,
             /*generated_fields=*/0, /*websocket_connect=*/websocket_value)) {
-        return http2_request_head_submit_result::make_failure(
-            http2_request_head_submit_error::invalid_message);
+        return http2_request_head_submit_error::invalid_message;
     }
 
     return submit_local_request_head([&](http2_stream_state& stream) {
@@ -365,6 +367,8 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         stream->mark_scheme(default_port);
         stream->mark_authority();
         stream->mark_path();
+        std::array<char, http2_lower_header_stack_bytes> lower_name_stack{};
+        std::pmr::string lower_name_scratch(resource_);
         for (std::size_t i = 0; i < request.headers_.size(); ++i) {
             const auto& header = request.headers_[i];
             const auto kind = header_kinds[i];
@@ -375,8 +379,12 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
                 if (!http2_append_cookie_header_value(*stream, header.value())) {
                     throw std::length_error("HTTP/2 push request cookie is too large");
                 }
-            } else if (!stream->append_remote_header(header.name(), header.value(), kind)) {
-                throw std::length_error("HTTP/2 push request has too many fields");
+            } else {
+                const auto lower_name =
+                    http2_lower_header_name(header.name(), lower_name_stack, lower_name_scratch);
+                if (!stream->append_remote_header(lower_name, header.value(), kind)) {
+                    throw std::length_error("HTTP/2 push request has too many fields");
+                }
             }
         }
         (void)stream->record_remote_head_end_stream();

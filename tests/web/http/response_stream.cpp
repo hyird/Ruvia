@@ -47,10 +47,10 @@ const auto stream_lane_observed = std::make_shared<stream_lane_observation>();
 
 class stream_lane_routes final {
     RUVIA_ROUTES_BEGIN(stream_lane_routes)
-    RUVIA_GET_STREAM("/server-lazy-stream-output", output);
-    RUVIA_GET_STREAM("/server-endless-stream", endless);
-    RUVIA_GET_STREAM("/server-upstream-timeout-stream", upstream_timeout);
-    RUVIA_GET_STREAM("/server-stream-then-read-body", stream_then_read_body);
+    RUVIA_GET("/server-lazy-stream-output", output);
+    RUVIA_GET("/server-endless-stream", endless);
+    RUVIA_GET("/server-upstream-timeout-stream", upstream_timeout);
+    RUVIA_GET("/server-stream-then-read-body", stream_then_read_body);
     RUVIA_ROUTES_END
 
     ruvia::task<void> output(ruvia::context& context_value) {
@@ -133,8 +133,7 @@ RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {
         ruvia::http_status::accepted, ruvia::http_response_trailer_intent::none);
     bool rejected = false;
     try {
-        (void)ruvia::prepare_http_response_stream_head(
-            std::move(response), ruvia::http_response_stream_kind::generic, std::move(plan));
+        (void)ruvia::prepare_http_response_stream_head(std::move(response), std::move(plan));
     } catch (const std::invalid_argument&) {
         rejected = true;
     }

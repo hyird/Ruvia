@@ -150,9 +150,9 @@ private:
 event_loop_state::event_loop_state(std::size_t queue_capacity)
     : context_ownership_(std::in_place_type<worker_runtime>,
           worker_runtime_options{.queue_capacity_ = queue_capacity}),
-      io_context_(&owned_runtime().context().io_context()),
+      io_context_(&owned_runtime().io_context()),
       executor_(io_context_->get_executor()),
-      runtime_(owned_runtime().context()) {}
+      runtime_(detail::worker_runtime_access::context(owned_runtime())) {}
 
 event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity)
     : context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity),

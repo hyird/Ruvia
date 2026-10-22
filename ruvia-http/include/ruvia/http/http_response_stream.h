@@ -11,7 +11,6 @@
 namespace ruvia {
 
 enum class http_response_stream_framing : std::uint8_t {
-    http1_known_length,
     http1_chunked,
     // RFC 9112 6.1: a server MUST NOT send Transfer-Encoding to a client that did
     // not indicate HTTP/1.1. An HTTP/1.0 stream therefore carries no chunk framing;
@@ -20,10 +19,6 @@ enum class http_response_stream_framing : std::uint8_t {
     http1_close_delimited,
     http2_frames
 };
-
-enum class http_response_stream_kind : std::uint8_t { generic,
-    sse };
-
 // A trailer section is terminal message metadata, not an independently queued
 // side channel. The caller declares whether this head commit is reserving a
 // terminal trailer section. Trailers are optional metadata a recipient may
@@ -96,7 +91,7 @@ private:
           head_disposition_(head_disposition),
           trailer_intent_present_(trailer_intent_present) {}
 
-    http_response_stream_framing framing_{http_response_stream_framing::http1_known_length};
+    http_response_stream_framing framing_{http_response_stream_framing::http1_chunked};
     http_response_body_plan body_plan_;
     http_response_stream_head_disposition head_disposition_{http_response_stream_head_disposition::message_ended};
     bool trailer_intent_present_{false};
@@ -143,7 +138,7 @@ public:
 
 private:
     friend http_response_stream_head prepare_http_response_stream_head(
-        http_response, http_response_stream_kind, http_response_stream_commit_plan);
+        http_response, http_response_stream_commit_plan);
 
     http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan)
         : response_(std::move(response)),
@@ -154,6 +149,5 @@ private:
 };
 
 [[nodiscard]] http_response_stream_head prepare_http_response_stream_head(
-    http_response response, http_response_stream_kind kind, http_response_stream_commit_plan commit_plan);
-
+    http_response response, http_response_stream_commit_plan commit_plan);
 }  // namespace ruvia

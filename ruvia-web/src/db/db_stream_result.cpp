@@ -1,6 +1,7 @@
 #include <utility>
 
 #include "ruvia/web/db/db.h"
+#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "db/db_pool.h"
 #include "db/db_pool_utils.h"
@@ -14,9 +15,11 @@ namespace ruvia {
 namespace {
 
 task<std::optional<db_row>> read_pool_stream(detail::db_pool_ref_type pool, std::size_t slot, void* result_value,
+    std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_options& options) {
-    return detail::visit_db_pool(
-        pool, [&](auto& client) { return client.read_stream_row(slot, result_value, resource, options); });
+    return detail::visit_db_pool(pool, [&](auto& client) {
+        return client.read_stream_row(slot, result_value, fields, column_names, resource, options);
+    });
 }
 
 task<void> close_pool_stream(detail::db_pool_ref_type pool, std::size_t slot, void* result_value,
@@ -33,18 +36,22 @@ void abort_pool_stream(detail::db_pool_ref_type pool, std::size_t slot, void* re
 }  // namespace
 
 db_stream_result::lease_type::lease_type(detail::db_pool_ref_type client, std::size_t slot, void* result_value,
-    std::pmr::memory_resource* resource, operation_options options) noexcept
+    std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
+    operation_options options) noexcept
     : client_(client),
       slot_(slot),
       result_(result_value),
       resource_(pmr_resource_or_default(resource)),
+      fields_(resource_),
+      column_names_(std::move(column_names)),
       options_(std::move(options)) {}
 
 class db_stream_result::state_type final {
 public:
     state_type(detail::db_pool_ref_type client, std::size_t slot, void* result_value,
-        std::pmr::memory_resource* resource, operation_options options) noexcept
-        : operation_(lease_type{client, slot, result_value, resource, std::move(options)}) {}
+        std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
+        operation_options options) noexcept
+        : operation_(lease_type{client, slot, result_value, std::move(column_names), resource, std::move(options)}) {}
 
     ~state_type() {
         operation_.reset(
@@ -55,9 +62,10 @@ public:
 };
 
 db_stream_result::db_stream_result(detail::db_pool_ref_type client, std::size_t slot, void* result_value,
-    std::pmr::memory_resource* resource, operation_options options)
+    std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
+    operation_options options)
     : state_(make_pmr_object<state_type>(
-          resource, client, slot, result_value, resource, std::move(options))) {}
+          resource, client, slot, result_value, std::move(column_names), resource, std::move(options))) {}
 
 db_stream_result::db_stream_result(db_stream_result&& other) noexcept
     : state_(std::move(other.state_)),
@@ -80,17 +88,18 @@ void db_stream_result::expire_capability(void* target) noexcept {
 
 scoped_operation<std::optional<db_row>> db_stream_result::read() & {
     registration_.require_active();
+    auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), read_task(operation_guard_type(state_->operation_)),
-        scoped_operation_io_kind::db);
+        scope, read_task(scope, operation_guard_type(state_->operation_)));
 }
 
-task<std::optional<db_row>> db_stream_result::read_task(operation_guard_type pending) {
+task<std::optional<db_row>> db_stream_result::read_task(operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
-    auto row = co_await read_pool_stream(
-        lease_value.client_, lease_value.slot_, lease_value.result_, lease_value.resource_, lease_value.options_);
+    auto row = co_await read_pool_stream(lease_value.client_, lease_value.slot_, lease_value.result_,
+        lease_value.fields_, lease_value.column_names_, lease_value.resource_, lease_value.options_);
     if (row) {
         operation.finish_active();
     } else {
@@ -101,12 +110,13 @@ task<std::optional<db_row>> db_stream_result::read_task(operation_guard_type pen
 
 scoped_operation<void> db_stream_result::close() & {
     registration_.require_active();
+    auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), close_task(operation_guard_type(state_->operation_)),
-        scoped_operation_io_kind::db);
+        scope, close_task(scope, operation_guard_type(state_->operation_)));
 }
 
-task<void> db_stream_result::close_task(operation_guard_type pending) {
+task<void> db_stream_result::close_task(operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();

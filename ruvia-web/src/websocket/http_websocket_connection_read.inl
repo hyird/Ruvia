@@ -23,13 +23,13 @@
 namespace ruvia::detail {
 
 template <typename stream_type>
-task<std::optional<websocket_message>> websocket_connection<stream_type>::read() {
+task<std::optional<websocket_message>> server_websocket_connection<stream_type>::read() {
     require_current_worker();
     return read_owned(read_guard_type(*this));
 }
 
 template <typename stream_type>
-task<std::optional<websocket_message>> websocket_connection<stream_type>::read_owned(read_guard_type read_guard_value) {
+task<std::optional<websocket_message>> server_websocket_connection<stream_type>::read_owned(read_guard_type read_guard_value) {
     require_current_worker();
     {
         read_guard_type active_read(std::move(read_guard_value));
@@ -42,7 +42,7 @@ task<std::optional<websocket_message>> websocket_connection<stream_type>::read_o
                 if (write_phase_ != write_phase_type::idle) {
                     co_await wait_for_write_idle();
                 }
-                const auto event = protocol_.poll();
+                const auto event = protocol_.next_event();
                 if (!event.has_value()) {
                     const auto read_result_value = co_await read_more();
                     if (const auto* failure = read_result_value.failure()) {
@@ -96,7 +96,7 @@ task<std::optional<websocket_message>> websocket_connection<stream_type>::read_o
 }
 
 template <typename stream_type>
-task<http_stream_read_result> websocket_connection<stream_type>::read_more() {
+task<http_stream_read_result> server_websocket_connection<stream_type>::read_more() {
     if constexpr (!native_stream) {
         co_return co_await stream_.read_more(buffer_);
     } else {

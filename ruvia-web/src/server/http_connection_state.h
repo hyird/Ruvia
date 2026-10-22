@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "ruvia/core/memory/memory_pool.h"
-#include "ruvia/core/scoped_operation.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_known_method.h"
@@ -17,6 +16,7 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_status.h"
+#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "router/route_resolution.h"
 
@@ -100,7 +100,7 @@ public:
     // `head_end`. Duration is measured when the record is reported.
     void defer(std::size_t head_end, const http_request& request, std::string_view client_address,
         std::chrono::steady_clock::time_point start, http_status_code status,
-        const operation_scope_io_metrics& io_metrics = {});
+        const request_io_metrics& io_metrics = {});
     // Reports every kept response whose head lies within the first `written`
     // output bytes (in output order), then forgets all of them.
     void complete(const access_log_sink& access_log, std::size_t written) noexcept;
@@ -115,7 +115,7 @@ private:
         std::size_t path_bytes_;
         std::size_t address_bytes_;
         std::chrono::steady_clock::time_point start_;
-        operation_scope_io_metrics io_metrics_{};
+        request_io_metrics io_metrics_{};
         http_known_method known_method_;
         http_protocol_version protocol_version_;
         http_status_code status_;

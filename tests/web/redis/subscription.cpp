@@ -238,10 +238,8 @@ ruvia::task<void> check_events_arrive_in_wire_order(ruvia::redis_client& client,
     }
     RUVIA_CHECK(rejected_early_read);
 
-    const std::array<std::string_view, 2> channels{"news", std::string_view("bin\0ary", 7)};
-    co_await subscription.subscribe(channels);
-    const std::array<std::string_view, 1> patterns{"news*"};
-    co_await subscription.psubscribe(patterns);
+    co_await subscription.subscribe("news", std::string_view("bin\0ary", 7));
+    co_await subscription.psubscribe("news*");
 
     auto first = co_await subscription.read();
     RUVIA_CHECK(first && first->kind() == ruvia::redis_pubsub_event_kind::subscribed);
@@ -274,8 +272,7 @@ ruvia::task<void> check_events_arrive_in_wire_order(ruvia::redis_client& client,
     auto room = co_await subscription.read();
     RUVIA_CHECK(room && room->pattern() == "news*" && room->channel() == "newsroom" && room->payload() == "y");
 
-    const std::array<std::string_view, 1> leave{"news"};
-    co_await subscription.unsubscribe(leave);
+    co_await subscription.unsubscribe("news");
     auto left = co_await subscription.read();
     RUVIA_CHECK(left && left->kind() == ruvia::redis_pubsub_event_kind::unsubscribed);
     RUVIA_CHECK(left && left->channel() == "news" && left->subscription_count() == 2);

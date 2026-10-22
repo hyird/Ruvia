@@ -3,6 +3,7 @@
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/detail/db/db_result_access.h"
+#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "db/db_config_validation.h"
 #include "db/db_pool.h"
@@ -22,16 +23,18 @@ namespace {
 
 task<db_rows> query_pool(detail::db_pool_ref_type pool, std::pmr::string sql,
     std::pmr::vector<db_value> params, std::pmr::memory_resource* resource,
-    operation_options options) {
-    return detail::visit_db_pool(pool, [&](auto& client) {
+    operation_scope& scope, operation_options options) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
+    co_return co_await detail::visit_db_pool(pool, [&](auto& client) {
         return client.query(std::move(sql), std::move(params), resource, std::move(options));
     });
 }
 
 task<db_exec_result> execute_pool(detail::db_pool_ref_type pool, std::pmr::string sql,
     std::pmr::vector<db_value> params, std::pmr::memory_resource* resource,
-    operation_options options) {
-    return detail::visit_db_pool(pool, [&](auto& client) {
+    operation_scope& scope, operation_options options) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
+    co_return co_await detail::visit_db_pool(pool, [&](auto& client) {
         return client.execute(std::move(sql), std::move(params), resource, std::move(options));
     });
 }
@@ -145,53 +148,48 @@ task<std::pair<db_rows, db_rows>> db_handle::query_and_count_task(const db_query
     return detail::execute_db_query_plan<true>(std::move(plan), backend, options_);
 }
 
-scoped_operation<db_rows> db_handle::query(const db_query& query) const {
-    registration_.require_active();
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), query_task(query), scoped_operation_io_kind::db);
-}
-
-scoped_operation<db_exec_result> db_handle::execute(const db_query& query) const {
+scoped_operation<db_exec_result> db_handle::execute_query(const db_query& query) const {
     registration_.require_active();
     auto statement = query.compile(query_driver(), resource_);
     if (statement.returns_rows()) {
         throw std::invalid_argument("execute requires a statement without returned rows");
     }
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        execute_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        execute_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, scope, options_));
 }
 
 scoped_operation<db_rows> db_handle::query(
     std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, resource_);
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), query_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        query_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, scope, options_));
 }
 
 scoped_operation<db_exec_result> db_handle::execute(
     std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, resource_);
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), execute_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        execute_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, scope, options_));
 }
 
 scoped_operation<db_stream_result> db_handle::query_stream(
     std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, resource_);
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), query_stream_prepared(client_, std::move(statement.sql_), std::move(statement.params_), resource_, registration_.scope(), options_),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        query_stream_prepared(client_, std::move(statement.sql_), std::move(statement.params_), resource_, scope, options_));
 }
 
 task<db_stream_result> db_handle::query_stream_prepared(detail::db_pool_ref_type client, std::pmr::string sql,
     std::pmr::vector<db_value> params, std::pmr::memory_resource* resource,
     ::ruvia::operation_scope& operation_scope, operation_options options) {
+    detail::scoped_request_io_timer timer(operation_scope, detail::request_io_kind::db);
     auto result_value = co_await stream_pool(
         client, std::move(sql), std::move(params), resource, std::move(options));
     result_value.bind_operation_scope(operation_scope);
@@ -200,14 +198,15 @@ task<db_stream_result> db_handle::query_stream_prepared(detail::db_pool_ref_type
 
 scoped_operation<db_transaction> db_handle::begin_transaction(db_transaction_options options) const {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        begin_transaction_prepared(query_backend(), registration_.scope(), options_, std::move(options)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        begin_transaction_prepared(query_backend(), scope, options_, std::move(options)));
 }
 
 task<db_transaction> db_handle::begin_transaction_prepared(detail::db_query_backend backend,
     ::ruvia::operation_scope& operation_scope, operation_options operation_options_value,
     db_transaction_options transaction_options) {
+    detail::scoped_request_io_timer timer(operation_scope, detail::request_io_kind::db);
     auto transaction = co_await begin_pool_transaction(
         backend.pool_, backend.resource_, std::move(operation_options_value), std::move(transaction_options));
     transaction.bind_operation_scope(operation_scope);
@@ -224,9 +223,9 @@ scoped_operation<void> db_handle::notify(std::string_view channel, std::string_v
     }
     const std::array<db_value, 2> params{db_value(channel), db_value(payload)};
     auto statement = prepare_db_statement("SELECT \"pg_notify\"($1::text, $2::text)", params, resource_);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        discard_rows_task(query_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, options_)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        discard_rows_task(query_pool(client_, std::move(statement.sql_), std::move(statement.params_), resource_, scope, options_)));
 }
 
 }  // namespace ruvia

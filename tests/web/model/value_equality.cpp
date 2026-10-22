@@ -24,17 +24,13 @@ RUVIA_TEST(model_equality_compares_state_and_value_but_not_presence) {
     RUVIA_CHECK(missing != expected_value);
 
     auto parsed_value = ruvia::from_json<comparable_model>(R"({"number":7})");
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
-    }
-    RUVIA_CHECK(parsed_value->is_present<"number">());
-    RUVIA_CHECK(*parsed_value == expected_value);
+    RUVIA_CHECK(parsed_value.is_present<"number">());
+    RUVIA_CHECK(parsed_value == expected_value);
 
     expected_value.set<"number">(8);
-    RUVIA_CHECK(*parsed_value != expected_value);
+    RUVIA_CHECK(parsed_value != expected_value);
     expected_value.set<"number">(nullptr);
-    RUVIA_CHECK(*parsed_value != expected_value);
+    RUVIA_CHECK(parsed_value != expected_value);
 }
 
 RUVIA_TEST(model_equality_distinguishes_missing_and_null) {
@@ -67,17 +63,13 @@ RUVIA_TEST(model_equality_compares_nested_arrays_and_recursive_boxed_values) {
     {
         auto first = ruvia::from_json<comparable_tree>(input, {.resource_ = &first_resource});
         auto second = ruvia::from_json<comparable_tree>(input, {.resource_ = &second_resource});
-        RUVIA_CHECK(first && second);
-        if (!first || !second) {
-            return;
-        }
-        RUVIA_CHECK(*first == *second);
-        second->ensure<"items">()[0].set<"text">("b");
-        RUVIA_CHECK(*first != *second);
-        second->ensure<"items">()[0].set<"text">("a");
-        RUVIA_CHECK(*first == *second);
-        second->ensure<"children">().front().ensure<"children">().front().set<"value">(4);
-        RUVIA_CHECK(*first != *second);
+        RUVIA_CHECK(first == second);
+        second.ensure<"items">()[0].set<"text">("b");
+        RUVIA_CHECK(first != second);
+        second.ensure<"items">()[0].set<"text">("a");
+        RUVIA_CHECK(first == second);
+        second.ensure<"children">().front().ensure<"children">().front().set<"value">(4);
+        RUVIA_CHECK(first != second);
     }
     RUVIA_CHECK_EQ(first_resource.live_allocations(), std::size_t{0});
     RUVIA_CHECK_EQ(second_resource.live_allocations(), std::size_t{0});

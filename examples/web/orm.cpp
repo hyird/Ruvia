@@ -98,7 +98,7 @@ task<void> demonstrate(db_client& db) {
     auto builder = devices.create_query_builder("d");
     builder.where(device::column<"revision">() >= 1);
     std::cout << "matching=" << co_await builder.get_count() << '\n';
-    builder.take(1);
+    builder.limit(1);
     auto [page, matching] = co_await builder.get_many_and_count();
     std::cout << "page=" << page.size() << ", matching=" << matching << '\n';
 
@@ -111,13 +111,14 @@ task<void> demonstrate(db_client& db) {
     for (const auto& item : summaries) {
         std::cout << item.get<"rank">() << ": " << item.get<"label">() << '\n';
     }
-    const auto changed = co_await devices.update_returning_one<device_summary>(
-        device::column<"id">() == 1,
-        {
+    auto update_summary = devices.create_update_builder();
+    update_summary.where(device::column<"id">() == 1)
+        .set({
             {"name", expressions.call("upper", {expressions.column("name")})},
             device::column<"revision">() += 1,
-        },
-        {{"id"}, device::column<"name">().as("label")});
+        })
+        .returning({{"id"}, device::column<"name">().as("label"), device::column<"revision">().as("rank")});
+    const auto changed = co_await update_summary.get_one<device_summary>();
     if (changed) {
         std::cout << "updated=" << changed->get<"label">() << '\n';
     }
@@ -125,7 +126,7 @@ task<void> demonstrate(db_client& db) {
     auto transaction = co_await handle.begin_transaction();
     auto transactional = transaction.get_repository<device>();
     auto candidates = transactional.create_query_builder("candidate");
-    candidates.where(device::column<"id">() == 1).take(1).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
+    candidates.where(device::column<"id">() == 1).limit(1).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
     auto claim = transactional.create_update_builder("target");
     claim.update_from_cte("candidates", "candidate")
         .set("name", "Claimed device")

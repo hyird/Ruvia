@@ -24,7 +24,7 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/asio_task.h"
+#include "ruvia/core/async.h"
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/stop_token.h"

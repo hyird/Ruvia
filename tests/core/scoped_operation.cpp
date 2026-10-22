@@ -980,6 +980,10 @@ RUVIA_TEST(scoped_capability_cleanup_can_destroy_its_owner_and_a_sibling) {
 
 RUVIA_TEST(scoped_capability_cleanup_can_reenter_scope_close) {
     ruvia::operation_scope scope;
+    int context_marker = 42;
+    RUVIA_CHECK(scope.context() == nullptr);
+    scope.bind_context(&context_marker);
+    RUVIA_CHECK(scope.context() == &context_marker);
     int expired = 0;
     struct reentrant_closer final {
         ruvia::operation_scope* scope_;

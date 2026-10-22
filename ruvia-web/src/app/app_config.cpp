@@ -92,7 +92,7 @@ application& application::on_stop(app_hook_type hook) {
         [&hook](detail::app_state& state_value) { state_value.on_stop_hooks_.push_back(std::move(hook)); });
 }
 
-application& application::get_rate_limit(rate_limit_config config) {
+application& application::rate_limit(rate_limit_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the default rate limit per worker while app is running",
         [config](detail::app_state& state_value) mutable {
@@ -106,7 +106,7 @@ application& application::get_rate_limit(rate_limit_config config) {
         });
 }
 
-application& application::get_rate_limit(std::nullptr_t) {
+application& application::rate_limit(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the default rate limit per worker while app is running",
         [](detail::app_state& state_value) { state_value.options_.default_rate_limit_per_worker_.reset(); });

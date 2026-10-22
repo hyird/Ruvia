@@ -9,6 +9,7 @@
 
 namespace ruvia {
 
+class worker_runtime;
 class worker_runtime_context;
 
 struct worker_notification_options final {
@@ -60,6 +61,8 @@ public:
         friend class worker_notification;
     };
 
+    explicit worker_notification(
+        worker_runtime& runtime, worker_notification_options options = {});
     explicit worker_notification(
         worker_runtime_context& runtime, worker_notification_options options = {});
     ~worker_notification();

@@ -80,7 +80,7 @@ private:
         co_return c.json(response);
     }
     ruvia::task<ruvia::http_response> find(ruvia::context& c) {
-        auto user_value = co_await c.redis().get_repository<cached_user>(user_redis_config).find_one({.where_ = cached_user::field<"id">() == c.req().param("id").value_or("")});
+        auto user_value = co_await c.redis().get_repository<cached_user>(user_redis_config).find_one({.where_ = cached_user::column<"id">() == c.req().param("id").value_or("")});
         if (!user_value) {
             co_return c.error({.status_ = ruvia::http_status::not_found, .message_ = "user not found"});
         }
@@ -90,8 +90,8 @@ private:
     }
     ruvia::task<ruvia::http_response> adults(ruvia::context& c) {
         const ruvia::redis_find_options find_options{
-            .where_ = cached_user::field<"age">() >= 18,
-            .order_ = {{.field_ = "name", .direction_ = ruvia::redis_order_direction::ascending}},
+            .where_ = cached_user::column<"age">() >= 18,
+            .order_ = {{.field_ = "name", .direction_ = ruvia::redis_order_direction::asc}},
             .take_ = 20};
         auto users = co_await c.redis().get_repository<cached_user>(user_redis_config).find(find_options);
         cached_users_response response({.resource_ = c.arena()});

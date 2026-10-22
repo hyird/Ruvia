@@ -19,7 +19,7 @@ RUVIA_TEST(context_rejects_unconfigured_worker_clients_consistently) {
         [&](ruvia::context& context_value) -> ruvia::task<void> {
             bool http_client_rejected = false;
             try {
-                static_cast<void>(context_value.get_http_client());
+                static_cast<void>(context_value.http_client());
             } catch (const ruvia::http_client_error& error) {
                 http_client_rejected = error.code() == ruvia::http_client_error::code_type::not_configured;
             }

@@ -17,7 +17,6 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_tunnel.h"
-#include "ruvia/web/http_udp_tunnel.h"
 
 #include "environment.h"
 
@@ -30,7 +29,7 @@ public:
     const ruvia::http_tunnel_route_config options{
         .peer_transport_fin_timeout_ = std::chrono::seconds(2), .datagrams_ = true};
     RUVIA_CONNECT("echo.example:443", bytes);
-    RUVIA_CONNECT_PROTOCOL_OPTIONS("connect-udp", "/udp/:host/:port", udp, options);
+    RUVIA_CONNECT_PROTOCOL("connect-udp", "/udp/:host/:port", udp, options);
     RUVIA_ROUTES_END
 
 private:
@@ -50,8 +49,8 @@ private:
 
     ruvia::task<void> udp(ruvia::context& c) {
         // This protocol route has already negotiated CONNECT-UDP. Capsule
-        // limits can be passed directly to datagrams(http_capsule_config).
-        ruvia::http_udp_tunnel stream(c.tunnel().datagrams());
+        // limits can be passed directly to udp(http_capsule_config).
+        auto stream = c.tunnel().udp();
         while (auto packet = co_await stream.read()) {
             // The adapter handles context ID 0 and ignores unknown contexts.
             // A zero-byte payload is a valid UDP packet, not an EOF marker.
@@ -74,13 +73,13 @@ ruvia::task<void> client_session(ruvia::event_loop loop, ruvia::http_client_conf
         {
             auto response = co_await origin.send({.target_ = "/health"});
             auto body = co_await response.body().read_all();
-            std::cout << "service: " << characters(body.bytes());
+            std::cout << "service: " << body.text();
         }
         if (selection == "all" || selection == "bytes") {
             auto opened = co_await origin.open_tunnel({.authority_ = "echo.example:443"});
             if (auto* rejection = opened.response()) {
                 auto body = co_await rejection->body().read_all();
-                throw std::runtime_error("CONNECT rejected: " + std::string(characters(body.bytes())));
+                throw std::runtime_error("CONNECT rejected: " + std::string(body.text()));
             }
             auto& tunnel = *opened.tunnel();
             co_await tunnel.write("byte stream");
@@ -99,7 +98,7 @@ ruvia::task<void> client_session(ruvia::event_loop loop, ruvia::http_client_conf
             auto opened = co_await origin.open_udp_tunnel({.target_ = "/udp/echo.example/443"});
             if (!opened.tunnel()) {
                 auto body = co_await opened.response()->body().read_all();
-                throw std::runtime_error("CONNECT-UDP rejected: " + std::string(characters(body.bytes())));
+                throw std::runtime_error("CONNECT-UDP rejected: " + std::string(body.text()));
             }
             // Checked conversion rejects ordinary CONNECT without consuming its
             // owner; both udp() and datagrams() accept http_capsule_config.

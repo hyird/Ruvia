@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/web/detail/integration/request_io_metrics.h"
+
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_registry.h"
 #include "redis/redis_utils.h"
@@ -78,7 +80,8 @@ redis_pipeline& redis_pipeline::command(std::span<const std::string_view> args) 
 }
 
 task<std::pmr::vector<redis_value>> redis_pipeline::execute_owned(
-    detail::redis_command_payload payload_value) {
+    operation_scope& scope, detail::redis_command_payload payload_value) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::redis);
     co_return co_await payload_value.pool_.get().execute_pipeline(
         std::span<const detail::redis_owned_command>(payload_value.commands_),
         std::move(payload_value.options_), payload_value.commands_.get_allocator().resource());
@@ -87,7 +90,7 @@ task<std::pmr::vector<redis_value>> redis_pipeline::execute_owned(
 scoped_operation<std::pmr::vector<redis_value>> redis_pipeline::exec() && {
     auto& scope = registration_.scope();
     auto payload_value = batch_.consume();
-    return make_scoped_operation(scope, execute_owned(std::move(payload_value)), scoped_operation_io_kind::redis);
+    return make_scoped_operation(scope, execute_owned(scope, std::move(payload_value)));
 }
 
 }  // namespace ruvia

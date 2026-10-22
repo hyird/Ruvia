@@ -76,7 +76,6 @@ private:
 #endif
     ruvia::worker_runtime runtime_;
     asio::io_context& io_context_;
-    ruvia::worker_runtime_context& worker_runtime_;
     worker_signal finalize_signal_;
     stop_source stop_source_;
     stop_token stop_token_{stop_source_.token()};

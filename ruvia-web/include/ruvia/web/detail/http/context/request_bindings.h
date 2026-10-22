@@ -4,13 +4,7 @@
 #include <cstdint>
 #include <exception>
 #include <stdexcept>
-#include <string_view>
 #include <type_traits>
-
-namespace ruvia {
-template <typename t_type>
-class validated_json;
-}
 
 namespace ruvia::detail {
 
@@ -41,9 +35,6 @@ class request_bindings;
 struct request_binding_node final {
     const void* type_key_;
     const void* value_;
-    // Validated-JSON bindings only: the exact original bytes, for JSONB
-    // passthrough. Empty for every other binding.
-    std::string_view raw_json_;
     request_binding_node* previous_;
     request_binding_kind kind_;
 };
@@ -64,8 +55,7 @@ public:
 private:
     friend class request_bindings;
 
-    request_binding_handle(request_bindings& bindings, const t_type& value, request_binding_kind kind,
-        std::string_view raw_json) noexcept;
+    request_binding_handle(request_bindings& bindings, const t_type& value, request_binding_kind kind) noexcept;
 
     request_bindings* bindings_;
     request_binding_node node_;
@@ -89,7 +79,7 @@ public:
 
     template <typename t_type>
     [[nodiscard]] const std::remove_cvref_t<t_type>* try_find(request_binding_kind kind) const noexcept {
-        const auto* node_value = find_node<t_type>(kind, false);
+        const auto* node_value = find_node<t_type>(kind);
         return node_value == nullptr ? nullptr
                                      : static_cast<const std::remove_cvref_t<t_type>*>(node_value->value_);
     }
@@ -99,18 +89,6 @@ public:
         return find_required<t_type>(
             request_binding_kind::validated_model, "validated request model is not available");
     }
-
-    template <typename t_type>
-    [[nodiscard]] validated_json<std::remove_cvref_t<t_type>> get_validated_json() const {
-        using model_t_type = std::remove_cvref_t<t_type>;
-        const auto* node_value = find_node<t_type>(request_binding_kind::validated_model, true);
-        if (node_value == nullptr) {
-            throw std::logic_error("validated JSON request model is not available");
-        }
-        return validated_json<model_t_type>(
-            *static_cast<const model_t_type*>(node_value->value_), node_value->raw_json_);
-    }
-
     template <typename t_type>
     [[nodiscard]] const std::remove_cvref_t<t_type>* try_get_state() const noexcept {
         return try_find<t_type>(request_binding_kind::request_state);
@@ -122,14 +100,13 @@ public:
     }
 
     template <typename t_type>
-    [[nodiscard]] request_binding_handle<t_type> bind_validated(
-        const t_type& value, std::string_view raw_json = {}) {
-        return request_binding_handle<t_type>(*this, value, request_binding_kind::validated_model, raw_json);
+    [[nodiscard]] request_binding_handle<t_type> bind_validated(const t_type& value) {
+        return request_binding_handle<t_type>(*this, value, request_binding_kind::validated_model);
     }
 
     template <typename t_type>
     [[nodiscard]] request_binding_handle<t_type> bind_state(const t_type& value) {
-        return request_binding_handle<t_type>(*this, value, request_binding_kind::request_state, {});
+        return request_binding_handle<t_type>(*this, value, request_binding_kind::request_state);
     }
 
 private:
@@ -148,15 +125,11 @@ private:
         head_ = node_value.previous_;
     }
 
-    // The innermost binding of t_type and kind; with requires_raw_json, the
-    // innermost one that also carries its source JSON.
     template <typename t_type>
-    [[nodiscard]] const request_binding_node* find_node(
-        request_binding_kind kind, bool requires_raw_json) const noexcept {
+    [[nodiscard]] const request_binding_node* find_node(request_binding_kind kind) const noexcept {
         const auto* key = request_binding_key<std::remove_cvref_t<t_type>>();
         for (auto* node_value = head_; node_value != nullptr; node_value = node_value->previous_) {
-            if (node_value->type_key_ == key && node_value->kind_ == kind &&
-                (!requires_raw_json || !node_value->raw_json_.empty())) {
+            if (node_value->type_key_ == key && node_value->kind_ == kind) {
                 return node_value;
             }
         }
@@ -177,10 +150,10 @@ private:
 };
 
 template <typename t_type>
-request_binding_handle<t_type>::request_binding_handle(request_bindings& bindings, const t_type& value,
-    request_binding_kind kind, std::string_view raw_json) noexcept
+request_binding_handle<t_type>::request_binding_handle(
+    request_bindings& bindings, const t_type& value, request_binding_kind kind) noexcept
     : bindings_(&bindings),
-      node_{request_binding_key<t_type>(), &value, raw_json, nullptr, kind} {
+      node_{request_binding_key<t_type>(), &value, nullptr, kind} {
     bindings_->push(node_);
 }
 

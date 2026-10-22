@@ -99,7 +99,7 @@ public:
 
     ruvia::task<void> read_websocket(ruvia::context& context) {
         auto& state_value = *context.worker_state<worker_state>().state_;
-        auto& websocket_value = context.get_websocket();
+        auto& websocket_value = context.websocket();
         try {
             const auto first = co_await websocket_value.read();
             state_value.websocket_message_ = first.has_value() && first->payload() == std::string_view("hi");
@@ -416,7 +416,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2, .worker_queue_capacity_ = 16, .max_connections_per_worker_ = 4})
         .trusted_proxies({.cidrs_ = {"::ffff:127.0.0.0/104"}, .trust_x_forwarded_proto_ = true})
-        .get_blocking_pool(nullptr)
+        .blocking_pool(nullptr)
         .use_worker_state<worker_state>([state_value] {
             if (state_value->outcome_ == startup_outcome::stop_during_worker_startup &&
                 !state_value->worker_startup_blocked_.exchange(true)) {
@@ -513,7 +513,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
             auto done = completion.get_future();
             const auto posted = workers.front().post([state_value, completion = std::move(completion)](ruvia::web_worker_context& context_value) mutable -> ruvia::task<void> {
                 state_value->hook_entered_.release();
-                const auto result_value = co_await ruvia::sleep_for(context_value.worker(), 1h, context_value.get_stop_token());
+                const auto result_value = co_await ruvia::sleep_for(context_value.worker(), 1h, context_value.stop_token());
                 state_value->startup_job_cancelled_.store(result_value == ruvia::timer_sleep_result::stop_requested);
                 completion.set_value();
             });

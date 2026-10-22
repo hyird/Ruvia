@@ -134,8 +134,8 @@ class response_compression_routes final {
 
 [[nodiscard]] std::string expected_encoding(ruvia::http_content_coding coding, std::string_view body) {
     const auto result_value = ruvia::encode_http_content(coding, body, {.max_encoded_bytes_ = body.size() - 1});
-    const auto* encoded = result_value.encoded();
-    return encoded != nullptr ? std::string(encoded->bytes()) : std::string();
+    const auto* encoded = std::get_if<std::pmr::string>(&result_value);
+    return encoded != nullptr ? std::string(*encoded) : std::string();
 }
 
 }  // namespace

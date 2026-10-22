@@ -22,8 +22,8 @@
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_protocol.h"
-#include "ruvia/http/websocket_server_protocol.h"
 #include "ruvia/web/websocket.h"
 
 #include "http/http_stream_read_result.h"
@@ -37,42 +37,45 @@ namespace ruvia::detail {
 // Frame reassembly, serialization, heartbeat and close policy are shared;
 // stream transports provide executor/read_more/write_bytes/abort operations.
 template <typename stream_type>
-class websocket_connection final {
+class server_websocket_connection final {
 public:
     static constexpr bool native_stream = requires(stream_type& stream) { stream.get_executor(); };
     using stream_argument_type = std::conditional_t<native_stream, stream_type&, stream_type>;
 
-    websocket_connection(stream_argument_type stream, const worker_handle& worker_value,
+    server_websocket_connection(stream_argument_type stream, const worker_handle& worker_value,
         connection_scanner::entry_type& scanner_entry, websocket_lifecycle_options lifecycle_options,
         protocol_byte_limit message_limit, std::pmr::memory_resource* resource, std::string_view initial_bytes,
-        websocket_server_protocol_options protocol_options)
+        websocket_connection_options protocol_options)
         : stream_(std::forward<stream_argument_type>(stream)),
           worker_(&worker_value),
           scanner_entry_(scanner_entry),
           lifecycle_options_(lifecycle_options),
           buffer_(std::pmr::polymorphic_allocator<char>(resource)),
-          protocol_(buffer_, message_limit, protocol_options),
+          protocol_(buffer_, [&] {
+              protocol_options.message_limit_ = message_limit;
+              return protocol_options;
+          }()),
           background_write_signal_(worker_value),
           reader_done_signal_(worker_value) {
         buffer_.append(initial_bytes);
-        scanner_entry_.register_periodic_check(periodic_check_, this, &websocket_connection::heartbeat_tick_thunk,
-            &websocket_connection::drain_thunk);
+        scanner_entry_.register_periodic_check(periodic_check_, this, &server_websocket_connection::heartbeat_tick_thunk,
+            &server_websocket_connection::drain_thunk);
     }
 
-    websocket_connection(stream_argument_type, worker_handle&&, connection_scanner::entry_type&, websocket_lifecycle_options,
-        protocol_byte_limit, std::pmr::memory_resource*, std::string_view, websocket_server_protocol_options) = delete;
+    server_websocket_connection(stream_argument_type, worker_handle&&, connection_scanner::entry_type&, websocket_lifecycle_options,
+        protocol_byte_limit, std::pmr::memory_resource*, std::string_view, websocket_connection_options) = delete;
 
-    ~websocket_connection() = default;
+    ~server_websocket_connection() = default;
 
-    websocket_connection(const websocket_connection&) = delete;
-    websocket_connection& operator=(const websocket_connection&) = delete;
+    server_websocket_connection(const server_websocket_connection&) = delete;
+    server_websocket_connection& operator=(const server_websocket_connection&) = delete;
 
     static void heartbeat_tick_thunk(void* target, std::int64_t now) noexcept {
-        static_cast<websocket_connection*>(target)->heartbeat_tick(now);
+        static_cast<server_websocket_connection*>(target)->heartbeat_tick(now);
     }
 
     static void drain_thunk(void* target) noexcept {
-        static_cast<websocket_connection*>(target)->start_going_away();
+        static_cast<server_websocket_connection*>(target)->start_going_away();
     }
 
     [[nodiscard]] task<std::optional<websocket_message>> read();
@@ -123,7 +126,7 @@ private:
 
     class write_guard_type final {
     public:
-        write_guard_type(websocket_connection& connection, write_phase_type phase,
+        write_guard_type(server_websocket_connection& connection, write_phase_type phase,
             write_claim_type claim = write_claim_type::acquire)
             : connection_(connection),
               phase_(phase) {
@@ -148,13 +151,13 @@ private:
         write_guard_type& operator=(const write_guard_type&) = delete;
 
     private:
-        websocket_connection& connection_;
+        server_websocket_connection& connection_;
         write_phase_type phase_;
     };
 
     class write_operation_lease_type final {
     public:
-        explicit write_operation_lease_type(websocket_connection& connection)
+        explicit write_operation_lease_type(server_websocket_connection& connection)
             : connection_(&connection) {
             if (connection_->write_active_) {
                 connection_ = nullptr;
@@ -180,7 +183,7 @@ private:
         }
 
     private:
-        websocket_connection* connection_;
+        server_websocket_connection* connection_;
     };
 
     // Submits an application payload by reference. Its owner is the caller of
@@ -192,7 +195,7 @@ private:
     class borrowed_frame_guard_type final {
     public:
         borrowed_frame_guard_type(
-            websocket_connection& connection, websocket_opcode opcode, std::string_view payload, bool compress)
+            server_websocket_connection& connection, websocket_opcode opcode, std::string_view payload, bool compress)
             : connection_(&connection) {
             if (!connection.accept_submitted_frame(connection.protocol_.submit_borrowed_frame(opcode, payload, compress))) {
                 connection_ = nullptr;
@@ -220,12 +223,12 @@ private:
         }
 
     private:
-        websocket_connection* connection_;
+        server_websocket_connection* connection_;
     };
 
     class read_guard_type final {
     public:
-        explicit read_guard_type(websocket_connection& connection)
+        explicit read_guard_type(server_websocket_connection& connection)
             : connection_(&connection) {
             if (connection_->read_phase_ != read_phase_type::idle) {
                 connection_ = nullptr;
@@ -258,7 +261,7 @@ private:
         }
 
     private:
-        websocket_connection* connection_;
+        server_websocket_connection* connection_;
     };
 
     void finish_write(write_phase_type phase) noexcept;
@@ -307,7 +310,7 @@ private:
     connection_scanner::entry_type& scanner_entry_;
     websocket_lifecycle_options lifecycle_options_{};
     http_io_buffer buffer_;
-    websocket_server_protocol protocol_;
+    websocket_connection protocol_;
     worker_signal background_write_signal_;
     worker_signal reader_done_signal_;
     write_phase_type write_phase_{write_phase_type::idle};

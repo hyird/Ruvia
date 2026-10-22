@@ -544,8 +544,8 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
         const auto& order = options.order_.front();
         sort_field_name = compiler.sort_field(order.field_);
         switch (order.direction_) {
-            case redis_order_direction::ascending:
-            case redis_order_direction::descending:
+            case redis_order_direction::asc:
+            case redis_order_direction::desc:
                 break;
             default:
                 throw std::invalid_argument("invalid Redis order direction");
@@ -569,7 +569,7 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
         emplace_redis_string(args, "SORTBY");
         args.push_back(std::move(*sort_field_name));
         emplace_redis_string(
-            args, options.order_.front().direction_ == redis_order_direction::ascending ? "ASC" : "DESC");
+            args, options.order_.front().direction_ == redis_order_direction::asc ? "ASC" : "DESC");
     }
     emplace_redis_string(args, "DIALECT");
     emplace_redis_string(args, "2");

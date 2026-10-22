@@ -145,7 +145,7 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
         return fail(http_parse_error::invalid_transfer_encoding);
     }
 
-    if (http_request_content_semantics(method) == http_request_content_semantics::forbidden) {
+    if (classify_http_request_content_semantics(method) == http_request_content_semantics::forbidden) {
         // RFC 9110 sections 9.3.6 and 9.3.8 disallow request content.
         // A zero Content-Length frames no content (RFC 9112 section 6.3);
         // transfer coding leaves the content length unknown at head time.
@@ -210,38 +210,33 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
     state_value.progress_ = http1_server_request_head_ready(header_bytes);
 }
 
-std::pair<http_request, std::optional<http_parse_error>> make_parsed_http_request(
+std::variant<http_request, http_parse_error> make_parsed_http_request(
     std::string_view method, std::string_view target, std::span<const http_header_view> headers,
     std::span<const std::byte> body, std::pmr::memory_resource* resource) {
+    if (!is_valid_http_method_token(method)) {
+        return http_parse_error::invalid_request_line;
+    }
     auto request = http_request_access::make();
     http_request_access::set_resource(request, resource);
     http_request_access::set_method(request, method);
     http_request_access::set_target(request, target);
 
-    std::optional<http_parse_error> error;
     request_target_view target_view;
-    if (!is_valid_http_method_token(method)) {
-        error = http_parse_error::invalid_request_line;
-    } else if (!parse_request_target(request.known_method(), target, target_view)) {
-        error = http_parse_error::invalid_request_target;
-    } else if (headers.size() > max_http_header_fields) {
-        error = http_parse_error::too_many_headers;
-    } else {
-        http_field_section_budget budget;
-        for (const auto& header : headers) {
-            if (!is_valid_http_header_name(header.name()) ||
-                !is_valid_http_header_value(header.value())) {
-                error = http_parse_error::invalid_header;
-                break;
-            }
-            if (!budget.add_field(header.name(), header.value())) {
-                error = http_parse_error::header_too_large;
-                break;
-            }
-        }
+    if (!parse_request_target(request.known_method(), target, target_view)) {
+        return http_parse_error::invalid_request_target;
     }
-    if (error.has_value()) {
-        return {std::move(request), error};
+    if (headers.size() > max_http_header_fields) {
+        return http_parse_error::too_many_headers;
+    }
+    http_field_section_budget budget;
+    for (const auto& header : headers) {
+        if (!is_valid_http_header_name(header.name()) ||
+            !is_valid_http_header_value(header.value())) {
+            return http_parse_error::invalid_header;
+        }
+        if (!budget.add_field(header.name(), header.value())) {
+            return http_parse_error::header_too_large;
+        }
     }
 
     http_request_access::set_path(request, target_view.path_);
@@ -258,12 +253,11 @@ std::pair<http_request, std::optional<http_parse_error>> make_parsed_http_reques
             field = http_header_view{field.name(), target_view.authority_};
         }
         if (!http_request_access::add_header(request, field)) {
-            error = http_parse_error::too_many_headers;
-            break;
+            return http_parse_error::too_many_headers;
         }
     }
     http_request_access::set_body(request, body);
-    return {std::move(request), error};
+    return request;
 }
 
 bool should_drop_invalid_cleartext_http1_input(

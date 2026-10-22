@@ -5,6 +5,7 @@
 // The demo issuer signs any ?sub= it is given without authenticating anyone;
 // replace it with real authentication.
 
+#include <array>
 #include <chrono>
 #include <exception>
 #include <iostream>
@@ -24,13 +25,17 @@ namespace {
 constexpr std::string_view jwt_secret =
     "development-only-not-for-production-0123456789abcdef0123456789abcdef";
 
+inline constexpr std::array<ruvia::jwt_claim_view, 1> default_claims{{
+    {.name_ = "scope", .value_ = "example"},
+}};
+
 ruvia::jwt_sign_options sign_options(ruvia::context& c) {
     ruvia::jwt_sign_options options;
     options.secret_ = jwt_secret;
-    options.issuer_.assign("ruvia-example");
-    options.audience_.assign("ruvia-api");
+    options.issuer_ = "ruvia-example";
+    options.audience_ = "ruvia-api";
     options.expires_in_ = std::chrono::minutes(30);
-    options.claims_.emplace_back(ruvia::jwt_claim_options{.name_ = "scope", .value_ = "example"});
+    options.claims_ = default_claims;
     options.resource_ = c.arena();
     return options;
 }
@@ -39,8 +44,8 @@ ruvia::jwt_verify_options verify_options(std::string_view token, std::pmr::memor
     ruvia::jwt_verify_options options;
     options.token_ = token;
     options.secret_ = jwt_secret;
-    options.issuer_.assign("ruvia-example");
-    options.audience_.assign("ruvia-api");
+    options.issuer_ = "ruvia-example";
+    options.audience_ = "ruvia-api";
     options.leeway_ = std::chrono::seconds(30);
     options.resource_ = resource;
     return options;
@@ -72,7 +77,7 @@ public:
         std::optional<ruvia::jwt_payload> payload;
         try {
             payload.emplace(ruvia::jwt_verify(verify_options(*token, c.arena())));
-        } catch (...) {
+        } catch (const ruvia::jwt_error&) {
             // RFC 6750 3.1: a presented but unusable token is invalid_token.
             c.header("WWW-Authenticate", R"(Bearer error="invalid_token")");
             c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
@@ -102,7 +107,7 @@ public:
 private:
     ruvia::task<ruvia::http_response> token(ruvia::context& c) {
         auto options = sign_options(c);
-        options.subject_.assign(c.req().query("sub").value_or("example-user"));
+        options.subject_ = c.req().query("sub").value_or("example-user");
         auto jwt = ruvia::jwt_sign(options);
         co_return c.text(std::move(jwt));
     }

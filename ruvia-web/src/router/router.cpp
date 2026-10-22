@@ -93,6 +93,9 @@ void detail::router_impl::append_route_middlewares(
     route_middleware_descriptors_.reserve(offset + controller_middlewares.size() + route_middlewares.size());
     for (const auto middlewares : {controller_middlewares, route_middlewares}) {
         for (const auto& descriptor : middlewares) {
+            if (descriptor.stream_request_body()) {
+                continue;
+            }
             const auto* const key = descriptor.validated_model_type_key();
             if (key != nullptr &&
                 std::ranges::any_of(std::span(route_middleware_descriptors_).subspan(offset),

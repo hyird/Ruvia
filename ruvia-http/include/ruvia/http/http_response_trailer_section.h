@@ -4,13 +4,11 @@
 
 #include "ruvia/http/http_header.h"
 
-namespace ruvia::detail {
-class http_response_trailer_section_result;
-[[nodiscard]] http_response_trailer_section_result check_http_response_trailer_section(
-    std::span<const http_header_view>) noexcept;
-}  // namespace ruvia::detail
-
 namespace ruvia {
+
+class http_response_trailer_section;
+[[nodiscard]] http_response_trailer_section validate_http_response_trailers(
+    std::span<const http_header_view> trailers);
 
 // Borrowed proof that the complete terminal section passed the shared response-
 // trailer rules. The source span must outlive its synchronous consumption.
@@ -25,10 +23,8 @@ public:
     }
 
 private:
-    friend class detail::http_response_trailer_section_result;
-    friend detail::http_response_trailer_section_result detail::check_http_response_trailer_section(
-        std::span<const http_header_view>) noexcept;
-
+    friend http_response_trailer_section validate_http_response_trailers(
+        std::span<const http_header_view>);
     explicit http_response_trailer_section(std::span<const http_header_view> fields_value) noexcept
         : fields_(fields_value) {}
 

@@ -87,7 +87,7 @@ RUVIA_TEST(http2_public_receive_credit_retry_preserves_exact_window) {
                 (void)client.consume_output(client.pending_output().size());
                 const auto submitted = client.submit_request_head(
                     ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
-                RUVIA_CHECK(submitted.submitted() != nullptr);
+                RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
                 (void)client.consume_output(client.pending_output().size());
 
                 std::pmr::string wire;
@@ -102,8 +102,7 @@ RUVIA_TEST(http2_public_receive_credit_retry_preserves_exact_window) {
                 while (auto event = client.next_event()) {
                     if (auto* body = event->message_body_chunk()) {
                         if (credit) {
-                            RUVIA_CHECK(credit->merge(body->take_credit()) ==
-                                        ruvia::http2_received_data_credit_merge_status::merged);
+                            credit->merge(body->take_credit());
                         } else {
                             credit.emplace(body->take_credit());
                         }

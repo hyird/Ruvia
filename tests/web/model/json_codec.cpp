@@ -136,18 +136,19 @@ private:
 
 RUVIA_TEST(model_json_codec_supports_public_scalar_and_array_roots) {
     auto string_value = ruvia::from_json<ruvia::string>(R"("escaped\\\"text")");
-    RUVIA_CHECK(string_value && string_value->view() == "escaped\\\"text");
+    RUVIA_CHECK_EQ(string_value.view(), std::string_view("escaped\\\"text"));
     auto integer = ruvia::from_json<ruvia::int64>("-9223372036854775808");
-    RUVIA_CHECK(integer && integer->value_ == INT64_MIN);
-    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*integer)), "-9223372036854775808");
+    RUVIA_CHECK_EQ(integer.value_, INT64_MIN);
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(integer)), "-9223372036854775808");
     auto boolean = ruvia::from_json<ruvia::bool_value>("true");
-    RUVIA_CHECK(boolean && boolean->value_);
+    RUVIA_CHECK(boolean.value_);
     auto strings = ruvia::from_json<ruvia::array<ruvia::string>>(R"(["a","b"])");
-    RUVIA_CHECK(strings && strings->size() == 2);
-    auto boxed = ruvia::from_json<ruvia::boxed_array<ruvia::string>>(R"(["x",[1]])");
-    RUVIA_CHECK(!boxed.has_value());
-    RUVIA_CHECK(!ruvia::from_json<ruvia::int64>("1 trailing"));
-    RUVIA_CHECK(!ruvia::from_json<ruvia::string>("null"));
+    RUVIA_CHECK_EQ(strings.size(), std::size_t{2});
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<ruvia::boxed_array<ruvia::string>>(R"(["x",[1]])");
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::int64>("1 trailing"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::string>("null"); }));
 }
 
 RUVIA_TEST(model_json_writer_replaces_ill_formed_utf8_with_replacement_characters) {
@@ -174,7 +175,7 @@ RUVIA_TEST(model_json_writer_replaces_ill_formed_utf8_with_replacement_character
     // The strict parser rejects ill-formed UTF-8, so a round trip proves the
     // output is well-formed.
     const auto reparsed = ruvia::from_json<ruvia::string>(output);
-    RUVIA_CHECK(reparsed.has_value());
+    RUVIA_CHECK(!reparsed.empty());
 
     ruvia::array<ruvia::string> nested;
     nested.emplace_back(std::string_view("\xFF"));
@@ -182,10 +183,18 @@ RUVIA_TEST(model_json_writer_replaces_ill_formed_utf8_with_replacement_character
 }
 
 RUVIA_TEST(model_json_codec_rejects_nested_wrong_null_and_duplicate_fields) {
-    RUVIA_CHECK(!ruvia::from_json<codec_root_types>(R"({"child":{"name":null,"values":[]},"flag":true})"));
-    RUVIA_CHECK(!ruvia::from_json<codec_root_types>(R"({"child":{"name":"x","values":[1]},"flag":true})"));
-    RUVIA_CHECK(!ruvia::from_json<codec_root_types>(R"({"child":{"name":"x","values":[]},"flag":true,"flag":false})"));
-    RUVIA_CHECK(!ruvia::from_json<codec_root_types>(R"({"child":{"name":"x","values":[]},"flag":true}junk)"));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_root_types>(R"({"child":{"name":null,"values":[]},"flag":true})");
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_root_types>(R"({"child":{"name":"x","values":[1]},"flag":true})");
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_root_types>(R"({"child":{"name":"x","values":[]},"flag":true,"flag":false})");
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_root_types>(R"({"child":{"name":"x","values":[]},"flag":true}junk)");
+    }));
 }
 
 RUVIA_TEST(model_json_codec_root_array_failure_cleans_partial_elements) {
@@ -194,10 +203,7 @@ RUVIA_TEST(model_json_codec_root_array_failure_cleans_partial_elements) {
     failing_resource successful_resource((std::numeric_limits<std::size_t>::max)());
     auto successful = ruvia::from_json<ruvia::array<ruvia::string>>(input,
         {.resource_ = &successful_resource});
-    RUVIA_CHECK(successful.has_value());
-    if (!successful) {
-        return;
-    }
+    RUVIA_CHECK_EQ(successful.size(), std::size_t{3});
     const auto allocations = successful_resource.payload_allocations();
     RUVIA_CHECK(allocations > 1);
     for (std::size_t failure = 1; failure <= allocations; ++failure) {
@@ -219,15 +225,12 @@ RUVIA_TEST(model_json_codec_root_model_arrays_validate_and_roundtrip_recursively
     constexpr auto input = R"([{"name":"root","children":[{"name":"child"}]}])";
     auto dense = ruvia::from_json<ruvia::array<codec_node>>(input);
     auto boxed = ruvia::from_json<ruvia::boxed_array<codec_node>>(input);
-    RUVIA_CHECK(dense && boxed);
-    if (dense && boxed) {
-        RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*dense)), input);
-        RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*boxed)), input);
-    }
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(dense)), input);
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(boxed)), input);
     for (const auto bad : {R"([{}])", R"([{"name":null}])",
              R"([{"name":"root","children":[{}]}])", R"([{"name":"a","name":"b"}])"}) {
-        RUVIA_CHECK(!ruvia::from_json<ruvia::array<codec_node>>(bad));
-        RUVIA_CHECK(!ruvia::from_json<ruvia::boxed_array<codec_node>>(bad));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::array<codec_node>>(bad); }));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::boxed_array<codec_node>>(bad); }));
     }
 }
 
@@ -239,11 +242,7 @@ RUVIA_TEST(model_json_codec_forward_declared_graph_owns_nested_destination_value
     {
         std::pmr::monotonic_buffer_resource source;
         auto parsed_value = ruvia::from_json<forward_root>(input, {.resource_ = &source});
-        RUVIA_CHECK(parsed_value.has_value());
-        if (!parsed_value) {
-            return;
-        }
-        retained = std::move(*parsed_value);
+        retained = std::move(parsed_value);
     }
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(retained)), input);
 }
@@ -274,85 +273,71 @@ RUVIA_TEST(model_json_codec_owned_root_string_survives_input_destruction) {
     ruvia::test::counting_memory_resource resource;
     std::string input = R"("retained")";
     auto parsed_value = ruvia::from_json<ruvia::string>(input, {.resource_ = &resource});
-    RUVIA_CHECK(parsed_value.has_value());
     input.assign(input.size(), 'x');
-    if (parsed_value) {
-        RUVIA_CHECK_EQ(parsed_value->view(), "retained");
-    }
+    RUVIA_CHECK_EQ(parsed_value.view(), "retained");
 }
 
 RUVIA_TEST(model_json_codec_roundtrips_nested_and_recursive_models) {
     constexpr std::string_view input =
         R"({"single":{"wire\"id":18446744073709551615,"text":"a\\b\"c"},"array":[{"wire\"id":1}],"boxed":[{"wire\"id":2,"text":"two"}],"tree":{"name":"root","children":[{"name":"leaf","children":[{"name":"end"}]}]}})";
     auto parsed_value = ruvia::from_json<codec_envelope>(input);
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
-    }
-    const auto& single = parsed_value->get<"single">();
-    const auto& tree = parsed_value->get<"tree">();
+    const auto& single = parsed_value.get<"single">();
+    const auto& tree = parsed_value.get<"tree">();
     RUVIA_CHECK_EQ(single.get<"id">().value_, std::uint64_t{18446744073709551615ULL});
     RUVIA_CHECK_EQ(single.get<"text">()->view(), "a\\b\"c");
-    RUVIA_CHECK_EQ(parsed_value->get<"array">().size(), std::size_t{1});
-    RUVIA_CHECK_EQ(parsed_value->get<"boxed">().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(parsed_value.get<"array">().size(), std::size_t{1});
+    RUVIA_CHECK_EQ(parsed_value.get<"boxed">().size(), std::size_t{1});
     RUVIA_CHECK_EQ(tree.get<"children">()->front().get<"name">().view(), "leaf");
 
-    const auto output = ruvia::to_json(*parsed_value);
+    const auto output = ruvia::to_json(parsed_value);
     RUVIA_CHECK_EQ(std::string_view(output), input);
     auto reparsed = ruvia::from_json<codec_envelope>(output);
-    RUVIA_CHECK(reparsed.has_value());
-    if (reparsed) {
-        RUVIA_CHECK_EQ(reparsed->get<"single">().get<"id">().value_,
-            std::uint64_t{18446744073709551615ULL});
-        RUVIA_CHECK_EQ(reparsed->get<"tree">().get<"children">()->front().get<"name">().view(),
-            "leaf");
-    }
+    RUVIA_CHECK_EQ(reparsed.get<"single">().get<"id">().value_,
+        std::uint64_t{18446744073709551615ULL});
+    RUVIA_CHECK_EQ(reparsed.get<"tree">().get<"children">()->front().get<"name">().view(),
+        "leaf");
 }
 
 RUVIA_TEST(model_json_codec_handles_presence_defaults_and_serialization_options) {
     default_evaluations = 0;
     auto missing = ruvia::from_json<codec_presence>(R"({"required":"x"})");
-    RUVIA_CHECK(missing.has_value());
-    if (!missing) {
-        return;
-    }
     RUVIA_CHECK_EQ(default_evaluations, std::size_t{1});
-    RUVIA_CHECK(!missing->is_present<"defaulted">());
-    RUVIA_CHECK(!missing->is_present<"nullable">());
-    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*missing)),
+    RUVIA_CHECK(!missing.is_present<"defaulted">());
+    RUVIA_CHECK(!missing.is_present<"nullable">());
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(missing)),
         std::string_view(R"({"required":"x","defaulted":7,"emitted":null})"));
     RUVIA_CHECK_EQ(default_evaluations, std::size_t{1});
 
-    const auto serialized = ruvia::to_json(*missing);
+    const auto serialized = ruvia::to_json(missing);
     const std::string roundtrip_input(serialized);
     auto roundtrip = ruvia::from_json<codec_presence>(roundtrip_input);
-    RUVIA_CHECK(roundtrip && roundtrip->is_present<"defaulted">());
-    if (roundtrip) {
-        RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*roundtrip)),
-            std::string_view(R"({"required":"x","defaulted":7,"emitted":null})"));
-    }
+    RUVIA_CHECK(roundtrip.is_present<"defaulted">());
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(roundtrip)),
+        std::string_view(R"({"required":"x","defaulted":7,"emitted":null})"));
 
     auto values = ruvia::from_json<codec_presence>(
         R"({"required":"x","nullable":null,"empty":""})");
-    RUVIA_CHECK(values.has_value());
-    if (!values) {
-        return;
-    }
-    RUVIA_CHECK(values->is_present<"nullable">() && values->is_null<"nullable">());
-    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*values)),
+    RUVIA_CHECK(values.is_present<"nullable">() && values.is_null<"nullable">());
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(values)),
         std::string_view(R"({"required":"x","nullable":null,"defaulted":7,"emitted":null})"));
 }
 
-RUVIA_TEST(model_json_codec_parses_and_serializes_without_running_validation_rules) {
+RUVIA_TEST(model_json_codec_validates_on_parse_and_serializes_without_running_validation_rules) {
     predicate_evaluations = 0;
-    auto parsed_value = ruvia::from_json<codec_rules>(R"({"value":"invalid"})");
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
+    bool rule_rejected = false;
+    try {
+        (void)ruvia::from_json<codec_rules>(R"({"value":"invalid"})");
+    } catch (const ruvia::validation_error&) {
+        rule_rejected = true;
     }
-    RUVIA_CHECK_EQ(predicate_evaluations, std::size_t{0});
-    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*parsed_value)), R"({"value":"invalid"})");
-    RUVIA_CHECK_EQ(predicate_evaluations, std::size_t{0});
+    RUVIA_CHECK(rule_rejected);
+    RUVIA_CHECK_EQ(predicate_evaluations, std::size_t{1});
+
+    auto parsed_value = ruvia::from_json<codec_rules>(R"({"value":"valid"})");
+    RUVIA_CHECK_EQ(predicate_evaluations, std::size_t{2});
+    parsed_value.set<"value">("invalid");
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(parsed_value)), R"({"value":"invalid"})");
+    RUVIA_CHECK_EQ(predicate_evaluations, std::size_t{2});
 }
 
 RUVIA_TEST(model_json_codec_preserves_default_null_dynamic_array_elements) {
@@ -363,15 +348,11 @@ RUVIA_TEST(model_json_codec_preserves_default_null_dynamic_array_elements) {
         for (const auto token : tokens) {
             if (token == "null") {
                 dense.emplace_back();
-                boxed.emplace();
+                boxed.emplace_back();
             } else {
                 const auto scalar = ruvia::json_value::parse(token);
-                RUVIA_CHECK(scalar.has_value());
-                if (!scalar) {
-                    return;
-                }
-                dense.push_back(*scalar);
-                boxed.push_back(*scalar);
+                dense.push_back(scalar);
+                boxed.push_back(scalar);
             }
         }
         codec_dynamic_sequences value;
@@ -382,20 +363,16 @@ RUVIA_TEST(model_json_codec_preserves_default_null_dynamic_array_elements) {
                               ",\"boxed\":" + std::string(expected_array) + "}";
         RUVIA_CHECK_EQ(std::string_view(output), std::string_view(expected));
         const auto reparsed = ruvia::from_json<codec_dynamic_sequences>(output);
-        RUVIA_CHECK(reparsed.has_value());
-        if (!reparsed) {
-            return;
-        }
-        RUVIA_CHECK_EQ(reparsed->get<"dense">().size(), tokens.size());
-        RUVIA_CHECK_EQ(reparsed->get<"boxed">().size(), tokens.size());
-        if (reparsed->get<"dense">().size() != tokens.size() ||
-            reparsed->get<"boxed">().size() != tokens.size()) {
+        RUVIA_CHECK_EQ(reparsed.get<"dense">().size(), tokens.size());
+        RUVIA_CHECK_EQ(reparsed.get<"boxed">().size(), tokens.size());
+        if (reparsed.get<"dense">().size() != tokens.size() ||
+            reparsed.get<"boxed">().size() != tokens.size()) {
             return;
         }
         std::size_t index = 0;
         for (const auto token : tokens) {
-            RUVIA_CHECK_EQ(reparsed->get<"dense">()[index].view(), token);
-            RUVIA_CHECK_EQ(reparsed->get<"boxed">()[index].view(), token);
+            RUVIA_CHECK_EQ(reparsed.get<"dense">()[index].view(), token);
+            RUVIA_CHECK_EQ(reparsed.get<"boxed">()[index].view(), token);
             ++index;
         }
     };
@@ -406,21 +383,14 @@ RUVIA_TEST(model_json_codec_preserves_default_null_dynamic_array_elements) {
 
 RUVIA_TEST(model_json_codec_roundtrips_default_dynamic_objects) {
     auto scalar = ruvia::json_value::parse("true");
-    RUVIA_CHECK(scalar.has_value());
-    if (!scalar) {
-        return;
-    }
     codec_dynamic value;
-    value.set<"value">(std::move(*scalar));
+    value.set<"value">(std::move(scalar));
     value.set<"object">(ruvia::json_object{});
     const auto output = ruvia::to_json(value);
     RUVIA_CHECK_EQ(std::string_view(output), R"({"value":true,"object":{}})");
     const auto reparsed = ruvia::from_json<codec_dynamic>(output);
-    RUVIA_CHECK(reparsed.has_value());
-    if (reparsed) {
-        RUVIA_CHECK_EQ(reparsed->get<"object">().view(), std::string_view("{}"));
-        RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*reparsed)), std::string_view(output));
-    }
+    RUVIA_CHECK_EQ(reparsed.get<"object">().view(), std::string_view("{}"));
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(reparsed)), std::string_view(output));
 }
 
 RUVIA_TEST(model_json_codec_owns_dynamic_tokens_and_preserves_retained_results) {
@@ -435,11 +405,7 @@ RUVIA_TEST(model_json_codec_owns_dynamic_tokens_and_preserves_retained_results) 
         input.append(256, 'q');
         input += R"("},"object":{"n":1}})";
         auto parsed_value = ruvia::from_json<codec_dynamic>(input, {.resource_ = &model_resource});
-        RUVIA_CHECK(parsed_value.has_value());
-        if (!parsed_value) {
-            return;
-        }
-        retained = std::move(*parsed_value);
+        retained = std::move(parsed_value);
         input.assign(input.size(), 'x');
         std::string expected_token = R"({"keep":")";
         expected_token.append(256, 'q');
@@ -454,13 +420,10 @@ RUVIA_TEST(model_json_codec_owns_dynamic_tokens_and_preserves_retained_results) 
         for (std::size_t i = 0; i < 32; ++i) {
             {
                 auto temporary = ruvia::from_json<codec_dynamic>(temporary_input, {.resource_ = &model_resource});
-                RUVIA_CHECK(temporary.has_value());
-                if (temporary) {
-                    RUVIA_CHECK(model_resource.live_allocations() > retained_model_live);
-                    const auto output = ruvia::to_json(*temporary, {.resource_ = &output_resource});
-                    RUVIA_CHECK(output_resource.live_allocations() > retained_output_live);
-                    RUVIA_CHECK_EQ(std::string_view(output), temporary_input);
-                }
+                RUVIA_CHECK(model_resource.live_allocations() > retained_model_live);
+                const auto output = ruvia::to_json(temporary, {.resource_ = &output_resource});
+                RUVIA_CHECK(output_resource.live_allocations() > retained_output_live);
+                RUVIA_CHECK_EQ(std::string_view(output), temporary_input);
             }
             RUVIA_CHECK_EQ(retained.get<"value">().view(), expected_token);
             RUVIA_CHECK_EQ(std::string_view(retained_json), saved);
@@ -470,8 +433,9 @@ RUVIA_TEST(model_json_codec_owns_dynamic_tokens_and_preserves_retained_results) 
         const std::string invalid_input = "{\"value\":\"" + std::string(160, 'i') + "\",\"object\":[]}";
         for (std::size_t i = 0; i < 32; ++i) {
             const auto allocated = model_resource.allocation_count();
-            auto invalid = ruvia::from_json<codec_dynamic>(invalid_input, {.resource_ = &model_resource});
-            RUVIA_CHECK(!invalid.has_value());
+            RUVIA_CHECK(ruvia::testing::throws_on([&] {
+                (void)ruvia::from_json<codec_dynamic>(invalid_input, {.resource_ = &model_resource});
+            }));
             RUVIA_CHECK(model_resource.allocation_count() > allocated);
             RUVIA_CHECK_EQ(model_resource.live_allocations(), retained_model_live);
             RUVIA_CHECK_EQ(output_resource.live_allocations(), retained_output_live);
@@ -491,10 +455,7 @@ RUVIA_TEST(model_json_codec_releases_allocations_when_parse_or_serialize_fails) 
     input += R"("}],"boxed":[{"wire\"id":2}],"tree":{"name":"root","children":[{"name":"leaf","children":[{"name":"end"}]}]}})";
     failing_resource successful_resource((std::numeric_limits<std::size_t>::max)());
     auto successful = ruvia::from_json<codec_envelope>(input, {.resource_ = &successful_resource});
-    RUVIA_CHECK(successful.has_value());
-    if (!successful) {
-        return;
-    }
+    RUVIA_CHECK_EQ(successful.get<"array">().size(), std::size_t{1});
     const auto successful_allocations = successful_resource.payload_allocations();
     RUVIA_CHECK(successful_allocations > 1);
     bool saw_partial_construction_failure = false;
@@ -518,72 +479,97 @@ RUVIA_TEST(model_json_codec_releases_allocations_when_parse_or_serialize_fails) 
     const std::string kept(80, 'k');
     auto model = ruvia::from_json<codec_dynamic>(
         "{\"value\":{\"kept\":\"" + kept + "\"},\"object\":{}}");
-    RUVIA_CHECK(model.has_value());
-    if (!model) {
-        return;
-    }
-    const auto before = std::string(ruvia::to_json(*model));
+    const auto before = std::string(ruvia::to_json(model));
     failing_resource output_resource(0);
     bool serialize_failed = false;
     try {
-        (void)ruvia::to_json(*model, {.resource_ = &output_resource});
+        (void)ruvia::to_json(model, {.resource_ = &output_resource});
     } catch (const std::bad_alloc&) {
         serialize_failed = true;
     }
     RUVIA_CHECK(serialize_failed);
     RUVIA_CHECK_EQ(output_resource.live_allocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*model)), before);
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(model)), before);
 }
 
 RUVIA_TEST(model_json_codec_roundtrips_empty_schema_and_rejects_non_object_root) {
     auto parsed_value = ruvia::from_json<codec_empty>(R"({})");
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
-    }
-    const auto output = ruvia::to_json(*parsed_value);
+    const auto output = ruvia::to_json(parsed_value);
     RUVIA_CHECK_EQ(std::string_view(output), "{}");
     auto reparsed = ruvia::from_json<codec_empty>(output);
-    RUVIA_CHECK(reparsed.has_value());
-    auto rejected = ruvia::from_json<codec_empty>(R"([])");
-    RUVIA_CHECK(!rejected.has_value());
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(reparsed)), "{}");
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<codec_empty>(R"([])"); }));
 }
 
 RUVIA_TEST(json_array_limits_apply_across_nested_collections_and_model_fields) {
     using nested_array = ruvia::array<ruvia::array<ruvia::int32>>;
-    RUVIA_CHECK(ruvia::from_json<nested_array>("[[1,2],[3]]", {.max_array_elements_ = 5}));
-    RUVIA_CHECK(!ruvia::from_json<nested_array>("[[1,2],[3]]", {.max_array_elements_ = 4}));
-    RUVIA_CHECK(ruvia::from_json<nested_array>("[]", {.max_array_elements_ = 0}));
-    RUVIA_CHECK(!ruvia::from_json<nested_array>("[[]]", {.max_array_elements_ = 0}));
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<nested_array>("[[1,2],[3]]", {.max_array_elements_ = 5});
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<nested_array>("[[1,2],[3]]", {.max_array_elements_ = 4});
+    }));
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<nested_array>("[]", {.max_array_elements_ = 0});
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<nested_array>("[[]]", {.max_array_elements_ = 0});
+    }));
 
     constexpr auto tree = R"({"name":"a","children":[{"name":"b","children":[{"name":"c"}]},{"name":"d"}]})";
-    RUVIA_CHECK(ruvia::from_json<codec_node>(tree, {.max_array_elements_ = 3}));
-    RUVIA_CHECK(!ruvia::from_json<codec_node>(tree, {.max_array_elements_ = 2}));
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_node>(tree, {.max_array_elements_ = 3});
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_node>(tree, {.max_array_elements_ = 2});
+    }));
 }
 
 RUVIA_TEST(json_array_limits_include_dynamic_tokens_and_unknown_fields) {
     constexpr auto nested = R"({"value":[[1,2],[3]],"object":{}})";
-    RUVIA_CHECK(ruvia::from_json<codec_dynamic>(nested, {.max_array_elements_ = 5}));
-    RUVIA_CHECK(!ruvia::from_json<codec_dynamic>(nested, {.max_array_elements_ = 4}));
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_dynamic>(nested, {.max_array_elements_ = 5});
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_dynamic>(nested, {.max_array_elements_ = 4});
+    }));
 
     constexpr auto dynamic = R"({"value":[1,2],"object":{"nested":[3]}})";
-    RUVIA_CHECK(ruvia::from_json<codec_dynamic>(dynamic, {.max_array_elements_ = 3}));
-    RUVIA_CHECK(!ruvia::from_json<codec_dynamic>(dynamic, {.max_array_elements_ = 2}));
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_dynamic>(dynamic, {.max_array_elements_ = 3});
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_dynamic>(dynamic, {.max_array_elements_ = 2});
+    }));
 
     constexpr auto mixed = R"({"dense":[[1,2]],"boxed":[{"nested":[3]}]})";
-    RUVIA_CHECK(ruvia::from_json<codec_dynamic_sequences>(mixed, {.max_array_elements_ = 5}));
-    RUVIA_CHECK(!ruvia::from_json<codec_dynamic_sequences>(mixed, {.max_array_elements_ = 4}));
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_dynamic_sequences>(mixed, {.max_array_elements_ = 5});
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_dynamic_sequences>(mixed, {.max_array_elements_ = 4});
+    }));
 
-    RUVIA_CHECK(ruvia::from_json<codec_empty>(R"({"unknown":[1,2]})", {.max_array_elements_ = 2}));
-    RUVIA_CHECK(!ruvia::from_json<codec_empty>(R"({"unknown":[1,2]})", {.max_array_elements_ = 1}));
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_empty>(R"({"unknown":[1,2]})", {.max_array_elements_ = 2});
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<codec_empty>(R"({"unknown":[1,2]})", {.max_array_elements_ = 1});
+    }));
 }
 
 RUVIA_TEST(json_representation_budget_bounds_scalar_and_owned_string_results) {
-    RUVIA_CHECK(!ruvia::from_json<ruvia::int32>("1", {.max_representation_bytes_ = 0}));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<ruvia::int32>("1", {.max_representation_bytes_ = 0});
+    }));
 
     const std::string text = "\"" + std::string(4096, 'x') + "\"";
-    RUVIA_CHECK(!ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = 1024}));
-    RUVIA_CHECK(ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = 16384}));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = 1024});
+    }));
+    RUVIA_CHECK(!ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = 16384});
+    }));
 }
 
 RUVIA_TEST(json_representation_budget_includes_decoded_field_names) {
@@ -596,11 +582,15 @@ RUVIA_TEST(json_representation_budget_includes_decoded_field_names) {
     {
         auto parsed_value = ruvia::from_json<codec_empty>(single,
             {.resource_ = &memory, .max_representation_bytes_ = one_key_budget});
-        RUVIA_CHECK(parsed_value.has_value());
-        RUVIA_CHECK(!ruvia::from_json<codec_empty>(single,
-            {.resource_ = &memory, .max_representation_bytes_ = sizeof(codec_empty) + 1024}));
-        RUVIA_CHECK(!ruvia::from_json<codec_empty>(repeated,
-            {.resource_ = &memory, .max_representation_bytes_ = one_key_budget}));
+        RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(parsed_value)), "{}");
+        RUVIA_CHECK(ruvia::testing::throws_on([&] {
+            (void)ruvia::from_json<codec_empty>(single,
+                {.resource_ = &memory, .max_representation_bytes_ = sizeof(codec_empty) + 1024});
+        }));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] {
+            (void)ruvia::from_json<codec_empty>(repeated,
+                {.resource_ = &memory, .max_representation_bytes_ = one_key_budget});
+        }));
     }
     RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
     RUVIA_CHECK_EQ(memory.allocation_count(), memory.deallocation_count());
@@ -611,15 +601,15 @@ RUVIA_TEST(json_budget_failure_releases_partial_results_and_preserves_retained_v
     {
         auto retained = ruvia::from_json<ruvia::array<ruvia::string>>(
             R"(["retained value with owned storage"])", {.resource_ = &memory});
-        RUVIA_CHECK(retained.has_value());
         const auto retained_allocations = memory.live_allocations();
         for (std::size_t index = 0; index < 8; ++index) {
-            auto failed = ruvia::from_json<ruvia::boxed_array<ruvia::string>>(
-                R"(["first element with owned storage","second element with owned storage"])",
-                {.resource_ = &memory, .max_array_elements_ = 1});
-            RUVIA_CHECK(!failed);
+            RUVIA_CHECK(ruvia::testing::throws_on([&] {
+                (void)ruvia::from_json<ruvia::boxed_array<ruvia::string>>(
+                    R"(["first element with owned storage","second element with owned storage"])",
+                    {.resource_ = &memory, .max_array_elements_ = 1});
+            }));
             RUVIA_CHECK_EQ(memory.live_allocations(), retained_allocations);
-            RUVIA_CHECK_EQ((*retained)[0].view(), std::string_view("retained value with owned storage"));
+            RUVIA_CHECK_EQ(retained[0].view(), std::string_view("retained value with owned storage"));
         }
     }
     RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});

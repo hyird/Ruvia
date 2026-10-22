@@ -31,6 +31,7 @@ void http2_connection_owner_endpoint::release() noexcept {
         std::terminate();
     }
     if (--references_ == 0) {
+        connection_ = nullptr;
         if (retained_storage_ != nullptr) {
             destroy_storage_(retained_storage_);
         }
@@ -39,7 +40,9 @@ void http2_connection_owner_endpoint::release() noexcept {
 }
 
 void http2_connection_owner_endpoint::detach() noexcept {
-    connection_ = nullptr;
+    if (retained_storage_ == nullptr) {
+        connection_ = nullptr;
+    }
 }
 
 void http2_connection_owner_endpoint::abandon_request(std::uint32_t stream_id) noexcept {

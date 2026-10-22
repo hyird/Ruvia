@@ -15,8 +15,9 @@
 
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/detail/model/rule/numeric_comparison.h"
+#include "ruvia/web/detail/model/rule/rules.h"
+#include "ruvia/web/detail/model/traits.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/model.h"
 #include "ruvia/web/validation_types.h"
 
 namespace ruvia {
@@ -275,6 +276,12 @@ public:
 private:
     issue_list_type issues_;
 };
+
+template <typename model_type>
+    requires detail::is_model<model_type>
+void validate_model(const model_type& model, validator& out) {
+    detail::model_validation_access::validate_model(model, out);
+}
 
 }  // namespace ruvia
 

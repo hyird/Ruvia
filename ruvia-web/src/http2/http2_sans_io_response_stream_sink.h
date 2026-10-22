@@ -53,21 +53,19 @@ namespace ruvia::detail {
 class http2_sans_io_response_stream_sink final {
 public:
     http2_sans_io_response_stream_sink(ruvia::http2_connection& connection, std::uint32_t stream_id,
-        http_response_stream_kind kind, worker_signal& write_signal, http2_sans_io_stream_signal& stream_signal,
+        worker_signal& write_signal, http2_sans_io_stream_signal& stream_signal,
         http2_data_output_budget& output_budget, std::pmr::memory_resource* resource,
         http_known_method request_method, worker_codecs& codecs,
         http_response_coding_selection response_coding,
         http_response_coding_availability response_coding_availability, const cors_options* cors) noexcept
         : connection_(connection),
           stream_id_(stream_id),
-          kind_(kind),
           write_signal_(write_signal),
           stream_signal_(stream_signal),
           output_budget_(output_budget),
           request_method_(request_method),
           cors_(cors),
           compression_(resource, codecs, response_coding, response_coding_availability) {}
-
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
     }
@@ -212,19 +210,18 @@ public:
             }
             co_await write_encoded(compression_.output());
         }
-        const auto result_value = connection_.finish_response(stream_id_, trailer_section);
+        http2_finish_response_status result_value{};
+        try {
+            result_value = connection_.finish_response(stream_id_, trailer_section);
+        } catch (...) {
+            state_.mark_aborted();
+            wake_writer();
+            throw;
+        }
         wake_writer();
         if (result_value == http2_finish_response_status::closed) {
             state_.mark_aborted();
             throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
-        }
-        if (result_value == http2_finish_response_status::invalid_state) {
-            state_.mark_aborted();
-            throw std::logic_error("invalid HTTP/2 response stream finish state");
-        }
-        if (result_value == http2_finish_response_status::content_length_incomplete) {
-            state_.mark_aborted();
-            throw std::length_error("HTTP/2 response ended before Content-Length");
         }
         if (result_value == http2_finish_response_status::queued) {
             const auto wait_result =
@@ -247,14 +244,15 @@ private:
                 apply_cors_headers(context_access::request(state_.bound_context()), response, *cors_);
             }
             throw_if_terminated();
-            compression_.prepare(request_method_, response, kind_);
+            compression_.prepare(request_method_, response);
             const auto commit_body_plan = plan_http_response_body(request_method_, response.status());
             compression_.activate(commit_body_plan);
             const auto head_result = connection_.submit_streaming_response_head(
-                stream_id_, std::move(response), kind_, trailer_intent);
-            const auto* submitted_head = head_result.submitted();
+                stream_id_, std::move(response), trailer_intent);
+            const auto* submitted_head = std::get_if<http_response_stream_commit_plan>(&head_result);
             if (submitted_head == nullptr) {
-                if (head_result.failure()->error() == ruvia::http2_response_head_submit_error::closed) {
+                if (std::get<ruvia::http2_response_head_submit_error>(head_result) ==
+                    ruvia::http2_response_head_submit_error::closed) {
                     throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
                 }
                 throw std::logic_error("HTTP/2 streaming response head submission failed");
@@ -288,7 +286,6 @@ private:
 
     ruvia::http2_connection& connection_;
     std::uint32_t stream_id_;
-    http_response_stream_kind kind_;
     response_stream_state state_;
     http_interim_response_output* interim_output_{};
     worker_signal& write_signal_;

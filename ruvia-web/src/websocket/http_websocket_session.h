@@ -47,7 +47,7 @@ template <typename connection_type>
 // onion middleware post-processing still belongs to the same websocket request
 // and must be able to turn its own failure into the session's 1011 outcome.
 template <typename stream_type>
-task<void> invoke_websocket_handler(websocket_connection<stream_type>& connection,
+task<void> invoke_websocket_handler(server_websocket_connection<stream_type>& connection,
     connection_scanner::entry_type& scanner_entry, const route_stream_handler_type& handler,
     context& context_value) {
     auto websocket_value = make_websocket_facade(connection, *context_value.pool());
@@ -73,7 +73,7 @@ task<void> invoke_websocket_handler(websocket_connection<stream_type>& connectio
 // each: a peer that resets instead of answering the Close, or a close-handshake
 // timeout that aborted the transport, ends the connection normally.
 template <typename stream_type>
-task<void> finish_websocket_session(websocket_connection<stream_type>& connection,
+task<void> finish_websocket_session(server_websocket_connection<stream_type>& connection,
     std::exception_ptr exception, const connection_failure_sink& connection_failure,
     std::string_view remote_address) {
     connection_failure.invoke(remote_address, exception);

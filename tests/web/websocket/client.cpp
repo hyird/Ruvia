@@ -89,12 +89,12 @@ namespace {
         ruvia::http_header_view("Sec-WebSocket-Key", key),
     };
     std::pmr::monotonic_buffer_resource resource;
-    auto [parsed_request, parse_error] =
+    auto parsed_request =
         ruvia::make_parsed_http_request("GET", "/", headers, {}, &resource);
-    if (parse_error) {
+    if (parsed_request.index() != 0) {
         throw std::runtime_error("could not parse WebSocket request");
     }
-    auto handshake = ruvia::make_websocket_server_handshake(parsed_request, {.resource_ = &resource});
+    auto handshake = ruvia::make_websocket_server_handshake(std::get<0>(parsed_request), {.resource_ = &resource});
     std::string response;
     handshake.for_each_response_part([&response](std::string_view part) {
         response.append(part);
@@ -261,12 +261,17 @@ RUVIA_TEST(websocket_client_negotiates_deflate_and_can_skip_individual_messages)
         {
             auto first_write = handle.text("discarded");
             auto second_write = handle.binary("discarded");
+            auto byte_write = handle.binary(std::as_bytes(std::span("discarded", 9)));
+            auto pmr_text = handle.text(std::pmr::string("discarded"));
+            auto pmr_binary = handle.binary(std::pmr::string("discarded"));
             auto first_read = handle.read();
             auto second_read = handle.read();
-            auto first_close = handle.close({});
+            auto first_close = handle.close();
             auto second_close = handle.close({});
             auto ping = handle.ping("discarded");
+            auto pmr_ping = handle.ping(std::pmr::string("discarded"));
             auto pong = handle.pong("discarded");
+            auto pmr_pong = handle.pong(std::pmr::string("discarded"));
         }
 
         std::string mutable_payload = payload_value;
@@ -320,6 +325,7 @@ RUVIA_TEST(websocket_client_negotiates_deflate_and_can_skip_individual_messages)
             }
             RUVIA_CHECK(client.connected());
         }
+        client.close();
         co_await client.shutdown();
         peer.close();
         attachment.stop();

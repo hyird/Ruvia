@@ -34,7 +34,7 @@ public:
     RUVIA_GET("/ready", ready, ruvia::rate_limit<10, 1000>);
     RUVIA_GET("/stats", stats);
     RUVIA_GET("/peer", peer);
-    RUVIA_GET_STREAM("/fail-after-head", fail_after_head);
+    RUVIA_GET("/fail-after-head", fail_after_head);
     RUVIA_ROUTES_END
 
 private:
@@ -94,7 +94,7 @@ int main() {
                 .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             // Each worker counts independently. Route-level limits additionally
             // apply and can only tighten the deployment-wide rule.
-            .get_rate_limit({.rule_ = {.max_requests_ = 100, .window_ = std::chrono::seconds(1)}})
+            .rate_limit({.rule_ = {.max_requests_ = 100, .window_ = std::chrono::seconds(1)}})
             .on_start([] {
                 // Runs on the thread calling run(), after worker capabilities are
                 // ready and before any listener starts serving. Throwing rolls back

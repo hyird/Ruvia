@@ -184,19 +184,22 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
         if (auto value = field.as<std::string_view>()) {
             out.assign(*value);
         } else {
-            throw std::invalid_argument("NULL in non-nullable entity column");
+            throw db_conversion_error(
+                db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     } else if constexpr (std::is_same_v<u_type, string>) {
         if (auto value = field.as<std::string_view>()) {
             out.assign_owned(*value);
         } else {
-            throw std::invalid_argument("NULL in non-nullable entity column");
+            throw db_conversion_error(
+                db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     } else {
         if (auto value = field.as<u_type>()) {
             out = *value;
         } else {
-            throw std::invalid_argument("NULL in non-nullable entity column");
+            throw db_conversion_error(
+                db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     }
     (void)resource;
@@ -208,9 +211,9 @@ void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory
         if constexpr (c_type::options.nullable_) {
             entity.template set_null<c_type::name>();
         } else {
-            throw std::invalid_argument("NULL in non-nullable database entity column");
+            throw db_conversion_error(
+                db_conversion_error::code_type::unexpected_null, "NULL in non-nullable database entity column");
         }
-        return;
     }
     using t_type = typename c_type::value_type;
     auto value = entity_value_slot<t_type>::make_value(resource);
@@ -251,7 +254,8 @@ public:
                 return;
             }
             if (indices_[i] == missing_column) {
-                throw std::out_of_range("database result has no such column");
+                throw db_conversion_error(
+                    db_conversion_error::code_type::missing_column, "database result has no such column");
             }
             decode_entity_field<e_type, column_type>(result, row[indices_[i]], resource);
         });

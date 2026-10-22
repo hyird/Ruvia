@@ -75,9 +75,6 @@ application& application::document_root(document_root_config config) {
             }
             detail::ensure_positive_duration(config.refresh_interval_,
                 "document root refresh interval must be greater than zero");
-            if (config.static_options_.index_file_.empty()) {
-                config.static_options_.index_file_ = "index.html";
-            }
             detail::validate_static_root_options(config.static_options_);
             const auto precompression = make_static_root_precompression_options(config);
 
@@ -110,13 +107,13 @@ application& application::use_middleware(detail::owned_middleware_descriptor des
         });
 }
 
-application& application::get_blocking_pool(blocking_pool_options config) {
+application& application::blocking_pool(blocking_pool_options config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the blocking pool while app is running",
         [&config](detail::app_state& state_value) { state_value.blocking_pool_ = config; });
 }
 
-application& application::get_blocking_pool(std::nullptr_t) {
+application& application::blocking_pool(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the blocking pool while app is running",
         [](detail::app_state& state_value) { state_value.blocking_pool_.reset(); });

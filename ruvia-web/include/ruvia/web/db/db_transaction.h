@@ -56,10 +56,6 @@ public:
     template <typename entity_type>
     db_repository<entity_type, db_transaction> get_repository() && = delete;
 
-    [[nodiscard]] scoped_operation<db_rows> query(const db_query& query) &;
-    scoped_operation<db_rows> query(const db_query&) && = delete;
-    [[nodiscard]] scoped_operation<db_exec_result> execute(const db_query& query) &;
-    scoped_operation<db_exec_result> execute(const db_query&) && = delete;
     scoped_operation<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) &;
     scoped_operation<db_rows> query(std::string_view, std::span<const db_value> = {}) && = delete;
     scoped_operation<db_rows> query(std::string_view, std::initializer_list<db_value>) & = delete;
@@ -142,8 +138,14 @@ public:
     scoped_operation<bool> try_advisory_lock(std::int32_t, std::int32_t) && = delete;
     [[nodiscard]] scoped_operation<bool> try_advisory_lock(std::string_view key, std::int64_t seed = 0) &;
     scoped_operation<bool> try_advisory_lock(std::string_view, std::int64_t = 0) && = delete;
-    scoped_operation<void> declare_cursor(std::string_view name, const db_query& query, bool scroll = false) &;
-    scoped_operation<void> declare_cursor(std::string_view, const db_query&, bool = false) && = delete;
+    scoped_operation<void> declare_cursor(
+        std::string_view name, std::string_view sql, std::span<const db_value> params = {}, bool scroll = false) &;
+    scoped_operation<void> declare_cursor(
+        std::string_view, std::string_view, std::span<const db_value> = {}, bool = false) && = delete;
+    scoped_operation<void> declare_cursor(
+        std::string_view, std::string_view, std::initializer_list<db_value>, bool = false) & = delete;
+    scoped_operation<void> declare_cursor(
+        std::string_view, std::string_view, std::initializer_list<db_value>, bool = false) && = delete;
     [[nodiscard]] scoped_operation<db_rows> fetch_cursor(std::string_view name, std::uint64_t count = 1) &;
     scoped_operation<db_rows> fetch_cursor(std::string_view, std::uint64_t = 1) && = delete;
     scoped_operation<void> close_cursor(std::string_view name) &;
@@ -168,25 +170,26 @@ private:
 
     [[nodiscard]] db_driver query_driver() const;
     [[nodiscard]] std::pmr::memory_resource* query_resource() const;
+    [[nodiscard]] scoped_operation<db_exec_result> execute_query(const db_query& query);
     [[nodiscard]] task<db_rows> query_task(const db_query& query);
     [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count);
     template <typename result_type, typename mapper_type>
     [[nodiscard]] scoped_operation<std::pair<result_type, std::uint64_t>> query_mapped_and_count(const db_query& query, const db_query& count, mapper_type mapper) {
         registration_.require_active();
+        auto& scope = registration_.scope();
         auto* resource = query_resource();
         auto task_value = query_and_count_task(query, count);
-        return make_scoped_operation(registration_.scope(),
-            detail::map_db_query_and_count<result_type>(std::move(task_value), resource, std::move(mapper)),
-            scoped_operation_io_kind::db);
+        return make_scoped_operation(scope,
+            detail::map_db_query_and_count<result_type>(scope, std::move(task_value), resource, std::move(mapper)));
     }
     template <typename result_type, typename mapper_type>
     [[nodiscard]] scoped_operation<result_type> query_mapped(const db_query& query, mapper_type mapper) {
         registration_.require_active();
+        auto& scope = registration_.scope();
         auto* resource = query_resource();
         auto task_value = query_task(query);
-        return make_scoped_operation(registration_.scope(),
-            detail::map_db_query<result_type>(std::move(task_value), resource, std::move(mapper)),
-            scoped_operation_io_kind::db);
+        return make_scoped_operation(scope,
+            detail::map_db_query<result_type>(scope, std::move(task_value), resource, std::move(mapper)));
     }
     template <typename driver_type>
     friend class detail::db_pool;
@@ -210,21 +213,26 @@ private:
     db_transaction(detail::db_pool_ref_type client, std::size_t slot, std::pmr::memory_resource* resource,
         operation_options options);
     static task<db_rows> query_prepared(
-        std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type operation);
+        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
     static task<db_exec_result> execute_prepared(
-        std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type operation);
-    static task<void> commit_task(operation_guard_type operation);
-    static task<void> rollback_task(operation_guard_type operation);
+        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
+    static task<void> commit_task(operation_scope& scope, operation_guard_type operation);
+    static task<void> rollback_task(operation_scope& scope, operation_guard_type operation);
     scoped_operation<void> run_savepoint_command(std::string_view prefix, std::string_view name);
-    static task<void> savepoint_task(std::pmr::string sql, operation_guard_type operation);
+    static task<void> savepoint_task(std::pmr::string sql, operation_scope& scope, operation_guard_type operation);
     void require_postgresql_transaction(std::string_view feature) const;
     scoped_operation<void> query_void_prepared(std::string_view sql, std::span<const db_value> params);
     scoped_operation<bool> query_bool_prepared(std::string_view sql, std::span<const db_value> params);
-    static task<void> query_void_task(std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type operation);
-    static task<void> execute_void_task(std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type operation);
-    static task<bool> query_bool_task(std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type operation);
-    static task<std::uint32_t> query_oid_task(std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type operation);
-    static task<std::pmr::string> query_text_task(std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type operation);
+    static task<void> query_void_task(
+        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
+    static task<void> execute_void_task(
+        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
+    static task<bool> query_bool_task(
+        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
+    static task<std::uint32_t> query_oid_task(
+        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
+    static task<std::pmr::string> query_text_task(
+        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
     void reset() noexcept;
     void bind_operation_scope(operation_scope& scope) noexcept;
     static void expire_capability(void* target) noexcept;

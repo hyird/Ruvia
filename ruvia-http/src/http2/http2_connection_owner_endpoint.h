@@ -23,6 +23,9 @@ public:
     void retain_storage(void* storage, destroy_storage_type destroy_storage) noexcept;
     void release() noexcept;
     void detach() noexcept;
+    [[nodiscard]] http2_connection* connection() const noexcept {
+        return connection_;
+    }
     void abandon_request(std::uint32_t stream_id) noexcept;
     void abandon_credit(std::uint32_t stream_id, std::uint32_t bytes) noexcept;
 

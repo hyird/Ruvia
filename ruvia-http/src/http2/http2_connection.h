@@ -41,12 +41,10 @@
 #include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http2_request_content.h"
-#include "ruvia/http/http2_request_head_submit_result.h"
-#include "ruvia/http/http2_response_head_submit_result.h"
-#include "ruvia/http/http2_websocket_handshake_submit_result.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/websocket_handshake.h"
 
@@ -67,24 +65,6 @@
 #include "websocket/websocket_server_negotiation.h"
 
 namespace ruvia::detail {
-
-// Shared by every facade path that reports a final response head through the
-// plain submission status.
-[[nodiscard]] constexpr http2_submit_status http2_response_head_submit_status(
-    http2_response_head_submit_error error) noexcept {
-    switch (error) {
-        case http2_response_head_submit_error::peer_stream_limit_reached:
-            return http2_submit_status::peer_capability_unavailable;
-        case http2_response_head_submit_error::closed:
-            return http2_submit_status::closed;
-        case http2_response_head_submit_error::invalid_state:
-        case http2_response_head_submit_error::response_plan_mismatch:
-            return http2_submit_status::invalid_state;
-        case http2_response_head_submit_error::invalid_message:
-            return http2_submit_status::invalid_message;
-    }
-    return http2_submit_status::invalid_state;
-}
 
 // A response body the send window could not fully drain: the core keeps the unsent
 // remainder and flushes it as WINDOW_UPDATE/SETTINGS reopen the window (nghttp2-style
@@ -155,7 +135,7 @@ public:
     [[nodiscard]] std::string_view pending_output() const&& = delete;
     // Acknowledges at most the current pending size. An out-of-range count is
     // rejected without clearing bytes or advancing the cursor.
-    http2_output_consume_status consume_output(std::size_t bytes) noexcept;
+    http2_output_consume_status consume_output(std::size_t bytes);
     // Move ALL pending outbound bytes into `into` (allocator-matching swap when nothing
     // was partially consumed, so the common path is copy-free) and reset the buffer.
     // REQUIRED for any writer that awaits mid-write: a pending_output() view dangles if
@@ -176,10 +156,9 @@ public:
     // here) are likewise rejected transactionally. An exclusive
     // http2_response_head_plan owns canonical, explicit, absent, or forbidden
     // Content-Length metadata before the encoder and local DATA state advance.
-    [[nodiscard]] http2_response_head_submit_result submit_response_head(std::uint32_t stream_id,
+    [[nodiscard]] std::variant<http_buffered_response_write_plan, http2_response_head_submit_error>
+    submit_response_head(std::uint32_t stream_id,
         const http_response& response, http_buffered_response_write_plan write_plan);
-    [[nodiscard]] http2_submit_status submit_buffered_response(
-        std::uint32_t stream_id, const http_response& response);
     // Submit a STREAMING response head: no Content-Length is generated automatically;
     // an explicit value is strictly parsed once and the same plan binds both HPACK
     // metadata and all later DATA. With no explicit value the body is unbounded.
@@ -188,8 +167,9 @@ public:
     // keeps an HTTP/2 content-forbidden response open in a trailers-only phase; without
     // one, END_STREAM is carried by the initial HEADERS. The owner then streams DATA
     // (when allowed) and terminates through finish_response(stream_id, trailers).
-    [[nodiscard]] http2_streaming_response_head_submit_result submit_streaming_response_head(
-        std::uint32_t stream_id, http_response head, http_response_stream_kind kind,
+    [[nodiscard]] std::variant<http_response_stream_commit_plan, http2_response_head_submit_error>
+    submit_streaming_response_head(
+        std::uint32_t stream_id, http_response head,
         http_response_trailer_intent trailer_intent);
     [[nodiscard]] http2_data_submit_status submit_data(
         std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream);
@@ -201,7 +181,8 @@ public:
     // Queue the RFC 8441 successful response (:status 200, Date and the exact
     // negotiated fields, without END_STREAM) and open the stream as a tunnel.
     // Only the submitted alternative exposes the negotiation committed on wire.
-    [[nodiscard]] http2_websocket_handshake_submit_result submit_websocket_handshake(
+    [[nodiscard]] std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_error>
+    submit_websocket_handshake(
         std::uint32_t stream_id, const websocket_handshake_validation_result& validation,
         websocket_server_negotiation&& negotiation);
     // Accept a pending standard or extended CONNECT with a successful final response.
@@ -279,7 +260,8 @@ public:
     // schemes use the complete RFC 3986 authority grammar and may carry an empty
     // path. Asterisk-form OPTIONS itself has no authority component, but a direct
     // HTTP/2 sender may still carry request authority in :authority.
-    [[nodiscard]] http2_request_head_submit_result submit_regular_request_head(std::string_view method,
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>
+    submit_regular_request_head(std::string_view method,
         std::string_view scheme, std::optional<std::string_view> authority, std::string_view path,
         std::span<const http_header_view> headers, http2_request_content content,
         http_client_request_expectation expectation = http_client_request_expectation::none);
@@ -288,32 +270,37 @@ public:
     // borrowed head is still pending. Owning temporaries are rejected at
     // compile time, one deleted overload per view parameter.
     template <detail::http_temporary_owning_char_string method_type>
-    http2_request_head_submit_result submit_regular_request_head(method_type&&, std::string_view,
+    std::variant<std::uint32_t, http2_request_head_submit_error> submit_regular_request_head(
+        method_type&&, std::string_view,
         std::optional<std::string_view>, std::string_view, std::span<const http_header_view>,
         http2_request_content,
         http_client_request_expectation = http_client_request_expectation::none) = delete;
     template <detail::http_temporary_owning_char_string scheme_type>
-    http2_request_head_submit_result submit_regular_request_head(std::string_view, scheme_type&&,
+    std::variant<std::uint32_t, http2_request_head_submit_error> submit_regular_request_head(
+        std::string_view, scheme_type&&,
         std::optional<std::string_view>, std::string_view, std::span<const http_header_view>,
         http2_request_content,
         http_client_request_expectation = http_client_request_expectation::none) = delete;
     template <typename authority_type>
         requires detail::http_temporary_owning_char_string<authority_type>
-    http2_request_head_submit_result submit_regular_request_head(std::string_view, std::string_view,
+    std::variant<std::uint32_t, http2_request_head_submit_error> submit_regular_request_head(
+        std::string_view, std::string_view,
         std::optional<authority_type>&&, std::string_view, std::span<const http_header_view>,
         http2_request_content,
         http_client_request_expectation = http_client_request_expectation::none) = delete;
     template <detail::http_temporary_owning_char_string path_type>
-    http2_request_head_submit_result submit_regular_request_head(std::string_view, std::string_view,
+    std::variant<std::uint32_t, http2_request_head_submit_error> submit_regular_request_head(
+        std::string_view, std::string_view,
         std::optional<std::string_view>, path_type&&, std::span<const http_header_view>,
         http2_request_content,
         http_client_request_expectation = http_client_request_expectation::none) = delete;
     // Standard CONNECT uses only :method and an authority-form :authority. Its
     // initial HEADERS never ends the stream; DATA is gated until a final 2xx response.
-    [[nodiscard]] http2_request_head_submit_result submit_connect_request_head(
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>
+    submit_connect_request_head(
         std::string_view authority, std::span<const http_header_view> headers = {});
     template <detail::http_temporary_owning_char_string authority_type>
-    http2_request_head_submit_result submit_connect_request_head(
+    std::variant<std::uint32_t, http2_request_head_submit_error> submit_connect_request_head(
         authority_type&&, std::span<const http_header_view> = {}) = delete;
     // RFC 8441 Extended CONNECT. The peer must first advertise
     // SETTINGS_ENABLE_CONNECT_PROTOCOL=1. :protocol is a protocol-name token and the
@@ -321,21 +308,26 @@ public:
     // accept any RFC 3986 scheme and allow its path to be empty; otherwise the path
     // is origin-form. websocket requires an HTTP(S) scheme. websocket protocol names
     // are matched case-insensitively and encoded as `websocket`.
-    [[nodiscard]] http2_request_head_submit_result submit_extended_connect_request_head(
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>
+    submit_extended_connect_request_head(
         std::string_view protocol, std::string_view scheme, std::string_view authority,
         std::string_view path, std::span<const http_header_view> headers = {});
     template <detail::http_temporary_owning_char_string protocol_type>
-    http2_request_head_submit_result submit_extended_connect_request_head(protocol_type&&, std::string_view,
+    std::variant<std::uint32_t, http2_request_head_submit_error> submit_extended_connect_request_head(
+        protocol_type&&, std::string_view,
         std::string_view, std::string_view, std::span<const http_header_view> = {}) = delete;
     template <detail::http_temporary_owning_char_string scheme_type>
-    http2_request_head_submit_result submit_extended_connect_request_head(std::string_view, scheme_type&&,
+    std::variant<std::uint32_t, http2_request_head_submit_error> submit_extended_connect_request_head(
+        std::string_view, scheme_type&&,
         std::string_view, std::string_view, std::span<const http_header_view> = {}) = delete;
     template <detail::http_temporary_owning_char_string authority_type>
-    http2_request_head_submit_result submit_extended_connect_request_head(std::string_view,
+    std::variant<std::uint32_t, http2_request_head_submit_error> submit_extended_connect_request_head(
+        std::string_view,
         std::string_view, authority_type&&, std::string_view,
         std::span<const http_header_view> = {}) = delete;
     template <detail::http_temporary_owning_char_string path_type>
-    http2_request_head_submit_result submit_extended_connect_request_head(std::string_view,
+    std::variant<std::uint32_t, http2_request_head_submit_error> submit_extended_connect_request_head(
+        std::string_view,
         std::string_view, std::string_view, path_type&&, std::span<const http_header_view> = {}) = delete;
     // A DATA event borrows bytes from the accepted input and retains the matching
     // receive-window debt. Once the owner has consumed a delivered DATA credit,
@@ -371,7 +363,7 @@ public:
     void pin_stream(std::uint32_t stream_id);
     // Pins the stream of a successful client request-head submission. A pin
     // failure abandons that stream, deferring cleanup if necessary, and rethrows.
-    void lease_submitted_request(const http2_request_head_submit_result& result);
+    void lease_submitted_request(const std::variant<std::uint32_t, http2_request_head_submit_error>& result);
     // Ends an owner lease. The stream is unpinned once its delivered DATA credit
     // and queued events are gone; until then the release stays deferred.
     void release_stream_lease(std::uint32_t stream_id);
@@ -403,9 +395,6 @@ private:
     void append_response_header_frames(
         http2_stream_state& stream, std::string_view header_block, http2_end_stream end_stream,
         std::size_t additional_output_bytes = 0, std::size_t additional_output_segments = 0);
-    [[nodiscard]] http2_response_head_submit_result submit_response_head_impl(
-        std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan,
-        std::optional<std::string_view> complete_body);
     struct prepared_data_submission final {
         explicit prepared_data_submission(std::pmr::memory_resource* resource)
             : owned_input_(resource) {}
@@ -519,14 +508,14 @@ private:
     [[nodiscard]] std::optional<http2_request_head_submit_error> local_request_admission_error()
         const noexcept;
     [[nodiscard]] http2_stream_state* admit_local_request_stream();
-    [[nodiscard]] http2_request_head_submit_result publish_local_request_head(
-        http2_stream_state& stream) noexcept;
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>
+    publish_local_request_head(http2_stream_state& stream) noexcept;
     template <typename prepare_type>
-    [[nodiscard]] http2_request_head_submit_result submit_local_request_head(prepare_type&& prepare) {
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>
+    submit_local_request_head(prepare_type&& prepare) {
         auto* stream = admit_local_request_stream();
         if (stream == nullptr) {
-            return http2_request_head_submit_result::make_failure(
-                http2_request_head_submit_error::local_stream_capacity_reached);
+            return http2_request_head_submit_error::local_stream_capacity_reached;
         }
         const auto stream_id = stream->id();
         try {

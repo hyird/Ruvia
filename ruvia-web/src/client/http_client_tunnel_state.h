@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/http_client_tunnel_config.h"
+#include "ruvia/web/http_client_types.h"
 
 #include "client/http_client_output_queue.h"
 

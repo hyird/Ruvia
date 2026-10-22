@@ -90,17 +90,19 @@ void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer, b
                 RUVIA_CHECK(fed != ruvia::http2_feed_result::protocol_failure);
                 while (auto event = connection.next_event()) {
                     if (auto* request = event->request_head()) {
-                        RUVIA_CHECK(request->request().header("x-client") == "unified");
-                        const auto request_view = connection.server_request_view(request->stream_id());
-                        saw_extended_connect = request_view && request_view->method_ == "CONNECT" &&
-                                               request_view->protocol_ == "websocket";
-                        const auto validation = ruvia::validate_http2_websocket_handshake(connection, request->stream_id(), request->request());
-                        const auto submitted = connection.submit_websocket_handshake(request->stream_id(), request->request(), validation, {.deflate_ = {.enabled_ = true}});
-                        if (!submitted.submitted()) {
+                        const auto built_request = request->build_request(&resource);
+                        RUVIA_CHECK(built_request.header("x-client") == "unified");
+                        const auto request_view = request->request_view();
+                        saw_extended_connect = request_view.method_ == "CONNECT" &&
+                                               request_view.protocol_ == "websocket";
+                        const auto validation = ruvia::validate_http2_websocket_handshake(connection, request->stream_id(), built_request);
+                        const auto submitted = connection.submit_websocket_handshake(request->stream_id(), built_request, validation, {.deflate_ = {.enabled_ = true}});
+                        const auto* negotiated = std::get_if<ruvia::http2_websocket_negotiation>(&submitted);
+                        if (negotiated == nullptr) {
                             throw std::runtime_error("HTTP/2 WebSocket handshake failed");
                         }
                         websocket.emplace(ruvia::websocket_connection_options{.resource_ = &resource,
-                            .compression_ = submitted.submitted()->compression()});
+                            .compression_ = negotiated->compression()});
                         if (reset_peer) {
                             RUVIA_CHECK(connection.submit_reset(1, ruvia::http2_error_code::cancel) == ruvia::http2_submit_status::accepted);
                         }
@@ -249,9 +251,10 @@ void exercise_closing_peer(ruvia::testing::test_context& ruvia_ctx, closing_peer
                 RUVIA_CHECK(fed != ruvia::http2_feed_result::protocol_failure);
                 while (auto event = connection.next_event()) {
                     if (auto* head = event->request_head()) {
-                        const auto validation = ruvia::validate_http2_websocket_handshake(connection, head->stream_id(), head->request());
-                        const auto submitted = connection.submit_websocket_handshake(head->stream_id(), head->request(), validation);
-                        RUVIA_CHECK(submitted.submitted() != nullptr);
+                        const auto built_request = head->build_request(std::pmr::get_default_resource());
+                        const auto validation = ruvia::validate_http2_websocket_handshake(connection, head->stream_id(), built_request);
+                        const auto submitted = connection.submit_websocket_handshake(head->stream_id(), built_request, validation);
+                        RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(submitted));
                         request.emplace(std::move(*head));
                         websocket.emplace();
                     } else if (auto* data = event->tunnel_data()) {

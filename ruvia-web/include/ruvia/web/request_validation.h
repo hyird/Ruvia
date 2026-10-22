@@ -69,7 +69,7 @@ public:
     using ruvia_validation_body_type = body_t_type;
 
     void validate(const body_t_type& body, validator& validator_value) const {
-        model_validation_access::validate_model(body, validator_value);
+        validate_model(body, validator_value);
     }
 
     [[nodiscard]] task<void> handle(context& c, next& next_value) {
@@ -88,7 +88,7 @@ public:
             validator validator_value({.resource_ = c.arena()});
             validate(body, validator_value);
             validator_value.throw_if_invalid();
-            auto binding = bind_validated_json_model(c, body, raw_json);
+            auto binding = detail::bind_validated_model(c, body);
             co_await next_value();
         } else if constexpr (target == validation_target::form) {
             if (!detail::content_type_matches(c.req().header("Content-Type").value_or(std::string_view{}),

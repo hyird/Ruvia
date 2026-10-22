@@ -173,7 +173,7 @@ websocket_client_negotiation::websocket_client_negotiation(websocket_client_nego
 std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_fields(std::span<const http_header> fields_value) const {
     return validate(fields_value, [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, false);
 }
-http2_request_head_submit_result websocket_client_negotiation::submit_http2_request(
+std::variant<std::uint32_t, http2_request_head_submit_error> websocket_client_negotiation::submit_http2_request(
     http2_connection& connection, std::string_view scheme, std::string_view authority,
     std::string_view target, std::span<const http_header_view> application_headers) const {
     std::pmr::vector<http_header_view> headers(protocols_.get_allocator().resource());

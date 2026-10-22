@@ -17,8 +17,8 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/http_datagram_stream.h"
 #include "ruvia/web/http_tunnel.h"
-#include "ruvia/web/http_udp_tunnel.h"
 
 #include "http_server_fixture.h"
 #include "test_harness.h"
@@ -51,14 +51,14 @@ class udp_tunnel_routes final {
 
     ruvia::task<void> dynamic(ruvia::context& c) {
         c.worker_state<std::shared_ptr<udp_tunnel_observation>>()->dynamic_invoked_ = true;
-        ruvia::http_udp_tunnel tunnel(c.tunnel().datagrams());
+        auto tunnel = c.tunnel().udp();
         co_await tunnel.finish();
     }
 
     ruvia::task<void> echo(ruvia::context& c) {
         auto& observation = *c.worker_state<std::shared_ptr<udp_tunnel_observation>>();
         ruvia::http_capsule_config config{.max_capsule_length_ = 13};
-        ruvia::http_udp_tunnel original(c.tunnel().datagrams(config));
+        auto original = c.tunnel().udp(config);
         try {
             try {
                 co_await original.send(std::string(13, 'x'));
@@ -75,7 +75,7 @@ class udp_tunnel_routes final {
                 auto discarded = tunnel.send("discarded");
                 static_cast<void>(discarded);
             }
-            std::optional<ruvia::http_udp_datagram> datagram;
+            std::optional<ruvia::http_datagram> datagram;
             ruvia::task_scope reads(c.worker());
             const auto receive = [&]() -> ruvia::task<void> {
                 datagram = co_await std::move(first_read);
@@ -114,7 +114,7 @@ class udp_tunnel_routes final {
 
     ruvia::task<void> delayed(ruvia::context& c) {
         co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(30));
-        ruvia::http_udp_tunnel tunnel(c.tunnel().datagrams());
+        auto tunnel = c.tunnel().udp();
         co_await tunnel.finish();
     }
 
@@ -152,7 +152,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             RUVIA_CHECK(result.tunnel()->header("capsule-protocol") == "?1");
             RUVIA_CHECK(!result.tunnel()->header("content-length"));
             ruvia::http_capsule_config capsule_config{.max_capsule_length_ = 13};
-            ruvia::http_udp_tunnel tunnel(std::move(*result.tunnel()).datagrams(capsule_config));
+            auto tunnel = std::move(*result.tunnel()).udp(capsule_config);
             bool capsule_bound_rejected = false;
             try {
                 co_await tunnel.send(std::string(13, 'x'));
@@ -174,7 +174,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
                     RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(ready->payload().data()), ready->payload().size()), expected);
                 }
             }
-            std::optional<ruvia::http_udp_datagram> retained;
+            std::optional<ruvia::http_datagram> retained;
             const auto worker = attachment.loop().handle();
             ruvia::task_scope reader(worker);
             const auto receive = [&]() -> ruvia::task<void> {

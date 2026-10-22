@@ -78,14 +78,16 @@ namespace db_transaction_operation_test {
 using text_entity = ruvia::db_entity<"records", ruvia::db_column<"v", std::pmr::string>>;
 
 struct queued_transaction_operations final {
-    queued_transaction_operations(ruvia::db_transaction& transaction, const ruvia::db_query& query,
-        const ruvia::db_query& change)
+    explicit queued_transaction_operations(ruvia::db_transaction& transaction)
         : commit_(transaction.commit()),
           rollback_(transaction.rollback()),
           query_(transaction.query("SELECT v FROM records")),
           execute_(transaction.execute("UPDATE records SET v = 'raw'")),
-          compiled_query_(transaction.query(query)),
-          compiled_execute_(transaction.execute(change)),
+          compiled_query_(transaction.get_repository<text_entity>().create_query_builder().get_raw_many()),
+          compiled_execute_(transaction.get_repository<text_entity>()
+                  .create_delete_builder()
+                  .where(text_entity::column<"v">().is_not_null())
+                  .execute()),
           mapped_(transaction.get_repository<text_entity>().find()),
           page_(transaction.get_repository<text_entity>().find_and_count()) {}
 
@@ -128,10 +130,6 @@ RUVIA_TEST(db_transaction_can_prepare_cold_operations_while_a_statement_is_runni
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto handle = connected.handle();
         auto transaction = co_await handle.begin_transaction();
-        db_query query;
-        query.select(query.column("v")).from("records");
-        db_query change;
-        change.delete_from("records");
         bool first_completed = false;
         task_scope running(connected.worker());
         const auto first = [&]() -> task<void> {
@@ -144,7 +142,7 @@ RUVIA_TEST(db_transaction_can_prepare_cold_operations_while_a_statement_is_runni
         bool concurrent_rejected = false;
         std::exception_ptr failure;
         try {
-            queued = std::make_unique<queued_transaction_operations>(transaction, query, change);
+            queued = std::make_unique<queued_transaction_operations>(transaction);
         } catch (const std::logic_error&) {
             queued.reset();
         } catch (...) {
@@ -316,9 +314,7 @@ RUVIA_TEST(db_transaction_advisory_locks_notify_cursors_and_large_objects_execut
         RUVIA_CHECK(co_await transaction.try_advisory_lock(7001));
         co_await transaction.notify("iot_outbox_pending", "ready");
 
-        db_query cursor_query;
-        cursor_query.select(cursor_query.column("v")).from("records");
-        co_await transaction.declare_cursor("chunk_cursor", cursor_query);
+        co_await transaction.declare_cursor("chunk_cursor", "SELECT \"v\" FROM \"records\"");
         const auto fetched = co_await transaction.fetch_cursor("chunk_cursor", 8);
         RUVIA_CHECK_EQ(fetched.size(), std::size_t{2});
         co_await transaction.close_cursor("chunk_cursor");

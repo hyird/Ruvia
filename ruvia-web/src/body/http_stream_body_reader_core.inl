@@ -46,7 +46,7 @@ stream_body_reader<stream_type>::stream_body_reader(stream_type& stream,
     continue_pending_ = expectation_plan.send_continue() != nullptr;
     const auto* chunked = body_plan_.chunked();
     if (chunked != nullptr && !chunked->transfer_codings().empty()) {
-        const auto& codings = chunked->transfer_codings().values_;
+        const auto& codings = chunked->transfer_codings();
         transfer_decoder_ = make_pmr_object<http_transfer_coding_stack_decoder>(allocator.resource(),
             std::span<const http_transfer_coding>(codings.data(), codings.size()),
             allocator.resource(), body_limit_value);

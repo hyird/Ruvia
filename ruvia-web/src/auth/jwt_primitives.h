@@ -26,8 +26,8 @@ void jwt_append_json_member(
 [[nodiscard]] std::chrono::system_clock::time_point jwt_from_epoch_seconds(std::int64_t value);
 
 struct jwt_payload_access final {
-    [[nodiscard]] static jwt_claim claim(std::pmr::string name, std::pmr::string value) {
-        return jwt_claim(jwt_claim::owned_tag_type{}, std::move(name), std::move(value));
+    [[nodiscard]] static jwt_claim claim(std::pmr::string name, std::pmr::string value) noexcept {
+        return jwt_claim(std::move(name), std::move(value));
     }
 
     [[nodiscard]] static bool decode_jwt_payload_claim(jwt_payload& payload_value, std::string_view key,

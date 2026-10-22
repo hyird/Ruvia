@@ -124,7 +124,7 @@ ruvia_link_controllers(my_service user_controllers)
 - **错误处理形状**：
   - **正常协议/队列状态推进**：通过状态枚举或结果类型表示（如 `post_status::queue_full`、`channel_send_status::full`、`blocking_status::timed_out`、`worker_wait_status::closed`）。
   - **操作失败或业务/协议错误**：抛出类型化异常（如路由中抛出 `ruvia::http_error` 或 `ruvia::validation_error` 由错误处理器转换为对应 HTTP 响应；客户端抛出 `http_client_error`、`websocket_client_error`、`db_error`、`redis_error`）。
-  - **纯解析/值校验边界**：返回 `std::optional<T>` 或 `std::variant<T, Error>`（如 `ruvia::parse_integer<T>`、`ruvia::from_json<T>`）。
+  - **纯解析/值校验边界**：返回 `std::optional<T>`、`std::variant<T, Error>`，或直接返回值并在格式/规则非法时抛出 `std::invalid_argument` / `ruvia::validation_error`（如 `ruvia::parse_integer<T>`、`ruvia::from_json<T>`）。
 
 ---
 
@@ -141,9 +141,9 @@ ruvia_link_controllers(my_service user_controllers)
 | [middleware_next.cpp](../examples/web/middleware_next.cpp) | `ruvia_example_middleware_next` | 默认 | 中间件职责链、前置/后置响应头处理、`co_await next_value()` 与 `c.respond(...)` 短路拦截 |
 | [request_policies.cpp](../examples/web/request_policies.cpp) | `ruvia_example_request_policies` | 默认 | 路由级请求体大小限制 `body_limit<N>`、请求级状态 `bind_request_state` / `request_state`、子请求 `c.dispatch(...)` 与 `csrf_protection` |
 | [files_static.cpp](../examples/web/files_static.cpp) | `ruvia_example_files_static` | 默认 | 单文件响应 `c.file()`、不可变静态快照 `static_root` 与 `c.static_file()`、定时刷新 `document_root`、Range、ETag 与预压缩 |
-| [streaming.cpp](../examples/web/streaming.cpp) | `ruvia_example_streaming` | 默认 | 流式请求体 `get_body_reader()`、流式 Multipart `get_multipart_reader()`、分块文本流 `stream_text()` 与 SSE `stream_sse()` |
+| [streaming.cpp](../examples/web/streaming.cpp) | `ruvia_example_streaming` | 默认 | 流式请求体 `body_reader()`、流式 Multipart `multipart_reader()`、分块文本流 `stream_text()` 与 SSE `stream_sse()` |
 | [http_features.cpp](../examples/web/http_features.cpp) | `ruvia_example_http_features` | 默认 | `103 Early Hints`（`c.inform`）、RFC 9218 优先级（`c.priority`）、HTTP/2 Server Push（`c.push`）、`ORIGIN` / `ALTSVC` 通告与请求/响应 Trailer |
-| [websocket.cpp](../examples/web/websocket.cpp) | `ruvia_example_websocket` | 默认 | WebSocket 服务端路由（`RUVIA_GET_WS` / `RUVIA_GET_WS_OPTIONS`）、子协议协商、心跳与关闭握手、零拷贝帧回显 |
+| [websocket.cpp](../examples/web/websocket.cpp) | `ruvia_example_websocket` | 默认 | WebSocket 服务端路由（`RUVIA_GET_WS` / `RUVIA_WS`）、子协议协商、心跳与关闭握手、零拷贝帧回显 |
 | [tunnels.cpp](../examples/web/tunnels.cpp) | `ruvia_example_tunnels` | 默认 | HTTP/1.1 & HTTP/2 `CONNECT` 字节流隧道与 RFC 9298 `CONNECT-UDP` 数据报隧道（含服务端与 `--client` 客户端模式） |
 | [http_client.cpp](../examples/web/http_client.cpp) | `ruvia_example_http_client` | 默认 | Worker 绑定的出站 `http_client`：超时控制、POST 转发、`read_all()` 与 `pipe_to(c.stream())` 流式反向代理 |
 | [http_client_advanced.cpp](../examples/web/http_client_advanced.cpp) | `ruvia_example_http_client_advanced` | 默认 | 独立 `event_loop_pool` 上的 HTTP/1.1 & HTTP/2 高级客户端：流式上传、`100-continue`、Trailer、1xx 响应、重设优先级、接收 Push 与通告、同源重定向 |

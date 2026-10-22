@@ -46,7 +46,8 @@ private:
 
     redis_transaction(detail::redis_pool& pool, operation_options options,
         std::pmr::memory_resource* resource, operation_scope& scope) noexcept;
-    [[nodiscard]] static task<std::pmr::vector<redis_value>> execute_owned(detail::redis_command_payload payload);
+    [[nodiscard]] static task<std::pmr::vector<redis_value>> execute_owned(
+        operation_scope& scope, detail::redis_command_payload payload);
 
     detail::redis_command_batch batch_;
     scoped_capability_registration registration_;

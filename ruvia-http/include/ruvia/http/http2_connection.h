@@ -14,10 +14,7 @@
 #include "ruvia/http/http2_event.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_request_content.h"
-#include "ruvia/http/http2_request_head_submit_result.h"
-#include "ruvia/http/http2_response_head_submit_result.h"
 #include "ruvia/http/http2_types.h"
-#include "ruvia/http/http2_websocket_handshake_submit_result.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
@@ -33,9 +30,7 @@
 namespace ruvia {
 
 enum class http2_server_request_release_status : std::uint8_t { released,
-    closed,
-    invalid_lease };
-
+    closed };
 struct http2_connection_options final {
     // The resource must outlive the connection and any escaped events or
     // credits, including their owned heads and trailers.
@@ -130,7 +125,7 @@ public:
     [[nodiscard]] std::optional<http2_event> next_event();
     [[nodiscard]] std::string_view pending_output() const& noexcept;
     std::string_view pending_output() const&& = delete;
-    [[nodiscard]] http2_output_consume_status consume_output(std::size_t bytes) noexcept;
+    [[nodiscard]] http2_output_consume_status consume_output(std::size_t bytes);
     void take_output(std::pmr::string& output);
     // Appends whole frame boundaries (the first frame may exceed max_bytes).
     // A complete unconsumed batch swaps storage when output is empty and its
@@ -147,11 +142,11 @@ public:
     // Submitted fields are encoded/owned before returning. If owner-lease
     // allocation fails after HEADERS commit, cancellation follows the deferred
     // release rules above and the original exception is rethrown.
-    [[nodiscard]] http2_request_head_submit_result submit_request_head(
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(
         const http2_regular_request_head_view& request);
-    [[nodiscard]] http2_request_head_submit_result submit_request_head(
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(
         const http2_connect_request_head_view& request);
-    [[nodiscard]] http2_request_head_submit_result submit_request_head(
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(
         const http2_extended_connect_request_head_view& request);
     // Bytes may borrow pending_output(); such input is copied in the connection
     // resource before output growth can invalidate that source.
@@ -168,38 +163,26 @@ public:
     [[nodiscard]] std::variant<http2_request_head_event, http2_push_submit_error> submit_push_request(
         std::uint32_t associated_stream_id, http_push_request_view request);
 
-    [[nodiscard]] std::variant<std::uint32_t, http2_push_submit_error> submit_push_promise(
-        std::uint32_t associated_stream_id, http_push_request_view request);
     [[nodiscard]] http2_submit_status submit_interim_response_head(
         std::uint32_t stream_id, const http_interim_response_head& response);
-    // Accepts the complete response body, including any flow-control-blocked
-    // suffix. Allocation failure queues no frames and leaves submission retryable.
-    [[nodiscard]] http2_submit_status submit_buffered_response(
-        std::uint32_t stream_id, const http_response& response);
     [[nodiscard]] http2_submit_status submit_connect_response_head(
         std::uint32_t stream_id, const http_response& response);
-    [[nodiscard]] http2_websocket_handshake_submit_result submit_websocket_handshake(
-        std::uint32_t stream_id, const http_request& request,
-        const websocket_handshake_validation_result& validation);
-    [[nodiscard]] http2_websocket_handshake_submit_result submit_websocket_handshake(
-        std::uint32_t stream_id, const http_request& request,
+    [[nodiscard]] std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_error>
+    submit_websocket_handshake(std::uint32_t stream_id, const http_request& request,
         const websocket_handshake_validation_result& validation,
-        http2_websocket_server_handshake_options options);
+        http2_websocket_server_handshake_options options = {});
     // Submit only the final buffered-response head. The committed plan tells the
     // caller whether/how much representation remains for DATA or file output.
-    [[nodiscard]] http2_response_head_submit_result submit_response_head(
-        std::uint32_t stream_id, const http_response& response,
+    [[nodiscard]] std::variant<http_buffered_response_write_plan, http2_response_head_submit_error>
+    submit_response_head(std::uint32_t stream_id, const http_response& response,
         http_buffered_response_write_plan write_plan);
-    // Submit a final generic response head without trailers and leave an eligible
-    // response body open for subsequent submit_data() calls. Content-Length is
-    // not generated automatically; an explicit value, when present, constrains
-    // the total submitted DATA bytes.
-    [[nodiscard]] http2_streaming_response_head_submit_result submit_streaming_response_head(
-        std::uint32_t stream_id, http_response response, http_response_stream_kind kind,
-        http_response_trailer_intent trailer_intent);
-    // Convenience form for generic streaming responses without trailers.
-    [[nodiscard]] http2_submit_status submit_streaming_response_head(
-        std::uint32_t stream_id, http_response response);
+    // Submit a final generic response head and leave an eligible response body
+    // open for subsequent submit_data() calls. Content-Length is not generated
+    // automatically; an explicit value, when present, constrains the total
+    // submitted DATA bytes.
+    [[nodiscard]] std::variant<http_response_stream_commit_plan, http2_response_head_submit_error>
+    submit_streaming_response_head(std::uint32_t stream_id, http_response response,
+        http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
     // Encodes trailers before returning accepted or queued; field storage may be
     // released or changed even while the ending waits for DATA flow control.
     [[nodiscard]] http2_finish_response_status finish_response(
@@ -231,10 +214,6 @@ public:
     // Reports the protocol receive state without exposing internal stream storage.
     [[nodiscard]] http2_stream_receive_status stream_receive_status(
         std::uint32_t stream_id) const noexcept;
-    // Borrowed snapshot of the peer's request metadata; it does not grant
-    // access to the connection's stream table or mutable protocol state.
-    [[nodiscard]] std::optional<http2_server_request_view> server_request_view(
-        std::uint32_t stream_id) const noexcept;
     // Reports each queued-send drain once, even if its final DATA closed the stream.
     // Control frames with no queued DATA preserve any untaken drain notifications.
     // A reset cancels untaken notifications. IDs borrow storage until the next
@@ -249,8 +228,6 @@ public:
     [[nodiscard]] std::optional<http2_error_code> connection_error() const noexcept;
 
 private:
-    friend std::variant<http_request, http_protocol_error> make_http2_server_request(
-        http2_connection&, std::uint32_t, std::pmr::memory_resource*, std::string_view);
     friend websocket_handshake_validation_result validate_http2_websocket_handshake(
         http2_connection&, std::uint32_t, const http_request&,
         websocket_handshake_validation_options) noexcept;
@@ -261,14 +238,6 @@ private:
     };
     std::unique_ptr<impl_type, impl_deleter_type> impl_;
 };
-
-// Builds a semantic request from a decoded server stream. The request borrows
-// stream metadata/body from `connection`, which must outlive the request, and
-// owns its header descriptors from `resource`.
-[[nodiscard]] std::variant<http_request, http_protocol_error> make_http2_server_request(
-    http2_connection& connection, std::uint32_t stream_id,
-    std::pmr::memory_resource* resource, std::string_view body);
-
 // Validates an RFC 8441 extended-CONNECT handshake against the decoded stream
 // state and its semantic request. The request and connection must remain alive
 // for the duration of the call.

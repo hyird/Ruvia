@@ -15,7 +15,7 @@ namespace ruvia {
 web_worker_context::web_worker_context(const worker_handle& worker_value, std::pmr::memory_resource* resource,
     const detail::worker_client_registry_view& client_registries,
     const detail::worker_state_registry* worker_states, blocking_pool* blocking_pool_value,
-    const stop_token& stop_token_value) noexcept
+    const ::ruvia::stop_token& stop_token_value) noexcept
     : capabilities_(worker_value, stop_token_value, worker_states, blocking_pool_value),
       resource_(resource),
       client_registries_(client_registries) {}
@@ -28,7 +28,7 @@ std::pmr::memory_resource* web_worker_context::pool() const noexcept {
     return resource_;
 }
 
-stop_token web_worker_context::get_stop_token() const noexcept {
+::ruvia::stop_token web_worker_context::stop_token() const noexcept {
     return capabilities_.stop_token();
 }
 
@@ -42,11 +42,11 @@ db_handle web_worker_context::db(std::string_view alias) const {
 }
 #endif
 
-http_client_handle web_worker_context::get_http_client() const {
+http_client_handle web_worker_context::http_client() const {
     return client_registries_.get_http_client(operation_scope_, capabilities_.stop_token());
 }
 
-http_client_handle web_worker_context::get_http_client(std::string_view alias) const {
+http_client_handle web_worker_context::http_client(std::string_view alias) const {
     return client_registries_.get_http_client(alias, operation_scope_, capabilities_.stop_token());
 }
 
@@ -107,7 +107,7 @@ using abandon_reservation_type = std::unique_ptr<web_worker_dispatch, abandon_re
 
 web_worker_dispatch::web_worker_dispatch(ruvia::worker_runtime& runtime, std::pmr::memory_resource* resource,
     worker_capabilities& capabilities, task_scope& jobs, const stop_token& stop_token_value)
-    : worker_(runtime.context().handle()),
+    : worker_(runtime.handle()),
       runtime_(runtime),
       resource_(pmr_resource_or_default(resource)),
       client_registries_(capabilities.client_registries()),

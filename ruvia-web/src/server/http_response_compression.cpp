@@ -39,12 +39,12 @@ struct buffered_compression_attempt final {
     const auto max_encoded_bytes = plain.empty() ? 0 : plain.size() - 1;
     auto encoding = encode_http_content(
         coding, plain, {.max_encoded_bytes_ = max_encoded_bytes, .resource_ = process_resource()});
-    if (auto* encoded = encoding.encoded(); encoded != nullptr) {
+    if (auto* encoded = std::get_if<std::pmr::string>(&encoding)) {
         return buffered_compression_attempt(
-            buffered_compression_attempt_status::compressed, std::move(*encoded).take_bytes());
+            buffered_compression_attempt_status::compressed, std::move(*encoded));
     }
-    const auto* failure = encoding.failure();
-    if (failure != nullptr && failure->error() == http_content_encode_error::encoded_size_exceeded) {
+    if (std::get<http_content_encode_error>(encoding) ==
+        http_content_encode_error::encoded_size_exceeded) {
         return buffered_compression_attempt(buffered_compression_attempt_status::not_smaller);
     }
     return buffered_compression_attempt(buffered_compression_attempt_status::failed);
@@ -113,9 +113,8 @@ http_response_compression_decision prepare_response_compression(
     const auto status_code = response.status();
     if (status_code == http_status::partial_content || status_code == http_status::reset_content ||
         response.header("Content-Encoding").has_value() || response.header("Content-Range").has_value() ||
-        (source_value != http_response_compression_source::sse &&
-            response_content_type_skips_compression(
-                response.header("Content-Type").value_or(std::string_view{}))) ||
+        response_content_type_skips_compression(
+            response.header("Content-Type").value_or(std::string_view{})) ||
         response_cache_control(response).has(cache_control_directive::no_transform) ||
         availability == http_response_coding_availability::identity_only) {
         return http_response_compression_decision::fixed_representation;
@@ -149,18 +148,17 @@ http_buffered_compression_step apply_response_compression(const http_response_co
 
     const auto coding = selection.coding();
     const auto max_encoded_bytes = body.empty() ? 0 : body.size() - 1;
-    std::optional<http_content_encode_result> encoding;
+    std::optional<std::variant<std::pmr::string, http_content_encode_error>> encoding;
     try {
         encoding.emplace(codecs.encoder(coding).encode(
             body, {.max_encoded_bytes_ = max_encoded_bytes, .resource_ = response.memory_resource()}));
     } catch (...) {
         return {http_response_compression_status::failed, false};
     }
-    auto* encoded = encoding->encoded();
+    auto* encoded = std::get_if<std::pmr::string>(&*encoding);
     if (encoded == nullptr) {
-        const auto* failure = encoding->failure();
-        if (failure != nullptr &&
-            failure->error() == http_content_encode_error::encoded_size_exceeded) {
+        if (std::get<http_content_encode_error>(*encoding) ==
+            http_content_encode_error::encoded_size_exceeded) {
             return not_applicable;
         }
         return {http_response_compression_status::failed, false};
@@ -168,7 +166,7 @@ http_buffered_compression_step apply_response_compression(const http_response_co
 
     try {
         response.replace_body_with_content_encoding(
-            std::move(*encoded).take_bytes(), http_content_coding_token(coding));
+            std::move(*encoded), http_content_coding_token(coding));
     } catch (...) {
         // The representation commit stages every affected header before
         // publishing the owned body. A request-resource failure therefore

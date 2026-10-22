@@ -71,7 +71,7 @@ struct worker_state final {
 class routes final {
 public:
     RUVIA_ROUTES_BEGIN(routes)
-    RUVIA_POST_STREAM("/accept-owner", echo);
+    RUVIA_POST("/accept-owner", echo, ruvia::stream_body);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& context) {
@@ -79,13 +79,13 @@ public:
         owner.check(context);
         const auto worker_id = context.worker().id();
         std::pmr::string body(context.arena());
-        auto& reader = context.req().get_body_reader();
+        auto& reader = context.req().body_reader();
         while (const auto chunk = co_await reader.text()) {
             owner.check(context);
             body.append(*chunk);
         }
         owner.check(context);
-        (void)co_await ruvia::sleep_for(context.worker(), 1ms, context.get_stop_token());
+        (void)co_await ruvia::sleep_for(context.worker(), 1ms, context.stop_token());
         owner.check(context);
         context.header("X-Connection-Worker", std::to_string(worker_id));
         co_return context.text(std::move(body));

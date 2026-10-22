@@ -31,10 +31,6 @@ public:
     }
 
     [[nodiscard]] http_client_handle handle(operation_options options);
-    [[nodiscard]] http_client_stats stats();
-    [[nodiscard]] std::string_view host();
-    [[nodiscard]] std::uint16_t port();
-    [[nodiscard]] http_scheme scheme();
 
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_;

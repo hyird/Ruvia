@@ -4,7 +4,6 @@
 #include <utility>
 
 #include "ruvia/web/http_client_types.h"
-#include "ruvia/web/http_udp_tunnel.h"
 
 #include "client/http_client_output_operation.h"
 #include "client/http_client_pool.h"

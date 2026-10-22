@@ -66,4 +66,38 @@ private:
     [[nodiscard]] scoped_operation<void> send_payload(std::string_view payload, bool udp);
     http_capsule_stream stream_;
 };
+
+// RFC 9297 HTTP Datagrams and reliable DATAGRAM capsules for a negotiated RFC 9298 CONNECT-UDP
+// tunnel. Unknown capsule types and unknown context IDs are silently dropped;
+// malformed DATAGRAM capsules terminate only this tunnel. Empty UDP packets are
+// data; an empty optional is EOF. Owns its capsule stream and preserves separate
+// read and send/finish lanes when moved.
+// Operations occupy their lane when started; unstarted operations may coexist.
+// send() owns its payload before returning.
+class http_udp_tunnel final {
+public:
+    explicit http_udp_tunnel(http_datagram_stream stream) noexcept
+        : stream_(std::move(stream)) {}
+    http_udp_tunnel(const http_udp_tunnel&) = delete;
+    http_udp_tunnel& operator=(const http_udp_tunnel&) = delete;
+    http_udp_tunnel(http_udp_tunnel&&) noexcept = default;
+    http_udp_tunnel& operator=(http_udp_tunnel&&) noexcept = default;
+    [[nodiscard]] scoped_operation<std::optional<http_datagram>> read() &;
+    scoped_operation<std::optional<http_datagram>> read() && = delete;
+    [[nodiscard]] scoped_operation<void> send(std::span<const std::byte> payload) &;
+    scoped_operation<void> send(std::span<const std::byte>) && = delete;
+    [[nodiscard]] scoped_operation<void> send(std::string_view payload) &;
+    scoped_operation<void> send(std::string_view) && = delete;
+    [[nodiscard]] scoped_operation<void> finish() & {
+        return stream_.finish();
+    }
+    scoped_operation<void> finish() && = delete;
+    void abort() & noexcept {
+        stream_.abort();
+    }
+    void abort() && = delete;
+
+private:
+    http_datagram_stream stream_;
+};
 }  // namespace ruvia

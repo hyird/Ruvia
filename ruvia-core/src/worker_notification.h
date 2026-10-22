@@ -112,8 +112,8 @@ void disconnect_native_receiver(native_wake_handle receiver) noexcept;
 
 class worker_notification_state final {
 public:
-    worker_notification_state(
-        ::ruvia::worker_runtime_context& runtime, worker_notification_options options);
+    worker_notification_state(asio::io_context& io_context, const worker_handle& worker,
+        worker_notification_options options);
     ~worker_notification_state();
 
     worker_notification_state(const worker_notification_state&) = delete;

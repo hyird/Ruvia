@@ -47,9 +47,6 @@ public:
     template <typename entity_type>
     [[nodiscard]] db_repository<entity_type, db_handle> get_repository() const;
 
-    [[nodiscard]] scoped_operation<db_rows> query(const db_query& query) const;
-    [[nodiscard]] scoped_operation<db_exec_result> execute(const db_query& query) const;
-
     scoped_operation<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const;
     scoped_operation<db_rows> query(
         std::string_view sql, std::initializer_list<db_value> params) const = delete;
@@ -131,23 +128,24 @@ private:
 
     [[nodiscard]] db_driver query_driver() const;
     [[nodiscard]] std::pmr::memory_resource* query_resource() const;
+    [[nodiscard]] scoped_operation<db_exec_result> execute_query(const db_query& query) const;
     [[nodiscard]] task<db_rows> query_task(const db_query& query) const;
     [[nodiscard]] task<std::pair<db_rows, db_rows>> query_and_count_task(const db_query& query, const db_query& count) const;
     template <typename result_type, typename mapper_type>
     [[nodiscard]] scoped_operation<std::pair<result_type, std::uint64_t>> query_mapped_and_count(const db_query& query, const db_query& count, mapper_type mapper) const {
         registration_.require_active();
+        auto& scope = registration_.scope();
         auto task_value = query_and_count_task(query, count);
-        return make_scoped_operation(registration_.scope(),
-            detail::map_db_query_and_count<result_type>(std::move(task_value), resource_, std::move(mapper)),
-            scoped_operation_io_kind::db);
+        return make_scoped_operation(scope,
+            detail::map_db_query_and_count<result_type>(scope, std::move(task_value), resource_, std::move(mapper)));
     }
     template <typename result_type, typename mapper_type>
     [[nodiscard]] scoped_operation<result_type> query_mapped(const db_query& query, mapper_type mapper) const {
         registration_.require_active();
+        auto& scope = registration_.scope();
         auto task_value = query_task(query);
-        return make_scoped_operation(registration_.scope(),
-            detail::map_db_query<result_type>(std::move(task_value), resource_, std::move(mapper)),
-            scoped_operation_io_kind::db);
+        return make_scoped_operation(scope,
+            detail::map_db_query<result_type>(scope, std::move(task_value), resource_, std::move(mapper)));
     }
 
 #ifdef RUVIA_ENABLE_REDIS

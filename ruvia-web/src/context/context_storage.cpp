@@ -10,7 +10,7 @@ namespace ruvia {
 context::context(
     request_memory& memory, const http_request& request, const detail::context_services& services)
     : context(memory, request, {}, nullptr, nullptr, 0, 0, services) {
-    operation_scope_.bind_io_metrics(services.io_metrics());
+    operation_scope_.bind_context(services.io_metrics());
 }
 
 context::context(request_memory& memory, const http_request& request,
@@ -28,7 +28,7 @@ context::context(request_memory& memory, const http_request& request,
       route_rate_limit_scope_(route_rate_limit_scope),
       request_storage_(make_pmr_object<detail::context_request_storage>(memory.resource(),
           services, memory.resource())) {
-    operation_scope_.bind_io_metrics(services.io_metrics());
+    operation_scope_.bind_context(services.io_metrics());
 }
 
 context::~context() = default;

@@ -74,45 +74,35 @@ RUVIA_TEST(model_json_bytes_roundtrip_empty_and_all_octets) {
     RUVIA_CHECK(encoded.find("AAECAwQF") != std::pmr::string::npos);
     RUVIA_CHECK(encoded.find("/w==") != std::pmr::string::npos);
     auto parsed_value = ruvia::from_json<ruvia::bytes>(encoded);
-    RUVIA_CHECK(parsed_value.has_value());
-    if (parsed_value) {
-        check_bytes(ruvia_ctx, *parsed_value, octets);
-    }
+    check_bytes(ruvia_ctx, parsed_value, octets);
     auto empty = ruvia::from_json<ruvia::bytes>(R"("")");
-    RUVIA_CHECK(empty && empty->empty());
+    RUVIA_CHECK(empty.empty());
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(ruvia::bytes{})), R"("")");
 }
 
 RUVIA_TEST(model_json_bytes_accepts_padding_and_rejects_noncanonical_inputs) {
     auto one = ruvia::from_json<ruvia::bytes>(R"("Zg==")");
     auto two = ruvia::from_json<ruvia::bytes>(R"("Zm8=")");
-    RUVIA_CHECK(one && two && one->size() == 1 && two->size() == 2);
-    if (one && two) {
-        RUVIA_CHECK_EQ(one->view().front(), std::uint8_t{0x66});
-        RUVIA_CHECK_EQ(two->view().back(), std::uint8_t{0x6f});
-    }
+    RUVIA_CHECK(one.size() == 1 && two.size() == 2);
+    RUVIA_CHECK_EQ(one.view().front(), std::uint8_t{0x66});
+    RUVIA_CHECK_EQ(two.view().back(), std::uint8_t{0x6f});
     auto escaped = ruvia::from_json<ruvia::bytes>(R"("\u005ag\u003d=")");
-    RUVIA_CHECK(escaped && escaped->view().front() == 0x66);
+    RUVIA_CHECK_EQ(escaped.view().front(), std::uint8_t{0x66});
     for (const auto input : {R"("Zg")", R"("Zh==")", R"("Zm=9")", R"("Zm9v=")",
              R"("Zm-v")", R"("Zm_v")", R"("Zm9v\n")", R"("Zm9=")", R"("====")",
              R"("Zg==AAAA")", R"("AA== ")", "null", "[1]", "123"}) {
-        RUVIA_CHECK(!ruvia::from_json<ruvia::bytes>(input));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::bytes>(input); }));
     }
 }
 
 RUVIA_TEST(model_json_bytes_supports_nested_arrays_nullable_and_omit_empty) {
     auto nested = ruvia::from_json<binary_array_model>(R"({"items":["AQI=",""],"boxed":["/w=="]})");
-    RUVIA_CHECK(nested.has_value());
-    if (nested) {
-        RUVIA_CHECK_EQ(nested->get<"items">().size(), std::size_t{2});
-        RUVIA_CHECK_EQ(nested->get<"items">()[0].view().size(), std::size_t{2});
-        RUVIA_CHECK_EQ(nested->get<"boxed">().front().view().front(), std::uint8_t{255});
-    }
+    RUVIA_CHECK_EQ(nested.get<"items">().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(nested.get<"items">()[0].view().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(nested.get<"boxed">().front().view().front(), std::uint8_t{255});
     auto model = ruvia::from_json<binary_model>(R"({"bytes":"AQI=","optional":null,"empty":""})");
-    RUVIA_CHECK(model && model->is_null<"optional">());
-    if (model) {
-        RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(*model)), R"({"bytes":"AQI=","optional":null})");
-    }
+    RUVIA_CHECK(model.is_null<"optional">());
+    RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(model)), R"({"bytes":"AQI=","optional":null})");
 }
 
 RUVIA_TEST(model_bytes_set_and_move_preserve_values) {
@@ -145,13 +135,13 @@ RUVIA_TEST(model_bytes_repeated_operations_reclaim_storage_and_keep_results) {
         for (int i = 0; i < 32; ++i) {
             {
                 auto parsed_value = ruvia::from_json<ruvia::bytes>(saved, {.resource_ = &memory});
-                RUVIA_CHECK(parsed_value && *parsed_value == retained.get<"bytes">());
-                if (parsed_value) {
-                    const auto output = ruvia::to_json(*parsed_value, {.resource_ = &output_memory});
-                    RUVIA_CHECK_EQ(output, saved);
-                }
-                RUVIA_CHECK(!ruvia::from_json<ruvia::array<ruvia::bytes>>(
-                    R"(["AQIDBA==","Zh=="])", {.resource_ = &memory}));
+                RUVIA_CHECK(parsed_value == retained.get<"bytes">());
+                const auto output = ruvia::to_json(parsed_value, {.resource_ = &output_memory});
+                RUVIA_CHECK_EQ(output, saved);
+                RUVIA_CHECK(ruvia::testing::throws_on([&] {
+                    (void)ruvia::from_json<ruvia::array<ruvia::bytes>>(
+                        R"(["AQIDBA==","Zh=="])", {.resource_ = &memory});
+                }));
             }
             RUVIA_CHECK_EQ(memory.live_allocations(), baseline);
             RUVIA_CHECK_EQ(output_memory.live_allocations(), output_baseline);
@@ -178,7 +168,7 @@ RUVIA_TEST(model_bytes_partial_parse_and_output_failures_release_storage) {
     binary_failing_resource reference(1024);
     {
         auto parsed_value = ruvia::from_json<ruvia::array<ruvia::bytes>>(input, {.resource_ = &reference});
-        RUVIA_CHECK(parsed_value && parsed_value->size() == 2);
+        RUVIA_CHECK_EQ(parsed_value.size(), std::size_t{2});
     }
     RUVIA_CHECK_EQ(reference.allocations_.live_allocations(), std::size_t{0});
     const auto count = reference.payload_allocations();

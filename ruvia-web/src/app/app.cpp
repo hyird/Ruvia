@@ -67,7 +67,7 @@ http_server_stats application::http_stats() const {
     return total;
 }
 
-blocking_pool_stats application::get_blocking_pool_stats() const {
+blocking_pool_stats application::blocking_pool_stats() const {
     auto& state_value = *state_;
     std::lock_guard lock(state_value.mutex_);
     if (!state_value.runtime_ || !state_value.runtime_->blocking_pool_) {

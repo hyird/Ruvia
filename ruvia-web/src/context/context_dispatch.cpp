@@ -86,7 +86,7 @@ scoped_operation<dispatch_response> context::dispatch(dispatch_options options) 
         operation_scope_, dispatch_task(std::move(fields), std::move(options.stop_token_)));
 }
 
-task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string> fields, stop_token stop_token_value) {
+task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string> fields, ::ruvia::stop_token stop_token_value) {
     auto memory = memory_.fork();
     const std::string_view body = fields[subrequest_field_body];
     std::array<char, http_max_unsigned_decimal_size> content_length_text;
@@ -98,11 +98,13 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
         headers.emplace_back(fields[index], fields[index + 1]);
     }
     headers.emplace_back("Content-Length", content_length);
-    const auto [request, parse_error] = make_parsed_http_request(fields[subrequest_field_method],
+    auto parsed_request = make_parsed_http_request(fields[subrequest_field_method],
         fields[subrequest_field_target], headers, std::as_bytes(std::span(body.data(), body.size())), memory.resource());
-    if (parse_error.has_value()) {
+    auto* parsed = std::get_if<http_request>(&parsed_request);
+    if (parsed == nullptr) {
         throw std::invalid_argument("invalid subrequest");
     }
+    const auto& request = *parsed;
     const auto& routes = *services().routes();
     const auto resolution = routes.resolve(request);
     const auto stop = combine_stop_tokens(capabilities_.stop_token(), std::move(stop_token_value));

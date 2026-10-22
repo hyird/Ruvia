@@ -571,7 +571,7 @@ task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::p
         if (!slots_[index].connected_) {
             co_await connect_slot(index, timeout);
         }
-        const auto start = co_await driver_type::start_stream(*this, index, sql, std::span<const db_value>(params),
+        auto start = co_await driver_type::start_stream(*this, index, sql, std::span<const db_value>(params),
             resource, timeout.constrained_by(config_.query_timeout_));
         if (!start.returns_rows_) {
             released = true;
@@ -580,7 +580,8 @@ task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::p
             throw std::invalid_argument("query_stream() requires row-producing SQL");
         }
         pending_result = start.result_;
-        db_stream_result stream_result(db_pool_ref_type{this}, index, pending_result, resource, std::move(options));
+        db_stream_result stream_result(
+            db_pool_ref_type{this}, index, pending_result, std::move(start.column_names_), resource, std::move(options));
         // Ownership now belongs to the stream result.
         pending_result = nullptr;
         co_return stream_result;
@@ -597,11 +598,12 @@ task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::p
 
 template <typename driver_type>
 task<std::optional<db_row>> db_pool<driver_type>::read_stream_row(std::size_t slot, void* result,
+    std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_options& options) {
     if (slot >= slots_.size()) {
         co_return std::nullopt;
     }
-    co_return co_await driver_type::read_stream_row(*this, slot, result, resource, options);
+    co_return co_await driver_type::read_stream_row(*this, slot, result, fields, column_names, resource, options);
 }
 
 template <typename driver_type>

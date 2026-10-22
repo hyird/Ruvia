@@ -24,14 +24,15 @@ using ruvia::known_http_method_token;
 // safe and idempotent properties a recipient acts on.
 
 RUVIA_TEST(http_request_method_content_semantics_are_shared_by_client_and_server) {
+    using ruvia::classify_http_request_content_semantics;
     using ruvia::http_request_content_semantics;
-    RUVIA_CHECK(ruvia::http_request_content_semantics("CONNECT") ==
+    RUVIA_CHECK(classify_http_request_content_semantics("CONNECT") ==
                 http_request_content_semantics::forbidden);
-    RUVIA_CHECK(ruvia::http_request_content_semantics("TRACE") ==
+    RUVIA_CHECK(classify_http_request_content_semantics("TRACE") ==
                 http_request_content_semantics::forbidden);
-    RUVIA_CHECK(ruvia::http_request_content_semantics("OPTIONS") ==
+    RUVIA_CHECK(classify_http_request_content_semantics("OPTIONS") ==
                 http_request_content_semantics::content_type_required);
-    RUVIA_CHECK(ruvia::http_request_content_semantics("POST") ==
+    RUVIA_CHECK(classify_http_request_content_semantics("POST") ==
                 http_request_content_semantics::no_additional_requirements);
 }
 

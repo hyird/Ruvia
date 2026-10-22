@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "redis/redis_types_access.h"
 #include "redis/redis_utils.h"
@@ -200,14 +201,14 @@ bool validate_redis_pooled_command(std::span<const std::string_view> args, bool 
     return blocking;
 }
 
-task<redis_value> execute_owned_redis_command(redis_command_executor executor,
-    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
-    return executor.pool_->execute_owned(std::move(args), resource, std::move(executor.options_));
+task<redis_value> redis_command_executor::execute(std::pmr::vector<std::pmr::string> args,
+    std::pmr::memory_resource* resource, std::optional<std::chrono::milliseconds> reply_timeout) {
+    return pool_->execute_owned(std::move(args), resource, std::move(options_), reply_timeout, scope_);
 }
 
-task<redis_value> execute_owned_redis_command(redis_pool& pool, std::pmr::vector<std::pmr::string> args,
-    operation_options options, std::pmr::memory_resource* resource) {
-    return pool.execute_owned(std::move(args), resource, std::move(options));
+task<redis_value> execute_owned_redis_command(redis_command_executor executor,
+    std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource) {
+    return executor.execute(std::move(args), resource);
 }
 
 task<std::optional<std::pmr::string>> redis_string_command(redis_command_executor executor,

@@ -98,7 +98,8 @@ public:
     // block window is not consumed by slot acquisition or a lazy connect.
     task<redis_value> execute_owned(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource, operation_options options = {},
-        std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt);
+        std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt,
+        operation_scope* scope = nullptr);
     // The caller keeps `args` alive until the operation completes. `deadline`
     // is copied, so repeated commands share the operation's absolute bound.
     task<redis_value> execute_borrowed(redis_command_args_view args, std::pmr::memory_resource* resource,
@@ -128,7 +129,7 @@ private:
     template <typename result_type, typename command_source_type>
     task<result_type> execute_commands(command_source_type source, operation_options options,
         std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
-        std::optional<operation_timeout> deadline);
+        std::optional<operation_timeout> deadline, operation_scope* scope = nullptr);
 
     const redis_config_storage& config_;
     std::optional<std::chrono::milliseconds> command_timeout_;
@@ -141,7 +142,12 @@ private:
 
 struct redis_command_executor final {
     redis_pool* pool_{nullptr};
+    operation_scope* scope_{nullptr};
     operation_options options_;
+
+    [[nodiscard]] task<redis_value> execute(std::pmr::vector<std::pmr::string> args,
+        std::pmr::memory_resource* resource,
+        std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt);
 };
 
 class redis_registry final {

@@ -50,7 +50,7 @@ private:
     redis_pipeline(detail::redis_pool& pool, operation_options options,
         std::pmr::memory_resource* resource, operation_scope& operation_scope) noexcept;
     [[nodiscard]] static task<std::pmr::vector<redis_value>> execute_owned(
-        detail::redis_command_payload payload);
+        operation_scope& scope, detail::redis_command_payload payload);
 
     static void expire_capability(void* target) noexcept;
 };

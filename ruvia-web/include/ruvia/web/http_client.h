@@ -7,7 +7,6 @@
 #include "ruvia/http/http_client_tunnel_request_view.h"
 #include "ruvia/web/http_client_handle.h"
 #include "ruvia/web/http_client_tunnel.h"
-#include "ruvia/web/http_client_tunnel_config.h"
 
 namespace ruvia {
 
@@ -49,15 +48,6 @@ public:
     [[nodiscard]] task<void> shutdown() &;
     task<void> shutdown() && = delete;
 
-    [[nodiscard]] http_client_stats stats() const;
-    [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const&;
-    [[nodiscard]] std::optional<http_client_push> next_push() const&;
-    std::optional<http_client_push> next_push() const&& = delete;
-    std::optional<http_client_advertisement> next_advertisement() const&& = delete;
-    [[nodiscard]] std::string_view host() const&;
-    [[nodiscard]] std::string_view host() const&& = delete;
-    [[nodiscard]] std::uint16_t port() const;
-    [[nodiscard]] http_scheme scheme() const;
     [[nodiscard]] const worker_handle& worker() const& noexcept;
     const worker_handle& worker() const&& = delete;
 

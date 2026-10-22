@@ -33,7 +33,7 @@ namespace ruvia::detail {
     if (resolved != nullptr) {
         body_mode = resolved->route().endpoint().request_body_mode();
     }
-    if (resolved != nullptr && ((method == http_known_method::connect && resolved->route().endpoint().get_websocket() != nullptr) ||
+    if (resolved != nullptr && ((method == http_known_method::connect && resolved->route().endpoint().websocket() != nullptr) ||
                                    resolved->route().endpoint().tunnel() != nullptr)) {
         body_mode = request_body_mode::stream;
     }

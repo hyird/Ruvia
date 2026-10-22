@@ -50,13 +50,13 @@ public:
 
     RUVIA_ROUTES_BEGIN(gateway_controller)
     RUVIA_POST("/forward", forward);
-    RUVIA_GET_STREAM("/forward-stream", forward_stream);
+    RUVIA_GET("/forward-stream", forward_stream);
     RUVIA_ROUTES_END
 
 private:
     ruvia::task<ruvia::http_response> forward(ruvia::context& c) {
         const auto incoming_body = co_await c.req().text();
-        auto client = c.get_http_client();
+        auto client = c.http_client();
 
         try {
             std::array<ruvia::http_header_view, 2> headers{};
@@ -95,7 +95,7 @@ private:
     }
 
     ruvia::task<void> forward_stream(ruvia::context& c) {
-        auto client = c.get_http_client();
+        auto client = c.http_client();
         std::array<ruvia::http_header_view, 1> headers{};
         std::size_t header_count = 0;
         if (const auto authorization = c.req().header("authorization")) {
@@ -136,7 +136,7 @@ int main() {
         ruvia::app()
             .listen({.address_ = "0.0.0.0", .http_ = 8080})
             .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-            .get_http_client({
+            .http_client({
                 .config_ =
                     {
                         .scheme_ = tls ? ruvia::http_scheme::https : ruvia::http_scheme::http,

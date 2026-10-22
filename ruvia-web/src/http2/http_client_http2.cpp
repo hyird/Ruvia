@@ -73,7 +73,7 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
     state_value.status_ = head.status();
     state_value.protocol_version_ = head.protocol_version();
     state_value.response_body_plan_ = plan_http_response_body(state_value.request_method_, state_value.status_);
-    auto headers = std::move(head).take_headers();
+    const auto headers = head.headers();
     state_value.headers_.clear();
     state_value.headers_.reserve(headers.size());
     for (const auto& header : headers) {
@@ -133,8 +133,8 @@ void http_client_connection::consume_http2_data(
     auto& retained_credit = state_value.http2_data_credit_;
     if (!retained_credit) {
         retained_credit.emplace(std::move(credit));
-    } else if (retained_credit->merge(std::move(credit)) != http2_received_data_credit_merge_status::merged) {
-        std::terminate();
+    } else {
+        retained_credit->merge(std::move(credit));
     }
 }
 
@@ -145,7 +145,7 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
     }
     try {
         const bool content_semantics_present = end.content_semantics() == http2_message_content_semantics::content;
-        auto trailers = std::move(end).take_trailers();
+        const auto trailers = end.trailers();
         auto& state_value = *stream->state_;
         state_value.trailers_.clear();
         state_value.trailers_.reserve(trailers.size());
@@ -473,20 +473,24 @@ task<void> http_client_connection::execute_http2(const http_client_request_stora
                           .authority_ = borrowed_text(request.tunnel_authority()),
                           .target_ = source_value.target_,
                           .headers_ = headers});
-            if (const auto* accepted = submitted.submitted()) {
-                stream.stream_id_ = accepted->stream_id();
+            if (const auto* accepted = std::get_if<std::uint32_t>(&submitted)) {
+                stream.stream_id_ = *accepted;
                 state_value.stream_id_ = stream.stream_id_;
                 if (body != nullptr && !body->value().empty()) {
-                    const auto status =
-                        connection.submit_data(stream.stream_id_, body->value(), http2_end_stream::end_stream);
-                    if (status != http2_data_submit_status::accepted && status != http2_data_submit_status::queued) {
+                    try {
+                        const auto status =
+                            connection.submit_data(stream.stream_id_, body->value(), http2_end_stream::end_stream);
+                        if (status != http2_data_submit_status::accepted && status != http2_data_submit_status::queued) {
+                            stream.error_ = http_client_error::code_type::protocol_error;
+                        }
+                    } catch (...) {
                         stream.error_ = http_client_error::code_type::protocol_error;
                     }
                 }
                 http2_.wake_writer();
                 break;
             }
-            const auto error = submitted.failure()->error();
+            const auto error = std::get<http2_request_head_submit_error>(submitted);
             if (error == http2_request_head_submit_error::peer_stream_limit_reached ||
                 error == http2_request_head_submit_error::local_stream_capacity_reached) {
                 co_await http2_.state_signal().wait();
@@ -601,8 +605,18 @@ task<void> http_client_connection::stream_http2_upload(
             break;
         }
         if (upload.chunk_ready_) {
-            const auto submitted =
-                connection.submit_data(stream.stream_id_, upload.chunk_, http2_end_stream::keep_open);
+            http2_data_submit_status submitted{};
+            try {
+                submitted = connection.submit_data(stream.stream_id_, upload.chunk_, http2_end_stream::keep_open);
+            } catch (const std::invalid_argument&) {
+                stream.error_ = http_client_error::code_type::invalid_request;
+                http2_.submit_reset(stream.stream_id_);
+                break;
+            } catch (const std::logic_error&) {
+                stream.error_ = http_client_error::code_type::invalid_request;
+                http2_.submit_reset(stream.stream_id_);
+                break;
+            }
             if (submitted == http2_data_submit_status::backpressured ||
                 submitted == http2_data_submit_status::expectation_pending) {
                 co_await stream.signal_.wait();
@@ -623,19 +637,25 @@ task<void> http_client_connection::stream_http2_upload(
         } else if (upload.end_requested_) {
             bool finish_accepted{};
             bool finish_queued{};
-            if (request.is_tunnel()) {
-                const auto finished = connection.submit_data(stream.stream_id_, {}, http2_end_stream::end_stream);
-                finish_queued = finished == http2_data_submit_status::queued;
-                finish_accepted = finished == http2_data_submit_status::accepted || finish_queued;
-            } else {
-                std::pmr::vector<http_header_view> trailers(state_value.resource_);
-                trailers.reserve(request.upload()->trailers_.size());
-                for (const auto& field : request.upload()->trailers_) {
-                    trailers.emplace_back(field.name(), field.value());
+            try {
+                if (request.is_tunnel()) {
+                    const auto finished = connection.submit_data(stream.stream_id_, {}, http2_end_stream::end_stream);
+                    finish_queued = finished == http2_data_submit_status::queued;
+                    finish_accepted = finished == http2_data_submit_status::accepted || finish_queued;
+                } else {
+                    std::pmr::vector<http_header_view> trailers(state_value.resource_);
+                    trailers.reserve(request.upload()->trailers_.size());
+                    for (const auto& field : request.upload()->trailers_) {
+                        trailers.emplace_back(field.name(), field.value());
+                    }
+                    const auto finished = connection.finish_request(stream.stream_id_, trailers);
+                    finish_queued = finished == http2_finish_request_status::queued;
+                    finish_accepted = finished == http2_finish_request_status::accepted || finish_queued;
                 }
-                const auto finished = connection.finish_request(stream.stream_id_, trailers);
-                finish_queued = finished == http2_finish_request_status::queued;
-                finish_accepted = finished == http2_finish_request_status::accepted || finish_queued;
+            } catch (const std::invalid_argument&) {
+                finish_accepted = false;
+            } catch (const std::logic_error&) {
+                finish_accepted = false;
             }
             if (!finish_accepted) {
                 stream.error_ = http_client_error::code_type::invalid_request;

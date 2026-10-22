@@ -60,6 +60,8 @@ public:
     // Owns payload bytes in the client resource before returning a cold task.
     [[nodiscard]] scoped_operation<void> write(websocket_opcode opcode, std::string_view payload,
         const operation_options& options, websocket_send_options send_options = {});
+    [[nodiscard]] scoped_operation<void> write(websocket_opcode opcode, std::pmr::string&& payload,
+        const operation_options& options, websocket_send_options send_options = {});
     [[nodiscard]] scoped_operation<void> close(
         websocket_close_options options, const operation_options& operation_options);
 
@@ -175,7 +177,6 @@ private:
         std::optional<std::chrono::milliseconds> read_timeout, std::string_view protocol_error_message);
     [[nodiscard]] task<std::size_t> read_transport(std::span<char> output,
         std::optional<std::chrono::milliseconds> configured_timeout);
-    void feed_input(std::string_view bytes);
     [[nodiscard]] task<void> write_transport(std::string_view bytes);
     void arm(worker_timer_registration& timer, std::optional<std::chrono::milliseconds> timeout,
         client_abort_reason reason);
@@ -196,7 +197,7 @@ private:
     worker_signal write_signal_;
     // Opening-handshake response bytes, then the transport read buffer of the
     // single input reader (read_active_).
-    std::pmr::string input_;
+    http_io_buffer input_;
     std::optional<ruvia::websocket_connection> protocol_;
     std::optional<websocket_http2_transport> http2_;
     std::pmr::string selected_subprotocol_;

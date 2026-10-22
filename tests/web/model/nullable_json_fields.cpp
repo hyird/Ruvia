@@ -36,51 +36,42 @@ RUVIA_TEST(nullable_optional_string_accepts_json_null) {
     std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value =
         ruvia::from_json<remark_request>(R"({"remark":null})", {.resource_ = &resource});
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
-    }
-    RUVIA_CHECK(!parsed_value->get<"remark">().has_value());
-    RUVIA_CHECK(parsed_value->is_present<"remark">());
-    RUVIA_CHECK(parsed_value->is_null<"remark">());
+    RUVIA_CHECK(!parsed_value.get<"remark">().has_value());
+    RUVIA_CHECK(parsed_value.is_present<"remark">());
+    RUVIA_CHECK(parsed_value.is_null<"remark">());
 }
 
 RUVIA_TEST(nullable_optional_string_still_accepts_text) {
     std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value =
         ruvia::from_json<remark_request>(R"({"remark":"note"})", {.resource_ = &resource});
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value || !parsed_value->get<"remark">()) {
+    if (!parsed_value.get<"remark">()) {
         return;
     }
-    RUVIA_CHECK_EQ(parsed_value->get<"remark">()->view(), std::string_view("note"));
+    RUVIA_CHECK_EQ(parsed_value.get<"remark">()->view(), std::string_view("note"));
 }
 
 RUVIA_TEST(nullable_null_does_not_apply_default) {
     std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value = ruvia::from_json<remark_with_default_request>(
         R"({"remark":null})", {.resource_ = &resource});
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
-    }
-    RUVIA_CHECK(!parsed_value->get<"remark">().has_value());
-    RUVIA_CHECK(parsed_value->is_present<"remark">());
-    RUVIA_CHECK(parsed_value->is_null<"remark">());
+    RUVIA_CHECK(!parsed_value.get<"remark">().has_value());
+    RUVIA_CHECK(parsed_value.is_present<"remark">());
+    RUVIA_CHECK(parsed_value.is_null<"remark">());
 
     const auto missing =
         ruvia::from_json<remark_with_default_request>("{}", {.resource_ = &resource});
-    RUVIA_CHECK(missing.has_value());
-    if (!missing || !missing->get<"remark">()) {
+    if (!missing.get<"remark">()) {
         return;
     }
-    RUVIA_CHECK_EQ(missing->get<"remark">()->view(), std::string_view("fallback"));
+    RUVIA_CHECK_EQ(missing.get<"remark">()->view(), std::string_view("fallback"));
 }
 
 RUVIA_TEST(required_string_rejects_json_null) {
     std::pmr::monotonic_buffer_resource resource;
-    RUVIA_CHECK(!ruvia::from_json<required_remark_request>(R"({"remark":null})", {.resource_ = &resource})
-            .has_value());
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<required_remark_request>(R"({"remark":null})", {.resource_ = &resource});
+    }));
 }
 
 RUVIA_TEST(json_value_model_fields_accept_any_json_token) {
@@ -88,15 +79,14 @@ RUVIA_TEST(json_value_model_fields_accept_any_json_token) {
     const auto parsed_value = ruvia::from_json<json_bag_request>(
         R"({"payload":[1,{"k":null}],"object":{"a":true},"items":[null,"x",{"z":2}]})",
         {.resource_ = &resource});
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value || !parsed_value->get<"payload">() || !parsed_value->get<"object">() ||
-        !parsed_value->get<"items">()) {
+    if (!parsed_value.get<"payload">() || !parsed_value.get<"object">() ||
+        !parsed_value.get<"items">()) {
         return;
     }
-    RUVIA_CHECK(parsed_value->get<"payload">()->is_array());
-    RUVIA_CHECK_EQ(parsed_value->get<"payload">()->view(), std::string_view(R"([1,{"k":null}])"));
-    RUVIA_CHECK_EQ(parsed_value->get<"object">()->view(), std::string_view(R"({"a":true})"));
-    const auto& items = *parsed_value->get<"items">();
+    RUVIA_CHECK(parsed_value.get<"payload">()->is_array());
+    RUVIA_CHECK_EQ(parsed_value.get<"payload">()->view(), std::string_view(R"([1,{"k":null}])"));
+    RUVIA_CHECK_EQ(parsed_value.get<"object">()->view(), std::string_view(R"({"a":true})"));
+    const auto& items = *parsed_value.get<"items">();
     RUVIA_CHECK_EQ(items.size(), std::size_t{3});
     RUVIA_CHECK(items[0].is_null());
     RUVIA_CHECK(items[1].is_string());
@@ -104,43 +94,39 @@ RUVIA_TEST(json_value_model_fields_accept_any_json_token) {
 
 RUVIA_TEST(json_object_model_field_rejects_non_objects) {
     std::pmr::monotonic_buffer_resource resource;
-    RUVIA_CHECK(!ruvia::from_json<json_bag_request>(R"({"object":[1]})", {.resource_ = &resource})
-            .has_value());
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<json_bag_request>(R"({"object":[1]})", {.resource_ = &resource});
+    }));
 
     const auto null_object =
         ruvia::from_json<json_bag_request>(R"({"object":null})", {.resource_ = &resource});
-    RUVIA_CHECK(null_object.has_value());
-    if (null_object) {
-        RUVIA_CHECK(!null_object->get<"object">().has_value());
-        RUVIA_CHECK(null_object->is_present<"object">());
-        RUVIA_CHECK(null_object->is_null<"object">());
-    }
+    RUVIA_CHECK(!null_object.get<"object">().has_value());
+    RUVIA_CHECK(null_object.is_present<"object">());
+    RUVIA_CHECK(null_object.is_null<"object">());
 }
 
 RUVIA_TEST(json_value_model_fields_own_tokens_for_from_json) {
     std::pmr::monotonic_buffer_resource resource;
     auto parsed_value = ruvia::from_json<json_bag_request>(
         std::string(R"({"payload":{"keep":true}})"), {.resource_ = &resource});
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value || !parsed_value->get<"payload">()) {
+    if (!parsed_value.get<"payload">()) {
         return;
     }
-    RUVIA_CHECK(parsed_value->get<"payload">()->is_object());
-    RUVIA_CHECK_EQ(parsed_value->get<"payload">()->view(), std::string_view(R"({"keep":true})"));
+    RUVIA_CHECK(parsed_value.get<"payload">()->is_object());
+    RUVIA_CHECK_EQ(parsed_value.get<"payload">()->view(), std::string_view(R"({"keep":true})"));
 }
 
 RUVIA_TEST(json_value_response_fields_write_raw_tokens) {
     std::pmr::monotonic_buffer_resource resource;
     auto parsed_value = ruvia::from_json<json_bag_request>(
         R"({"payload":[1,2],"object":{"a":1}})", {.resource_ = &resource});
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value || !parsed_value->get<"payload">() || !parsed_value->get<"object">()) {
+    if (!parsed_value.get<"payload">() || !parsed_value.get<"object">()) {
         return;
     }
 
     json_bag_response response({.resource_ = &resource});
-    response.set<"payload">(std::move(parsed_value->ensure<"payload">()));
-    response.set<"object">(std::move(parsed_value->ensure<"object">()));
+    response.set<"payload">(std::move(parsed_value.ensure<"payload">()));
+    response.set<"object">(std::move(parsed_value.ensure<"object">()));
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(response, {.resource_ = &resource})),
         std::string_view(R"({"payload":[1,2],"object":{"a":1}})"));
 }

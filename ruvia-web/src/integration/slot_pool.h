@@ -92,11 +92,7 @@ public:
     // A release that names no live lease is a caller bug and cannot be
     // reported through a noexcept path.
     void release(std::size_t slot) noexcept {
-        const auto status = scheduler_.release(slot);
-        if (status == pool_lease_release_status::invalid_slot ||
-            status == pool_lease_release_status::already_released) {
-            std::terminate();
-        }
+        scheduler_.release(slot);
     }
 
     // Refuses new leases and marks every slot without an abort reason as

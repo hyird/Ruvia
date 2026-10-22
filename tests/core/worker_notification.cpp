@@ -18,7 +18,6 @@
 #include <asio/io_context.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/asio_task.h"
 #include "ruvia/core/async.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_runtime_context.h"
@@ -35,8 +34,8 @@ struct spawned_task final {
     std::future<std::exception_ptr> result_;
 };
 
-[[nodiscard]] spawned_task spawn(
-    ruvia::worker_runtime_context& runtime, ruvia::task<void> task_value) {
+template <typename runtime_type>
+[[nodiscard]] spawned_task spawn(runtime_type& runtime, ruvia::task<void> task_value) {
     auto completion = std::make_shared<std::promise<std::exception_ptr>>();
     auto result_value = completion->get_future();
     asio::co_spawn(runtime.io_context(), ruvia::as_awaitable(std::move(task_value)),
@@ -230,7 +229,7 @@ ruvia::task<void> probe_concurrent_wait(
 RUVIA_TEST(worker_notification_early_latch_cold_wait_and_repeated_reuse) {
     constexpr std::size_t round_count = 128;
     ruvia::worker_runtime worker;
-    ruvia::worker_notification notification(worker.context());
+    ruvia::worker_notification notification(worker);
 
     {
         auto unused_cold_wait = cold_wait(notification);
@@ -241,7 +240,7 @@ RUVIA_TEST(worker_notification_early_latch_cold_wait_and_repeated_reuse) {
 
     round_state rounds;
     bool success = false;
-    auto task_value = spawn(worker.context(), wait_rounds(notification, rounds, round_count, success));
+    auto task_value = spawn(worker, wait_rounds(notification, rounds, round_count, success));
     RUVIA_CHECK(worker.start());
 
     std::thread producer_value([&] {
@@ -366,9 +365,9 @@ RUVIA_TEST(worker_notification_many_producers_coalesce_without_lost_final_state)
     constexpr std::size_t expected = producer_count * notifications_per_producer;
 
     ruvia::worker_runtime worker;
-    ruvia::worker_notification notification(worker.context());
+    ruvia::worker_notification notification(worker);
     producer_state state;
-    auto task_value = spawn(worker.context(), wait_for_producers(notification, state, producer_count));
+    auto task_value = spawn(worker, wait_for_producers(notification, state, producer_count));
     RUVIA_CHECK(worker.start());
 
     std::vector<std::thread> producers;
@@ -392,7 +391,7 @@ RUVIA_TEST(worker_notification_many_producers_coalesce_without_lost_final_state)
         producer.join();
     }
     const bool observed_value = state.observed_.load(std::memory_order_acquire) == expected;
-    auto closer = spawn(worker.context(), close_notification(notification));
+    auto closer = spawn(worker, close_notification(notification));
     const bool closed = finish(closer);
 
     RUVIA_CHECK(completed);
@@ -407,7 +406,7 @@ RUVIA_TEST(worker_notification_many_producers_coalesce_without_lost_final_state)
 RUVIA_TEST(worker_notification_wait_checks_worker_and_rejects_concurrency) {
     ruvia::worker_runtime owner;
     ruvia::worker_runtime other;
-    ruvia::worker_notification notification(owner.context());
+    ruvia::worker_notification notification(owner);
     bool wrong_worker_rejected = false;
     bool concurrent_wait_rejected = false;
     std::promise<void> first_wait_started;
@@ -417,13 +416,13 @@ RUVIA_TEST(worker_notification_wait_checks_worker_and_rejects_concurrency) {
     RUVIA_CHECK(owner.start());
     RUVIA_CHECK(other.start());
 
-    auto wrong = spawn(other.context(), probe_wrong_worker_wait(notification, wrong_worker_rejected));
+    auto wrong = spawn(other, probe_wrong_worker_wait(notification, wrong_worker_rejected));
     const bool wrong_completed = finish(wrong);
-    auto first = spawn(owner.context(), wait_for_one(notification, &first_wait_started, &first_wait_result));
+    auto first = spawn(owner, wait_for_one(notification, &first_wait_started, &first_wait_result));
     const bool first_started = first_wait_ready.wait_for(wait_timeout) == std::future_status::ready;
-    auto concurrent = spawn(owner.context(), probe_concurrent_wait(notification, concurrent_wait_rejected));
+    auto concurrent = spawn(owner, probe_concurrent_wait(notification, concurrent_wait_rejected));
     const bool concurrent_completed = finish(concurrent);
-    auto closer = spawn(owner.context(), close_notification(notification));
+    auto closer = spawn(owner, close_notification(notification));
     const bool close_completed = finish(closer);
     const bool first_completed = finish(first);
 
@@ -441,16 +440,16 @@ RUVIA_TEST(worker_notification_wait_checks_worker_and_rejects_concurrency) {
 
 RUVIA_TEST(worker_notification_normal_resume_can_destroy_owner_immediately) {
     ruvia::worker_runtime worker;
-    auto notification = std::make_unique<ruvia::worker_notification>(worker.context());
+    auto notification = std::make_unique<ruvia::worker_notification>(worker);
     std::promise<void> started;
     auto started_future = started.get_future();
     std::atomic<int> wait_result{0};
     std::atomic<int> notify_result{-1};
-    auto waiting = spawn(worker.context(), close_and_destroy_on_resume(notification, &started, wait_result));
+    auto waiting = spawn(worker, close_and_destroy_on_resume(notification, &started, wait_result));
     RUVIA_CHECK(worker.start());
     const bool entered = started_future.wait_for(wait_timeout) == std::future_status::ready;
 
-    auto notifier = spawn(worker.context(), notify_on_worker(*notification, notify_result));
+    auto notifier = spawn(worker, notify_on_worker(*notification, notify_result));
     const bool notify_completed = finish(notifier);
     const bool wait_completed = finish(waiting);
 
@@ -466,15 +465,15 @@ RUVIA_TEST(worker_notification_normal_resume_can_destroy_owner_immediately) {
 
 RUVIA_TEST(worker_notification_cancel_resume_can_destroy_owner_immediately) {
     ruvia::worker_runtime worker;
-    auto notification = std::make_unique<ruvia::worker_notification>(worker.context());
+    auto notification = std::make_unique<ruvia::worker_notification>(worker);
     std::promise<void> started;
     auto started_future = started.get_future();
     std::atomic<int> wait_result{0};
-    auto waiting = spawn(worker.context(), close_and_destroy_on_resume(notification, &started, wait_result));
+    auto waiting = spawn(worker, close_and_destroy_on_resume(notification, &started, wait_result));
     RUVIA_CHECK(worker.start());
     const bool entered = started_future.wait_for(wait_timeout) == std::future_status::ready;
 
-    auto closer = spawn(worker.context(), close_notification(*notification));
+    auto closer = spawn(worker, close_notification(*notification));
     const bool close_completed = finish(closer);
     const bool wait_completed = finish(waiting);
 
@@ -488,15 +487,15 @@ RUVIA_TEST(worker_notification_cancel_resume_can_destroy_owner_immediately) {
 
 RUVIA_TEST(worker_notification_pending_close_drains_and_worker_timer_survives) {
     ruvia::worker_runtime worker;
-    ruvia::worker_notification notification(worker.context());
+    ruvia::worker_notification notification(worker);
     std::promise<void> started;
     auto started_future = started.get_future();
     std::atomic<int> wait_result{0};
-    auto waiting = spawn(worker.context(), wait_for_one(notification, &started, &wait_result));
+    auto waiting = spawn(worker, wait_for_one(notification, &started, &wait_result));
     RUVIA_CHECK(worker.start());
     const bool entered = started_future.wait_for(wait_timeout) == std::future_status::ready;
     std::atomic<bool> timer_fired{false};
-    auto closer = spawn(worker.context(), observe_close_and_timer(worker.context().io_context(), notification, timer_fired));
+    auto closer = spawn(worker, observe_close_and_timer(worker.io_context(), notification, timer_fired));
 
     const bool wait_completed = finish(waiting);
     const bool close_task_completed = finish(closer);
@@ -511,11 +510,11 @@ RUVIA_TEST(worker_notification_pending_close_drains_and_worker_timer_survives) {
 RUVIA_TEST(worker_notification_close_races_producers_without_waiting_for_them) {
     constexpr std::size_t producer_count = 4;
     ruvia::worker_runtime worker;
-    ruvia::worker_notification notification(worker.context());
+    ruvia::worker_notification notification(worker);
     std::promise<void> wait_started;
     auto wait_started_future = wait_started.get_future();
     std::atomic<int> wait_result{0};
-    auto waiting = spawn(worker.context(), wait_until_closed(notification, &wait_started, wait_result));
+    auto waiting = spawn(worker, wait_until_closed(notification, &wait_started, wait_result));
     RUVIA_CHECK(worker.start());
     const bool entered = wait_started_future.wait_for(wait_timeout) == std::future_status::ready;
 
@@ -559,7 +558,7 @@ RUVIA_TEST(worker_notification_close_races_producers_without_waiting_for_them) {
     }
     const bool producers_notified_open = open_calls.load(std::memory_order_acquire) == producer_count;
     std::atomic<bool> timer_fired{false};
-    auto closer = spawn(worker.context(), observe_close_and_timer(worker.context().io_context(), notification, timer_fired));
+    auto closer = spawn(worker, observe_close_and_timer(worker.io_context(), notification, timer_fired));
 
     const bool wait_completed = finish(waiting);
     const bool close_task_completed = finish(closer);
@@ -580,12 +579,12 @@ RUVIA_TEST(worker_notification_close_races_producers_without_waiting_for_them) {
 
 RUVIA_TEST(worker_notification_wakes_while_public_post_queue_is_full) {
     ruvia::worker_runtime worker_value({.queue_capacity_ = 1});
-    ruvia::worker_notification notification(worker_value.context());
-    const auto worker_handle_value = worker_value.context().handle();
+    ruvia::worker_notification notification(worker_value);
+    const auto worker_handle_value = worker_value.handle();
     std::promise<void> wait_started;
     auto wait_started_future = wait_started.get_future();
     std::atomic<int> wait_result{0};
-    auto waiting = spawn(worker_value.context(), wait_for_one(notification, &wait_started, &wait_result));
+    auto waiting = spawn(worker_value, wait_for_one(notification, &wait_started, &wait_result));
     RUVIA_CHECK(worker_value.start());
     const bool entered = wait_started_future.wait_for(wait_timeout) == std::future_status::ready;
 
@@ -613,7 +612,7 @@ RUVIA_TEST(worker_notification_wakes_while_public_post_queue_is_full) {
     gate_changed.notify_all();
 
     const bool wait_completed = finish(waiting);
-    auto closer = spawn(worker_value.context(), close_notification(notification));
+    auto closer = spawn(worker_value, close_notification(notification));
     const bool close_completed = finish(closer);
 
     RUVIA_CHECK(entered);
@@ -633,7 +632,7 @@ RUVIA_TEST(worker_notification_wakes_while_public_post_queue_is_full) {
 RUVIA_TEST(worker_notification_startup_validation_rolls_back) {
     ruvia::worker_runtime worker;
     {
-        ruvia::worker_notification cold(worker.context());
+        ruvia::worker_notification cold(worker);
         auto abandoned_wait = cold_wait(cold);
         static_cast<void>(abandoned_wait);
     }
@@ -642,20 +641,20 @@ RUVIA_TEST(worker_notification_startup_validation_rolls_back) {
     stopped.join();
     bool stopped_runtime_rejected = false;
     try {
-        ruvia::worker_notification invalid(stopped.context());
+        ruvia::worker_notification invalid(stopped);
     } catch (const std::invalid_argument&) {
         stopped_runtime_rejected = true;
     }
 
     bool invalid_timeout_rejected = false;
     try {
-        ruvia::worker_notification invalid(worker.context(), {.startup_timeout_ = 0ms});
+        ruvia::worker_notification invalid(worker, {.startup_timeout_ = 0ms});
     } catch (const std::invalid_argument&) {
         invalid_timeout_rejected = true;
     }
     bool unbounded_timeout_rejected = false;
     try {
-        ruvia::worker_notification invalid(worker.context(), {.startup_timeout_ = 61s});
+        ruvia::worker_notification invalid(worker, {.startup_timeout_ = 61s});
     } catch (const std::invalid_argument&) {
         unbounded_timeout_rejected = true;
     }

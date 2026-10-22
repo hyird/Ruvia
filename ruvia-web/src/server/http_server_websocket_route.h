@@ -32,7 +32,7 @@ namespace ruvia::detail {
 // remains.
 template <typename stream_type>
 struct http1_websocket_upgrade_operation final {
-    using connection_type = websocket_connection<stream_type>;
+    using connection_type = server_websocket_connection<stream_type>;
 
     http1_route_dispatch<stream_type>& dispatch_;
     http_response_tail& tail_;
@@ -60,7 +60,7 @@ struct http1_websocket_upgrade_operation final {
             dispatch_.scanner_entry_, websocket_endpoint_.lifecycle(),
             protocol_byte_limit::limited(dispatch_.options_.server_.max_websocket_message_bytes_),
             &dispatch_.inbound_buffer_pool_, pending_frames_,
-            websocket_server_protocol_options{.compression_ = handshake.compression(),
+            websocket_connection_options{.compression_ = handshake.compression(),
                 .compression_level_ = deflate_config.compression_level_,
                 .mem_level_ = deflate_config.mem_level_,
                 .shared_deflate_ = &dispatch_.options_.codecs_->websocket_deflate()});
@@ -79,7 +79,7 @@ template <typename stream_type>
 task<std::optional<http1_session_request_completion>> dispatch_http_websocket_route(
     http1_route_dispatch<stream_type> d, http_response_tail& tail, const resolved_route& resolved,
     std::string_view pending_frames) {
-    const auto& websocket_endpoint = *resolved.route().endpoint().get_websocket();
+    const auto& websocket_endpoint = *resolved.route().endpoint().websocket();
     const auto handshake_validation = validate_websocket_handshake(
         d.parsed_.request_, d.parsed_.body_plan_, websocket_endpoint.handshake_validation());
     if (const auto* failure = handshake_validation.failure()) {

@@ -321,8 +321,7 @@ RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 RUVIA_CHECK(co_await read_many(handle, suffixed_id) == gamma);
                 // Removing the caller's id drops every result shape cached under
                 // it and leaves the independent id's entry alone.
-                const std::array<std::string_view, 1> ids{cache_id};
-                co_await handle.query_result_cache().remove(ids);
+                co_await handle.query_result_cache().remove(cache_id);
                 RUVIA_CHECK_EQ(redis_peer.key_count(), std::size_t{1});
                 RUVIA_CHECK_EQ(co_await read_one(handle), std::string("beta"));
                 RUVIA_CHECK(!(co_await read_exists(handle)));

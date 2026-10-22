@@ -4,6 +4,7 @@
 #include "http2/http2_frame_codec.h"
 #include "http2/http2_frame_payload.h"
 #include "http2/http2_remote_receive_semantics.h"
+#include "http2/http2_request_headers.h"
 #include "http2/http2_response_headers.h"
 #include "http2/http2_window_update.h"
 
@@ -300,13 +301,13 @@ http2_stream_state* http2_connection::admit_local_request_stream() {
     return stream;
 }
 
-http2_request_head_submit_result http2_connection::publish_local_request_head(
-    http2_stream_state& stream) noexcept {
+std::variant<std::uint32_t, http2_request_head_submit_error>
+http2_connection::publish_local_request_head(http2_stream_state& stream) noexcept {
     if (stream.hold_peer_concurrency_slot()) {
         ++active_local_request_streams_;
     }
     http2_release_local_header_block(stream);
-    return http2_request_head_submit_result::make_submitted(stream.id());
+    return stream.id();
 }
 
 void http2_connection::release_local_request_stream(http2_stream_state& stream) noexcept {
@@ -364,8 +365,9 @@ std::optional<http2_server_request_view> http2_connection::server_request_view(
     }
     return http2_server_request_view{
         .method_ = stream_state->request_method(),
+        .scheme_ = stream_state->request_scheme(),
         .path_ = stream_state->request_path(),
-        .authority_ = stream_state->request_authority(),
+        .authority_ = http2_effective_request_authority(*stream_state),
         .protocol_ = stream_state->request_protocol(),
     };
 }

@@ -5,9 +5,9 @@
 #include <optional>
 #include <type_traits>
 
-#include "ruvia/http/http1_chunk_decode_error.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_protocol_error.h"
-#include "ruvia/http/http_transfer_coding_decode_error.h"
+#include "ruvia/http/http_transfer_coding_decoder.h"
 #include "ruvia/http/protocol_byte_limit.h"
 
 namespace ruvia {

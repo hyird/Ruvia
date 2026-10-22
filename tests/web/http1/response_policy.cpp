@@ -90,8 +90,8 @@ public:
 
 class response_policy_routes final {
     RUVIA_ROUTES_BEGIN(response_policy_routes)
-    RUVIA_GET_STREAM("/policy-stream", stream);
-    RUVIA_GET_STREAM("/policy-trailer-stream", trailer_stream);
+    RUVIA_GET("/policy-stream", stream);
+    RUVIA_GET("/policy-trailer-stream", trailer_stream);
     RUVIA_GET("/policy-plain", plain);
     RUVIA_GET_WS("/policy-websocket", websocket);
     RUVIA_CONNECT("policy-target.test:443", tunnel);

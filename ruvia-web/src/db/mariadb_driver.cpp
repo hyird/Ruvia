@@ -361,8 +361,8 @@ task<db_rows> mariadb_driver::query(pool_type& pool, std::size_t index, std::str
             }
             result_fields.push_back(db_result_access::borrowed_field(std::string_view(row[i], lengths[i]), resource));
         }
-        result_rows.push_back(db_result_access::borrowed_row(result_fields.data() + row_start, field_count,
-            result_column_names.data(), result_column_names.size(), resource));
+        result_rows.push_back(db_result_access::borrowed_row(
+            result_fields.data() + row_start, field_count, result_column_names.data(), result_column_names.size()));
     }
 
     co_return result_value;
@@ -396,12 +396,24 @@ task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t 
         if (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0) {
             throw mysql_error(connection, "mysql_use_result", db_error::code_type::statement_failed);
         }
-        co_return db_stream_start{.result_ = nullptr, .returns_rows_ = false};
+        db_stream_start empty(resource);
+        empty.returns_rows_ = false;
+        co_return empty;
     }
-    co_return db_stream_start{.result_ = raw_result, .returns_rows_ = true};
+    db_stream_start start(resource);
+    start.result_ = raw_result;
+    const auto field_count = static_cast<std::size_t>(mysql_num_fields(raw_result));
+    const auto* fields_value = mysql_fetch_fields(raw_result);
+    start.column_names_.reserve(field_count);
+    for (std::size_t i = 0; i < field_count; ++i) {
+        start.column_names_.emplace_back(
+            fields_value[i].name, static_cast<std::size_t>(fields_value[i].name_length));
+    }
+    co_return start;
 }
 
 task<std::optional<db_row>> mariadb_driver::read_stream_row(pool_type& pool, std::size_t index, void* result_value,
+    std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_options& options) {
     if (result_value == nullptr) {
         co_return std::nullopt;
@@ -427,22 +439,17 @@ task<std::optional<db_row>> mariadb_driver::read_stream_row(pool_type& pool, std
         if (row != nullptr) {
             const auto field_count = static_cast<std::size_t>(mysql_num_fields(raw_result));
             const auto* lengths = mysql_fetch_lengths(raw_result);
-            auto output_row = db_result_access::owned_row(resource);
-            auto& output_fields = db_result_access::owned_fields(output_row);
-            auto& output_column_names = db_result_access::owned_column_names(output_row);
-            output_fields.reserve(field_count);
-            output_column_names.reserve(field_count);
-            const auto* fields_value = mysql_fetch_fields(raw_result);
+            fields.clear();
+            fields.reserve(field_count);
             for (std::size_t i = 0; i < field_count; ++i) {
-                output_column_names.emplace_back(
-                    fields_value[i].name, static_cast<std::size_t>(fields_value[i].name_length));
                 if (row[i] == nullptr) {
-                    output_fields.push_back(db_result_access::null_field(resource));
+                    fields.push_back(db_result_access::null_field(resource));
                     continue;
                 }
-                output_fields.push_back(db_result_access::owned_field(std::string_view(row[i], lengths[i]), resource));
+                fields.push_back(db_result_access::owned_field(std::string_view(row[i], lengths[i]), resource));
             }
-            co_return output_row;
+            co_return db_result_access::borrowed_row(
+                fields.data(), fields.size(), column_names.data(), column_names.size());
         }
     } catch (...) {
         discard_unbuffered_result(raw_result);

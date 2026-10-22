@@ -158,6 +158,9 @@ public:
     enum class code_type : std::uint8_t {
         invalid_format,
         out_of_range,
+        unexpected_null,
+        missing_column,
+        unexpected_row_count,
     };
 
     db_conversion_error(code_type code, const std::string& message)
@@ -305,7 +308,6 @@ private:
     struct borrowed_tag_type final {};
 
     explicit db_field(std::pmr::memory_resource* resource);
-    db_field(const db_field& other, std::pmr::memory_resource* resource);
     db_field(std::nullptr_t, std::pmr::memory_resource* resource);
     db_field(std::string_view value, std::pmr::memory_resource* resource);
     db_field(borrowed_tag_type, std::string_view value, std::pmr::memory_resource* resource);
@@ -317,20 +319,9 @@ private:
 };
 
 class db_row final {
-private:
-    using owned_fields_type = std::pmr::vector<db_field>;
-    using borrowed_fields_type = std::span<const db_field>;
-    using storage_type = std::variant<owned_fields_type, borrowed_fields_type>;
-    using owned_column_names_type = std::pmr::vector<std::pmr::string>;
-    using borrowed_column_names_type = std::span<const std::pmr::string>;
-    using column_name_storage_type = std::variant<owned_column_names_type, borrowed_column_names_type>;
-
 public:
     db_row(db_row&& other) noexcept;
-    // Assignment retains the destination PMR resource. Allocation failure
-    // leaves both rows unchanged.
-    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    db_row& operator=(db_row&& other);
+    db_row& operator=(db_row&& other) noexcept;
 
     db_row(const db_row&) = delete;
     db_row& operator=(const db_row&) = delete;
@@ -349,16 +340,13 @@ public:
 private:
     friend struct detail::db_result_access;
 
-    explicit db_row(std::pmr::memory_resource* resource = nullptr);
+    db_row() noexcept = default;
     db_row(const db_field* fields_value, std::size_t size, const std::pmr::string* column_names,
-        std::size_t column_count, std::pmr::memory_resource* resource);
-    [[nodiscard]] owned_fields_type& owned_fields() noexcept;
-    [[nodiscard]] owned_column_names_type& owned_column_names() noexcept;
+        std::size_t column_count) noexcept;
     [[nodiscard]] std::span<const std::pmr::string> column_names() const noexcept;
 
-    std::pmr::memory_resource* resource_;
-    storage_type storage_;
-    column_name_storage_type column_names_;
+    std::span<const db_field> fields_{};
+    std::span<const std::pmr::string> column_names_{};
 };
 
 }  // namespace ruvia

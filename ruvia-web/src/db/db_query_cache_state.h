@@ -31,8 +31,9 @@ public:
     // Serves the step from the cache, or runs `database` and stores its rows.
     [[nodiscard]] task<db_rows> wrap(std::optional<std::chrono::milliseconds> duration, std::pmr::string key,
         db_cache_query database, operation_options options, operation_timeout deadline);
-    [[nodiscard]] task<void> remove(std::span<const std::string_view> ids, operation_options options);
-    [[nodiscard]] task<void> clear(operation_options options);
+    [[nodiscard]] task<void> remove(
+        std::span<const std::string_view> ids, operation_scope& scope, operation_options options);
+    [[nodiscard]] task<void> clear(operation_scope& scope, operation_options options);
 
 private:
     void require_open() const;

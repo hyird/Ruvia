@@ -69,6 +69,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
     std::optional<ruvia::http_client_response_bytes> retained;
     std::exception_ptr failure;
     try {
+        const auto origin = client.handle();
         auto bounded = client.with_options({.timeout_ = std::chrono::seconds(5)});
         {
             const std::array<ruvia::http_header_view, 1> headers{{
@@ -101,13 +102,13 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
             }
             while (co_await response.body().read()) {
             }
-            while (auto push = client.next_push()) {
+            while (auto push = origin.next_push()) {
                 std::cout << "push=" << push->request().path_ << '\n';
                 auto pushed = co_await push->response();
                 auto content = co_await pushed.body().read_all(4096);
                 std::cout << "pushed bytes=" << content.bytes().size() << '\n';
             }
-            while (auto advertisement = client.next_advertisement()) {
+            while (auto advertisement = origin.next_advertisement()) {
                 std::cout << "advertisement: origins=" << (advertisement->origins() != nullptr)
                           << " alt-svc=" << (advertisement->alternative_service() != nullptr) << '\n';
             }
@@ -128,7 +129,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
                 throw std::runtime_error("missing response trailer");
             }
         }
-        std::cout << "completed requests=" << client.stats().completed_requests_ << '\n';
+        std::cout << "completed requests=" << origin.stats().completed_requests_ << '\n';
     } catch (...) {
         failure = std::current_exception();
     }

@@ -743,21 +743,21 @@ public:
             return;
         }
         while (size() < count) {
-            emplace();
+            emplace_back();
         }
     }
 
     template <typename... args_type>
-    t_type& emplace(args_type&&... args) & {
+    t_type& emplace_back(args_type&&... args) & {
         return detail::emplace_model_value<t_type>(resource_, this, [this](t_type&& value) -> t_type& { return emplace_parsed(std::move(value)); }, std::forward<args_type>(args)...);
     }
 
     void push_back(const t_type& value) & {
-        (void)emplace(value);
+        (void)emplace_back(value);
     }
 
     void push_back(t_type&& value) & {
-        (void)emplace(std::move(value));
+        (void)emplace_back(std::move(value));
     }
 
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {

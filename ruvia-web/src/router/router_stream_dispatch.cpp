@@ -49,7 +49,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
         response_stream_output != nullptr ? &response_stream_output->writer() : nullptr);
     if (response_stream_output != nullptr) {
         detail::streaming_access::bind_context(
-            response_stream_output->writer(), context_value, context_value.get_stop_token());
+            response_stream_output->writer(), context_value, context_value.stop_token());
     }
 
     // Records that next() reached the handler even when it emitted no bytes.

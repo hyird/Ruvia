@@ -3,6 +3,7 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -56,27 +57,26 @@ public:
         : json_value(resolved_pmr_resource_tag{}, "null",
               pmr_resource_or_default(options.resource_)) {}
 
-    [[nodiscard]] static std::optional<json_value> parse(
-        std::string_view body, model_parse_options options = {}) noexcept {
+    [[nodiscard]] static json_value parse(std::string_view body, model_parse_options options = {}) {
         auto input = body;
         detail::json_parse_budget budget(options);
         if (!budget.skip_value(input, 0)) {
-            return std::nullopt;
+            throw std::invalid_argument("invalid JSON value");
         }
         detail::skip_json_whitespace(input);
         if (!input.empty()) {
-            return std::nullopt;
+            throw std::invalid_argument("invalid JSON value");
         }
         return json_value(
             resolved_pmr_resource_tag{}, body, pmr_resource_or_default(options.resource_));
     }
 
     template <typename traits_type, typename allocator_type>
-    static std::optional<json_value> parse(
+    static json_value parse(
         std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     template <typename traits_type, typename allocator_type>
-    static std::optional<json_value> parse(
+    static json_value parse(
         const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     json_value(const json_value&) = delete;
@@ -216,28 +216,27 @@ public:
         : json_object(resolved_pmr_resource_tag{}, "{}",
               pmr_resource_or_default(options.resource_)) {}
 
-    [[nodiscard]] static std::optional<json_object> parse(
-        std::string_view body, model_parse_options options = {}) noexcept {
+    [[nodiscard]] static json_object parse(std::string_view body, model_parse_options options = {}) {
         auto input = body;
         detail::json_parse_budget budget(options);
         detail::skip_json_whitespace(input);
         if (input.empty() || input.front() != '{' || !budget.skip_value(input, 0)) {
-            return std::nullopt;
+            throw std::invalid_argument("invalid JSON object");
         }
         detail::skip_json_whitespace(input);
         if (!input.empty()) {
-            return std::nullopt;
+            throw std::invalid_argument("invalid JSON object");
         }
         return json_object(
             resolved_pmr_resource_tag{}, body, pmr_resource_or_default(options.resource_));
     }
 
     template <typename traits_type, typename allocator_type>
-    static std::optional<json_object> parse(
+    static json_object parse(
         std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     template <typename traits_type, typename allocator_type>
-    static std::optional<json_object> parse(
+    static json_object parse(
         const std::basic_string<char, traits_type, allocator_type>&&, model_parse_options = {}) = delete;
 
     json_object(const json_object&) = delete;

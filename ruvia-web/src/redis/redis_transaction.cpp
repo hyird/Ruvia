@@ -3,6 +3,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/web/detail/integration/request_io_metrics.h"
+
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_registry.h"
 #include "redis/redis_types_access.h"
@@ -28,7 +30,9 @@ redis_transaction& redis_transaction::command(std::span<const std::string_view> 
     return *this;
 }
 
-task<std::pmr::vector<redis_value>> redis_transaction::execute_owned(detail::redis_command_payload payload_value) {
+task<std::pmr::vector<redis_value>> redis_transaction::execute_owned(
+    operation_scope& scope, detail::redis_command_payload payload_value) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::redis);
     auto* resource = payload_value.commands_.get_allocator().resource();
     std::pmr::vector<detail::redis_command_args_view> framed(resource);
     framed.reserve(payload_value.commands_.size() + 2);
@@ -63,7 +67,7 @@ task<std::pmr::vector<redis_value>> redis_transaction::execute_owned(detail::red
 scoped_operation<std::pmr::vector<redis_value>> redis_transaction::exec() && {
     auto& scope = registration_.scope();
     auto payload_value = batch_.consume();
-    return make_scoped_operation(scope, execute_owned(std::move(payload_value)), scoped_operation_io_kind::redis);
+    return make_scoped_operation(scope, execute_owned(scope, std::move(payload_value)));
 }
 
 }  // namespace ruvia

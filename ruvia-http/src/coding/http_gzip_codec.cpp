@@ -14,13 +14,13 @@
 
 namespace ruvia::detail {
 
-static http_content_decode_result decode_zlib_content(std::string_view input,
+static std::variant<std::pmr::string, http_content_decode_error> decode_zlib_content(std::string_view input,
     std::size_t max_decoded_bytes, std::pmr::memory_resource* resource, int window_bits,
     bool allow_concatenated_members) {
     std::pmr::string output(http_pmr_resource_or_default(resource));
     zlib_inflate_stream inflater(output.get_allocator().resource(), window_bits);
     if (!inflater.initialized()) {
-        return http_content_decode_result_access::failure(http_content_decode_error::decoder_failure);
+        return http_content_decode_error::decoder_failure;
     }
     auto& stream = inflater.native();
 
@@ -37,7 +37,7 @@ static http_content_decode_result decode_zlib_content(std::string_view input,
         }
         const auto produced = sizeof(buffer) - stream.avail_out;
         if (!append_decoded_bytes(output, buffer, produced, max_decoded_bytes)) {
-            return http_content_decode_result_access::failure(http_content_decode_error::decoded_size_exceeded);
+            return http_content_decode_error::decoded_size_exceeded;
         }
 
         if (status == Z_STREAM_END) {
@@ -46,27 +46,27 @@ static http_content_decode_result decode_zlib_content(std::string_view input,
             // decoding until the exact HTTP content boundary is consumed.
             zlib_refill_input(stream, input, supplied);
             if (stream.avail_in == 0 && supplied == input.size()) {
-                return http_content_decode_result_access::decoded(std::move(output));
+                return output;
             }
             if (!allow_concatenated_members) {
-                return http_content_decode_result_access::failure(http_content_decode_error::invalid_content);
+                return http_content_decode_error::invalid_content;
             }
             auto* next_input = stream.next_in;
             const auto available_input = stream.avail_in;
             const int reset = inflateReset2(&stream, window_bits);
             if (reset != Z_OK) {
                 inflater.rethrow_allocation_failure();
-                return http_content_decode_result_access::failure(http_content_decode_error::decoder_failure);
+                return http_content_decode_error::decoder_failure;
             }
             stream.next_in = next_input;
             stream.avail_in = available_input;
             continue;
         }
         if (status == Z_MEM_ERROR) {
-            return http_content_decode_result_access::failure(http_content_decode_error::decoder_failure);
+            return http_content_decode_error::decoder_failure;
         }
         if (status != Z_OK && status != Z_BUF_ERROR) {
-            return http_content_decode_result_access::failure(http_content_decode_error::invalid_content);
+            return http_content_decode_error::invalid_content;
         }
 
         const bool progressed = produced != 0 || stream.avail_in != before_input;
@@ -74,13 +74,13 @@ static http_content_decode_result decode_zlib_content(std::string_view input,
             if (stream.avail_in == 0 && supplied < input.size()) {
                 continue;
             }
-            return http_content_decode_result_access::failure(http_content_decode_error::invalid_content);
+            return http_content_decode_error::invalid_content;
         }
     }
 }
 
-http_content_encode_result encode_zlib_content(zlib_deflate_stream& deflater, std::string_view input,
-    std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
+std::variant<std::pmr::string, http_content_encode_error> encode_zlib_content(zlib_deflate_stream& deflater,
+    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
     std::pmr::string output(http_pmr_resource_or_default(output_resource));
     auto& stream = deflater.native();
     const zlib_borrow_scope borrow(stream);
@@ -100,13 +100,13 @@ http_content_encode_result encode_zlib_content(zlib_deflate_stream& deflater, st
                     deflater.rethrow_allocation_failure();
                 }
                 if (status == Z_STREAM_END && stream.avail_out == 1) {
-                    return http_content_encode_result_access::encoded(std::move(output));
+                    return output;
                 }
                 if (status == Z_MEM_ERROR) {
-                    return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+                    return http_content_encode_error::encoder_failure;
                 }
             }
-            return http_content_encode_result_access::failure(http_content_encode_error::encoded_size_exceeded);
+            return http_content_encode_error::encoded_size_exceeded;
         }
         const auto offset = output.size();
         const auto writable = std::min<std::size_t>(sizeof(buffer), max_encoded_bytes - offset);
@@ -119,48 +119,48 @@ http_content_encode_result encode_zlib_content(zlib_deflate_stream& deflater, st
             deflater.rethrow_allocation_failure();
         }
         if (status == Z_STREAM_END) {
-            return http_content_encode_result_access::encoded(std::move(output));
+            return output;
         }
         if (status == Z_MEM_ERROR) {
-            return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+            return http_content_encode_error::encoder_failure;
         }
         if (status != Z_OK || (output.size() == offset && stream.avail_in == before_input)) {
-            return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+            return http_content_encode_error::encoder_failure;
         }
     }
 }
 
 namespace {
 
-[[nodiscard]] http_content_encode_result encode_zlib_content(std::string_view input,
-    std::size_t max_encoded_bytes, std::pmr::memory_resource* resource, int window_bits) {
+[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_zlib_content(
+    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource, int window_bits) {
     auto* const state_resource = http_pmr_resource_or_default(resource);
     zlib_deflate_stream deflater(
         state_resource, Z_DEFAULT_COMPRESSION, window_bits, zlib_default_mem_level, Z_DEFAULT_STRATEGY);
     if (!deflater.initialized()) {
-        return http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+        return http_content_encode_error::encoder_failure;
     }
     return encode_zlib_content(deflater, input, max_encoded_bytes, state_resource);
 }
 
 }  // namespace
 
-http_content_decode_result decode_gzip_content(
+std::variant<std::pmr::string, http_content_decode_error> decode_gzip_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
     return decode_zlib_content(input, max_decoded_bytes, resource, zlib_gzip_window_bits, true);
 }
 
-http_content_decode_result decode_deflate_content(
+std::variant<std::pmr::string, http_content_decode_error> decode_deflate_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
     return decode_zlib_content(input, max_decoded_bytes, resource, zlib_deflate_window_bits, false);
 }
 
-http_content_encode_result encode_gzip_content(
+std::variant<std::pmr::string, http_content_encode_error> encode_gzip_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
     return encode_zlib_content(input, max_encoded_bytes, resource, zlib_gzip_window_bits);
 }
 
-http_content_encode_result encode_deflate_content(
+std::variant<std::pmr::string, http_content_encode_error> encode_deflate_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
     return encode_zlib_content(input, max_encoded_bytes, resource, zlib_deflate_window_bits);
 }

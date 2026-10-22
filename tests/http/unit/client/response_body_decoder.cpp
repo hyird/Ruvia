@@ -310,7 +310,7 @@ RUVIA_TEST(http1_response_body_decoder_terminal_result_is_stable_and_replayed) {
     std::array<char, 4> scratch{};
     const auto failed = decoder.decode("1\r\nx\r\n0\r\n\r\nTAIL", scratch);
     RUVIA_CHECK(failed.protocol_failure() != nullptr);
-    RUVIA_CHECK(failed.protocol_failure()->error() == ruvia::http1_client_response_body_error::non_empty205);
+    RUVIA_CHECK(failed.protocol_failure()->error() == ruvia::http1_client_response_body_error::non_empty_205);
     const auto replayed = decoder.decode("ignored", scratch);
     RUVIA_CHECK(replayed.protocol_failure() != nullptr);
     RUVIA_CHECK(replayed.protocol_failure()->error() == failed.protocol_failure()->error());
@@ -385,7 +385,7 @@ RUVIA_TEST(http1_response_body_decoder_205_accepts_empty_gzip_and_rejects_decode
         25};
     const auto rejected = nonempty.finish_input(gzip_hello, scratch);
     RUVIA_CHECK(rejected.protocol_failure() != nullptr);
-    RUVIA_CHECK(rejected.protocol_failure()->error() == ruvia::http1_client_response_body_error::non_empty205);
+    RUVIA_CHECK(rejected.protocol_failure()->error() == ruvia::http1_client_response_body_error::non_empty_205);
 }
 
 RUVIA_TEST(http1_response_body_decoder_chunk_output_is_limited_to_scratch_and_keeps_tail) {

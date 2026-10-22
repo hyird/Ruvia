@@ -40,16 +40,22 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
         co_return co_await complete_failed_http_route(d.scanner_entry_, body_setup_failure, d.parsed_,
             d.routes_, d.request_memory_, d.base_route_services_, d.response_);
     }
-    d.base_route_services_ = body_state.with_loader(d.base_route_services_);
     const auto close_policy = d.request_sequence_.next_response_close_policy();
     const auto stream_plan = http1_plan_response_stream(d.parsed_, close_policy);
     auto connection_plan = stream_plan.request_connection_plan();
     using response_sink_type = response_stream_sink<stream_type>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().response_stream();
+    body_reader stream_body_facade = make_body_reader_facade(body_state.body_->loader().reader());
+    if (endpoint.request_body_mode() == request_body_mode::stream) {
+        d.base_route_services_.bind_streaming_request_body(stream_body_facade);
+        d.base_route_services_.bind_request_trailers(body_state.body().trailers());
+    } else {
+        d.base_route_services_ = body_state.with_loader(d.base_route_services_);
+    }
     response_sink_type response_sink(d.stream_, d.memory_, *d.options_.codecs_, response_head, d.scanner_entry_,
         d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
-        endpoint.kind(), stream_plan, http1_plan_consumed_response_stream(d.parsed_, close_policy),
+        stream_plan, http1_plan_consumed_response_stream(d.parsed_, close_policy),
         body_state.body(), d.response_coding_, d.response_coding_availability_, &d.inbound_buffer_pool_);
 
     // The handler stays in the session's idle deadman phase; the sink times

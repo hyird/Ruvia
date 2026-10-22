@@ -8,6 +8,7 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/attributes.h"
 #include "ruvia/http/detail/field/request_header_kind.h"
@@ -170,7 +171,7 @@ private:
 // returned request is in use. Invalid method, target, or header fields are
 // reported as http_parse_error; body framing fields are intentionally not
 // interpreted because this API represents an already-parsed request.
-[[nodiscard]] std::pair<http_request, std::optional<http_parse_error>> make_parsed_http_request(
+[[nodiscard]] std::variant<http_request, http_parse_error> make_parsed_http_request(
     std::string_view method, std::string_view target, std::span<const http_header_view> headers,
     std::span<const std::byte> body, std::pmr::memory_resource* resource);
 

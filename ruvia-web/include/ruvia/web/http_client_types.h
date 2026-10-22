@@ -14,9 +14,6 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/client_tls_config.h"
-#include "ruvia/web/http_client_advertisement_config.h"
-#include "ruvia/web/http_client_push_config.h"
-
 namespace ruvia {
 
 enum class http_client_protocol : std::uint8_t {
@@ -30,6 +27,37 @@ enum class http_client_received_cookie_policy : std::uint8_t {
     retain_and_send,
 };
 
+// Connection advertisements are optional observations. They do not change the
+// fixed registered origin, connection coalescing, TLS identity or cache policy.
+struct http_client_advertisement_config final {
+    bool receive_origins_{false};
+    bool receive_alternative_services_{false};
+    std::size_t max_queued_advertisements_{32};
+    // Includes observations retained by callers after polling the client.
+    std::size_t max_retained_bytes_{64 * 1024};
+};
+
+struct http_client_push_config final {
+    bool enabled_{false};
+    std::size_t max_queued_pushes_{16};
+    std::size_t max_concurrent_pushes_{16};
+    std::optional<std::chrono::milliseconds> timeout_{30000};
+};
+
+struct http_client_upload_config final {
+    // A known length must be fulfilled exactly; HTTP/1 trailers require chunked
+    // framing. Without trailers, HTTP/1 finalization uses fixed-size wire storage.
+    std::optional<std::uint64_t> content_length_{};
+    http_client_request_expectation expectation_{http_client_request_expectation::none};
+    std::size_t max_chunk_bytes_{64 * 1024};
+    std::chrono::milliseconds continue_timeout_{1000};
+};
+
+// open_tunnel() and open_udp_tunnel() select the protocol; this policy bounds
+// the size of one transport write, independently of Capsule payload limits.
+struct http_client_tunnel_config final {
+    std::size_t max_chunk_bytes_{64 * 1024};
+};
 // Bounds bytes retained by read_all() results: per standalone client or,
 // in an application, across all registered aliases of one business worker. This is
 // independent of per-response limits and worker-owned memory.

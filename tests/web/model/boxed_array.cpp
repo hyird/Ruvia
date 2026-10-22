@@ -54,15 +54,15 @@ RUVIA_TEST(model_list_clear_and_destructor_release_owned_elements) {
     counting_memory_resource resource;
     {
         ruvia::boxed_array<tracked_value> values({.resource_ = &resource});
-        values.emplace(1);
-        values.emplace(2);
+        values.emplace_back(1);
+        values.emplace_back(2);
         RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{2});
 
         values.clear();
         RUVIA_CHECK(values.empty());
         RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{0});
 
-        values.emplace(3);
+        values.emplace_back(3);
         RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{1});
     }
 
@@ -76,11 +76,11 @@ RUVIA_TEST(model_list_move_assignment_keeps_element_resource_owner) {
     counting_memory_resource target_resource;
     {
         ruvia::boxed_array<tracked_value> source_value({.resource_ = &source_resource});
-        source_value.emplace(4);
-        source_value.emplace(5);
+        source_value.emplace_back(4);
+        source_value.emplace_back(5);
 
         ruvia::boxed_array<tracked_value> target({.resource_ = &target_resource});
-        target.emplace(9);
+        target.emplace_back(9);
         RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{3});
 
         target = std::move(source_value);
@@ -91,7 +91,7 @@ RUVIA_TEST(model_list_move_assignment_keeps_element_resource_owner) {
         RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{2});
         RUVIA_CHECK(target_resource.live_allocations() > 0);
 
-        source_value.emplace(6);
+        source_value.emplace_back(6);
         RUVIA_CHECK_EQ(source_value.front().value(), 6);
         RUVIA_CHECK_EQ(tracked_value::alive(), std::size_t{3});
     }
@@ -107,9 +107,9 @@ RUVIA_TEST(model_boxed_array_supports_standard_range_algorithms) {
     ruvia::boxed_array<tracked_value> values;
     RUVIA_CHECK(std::ranges::find_if(values, [](const auto&) { return true; }) == values.end());
     RUVIA_CHECK_EQ(std::ranges::distance(values), std::ptrdiff_t{0});
-    values.emplace(1);
-    values.emplace(2);
-    values.emplace(3);
+    values.emplace_back(1);
+    values.emplace_back(2);
+    values.emplace_back(3);
 
     const auto found = std::ranges::find_if(values, [](const auto& value) { return value.value() == 2; });
     RUVIA_CHECK(found != values.end());

@@ -645,15 +645,14 @@ RUVIA_TEST(redis_composite_results_rebind_equivalent_resource_owners) {
         const auto value = co_await redis.command("TEST", "nested");
         const auto value_seed = co_await redis.command("TEST", "integer");
         const std::array streams{ruvia::redis_stream_read_view{.stream_ = stream_name, .id_ = "0"}};
-        const auto grouped = co_await redis.xread_group("group", "consumer", streams);
-        const auto group_seed = co_await redis.xread_group("group", "consumer", streams);
-        const auto scanned = co_await redis.scan();
-        const auto scan_seed = co_await redis.scan();
-        const auto hashed = co_await redis.hscan("hash");
-        const auto hash_seed = co_await redis.hscan("hash");
-        const auto scored = co_await redis.zscan("scores");
-        const auto score_seed = co_await redis.zscan("scores");
-        RUVIA_CHECK(grouped.has_value());
+        auto grouped = co_await redis.xread_group("group", "consumer", streams);
+        auto group_seed = co_await redis.xread_group("group", "consumer", streams);
+        auto scanned = co_await redis.scan();
+        auto scan_seed = co_await redis.scan();
+        auto hashed = co_await redis.hscan("hash");
+        auto hash_seed = co_await redis.hscan("hash");
+        auto scored = co_await redis.zscan("scores");
+        auto score_seed = co_await redis.zscan("scores");
         RUVIA_CHECK(group_seed.has_value());
         if (!grouped || !group_seed || grouped->streams().size() != 2 || grouped->streams()[0].entries().size() != 2) {
             co_return;
@@ -695,37 +694,46 @@ RUVIA_TEST(redis_composite_results_rebind_equivalent_resource_owners) {
             check_redis_result_rebinding(ruvia_ctx, stream.entries()[0], stream.entries()[1], allocator_move, check_entry);
             check_redis_result_rebinding(ruvia_ctx, stream, grouped->streams()[1], allocator_move, check_stream);
         }
-        check_redis_result_rebinding(ruvia_ctx, *grouped, *group_seed, false, [&](const ruvia::redis_x_read_group_result& result) {
-            RUVIA_CHECK_EQ(result.streams().size(), std::size_t{2});
-            if (result.streams().size() == 2) {
-                check_stream(result.streams()[0]);
-                RUVIA_CHECK_EQ(result.streams()[1].stream(), std::string_view("seed"));
-                RUVIA_CHECK_EQ(result.streams()[1].entries().size(), std::size_t{1});
-            }
-        });
-        check_redis_result_rebinding(ruvia_ctx, scanned, scan_seed, false, [&](const ruvia::redis_scan_result& result) {
-            RUVIA_CHECK(!result.done());
-            RUVIA_CHECK_EQ(result.next_cursor(), scanned.next_cursor());
-            RUVIA_CHECK_EQ(result.values().size(), std::size_t{2});
-            if (result.values().size() == 2) {
-                RUVIA_CHECK_EQ(std::string_view(result.values()[0]), std::string_view(key_name));
-                RUVIA_CHECK_EQ(std::string_view(result.values()[1]), std::string_view("second"));
-            }
-        });
-        check_redis_result_rebinding(ruvia_ctx, hashed, hash_seed, false, [&](const ruvia::redis_hash_scan_result& result) {
-            RUVIA_CHECK(result.done());
-            RUVIA_CHECK_EQ(result.next_cursor(), hashed.next_cursor());
-            check_fields(result.entries());
-        });
-        check_redis_result_rebinding(ruvia_ctx, scored, score_seed, false, [&](const ruvia::redis_z_scan_result& result) {
-            RUVIA_CHECK(!result.done());
-            RUVIA_CHECK_EQ(result.next_cursor(), scored.next_cursor());
-            RUVIA_CHECK_EQ(result.entries().size(), std::size_t{1});
-            if (result.entries().size() == 1) {
-                RUVIA_CHECK_EQ(result.entries()[0].value(), std::string_view(member_name));
-                RUVIA_CHECK_EQ(result.entries()[0].score(), 1.5);
-            }
-        });
+        static_assert(!std::is_copy_constructible_v<ruvia::redis_x_read_group_result>);
+        static_assert(!std::is_copy_assignable_v<ruvia::redis_x_read_group_result>);
+        static_assert(!std::is_copy_constructible_v<ruvia::redis_scan_result>);
+        static_assert(!std::is_copy_assignable_v<ruvia::redis_scan_result>);
+        static_assert(!std::is_copy_constructible_v<ruvia::redis_hash_scan_result>);
+        static_assert(!std::is_copy_assignable_v<ruvia::redis_hash_scan_result>);
+        static_assert(!std::is_copy_constructible_v<ruvia::redis_z_scan_result>);
+        static_assert(!std::is_copy_assignable_v<ruvia::redis_z_scan_result>);
+
+        *group_seed = std::move(*grouped);
+        RUVIA_CHECK_EQ(group_seed->streams().size(), std::size_t{2});
+        if (group_seed->streams().size() == 2) {
+            check_stream(group_seed->streams()[0]);
+            RUVIA_CHECK_EQ(group_seed->streams()[1].stream(), std::string_view("seed"));
+            RUVIA_CHECK_EQ(group_seed->streams()[1].entries().size(), std::size_t{1});
+        }
+        const auto expected_scan_cursor = scanned.next_cursor();
+        scan_seed = std::move(scanned);
+        RUVIA_CHECK(!scan_seed.done());
+        RUVIA_CHECK_EQ(scan_seed.next_cursor(), expected_scan_cursor);
+        RUVIA_CHECK_EQ(scan_seed.values().size(), std::size_t{2});
+        if (scan_seed.values().size() == 2) {
+            RUVIA_CHECK_EQ(std::string_view(scan_seed.values()[0]), std::string_view(key_name));
+            RUVIA_CHECK_EQ(std::string_view(scan_seed.values()[1]), std::string_view("second"));
+        }
+        const auto expected_hash_cursor = hashed.next_cursor();
+        hash_seed = std::move(hashed);
+        RUVIA_CHECK(hash_seed.done());
+        RUVIA_CHECK_EQ(hash_seed.next_cursor(), expected_hash_cursor);
+        check_fields(hash_seed.entries());
+
+        const auto expected_score_cursor = scored.next_cursor();
+        score_seed = std::move(scored);
+        RUVIA_CHECK(!score_seed.done());
+        RUVIA_CHECK_EQ(score_seed.next_cursor(), expected_score_cursor);
+        RUVIA_CHECK_EQ(score_seed.entries().size(), std::size_t{1});
+        if (score_seed.entries().size() == 1) {
+            RUVIA_CHECK_EQ(score_seed.entries()[0].value(), std::string_view(member_name));
+            RUVIA_CHECK_EQ(score_seed.entries()[0].score(), 1.5);
+        }
     });
     peer.join();
 }

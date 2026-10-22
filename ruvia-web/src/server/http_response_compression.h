@@ -25,13 +25,10 @@ enum class http_response_coding_availability : std::uint8_t {
     identity_and_compression,
 };
 
-// The representation source affects compression eligibility (notably SSE's
-// media type), while static-file representations remain owned by the static
-// response path.
+// Static-file representations remain owned by the static response path.
 enum class http_response_compression_source : std::uint8_t {
     buffered,
     stream,
-    sse,
 };
 
 enum class http_response_compression_decision : std::uint8_t {

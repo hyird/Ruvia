@@ -11,14 +11,12 @@ namespace {
 using ruvia::http_known_method;
 using ruvia::http_response;
 using ruvia::http_response_stream_framing;
-using ruvia::http_response_stream_kind;
 using ruvia::http_response_trailer_intent;
 
 }  // namespace
 
 RUVIA_TEST(response_stream_commit_discards_trailers_without_wire_framing) {
     constexpr std::array framings{
-        http_response_stream_framing::http1_known_length,
         http_response_stream_framing::http1_close_delimited,
         http_response_stream_framing::http1_chunked};
     constexpr std::array methods{http_known_method::get, http_known_method::head};
@@ -34,7 +32,7 @@ RUVIA_TEST(response_stream_commit_discards_trailers_without_wire_framing) {
             RUVIA_CHECK(plan.trailer_intent_allowed());
             RUVIA_CHECK(!plan.trailers_available());
             const auto prepared = ruvia::prepare_http_response_stream_head(
-                std::move(response), http_response_stream_kind::generic, plan);
+                std::move(response), plan);
             RUVIA_CHECK(!prepared.response().header("Trailer").has_value());
         }
     }
@@ -55,7 +53,7 @@ RUVIA_TEST(response_stream_commit_keeps_allowed_trailers_open) {
                 framing, method, response.status(), http_response_trailer_intent::present);
             RUVIA_CHECK(plan.trailer_intent_allowed());
             const auto prepared = ruvia::prepare_http_response_stream_head(
-                std::move(response), http_response_stream_kind::generic, plan);
+                std::move(response), plan);
             RUVIA_CHECK_EQ(prepared.commit_plan().head_disposition(),
                 method == http_known_method::head
                     ? ruvia::http_response_stream_head_disposition::trailers_only
@@ -82,7 +80,7 @@ RUVIA_TEST(response_stream_commit_rejects_trailers_for_bodyless_statuses) {
             bool rejected = false;
             try {
                 (void)ruvia::prepare_http_response_stream_head(
-                    std::move(response), http_response_stream_kind::generic, plan);
+                    std::move(response), plan);
             } catch (const std::invalid_argument&) {
                 rejected = true;
             }

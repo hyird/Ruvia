@@ -122,7 +122,7 @@ http_tunnel& context::tunnel() const {
     return output->tunnel();
 }
 
-websocket& context::get_websocket() const {
+websocket& context::websocket() const {
     const auto* output = response_output().get_websocket();
     if (output == nullptr) {
         throw std::logic_error("websocket is not available");
@@ -245,6 +245,10 @@ scoped_operation<void> websocket::text(std::string_view payload_value, websocket
 
 scoped_operation<void> websocket::binary(std::string_view payload_value, websocket_send_options options) & {
     return write(websocket_opcode::binary, payload_value, options.compress_);
+}
+
+scoped_operation<void> websocket::binary(std::span<const std::byte> payload_value, websocket_send_options options) & {
+    return binary(as_chars(payload_value), options);
 }
 
 scoped_operation<void> websocket::pong(std::string_view payload_value) & {

@@ -33,20 +33,27 @@ void set_source_options(db_query_source& source_value, const db_source_options& 
 }  // namespace
 
 struct qualified_expression_importer final {
-    const db_query_storage& source_;
+    std::span<const db_query_node> source_nodes_;
+    std::span<const db_query> source_queries_;
     db_query_storage& target_;
     std::string_view source_qualifier_;
     std::string_view target_qualifier_;
     std::pmr::vector<std::size_t> mapped_;
 
-    qualified_expression_importer(const db_query_storage& source_value, db_query_storage& target,
+    qualified_expression_importer(std::span<const db_query_node> source_nodes,
+        std::span<const db_query> source_queries, db_query_storage& target,
         std::string_view source_qualifier, std::string_view target_qualifier)
-        : source_(source_value),
+        : source_nodes_(source_nodes),
+          source_queries_(source_queries),
           target_(target),
           source_qualifier_(source_qualifier),
           target_qualifier_(target_qualifier),
-          mapped_(source_value.nodes_.size(), no_db_node, target.resource_) {}
+          mapped_(source_nodes.size(), no_db_node, target.resource_) {}
 
+    qualified_expression_importer(const db_query_storage& source_value, db_query_storage& target,
+        std::string_view source_qualifier, std::string_view target_qualifier)
+        : qualified_expression_importer(
+              source_value.nodes_, source_value.queries_, target, source_qualifier, target_qualifier) {}
     [[nodiscard]] static bool binds_qualifier(const db_query_source& src, std::string_view qualifier) noexcept {
         if (!src.alias_.empty()) {
             return src.alias_ == qualifier;
@@ -75,7 +82,8 @@ struct qualified_expression_importer final {
         }
         visited[node] = true;
         auto& sub_node = query_storage.nodes_[node];
-        if (!source_bound && (sub_node.kind_ == db_node_kind::column || sub_node.kind_ == db_node_kind::star) &&
+        if (!source_bound && !sub_node.explicit_alias_ &&
+            (sub_node.kind_ == db_node_kind::column || sub_node.kind_ == db_node_kind::star) &&
             sub_node.qualifier_ == source_qualifier_) {
             if (target_bound) {
                 throw std::invalid_argument("expression qualifier mapping would capture a correlated reference");
@@ -177,8 +185,8 @@ struct qualified_expression_importer final {
         if (mapped_[id] != no_db_node) {
             return mapped_[id];
         }
-        db_query_node node_value(source_.nodes_[id], target_.resource_);
-        if (!source_qualifier_.empty() &&
+        db_query_node node_value(source_nodes_[id], target_.resource_);
+        if (!source_qualifier_.empty() && !node_value.explicit_alias_ &&
             (node_value.kind_ == db_node_kind::column || node_value.kind_ == db_node_kind::star) &&
             node_value.qualifier_ == source_qualifier_) {
             node_value.qualifier_ = target_qualifier_;
@@ -199,7 +207,7 @@ struct qualified_expression_importer final {
             order.expression_ = import_node(order.expression_, depth + 1);
         }
         if (node_value.query_ != no_db_node) {
-            auto snapshot = source_.queries_[node_value.query_].clone(target_.resource_);
+            auto snapshot = source_queries_[node_value.query_].clone(target_.resource_);
             if (!source_qualifier_.empty()) {
                 rewrite_subquery(snapshot.storage(), false, false, depth + 1);
             }
@@ -224,20 +232,125 @@ using detail::no_db_node;
 
 namespace detail {
 
+struct db_expr_tree final {
+    explicit db_expr_tree(std::pmr::memory_resource* resource)
+        : resource_(pmr_resource_or_default(resource)),
+          nodes_(resource_),
+          queries_(resource_) {}
+
+    db_expr_tree(const db_expr_tree& other, std::pmr::memory_resource* resource)
+        : resource_(pmr_resource_or_default(resource)),
+          nodes_(resource_),
+          queries_(resource_),
+          root_(other.root_) {
+        nodes_.reserve(other.nodes_.size());
+        for (const auto& node : other.nodes_) {
+            nodes_.emplace_back(node, resource_);
+        }
+        queries_.reserve(other.queries_.size());
+        for (const auto& query : other.queries_) {
+            queries_.push_back(query.clone(resource_));
+        }
+    }
+
+    std::pmr::memory_resource* resource_;
+    std::pmr::vector<db_query_node> nodes_;
+    std::pmr::vector<db_query> queries_;
+    std::size_t root_{no_db_node};
+};
+
+void db_expr_tree_deleter::operator()(db_expr_tree* tree) const noexcept {
+    if (tree != nullptr) {
+        std::destroy_at(tree);
+        resource_->deallocate(tree, sizeof(db_expr_tree), alignof(db_expr_tree));
+    }
+}
+namespace {
+
+[[nodiscard]] std::size_t push_tree_node(db_expr_tree& tree, db_query_node&& node) {
+    tree.nodes_.push_back(std::move(node));
+    return tree.nodes_.size() - 1;
+}
+
+[[nodiscard]] std::size_t push_tree_value(db_expr_tree& tree, const db_value& value) {
+    db_query_node node_value(db_node_kind::value, tree.resource_);
+    auto owned = clone_db_value_for_resource(value, tree.resource_);
+    std::destroy_at(&node_value.value_);
+    std::construct_at(&node_value.value_, std::move(owned));
+    return push_tree_node(tree, std::move(node_value));
+}
+
+[[nodiscard]] std::size_t push_tree_text_array(
+    db_expr_tree& tree, std::span<const std::string_view> strings) {
+    db_query_node array_node(db_node_kind::array, tree.resource_);
+    array_node.args_.reserve(strings.size());
+    for (const auto item : strings) {
+        array_node.args_.push_back(push_tree_value(tree, db_value(item)));
+    }
+    const auto array_idx = push_tree_node(tree, std::move(array_node));
+    db_query_node cast_node(db_node_kind::cast, tree.resource_);
+    cast_node.left_ = array_idx;
+    cast_node.type_ = db_stored_type(
+        db_type_definition{.data_type_ = db_data_type::text, .array_ = true}, tree.resource_);
+    return push_tree_node(tree, std::move(cast_node));
+}
+
+[[nodiscard]] std::size_t import_borrowed_node_to_tree(const db_query_storage& source,
+    db_expr_tree& target, std::pmr::vector<std::size_t>& mapped, bool aliased, std::size_t id, std::size_t depth) {
+    qualified_expression_importer::require_depth(depth);
+    if (mapped[id] != no_db_node) {
+        return mapped[id];
+    }
+    db_query_node node_value(source.nodes_[id], target.resource_);
+    if (aliased && (node_value.kind_ == db_node_kind::column || node_value.kind_ == db_node_kind::star)) {
+        node_value.explicit_alias_ = true;
+    }
+    if (node_value.left_ != no_db_node) {
+        node_value.left_ = import_borrowed_node_to_tree(source, target, mapped, aliased, node_value.left_, depth + 1);
+    }
+    if (node_value.right_ != no_db_node) {
+        node_value.right_ = import_borrowed_node_to_tree(source, target, mapped, aliased, node_value.right_, depth + 1);
+    }
+    for (auto& arg : node_value.args_) {
+        arg = import_borrowed_node_to_tree(source, target, mapped, aliased, arg, depth + 1);
+    }
+    for (auto& arg : node_value.named_) {
+        arg.expression_ = import_borrowed_node_to_tree(source, target, mapped, aliased, arg.expression_, depth + 1);
+    }
+    for (auto& order : node_value.orders_) {
+        order.expression_ = import_borrowed_node_to_tree(source, target, mapped, aliased, order.expression_, depth + 1);
+    }
+    if (node_value.query_ != no_db_node) {
+        node_value.query_ = target.queries_.size();
+        target.queries_.push_back(source.queries_[source.nodes_[id].query_].clone(target.resource_));
+    }
+    const auto index = push_tree_node(target, std::move(node_value));
+    mapped[id] = index;
+    return index;
+}
+
+}  // namespace
+
 db_owned_expression::db_owned_expression() noexcept = default;
 
-db_owned_expression::db_owned_expression(db_query&& query, db_expression expression, std::string_view table, bool aliased) noexcept
-    : query_(std::make_unique<db_query>(std::move(query))),
-      expression_(expression),
-      table_(table),
-      aliased_(aliased) {}
-
 db_owned_expression::db_owned_expression(const db_owned_expression& other)
-    : table_(other.table_),
-      aliased_(other.aliased_) {
-    if (other.query_ && !other.expression_.empty()) {
-        query_ = std::make_unique<db_query>(other.query_->resource());
-        expression_ = query_->import_expression(other.expression_);
+    : kind_(other.kind_),
+      aliased_(other.aliased_),
+      borrowed_(other.borrowed_),
+      text_(other.text_),
+      table_(other.table_),
+      scalar_(other.scalar_) {
+    if (other.tree_) {
+        auto* resource = other.tree_->resource_;
+        void* block = resource->allocate(sizeof(db_expr_tree), alignof(db_expr_tree));
+        try {
+            tree_ = tree_owner_type(
+                std::construct_at(static_cast<db_expr_tree*>(block), *other.tree_, resource),
+                tree_deleter_type{resource});
+        } catch (...) {
+            resource->deallocate(block, sizeof(db_expr_tree), alignof(db_expr_tree));
+            throw;
+        }
     }
 }
 
@@ -249,17 +362,23 @@ db_owned_expression& db_owned_expression::operator=(const db_owned_expression& o
 }
 
 db_owned_expression::db_owned_expression(db_owned_expression&& other) noexcept
-    : query_(std::move(other.query_)),
-      expression_(std::exchange(other.expression_, db_expression{})),
+    : kind_(std::exchange(other.kind_, leaf_kind::empty)),
+      aliased_(std::exchange(other.aliased_, false)),
+      borrowed_(std::exchange(other.borrowed_, db_expression{})),
+      text_(std::exchange(other.text_, std::string_view{})),
       table_(std::exchange(other.table_, std::string_view{})),
-      aliased_(std::exchange(other.aliased_, false)) {}
+      scalar_(other.scalar_),
+      tree_(std::move(other.tree_)) {}
 
 db_owned_expression& db_owned_expression::operator=(db_owned_expression&& other) noexcept {
     if (this != &other) {
-        query_ = std::move(other.query_);
-        expression_ = std::exchange(other.expression_, db_expression{});
-        table_ = std::exchange(other.table_, std::string_view{});
+        kind_ = std::exchange(other.kind_, leaf_kind::empty);
         aliased_ = std::exchange(other.aliased_, false);
+        borrowed_ = std::exchange(other.borrowed_, db_expression{});
+        text_ = std::exchange(other.text_, std::string_view{});
+        table_ = std::exchange(other.table_, std::string_view{});
+        scalar_ = other.scalar_;
+        tree_ = std::move(other.tree_);
     }
     return *this;
 }
@@ -267,14 +386,753 @@ db_owned_expression& db_owned_expression::operator=(db_owned_expression&& other)
 db_owned_expression::~db_owned_expression() = default;
 
 db_expression db_owned_expression::import_into(db_query& target, std::string_view table, std::string_view alias) const {
-    if (expression_.empty()) {
-        return {};
+    switch (kind_) {
+        case leaf_kind::empty:
+            return {};
+        case leaf_kind::borrowed: {
+            const auto source_table = !table_.empty() ? table_ : table;
+            if (!aliased_ && !source_table.empty() && !alias.empty()) {
+                return target.import_expression(borrowed_, source_table, alias);
+            }
+            return target.import_expression(borrowed_);
+        }
+        case leaf_kind::null_value:
+            return target.null_value();
+        case leaf_kind::default_value:
+            return target.default_value();
+        case leaf_kind::star: {
+            const auto qualifier =
+                (!aliased_ && !table_.empty() && table_ == table && !alias.empty()) ? alias : table_;
+            return target.star(qualifier);
+        }
+        case leaf_kind::column: {
+            const auto qualifier =
+                (!aliased_ && !table_.empty() && table_ == table && !alias.empty()) ? alias : table_;
+            require_name(text_);
+            if (!qualifier.empty()) {
+                require_name(qualifier, true);
+            }
+            auto node_value = target.make_node(db_node_kind::column);
+            node_value.text_ = text_;
+            node_value.qualifier_ = qualifier;
+            node_value.explicit_alias_ = aliased_;
+            return target.push_node(std::move(node_value));
+        }
+        case leaf_kind::excluded:
+            return target.excluded(text_);
+        case leaf_kind::signed_value:
+            return target.value(db_value(scalar_.signed_value_));
+        case leaf_kind::unsigned_value:
+            return target.value(db_value(scalar_.unsigned_value_));
+        case leaf_kind::double_value:
+            return target.value(db_value(scalar_.double_value_));
+        case leaf_kind::bool_value:
+            return target.value(db_value(scalar_.bool_value_));
+        case leaf_kind::tree: {
+            auto& target_storage = target.storage();
+            const auto source_qualifier = alias.empty() ? std::string_view{} : table;
+            const auto target_qualifier = alias.empty() ? std::string_view{} : alias;
+            if (!source_qualifier.empty()) {
+                require_name(source_qualifier, true);
+                require_name(target_qualifier, true);
+            }
+            qualified_expression_importer importer(
+                tree_->nodes_, tree_->queries_, target_storage, source_qualifier, target_qualifier);
+            return db_expression(&target_storage, importer.import_node(tree_->root_, 0));
+        }
     }
-    const auto source_table = !table_.empty() ? table_ : table;
-    if (!aliased_ && !source_table.empty() && !alias.empty()) {
-        return target.import_expression(expression_, source_table, alias);
+    return {};
+}
+
+db_owned_expression db_owned_expression::from_borrowed(
+    db_expression expression, std::string_view table, bool aliased) noexcept {
+    db_owned_expression result;
+    if (!expression.empty()) {
+        result.kind_ = leaf_kind::borrowed;
+        result.borrowed_ = expression;
+        result.table_ = table;
+        result.aliased_ = aliased;
     }
-    return target.import_expression(expression_);
+    return result;
+}
+
+db_owned_expression::tree_owner_type db_owned_expression::allocate_tree(std::pmr::memory_resource* resource) {
+    auto* resolved = pmr_resource_or_default(resource);
+    void* block = resolved->allocate(sizeof(db_expr_tree), alignof(db_expr_tree));
+    try {
+        return tree_owner_type(
+            std::construct_at(static_cast<db_expr_tree*>(block), resolved),
+            tree_deleter_type{resolved});
+    } catch (...) {
+        resolved->deallocate(block, sizeof(db_expr_tree), alignof(db_expr_tree));
+        throw;
+    }
+}
+
+db_owned_expression db_owned_expression::from_tree(tree_owner_type tree) noexcept {
+    db_owned_expression result;
+    result.kind_ = leaf_kind::tree;
+    result.tree_ = std::move(tree);
+    return result;
+}
+
+std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
+    switch (kind_) {
+        case leaf_kind::empty:
+            throw std::invalid_argument("cannot evaluate an empty database expression");
+        case leaf_kind::borrowed: {
+            if (borrowed_.empty() || borrowed_.node_ >= borrowed_.owner_->nodes_.size()) {
+                throw std::invalid_argument("cannot import an empty database expression");
+            }
+            std::pmr::vector<std::size_t> mapped(borrowed_.owner_->nodes_.size(), no_db_node, target.resource_);
+            return import_borrowed_node_to_tree(
+                *borrowed_.owner_, target, mapped, aliased_, borrowed_.node_, 0);
+        }
+        case leaf_kind::null_value:
+            return push_tree_value(target, db_value(nullptr));
+        case leaf_kind::default_value:
+            return push_tree_node(target, db_query_node(db_node_kind::default_value, target.resource_));
+        case leaf_kind::star: {
+            if (!table_.empty()) {
+                require_name(table_, true);
+            }
+            db_query_node node_value(db_node_kind::star, target.resource_);
+            node_value.qualifier_ = table_;
+            node_value.explicit_alias_ = aliased_;
+            return push_tree_node(target, std::move(node_value));
+        }
+        case leaf_kind::column: {
+            require_name(text_);
+            if (!table_.empty()) {
+                require_name(table_, true);
+            }
+            db_query_node node_value(db_node_kind::column, target.resource_);
+            node_value.text_ = text_;
+            node_value.qualifier_ = table_;
+            node_value.explicit_alias_ = aliased_;
+            return push_tree_node(target, std::move(node_value));
+        }
+        case leaf_kind::excluded: {
+            require_name(text_);
+            db_query_node node_value(db_node_kind::excluded, target.resource_);
+            node_value.text_ = text_;
+            return push_tree_node(target, std::move(node_value));
+        }
+        case leaf_kind::signed_value:
+            return push_tree_value(target, db_value(scalar_.signed_value_));
+        case leaf_kind::unsigned_value:
+            return push_tree_value(target, db_value(scalar_.unsigned_value_));
+        case leaf_kind::double_value:
+            return push_tree_value(target, db_value(scalar_.double_value_));
+        case leaf_kind::bool_value:
+            return push_tree_value(target, db_value(scalar_.bool_value_));
+        case leaf_kind::tree: {
+            const auto node_offset = target.nodes_.size();
+            const auto query_offset = target.queries_.size();
+            target.queries_.reserve(query_offset + tree_->queries_.size());
+            for (const auto& query : tree_->queries_) {
+                target.queries_.push_back(query.clone(target.resource_));
+            }
+            target.nodes_.reserve(node_offset + tree_->nodes_.size());
+            for (const auto& node : tree_->nodes_) {
+                db_query_node copy(node, target.resource_);
+                if (copy.left_ != no_db_node) {
+                    copy.left_ += node_offset;
+                }
+                if (copy.right_ != no_db_node) {
+                    copy.right_ += node_offset;
+                }
+                for (auto& arg : copy.args_) {
+                    arg += node_offset;
+                }
+                for (auto& named : copy.named_) {
+                    named.expression_ += node_offset;
+                }
+                for (auto& order : copy.orders_) {
+                    order.expression_ += node_offset;
+                }
+                if (copy.query_ != no_db_node) {
+                    copy.query_ += query_offset;
+                }
+                target.nodes_.push_back(std::move(copy));
+            }
+            return tree_->root_ + node_offset;
+        }
+    }
+    return no_db_node;
+}
+
+db_owned_expression db_owned_expression::from_expression(
+    db_expression expression, std::string_view table, bool aliased) {
+    if (expression.empty() || expression.node_ >= expression.owner_->nodes_.size()) {
+        throw std::invalid_argument("cannot construct an owned expression from an empty expression");
+    }
+    auto tree = allocate_tree(expression.owner_->resource_);
+    std::pmr::vector<std::size_t> mapped(expression.owner_->nodes_.size(), no_db_node, tree->resource_);
+    tree->root_ = import_borrowed_node_to_tree(
+        *expression.owner_, *tree, mapped, aliased, expression.node_, 0);
+    auto result = from_tree(std::move(tree));
+    result.table_ = table;
+    result.aliased_ = aliased;
+    return result;
+}
+
+db_owned_expression db_owned_expression::make_null() noexcept {
+    db_owned_expression result;
+    result.kind_ = leaf_kind::null_value;
+    return result;
+}
+
+db_owned_expression db_owned_expression::make_default() noexcept {
+    db_owned_expression result;
+    result.kind_ = leaf_kind::default_value;
+    return result;
+}
+
+db_owned_expression db_owned_expression::make_star(std::string_view table) {
+    if (table.empty()) {
+        db_owned_expression result;
+        result.kind_ = leaf_kind::star;
+        return result;
+    }
+    require_name(table, true);
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::star, tree->resource_);
+    node_value.qualifier_ = table;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_column(
+    std::string_view name, std::string_view table, bool explicit_alias) {
+    require_name(name);
+    if (!table.empty()) {
+        require_name(table, true);
+    }
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::column, tree->resource_);
+    node_value.text_ = name;
+    node_value.qualifier_ = table;
+    node_value.explicit_alias_ = explicit_alias;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_static_column(
+    std::string_view name, std::string_view table, std::string_view alias) {
+    if (alias.empty()) {
+        db_owned_expression result;
+        result.kind_ = leaf_kind::column;
+        result.text_ = name;
+        result.table_ = table;
+        result.aliased_ = false;
+        return result;
+    }
+    return make_column(name, alias, true);
+}
+
+db_owned_expression db_owned_expression::make_excluded(std::string_view name) {
+    require_name(name);
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::excluded, tree->resource_);
+    node_value.text_ = name;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_static_excluded(
+    std::string_view name, std::string_view table) noexcept {
+    db_owned_expression result;
+    result.kind_ = leaf_kind::excluded;
+    result.text_ = name;
+    result.table_ = table;
+    result.aliased_ = true;
+    return result;
+}
+
+db_owned_expression db_owned_expression::make_value(const db_value& value) {
+    db_owned_expression result;
+    switch (db_value_access::type(value)) {
+        case db_value_type::null:
+            result.kind_ = leaf_kind::null_value;
+            return result;
+        case db_value_type::signed_value:
+            result.kind_ = leaf_kind::signed_value;
+            result.scalar_.signed_value_ = db_value_access::signed_value(value);
+            return result;
+        case db_value_type::unsigned_value:
+            result.kind_ = leaf_kind::unsigned_value;
+            result.scalar_.unsigned_value_ = db_value_access::unsigned_value(value);
+            return result;
+        case db_value_type::double_value:
+            result.kind_ = leaf_kind::double_value;
+            result.scalar_.double_value_ = db_value_access::get_double_value(value);
+            return result;
+        case db_value_type::bool_value:
+            result.kind_ = leaf_kind::bool_value;
+            result.scalar_.bool_value_ = db_value_access::get_bool_value(value);
+            return result;
+        case db_value_type::string: {
+            auto tree = allocate_tree();
+            tree->root_ = push_tree_value(*tree, value);
+            return from_tree(std::move(tree));
+        }
+    }
+    return result;
+}
+
+db_owned_expression db_owned_expression::make_raw_sql(
+    std::span<const std::string_view> parts, std::span<const db_expr> args) {
+    if (parts.size() != args.size() + 1 || (args.empty() && parts.front().empty())) {
+        throw std::invalid_argument("SQL expression requires one more syntax part than arguments");
+    }
+    for (const auto part : parts) {
+        if (part.find('\0') != std::string_view::npos) {
+            throw std::invalid_argument("SQL expression cannot contain NUL");
+        }
+    }
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::sql, tree->resource_);
+    for (std::size_t i = 0; i < args.size(); ++i) {
+        node_value.named_.emplace_back(parts[i], args[i].owned().append_to_tree(*tree), tree->resource_);
+    }
+    node_value.text_ = parts.back();
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_call(
+    std::string_view function, std::span<const db_expr> args) {
+    require_name(function, true);
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::function, tree->resource_);
+    node_value.text_ = function;
+    node_value.args_.reserve(args.size());
+    for (const auto& arg : args) {
+        node_value.args_.push_back(arg.owned().append_to_tree(*tree));
+    }
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_coalesce(std::span<const db_expr> args) {
+    if (args.empty()) {
+        throw std::invalid_argument("COALESCE requires an argument");
+    }
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::coalesce, tree->resource_);
+    node_value.args_.reserve(args.size());
+    for (const auto& arg : args) {
+        node_value.args_.push_back(arg.owned().append_to_tree(*tree));
+    }
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_null_if(
+    const db_owned_expression& lhs, const db_owned_expression& rhs) {
+    auto tree = allocate_tree();
+    const auto left_idx = lhs.append_to_tree(*tree);
+    const auto right_idx = rhs.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::null_if, tree->resource_);
+    node_value.args_.push_back(left_idx);
+    node_value.args_.push_back(right_idx);
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_greatest(std::span<const db_expr> args) {
+    if (args.empty()) {
+        throw std::invalid_argument("GREATEST requires an argument");
+    }
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::greatest, tree->resource_);
+    node_value.args_.reserve(args.size());
+    for (const auto& arg : args) {
+        node_value.args_.push_back(arg.owned().append_to_tree(*tree));
+    }
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_least(std::span<const db_expr> args) {
+    if (args.empty()) {
+        throw std::invalid_argument("LEAST requires an argument");
+    }
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::least, tree->resource_);
+    node_value.args_.reserve(args.size());
+    for (const auto& arg : args) {
+        node_value.args_.push_back(arg.owned().append_to_tree(*tree));
+    }
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_case_when(
+    std::span<const db_case_branch> branches, const db_owned_expression& otherwise) {
+    if (branches.empty()) {
+        throw std::invalid_argument("CASE requires a branch");
+    }
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::case_value, tree->resource_);
+    node_value.args_.reserve(branches.size() * 2);
+    for (const auto& branch : branches) {
+        if (branch.when_.empty()) {
+            throw std::invalid_argument("CASE WHEN requires a nonempty condition");
+        }
+        node_value.args_.push_back(branch.when_.owned().append_to_tree(*tree));
+        node_value.args_.push_back(branch.then_.owned().append_to_tree(*tree));
+    }
+    if (!otherwise.empty()) {
+        node_value.left_ = otherwise.append_to_tree(*tree);
+    }
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_jsonb_set(const db_owned_expression& target,
+    std::span<const std::string_view> path, const db_owned_expression& new_value, bool create_if_missing) {
+    auto tree = allocate_tree();
+    const auto target_idx = target.append_to_tree(*tree);
+    const auto path_idx = push_tree_text_array(*tree, path);
+    const auto val_idx = new_value.append_to_tree(*tree);
+    const auto flag_idx = push_tree_value(*tree, db_value(create_if_missing));
+    db_query_node node_value(db_node_kind::function, tree->resource_);
+    node_value.text_ = "jsonb_set";
+    node_value.args_ = {target_idx, path_idx, val_idx, flag_idx};
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_json_path_op(
+    const db_owned_expression& target, db_binary_operator op, std::span<const std::string_view> path) {
+    auto tree = allocate_tree();
+    const auto target_idx = target.append_to_tree(*tree);
+    const auto path_idx = push_tree_text_array(*tree, path);
+    db_query_node node_value(db_node_kind::binary, tree->resource_);
+    node_value.left_ = target_idx;
+    node_value.right_ = path_idx;
+    node_value.binary_ = op;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_aggregate(std::string_view function,
+    std::span<const db_expr> args, bool distinct, std::span<const db_order_term> order) {
+    require_name(function, true);
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::aggregate, tree->resource_);
+    node_value.text_ = function;
+    node_value.flag_ = distinct;
+    node_value.args_.reserve(args.size());
+    for (const auto& arg : args) {
+        node_value.args_.push_back(arg.owned().append_to_tree(*tree));
+    }
+    node_value.orders_.reserve(order.size());
+    for (const auto& term : order) {
+        node_value.orders_.push_back(
+            {term.expression_.owned().append_to_tree(*tree), term.direction_, term.nulls_});
+    }
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_count_star() {
+    auto tree = allocate_tree();
+    const auto star_idx = push_tree_node(*tree, db_query_node(db_node_kind::star, tree->resource_));
+    db_query_node node_value(db_node_kind::aggregate, tree->resource_);
+    node_value.text_ = "count";
+    node_value.args_.push_back(star_idx);
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_filter(
+    const db_owned_expression& aggregate, const db_owned_expression& predicate) {
+    auto tree = allocate_tree();
+    const auto agg_idx = aggregate.append_to_tree(*tree);
+    const auto pred_idx = predicate.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::filter, tree->resource_);
+    node_value.left_ = agg_idx;
+    node_value.right_ = pred_idx;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_over(
+    const db_owned_expression& function, const db_window_options& window) {
+    auto tree = allocate_tree();
+    const auto fn_idx = function.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::window, tree->resource_);
+    node_value.left_ = fn_idx;
+    node_value.args_.reserve(window.partition_by_.size());
+    for (const auto& item : window.partition_by_) {
+        node_value.args_.push_back(item.owned().append_to_tree(*tree));
+    }
+    node_value.orders_.reserve(window.order_by_.size());
+    for (const auto& term : window.order_by_) {
+        node_value.orders_.push_back(
+            {term.expression_.owned().append_to_tree(*tree), term.direction_, term.nulls_});
+    }
+    node_value.frame_ = window.frame_;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_within_group(
+    const db_owned_expression& function, std::span<const db_order_term> order) {
+    if (order.empty()) {
+        throw std::invalid_argument("WITHIN GROUP requires ordering");
+    }
+    auto tree = allocate_tree();
+    const auto fn_idx = function.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::within_group, tree->resource_);
+    node_value.left_ = fn_idx;
+    node_value.orders_.reserve(order.size());
+    for (const auto& term : order) {
+        node_value.orders_.push_back(
+            {term.expression_.owned().append_to_tree(*tree), term.direction_, term.nulls_});
+    }
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_cast(
+    const db_owned_expression& operand, const db_type_definition& type) {
+    auto tree = allocate_tree();
+    const auto op_idx = operand.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::cast, tree->resource_);
+    node_value.left_ = op_idx;
+    node_value.type_ = db_stored_type(type, tree->resource_);
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_at_time_zone(
+    const db_owned_expression& operand, const db_owned_expression& zone) {
+    auto tree = allocate_tree();
+    const auto op_idx = operand.append_to_tree(*tree);
+    const auto zone_idx = zone.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::at_time_zone, tree->resource_);
+    node_value.left_ = op_idx;
+    node_value.right_ = zone_idx;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_extract(
+    db_date_part part, const db_owned_expression& operand) {
+    auto tree = allocate_tree();
+    const auto op_idx = operand.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::extract, tree->resource_);
+    node_value.left_ = op_idx;
+    node_value.date_part_ = part;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_subscript(
+    const db_owned_expression& array, const db_owned_expression& index) {
+    auto tree = allocate_tree();
+    const auto arr_idx = array.append_to_tree(*tree);
+    const auto idx_idx = index.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::subscript, tree->resource_);
+    node_value.left_ = arr_idx;
+    node_value.right_ = idx_idx;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_collate(
+    const db_owned_expression& operand, std::string_view collation) {
+    require_name(collation, true);
+    auto tree = allocate_tree();
+    const auto op_idx = operand.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::collate, tree->resource_);
+    node_value.left_ = op_idx;
+    node_value.text_ = collation;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_binary(
+    const db_owned_expression& lhs, db_binary_operator op, const db_owned_expression& rhs) {
+    auto tree = allocate_tree();
+    const auto left_idx = lhs.append_to_tree(*tree);
+    const auto right_idx = rhs.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::binary, tree->resource_);
+    node_value.left_ = left_idx;
+    node_value.right_ = right_idx;
+    node_value.binary_ = op;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_binary(
+    db_owned_expression&& lhs, db_binary_operator op, const db_owned_expression& rhs) {
+    if (lhs.kind_ == leaf_kind::tree && lhs.tree_ != nullptr) {
+        const auto left_idx = lhs.tree_->root_;
+        const auto right_idx = rhs.append_to_tree(*lhs.tree_);
+        db_query_node node_value(db_node_kind::binary, lhs.tree_->resource_);
+        node_value.left_ = left_idx;
+        node_value.right_ = right_idx;
+        node_value.binary_ = op;
+        lhs.tree_->root_ = push_tree_node(*lhs.tree_, std::move(node_value));
+        return std::move(lhs);
+    }
+    return make_binary(std::as_const(lhs), op, rhs);
+}
+
+db_owned_expression db_owned_expression::make_unary(
+    db_unary_operator op, const db_owned_expression& operand) {
+    auto tree = allocate_tree();
+    const auto op_idx = operand.append_to_tree(*tree);
+    db_query_node node_value(db_node_kind::unary, tree->resource_);
+    node_value.left_ = op_idx;
+    node_value.unary_ = op;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_unary(
+    db_unary_operator op, db_owned_expression&& operand) {
+    if (operand.kind_ == leaf_kind::tree && operand.tree_ != nullptr) {
+        const auto op_idx = operand.tree_->root_;
+        db_query_node node_value(db_node_kind::unary, operand.tree_->resource_);
+        node_value.left_ = op_idx;
+        node_value.unary_ = op;
+        operand.tree_->root_ = push_tree_node(*operand.tree_, std::move(node_value));
+        return std::move(operand);
+    }
+    return make_unary(op, std::as_const(operand));
+}
+
+db_owned_expression db_owned_expression::make_between(const db_owned_expression& operand,
+    const db_value& lower, const db_value& upper, bool negate) {
+    auto tree = allocate_tree();
+    const auto val_idx = operand.append_to_tree(*tree);
+    const auto low_idx = push_tree_value(*tree, lower);
+    const auto high_idx = push_tree_value(*tree, upper);
+    db_query_node node_value(db_node_kind::between, tree->resource_);
+    node_value.args_ = {val_idx, low_idx, high_idx};
+    node_value.flag_ = negate;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_tuple(std::span<const db_expr> elements) {
+    if (elements.empty()) {
+        throw std::invalid_argument("database tuple requires at least one element");
+    }
+    auto tree = allocate_tree();
+    db_query_node node_value(db_node_kind::tuple, tree->resource_);
+    node_value.args_.reserve(elements.size());
+    for (const auto& elem : elements) {
+        node_value.args_.push_back(elem.owned().append_to_tree(*tree));
+    }
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_in_list(
+    const db_owned_expression& lhs, db_binary_operator op, std::span<const db_value> values) {
+    auto tree = allocate_tree();
+    const auto left_idx = lhs.append_to_tree(*tree);
+    db_query_node list_node(db_node_kind::list, tree->resource_);
+    list_node.args_.reserve(values.size());
+    for (const auto& value : values) {
+        list_node.args_.push_back(push_tree_value(*tree, value));
+    }
+    const auto list_idx = push_tree_node(*tree, std::move(list_node));
+    db_query_node node_value(db_node_kind::binary, tree->resource_);
+    node_value.left_ = left_idx;
+    node_value.right_ = list_idx;
+    node_value.binary_ = op;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_in_expr_list(
+    const db_owned_expression& lhs, db_binary_operator op, std::span<const db_owned_expression> values) {
+    auto tree = allocate_tree();
+    const auto left_idx = lhs.append_to_tree(*tree);
+    db_query_node list_node(db_node_kind::list, tree->resource_);
+    list_node.args_.reserve(values.size());
+    for (const auto& value : values) {
+        list_node.args_.push_back(value.append_to_tree(*tree));
+    }
+    const auto list_idx = push_tree_node(*tree, std::move(list_node));
+    db_query_node node_value(db_node_kind::binary, tree->resource_);
+    node_value.left_ = left_idx;
+    node_value.right_ = list_idx;
+    node_value.binary_ = op;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_in_subquery(
+    const db_owned_expression& lhs, db_binary_operator op, const db_query& subquery) {
+    subquery.require_select_query();
+    auto tree = allocate_tree();
+    const auto left_idx = lhs.append_to_tree(*tree);
+    const auto query_idx = tree->queries_.size();
+    tree->queries_.push_back(subquery.clone(tree->resource_));
+    db_query_node sub_node(db_node_kind::subquery, tree->resource_);
+    sub_node.query_ = query_idx;
+    const auto sub_idx = push_tree_node(*tree, std::move(sub_node));
+    db_query_node node_value(db_node_kind::binary, tree->resource_);
+    node_value.left_ = left_idx;
+    node_value.right_ = sub_idx;
+    node_value.binary_ = op;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_exists(const db_query& subquery) {
+    subquery.require_select_query();
+    auto tree = allocate_tree();
+    const auto query_idx = tree->queries_.size();
+    tree->queries_.push_back(subquery.clone(tree->resource_));
+    db_query_node node_value(db_node_kind::exists, tree->resource_);
+    node_value.query_ = query_idx;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_array_op(const db_owned_expression& lhs,
+    db_binary_operator op, std::span<const db_value> values, const db_type_definition& array_type) {
+    auto tree = allocate_tree();
+    const auto left_idx = lhs.append_to_tree(*tree);
+    db_query_node array_node(db_node_kind::array, tree->resource_);
+    array_node.args_.reserve(values.size());
+    for (const auto& value : values) {
+        array_node.args_.push_back(push_tree_value(*tree, value));
+    }
+    const auto array_idx = push_tree_node(*tree, std::move(array_node));
+    db_query_node cast_node(db_node_kind::cast, tree->resource_);
+    cast_node.left_ = array_idx;
+    cast_node.type_ = db_stored_type(array_type, tree->resource_);
+    const auto cast_idx = push_tree_node(*tree, std::move(cast_node));
+    db_query_node node_value(db_node_kind::binary, tree->resource_);
+    node_value.left_ = left_idx;
+    node_value.right_ = cast_idx;
+    node_value.binary_ = op;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
+}
+
+db_owned_expression db_owned_expression::make_json_keys_op(
+    const db_owned_expression& lhs, db_binary_operator op, std::span<const std::string_view> keys) {
+    auto tree = allocate_tree();
+    const auto left_idx = lhs.append_to_tree(*tree);
+    const auto keys_idx = push_tree_text_array(*tree, keys);
+    db_query_node node_value(db_node_kind::binary, tree->resource_);
+    node_value.left_ = left_idx;
+    node_value.right_ = keys_idx;
+    node_value.binary_ = op;
+    tree->root_ = push_tree_node(*tree, std::move(node_value));
+    return from_tree(std::move(tree));
 }
 
 }  // namespace detail
@@ -616,8 +1474,8 @@ db_query::expr_type db_query::case_when(std::span<const db_case_branch> branches
     }
     auto node_value = make_node(db_node_kind::case_value);
     for (const auto& branch : branches) {
-        node_value.args_.push_back(require_expression(branch.when_));
-        node_value.args_.push_back(require_expression(branch.then_));
+        node_value.args_.push_back(require_expression(branch.when_.expression(*this)));
+        node_value.args_.push_back(require_expression(branch.then_.expression(*this)));
     }
     if (!otherwise.empty()) {
         node_value.left_ = require_expression(otherwise);
@@ -649,7 +1507,7 @@ db_query::expr_type db_query::aggregate(std::string_view function, std::span<con
     node_value.text_ = function;
     node_value.flag_ = distinct;
     for (const auto& term : order) {
-        node_value.orders_.push_back({require_expression(term.expression_), term.direction_, term.nulls_});
+        node_value.orders_.push_back({require_expression(term.expression_.expression(*this)), term.direction_, term.nulls_});
     }
     return push_node(std::move(node_value));
 }
@@ -661,10 +1519,14 @@ db_query::expr_type db_query::filter(expr_type aggregate, expr_type predicate) {
 }
 db_query::expr_type db_query::over(expr_type function, const db_window_options& window) {
     const auto function_node = require_expression(function);
-    auto node_value = make_node(db_node_kind::window, window.partition_by_);
+    auto node_value = make_node(db_node_kind::window);
     node_value.left_ = function_node;
+    node_value.args_.reserve(window.partition_by_.size());
+    for (const auto& item : window.partition_by_) {
+        node_value.args_.push_back(require_expression(item.expression(*this)));
+    }
     for (const auto& term : window.order_by_) {
-        node_value.orders_.push_back({require_expression(term.expression_), term.direction_, term.nulls_});
+        node_value.orders_.push_back({require_expression(term.expression_.expression(*this)), term.direction_, term.nulls_});
     }
     node_value.frame_ = window.frame_;
     return push_node(std::move(node_value));
@@ -676,7 +1538,7 @@ db_query::expr_type db_query::within_group(expr_type function, std::span<const d
     auto node_value = make_node(db_node_kind::within_group);
     node_value.left_ = require_expression(function);
     for (const auto& term : order) {
-        node_value.orders_.push_back({require_expression(term.expression_), term.direction_, term.nulls_});
+        node_value.orders_.push_back({require_expression(term.expression_.expression(*this)), term.direction_, term.nulls_});
     }
     return push_node(std::move(node_value));
 }
@@ -994,7 +1856,7 @@ db_query& db_query::on_conflict(const db_conflict_options& conflict) {
         if (std::ranges::any_of(owned.assignments_, [&](const auto& existing) { return std::string_view(existing.column_) == assignment.column_; })) {
             throw std::invalid_argument("duplicate conflict update column");
         }
-        const auto expression = !assignment.owned_.empty() ? assignment.owned_.import_into(*this) : assignment.value_;
+        const auto expression = assignment.expression(*this);
         owned.assignments_.emplace_back(assignment.column_, require_expression(expression), s.resource_);
     }
     s.conflict_ = std::move(owned);
@@ -1028,8 +1890,7 @@ db_query& db_query::set(std::string_view column, expr_type value) {
     return *this;
 }
 db_query& db_query::set(const db_assignment& assignment) {
-    const auto expression = !assignment.owned_.empty() ? assignment.owned_.import_into(*this) : assignment.value_;
-    return set(assignment.column_, expression);
+    return set(assignment.column_, assignment.expression(*this));
 }
 db_query& db_query::set(std::span<const db_assignment> assignments) {
     for (const auto& assignment : assignments) {

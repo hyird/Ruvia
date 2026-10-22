@@ -223,8 +223,9 @@ RUVIA_TEST(route_body_limit_bounds_the_decoded_representation) {
     const std::string plain(4096, 'x');
     auto encoded = ruvia::encode_http_content(
         ruvia::http_content_coding::gzip, plain, {.max_encoded_bytes_ = 64});
-    RUVIA_CHECK(encoded.encoded() != nullptr);
-    if (encoded.encoded() == nullptr) {
+    const auto* encoded_bytes = std::get_if<std::pmr::string>(&encoded);
+    RUVIA_CHECK(encoded_bytes != nullptr);
+    if (encoded_bytes == nullptr) {
         return;
     }
 
@@ -232,13 +233,13 @@ RUVIA_TEST(route_body_limit_bounds_the_decoded_representation) {
     // route reads the decoded representation, which is far larger.
     const auto rejected = app.request(ruvia::test_request::post("/route-config/small-decoded")
             .header("Content-Encoding", "gzip")
-            .body(encoded.encoded()->bytes()));
+            .body(*encoded_bytes));
     RUVIA_CHECK_EQ(rejected.status(), ruvia::http_status::content_too_large);
 
     // A sibling without the declaration decodes up to the app-wide ceiling.
     const auto accepted = app.request(ruvia::test_request::post("/route-config/default")
             .header("Content-Encoding", "gzip")
-            .body(encoded.encoded()->bytes()));
+            .body(*encoded_bytes));
     RUVIA_CHECK_EQ(accepted.status(), ruvia::http_status::ok);
     RUVIA_CHECK_EQ(accepted.body(), std::string_view(plain));
 }

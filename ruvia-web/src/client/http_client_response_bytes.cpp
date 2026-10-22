@@ -1,57 +1,59 @@
-#include "ruvia/web/http_client_response_bytes.h"
-
+#include <cstring>
 #include <memory>
-#include <memory_resource>
 #include <utility>
-#include <vector>
+
+#include "ruvia/web/http_client_response.h"
 
 #include "client/http_client_result_budget.h"
 
 namespace ruvia {
 
-struct http_client_response_bytes::storage_type final {
-    explicit storage_type(detail::http_client_result_budget_lease&& reservation)
-        : lease_(std::move(reservation)),
-          bytes_(std::pmr::new_delete_resource()) {}
-
-    // Members are destroyed in reverse declaration order: free the owned byte
-    // buffer before making its reservation available to another result.
-    detail::http_client_result_budget_lease lease_;
-    std::pmr::vector<std::byte> bytes_;
-};
-
 http_client_response_bytes::http_client_response_bytes(
     std::size_t reserve_bytes, detail::http_client_result_budget_lease&& lease_value)
-    : storage_(std::make_unique<storage_type>(std::move(lease_value))) {
-    storage_->bytes_.reserve(reserve_bytes);
+    : data_(reserve_bytes == 0 ? nullptr : std::make_unique_for_overwrite<std::byte[]>(reserve_bytes)) {
+    auto [domain, reserved] = std::move(lease_value).release();
+    budget_domain_ = std::move(domain);
+    reserved_ = reserved;
 }
 
-http_client_response_bytes::http_client_response_bytes() noexcept = default;
+http_client_response_bytes::http_client_response_bytes(http_client_response_bytes&& other) noexcept
+    : budget_domain_(std::move(other.budget_domain_)),
+      data_(std::move(other.data_)),
+      size_(std::exchange(other.size_, 0)),
+      reserved_(std::exchange(other.reserved_, 0)) {}
 
-http_client_response_bytes::http_client_response_bytes(http_client_response_bytes&&) noexcept = default;
-
-http_client_response_bytes& http_client_response_bytes::operator=(http_client_response_bytes&&) noexcept =
-    default;
-
-http_client_response_bytes::~http_client_response_bytes() = default;
-
-std::size_t http_client_response_bytes::size() const noexcept {
-    return storage_ == nullptr ? 0 : storage_->bytes_.size();
-}
-
-bool http_client_response_bytes::empty() const noexcept {
-    return size() == 0;
-}
-
-std::span<const std::byte> http_client_response_bytes::bytes() const& noexcept {
-    if (storage_ == nullptr) {
-        return {};
+http_client_response_bytes& http_client_response_bytes::operator=(
+    http_client_response_bytes&& other) noexcept {
+    if (this != &other) {
+        release();
+        budget_domain_ = std::move(other.budget_domain_);
+        data_ = std::move(other.data_);
+        size_ = std::exchange(other.size_, 0);
+        reserved_ = std::exchange(other.reserved_, 0);
     }
-    return {storage_->bytes_.data(), storage_->bytes_.size()};
+    return *this;
 }
 
-void http_client_response_bytes::append(std::span<const std::byte> bytes_value) {
-    storage_->bytes_.insert(storage_->bytes_.end(), bytes_value.begin(), bytes_value.end());
+http_client_response_bytes::~http_client_response_bytes() {
+    release();
+}
+
+void http_client_response_bytes::release() noexcept {
+    // Free the owned byte buffer before making its reservation available to another result.
+    data_.reset();
+    if (budget_domain_ != nullptr) {
+        budget_domain_->release(reserved_);
+        budget_domain_.reset();
+    }
+    size_ = 0;
+    reserved_ = 0;
+}
+
+void http_client_response_bytes::append(std::span<const std::byte> bytes_value) noexcept {
+    if (!bytes_value.empty()) {
+        std::memcpy(data_.get() + size_, bytes_value.data(), bytes_value.size());
+        size_ += bytes_value.size();
+    }
 }
 
 }  // namespace ruvia

@@ -334,7 +334,7 @@ ruvia::task<void> check_commands(ruvia::redis_client& client, ruvia::testing::te
     auto retained = co_await redis.get("retained");
     RUVIA_CHECK(retained.has_value());
     auto users = redis.get_repository<client_user>();
-    auto user_value = co_await users.find_one({.where_ = client_user::field<"id">() == "1"});
+    auto user_value = co_await users.find_one({.where_ = client_user::column<"id">() == "1"});
     RUVIA_CHECK(user_value.has_value());
     std::string mutable_ping(128, 'm');
     auto cold_ping = redis.ping(mutable_ping);

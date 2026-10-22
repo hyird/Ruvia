@@ -35,7 +35,7 @@ public:
     RUVIA_CONTROLLER_GROUP("/pubsub")
     RUVIA_ROUTES_BEGIN(pubsub_controller)
     RUVIA_POST("/publish", publish, ruvia::body_limit<4096>);
-    RUVIA_GET_SSE("/events", events_value);
+    RUVIA_GET("/events", events_value);
     RUVIA_ROUTES_END
 
 private:

@@ -64,27 +64,25 @@ RUVIA_TEST(model_narrow_value_types_preserve_boundaries) {
 
 RUVIA_TEST(model_narrow_values_parse_json_form_and_reject_float_as_integer) {
     auto json = ruvia::from_json<narrow_values>(R"({"i8":-128,"u8":255,"i16":-32768,"u16":65535,"real":1.5})");
-    RUVIA_CHECK(json.has_value());
-    if (json) {
-        RUVIA_CHECK_EQ(json->get<"i8">().value_, std::int8_t{-128});
-        RUVIA_CHECK_EQ(json->get<"u16">().value_, std::uint16_t{65535});
-        RUVIA_CHECK_EQ(json->get<"real">().value_, 1.5);
-    }
-    RUVIA_CHECK(!ruvia::from_json<narrow_values>(R"({"i8":1.5,"u8":2,"i16":3,"u16":4,"real":1})"));
-    RUVIA_CHECK(!ruvia::from_json<ruvia::int8>("128"));
-    RUVIA_CHECK(!ruvia::from_json<ruvia::int8>("-129"));
-    RUVIA_CHECK(!ruvia::from_json<ruvia::uint8>("-1"));
-    RUVIA_CHECK(!ruvia::from_json<ruvia::uint8>("256"));
-    RUVIA_CHECK(!ruvia::from_json<ruvia::int16>("32768"));
-    RUVIA_CHECK(!ruvia::from_json<ruvia::int16>("-32769"));
-    RUVIA_CHECK(!ruvia::from_json<ruvia::uint16>("65536"));
-    RUVIA_CHECK(!ruvia::from_json<ruvia::uint16>("-1"));
-    RUVIA_CHECK(!ruvia::from_form<narrow_values>("i8=128&u8=255&i16=-32768&u16=65535&real=1.5"));
+    RUVIA_CHECK_EQ(json.get<"i8">().value_, std::int8_t{-128});
+    RUVIA_CHECK_EQ(json.get<"u16">().value_, std::uint16_t{65535});
+    RUVIA_CHECK_EQ(json.get<"real">().value_, 1.5);
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_json<narrow_values>(R"({"i8":1.5,"u8":2,"i16":3,"u16":4,"real":1})");
+    }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::int8>("128"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::int8>("-129"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::uint8>("-1"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::uint8>("256"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::int16>("32768"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::int16>("-32769"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::uint16>("65536"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<ruvia::uint16>("-1"); }));
+    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        (void)ruvia::from_form<narrow_values>("i8=128&u8=255&i16=-32768&u16=65535&real=1.5");
+    }));
     auto form = ruvia::from_form<narrow_values>("i8=-128&u8=255&i16=-32768&u16=65535&real=1.5");
-    RUVIA_CHECK(form.has_value());
-    if (form) {
-        RUVIA_CHECK_EQ(form->get<"i8">().value_, std::int8_t{-128});
-    }
+    RUVIA_CHECK_EQ(form.get<"i8">().value_, std::int8_t{-128});
 }
 
 RUVIA_TEST(model_narrow_assignment_checks_native_and_model_scalars_before_replacing_values) {
@@ -107,18 +105,14 @@ RUVIA_TEST(model_narrow_assignment_checks_native_and_model_scalars_before_replac
     check_rejected(ruvia::int32{-1});
     check_rejected(ruvia::uint64{256});
     auto parsed_value = ruvia::from_json<narrow_nullable>(R"({"value":null})");
-    RUVIA_CHECK(parsed_value.has_value());
-    if (!parsed_value) {
-        return;
-    }
     bool rejected = false;
     try {
-        parsed_value->set<"value">(ruvia::int64{-1});
+        parsed_value.set<"value">(ruvia::int64{-1});
     } catch (const std::out_of_range&) {
         rejected = true;
     }
     RUVIA_CHECK(rejected);
-    RUVIA_CHECK(parsed_value->is_present<"value">() && parsed_value->is_null<"value">());
+    RUVIA_CHECK(parsed_value.is_present<"value">() && parsed_value.is_null<"value">());
 }
 
 RUVIA_TEST(model_integer_assignment_rejects_out_of_range_without_replacing_values) {

@@ -55,7 +55,7 @@ public:
     ruvia::task<ruvia::http_response> held(ruvia::context& context) {
         auto& state = observed();
         state.entered_ = true;
-        const auto stop = context.get_stop_token();
+        const auto stop = context.stop_token();
         while (!state.release_ && !stop.stop_requested()) {
             (void)co_await ruvia::sleep_for(context.worker(), 1ms, stop);
         }

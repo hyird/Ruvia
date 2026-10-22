@@ -1,57 +1,39 @@
 #pragma once
 
 #include <memory_resource>
-#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/detail/model/parse/json_parser.h"
 #include "ruvia/web/detail/model/parse/json_writer.h"
 #include "ruvia/web/detail/model/traits.h"
 #include "ruvia/web/model_types.h"
+#include "ruvia/web/validation.h"
 
 namespace ruvia {
 
-namespace detail {
-class request_bindings;
-}
-
-// A request-scoped view of one validated JSON body. The typed value and the
-// exact original bytes share the same middleware scope, allowing JSONB
-// passthrough without a parse/serialize round trip.
-template <typename t_type>
-class validated_json final {
-public:
-    [[nodiscard]] const t_type& value() const noexcept {
-        return *value_;
-    }
-
-    [[nodiscard]] std::string_view raw() const noexcept {
-        return raw_;
-    }
-
-private:
-    friend class detail::request_bindings;
-
-    validated_json(const t_type& value, std::string_view raw) noexcept
-        : value_(&value),
-          raw_(raw) {}
-
-    const t_type* value_;
-    std::string_view raw_;
-};
-
 // Owns parsed data in options.resource. Supports models, Ruvia scalar values,
-// strings, bytes and arrays of these types. Request middleware evaluates field
-// rules separately; the codec only checks the complete document's structure.
+// strings, bytes and arrays of these types. Model types also evaluate their
+// declared field validation rules.
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
-[[nodiscard]] std::optional<t_type> from_json(std::string_view body, model_parse_options options = {}) {
-    return detail::parse_json_document<t_type>(body, pmr_resource_or_default(options.resource_),
-        detail::model_string_storage::owned, options);
+[[nodiscard]] t_type from_json(std::string_view body, model_parse_options options = {}) {
+    auto* const resource = pmr_resource_or_default(options.resource_);
+    auto parsed_value = detail::parse_json_document<t_type>(
+        body, resource, detail::model_string_storage::owned, options);
+    if (!parsed_value) {
+        throw std::invalid_argument("invalid JSON value");
+    }
+    if constexpr (detail::is_model<t_type>) {
+        validator validator_value({.resource_ = resource});
+        validate_model(*parsed_value, validator_value);
+        validator_value.throw_if_invalid();
+    }
+    return std::move(*parsed_value);
 }
-
 // Serializes current values without invoking field rules or initializers.
 // The output is always well-formed UTF-8 (RFC 8259 §8.1): a string value holding
 // ill-formed UTF-8 has each maximal ill-formed subpart replaced by U+FFFD.

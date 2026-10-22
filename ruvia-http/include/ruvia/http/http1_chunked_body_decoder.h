@@ -7,11 +7,15 @@
 #include <variant>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
-#include "ruvia/http/http1_chunk_decode_error.h"
 #include "ruvia/http/protocol_byte_limit.h"
 
 namespace ruvia {
 
+enum class http1_chunk_decode_error : std::uint8_t {
+    invalid_framing,
+    body_limit_exceeded,
+    framing_limit_exceeded,
+};
 class http1_chunk_decode_need_more final {
 public:
     [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {

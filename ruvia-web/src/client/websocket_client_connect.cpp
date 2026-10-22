@@ -64,18 +64,13 @@ task<void> websocket_client_state::establish() {
     } else {
         co_await perform_handshake();
     }
-    protocol_.emplace(websocket_connection_options{
-        .resource_ = memory_.resource(),
-        .message_limit_ = protocol_byte_limit::limited(config_.max_message_bytes_),
-        .compression_ = negotiated_compression_,
-        .role_ = websocket_connection_role::client,
-        .mask_key_generator_ = &websocket_client_state::generate_mask,
-        .compression_level_ = config_.compression_level_,
-        .max_buffered_input_bytes_ = websocket_client_max_buffered_input_bytes(config_.max_message_bytes_)});
-    feed_input(input_);
-    // From here input_ is the transport read buffer, sized once per connection.
-    input_.clear();
-    input_.resize(websocket_client_transport_buffer_bytes);
+    protocol_.emplace(input_, websocket_connection_options{
+                                  .resource_ = memory_.resource(),
+                                  .message_limit_ = protocol_byte_limit::limited(config_.max_message_bytes_),
+                                  .compression_ = negotiated_compression_,
+                                  .role_ = websocket_connection_role::client,
+                                  .mask_key_generator_ = &websocket_client_state::generate_mask,
+                                  .compression_level_ = config_.compression_level_});
     last_active_ms_ = steady_now_ms();
     liveness_state_ = websocket_liveness_idle{};
     if (config_.heartbeat_.ping_interval_.has_value()) {
@@ -104,7 +99,7 @@ task<void> websocket_client_state::perform_handshake() {
     http_io_buffer request_buffer(memory_.resource());
     auto prepared_result = prepare_http1_request_head(request_buffer, max_request_head_bytes,
         [&](std::span<char> buffer) { return handshake.prepare_request(config_.origin_, config_.target_, buffer); });
-    const auto* prepared = prepared_result.prepared();
+    auto* prepared = prepared_result.prepared();
     if (prepared == nullptr) {
         const auto message = prepared_result.failure()
                                  ? std::string(http1_client_request_prepare_error_message(
@@ -112,14 +107,12 @@ task<void> websocket_client_state::perform_handshake() {
                                  : "WebSocket handshake request head is too large";
         throw websocket_client_error(websocket_client_error::code_type::invalid_config, message);
     }
-    http1_client_response_parser parser(prepared->exchange_state(), {.resource_ = memory_.resource()});
-    co_await write_transport(prepared->head());
+    const auto head_view = prepared->head();
+    http1_client_response_parser parser(std::move(*prepared).take_exchange_state(), {.resource_ = memory_.resource()});
+    co_await write_transport(head_view);
 
-    // The response head is read into the request buffer's storage.
-    request_buffer.clear();
-    const auto bytes_value = request_buffer.prepare(websocket_client_transport_buffer_bytes);
     for (;;) {
-        auto result_value = parser.parse(input_);
+        auto result_value = parser.parse(input_.view());
         if (const auto* failure = result_value.failure()) {
             throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                 std::string(http1_client_response_parse_error_message(failure->error())));
@@ -129,12 +122,13 @@ task<void> websocket_client_state::perform_handshake() {
                 throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                     "WebSocket handshake response head is too large");
             }
-            const auto read = co_await read_transport(bytes_value, std::nullopt);
+            const auto space = input_.prepare(websocket_client_transport_buffer_bytes);
+            const auto read = co_await read_transport(space, std::nullopt);
             if (read == 0) {
                 throw websocket_client_error(websocket_client_error::code_type::io_error,
                     "upstream closed during WebSocket handshake");
             }
-            input_.append(bytes_value.data(), read);
+            input_.commit(read);
             continue;
         }
         auto* parsed_value = result_value.parsed();
@@ -147,7 +141,7 @@ task<void> websocket_client_state::perform_handshake() {
                 throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
                     "upstream closed the HTTP exchange before the WebSocket upgrade");
             }
-            input_.erase(0, parsed_value->consumed_bytes());
+            input_.consume(parsed_value->consumed_bytes());
             continue;
         }
         const auto validated = handshake.validate_response(*parsed_value);
@@ -157,7 +151,7 @@ task<void> websocket_client_state::perform_handshake() {
         }
         selected_subprotocol_.assign(std::get<0>(validated).selected_subprotocol_);
         negotiated_compression_ = std::get<0>(validated).compression_;
-        input_.erase(0, parsed_value->consumed_bytes());
+        input_.consume(parsed_value->consumed_bytes());
         co_return;
     }
 }

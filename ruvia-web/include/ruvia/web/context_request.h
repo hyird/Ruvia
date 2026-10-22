@@ -29,14 +29,9 @@ class context_request;
 class body_reader;
 class multipart_reader;
 class multipart_part;
-template <typename t_type>
-class validated_json;
 namespace detail {
 template <typename t_type>
 [[nodiscard]] request_binding_handle<t_type> bind_validated_model(context& context_value, const t_type& model);
-template <typename t_type>
-[[nodiscard]] request_binding_handle<t_type> bind_validated_json_model(
-    context& context_value, const t_type& model, std::string_view raw_json);
 template <typename t_type>
     requires(!std::is_lvalue_reference_v<t_type>)
 request_binding_handle<std::remove_cvref_t<t_type>> bind_validated_model(context&, t_type&&) = delete;
@@ -112,26 +107,24 @@ public:
     [[nodiscard]] scoped_operation<std::span<const std::byte>> bytes() const;
     scoped_operation<void> discard_body() const;
 
-    // Typed optional parsing without field-rule validation. Only a media-type
-    // mismatch yields nullopt; selected but malformed input throws HTTP 400.
-    // Use json_body<T>/form_body<T> with validated<T>() to run schema rules.
+    // Typed optional parsing with schema and field-rule validation. Only a
+    // media-type mismatch yields nullopt; selected but malformed input throws
+    // HTTP 400, and rule violations throw validation_error.
     template <typename t_type>
     [[nodiscard]] scoped_operation<std::optional<t_type>> json_if() const;
     template <typename t_type>
     [[nodiscard]] scoped_operation<std::optional<t_type>> form_if() const;
     template <typename t_type>
     [[nodiscard]] const t_type& validated() const;
-    template <typename t_type>
-    [[nodiscard]] validated_json<t_type> validated_json() const;
 
     // Multipart remains a flat protocol representation, without dotted paths
     // or implicit array/group interpretation. Streaming is explicit-route only.
-    // multipart() decodes a supported Content-Encoding; get_multipart_reader()
+    // multipart() decodes a supported Content-Encoding; multipart_reader()
     // decodes none, so a coded body is refused with 415 and an invalid
     // Content-Encoding field with 400.
     [[nodiscard]] scoped_operation<std::pmr::vector<multipart_part>> multipart() const;
-    [[nodiscard]] body_reader& get_body_reader() const;
-    [[nodiscard]] multipart_reader get_multipart_reader() const;
+    [[nodiscard]] ::ruvia::body_reader& body_reader() const;
+    [[nodiscard]] ::ruvia::multipart_reader multipart_reader() const;
 
 private:
     friend class context;

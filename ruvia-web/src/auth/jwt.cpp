@@ -16,7 +16,6 @@
 #include "auth/hmac.h"
 #include "auth/jwt_primitives.h"
 #include "util/constant_time.h"
-#include "util/pmr_owned_storage.h"
 
 namespace ruvia {
 
@@ -124,7 +123,7 @@ struct jwt_token_parts final {
         first == std::string_view::npos ? std::string_view::npos : token.find('.', first + 1);
     if (first == std::string_view::npos || second == std::string_view::npos ||
         token.find('.', second + 1) != std::string_view::npos) {
-        throw std::invalid_argument("JWT token must have three sections");
+        throw jwt_error(jwt_error::code_type::malformed_token, "JWT token must have three sections");
     }
     return jwt_token_parts{token.substr(0, first), token.substr(first + 1, second - first - 1),
         token.substr(second + 1), token.substr(0, second)};
@@ -148,7 +147,7 @@ struct jwt_token_parts final {
         std::span(reinterpret_cast<std::uint8_t*>(out.data()), out.size()),
         http_base64_charset::url_safe, http_base64_padding::forbidden);
     if (!decoded_size) {
-        throw std::invalid_argument("JWT base64url value is invalid");
+        throw jwt_error(jwt_error::code_type::malformed_token, "JWT base64url value is invalid");
     }
     out.resize(*decoded_size);
     return out;
@@ -214,21 +213,6 @@ std::chrono::system_clock::time_point jwt_from_epoch_seconds(std::int64_t value)
 
 namespace {
 
-[[nodiscard]] std::pmr::string move_claim_text(
-    std::variant<std::string, std::pmr::string>& source,
-    const std::variant<std::string, std::pmr::string>& peer,
-    std::pmr::memory_resource* resource) {
-    auto* owned = std::get_if<std::pmr::string>(&source);
-    const auto* owned_peer = std::get_if<std::pmr::string>(&peer);
-    if (owned != nullptr && owned_peer != nullptr) {
-        return detail::rebind_owned_storage(*owned, resource, *owned_peer);
-    }
-    return std::visit([resource](const auto& text) {
-        return std::pmr::string(std::string_view(text), resource);
-    },
-        source);
-}
-
 // The payload writer replaces each ill-formed UTF-8 subpart with U+FFFD, so
 // two distinct ill-formed names could serialize as one; only well-formed
 // names keep the raw uniqueness check equal to the signed one.
@@ -247,9 +231,9 @@ namespace {
     return true;
 }
 
-void validate_jwt_custom_claims(std::span<const jwt_claim> claims) {
+void validate_jwt_custom_claims(std::span<const jwt_claim_view> claims) {
     for (std::size_t i = 0; i < claims.size(); ++i) {
-        const auto name = claims[i].name();
+        const auto name = claims[i].name_.view();
         if (name.empty() || detail::jwt_is_reserved_claim(name)) {
             throw std::invalid_argument("JWT custom claim name is empty or reserved");
         }
@@ -257,7 +241,7 @@ void validate_jwt_custom_claims(std::span<const jwt_claim> claims) {
             throw std::invalid_argument("JWT custom claim name must be well-formed UTF-8");
         }
         for (std::size_t j = 0; j < i; ++j) {
-            if (claims[j].name() == name) {
+            if (claims[j].name_.view() == name) {
                 throw std::invalid_argument("JWT custom claim names must be unique");
             }
         }
@@ -266,82 +250,12 @@ void validate_jwt_custom_claims(std::span<const jwt_claim> claims) {
 
 }  // namespace
 
-jwt_claim::jwt_claim(const jwt_claim& other, allocator_type allocator)
-    : jwt_claim(owned_tag_type{}, std::pmr::string(other.name(), allocator.resource()),
-          std::pmr::string(other.value(), allocator.resource())) {}
-
-jwt_claim::jwt_claim(jwt_claim&& other, allocator_type allocator)
-    : jwt_claim(owned_tag_type{}, move_claim_text(other.name_, other.value_, allocator.resource()),
-          move_claim_text(other.value_, other.name_, allocator.resource())) {
-    std::visit([](auto& text) { text.clear(); }, other.name_);
-    std::visit([](auto& text) { text.clear(); }, other.value_);
-}
-
 jwt_payload::jwt_payload(jwt_payload_options options)
     : issuer_(pmr_resource_or_default(options.resource_)),
       subject_(issuer_.get_allocator().resource()),
       audiences_(issuer_.get_allocator().resource()),
       id_(issuer_.get_allocator().resource()),
       claims_(issuer_.get_allocator().resource()) {}
-
-jwt_payload::jwt_payload(const jwt_payload& other)
-    : jwt_payload(other, other.issuer_.get_allocator().resource()) {}
-
-jwt_payload::jwt_payload(const jwt_payload& other, std::pmr::memory_resource* resource)
-    : issuer_(other.issuer_, resource),
-      subject_(other.subject_, resource),
-      audiences_(other.audiences_, resource),
-      id_(other.id_, resource),
-      expires_at_(other.expires_at_),
-      not_before_(other.not_before_),
-      issued_at_(other.issued_at_),
-      claims_(other.claims_, resource) {}
-
-jwt_payload::jwt_payload(jwt_payload&& other, std::pmr::memory_resource* resource)
-    : issuer_(detail::rebind_owned_storage(other.issuer_, resource, other.subject_, other.audiences_, other.id_, other.claims_)),
-      subject_(detail::rebind_owned_storage(other.subject_, resource, other.issuer_, other.audiences_, other.id_, other.claims_)),
-      audiences_(detail::rebind_owned_storage(other.audiences_, resource, other.issuer_, other.subject_, other.id_, other.claims_)),
-      id_(detail::rebind_owned_storage(other.id_, resource, other.issuer_, other.subject_, other.audiences_, other.claims_)),
-      expires_at_(other.expires_at_),
-      not_before_(other.not_before_),
-      issued_at_(other.issued_at_),
-      claims_(detail::rebind_owned_storage(other.claims_, resource, other.issuer_, other.subject_, other.audiences_, other.id_)) {
-    other.issuer_.clear();
-    other.subject_.clear();
-    other.audiences_.clear();
-    other.id_.clear();
-    other.expires_at_.reset();
-    other.not_before_.reset();
-    other.issued_at_.reset();
-    other.claims_.clear();
-}
-
-void jwt_payload::swap_values(jwt_payload& other) noexcept {
-    issuer_.swap(other.issuer_);
-    subject_.swap(other.subject_);
-    audiences_.swap(other.audiences_);
-    id_.swap(other.id_);
-    expires_at_.swap(other.expires_at_);
-    not_before_.swap(other.not_before_);
-    issued_at_.swap(other.issued_at_);
-    claims_.swap(other.claims_);
-}
-
-jwt_payload& jwt_payload::operator=(const jwt_payload& other) {
-    if (this != &other) {
-        jwt_payload owned(other, issuer_.get_allocator().resource());
-        swap_values(owned);
-    }
-    return *this;
-}
-
-jwt_payload& jwt_payload::operator=(jwt_payload&& other) {
-    if (this != &other) {
-        jwt_payload owned(std::move(other), issuer_.get_allocator().resource());
-        swap_values(owned);
-    }
-    return *this;
-}
 
 std::string_view jwt_payload::issuer() const& noexcept {
     return issuer_;
@@ -425,7 +339,7 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
         detail::jwt_append_json_member(payload, first, "nbf", not_before_seconds);
     }
     for (const auto& claim : options.claims_) {
-        detail::jwt_append_json_member(payload, first, claim.name(), claim.value());
+        detail::jwt_append_json_member(payload, first, claim.name_.view(), claim.value_.view());
     }
     payload.push_back('}');
 
@@ -455,43 +369,44 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
     const auto expected =
         detail::jwt_hmac_sign(options.algorithm_, options.secret_, parts.signing_input_, resolved);
     if (!detail::constant_time_bytes_equal(expected, parts.signature_)) {
-        throw std::runtime_error("JWT signature verification failed");
+        throw jwt_error(jwt_error::code_type::signature_mismatch, "JWT signature verification failed");
     }
     const auto header_value = detail::jwt_base64_url_decode(parts.header_, resolved);
     if (detail::jwt_parse_jose_algorithm(header_value, resolved) !=
         detail::jwt_algorithm_name(options.algorithm_)) {
-        throw std::runtime_error("JWT algorithm mismatch");
+        throw jwt_error(jwt_error::code_type::algorithm_mismatch, "JWT algorithm mismatch");
     }
     const auto payload_json = detail::jwt_base64_url_decode(parts.payload_, resolved);
     auto payload_value = detail::jwt_payload_access::decode_payload_json(payload_json, resolved);
     if (options.expiration_claim_ == jwt_expiration_claim_policy::require && !payload_value.expires_at()) {
-        throw std::runtime_error("JWT token is missing exp claim");
+        throw jwt_error(jwt_error::code_type::missing_claim, "JWT token is missing exp claim");
     }
     if (payload_value.expires_at() || payload_value.not_before()) {
         const auto now_parts = detail::jwt_split_clock_time(std::chrono::system_clock::now());
         if (payload_value.expires_at() &&
             detail::jwt_token_expired(now_parts, *payload_value.expires_at(), options.leeway_)) {
-            throw std::runtime_error("JWT token is expired");
+            throw jwt_error(jwt_error::code_type::expired, "JWT token is expired");
         }
         if (payload_value.not_before() &&
             detail::jwt_token_not_yet_valid(now_parts, *payload_value.not_before(), options.leeway_)) {
-            throw std::runtime_error("JWT token is not yet valid");
+            throw jwt_error(jwt_error::code_type::not_yet_valid, "JWT token is not yet valid");
         }
     }
-    if (!options.issuer_.empty() && payload_value.issuer() != options.issuer_) {
-        throw std::runtime_error("JWT issuer mismatch");
+    if (!options.issuer_.empty() && payload_value.issuer() != options.issuer_.view()) {
+        throw jwt_error(jwt_error::code_type::claim_mismatch, "JWT issuer mismatch");
     }
-    if (!options.subject_.empty() && payload_value.subject() != options.subject_) {
-        throw std::runtime_error("JWT subject mismatch");
+    if (!options.subject_.empty() && payload_value.subject() != options.subject_.view()) {
+        throw jwt_error(jwt_error::code_type::claim_mismatch, "JWT subject mismatch");
     }
     // RFC 7519 §4.1.3: a token that names audiences is rejected unless this
     // verifier identifies itself with one of them.
     if (options.audience_.empty()) {
         if (!payload_value.audiences_.empty()) {
-            throw std::runtime_error("JWT audience is present but none is expected");
+            throw jwt_error(
+                jwt_error::code_type::claim_mismatch, "JWT audience is present but none is expected");
         }
-    } else if (!payload_value.has_audience(options.audience_)) {
-        throw std::runtime_error("JWT audience mismatch");
+    } else if (!payload_value.has_audience(options.audience_.view())) {
+        throw jwt_error(jwt_error::code_type::claim_mismatch, "JWT audience mismatch");
     }
     return payload_value;
 }

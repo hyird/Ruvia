@@ -1,10 +1,9 @@
-#include "ruvia/web/http_client_exchange.h"
-
 #include <stdexcept>
 #include <utility>
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_request_trailers.h"
+#include "ruvia/web/http_client_handle.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "client/http_client_output_operation.h"
@@ -123,11 +122,7 @@ scoped_operation<void> http_client_request_body_writer::end(std::span<const http
     require_writable(*state_);
     http_request_trailers validation(state_->resource_);
     for (const auto& field : fields_value) {
-        std::pmr::string name(field.name(), state_->resource_);
-        for (auto& ch : name) {
-            ch = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(ch)));
-        }
-        if ((validation.append(name, field.value()).index() != 0)) {
+        if ((validation.append(field.name(), field.value()).index() != 0)) {
             throw std::invalid_argument("invalid request trailer section");
         }
     }

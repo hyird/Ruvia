@@ -74,7 +74,7 @@ RUVIA_TEST(model_resource_assignment_recursively_outlives_source_owner) {
             // Public insertion accepts a const model and owns it recursively.
             const auto& borrowed = other;
             target.ensure<"children">().emplace_back(borrowed);
-            target.ensure<"boxed">().emplace(std::move(other));
+            target.ensure<"boxed">().emplace_back(std::move(other));
         }
         RUVIA_CHECK_EQ(target.get<"title">().view(), std::string_view(text));
         const auto verify = [&](const resource_child& child_value) {
@@ -99,7 +99,7 @@ RUVIA_TEST(model_resource_array_construction_and_mutable_assignment_keep_owner) 
         ruvia::array<resource_child> children({.resource_ = &target_resource});
         children.emplace_back().set<"name">(text);
         ruvia::boxed_array<ruvia::string> boxed({.resource_ = &target_resource});
-        boxed.emplace(text);
+        boxed.emplace_back(text);
         {
             std::pmr::monotonic_buffer_resource temporary;
             strings.front() = ruvia::string(text, {.resource_ = &temporary});
@@ -139,15 +139,15 @@ RUVIA_TEST(model_resource_recursive_assignment_can_promote_an_owned_child) {
     {
         resource_node root({.resource_ = &resource});
         root.set<"name">("parent");
-        auto& child_value = root.ensure<"children">().emplace();
+        auto& child_value = root.ensure<"children">().emplace_back();
         child_value.set<"name">(text);
-        child_value.ensure<"children">().emplace().set<"name">("grandchild");
+        child_value.ensure<"children">().emplace_back().set<"name">("grandchild");
         root = std::move(child_value);
         RUVIA_CHECK_EQ(root.get<"name">().view(), std::string_view(text));
         RUVIA_CHECK_EQ(root.get<"children">()->front().get<"name">().view(), std::string_view("grandchild"));
 
         auto& children = root.ensure<"children">();
-        children.front().ensure<"children">().emplace().set<"name">(text);
+        children.front().ensure<"children">().emplace_back().set<"name">(text);
         children = std::move(children.front().ensure<"children">());
         RUVIA_CHECK_EQ(children.size(), std::size_t{1});
         RUVIA_CHECK_EQ(children.front().get<"name">().view(), std::string_view(text));
@@ -215,15 +215,15 @@ RUVIA_TEST(model_resource_moves_reject_a_source_that_owns_the_destination) {
     {
         resource_node root({.resource_ = &resource});
         root.set<"name">(text);
-        auto& child_value = root.ensure<"children">().emplace();
+        auto& child_value = root.ensure<"children">().emplace_back();
         child_value.set<"name">("child");
         auto& grandchildren = child_value.ensure<"children">();
-        grandchildren.emplace().set<"name">("grandchild");
+        grandchildren.emplace_back().set<"name">("grandchild");
 
         RUVIA_CHECK(rejects([&] { child_value = std::move(root); }));
         RUVIA_CHECK(rejects([&] { grandchildren = std::move(root.ensure<"children">()); }));
         RUVIA_CHECK(rejects([&] { grandchildren.push_back(std::move(root)); }));
-        RUVIA_CHECK(rejects([&] { root.ensure<"children">().emplace(std::move(root)); }));
+        RUVIA_CHECK(rejects([&] { root.ensure<"children">().emplace_back(std::move(root)); }));
         RUVIA_CHECK(rejects([&] { child_value.set<"children">(std::move(root.ensure<"children">())); }));
 
         RUVIA_CHECK_EQ(root.get<"name">().view(), std::string_view(text));

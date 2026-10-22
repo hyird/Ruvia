@@ -7,8 +7,6 @@
 
 #include "ruvia/http/http_content_codec.h"
 
-#include "coding/http_content_codec_result.h"
-
 // One compression library binding per coding, behind a uniform signature: decode
 // or encode a whole buffer through the caller's memory resource, bounded by an
 // explicit output ceiling, reporting failure as a value. Which coding a field
@@ -33,33 +31,32 @@ class zstd_encoder_stream;
     return true;
 }
 
-[[nodiscard]] http_content_decode_result decode_gzip_content(
+[[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_gzip_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource);
-[[nodiscard]] http_content_decode_result decode_deflate_content(
+[[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_deflate_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource);
-[[nodiscard]] http_content_decode_result decode_brotli_content(
+[[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource);
-[[nodiscard]] http_content_decode_result decode_zstd_content(
+[[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_zstd_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource);
 
-[[nodiscard]] http_content_encode_result encode_gzip_content(
+[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_gzip_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource);
-[[nodiscard]] http_content_encode_result encode_deflate_content(
+[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_deflate_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource);
-[[nodiscard]] http_content_encode_result encode_brotli_content(
+[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_brotli_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource);
-[[nodiscard]] http_content_encode_result encode_zstd_content(
+[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_zstd_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource);
 
 // The single whole-buffer encode loop of each library, over caller-owned codec
 // state that is freshly initialized or reset. Output comes from
 // `output_resource`. Every path leaves the state consumed (finished or
 // mid-stream), so an owner that reuses it resets it afterwards.
-[[nodiscard]] http_content_encode_result encode_zlib_content(zlib_deflate_stream& deflater,
+[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_zlib_content(zlib_deflate_stream& deflater,
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource);
-[[nodiscard]] http_content_encode_result encode_brotli_content(brotli_encoder_stream& encoder,
+[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_brotli_content(brotli_encoder_stream& encoder,
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource);
-[[nodiscard]] http_content_encode_result encode_zstd_content(zstd_encoder_stream& encoder,
+[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_zstd_content(zstd_encoder_stream& encoder,
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource);
-
 }  // namespace ruvia::detail

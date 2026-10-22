@@ -11,7 +11,7 @@
 #include <asio/detached.hpp>
 #include <asio/recycling_allocator.hpp>
 
-#include "ruvia/core/asio_task.h"
+#include "ruvia/core/async.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/websocket_protocol.h"
 
@@ -22,7 +22,7 @@
 namespace ruvia::detail {
 
 template <typename stream_type>
-bool websocket_connection<stream_type>::pong_observable() const noexcept {
+bool server_websocket_connection<stream_type>::pong_observable() const noexcept {
     return write_phase_ == write_phase_type::idle && read_phase_ == read_phase_type::active;
 }
 
@@ -31,14 +31,14 @@ bool websocket_connection<stream_type>::pong_observable() const noexcept {
 // Pong that was already buffered during a write from being timed out before
 // the reader's next poll gets to it.
 template <typename stream_type>
-void websocket_connection<stream_type>::restart_pong_window(std::int64_t now) noexcept {
+void server_websocket_connection<stream_type>::restart_pong_window(std::int64_t now) noexcept {
     if (const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_)) {
         liveness_state_ = websocket_awaiting_pong(now, pong->challenge());
     }
 }
 
 template <typename stream_type>
-void websocket_connection<stream_type>::finish_write(write_phase_type phase) noexcept {
+void server_websocket_connection<stream_type>::finish_write(write_phase_type phase) noexcept {
     if (write_phase_ != phase) {
         std::terminate();
     }
@@ -51,7 +51,7 @@ void websocket_connection<stream_type>::finish_write(write_phase_type phase) noe
 }
 
 template <typename stream_type>
-void websocket_connection<stream_type>::start_going_away() noexcept {
+void server_websocket_connection<stream_type>::start_going_away() noexcept {
     if (protocol_.liveness_mode() != websocket_liveness_mode::open) {
         // A close handshake (or a terminal failure) is already under way.
         going_away_pending_ = false;
@@ -74,7 +74,7 @@ void websocket_connection<stream_type>::start_going_away() noexcept {
 }
 
 template <typename stream_type>
-task<void> websocket_connection<stream_type>::write_going_away_close() {
+task<void> server_websocket_connection<stream_type>::write_going_away_close() {
     write_guard_type write_guard(*this, write_phase_type::going_away, write_claim_type::adopt);
     try {
         // The session may have closed or failed before this coroutine ran.
@@ -90,7 +90,7 @@ task<void> websocket_connection<stream_type>::write_going_away_close() {
 }
 
 template <typename stream_type>
-void websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcept {
+void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcept {
     const bool observable = pong_observable();
     if (!observable) {
         restart_pong_window(now);
@@ -120,7 +120,7 @@ void websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcep
 }
 
 template <typename stream_type>
-task<void> websocket_connection<stream_type>::write_heartbeat_ping() {
+task<void> server_websocket_connection<stream_type>::write_heartbeat_ping() {
     write_guard_type write_guard(*this, write_phase_type::heartbeat, write_claim_type::adopt);
     try {
         const auto* sending = std::get_if<websocket_sending_ping>(&liveness_state_);
@@ -147,7 +147,7 @@ task<void> websocket_connection<stream_type>::write_heartbeat_ping() {
 }
 
 template <typename stream_type>
-void websocket_connection<stream_type>::fail_background(std::exception_ptr failure) noexcept {
+void server_websocket_connection<stream_type>::fail_background(std::exception_ptr failure) noexcept {
     abort_transport();
     if (background_failure_ == nullptr) {
         background_failure_ = std::move(failure);

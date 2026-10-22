@@ -51,8 +51,12 @@ enum class db_deadline_kind : std::uint8_t {
 
 // What a driver hook reports after starting an unbuffered statement.
 struct db_stream_start final {
+    explicit db_stream_start(std::pmr::memory_resource* resource = nullptr)
+        : column_names_(pmr_resource_or_default(resource)) {}
+
     // Driver-owned result handle handed to the stream (may be null).
     void* result_{nullptr};
+    std::pmr::vector<std::pmr::string> column_names_;
     // False when the statement produced no row set; the slot is still clean.
     bool returns_rows_{true};
 };
@@ -86,6 +90,7 @@ struct mariadb_driver final {
     static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
         std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
     static task<std::optional<db_row>> read_stream_row(pool_type& pool, std::size_t slot, void* result,
+        std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
         std::pmr::memory_resource* resource, const operation_options& options);
     static task<void> close_stream(pool_type& pool, std::size_t slot, void* result,
         std::pmr::memory_resource* resource, const operation_options& options);
@@ -107,6 +112,7 @@ struct postgresql_driver final {
     static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
         std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
     static task<std::optional<db_row>> read_stream_row(pool_type& pool, std::size_t slot, void* result,
+        std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
         std::pmr::memory_resource* resource, const operation_options& options);
     static task<void> close_stream(pool_type& pool, std::size_t slot, void* result,
         std::pmr::memory_resource* resource, const operation_options& options);
@@ -199,6 +205,7 @@ public:
     task<db_stream_result> stream(std::pmr::string sql, std::pmr::vector<db_value> params,
         std::pmr::memory_resource* resource, operation_options options);
     task<std::optional<db_row>> read_stream_row(std::size_t slot, void* result,
+        std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
         std::pmr::memory_resource* resource, const operation_options& options);
     task<void> close_stream(std::size_t slot, void* result, std::pmr::memory_resource* resource,
         const operation_options& options);

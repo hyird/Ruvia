@@ -11,7 +11,7 @@
 
 #include <asio/co_spawn.hpp>
 
-#include "ruvia/core/asio_task.h"
+#include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"

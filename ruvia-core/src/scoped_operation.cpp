@@ -255,9 +255,7 @@ void operation_scope::unlink(detail::scoped_operation_registration& operation) n
 
 namespace detail {
 
-scoped_operation_registration::scoped_operation_registration(
-    operation_scope& scope, scoped_operation_io_kind io_kind) noexcept
-    : io_kind_(io_kind) {
+scoped_operation_registration::scoped_operation_registration(operation_scope& scope) noexcept {
     if (scope.active()) {
         scope.link(*this);
     } else {
@@ -314,9 +312,6 @@ void scoped_operation_registration::start() noexcept {
     if (phase_ != phase::cold) {
         std::terminate();
     }
-    if (io_kind_ != scoped_operation_io_kind::none && scope_ != nullptr && scope_->io_metrics() != nullptr) {
-        started_at_ = std::chrono::steady_clock::now();
-    }
     phase_ = phase::running;
 }
 
@@ -337,12 +332,6 @@ void scoped_operation_registration::complete() noexcept {
     clear_frame_binding();
     if (scope_ != nullptr) {
         auto* scope = scope_;
-        if (io_kind_ != scoped_operation_io_kind::none && scope->io_metrics() != nullptr) {
-            const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - started_at_)
-                                     .count();
-            scope->record_io(io_kind_, elapsed < 0 ? 0 : static_cast<std::uint64_t>(elapsed));
-        }
         scope->unlink(*this);
         scope->resume_joiner();
     }

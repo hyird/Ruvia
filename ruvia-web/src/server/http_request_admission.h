@@ -8,12 +8,12 @@
 #include <string_view>
 
 #include "ruvia/core/memory/memory_pool.h"
-#include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/web/detail/integration/request_io_metrics.h"
 #include "ruvia/web/detail/router/route_modes.h"
 #include "ruvia/web/error.h"
 
@@ -50,7 +50,7 @@ struct http_request_admission_input final {
     const http_request& request_;
     const route_resolution& resolution_;
     // The parser or subrequest supplies the response-coding selection.
-    http_response_coding_selection_result coding_;
+    std::optional<http_response_coding_selection> coding_;
     // Request arena for copied rejection diagnostics.
     std::pmr::memory_resource* resource_;
     // The protocol's Expect plan, when it defers the rejection to Web.
@@ -146,7 +146,7 @@ public:
         return coding_policy_;
     }
 
-    [[nodiscard]] operation_scope_io_metrics& io_metrics() const noexcept {
+    [[nodiscard]] request_io_metrics& io_metrics() const noexcept {
         return io_metrics_;
     }
 
@@ -183,7 +183,7 @@ private:
     http_response_coding_policy coding_policy_;
     std::string_view client_address_;
     std::chrono::steady_clock::time_point start_;
-    mutable operation_scope_io_metrics io_metrics_{};
+    mutable request_io_metrics io_metrics_{};
 };
 
 enum class http_request_endpoint : std::uint8_t {

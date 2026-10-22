@@ -24,7 +24,7 @@ namespace ruvia::detail {
 
 class router;
 
-template <typename controller_t_type>
+template <typename controller_type>
 class controller_registration_access;
 
 struct controller_store_state;
@@ -62,7 +62,7 @@ public:
     [[nodiscard]] void* instance(std::size_t slot) const noexcept;
 
 private:
-    template <typename controller_t_type>
+    template <typename controller_type>
     friend void* create_controller(controller_store& controllers);
 
     template <typename t_type>
@@ -96,7 +96,7 @@ public:
     ~controller_route_builder();
 
 private:
-    template <typename controller_t_type>
+    template <typename controller_type>
     friend class controller_registration_access;
 
     // Middlewares come from make_middlewares(), already allocated from
@@ -107,14 +107,13 @@ private:
     // Each builds the endpoint its route kind runs and registers it through
     // the router's single registration path.
     void register_route(http_known_method method, std::string_view path, route_handler_type handler,
-        request_body_mode body_mode, std::span<const controller_middleware_descriptor> middlewares) const;
+        std::span<const controller_middleware_descriptor> middlewares) const;
+    void register_route(http_known_method method, std::string_view path, route_stream_handler_type handler,
+        std::span<const controller_middleware_descriptor> middlewares) const;
     void register_extension_method_route(std::string_view method_token, std::string_view path,
-        route_handler_type handler, request_body_mode body_mode,
-        std::span<const controller_middleware_descriptor> middlewares) const;
-    void register_response_stream_route(http_known_method method, std::string_view path,
+        route_handler_type handler, std::span<const controller_middleware_descriptor> middlewares) const;
+    void register_extension_method_route(std::string_view method_token, std::string_view path,
         route_stream_handler_type handler, std::span<const controller_middleware_descriptor> middlewares) const;
-    void register_sse_route(http_known_method method, std::string_view path, route_stream_handler_type handler,
-        std::span<const controller_middleware_descriptor> middlewares) const;
     void register_tunnel_route(std::string_view protocol, std::string_view target, route_stream_handler_type handler,
         std::span<const controller_middleware_descriptor> middlewares, http_tunnel_route_config config) const;
     void register_websocket_route(http_known_method method, std::string_view path,

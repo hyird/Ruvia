@@ -346,6 +346,19 @@ class db_entity final {
     using columns_tuple_type = detail::tuple_filter_t<is_db_column, members_type...>;
     using relations_tuple_type = detail::tuple_filter_t<is_db_relation, members_type...>;
     static_assert(detail::unique_entity_columns<members_type...>(), "duplicate database entity member name");
+    static consteval std::size_t count_lifecycle_columns(auto predicate) noexcept {
+        return [&]<typename... cols>(std::tuple<cols...>*) {
+            return (std::size_t{predicate(cols::options)} + ... + std::size_t{0});
+        }(static_cast<columns_tuple_type*>(nullptr));
+    }
+    static_assert(count_lifecycle_columns([](const auto& opts) { return opts.create_date_; }) <= 1,
+        "database entity may declare at most one create_date_ column");
+    static_assert(count_lifecycle_columns([](const auto& opts) { return opts.update_date_; }) <= 1,
+        "database entity may declare at most one update_date_ column");
+    static_assert(count_lifecycle_columns([](const auto& opts) { return opts.delete_date_; }) <= 1,
+        "database entity may declare at most one delete_date_ column");
+    static_assert(count_lifecycle_columns([](const auto& opts) { return opts.version_; }) <= 1,
+        "database entity may declare at most one version_ column");
     template <typename r_type>
     using relation_slot_type = detail::db_relation_slot<typename r_type::target_entity_type, r_type::is_collection>;
     template <std::size_t... indexes>

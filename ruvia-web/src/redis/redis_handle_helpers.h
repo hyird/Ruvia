@@ -42,8 +42,6 @@ void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_
 
 task<redis_value> execute_owned_redis_command(redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
-task<redis_value> execute_owned_redis_command(redis_pool& pool, std::pmr::vector<std::pmr::string> args,
-    operation_options options, std::pmr::memory_resource* resource);
 task<std::optional<std::pmr::string>> redis_string_command(redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
 task<std::int64_t> redis_integer_command(redis_command_executor executor,

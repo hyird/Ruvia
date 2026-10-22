@@ -8,7 +8,6 @@
 
 #include "coding/http_brotli_stream.h"
 #include "coding/http_content_codec.h"
-#include "coding/http_content_codec_result.h"
 #include "coding/http_zlib_stream.h"
 #include "coding/http_zstd_stream.h"
 
@@ -30,7 +29,8 @@ struct http_content_encode_context::state final {
         return std::visit([](auto& stream) { return stream.reset(); }, stream_);
     }
 
-    [[nodiscard]] http_content_encode_result encode(std::string_view input, http_content_encode_options options) {
+    [[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode(
+        std::string_view input, http_content_encode_options options) {
         if (auto* deflater = std::get_if<detail::zlib_deflate_stream>(&stream_)) {
             return detail::encode_zlib_content(*deflater, input, options.max_encoded_bytes_, options.resource_);
         }
@@ -60,7 +60,7 @@ http_content_encode_context::~http_content_encode_context() {
     detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, state_, resource_);
 }
 
-http_content_encode_result http_content_encode_context::encode(
+std::variant<std::pmr::string, http_content_encode_error> http_content_encode_context::encode(
     std::string_view input, http_content_encode_options options) {
     switch (coding_) {
         case http_content_coding::gzip:
@@ -70,7 +70,7 @@ http_content_encode_result http_content_encode_context::encode(
         case http_content_coding::brotli: {
             detail::brotli_encoder_stream encoder(resource_);
             if (!encoder.initialized()) {
-                return detail::http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+                return http_content_encode_error::encoder_failure;
             }
             return detail::encode_brotli_content(encoder, input, options.max_encoded_bytes_, options.resource_);
         }
@@ -84,7 +84,7 @@ http_content_encode_result http_content_encode_context::encode(
             detail::http_resolved_pmr_resource_tag{}, resource_, coding_, resource_);
         if (!created->initialized()) {
             detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, created, resource_);
-            return detail::http_content_encode_result_access::failure(http_content_encode_error::encoder_failure);
+            return http_content_encode_error::encoder_failure;
         }
         state_ = created;
     }

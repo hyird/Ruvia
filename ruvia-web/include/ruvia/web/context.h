@@ -164,9 +164,6 @@ private:
     template <typename t_type>
     friend detail::request_binding_handle<t_type> detail::bind_validated_model(
         context& context_value, const t_type& model);
-    template <typename t_type>
-    friend detail::request_binding_handle<t_type> detail::bind_validated_json_model(
-        context& context_value, const t_type& model, std::string_view raw_json);
 
     context(request_memory& memory, const http_request& request, const detail::context_services& services);
 
@@ -252,7 +249,7 @@ public:
     }
 
     // Observes worker shutdown and, for a subrequest, explicit cancellation.
-    // db(), redis(), get_http_client({...}).send(), and run_blocking() bind this
+    // db(), redis(), http_client({...}).send(), and run_blocking() bind this
     // token automatically. Explicit operation tokens are combined with it.
     //
     // Cancellation is cooperative: framework waits, including streaming sleep(),
@@ -263,7 +260,7 @@ public:
     // sse_writer::cancel_on_peer_eof()，并把其返回的组合 token 传给业务等待；
     // 此处返回的原 token 不变。该选项将合法写半关闭也视作放弃响应。
     //
-    [[nodiscard]] stop_token get_stop_token() const noexcept {
+    [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept {
         return capabilities_.stop_token();
     }
 
@@ -353,9 +350,9 @@ public:
     [[nodiscard]] redis_handle redis() const;
     [[nodiscard]] redis_handle redis(std::string_view alias) const;
 #endif
-    [[nodiscard]] http_client_handle get_http_client() const;
-    [[nodiscard]] http_client_handle get_http_client(std::string_view alias) const;
-    [[nodiscard]] websocket& get_websocket() const;
+    [[nodiscard]] http_client_handle http_client() const;
+    [[nodiscard]] http_client_handle http_client(std::string_view alias) const;
+    [[nodiscard]] ::ruvia::websocket& websocket() const;
     [[nodiscard]] http_tunnel& tunnel() const;
 
     [[nodiscard]] response_stream_writer& stream();
@@ -408,45 +405,33 @@ public:
     void respond(http_response&& response);
 
     // Body builders copy their input into response-owned storage, except
-    // static_text, which explicitly borrows static bytes without copying.
-    // Character arrays (string literals and filled buffers) are copied up to
-    // their first NUL byte, or in full when they contain none.
-    [[nodiscard]] http_response body(std::string_view body) const;
-    [[nodiscard]] http_response body(std::nullptr_t) const;
-    [[nodiscard]] http_response body(std::pmr::string&& body) const;
+    // static_text, which explicitly borrows static bytes without copying, and
+    // std::pmr::string&&, which transfers compatible arena allocations.
+    [[nodiscard]] http_response body(std::string_view body = {}) const;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] http_response body(string_type&& body_value) const {
+        return body_owned(std::move(body_value));
+    }
     [[nodiscard]] http_response body(std::span<const std::byte> body) const;
     [[nodiscard]] http_response body(static_text body) const;
-    [[nodiscard]] http_response body(std::string& body) const = delete;
-    [[nodiscard]] http_response body(const std::string& body) const = delete;
-    [[nodiscard]] http_response body(std::string&& body) const = delete;
-
-    template <std::size_t n>
-    [[nodiscard]] http_response body(const char (&body)[n]) const;
 
     [[nodiscard]] http_response text(std::string_view body) const;
-    [[nodiscard]] http_response text(std::pmr::string&& body) const;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] http_response text(string_type&& body_value) const {
+        return text_owned(std::move(body_value));
+    }
     [[nodiscard]] http_response text(static_text body) const;
-    [[nodiscard]] http_response text(std::string& body) const = delete;
-    [[nodiscard]] http_response text(const std::string& body) const = delete;
-    [[nodiscard]] http_response text(std::string&& body) const = delete;
-
-    template <std::size_t n>
-    [[nodiscard]] http_response text(const char (&body)[n]) const;
 
     template <typename t_type>
         requires detail::is_model<t_type>
     [[nodiscard]] http_response json(const t_type& value) const;
 
     [[nodiscard]] http_response html(std::string_view body) const;
-    [[nodiscard]] http_response html(std::pmr::string&& body) const;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] http_response html(string_type&& body_value) const {
+        return html_owned(std::move(body_value));
+    }
     [[nodiscard]] http_response html(static_text body) const;
-    [[nodiscard]] http_response html(std::string& body) const = delete;
-    [[nodiscard]] http_response html(const std::string& body) const = delete;
-    [[nodiscard]] http_response html(std::string&& body) const = delete;
-
-    template <std::size_t n>
-    [[nodiscard]] http_response html(const char (&body)[n]) const;
-
     [[nodiscard]] http_response redirect(redirect_response_options options) const;
 
     // File helpers honor If-Range only for matching strong ETags. Last-Modified
@@ -471,11 +456,14 @@ public:
 
 private:
     [[nodiscard]] http_response streaming_head() const;
+    [[nodiscard]] http_response body_owned(std::pmr::string&& body) const;
+    [[nodiscard]] http_response text_owned(std::pmr::string&& body) const;
+    [[nodiscard]] http_response html_owned(std::pmr::string&& body) const;
 
     [[nodiscard]] task<http_response> not_found_task();
     // `fields`: method, target, body, then header name/value pairs (owned copies).
     [[nodiscard]] task<dispatch_response> dispatch_task(
-        std::pmr::vector<std::pmr::string> fields, stop_token stop);
+        std::pmr::vector<std::pmr::string> fields, ::ruvia::stop_token stop);
     [[nodiscard]] task<std::string_view> request_body() const;
     task<void> request_discard_body() const;
     [[nodiscard]] task<std::pmr::vector<multipart_part>> request_multipart() const;
@@ -558,10 +546,6 @@ namespace detail {
 
 template <typename t_type>
 request_binding_handle<t_type> bind_validated_model(context& context_value, const t_type& model);
-
-template <typename t_type>
-request_binding_handle<t_type> bind_validated_json_model(
-    context& context_value, const t_type& model, std::string_view raw_json);
 
 }  // namespace detail
 

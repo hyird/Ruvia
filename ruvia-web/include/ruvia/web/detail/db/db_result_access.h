@@ -73,22 +73,9 @@ struct db_result_access final {
         return db_field::borrowed(value, resource);
     }
 
-    [[nodiscard]] static db_row owned_row(std::pmr::memory_resource* resource) {
-        return db_row(resource);
-    }
-
-    [[nodiscard]] static std::pmr::vector<db_field>& owned_fields(db_row& row) noexcept {
-        return row.owned_fields();
-    }
-
-    [[nodiscard]] static std::pmr::vector<std::pmr::string>& owned_column_names(db_row& row) noexcept {
-        return row.owned_column_names();
-    }
-
     [[nodiscard]] static db_row borrowed_row(const db_field* fields_value, std::size_t size,
-        const std::pmr::string* column_names, std::size_t column_count,
-        std::pmr::memory_resource* resource) {
-        return db_row(fields_value, size, column_names, column_count, resource);
+        const std::pmr::string* column_names, std::size_t column_count) noexcept {
+        return db_row(fields_value, size, column_names, column_count);
     }
 };
 

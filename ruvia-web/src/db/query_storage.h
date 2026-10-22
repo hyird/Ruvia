@@ -122,8 +122,8 @@ struct db_query_node final {
           right_(source_value.right_),
           query_(source_value.query_),
           flag_(source_value.flag_),
+          explicit_alias_(source_value.explicit_alias_),
           frame_(source_value.frame_) {
-        named_.reserve(source_value.named_.size());
         for (const auto& argument : source_value.named_) {
             named_.emplace_back(argument.name_, argument.expression_, resource);
         }
@@ -145,6 +145,7 @@ struct db_query_node final {
     std::size_t right_{no_db_node};
     std::size_t query_{no_db_node};
     bool flag_{false};
+    bool explicit_alias_{false};
     std::optional<db_window_frame_options> frame_{};
 };
 struct db_stored_source_column final {

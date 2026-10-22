@@ -47,18 +47,18 @@ struct completion final {
 
 class routes final {
     RUVIA_ROUTES_BEGIN(routes)
-    RUVIA_GET_STREAM("/disconnect/events", events);
-    RUVIA_GET_STREAM("/disconnect/pipeline", pipeline);
-    RUVIA_GET_STREAM("/disconnect/body", body);
+    RUVIA_GET("/disconnect/events", events);
+    RUVIA_GET("/disconnect/pipeline", pipeline);
+    RUVIA_GET("/disconnect/body", body);
     RUVIA_POST("/disconnect/echo", echo);
-    RUVIA_POST_SSE("/disconnect/post-sse", post_sse);
+    RUVIA_POST("/disconnect/post-sse", post_sse);
     RUVIA_GET("/disconnect/health", health);
     RUVIA_ROUTES_END
 
     ruvia::task<void> events(ruvia::context& c) {
         completion done;
         const auto mode = c.req().query("mode").value_or("token");
-        const auto original = c.get_stop_token();
+        const auto original = c.stop_token();
         auto writer = c.stream_sse();
         auto token = mode == "default" ? original : writer.cancel_on_peer_eof();
         if (mode == "explicit") {

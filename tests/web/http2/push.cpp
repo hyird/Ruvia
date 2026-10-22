@@ -50,7 +50,7 @@ public:
     RUVIA_GET("/two", parent);
     RUVIA_GET("/large", parent);
     RUVIA_GET("/asset", asset);
-    RUVIA_GET_STREAM("/large-asset", large);
+    RUVIA_GET("/large-asset", large);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> parent(ruvia::context& context_value) {
@@ -107,7 +107,7 @@ RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_
                 for (unsigned repeat = 0; repeat != 128; ++repeat) {
                     auto parent_value = co_await client_origin.send({.target_ = "/parent"});
                     RUVIA_CHECK((co_await collect_text(parent_value)) == "parent");
-                    auto push = client.next_push();
+                    auto push = client_origin.next_push();
                     RUVIA_CHECK(push.has_value());
                     if (!push) {
                         throw std::runtime_error("missing push");
@@ -130,7 +130,7 @@ RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_
                     RUVIA_CHECK(response.status() == ruvia::http_status::ok);
                     RUVIA_CHECK(response.header("x-asset") == "metadata");
                     RUVIA_CHECK((co_await collect_text(response)) == "pushed-body");
-                    RUVIA_CHECK(!client.next_push());
+                    RUVIA_CHECK(!client_origin.next_push());
                     if (repeat == 0) {
                         retained.emplace(std::move(moved));
                         retained_response.emplace(std::move(response));
@@ -140,7 +140,7 @@ RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_
                 }
                 auto parent_value = co_await client_origin.send({.target_ = "/large"});
                 RUVIA_CHECK((co_await collect_text(parent_value)) == "parent");
-                auto pushed = client.next_push();
+                auto pushed = client_origin.next_push();
                 RUVIA_CHECK(pushed.has_value());
                 if (!pushed) {
                     throw std::runtime_error("missing large push");
@@ -155,19 +155,19 @@ RUVIA_TEST(http2_push_routes_and_client_preserve_owners_flow_control_cold_reads_
                 RUVIA_CHECK_EQ(observed->streamed_.load(), 1U);
                 auto cancelled_parent = co_await client_origin.send({.target_ = "/large"});
                 RUVIA_CHECK((co_await collect_text(cancelled_parent)) == "parent");
-                auto cancelled_push = client.next_push();
+                auto cancelled_push = client_origin.next_push();
                 RUVIA_CHECK(cancelled_push.has_value());
                 cancelled_push.reset();
                 auto after_cancel = co_await client_origin.send({.target_ = "/parent"});
                 RUVIA_CHECK((co_await collect_text(after_cancel)) == "parent");
-                auto after_push = client.next_push();
+                auto after_push = client_origin.next_push();
                 RUVIA_CHECK(after_push.has_value());
                 if (after_push) {
                     auto after_response = co_await after_push->response();
                     RUVIA_CHECK((co_await collect_text(after_response)) == "pushed-body");
                 }
-                RUVIA_CHECK_EQ(client.stats().received_pushes_, std::size_t{131});
-                RUVIA_CHECK_EQ(client.stats().rejected_pushes_, std::size_t{0});
+                RUVIA_CHECK_EQ(client_origin.stats().received_pushes_, std::size_t{131});
+                RUVIA_CHECK_EQ(client_origin.stats().rejected_pushes_, std::size_t{0});
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -205,14 +205,14 @@ RUVIA_TEST(http2_push_queue_overflow_and_disabled_permission_keep_parent_respons
             try {
                 auto parent_value = co_await client_origin.send({.target_ = "/two"});
                 RUVIA_CHECK((co_await collect_text(parent_value)) == "parent");
-                auto push = client.next_push();
+                auto push = client_origin.next_push();
                 RUVIA_CHECK(push.has_value() == enabled);
                 if (push) {
                     auto response = co_await push->response();
                     RUVIA_CHECK((co_await collect_text(response)) == "pushed-body");
                 }
-                RUVIA_CHECK_EQ(client.stats().received_pushes_, enabled ? std::size_t{1} : std::size_t{0});
-                RUVIA_CHECK_EQ(client.stats().rejected_pushes_, enabled ? std::size_t{1} : std::size_t{0});
+                RUVIA_CHECK_EQ(client_origin.stats().received_pushes_, enabled ? std::size_t{1} : std::size_t{0});
+                RUVIA_CHECK_EQ(client_origin.stats().rejected_pushes_, enabled ? std::size_t{1} : std::size_t{0});
                 RUVIA_CHECK_EQ(observed->refused_.load(), enabled ? 0U : 2U);
             } catch (...) {
                 failure = std::current_exception();

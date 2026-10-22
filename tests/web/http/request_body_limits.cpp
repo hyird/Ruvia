@@ -15,7 +15,6 @@
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 
-#include "ruvia/core/asio_task.h"
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/socket.h"
@@ -54,18 +53,18 @@ const auto body_lane_observed = std::make_shared<body_lane_observation>();
 
 class body_lane_routes final {
     RUVIA_ROUTES_BEGIN(body_lane_routes)
-    RUVIA_POST_STREAM("/server-lazy-body-read", read);
-    RUVIA_POST_STREAM("/server-lazy-multipart-read", read_multipart);
-    RUVIA_POST_STREAM("/server-multipart-reader", read_multipart_reader);
-    RUVIA_POST_STREAM("/server-truncated-body-reread", reread_truncated);
-    RUVIA_POST_STREAM("/server-small-chunk-body", read_small_chunks);
+    RUVIA_POST("/server-lazy-body-read", read, ruvia::stream_body);
+    RUVIA_POST("/server-lazy-multipart-read", read_multipart, ruvia::stream_body);
+    RUVIA_POST("/server-multipart-reader", read_multipart_reader, ruvia::stream_body);
+    RUVIA_POST("/server-truncated-body-reread", reread_truncated, ruvia::stream_body);
+    RUVIA_POST("/server-small-chunk-body", read_small_chunks, ruvia::stream_body);
     RUVIA_GET("/server-small-chunk-next", small_chunk_next);
     RUVIA_POST("/server-pipelined-echo", pipelined_echo);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> read_multipart_reader(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
-        auto reader = context_value.req().get_multipart_reader();
+        auto reader = context_value.req().multipart_reader();
         std::pmr::string body(context_value.allocator<char>());
         while (auto part = co_await reader.read()) {
             observed.multipart_reader_parts_.fetch_add(1);
@@ -76,7 +75,7 @@ class body_lane_routes final {
 
     ruvia::task<ruvia::http_response> read(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
-        auto& reader = context_value.req().get_body_reader();
+        auto& reader = context_value.req().body_reader();
         {
             auto discarded = reader.read();
             static_cast<void>(discarded);
@@ -103,7 +102,7 @@ class body_lane_routes final {
 
     ruvia::task<ruvia::http_response> read_multipart(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
-        ruvia::multipart_reader reader(context_value.req().get_body_reader(),
+        ruvia::multipart_reader reader(context_value.req().body_reader(),
             {.boundary_ = ruvia::multipart_boundary("lazy"), .resource_ = context_value.pool()});
         auto first = reader.read();
         auto last = reader.read();
@@ -137,7 +136,7 @@ class body_lane_routes final {
 
     ruvia::task<ruvia::http_response> reread_truncated(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
-        auto& reader = context_value.req().get_body_reader();
+        auto& reader = context_value.req().body_reader();
         try {
             static_cast<void>(co_await reader.read());
         } catch (const ruvia::http_protocol_error&) {
@@ -152,7 +151,7 @@ class body_lane_routes final {
     }
 
     ruvia::task<ruvia::http_response> read_small_chunks(ruvia::context& context_value) {
-        auto& reader = context_value.req().get_body_reader();
+        auto& reader = context_value.req().body_reader();
         std::pmr::string body(context_value.allocator<char>());
         while (const auto chunk = co_await reader.text()) {
             body.append(*chunk);
@@ -493,12 +492,13 @@ RUVIA_TEST(web_request_decodes_content_coding_stacks_in_reverse_order) {
         ruvia::http_content_coding::deflate};
     const std::string plain(8192, 'm');
     auto encoded = ruvia::encode_http_content(codings, plain, {.max_encoded_bytes_ = plain.size()});
-    RUVIA_CHECK(encoded.encoded() != nullptr);
-    if (encoded.encoded() == nullptr) {
+    const auto* encoded_bytes = std::get_if<std::pmr::string>(&encoded);
+    RUVIA_CHECK(encoded_bytes != nullptr);
+    if (encoded_bytes == nullptr) {
         return;
     }
     (void)context_request_test::with_context(
-        ruvia::test_request::post("/").header("Content-Encoding", "gzip, deflate").body(encoded.encoded()->bytes()),
+        ruvia::test_request::post("/").header("Content-Encoding", "gzip, deflate").body(*encoded_bytes),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
             const auto body = co_await context_value.req().text();
             RUVIA_CHECK_EQ(body, std::string_view(plain));

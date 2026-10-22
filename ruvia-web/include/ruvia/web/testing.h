@@ -33,6 +33,8 @@
 #include "ruvia/web/detail/integration/worker_state.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 #include "ruvia/web/error_handlers.h"
+#include "ruvia/web/rate_limit_rule.h"
+#include "ruvia/web/server_config.h"
 
 namespace ruvia {
 
@@ -197,6 +199,16 @@ public:
     test_app& use_worker_state() {
         return use_worker_state_definition(detail::make_default_worker_state<state_type>());
     }
+
+    test_app& server(server_config config);
+    test_app& compression(compression_config config);
+    test_app& compression(std::nullptr_t);
+    test_app& cors(cors_config config);
+    test_app& cors(std::nullptr_t);
+    test_app& rate_limit(rate_limit_config config);
+    test_app& rate_limit(std::nullptr_t);
+    test_app& trusted_proxies(trusted_proxy_config config);
+    test_app& trusted_proxies(std::nullptr_t);
 
     test_app& on_error(http_error_handler_type handler);
     test_app& on_not_found(http_not_found_handler_type handler);

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -109,10 +110,27 @@ public:
     [[nodiscard]] websocket_client_handle with_options(operation_options options) const;
     [[nodiscard]] scoped_operation<std::optional<websocket_message>> read() const;
     [[nodiscard]] scoped_operation<void> text(std::string_view payload, websocket_send_options options = {}) const;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] scoped_operation<void> text(string_type&& payload, websocket_send_options options = {}) const {
+        return text_owned(std::move(payload), options);
+    }
     [[nodiscard]] scoped_operation<void> binary(std::string_view payload, websocket_send_options options = {}) const;
+    [[nodiscard]] scoped_operation<void> binary(std::span<const std::byte> payload, websocket_send_options options = {}) const;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] scoped_operation<void> binary(string_type&& payload, websocket_send_options options = {}) const {
+        return binary_owned(std::move(payload), options);
+    }
     [[nodiscard]] scoped_operation<void> ping(std::string_view payload = {}) const;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] scoped_operation<void> ping(string_type&& payload) const {
+        return ping_owned(std::move(payload));
+    }
     [[nodiscard]] scoped_operation<void> pong(std::string_view payload) const;
-    [[nodiscard]] scoped_operation<void> close(websocket_close_options options) const;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] scoped_operation<void> pong(string_type&& payload) const {
+        return pong_owned(std::move(payload));
+    }
+    [[nodiscard]] scoped_operation<void> close(websocket_close_options options = {}) const;
     void abort() noexcept;
 
 private:
@@ -120,6 +138,10 @@ private:
     websocket_client_handle(detail::websocket_client_state& state_value,
         ::ruvia::operation_scope& scope, operation_options options) noexcept;
     static void expire_capability(void* target) noexcept;
+    [[nodiscard]] scoped_operation<void> text_owned(std::pmr::string&& payload, websocket_send_options options) const;
+    [[nodiscard]] scoped_operation<void> binary_owned(std::pmr::string&& payload, websocket_send_options options) const;
+    [[nodiscard]] scoped_operation<void> ping_owned(std::pmr::string&& payload) const;
+    [[nodiscard]] scoped_operation<void> pong_owned(std::pmr::string&& payload) const;
 
     detail::websocket_client_state* state_;
     operation_options options_;
@@ -158,7 +180,7 @@ public:
     // transport termination. Graceful RFC 6455 close uses the handle:
     // co_await client.handle().close({...}). Use shutdown() when completion must
     // be awaited.
-    void abort() noexcept;
+    void close() noexcept;
     // Requests immediate transport shutdown, joins an in-flight connect and
     // all worker-bound operations, and completes on the bound loop after
     // teardown has finished.

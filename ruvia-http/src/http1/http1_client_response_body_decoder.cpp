@@ -15,7 +15,7 @@ std::string_view http1_client_response_body_error_message(http1_client_response_
             return "invalid HTTP/1 response transfer coding";
         case http1_client_response_body_error::incomplete_body:
             return "incomplete HTTP/1 response body";
-        case http1_client_response_body_error::non_empty205:
+        case http1_client_response_body_error::non_empty_205:
             return "HTTP 205 response content is not empty";
     }
     return "invalid HTTP/1 response body";
@@ -37,7 +37,7 @@ http1_client_response_body_decoder::http1_client_response_body_decoder(
     const auto configure_coding = [this, resource](const http_transfer_codings& codings) {
         if (!codings.empty()) {
             transfer_.emplace(std::span<const http_transfer_coding>(
-                                  codings.values_.data(), codings.values_.size()),
+                                  codings.data(), codings.size()),
                 resource, protocol_byte_limit::unlimited());
         }
     };
@@ -312,7 +312,7 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
 http1_client_response_body_decoder::result_type http1_client_response_body_decoder::emit(
     std::size_t consumed, std::string_view bytes_value) {
     if (zero_content_ && !bytes_value.empty()) {
-        return fail(http1_client_response_body_error::non_empty205, consumed);
+        return fail(http1_client_response_body_error::non_empty_205, consumed);
     }
     return result_type(output_view_type(consumed, bytes_value));
 }

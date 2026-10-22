@@ -56,7 +56,7 @@ public:
     response_stream_sink(stream_type& stream, worker_memory& memory, worker_codecs& codecs,
         http_response_head_buffer& head, connection_scanner::entry_type& scanner_entry,
         const worker_handle& worker_value, const http_request& request, const cors_options* cors,
-        http_response_stream_kind kind, http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
+        http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
         const lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
         http_response_coding_availability response_coding_availability,
         std::pmr::memory_resource* inbound_resource = nullptr) noexcept
@@ -67,7 +67,6 @@ public:
           worker_(worker_value),
           request_(request),
           cors_(cors),
-          kind_(kind),
           plan_(plan),
           consumed_plan_(consumed_plan),
           request_body_(request_body),
@@ -77,7 +76,7 @@ public:
 
     response_stream_sink(stream_type&, worker_memory&, worker_codecs&, http_response_head_buffer&,
         connection_scanner::entry_type&, worker_handle&&, const http_request&, const cors_options*,
-        http_response_stream_kind, http1_response_stream_plan, http1_response_stream_plan,
+        http1_response_stream_plan, http1_response_stream_plan,
         const lazy_buffered_body<stream_type>&, http_response_coding_selection,
         http_response_coding_availability, std::pmr::memory_resource* = nullptr) = delete;
 
@@ -202,7 +201,7 @@ private:
             if (cors_ != nullptr) {
                 apply_cors_headers(request_, response, *cors_);
             }
-            compression_.prepare(plan_.request_method(), response, kind_);
+            compression_.prepare(plan_.request_method(), response);
             // The request body is settled at commit: read in full by now, the
             // connection stays reusable; anything less closes it after the
             // stream, since the body bytes still in the socket would be read as
@@ -210,12 +209,8 @@ private:
             if (request_body_.consumption() == http1_request_body_consumption::complete) {
                 plan_ = consumed_plan_;
             }
-            auto prepare_result =
-                prepare_http1_response_stream_head(std::move(response), kind_, plan_, trailer_intent);
-            if (const auto* failure = prepare_result.failure()) {
-                throw failure->exception();
-            }
-            auto stream_head = std::move(*prepare_result.prepared());
+            auto stream_head =
+                prepare_http1_response_stream_head(std::move(response), plan_, trailer_intent);
             compression_.activate(stream_head.commit_plan().body_plan());
 
             head_.reset();
@@ -397,7 +392,6 @@ private:
     const worker_handle& worker_;
     const http_request& request_;
     const cors_options* cors_;
-    http_response_stream_kind kind_;
     http1_response_stream_plan plan_;
     http1_response_stream_plan consumed_plan_;
     const lazy_buffered_body<stream_type>& request_body_;

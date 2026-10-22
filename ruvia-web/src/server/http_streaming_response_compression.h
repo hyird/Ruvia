@@ -42,14 +42,12 @@ public:
     // Applies the representation headers before the protocol-owned stream head
     // is committed. A forbidden identity fallback is rejected here, while the
     // encoder itself is delayed until activate() has a final body plan.
-    void prepare(http_known_method request_method, http_response& response, http_response_stream_kind kind) {
+    void prepare(http_known_method request_method, http_response& response) {
         if (!std::holds_alternative<unprepared_type>(state_)) {
             throw std::logic_error("streaming response compression is already prepared");
         }
-        const auto source = (kind == http_response_stream_kind::sse) ? http_response_compression_source::sse
-                                                                     : http_response_compression_source::stream;
         const auto decision = prepare_response_compression(
-            selection_, request_method, response, source, availability_);
+            selection_, request_method, response, http_response_compression_source::stream, availability_);
         if (decision != http_response_compression_decision::encode) {
             if (http_response_coding_fallback_forbidden(selection_, request_method, response)) {
                 throw http_error(http_not_acceptable_coding_error());

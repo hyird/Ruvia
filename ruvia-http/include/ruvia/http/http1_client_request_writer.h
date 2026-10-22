@@ -212,6 +212,9 @@ public:
             exchange_state_, exchange_state_.offered_upgrade_protocols_.get_allocator().resource());
     }
     http1_client_exchange_state exchange_state() const&& = delete;
+    [[nodiscard]] http1_client_exchange_state take_exchange_state() && noexcept {
+        return std::move(exchange_state_);
+    }
 
 private:
     friend struct detail::http1_client_request_prepare_result_access;

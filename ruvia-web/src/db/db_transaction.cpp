@@ -3,6 +3,7 @@
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/detail/db/db_result_access.h"
+#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "db/db_pool.h"
 #include "db/db_pool_utils.h"
@@ -154,13 +155,7 @@ task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(
     }
 }
 
-scoped_operation<db_rows> db_transaction::query(const db_query& query) & {
-    registration_.require_active();
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), query_task(query), scoped_operation_io_kind::db);
-}
-
-scoped_operation<db_exec_result> db_transaction::execute(const db_query& query) & {
+scoped_operation<db_exec_result> db_transaction::execute_query(const db_query& query) {
     registration_.require_active();
     const auto& lease_value = state_->operation_.preparation_payload();
     auto statement = query.compile(detail::db_pool_driver(lease_value.client_), lease_value.resource_);
@@ -168,9 +163,9 @@ scoped_operation<db_exec_result> db_transaction::execute(const db_query& query) 
         throw std::invalid_argument("execute requires a statement without returned rows");
     }
     operation_guard_type operation(state_->operation_);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        execute_prepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        execute_prepared(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
 }
 
 scoped_operation<db_rows> db_transaction::query(
@@ -178,9 +173,9 @@ scoped_operation<db_rows> db_transaction::query(
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
     operation_guard_type operation(state_->operation_);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        query_prepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        query_prepared(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
 }
 
 scoped_operation<db_exec_result> db_transaction::execute(
@@ -188,13 +183,14 @@ scoped_operation<db_exec_result> db_transaction::execute(
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
     operation_guard_type operation(state_->operation_);
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), execute_prepared(std::move(statement.sql_), std::move(statement.params_), std::move(operation)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        execute_prepared(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
 }
 
 task<db_rows> db_transaction::query_prepared(
-    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -205,7 +201,8 @@ task<db_rows> db_transaction::query_prepared(
 }
 
 task<db_exec_result> db_transaction::execute_prepared(
-    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -217,12 +214,13 @@ task<db_exec_result> db_transaction::execute_prepared(
 
 scoped_operation<void> db_transaction::commit() & {
     registration_.require_active();
+    auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), commit_task(operation_guard_type(state_->operation_)),
-        scoped_operation_io_kind::db);
+        scope, commit_task(scope, operation_guard_type(state_->operation_)));
 }
 
-task<void> db_transaction::commit_task(operation_guard_type pending) {
+task<void> db_transaction::commit_task(operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -232,12 +230,13 @@ task<void> db_transaction::commit_task(operation_guard_type pending) {
 
 scoped_operation<void> db_transaction::rollback() & {
     registration_.require_active();
+    auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), rollback_task(operation_guard_type(state_->operation_)),
-        scoped_operation_io_kind::db);
+        scope, rollback_task(scope, operation_guard_type(state_->operation_)));
 }
 
-task<void> db_transaction::rollback_task(operation_guard_type pending) {
+task<void> db_transaction::rollback_task(operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -262,12 +261,14 @@ scoped_operation<void> db_transaction::run_savepoint_command(std::string_view pr
     std::pmr::string sql(prefix, lease_value.resource_);
     detail::append_db_identifier(sql, name, detail::db_pool_driver(lease_value.client_));
     operation_guard_type operation(state_->operation_);
+    auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), savepoint_task(std::move(sql), std::move(operation)),
-        scoped_operation_io_kind::db);
+        scope, savepoint_task(std::move(sql), scope, std::move(operation)));
 }
 
-task<void> db_transaction::savepoint_task(std::pmr::string sql, operation_guard_type pending) {
+task<void> db_transaction::savepoint_task(
+    std::pmr::string sql, operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -286,22 +287,23 @@ scoped_operation<void> db_transaction::query_void_prepared(std::string_view sql,
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
     operation_guard_type operation(state_->operation_);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        query_void_task(std::move(statement.sql_), std::move(statement.params_), std::move(operation)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        query_void_task(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
 }
 
 scoped_operation<bool> db_transaction::query_bool_prepared(std::string_view sql, std::span<const db_value> params) {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
     operation_guard_type operation(state_->operation_);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        query_bool_task(std::move(statement.sql_), std::move(statement.params_), std::move(operation)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        query_bool_task(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
 }
 
 task<void> db_transaction::query_void_task(
-    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -311,7 +313,8 @@ task<void> db_transaction::query_void_task(
 }
 
 task<void> db_transaction::execute_void_task(
-    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -321,7 +324,8 @@ task<void> db_transaction::execute_void_task(
 }
 
 task<bool> db_transaction::query_bool_task(
-    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -341,7 +345,8 @@ task<bool> db_transaction::query_bool_task(
 }
 
 task<std::uint32_t> db_transaction::query_oid_task(
-    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -364,7 +369,8 @@ task<std::uint32_t> db_transaction::query_oid_task(
 }
 
 task<std::pmr::string> db_transaction::query_text_task(
-    std::pmr::string sql, std::pmr::vector<db_value> params, operation_guard_type pending) {
+    std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -433,21 +439,22 @@ scoped_operation<bool> db_transaction::try_advisory_lock(std::string_view key, s
     return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))", params);
 }
 
-scoped_operation<void> db_transaction::declare_cursor(std::string_view name, const db_query& query, bool scroll) & {
+scoped_operation<void> db_transaction::declare_cursor(
+    std::string_view name, std::string_view sql, std::span<const db_value> params, bool scroll) & {
     require_postgresql_transaction("declare_cursor");
-    if (!query.returns_rows()) {
-        throw std::invalid_argument("declare_cursor requires a row-returning query");
+    if (sql.empty()) {
+        throw std::invalid_argument("SQL must not be empty");
     }
     const auto& lease_value = state_->operation_.preparation_payload();
-    auto compiled = query.compile(db_driver::postgresql, lease_value.resource_);
-    std::pmr::string sql("DECLARE ", lease_value.resource_);
-    detail::append_db_identifier(sql, name, db_driver::postgresql);
-    sql += scroll ? " SCROLL CURSOR FOR " : " NO SCROLL CURSOR FOR ";
-    sql += compiled.sql();
+    auto statement = prepare_db_statement(sql, params, lease_value.resource_);
+    std::pmr::string command("DECLARE ", lease_value.resource_);
+    detail::append_db_identifier(command, name, db_driver::postgresql);
+    command += scroll ? " SCROLL CURSOR FOR " : " NO SCROLL CURSOR FOR ";
+    command += statement.sql_;
     operation_guard_type operation(state_->operation_);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        execute_void_task(std::move(sql), std::move(compiled.params_), std::move(operation)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        execute_void_task(std::move(command), std::move(statement.params_), scope, std::move(operation)));
 }
 
 scoped_operation<db_rows> db_transaction::fetch_cursor(std::string_view name, std::uint64_t count) & {
@@ -461,9 +468,9 @@ scoped_operation<db_rows> db_transaction::fetch_cursor(std::string_view name, st
     sql += " FROM ";
     detail::append_db_identifier(sql, name, db_driver::postgresql);
     operation_guard_type operation(state_->operation_);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        query_prepared(std::move(sql), {}, std::move(operation)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        query_prepared(std::move(sql), {}, scope, std::move(operation)));
 }
 
 scoped_operation<void> db_transaction::close_cursor(std::string_view name) & {
@@ -477,9 +484,9 @@ scoped_operation<std::uint32_t> db_transaction::lo_create(std::uint32_t oid) & {
     auto statement = prepare_db_statement("SELECT \"lo_create\"($1::oid)::bigint", params,
         state_->operation_.preparation_payload().resource_);
     operation_guard_type operation(state_->operation_);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        query_oid_task(std::move(statement.sql_), std::move(statement.params_), std::move(operation)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        query_oid_task(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
 }
 
 scoped_operation<void> db_transaction::lo_put(std::uint32_t oid, std::int64_t offset, std::string_view utf8_bytes) & {
@@ -500,9 +507,9 @@ scoped_operation<std::pmr::string> db_transaction::lo_get_text(std::uint32_t oid
     auto statement = prepare_db_statement("SELECT \"convert_from\"(\"lo_get\"($1::oid), $2::text)", params,
         state_->operation_.preparation_payload().resource_);
     operation_guard_type operation(state_->operation_);
-    return ::ruvia::make_scoped_operation(registration_.scope(),
-        query_text_task(std::move(statement.sql_), std::move(statement.params_), std::move(operation)),
-        scoped_operation_io_kind::db);
+    auto& scope = registration_.scope();
+    return ::ruvia::make_scoped_operation(scope,
+        query_text_task(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
 }
 
 scoped_operation<bool> db_transaction::lo_unlink(std::uint32_t oid) & {

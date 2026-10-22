@@ -236,10 +236,10 @@ http_client_request_view client_request_policy::prepare_request(const http_clien
     // Owning request storage has already normalized every field name.
     for (const auto& field : input_headers) {
         const auto name = field.name();
-        if (add_user_agent && name == "user-agent") {
+        if (add_user_agent && http_ascii_equals_ignore_case(name, "user-agent")) {
             add_user_agent = false;
         }
-        if (name != "cookie") {
+        if (!http_ascii_equals_ignore_case(name, "cookie")) {
             continue;
         }
         --field_count;
@@ -276,7 +276,7 @@ http_client_request_view client_request_policy::prepare_request(const http_clien
     headers.clear();
     headers.reserve(field_count);
     for (const auto& field : input_headers) {
-        if (field.name() != "cookie") {
+        if (!http_ascii_equals_ignore_case(field.name(), "cookie")) {
             headers.emplace_back(field.name(), field.value());
         }
     }

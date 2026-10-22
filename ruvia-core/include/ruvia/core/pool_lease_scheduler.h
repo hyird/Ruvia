@@ -19,13 +19,6 @@ namespace detail {
 class pool_waiter_queue;
 }  // namespace detail
 
-enum class pool_lease_release_status : std::uint8_t {
-    released,
-    transferred_to_waiter,
-    invalid_slot,
-    already_released,
-};
-
 class pool_lease_acquire;
 
 // Single-worker owner of pool slot leases and their asynchronous wait queue.
@@ -56,7 +49,7 @@ public:
     [[nodiscard]] pool_lease_acquire acquire(const std::optional<std::chrono::milliseconds>& timeout,
         stop_token stop_token);
 
-    [[nodiscard]] pool_lease_release_status release(std::size_t slot) noexcept;
+    void release(std::size_t slot) noexcept;
     [[nodiscard]] bool close() noexcept;
     [[nodiscard]] bool closing() const noexcept;
 

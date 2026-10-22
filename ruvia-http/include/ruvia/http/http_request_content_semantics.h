@@ -13,7 +13,7 @@ enum class http_request_content_semantics : std::uint8_t {
     content_type_required,
 };
 
-[[nodiscard]] constexpr http_request_content_semantics http_request_content_semantics(
+[[nodiscard]] constexpr http_request_content_semantics classify_http_request_content_semantics(
     std::string_view method) noexcept {
     if (method == "CONNECT" || method == "TRACE") {
         return http_request_content_semantics::forbidden;

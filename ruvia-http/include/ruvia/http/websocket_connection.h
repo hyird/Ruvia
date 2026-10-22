@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_deflate_codecs.h"
@@ -50,6 +51,7 @@ struct websocket_connection_options final {
 class websocket_connection final {
 public:
     explicit websocket_connection(websocket_connection_options options = {});
+    explicit websocket_connection(http_io_buffer& input, websocket_connection_options options = {});
     ~websocket_connection();
     websocket_connection(const websocket_connection&) = delete;
     websocket_connection& operator=(const websocket_connection&) = delete;
@@ -63,6 +65,7 @@ public:
     websocket_feed_status feed(input_type&&) = delete;
     [[nodiscard]] std::optional<websocket_event> next_event() &;
     std::optional<websocket_event> next_event() && = delete;
+    [[nodiscard]] std::size_t needed_input_bytes() const noexcept;
     [[nodiscard]] websocket_output_plan output_plan() const& noexcept;
     websocket_output_plan output_plan() const&& = delete;
     [[nodiscard]] websocket_output_consume_status consume_output(std::size_t bytes) noexcept;
@@ -74,6 +77,10 @@ public:
     // compression history. It can be retried unless resetting the codec also
     // failed, in which case liveness_mode() reports inactive.
     [[nodiscard]] websocket_frame_submit_status submit_frame(
+        websocket_opcode opcode, std::string_view payload, bool compress = true);
+    // submit_frame() without copying an uncompressed, unmasked payload:
+    // output_plan() exposes it as borrowed_bytes() after the frame header.
+    [[nodiscard]] websocket_frame_submit_status submit_borrowed_frame(
         websocket_opcode opcode, std::string_view payload, bool compress = true);
     [[nodiscard]] websocket_close_submit_status submit_close(
         std::uint16_t code, std::string_view reason);

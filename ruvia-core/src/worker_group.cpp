@@ -33,6 +33,27 @@ void worker_group::add(worker_runtime& member) {
     }
 }
 
+void worker_group::launch() {
+    {
+        const std::lock_guard lock(mutex_);
+        if (sealed_) {
+            throw std::logic_error("worker group can only be started once");
+        }
+        sealed_ = true;
+    }
+    try {
+        for (auto* member : members_) {
+            if (!launch(*member)) {
+                return;
+            }
+        }
+    } catch (...) {
+        const auto launch_failure = std::current_exception();
+        (void)join(launch_failure);
+        std::rethrow_exception(launch_failure);
+    }
+}
+
 bool worker_group::start() {
     {
         const std::lock_guard lock(mutex_);

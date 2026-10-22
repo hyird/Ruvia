@@ -93,7 +93,7 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
         compressed_chunked.expectation_plan(http_unsupported_expectation_policy::reject);
     RUVIA_CHECK(compressed_expectation_plan.send_continue() != nullptr);
     if (chunked_body != nullptr) {
-        RUVIA_CHECK_EQ(chunked_body->transfer_codings().values_.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(chunked_body->transfer_codings().size(), std::size_t{1});
     }
 }
 

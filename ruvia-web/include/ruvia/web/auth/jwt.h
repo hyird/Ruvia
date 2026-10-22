@@ -9,10 +9,10 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/pmr_resource.h"
@@ -33,53 +33,63 @@ enum class jwt_expiration_claim_policy : std::uint8_t {
     allow_missing,
 };
 
-struct jwt_claim_options final {
+class jwt_error final : public std::runtime_error {
+public:
+    enum class code_type : std::uint8_t {
+        malformed_token,
+        invalid_header,
+        invalid_payload,
+        signature_mismatch,
+        algorithm_mismatch,
+        expired,
+        not_yet_valid,
+        missing_claim,
+        claim_mismatch
+    };
+
+    jwt_error(code_type code, std::string_view message)
+        : std::runtime_error(std::string(message)),
+          code_(code) {}
+
+    [[nodiscard]] code_type code() const noexcept {
+        return code_;
+    }
+
+private:
+    code_type code_;
+};
+
+struct jwt_claim_view final {
     borrowed_text name_{};
     borrowed_text value_{};
 };
 
 class jwt_claim final {
 public:
-    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
-    jwt_claim(const jwt_claim& other, allocator_type allocator);
-    jwt_claim(jwt_claim&& other, allocator_type allocator);
-    jwt_claim(const jwt_claim&) = default;
-    jwt_claim& operator=(const jwt_claim&) = default;
+    jwt_claim(const jwt_claim&) = delete;
+    jwt_claim& operator=(const jwt_claim&) = delete;
     jwt_claim(jwt_claim&&) noexcept = default;
-    jwt_claim& operator=(jwt_claim&&) = default;
-
-    explicit jwt_claim(jwt_claim_options options)
-        : name_(std::in_place_type<std::string>, options.name_.view()),
-          value_(std::in_place_type<std::string>, options.value_.view()) {}
+    jwt_claim& operator=(jwt_claim&&) = delete;
 
     [[nodiscard]] std::string_view name() const& noexcept {
-        return text(name_);
+        return name_;
     }
     [[nodiscard]] std::string_view name() const&& = delete;
 
     [[nodiscard]] std::string_view value() const& noexcept {
-        return text(value_);
+        return value_;
     }
     [[nodiscard]] std::string_view value() const&& = delete;
 
 private:
     friend struct detail::jwt_payload_access;
 
-    struct owned_tag_type final {};
+    jwt_claim(std::pmr::string name, std::pmr::string value) noexcept
+        : name_(std::move(name)),
+          value_(std::move(value)) {}
 
-    jwt_claim(owned_tag_type, std::pmr::string name, std::pmr::string value) noexcept
-        : name_(std::in_place_type<std::pmr::string>, std::move(name)),
-          value_(std::in_place_type<std::pmr::string>, std::move(value)) {}
-
-    using text_type = std::variant<std::string, std::pmr::string>;
-
-    [[nodiscard]] static std::string_view text(const text_type& value) noexcept {
-        return std::visit(
-            [](const auto& stored) noexcept { return std::string_view(stored); }, value);
-    }
-
-    text_type name_;
-    text_type value_;
+    std::pmr::string name_;
+    std::pmr::string value_;
 };
 
 struct jwt_sign_options final {
@@ -87,13 +97,13 @@ struct jwt_sign_options final {
     // Raw key bytes: at least 32/48/64 bytes for HS256/HS384/HS512 (RFC 7518).
     // Use cryptographically random keys; byte length alone is not entropy.
     borrowed_text secret_{};
-    std::string issuer_{};
-    std::string subject_{};
-    std::string audience_{};
-    std::string id_{};
+    borrowed_text issuer_{};
+    borrowed_text subject_{};
+    borrowed_text audience_{};
+    borrowed_text id_{};
     std::optional<std::chrono::seconds> expires_in_{std::chrono::hours(1)};
     std::optional<std::chrono::seconds> not_before_delay_{};
-    std::vector<jwt_claim> claims_{};
+    std::span<const jwt_claim_view> claims_{};
     std::pmr::memory_resource* resource_{nullptr};
 };
 
@@ -102,12 +112,12 @@ struct jwt_verify_options final {
     jwt_algorithm algorithm_{jwt_algorithm::hs256};
     // Same raw-key requirements as jwt_sign_options::secret.
     borrowed_text secret_{};
-    std::string issuer_{};
-    std::string subject_{};
+    borrowed_text issuer_{};
+    borrowed_text subject_{};
     // The audience this verifier identifies itself with. A token that carries
     // "aud" is rejected unless this value is one of its audiences (RFC 7519
     // §4.1.3); when empty, any token that carries "aud" is rejected.
-    std::string audience_{};
+    borrowed_text audience_{};
     std::chrono::seconds leeway_{0};
     jwt_expiration_claim_policy expiration_claim_{jwt_expiration_claim_policy::require};
     std::pmr::memory_resource* resource_{nullptr};
@@ -124,13 +134,10 @@ struct jwt_payload_options final {
 
 class jwt_payload final {
 public:
-    jwt_payload(const jwt_payload& other);
-    jwt_payload& operator=(const jwt_payload& other);
+    jwt_payload(const jwt_payload&) = delete;
+    jwt_payload& operator=(const jwt_payload&) = delete;
     jwt_payload(jwt_payload&&) noexcept = default;
-    // Assignment keeps the destination resource, including all nested claims.
-    // Rebinding may allocate; failure leaves both payloads unchanged.
-    jwt_payload& operator=(jwt_payload&& other);
-
+    jwt_payload& operator=(jwt_payload&&) = delete;
     [[nodiscard]] std::string_view issuer() const& noexcept;
     [[nodiscard]] std::string_view issuer() const&& = delete;
     [[nodiscard]] std::string_view subject() const& noexcept;
@@ -157,9 +164,6 @@ private:
     friend jwt_payload jwt_verify(const jwt_verify_options&);
 
     explicit jwt_payload(jwt_payload_options options);
-    jwt_payload(const jwt_payload& other, std::pmr::memory_resource* resource);
-    jwt_payload(jwt_payload&& other, std::pmr::memory_resource* resource);
-    void swap_values(jwt_payload& other) noexcept;
 
     std::pmr::string issuer_;
     std::pmr::string subject_;

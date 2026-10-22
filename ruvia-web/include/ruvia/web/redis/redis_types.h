@@ -307,8 +307,8 @@ private:
 // the same resource transfer storage without allocation.
 class redis_scan_result final {
 public:
-    redis_scan_result(const redis_scan_result&) = default;
-    redis_scan_result& operator=(const redis_scan_result&) = default;
+    redis_scan_result(const redis_scan_result&) = delete;
+    redis_scan_result& operator=(const redis_scan_result&) = delete;
     redis_scan_result(redis_scan_result&&) noexcept = default;
     redis_scan_result& operator=(redis_scan_result&& other);
 
@@ -337,8 +337,8 @@ private:
 
 class redis_hash_scan_result final {
 public:
-    redis_hash_scan_result(const redis_hash_scan_result&) = default;
-    redis_hash_scan_result& operator=(const redis_hash_scan_result&) = default;
+    redis_hash_scan_result(const redis_hash_scan_result&) = delete;
+    redis_hash_scan_result& operator=(const redis_hash_scan_result&) = delete;
     redis_hash_scan_result(redis_hash_scan_result&&) noexcept = default;
     redis_hash_scan_result& operator=(redis_hash_scan_result&& other);
 
@@ -367,8 +367,8 @@ private:
 
 class redis_z_scan_result final {
 public:
-    redis_z_scan_result(const redis_z_scan_result&) = default;
-    redis_z_scan_result& operator=(const redis_z_scan_result&) = default;
+    redis_z_scan_result(const redis_z_scan_result&) = delete;
+    redis_z_scan_result& operator=(const redis_z_scan_result&) = delete;
     redis_z_scan_result(redis_z_scan_result&&) noexcept = default;
     redis_z_scan_result& operator=(redis_z_scan_result&& other);
 
@@ -464,8 +464,8 @@ private:
 
 class redis_x_read_group_result final {
 public:
-    redis_x_read_group_result(const redis_x_read_group_result&) = default;
-    redis_x_read_group_result& operator=(const redis_x_read_group_result&) = default;
+    redis_x_read_group_result(const redis_x_read_group_result&) = delete;
+    redis_x_read_group_result& operator=(const redis_x_read_group_result&) = delete;
     redis_x_read_group_result(redis_x_read_group_result&&) noexcept = default;
     redis_x_read_group_result& operator=(redis_x_read_group_result&& other);
 

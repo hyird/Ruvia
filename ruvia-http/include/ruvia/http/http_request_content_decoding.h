@@ -59,7 +59,7 @@ private:
 
 // Request decoding is role-specific: success, an HTTP protocol failure, and an
 // internal decoder failure are mutually exclusive alternatives. Client
-// response decoding keeps using the role-neutral http_content_decode_result.
+// response decoding keeps using the role-neutral decode_http_content().
 class http_request_content_decode_result final {
 public:
     http_request_content_decode_result(const http_request_content_decode_result&) = delete;
@@ -67,14 +67,14 @@ public:
     http_request_content_decode_result(http_request_content_decode_result&&) noexcept = default;
     http_request_content_decode_result& operator=(http_request_content_decode_result&&) = delete;
 
-    [[nodiscard]] http_decoded_content* decoded() & noexcept {
-        return std::get_if<http_decoded_content>(&value_);
+    [[nodiscard]] std::pmr::string* decoded() & noexcept {
+        return std::get_if<std::pmr::string>(&value_);
     }
-    [[nodiscard]] const http_decoded_content* decoded() const& noexcept {
-        return std::get_if<http_decoded_content>(&value_);
+    [[nodiscard]] const std::pmr::string* decoded() const& noexcept {
+        return std::get_if<std::pmr::string>(&value_);
     }
-    http_decoded_content* decoded() && = delete;
-    const http_decoded_content* decoded() const&& = delete;
+    std::pmr::string* decoded() && = delete;
+    const std::pmr::string* decoded() const&& = delete;
 
     [[nodiscard]] const http_request_content_decode_protocol_failure* protocol_failure() const& noexcept {
         return std::get_if<http_request_content_decode_protocol_failure>(&value_);
@@ -90,10 +90,10 @@ private:
     friend http_request_content_decode_result decode_http_request_content(
         std::span<const http_content_coding>, std::string_view, http_content_decode_options);
 
-    using value_type = std::variant<http_decoded_content, http_request_content_decode_protocol_failure,
+    using value_type = std::variant<std::pmr::string, http_request_content_decode_protocol_failure,
         http_request_content_decoder_failure>;
 
-    explicit http_request_content_decode_result(http_decoded_content decoded) noexcept
+    explicit http_request_content_decode_result(std::pmr::string decoded) noexcept
         : value_(std::move(decoded)) {}
 
     explicit http_request_content_decode_result(http_content_decode_error error) noexcept
@@ -114,16 +114,13 @@ private:
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_decode_options options) {
     auto result_value = decode_http_content(codings, input, options);
-    if (auto* decoded = result_value.decoded()) {
+    if (auto* decoded = std::get_if<std::pmr::string>(&result_value)) {
         return http_request_content_decode_result(std::move(*decoded));
     }
-    if (const auto* failure = result_value.failure()) {
-        if (failure->error() == http_content_decode_error::decoder_failure) {
-            return http_request_content_decode_result::make_decoder_failure();
-        }
-        return http_request_content_decode_result(failure->error());
+    const auto error = std::get<http_content_decode_error>(result_value);
+    if (error == http_content_decode_error::decoder_failure) {
+        return http_request_content_decode_result::make_decoder_failure();
     }
-    throw std::logic_error("unexpected HTTP content decode result");
+    return http_request_content_decode_result(error);
 }
-
 }  // namespace ruvia

@@ -66,18 +66,18 @@ constexpr std::array compressing_codings{http_content_coding::gzip, http_content
 
 [[nodiscard]] std::string one_shot(http_content_coding coding, std::string_view input, std::size_t cap) {
     const auto result_value = encode_http_content(coding, input, {.max_encoded_bytes_ = cap});
-    const auto* encoded = result_value.encoded();
-    return encoded != nullptr ? std::string(encoded->bytes()) : std::string();
+    const auto* encoded = std::get_if<std::pmr::string>(&result_value);
+    return encoded != nullptr ? std::string(*encoded) : std::string();
 }
 
 [[nodiscard]] std::optional<std::string> encode_with(http_content_encode_context& context,
     std::string_view input, std::size_t cap, std::pmr::memory_resource* output_resource = nullptr) {
     auto result_value = context.encode(input, {.max_encoded_bytes_ = cap, .resource_ = output_resource});
-    const auto* encoded = result_value.encoded();
+    const auto* encoded = std::get_if<std::pmr::string>(&result_value);
     if (encoded == nullptr) {
         return std::nullopt;
     }
-    return std::string(encoded->bytes());
+    return std::string(*encoded);
 }
 
 }  // namespace
@@ -100,9 +100,9 @@ RUVIA_TEST(http_content_encode_context_reuse_matches_one_shot_bytes) {
                 RUVIA_CHECK(actual.value_or(std::string()) == expected);
                 const auto decoded =
                     decode_http_content(coding, actual.value_or(std::string()), {.max_decoded_bytes_ = size});
-                RUVIA_CHECK(decoded.decoded() != nullptr);
-                if (const auto* content = decoded.decoded()) {
-                    RUVIA_CHECK(content->bytes() == input);
+                RUVIA_CHECK(std::holds_alternative<std::pmr::string>(decoded));
+                if (const auto* content = std::get_if<std::pmr::string>(&decoded)) {
+                    RUVIA_CHECK(std::string_view(*content) == input);
                 }
             }
         }
@@ -122,10 +122,10 @@ RUVIA_TEST(http_content_encode_context_keeps_state_apart_from_output) {
             {
                 auto result_value =
                     context.encode(input, {.max_encoded_bytes_ = input.size(), .resource_ = &output_resource});
-                RUVIA_CHECK(result_value.encoded() != nullptr);
+                RUVIA_CHECK(std::holds_alternative<std::pmr::string>(result_value));
                 RUVIA_CHECK(output_resource.live_bytes() != 0);
-                if (const auto* encoded = result_value.encoded()) {
-                    first.emplace(encoded->bytes());
+                if (const auto* encoded = std::get_if<std::pmr::string>(&result_value)) {
+                    first.emplace(*encoded);
                 }
             }
             RUVIA_CHECK_EQ(output_resource.live_bytes(), 0U);
@@ -155,9 +155,9 @@ RUVIA_TEST(http_content_encode_context_resets_after_a_failed_encode) {
 
         // Stop mid-stream on the output cap.
         const auto capped = context.encode(failed_input, {.max_encoded_bytes_ = 64});
-        RUVIA_CHECK(capped.failure() != nullptr);
-        if (const auto* failure = capped.failure()) {
-            RUVIA_CHECK(failure->error() == http_content_encode_error::encoded_size_exceeded);
+        RUVIA_CHECK(std::holds_alternative<http_content_encode_error>(capped));
+        if (const auto* failure = std::get_if<http_content_encode_error>(&capped)) {
+            RUVIA_CHECK(*failure == http_content_encode_error::encoded_size_exceeded);
         }
         RUVIA_CHECK(encode_with(context, next_input, next_input.size()) == expected);
 
@@ -205,6 +205,6 @@ RUVIA_TEST(http_content_encode_context_identity_follows_the_one_shot_contract) {
     http_content_encode_context context(http_content_coding::identity, &state_resource);
     RUVIA_CHECK(encode_with(context, "plain", 5) == std::optional<std::string>("plain"));
     const auto oversized = context.encode("plain", {.max_encoded_bytes_ = 4});
-    RUVIA_CHECK(oversized.failure() != nullptr);
+    RUVIA_CHECK(std::holds_alternative<http_content_encode_error>(oversized));
     RUVIA_CHECK_EQ(state_resource.allocations(), 0U);
 }

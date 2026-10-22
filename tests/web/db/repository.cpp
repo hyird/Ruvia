@@ -169,7 +169,7 @@ RUVIA_TEST(db_repository_update_builder_owns_complex_conditions_and_cross_table_
         patch.set<"name">("next");
         const auto condition = x.binary(x.column("name"), db_binary_operator::is_distinct_from, x.value("next"));
         auto ordinary = repository.update(condition, patch);
-        auto returned = repository.update_returning(condition, patch);
+        auto returned = repository.create_update_builder().set(patch).where(condition).returning().get_many();
         auto expression_update = repository.update(condition, {{"name", x.value("next")}});
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.update(db_expression{}, patch); }));
         auto unbounded = repository.create_update_builder();
@@ -214,7 +214,7 @@ RUVIA_TEST(db_repository_write_ctes_claim_and_persist_in_one_statement) {
                 {
                     db_query x(&source);
                     auto candidates = repository.create_query_builder("c");
-                    candidates.where(entity_type::column<"name">() == "pending").order_by("id").take(10).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
+                    candidates.where(entity_type::column<"name">() == "pending").order_by("id").limit(10).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
                     auto claim = repository.create_update_builder("t");
                     claim.update_from_cte("candidates", "c")
                         .set("name", x.value(std::string(300, 'x')))
@@ -294,7 +294,7 @@ RUVIA_TEST(db_repository_composes_entity_joins_lateral_cte_and_grouped_queries) 
             builder.with("recent", source_value, {.materialization_ = db_materialization::materialized});
             builder.join_cte(db_join_type::inner, "recent", "r", x.binary(x.column("id", "i"), db_binary_operator::equal, x.column("id", "r")));
             auto correlated = repository.create_query_builder("c");
-            correlated.where(x.binary(x.column("id", "c"), db_binary_operator::equal, x.column("id", "i"))).take(1);
+            correlated.where(x.binary(x.column("id", "c"), db_binary_operator::equal, x.column("id", "i"))).limit(1);
             builder.join(db_join_type::left, correlated, "l", x.value(true), {.lateral_ = true});
             builder.join<entity_type>(db_join_type::cross, "other");
             builder.select({{"id"}, {"rank", x.aggregate("count", {x.star()})}});
@@ -339,7 +339,11 @@ RUVIA_TEST(db_repository_expression_writes_own_sources_and_validate_returning) {
         entity_type entity;
         entity.set<"id">(8);
         entity.set<"name">("initial");
-        RUVIA_CHECK(testing::throws_on([&] { (void)repository.insert_returning<item_summary>(entity); }));
+        RUVIA_CHECK(testing::throws_on([&] {
+            auto bad = repository.create_insert_builder(entity);
+            bad.returning();
+            (void)bad.get_many<item_summary>();
+        }));
         auto where = entity_type::column<"id">() == 8;
         for (int i = 0; i < 12; ++i) {
             {
@@ -347,15 +351,17 @@ RUVIA_TEST(db_repository_expression_writes_own_sources_and_validate_returning) {
                     db_query x(&source);
                     const std::array changes{db_assignment{"name", x.call("concat", {x.column("name"), x.value(std::string(400, 'z'))})}};
                     const std::array fields_value{db_selection{"id"}, db_selection{"label", x.call("upper", {x.column("name")})}};
-                    return repository.update_returning<item_summary>(where, changes, fields_value);
+                    auto builder = repository.create_update_builder();
+                    builder.set(changes).where(where).returning(fields_value);
+                    return builder.get_many<item_summary>();
                 }();
                 RUVIA_CHECK_EQ(source.live_allocations(), std::size_t{0});
-                auto insert = repository.insert_returning(entity);
-                auto erase = repository.delete_returning(where);
-                auto plain_update = repository.update_returning(where, entity);
+                auto insert = repository.create_insert_builder(entity).returning().get_many();
+                auto erase = repository.create_delete_builder().where(where).returning().get_many();
+                auto plain_update = repository.create_update_builder().set(entity).where(where).returning().get_many();
                 db_query x;
                 db_upsert_options options{.conflict_paths_ = {"id"}, .skip_update_if_no_values_changed_ = true, .update_expressions_ = {{"name", x.call("concat", {x.excluded("name"), x.value("suffix")})}}, .update_where_ = x.binary(x.column("id", "items"), db_binary_operator::greater, x.value(0))};
-                auto upsert = repository.upsert_returning(entity, options);
+                auto upsert = repository.create_insert_builder(entity).on_conflict(options).returning().get_many();
                 auto direct_result = repository.update(where, {{"name", x.value("replacement")}});
                 RUVIA_CHECK(testing::throws_on([&] { (void)repository.update(where, {{"missing", x.value(1)}}); }));
                 RUVIA_CHECK(testing::throws_on([&] { (void)repository.update(where, {{"id", x.value(1)}, {"id", x.value(2)}}); }));
@@ -375,7 +381,7 @@ RUVIA_TEST(db_repository_builder_binds_entity_predicates_to_join_alias) {
         auto repository = client.handle().get_repository<entity_type>();
         auto builder = repository.create_query_builder("i");
         builder.where(entity_type::column<"id">() >= 7).and_where(entity_type::column<"name">() == std::string("temporary"));
-        builder.order_by("id").take(3);
+        builder.order_by("id").limit(3);
         const auto statement = builder.get_query_and_parameters();
         if (config.driver_ == db_driver::postgresql) {
             RUVIA_CHECK_EQ(statement.sql(), "SELECT \"i\".\"id\", \"i\".\"name\" FROM \"items\" AS \"i\" WHERE ((\"i\".\"id\" >= $1) AND (\"i\".\"name\" = $2)) ORDER BY \"i\".\"id\" ASC LIMIT $3");
@@ -493,8 +499,8 @@ RUVIA_TEST(db_repository_builder_orders_entity_fields_and_owns_predicates) {
             .or_where(entity_type::column<"id">() == 2)
             .order_by("name", db_order_direction::desc, db_nulls_order::last)
             .add_order_by("id", db_order_direction::asc, db_nulls_order::first)
-            .skip(2)
-            .take(3);
+            .offset(2)
+            .limit(3);
         builder.cache("builder-page", std::chrono::seconds(5));
         const auto statement = builder.get_query_and_parameters();
         const auto sql = statement.sql();
@@ -717,7 +723,7 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
                 .conflict_paths_ = {"id"},
                 .skip_update_if_no_values_changed_ = true,
                 .update_expressions_ = {trigger_populated_entity::column<"revision">().increment(1)},
-                .update_predicate_ = trigger_populated_entity::column<"revision">() < 100,
+                .update_where_ = trigger_populated_entity::column<"revision">() < 100,
             })
             .returning({{"id"}});
         const auto pipeline_sql = pipeline.get_query_and_parameters();
@@ -750,14 +756,15 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
             "DELETE FROM \"devices\" AS \"d\" USING \"roles\" AS \"r\" INNER JOIN \"expired\" AS \"e\" ON (\"r\".\"id\" = \"e\".\"id\") "
             "WHERE (\"d\".\"id\" = \"r\".\"id\") RETURNING \"d\".\"id\" AS \"id\"");
 
-        auto ret_one = devices.update_returning_one<item_summary>(
-            trigger_populated_entity::column<"id">() == 1,
-            {
+        auto ret_one_builder = devices.create_update_builder();
+        ret_one_builder.where(trigger_populated_entity::column<"id">() == 1)
+            .set({
                 trigger_populated_entity::column<"name">() = "next",
                 trigger_populated_entity::column<"revision">() += 1,
                 trigger_populated_entity::column<"updated_at">().set_now(),
-            },
-            {{"id"}, trigger_populated_entity::column<"name">().coalesce("", "label"), {"rank", trigger_populated_entity::column<"revision">().select().expression()}});
+            })
+            .returning({{"id"}, trigger_populated_entity::column<"name">().coalesce("", "label"), {"rank", trigger_populated_entity::column<"revision">()}});
+        auto ret_one = ret_one_builder.get_one<item_summary>();
         (void)ret_one;
         co_return;
     });
@@ -781,10 +788,7 @@ RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_jo
             .add_select("views")
             .add_select(db_expr::count(), "total_count")
             .where(soft_entity::column<"views">() >= 10)
-            .and_where([](db_where_builder& sub) {
-                sub.where(soft_entity::column<"title">().ilike("%ruvia%"))
-                    .or_where(soft_entity::column<"id">() == 1);
-            })
+            .and_where(soft_entity::column<"title">().ilike("%ruvia%") || (soft_entity::column<"id">() == 1))
             .group_by({"id", "title", "views"})
             .having(soft_entity::column<"views">() > 0)
             .or_having(soft_entity::column<"id">() == 1)
@@ -825,51 +829,32 @@ RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_jo
         item.set<"id">(1);
         item.set<"title">("Ruvia ORM");
         item.set<"views">(100);
-        auto ins_ignore = repo.create_query_builder().insert();
+        auto ins_ignore = repo.create_insert_builder();
         ins_ignore.values(item).or_ignore().returning({"id"});
         const auto ins_ignore_sql = ins_ignore.get_query_and_parameters();
         RUVIA_CHECK_EQ(ins_ignore_sql.sql(),
             "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING \"articles\".\"id\" AS \"id\"");
 
-        auto ins_update = repo.create_query_builder().insert();
+        auto ins_update = repo.create_insert_builder();
         ins_update.values(item).or_update({"title", "views"}, {"id"}).returning({"id"});
         const auto ins_update_sql = ins_update.get_query_and_parameters();
         RUVIA_CHECK_EQ(ins_update_sql.sql(),
             "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT (\"id\") DO UPDATE SET \"title\" = excluded.\"title\", \"views\" = excluded.\"views\" RETURNING \"articles\".\"id\" AS \"id\"");
-
-        auto soft_del_qb = repo.create_query_builder("a").soft_delete();
-        soft_del_qb.where(soft_entity::column<"id">() == 1);
-        const auto soft_del_sql = soft_del_qb.get_query_and_parameters();
-        RUVIA_CHECK_EQ(soft_del_sql.sql(),
-            "UPDATE \"articles\" AS \"a\" SET \"deleted_at\" = \"now\"(), \"updated_at\" = \"now\"(), \"revision\" = (\"a\".\"revision\" + $1) WHERE (\"a\".\"id\" = $2)");
-
-        auto restore_qb = repo.create_query_builder("a").restore();
-        restore_qb.where(soft_entity::column<"id">() == 1);
-        const auto restore_sql = restore_qb.get_query_and_parameters();
-        RUVIA_CHECK_EQ(restore_sql.sql(),
-            "UPDATE \"articles\" AS \"a\" SET \"deleted_at\" = NULL, \"updated_at\" = \"now\"() WHERE (\"a\".\"id\" = $1)");
         {
-            auto op1 = repo.find_by(soft_entity::column<"id">() == 1);
-            auto op2 = repo.find_one_by(soft_entity::column<"id">() == 1);
-            auto op3 = repo.find_and_count_by(soft_entity::column<"id">() == 1);
-            auto op4 = repo.count_by(soft_entity::column<"id">() == 1);
-            auto op5 = repo.exists_by(soft_entity::column<"id">() == 1);
+            auto op1 = repo.find({.where_ = soft_entity::column<"id">() == 1});
+            auto op2 = repo.find_one({.where_ = soft_entity::column<"id">() == 1});
+            auto op3 = repo.find_and_count({.where_ = soft_entity::column<"id">() == 1});
+            auto op4 = repo.count({.where_ = soft_entity::column<"id">() == 1});
+            auto op5 = repo.exists({.where_ = soft_entity::column<"id">() == 1});
             auto op6 = repo.save(item);
             auto op7 = repo.soft_delete(soft_entity::column<"id">() == 1);
             auto op8 = repo.restore(soft_entity::column<"id">() == 1);
-            auto op9 = repo.sum("views", soft_entity::column<"id">() == 1);
-            auto op10 = repo.average("views");
-            auto op11 = repo.minimum("views");
-            auto op12 = repo.maximum("views");
             auto op13 = repo.clear();
-            auto op14 = active_qb.get_raw_one();
             auto op15 = active_qb.get_raw_many();
             auto op16 = rel_join.get_raw_and_entities();
             auto op17 = active_qb.get_scalar<std::int64_t>();
             auto op18 = active_qb.get_scalars<std::int64_t>();
             auto op19 = ins_update.get_scalar<std::int64_t>();
-            auto op20 = repo.insert_returning_scalar<std::int64_t>(item, "id");
-            auto op21 = repo.update_returning_scalar<std::int64_t>(soft_entity::column<"id">() == 1, item, "revision");
             (void)op1;
             (void)op2;
             (void)op3;
@@ -878,19 +863,12 @@ RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_jo
             (void)op6;
             (void)op7;
             (void)op8;
-            (void)op9;
-            (void)op10;
-            (void)op11;
-            (void)op12;
             (void)op13;
-            (void)op14;
             (void)op15;
             (void)op16;
             (void)op17;
             (void)op18;
             (void)op19;
-            (void)op20;
-            (void)op21;
         }
         co_return;
     });
@@ -914,7 +892,8 @@ RUVIA_TEST(db_postgresql_declares_float8_for_doubles_and_leaves_other_parameters
         // Untyped, json_build_object's variadic "any" arguments cannot be resolved.
         db_query query;
         query.select(query.call("json_build_object", {query.value("k"), query.value(5)})).from("records");
-        (void)co_await handle.query(query);
+        const auto compiled = query.compile(db_driver::postgresql, nullptr);
+        (void)co_await handle.query(compiled.sql(), compiled.params());
     });
     const auto statements = peer.postgres_parses();
     RUVIA_CHECK_EQ(statements.size(), std::size_t{2});
@@ -953,11 +932,10 @@ RUVIA_TEST(db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_val
         (void)co_await std::move(operation);
         // A compiled value is checked by the driver before it reaches the wire.
         const std::string invalid_text("a\0b", 3);
-        db_query invalid;
-        invalid.select(invalid.value(std::string_view(invalid_text))).from("records");
+        const std::array invalid_params{db_value{std::string_view(invalid_text)}};
         bool rejected = false;
         try {
-            (void)co_await handle.query(invalid);
+            (void)co_await handle.query("SELECT $1", invalid_params);
         } catch (const std::invalid_argument&) {
             rejected = true;
         }

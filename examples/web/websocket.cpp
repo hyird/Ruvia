@@ -32,12 +32,12 @@ public:
             },
     };
     RUVIA_GET_WS("/echo", echo);
-    RUVIA_GET_WS_OPTIONS("/chat", chat, chat_options);
+    RUVIA_GET_WS("/chat", chat, chat_options);
     RUVIA_ROUTES_END
 
 private:
     ruvia::task<void> echo(ruvia::context& c) {
-        auto& ws = c.get_websocket();
+        auto& ws = c.websocket();
         while (auto message = co_await ws.read()) {
             // Zero-copy echo: the frame borrows the read buffer and keeps the
             // read lane until it is written, preserving the message opcode.
@@ -46,7 +46,7 @@ private:
     }
 
     ruvia::task<void> chat(ruvia::context& c) {
-        auto& ws = c.get_websocket();
+        auto& ws = c.websocket();
         co_await ws.text("welcome");
         while (auto message = co_await ws.read()) {
             if (message->text()) {

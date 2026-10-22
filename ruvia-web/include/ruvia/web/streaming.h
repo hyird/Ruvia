@@ -22,7 +22,17 @@
 namespace ruvia {
 
 class context;
+class next;
 
+// Route-level policy declaration that switches the matched route's request body
+// from buffered to streamed (read via c.req().body_reader() or
+// c.req().multipart_reader()). May be combined with either a buffered-response
+// handler (task<http_response>) or a streaming-response handler (task<void>).
+struct stream_body final {
+    static constexpr bool ruvia_stream_request_body = true;
+
+    task<void> handle(context&, next& next_value);
+};
 namespace detail {
 struct streaming_access;
 }
@@ -114,7 +124,7 @@ public:
     /// 显式将 HTTP/1 peer EOF（包括合法的 TCP 写半关闭）视为放弃当前响应。
     /// 仅在请求体完整消费后可启用，否则抛出 std::logic_error；不主动读取或丢弃请求体。
     /// 返回与请求取消组合的 token，供订阅、数据库等异步等待使用；sleep() 也观察它。
-    /// 不改变 context::get_stop_token() 或此前复制的 token。HTTP/2 只观察当前流终止。
+    /// 不改变 context::stop_token() 或此前复制的 token。HTTP/2 只观察当前流终止。
     /// 检测由连接 owner 管理，响应结束前取消并等待其完成。后续请求字节完整保留；
     /// 读前探缓冲达到既有请求头上限时暂停检测，不为探测分配无界存储。
     /// 默认不开启；FIN 无法区分关闭整个客户端与仅关闭发送方向。

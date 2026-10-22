@@ -107,7 +107,7 @@ task<void> query_example(db_client& db) {
     auto builder = employees.create_query_builder("employee");
     builder.left_join_and_select("department", "department")
         .left_join_and_select("department.employees", "colleague")
-        .take(25);
+        .limit(25);
     auto [joined, joined_total] = co_await builder.get_many_and_count();
     if (rows.size() < 2 || joined.size() < 2 || total != 3 || joined_total != 3) {
         throw std::runtime_error("relation example expected at least two employees");
@@ -179,7 +179,7 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
             throw std::runtime_error("findOne did not preserve the complete collection");
         }
         auto next_page = departments.create_query_builder("d");
-        next_page.left_join_and_select("d.employees", "e").order_by("id").skip(1).take(1);
+        next_page.left_join_and_select("d.employees", "e").order_by("id").offset(1).limit(1);
         auto second = co_await next_page.get_one();
         if (!second || second->get<"id">() != 2 || second->get<"employees">().size() != 1) {
             throw std::runtime_error("relation query offset did not page departments");

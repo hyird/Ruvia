@@ -147,8 +147,8 @@ db_rows decode_db_cache_rows(std::string_view bytes_value, std::pmr::memory_reso
             }
         }
         // The field storage was reserved up front, so borrowed rows stay valid.
-        rows.push_back(db_result_access::borrowed_row(fields_value.data() + row_start,
-            static_cast<std::size_t>(columns), names.data(), names.size(), resource));
+        rows.push_back(db_result_access::borrowed_row(
+            fields_value.data() + row_start, static_cast<std::size_t>(columns), names.data(), names.size()));
     }
     if (!reader_value.bytes_.empty()) {
         invalid_cache();

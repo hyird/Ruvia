@@ -17,13 +17,13 @@
 
 namespace ruvia {
 
-class worker_runtime::impl final {
+class worker_runtime::impl_type final {
 public:
     enum class phase_type : std::uint8_t { pending,
         reached,
         aborted };
 
-    explicit impl(worker_runtime_options options)
+    explicit impl_type(worker_runtime_options options)
         : io_context_(options.io_policy_ == worker_io_policy::single_owner
                           ? ASIO_CONCURRENCY_HINT_UNSAFE_IO
                           : ASIO_CONCURRENCY_HINT_DEFAULT),
@@ -359,12 +359,12 @@ public:
     std::size_t group_notifications_{0};
 };
 
-void worker_runtime::impl_deleter::operator()(impl* value) const noexcept {
+void worker_runtime::impl_deleter::operator()(impl_type* value) const noexcept {
     destroy_pmr_object(value, process_resource());
 }
 
 worker_runtime::worker_runtime(worker_runtime_options options)
-    : impl_(construct_pmr_object<impl>(process_resource(), options)) {}
+    : impl_(construct_pmr_object<impl_type>(process_resource(), options)) {}
 
 worker_runtime::~worker_runtime() {
     impl_->request_stop();
@@ -440,8 +440,15 @@ runtime_lifecycle::state_type worker_runtime::state() const noexcept {
     return impl_->lifecycle_.state();
 }
 
+asio::io_context& worker_runtime::io_context() noexcept {
+    return impl_->io_context_;
+}
+
+const worker_handle& worker_runtime::handle() const noexcept {
+    return impl_->context_.handle();
+}
+
 worker_runtime_context& worker_runtime::context() & noexcept {
     return impl_->context_;
 }
-
 }  // namespace ruvia

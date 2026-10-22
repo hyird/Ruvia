@@ -76,25 +76,24 @@ void decode_http_client_response_body(http_client_response_state& state_value,
         const auto decoded_limit = std::min(max_decoded_bytes, state_value.buffered_limit_);
         auto decoded = decode_http_content(
             parsed_coding.codings(), encoded, {.max_decoded_bytes_ = decoded_limit, .resource_ = resource});
-        if (auto* content = decoded.decoded()) {
-            auto decoded_body = std::move(*content).take_bytes();
+        if (auto* decoded_body = std::get_if<std::pmr::string>(&decoded)) {
             std::pmr::string empty_buffered(state_value.resource_);
             std::pmr::string empty_pending(state_value.resource_);
             state_value.buffered_.swap(empty_buffered);
             state_value.pending_.swap(empty_pending);
-            state_value.buffered_.swap(decoded_body);
+            state_value.buffered_.swap(*decoded_body);
             state_value.offset_ = 0;
             state_value.body_decode_required_ = false;
             state_value.content_coding_.reset();
             state_value.notify_producer_space();
             return;
         }
-        const auto* failure = decoded.failure();
-        if (failure != nullptr && failure->error() == http_content_decode_error::decoded_size_exceeded) {
+        const auto* failure = std::get_if<http_content_decode_error>(&decoded);
+        if (failure != nullptr && *failure == http_content_decode_error::decoded_size_exceeded) {
             throw http_client_error(http_client_error::code_type::response_too_large,
                 "HTTP response exceeds configured byte limit");
         }
-        if (failure != nullptr && failure->error() == http_content_decode_error::decoder_failure) {
+        if (failure != nullptr && *failure == http_content_decode_error::decoder_failure) {
             throw http_client_error(http_client_error::code_type::protocol_error,
                 "HTTP response content-coding decoder failed");
         }

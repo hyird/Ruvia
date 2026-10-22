@@ -158,7 +158,7 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
 class http1_interim_routes final {
     RUVIA_ROUTES_BEGIN(http1_interim_routes)
     RUVIA_GET("/http1-early-hints", hints);
-    RUVIA_GET_STREAM("/http1-cold-hints", cold_hints);
+    RUVIA_GET("/http1-cold-hints", cold_hints);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> hints(ruvia::context& context_value) {

@@ -1,7 +1,7 @@
 // Typed models and validation: rules live on model fields; routes select the
 // source with json_body/form_body/Query/Path/Header/Cookie.
 // Handlers return HTTP responses using c.json(model).
-// json_if/form_if still parse without field rules.
+// json_if/form_if parse optional bodies and run field rules when media type matches.
 // Run ruvia_example_models_validation on port 8081.
 // curl "http://127.0.0.1:8081/models/search?q=hello&page=2"
 // POST JSON to /models/register and form data to /models/contact.
@@ -134,8 +134,8 @@ private:
         co_return c.json(response);
     }
 
-    // json_if/form_if still parse without field rules. A malformed selected body
-    // is 400; only a different Content-Type yields nullopt.
+    // json_if/form_if parse and validate when the media type matches. A malformed
+    // selected body is 400; only a different Content-Type yields nullopt.
     ruvia::task<ruvia::http_response> feedback(ruvia::context& c) {
         if (const auto json = co_await c.req().json_if<contact_form>()) {
             std::pmr::string body(c.allocator<char>());
@@ -192,7 +192,7 @@ private:
     ruvia::task<ruvia::http_response> category(ruvia::context& c) {
         ::category root({.resource_ = c.arena()});
         root.set<"name">("root");
-        root.ensure<"children">().emplace().set<"name">("leaf");
+        root.ensure<"children">().emplace_back().set<"name">("leaf");
         co_return c.json(root);
     }
 

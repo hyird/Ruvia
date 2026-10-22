@@ -76,7 +76,7 @@ private:
     struct websocket_upgrade_operation;
 
     void reset_event_stream(std::uint32_t stream_id, http2_error_code error) noexcept;
-    [[nodiscard]] http2_sans_io_stream_runtime* resolve_stream_route(std::uint32_t stream_id);
+    [[nodiscard]] http2_sans_io_stream_runtime* resolve_stream_route(const http2_request_head_event& message_head);
     void on_message_head(http2_request_head_event& message_head);
     void on_body_chunk(http2_message_body_chunk_event& body_chunk);
     void on_tunnel_data(http2_tunnel_data_event& tunnel_data);

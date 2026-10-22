@@ -19,9 +19,9 @@ RUVIA_TEST(response_coding_sets_and_selection_snapshots_distinguish_every_suppor
         const std::string field = std::string(ruvia::http_content_coding_token(coding)) +
                                   ";q=1,*;q=0" + (coding == ruvia::http_content_coding::identity ? "" : ",identity;q=0");
         qualities.update(field);
-        const auto result_value = ruvia::http_response_coding_selection::select(qualities, candidates);
-        RUVIA_CHECK(result_value.selected() != nullptr);
-        if (const auto* selected = result_value.selected()) {
+        const auto selected = ruvia::http_response_coding_selection::select(qualities, candidates);
+        RUVIA_CHECK(selected.has_value());
+        if (selected.has_value()) {
             RUVIA_CHECK(selected->coding() == coding);
             for (const auto other : codings) {
                 RUVIA_CHECK(candidates.contains(other) == (other == coding));
@@ -100,9 +100,8 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     const auto select = [](std::string_view header_value) {
         http_response_coding_qualities qualities;
         qualities.update(header_value);
-        const auto result_value = http_response_coding_selection::select(qualities);
-        const auto* selected = result_value.selected();
-        if (selected == nullptr) {
+        const auto selected = http_response_coding_selection::select(qualities);
+        if (!selected.has_value()) {
             throw std::runtime_error("test expected an acceptable response coding");
         }
         return selected->coding();
@@ -148,18 +147,13 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
         http_response_coding_qualities qualities;
         qualities.update(header);
         const auto result_value = http_response_coding_selection::select(qualities);
-        RUVIA_CHECK(result_value.selected() == nullptr);
-        RUVIA_CHECK(result_value.failure() != nullptr);
-        if (const auto* failure = result_value.failure()) {
-            RUVIA_CHECK(failure->error() ==
-                        ruvia::http_response_coding_selection_error::no_acceptable_coding);
-        }
+        RUVIA_CHECK(!result_value.has_value());
     }
     http_response_coding_qualities explicit_empty;
     explicit_empty.update("");
     const auto empty_selects_identity = http_response_coding_selection::select(explicit_empty);
-    RUVIA_CHECK(empty_selects_identity.selected() != nullptr);
-    if (const auto* selected = empty_selects_identity.selected()) {
+    RUVIA_CHECK(empty_selects_identity.has_value());
+    if (const auto& selected = empty_selects_identity) {
         RUVIA_CHECK(selected->coding() == http_content_coding::identity);
         RUVIA_CHECK(selected->identity_accepted());
         RUVIA_CHECK(selected->accepts(http_content_coding::identity));
@@ -167,8 +161,8 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     }
     http_response_coding_qualities no_header;
     const auto implicit_identity = http_response_coding_selection::select(no_header);
-    RUVIA_CHECK(implicit_identity.selected() != nullptr);
-    if (const auto* selected = implicit_identity.selected()) {
+    RUVIA_CHECK(implicit_identity.has_value());
+    if (const auto& selected = implicit_identity) {
         RUVIA_CHECK(selected->coding() == http_content_coding::identity);
         RUVIA_CHECK(selected->identity_accepted());
         RUVIA_CHECK(selected->accepts(http_content_coding::identity));
@@ -178,8 +172,8 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     auto gzip_only = http_response_coding_candidates::empty();
     gzip_only.include(http_content_coding::gzip);
     const auto absent_header_gzip = http_response_coding_selection::select(no_header, gzip_only);
-    RUVIA_CHECK(absent_header_gzip.selected() != nullptr);
-    if (const auto* selected = absent_header_gzip.selected()) {
+    RUVIA_CHECK(absent_header_gzip.has_value());
+    if (const auto& selected = absent_header_gzip) {
         RUVIA_CHECK(selected->coding() == http_content_coding::gzip);
         RUVIA_CHECK(selected->accepts(http_content_coding::gzip));
     }
@@ -189,8 +183,7 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
     // An explicitly empty Accept-Encoding allows only an uncoded representation,
     // so a response policy with only gzip has no acceptable candidate.
     const auto explicit_empty_gzip = http_response_coding_selection::select(empty_header, gzip_only);
-    RUVIA_CHECK(explicit_empty_gzip.selected() == nullptr);
-    RUVIA_CHECK(explicit_empty_gzip.failure() != nullptr);
+    RUVIA_CHECK(!explicit_empty_gzip.has_value());
 }
 
 RUVIA_TEST(accepted_encoding_quality_treats_gzip_aliases_as_the_same_coding) {
@@ -207,10 +200,9 @@ RUVIA_TEST(response_coding_selection_accepts_the_gzip_alias) {
     for (const auto header : {std::string_view{"x-gzip, identity;q=0"}, std::string_view{"X-GZIP;q=0.8, identity;q=0"}}) {
         http_response_coding_qualities qualities;
         qualities.update(header);
-        const auto result_value = http_response_coding_selection::select(qualities);
-        RUVIA_CHECK(result_value.failure() == nullptr);
-        RUVIA_CHECK(result_value.selected() != nullptr);
-        if (const auto* selected = result_value.selected()) {
+        const auto selected = http_response_coding_selection::select(qualities);
+        RUVIA_CHECK(selected.has_value());
+        if (selected.has_value()) {
             RUVIA_CHECK(selected->coding() == http_content_coding::gzip);
             RUVIA_CHECK(selected->accepts(http_content_coding::gzip));
             RUVIA_CHECK(!selected->identity_accepted());
@@ -244,9 +236,9 @@ RUVIA_TEST(response_coding_selection_retains_client_preference_until_representat
     // The selector records the client's acceptable representation set. Whether
     // a Web runtime can create gzip is enforced only after the representation
     // source (sidecar, buffered body, or stream) is known.
-    const auto selected = http_response_coding_selection::select(qualities);
-    RUVIA_CHECK(selected.selected() != nullptr);
-    if (const auto* coding = selected.selected()) {
+    const auto coding = http_response_coding_selection::select(qualities);
+    RUVIA_CHECK(coding.has_value());
+    if (coding.has_value()) {
         RUVIA_CHECK(coding->coding() == http_content_coding::gzip);
         RUVIA_CHECK(!coding->identity_accepted());
         RUVIA_CHECK(coding->accepts(http_content_coding::gzip));
@@ -261,31 +253,30 @@ RUVIA_TEST(response_coding_selection_uses_only_available_representations) {
     auto gzip_only = http_response_coding_candidates::identity_only();
     gzip_only.include(http_content_coding::gzip);
     const auto gzip_selection = http_response_coding_selection::select(qualities, gzip_only);
-    RUVIA_CHECK(gzip_selection.selected() != nullptr);
-    if (const auto* selected = gzip_selection.selected()) {
-        RUVIA_CHECK(selected->coding() == http_content_coding::gzip);
+    RUVIA_CHECK(gzip_selection.has_value());
+    if (gzip_selection.has_value()) {
+        RUVIA_CHECK(gzip_selection->coding() == http_content_coding::gzip);
     }
 
     auto identity_only = http_response_coding_candidates::identity_only();
     const auto identity_selection = http_response_coding_selection::select(qualities, identity_only);
-    RUVIA_CHECK(identity_selection.selected() == nullptr);
-    RUVIA_CHECK(identity_selection.failure() != nullptr);
+    RUVIA_CHECK(!identity_selection.has_value());
 
     auto brotli_only = http_response_coding_candidates::empty();
     brotli_only.include(http_content_coding::brotli);
     const auto brotli_selection = http_response_coding_selection::select(qualities, brotli_only);
-    RUVIA_CHECK(brotli_selection.selected() != nullptr);
-    if (const auto* selected = brotli_selection.selected()) {
-        RUVIA_CHECK(selected->coding() == http_content_coding::brotli);
+    RUVIA_CHECK(brotli_selection.has_value());
+    if (brotli_selection.has_value()) {
+        RUVIA_CHECK(brotli_selection->coding() == http_content_coding::brotli);
     }
 }
 
 RUVIA_TEST(response_coding_selection_carries_identity_fallback_once) {
     http_response_coding_qualities qualities;
     qualities.update("gzip, identity;q=0");
-    const auto selected = http_response_coding_selection::select(qualities);
-    RUVIA_CHECK(selected.selected() != nullptr);
-    if (const auto* coding = selected.selected()) {
+    const auto coding = http_response_coding_selection::select(qualities);
+    RUVIA_CHECK(coding.has_value());
+    if (coding.has_value()) {
         RUVIA_CHECK(coding->coding() == http_content_coding::gzip);
         RUVIA_CHECK(!coding->identity_accepted());
     }
@@ -330,9 +321,9 @@ RUVIA_TEST(accepted_encoding_weights_do_not_allow_media_parameter_slots) {
         http_response_coding_qualities qualities;
         qualities.update("identity;q=0.5");
         qualities.update(item);
-        const auto selection = http_response_coding_selection::select(qualities);
-        RUVIA_CHECK(selection.selected() != nullptr);
-        if (const auto* selected = selection.selected()) {
+        const auto selected = http_response_coding_selection::select(qualities);
+        RUVIA_CHECK(selected.has_value());
+        if (selected.has_value()) {
             RUVIA_CHECK(selected->coding() == http_content_coding::identity);
             RUVIA_CHECK(!selected->accepts(http_content_coding::gzip));
         }

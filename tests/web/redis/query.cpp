@@ -26,9 +26,9 @@ RUVIA_TEST(redis_predicate_composition_moves_source_and_preserves_range) {
     } guard_value{std::pmr::set_default_resource(&resource)};
     {
         std::string text(200, 'x');
-        auto filter = redis_query_user::field<"email">() == text;
+        auto filter = redis_query_user::column<"email">() == text;
         text.assign(200, 'y');
-        auto range = redis_query_user::field<"age">().between(18, 65);
+        auto range = redis_query_user::column<"age">().between(18, 65);
         ruvia::redis_find_options options{.where_ = std::move(filter) && range};
         RUVIA_CHECK(filter.empty());
         RUVIA_CHECK(!options.where_.empty());

@@ -30,8 +30,8 @@ public:
     RUVIA_GET("/asset", asset);
     RUVIA_GET("/safe", safe);
     RUVIA_GET("/redirect", redirect);
-    RUVIA_GET_STREAM("/download", download);
-    RUVIA_POST_STREAM("/upload", upload, ruvia::body_limit<1024 * 1024>);
+    RUVIA_GET("/download", download);
+    RUVIA_POST("/upload", upload, ruvia::stream_body, ruvia::body_limit<1024 * 1024>);
     RUVIA_GET_WS("/ws", websocket);
     RUVIA_ROUTES_END
 
@@ -90,7 +90,7 @@ private:
 
     ruvia::task<ruvia::http_response> upload(ruvia::context& c) {
         std::size_t bytes_value = 0;
-        auto& body = c.req().get_body_reader();
+        auto& body = c.req().body_reader();
         while (const auto chunk = co_await body.read()) {
             bytes_value += chunk->size();
         }
@@ -103,7 +103,7 @@ private:
     }
 
     ruvia::task<void> websocket(ruvia::context& c) {
-        auto& socket = c.get_websocket();
+        auto& socket = c.websocket();
         while (auto message = co_await socket.read()) {
             // Borrow the payload for the echo; send() holds the read lane until
             // the frame is written, so the next read cannot replace it early.
