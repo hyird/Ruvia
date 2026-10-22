@@ -206,6 +206,7 @@ struct db_lock_options final {
 class db_query;
 class db_predicate;
 class db_expr;
+class db_tuple;
 struct db_order_term;
 struct db_window_options;
 struct db_case_branch;
@@ -320,7 +321,7 @@ public:
             });
     }
     [[nodiscard]] static db_owned_expression make_in_expr_list(
-        const db_owned_expression& lhs, db_binary_operator op, std::span<const db_owned_expression> values);
+        const db_owned_expression& lhs, db_binary_operator op, std::span<const db_tuple> values);
     [[nodiscard]] static db_owned_expression make_in_subquery(
         const db_owned_expression& lhs, db_binary_operator op, const db_query& subquery);
     [[nodiscard]] static db_owned_expression make_exists(const db_query& subquery);
@@ -1357,16 +1358,14 @@ public:
     }
 
 private:
+    friend class detail::db_owned_expression;
+
     [[nodiscard]] db_predicate compare(db_binary_operator op, const db_tuple& rhs) const {
         return db_predicate(detail::db_owned_expression::make_binary(owned_, op, rhs.owned_));
     }
     [[nodiscard]] db_predicate compare_list(db_binary_operator op, std::span<const db_tuple> rows) const {
-        static_assert(sizeof(db_tuple) == sizeof(detail::db_owned_expression) &&
-                      alignof(db_tuple) == alignof(detail::db_owned_expression));
-        return db_predicate(detail::db_owned_expression::make_in_expr_list(
-            owned_, op, std::span<const detail::db_owned_expression>(&rows.data()->owned_, rows.size())));
+        return db_predicate(detail::db_owned_expression::make_in_expr_list(owned_, op, rows));
     }
-
     detail::db_owned_expression owned_{};
 };
 

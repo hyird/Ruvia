@@ -1125,3 +1125,11 @@ RUVIA_TEST(ws_public_receiver_accepts_non_minimal_payload_length_forms) {
     const auto event = server.next_event();
     RUVIA_CHECK(event && event->ping() && event->ping()->payload() == "hi");
 }
+
+RUVIA_TEST(ws_public_feed_reports_backpressure_when_initial_buffer_exceeds_limit) {
+    http_io_buffer input;
+    input.append("123456789");
+    websocket_connection connection(input, {.max_buffered_input_bytes_ = 8});
+    RUVIA_CHECK(connection.feed("x") == websocket_feed_status::backpressured);
+    RUVIA_CHECK_EQ(input.size(), std::size_t{9});
+}

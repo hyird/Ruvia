@@ -68,7 +68,7 @@ public:
         if (empty()) {
             *this = other;
         } else {
-            *this = combine(std::move(*this), detail::redis_binary_operator::logical_and, other);
+            append(detail::redis_binary_operator::logical_and, other);
         }
         return *this;
     }
@@ -79,15 +79,17 @@ public:
         if (empty()) {
             *this = other;
         } else {
-            *this = combine(std::move(*this), detail::redis_binary_operator::logical_or, other);
+            append(detail::redis_binary_operator::logical_or, other);
         }
         return *this;
     }
     friend redis_predicate operator&&(redis_predicate left, const redis_predicate& right) {
-        return combine(std::move(left), detail::redis_binary_operator::logical_and, right);
+        left.append(detail::redis_binary_operator::logical_and, right);
+        return left;
     }
     friend redis_predicate operator||(redis_predicate left, const redis_predicate& right) {
-        return combine(std::move(left), detail::redis_binary_operator::logical_or, right);
+        left.append(detail::redis_binary_operator::logical_or, right);
+        return left;
     }
 
 private:
@@ -100,11 +102,11 @@ private:
         result.storage_ = make_pmr_object<detail::redis_predicate_storage>(resource, resource, initial_capacity);
         return result;
     }
-    static redis_predicate combine(redis_predicate left, detail::redis_binary_operator operation, const redis_predicate& right) {
-        if (left.empty() || right.empty()) {
+    void append(detail::redis_binary_operator operation, const redis_predicate& right) {
+        if (empty() || right.empty()) {
             throw std::invalid_argument("cannot combine empty Redis predicates");
         }
-        auto& storage = *left.storage_;
+        auto& storage = *storage_;
         const auto left_root = storage.root_;
         const auto offset = storage.nodes_.size();
         const auto right_root = right.storage_->root_ + offset;
@@ -117,7 +119,6 @@ private:
         auto& root = storage.nodes_[storage.root_];
         root.binary_ = operation;
         root.operands_ = {left_root, right_root};
-        return left;
     }
     std::unique_ptr<detail::redis_predicate_storage, pmr_object_deleter<detail::redis_predicate_storage>> storage_;
 };

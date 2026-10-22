@@ -33,15 +33,15 @@ void set_source_options(db_query_source& source_value, const db_source_options& 
 }  // namespace
 
 struct qualified_expression_importer final {
-    std::span<const db_query_node> source_nodes_;
-    std::span<const db_query> source_queries_;
+    const std::pmr::vector<db_query_node>& source_nodes_;
+    const std::pmr::vector<db_query>& source_queries_;
     db_query_storage& target_;
     std::string_view source_qualifier_;
     std::string_view target_qualifier_;
     std::pmr::vector<std::size_t> mapped_;
 
-    qualified_expression_importer(std::span<const db_query_node> source_nodes,
-        std::span<const db_query> source_queries, db_query_storage& target,
+    qualified_expression_importer(const std::pmr::vector<db_query_node>& source_nodes,
+        const std::pmr::vector<db_query>& source_queries, db_query_storage& target,
         std::string_view source_qualifier, std::string_view target_qualifier)
         : source_nodes_(source_nodes),
           source_queries_(source_queries),
@@ -987,7 +987,7 @@ db_owned_expression db_owned_expression::make_binary(
 
 db_owned_expression db_owned_expression::make_binary(
     db_owned_expression&& lhs, db_binary_operator op, const db_owned_expression& rhs) {
-    if (lhs.kind_ == leaf_kind::tree && lhs.tree_ != nullptr) {
+    if (&lhs != &rhs && lhs.kind_ == leaf_kind::tree && lhs.tree_ != nullptr) {
         const auto left_idx = lhs.tree_->root_;
         const auto right_idx = rhs.append_to_tree(*lhs.tree_);
         db_query_node node_value(db_node_kind::binary, lhs.tree_->resource_);
@@ -1073,13 +1073,13 @@ db_owned_expression db_owned_expression::make_in_list(const db_owned_expression&
 }
 
 db_owned_expression db_owned_expression::make_in_expr_list(
-    const db_owned_expression& lhs, db_binary_operator op, std::span<const db_owned_expression> values) {
+    const db_owned_expression& lhs, db_binary_operator op, std::span<const db_tuple> values) {
     auto tree = allocate_tree();
     const auto left_idx = lhs.append_to_tree(*tree);
     db_query_node list_node(db_node_kind::list, tree->resource_);
     list_node.args_.reserve(values.size());
     for (const auto& value : values) {
-        list_node.args_.push_back(value.append_to_tree(*tree));
+        list_node.args_.push_back(value.owned_.append_to_tree(*tree));
     }
     const auto list_idx = push_tree_node(*tree, std::move(list_node));
     db_query_node node_value(db_node_kind::binary, tree->resource_);

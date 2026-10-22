@@ -57,3 +57,17 @@ RUVIA_TEST(exception_text_describes_any_exception) {
     RUVIA_CHECK(text.starts_with("bind: "));
     RUVIA_CHECK(text.size() > std::string_view("bind: ").size());
 }
+
+RUVIA_TEST(http_error_cross_resource_move_assignment_propagates_bad_alloc) {
+    http_error target({}, std::pmr::null_memory_resource());
+    const std::string long_message(1024, 'x');
+    http_error source({.status_ = ruvia::http_status::bad_request, .message_ = long_message});
+    bool caught = false;
+    try {
+        target = std::move(source);
+    } catch (const std::bad_alloc&) {
+        caught = true;
+    }
+    RUVIA_CHECK(caught);
+    RUVIA_CHECK_EQ(source.info().message(), std::string_view(long_message));
+}

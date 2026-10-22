@@ -118,6 +118,9 @@ scoped_operation<void> db_stream_result::close() & {
 task<void> db_stream_result::close_task(operation_scope& scope, operation_guard_type pending) {
     detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
+    if (operation.finished()) {
+        co_return;
+    }
     operation.start();
     auto& lease_value = operation.lease();
     co_await close_pool_stream(lease_value.client_, lease_value.slot_, lease_value.result_, lease_value.resource_, lease_value.options_);

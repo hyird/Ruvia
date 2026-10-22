@@ -168,6 +168,22 @@ http_error& http_error::operator=(const http_error& other) {
     return *this;
 }
 
+// NOLINTNEXTLINE(performance-noexcept-move-constructor)
+http_error& http_error::operator=(http_error&& other) {
+    if (this != &other) {
+        if (*resource() == *other.resource()) {
+            validation_issues_ = std::move(other.validation_issues_);
+            status_text_ = std::move(other.status_text_);
+            code_ = std::move(other.code_);
+            message_ = std::move(other.message_);
+            status_ = other.status_;
+        } else {
+            *this = other;
+        }
+    }
+    return *this;
+}
+
 const char* http_error::what() const noexcept {
     return message_.c_str();
 }

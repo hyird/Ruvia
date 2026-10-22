@@ -77,3 +77,15 @@ RUVIA_TEST(redis_predicate_holds_signed_and_unsigned_primary_key_comparisons) {
     RUVIA_CHECK(!unsigned_eq.empty());
     RUVIA_CHECK(!signed_eq.empty());
 }
+
+RUVIA_TEST(redis_predicate_self_combination_preserves_operands) {
+    for (const bool use_or : {false, true}) {
+        auto predicate = redis_signed_pk_entity::column<"id">() == std::int64_t{1};
+        if (use_or) {
+            predicate.or_where(predicate);
+        } else {
+            predicate.and_where(predicate);
+        }
+        RUVIA_CHECK(!predicate.empty());
+    }
+}

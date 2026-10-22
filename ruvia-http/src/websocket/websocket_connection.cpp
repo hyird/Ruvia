@@ -335,8 +335,10 @@ websocket_feed_status websocket_connection::feed(std::string_view input) {
     if (impl_->liveness_mode() == websocket_liveness_mode::inactive) {
         return websocket_feed_status::inactive;
     }
-    if (input.size() > impl_->max_buffered_input_bytes_ - impl_->input_->size()) {
-        if (input.size() > impl_->max_buffered_input_bytes_ - impl_->pending_input_bytes()) {
+    if (impl_->input_->size() > impl_->max_buffered_input_bytes_ ||
+        input.size() > impl_->max_buffered_input_bytes_ - impl_->input_->size()) {
+        if (impl_->pending_input_bytes() > impl_->max_buffered_input_bytes_ ||
+            input.size() > impl_->max_buffered_input_bytes_ - impl_->pending_input_bytes()) {
             return websocket_feed_status::backpressured;
         }
         // The bound covers bytes awaiting next_event(), not the frame already

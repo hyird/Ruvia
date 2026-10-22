@@ -218,7 +218,8 @@ public:
     http_error(const http_error& other, std::pmr::memory_resource* resource);
     http_error& operator=(const http_error& other);
     http_error(http_error&&) noexcept = default;
-    http_error& operator=(http_error&&) noexcept = default;
+    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
+    http_error& operator=(http_error&& other);
 
     [[nodiscard]] const char* what() const noexcept override;
     [[nodiscard]] http_error_info info() const& noexcept;

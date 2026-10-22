@@ -252,6 +252,24 @@ RUVIA_TEST(db_stream_cold_reads_and_close_wait_for_the_started_read_to_finish) {
     });
 }
 
+RUVIA_TEST(db_stream_close_after_exhaustion_is_idempotent) {
+    using namespace ruvia;
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle,
+        {{.rows_ = {"only"}, .command_ = "SELECT 1"}});
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), peer.config());
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto stream = co_await connected.handle().query_stream("SELECT v FROM records");
+        while (co_await stream.read()) {
+        }
+        RUVIA_CHECK(!stream.active());
+        co_await stream.close();
+        RUVIA_CHECK(!stream.active());
+    });
+}
+
 RUVIA_TEST(db_transaction_savepoint_commands_quote_identifiers_and_keep_transaction_active) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,

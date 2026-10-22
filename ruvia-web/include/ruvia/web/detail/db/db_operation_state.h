@@ -54,6 +54,9 @@ public:
         return std::holds_alternative<active_type>(state_);
     }
 
+    [[nodiscard]] bool finished() const noexcept {
+        return std::holds_alternative<closed_type>(state_) || std::holds_alternative<failed_type>(state_);
+    }
     // Preparation only borrows immutable connection and resource metadata. It
     // never grants the operation right, even while another task holds it.
     [[nodiscard]] const payload& preparation_payload() const {
@@ -182,6 +185,9 @@ public:
         started_ = true;
     }
 
+    [[nodiscard]] bool finished() const noexcept {
+        return state_ != nullptr && state_->finished();
+    }
     [[nodiscard]] payload& lease() noexcept {
         if (state_ == nullptr || !started_) {
             std::terminate();

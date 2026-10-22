@@ -1842,4 +1842,42 @@ RUVIA_TEST(db_expr_from_expression_outlives_source_query_resource_and_maps_table
     }
 }
 
+RUVIA_TEST(db_query_self_import_and_tuple_empty_in_and_predicate_self_merge) {
+    {
+        db_query query;
+        const auto a = query.column("id", "src");
+        const auto b = query.column("id", "other");
+        const auto expression = query.binary(a, db_binary_operator::equal, b);
+        (void)query.value(0);
+        const auto imported = query.import_expression(expression, "src", "dst");
+        query.select(imported).from("items", "dst");
+        const auto compiled = query.compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(
+            compiled.sql(), R"(SELECT ("dst"."id" = "other"."id") FROM "items" AS "dst")");
+    }
+    {
+        db_tuple tuple{db_expr::value(1)};
+        const auto empty_in = tuple.in({});
+        const auto empty_not_in = tuple.not_in({});
+        db_query q1;
+        q1.select(q1.value(1)).where(empty_in.expression(q1));
+        const auto c1 = q1.compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(c1.sql(), "SELECT $1 WHERE FALSE");
+        db_query q2;
+        q2.select(q2.value(1)).where(empty_not_in.expression(q2));
+        const auto c2 = q2.compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(c2.sql(), "SELECT $1 WHERE TRUE");
+    }
+    {
+        auto pred = db_expr::column("id") == 1;
+        pred.and_where(pred);
+        pred.or_where(pred);
+        db_query query;
+        query.select(query.value(1)).from("items").where(pred.expression(query));
+        const auto compiled = query.compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(compiled.sql(),
+            R"(SELECT $1 FROM "items" WHERE ((("id" = $2) AND ("id" = $3)) OR (("id" = $4) AND ("id" = $5))))");
+    }
+}
+
 }  // namespace
