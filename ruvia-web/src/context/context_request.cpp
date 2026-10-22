@@ -477,7 +477,8 @@ scoped_operation<std::string_view> context_request::text() const {
                                           : context_value->pool();
         const auto parsed_coding = request_content_coding(context_value->request_);
         if (const auto* invalid = parsed_coding.invalid()) {
-            throw http_protocol_error(invalid->status(), "invalid request Content-Encoding");
+            throw http_protocol_error(
+                invalid->status(), "invalid_content_encoding", "invalid request Content-Encoding");
         }
         if (parsed_coding.unsupported() != nullptr) {
             throw detail::unsupported_request_content_coding(http_supported_request_content_codings());
@@ -564,7 +565,8 @@ multipart_reader context_request::multipart_reader() const {
     // coding, so only an identity body is accepted.
     const auto parsed_coding = request_content_coding(context_->request_);
     if (const auto* invalid = parsed_coding.invalid()) {
-        throw http_protocol_error(invalid->status(), "invalid request Content-Encoding");
+        throw http_protocol_error(
+            invalid->status(), "invalid_content_encoding", "invalid request Content-Encoding");
     }
     const auto coded = std::ranges::any_of(
         parsed_coding.codings(), [](http_content_coding coding) { return coding != http_content_coding::identity; });

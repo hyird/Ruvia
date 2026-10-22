@@ -5,12 +5,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <initializer_list>
 #include <memory_resource>
 #include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
@@ -23,7 +25,6 @@
 namespace ruvia {
 
 class context;
-class validation_error;
 class validator;
 
 inline constexpr std::size_t max_validation_issues = 64;
@@ -68,7 +69,6 @@ public:
     [[nodiscard]] std::string_view message() const&& = delete;
 
 private:
-    friend class validation_error;
     friend class validator;
     friend struct detail::validation_issue_access;
 
@@ -100,6 +100,20 @@ struct validation_issue_access final {
             .resource_ = resource});
     }
 };
+
+// Copies at most max_validation_issues issues into resource. The vector is
+// built with a constructor that can propagate allocation failure while the
+// source diagnostics remain intact.
+[[nodiscard]] inline std::pmr::vector<validation_issue> clone_validation_issues(
+    std::span<const validation_issue> issues, std::pmr::memory_resource* resource) {
+    std::pmr::vector<validation_issue> copied(std::initializer_list<validation_issue>{}, resource);
+    const auto count = std::min(issues.size(), max_validation_issues);
+    copied.reserve(count);
+    for (const auto& issue : issues.first(count)) {
+        copied.push_back(validation_issue_access::copy(issue, resource));
+    }
+    return copied;
+}
 
 }  // namespace detail
 namespace detail {
@@ -190,10 +204,18 @@ private:
     std::span<const validation_issue> validation_issues_{};
 };
 
+// The owning Web application error: status, code, message, status text and
+// validation issues are deep-copied from the options. Thrown by application
+// code it lives in the process resource, because an exception may be rethrown
+// and destroyed on a thread other than the one that built it. The resource
+// overload binds the error to a caller-provided resource, which must outlive
+// the error and every copy made from it; copies keep the source resource.
 class http_error final : public std::exception {
 public:
     explicit http_error(http_error_info_options options);
+    http_error(http_error_info_options options, std::pmr::memory_resource* resource);
     http_error(const http_error& other);
+    http_error(const http_error& other, std::pmr::memory_resource* resource);
     http_error& operator=(const http_error& other);
     http_error(http_error&&) noexcept = default;
     http_error& operator=(http_error&&) noexcept = default;
@@ -202,11 +224,21 @@ public:
     [[nodiscard]] http_error_info info() const& noexcept;
     [[nodiscard]] http_error_info info() const&& = delete;
 
+    [[nodiscard]] std::span<const validation_issue> validation_issues() const& noexcept {
+        return validation_issues_;
+    }
+    [[nodiscard]] std::span<const validation_issue> validation_issues() const&& = delete;
+
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return validation_issues_.get_allocator().resource();
+    }
+
 private:
     http_status_code status_{http_status::internal_server_error};
     std::pmr::string status_text_;
     std::pmr::string code_;
     std::pmr::string message_;
+    std::pmr::vector<validation_issue> validation_issues_;
 };
 
 [[nodiscard]] std::string_view default_error_code(http_status_code status) noexcept;

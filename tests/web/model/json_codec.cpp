@@ -327,7 +327,7 @@ RUVIA_TEST(model_json_codec_validates_on_parse_and_serializes_without_running_va
     bool rule_rejected = false;
     try {
         (void)ruvia::from_json<codec_rules>(R"({"value":"invalid"})");
-    } catch (const ruvia::validation_error&) {
+    } catch (const ruvia::http_error&) {
         rule_rejected = true;
     }
     RUVIA_CHECK(rule_rejected);

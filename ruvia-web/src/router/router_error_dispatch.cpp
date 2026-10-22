@@ -1,5 +1,5 @@
-#include <algorithm>
 #include <exception>
+#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -10,7 +10,6 @@
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/validation.h"
 
 #include "context/context_access.h"
 #include "http/http_error_response.h"
@@ -27,100 +26,63 @@ namespace ruvia {
 
 namespace {
 
-struct owned_http_error_info;
-void assign_exception_error(owned_http_error_info& error_info, const std::exception_ptr& exception);
-
-struct owned_http_error_info final {
-    http_error_info info_{};
-    std::pmr::string status_text_;
-    std::pmr::string code_;
-    std::pmr::string message_;
-    std::pmr::vector<validation_issue> validation_issues_;
+// The error a thrown exception really carries, owned by the request arena so
+// an application error handler may suspend while it is read.
+struct classified_error final {
+    http_error error_;
     // Not an HTTP-mapped failure: answered with a generic 500.
     bool unexpected_{false};
-
-    explicit owned_http_error_info(http_error_info source_value, std::pmr::memory_resource* resource)
-        : status_text_(resource),
-          code_(resource),
-          message_(resource),
-          validation_issues_(resource) {
-        assign(source_value);
-    }
-
-    owned_http_error_info(std::pmr::memory_resource* resource, const std::exception_ptr& exception)
-        : owned_http_error_info(http_error_info({.status_ = ruvia::http_status::internal_server_error,
-                                    .message_ = "unhandled exception"}),
-              resource) {
-        assign_exception_error(*this, exception);
-    }
-
-    void assign(http_error_info source_value) {
-        status_text_.assign(source_value.status_text().data(), source_value.status_text().size());
-        code_.assign(source_value.code().data(), source_value.code().size());
-        message_.assign(source_value.message().data(), source_value.message().size());
-        std::pmr::vector<validation_issue> copied(validation_issues_.get_allocator().resource());
-        const auto issues = source_value.validation_issues().first(
-            std::min(source_value.validation_issues().size(), max_validation_issues));
-        copied.reserve(issues.size());
-        for (const auto& issue : issues) {
-            copied.push_back(
-                detail::validation_issue_access::copy(issue, copied.get_allocator().resource()));
-        }
-        validation_issues_ = std::move(copied);
-
-        info_ = http_error_info({.status_ = source_value.status(),
-            .code_ = code_,
-            .message_ = message_,
-            .status_text_ = status_text_,
-            .validation_issues_ = validation_issues_});
-    }
 };
 
-void assign_exception_error(owned_http_error_info& error_info, const std::exception_ptr& exception) {
+[[nodiscard]] classified_error classify_exception(
+    std::pmr::memory_resource* resource, const std::exception_ptr& exception) {
     try {
         if (exception != nullptr) {
             std::rethrow_exception(exception);
         }
-    } catch (const validation_error& error) {
-        error_info.assign(error.info());
+        return {.error_ = http_error({.status_ = ruvia::http_status::internal_server_error,
+                                         .message_ = "unhandled exception"},
+                    resource)};
     } catch (const detail::unsupported_request_content_coding& error) {
-        error_info.assign(http_error_info({.status_ = http_unsupported_content_coding::status(),
-            .code_ = "unsupported_content_coding",
-            .message_ = error.what()}));
+        return {.error_ = http_error({.status_ = http_unsupported_content_coding::status(),
+                                         .code_ = "unsupported_content_coding",
+                                         .message_ = error.what()},
+                    resource)};
     } catch (const http_error& error) {
-        error_info.assign(error.info());
+        return {.error_ = http_error(error, resource)};
     } catch (const http_protocol_error& error) {
-        error_info.assign(http_error_info({.status_ = error.status(), .message_ = error.what()}));
+        return {.error_ = http_error(
+                    {.status_ = error.status(), .code_ = error.code(), .message_ = error.what()},
+                    resource)};
     } catch (const detail::inbound_buffer_limit_error&) {
-        error_info.assign(http_error_info({.status_ = ruvia::http_status::service_unavailable,
-            .code_ = "inbound_buffer_limit",
-            .message_ = "inbound buffer capacity exhausted"}));
+        return {.error_ = http_error({.status_ = ruvia::http_status::service_unavailable,
+                                         .code_ = "inbound_buffer_limit",
+                                         .message_ = "inbound buffer capacity exhausted"},
+                    resource)};
     } catch (const blocking_operation_rejected& error) {
         // The blocking pool refused the work or the worker is going away. That
         // is capacity, not a bug in the request: answer it like any other
         // overload instead of a 500. The message is the framework's own and
         // names no application internals.
-        error_info.assign(http_error_info({.status_ = ruvia::http_status::service_unavailable,
-            .code_ = "blocking_pool_unavailable",
-            .message_ = error.what()}));
-    } catch (const std::exception&) {
+        return {.error_ = http_error({.status_ = ruvia::http_status::service_unavailable,
+                                         .code_ = "blocking_pool_unavailable",
+                                         .message_ = error.what()},
+                    resource)};
+    } catch (...) {
         // An unexpected exception (e.g. a database/library error) may carry
         // internal detail -- table names, query fragments, file paths. Do NOT echo
         // what() to the client: an info without a message renders the generic
         // "Internal Server Error" body. The exception_ptr is still set on the context, so an on_error
         // handler can log or inspect the full detail server-side; without one it
         // is reported to stderr (report_unexpected_failure).
-        error_info.assign(http_error_info({.status_ = ruvia::http_status::internal_server_error}));
-        error_info.unexpected_ = true;
-    } catch (...) {
-        error_info.assign(http_error_info({.status_ = ruvia::http_status::internal_server_error}));
-        error_info.unexpected_ = true;
+        return {.error_ = http_error({.status_ = ruvia::http_status::internal_server_error}, resource),
+            .unexpected_ = true};
     }
 }
 
 // An unexpected exception answered without an application error handler would
 // otherwise leave no server-side trace at all.
-void report_unexpected_failure(const owned_http_error_info& error_info, const std::exception_ptr& exception,
+void report_unexpected_failure(const classified_error& error_info, const std::exception_ptr& exception,
     detail::http_error_handler_ref error_handler) noexcept {
     if (error_info.unexpected_ && error_handler == nullptr) {
         ruvia::report_unhandled_failure("request handler", exception);
@@ -203,9 +165,9 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
     http_error_handler_ref error_handler) const {
     rethrow_inbound_transport_error(exception);
     if (error_handler == nullptr) {
-        owned_http_error_info error_info(memory.resource(), exception);
+        const auto error_info = classify_exception(memory.resource(), exception);
         report_unexpected_failure(error_info, exception, nullptr);
-        auto response = make_default_error_response(memory.resource(), error_info.info_);
+        auto response = make_default_error_response(memory.resource(), error_info.error_.info());
         apply_exception_response_metadata(response, exception);
         co_return response;
     }
@@ -262,10 +224,10 @@ task<http_response> detail::route_table::handle_exception(context& context_value
     std::exception_ptr exception, http_error_handler_ref error_handler) const {
     rethrow_inbound_transport_error(exception);
     detail::context_access::set_error(context_value, exception);
-    owned_http_error_info error_info(context_value.arena(), exception);
+    const auto error_info = classify_exception(context_value.arena(), exception);
     report_unexpected_failure(error_info, exception, error_handler);
 
-    auto response = co_await handle_error(context_value, error_info.info_, error_handler);
+    auto response = co_await handle_error(context_value, error_info.error_.info(), error_handler);
     apply_exception_response_metadata(response, exception);
     co_return response;
 }

@@ -316,11 +316,11 @@ RUVIA_TEST(model_numeric_rules_compare_float_fields_and_integer_bounds_exactly) 
         bool rejected = false;
         try {
             (void)ruvia::from_json<precise_numeric_bounds>(body);
-        } catch (const ruvia::validation_error& error) {
+        } catch (const ruvia::http_error& error) {
             rejected = true;
-            RUVIA_CHECK_EQ(error.issues().size(), std::size_t{1});
-            if (!error.issues().empty()) {
-                RUVIA_CHECK_EQ(error.issues()[0].code(), std::string_view(code));
+            RUVIA_CHECK_EQ(error.validation_issues().size(), std::size_t{1});
+            if (!error.validation_issues().empty()) {
+                RUVIA_CHECK_EQ(error.validation_issues()[0].code(), std::string_view(code));
             }
         }
         RUVIA_CHECK(rejected);
@@ -412,7 +412,7 @@ RUVIA_TEST(validator_one_of_absent_skips_and_range_accepts_doubles) {
     RUVIA_CHECK_EQ(v.issues().size(), std::size_t{2});  // unchanged
 }
 
-RUVIA_TEST(validation_error_exposes_typed_issues) {
+RUVIA_TEST(throw_if_invalid_exposes_typed_issues) {
     validator v;
     std::optional<std::string> absent;
     v.required(absent, "email", "email is required");
@@ -422,7 +422,7 @@ RUVIA_TEST(validation_error_exposes_typed_issues) {
     try {
         v.throw_if_invalid();
         RUVIA_CHECK(false);  // must have thrown
-    } catch (const ruvia::validation_error& error) {
+    } catch (const ruvia::http_error& error) {
         const auto issues = error.info().validation_issues();
         RUVIA_CHECK_EQ(issues.size(), std::size_t{2});
         RUVIA_CHECK_EQ(issues[0].field(), std::string_view("email"));
@@ -434,13 +434,13 @@ RUVIA_TEST(validation_error_exposes_typed_issues) {
     }
 }
 
-RUVIA_TEST(validation_error_preserves_special_characters_as_typed_data) {
+RUVIA_TEST(throw_if_invalid_preserves_special_characters_as_typed_data) {
     validator v;
     v.add("f\"x", "code", "a\"b\\c");
     try {
         v.throw_if_invalid();
         RUVIA_CHECK(false);
-    } catch (const ruvia::validation_error& error) {
+    } catch (const ruvia::http_error& error) {
         const auto issues = error.info().validation_issues();
         RUVIA_CHECK_EQ(issues.size(), std::size_t{1});
         RUVIA_CHECK_EQ(issues[0].field(), std::string_view("f\"x"));
@@ -448,7 +448,7 @@ RUVIA_TEST(validation_error_preserves_special_characters_as_typed_data) {
     }
 }
 
-RUVIA_TEST(validation_error_options_control_reported_error_info) {
+RUVIA_TEST(validation_failure_options_control_reported_error_info) {
     validator v;
     v.add("field", "required", "missing");
 
@@ -459,7 +459,7 @@ RUVIA_TEST(validation_error_options_control_reported_error_info) {
             .message_ = "payload failed validation",
         });
         RUVIA_CHECK(false);
-    } catch (const ruvia::validation_error& error) {
+    } catch (const ruvia::http_error& error) {
         const auto info = error.info();
         RUVIA_CHECK_EQ(info.status(), ruvia::http_status::unprocessable_content);
         RUVIA_CHECK_EQ(info.code(), std::string_view("invalid_payload"));
@@ -468,7 +468,7 @@ RUVIA_TEST(validation_error_options_control_reported_error_info) {
     }
 }
 
-RUVIA_TEST(validation_error_throw_releases_validator_resource) {
+RUVIA_TEST(throw_if_invalid_releases_validator_resource) {
     counting_memory_resource resource;
     const auto exception = capture_validation_exception(&resource);
 
@@ -479,15 +479,15 @@ RUVIA_TEST(validation_error_throw_releases_validator_resource) {
 
     try {
         std::rethrow_exception(exception);
-    } catch (const ruvia::validation_error& error) {
+    } catch (const ruvia::http_error& error) {
         RUVIA_CHECK_EQ(std::string_view(error.what()), std::string_view("payload failed validation"));
-        RUVIA_CHECK_EQ(error.issues().size(), std::size_t{1});
-        RUVIA_CHECK_EQ(error.issues()[0].field().size(), std::size_t{128});
-        RUVIA_CHECK_EQ(error.issues()[0].message().size(), std::size_t{256});
+        RUVIA_CHECK_EQ(error.validation_issues().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(error.validation_issues()[0].field().size(), std::size_t{128});
+        RUVIA_CHECK_EQ(error.validation_issues()[0].message().size(), std::size_t{256});
     }
 }
 
-RUVIA_TEST(validation_error_survives_short_lived_arena_and_exception_ptr) {
+RUVIA_TEST(throw_if_invalid_survives_short_lived_arena_and_exception_ptr) {
     counting_memory_resource upstream;
     const auto exception = capture_validation_exception_from_short_lived_arena(&upstream);
 
@@ -499,40 +499,41 @@ RUVIA_TEST(validation_error_survives_short_lived_arena_and_exception_ptr) {
 
     try {
         std::rethrow_exception(exception);
-    } catch (const ruvia::validation_error& error) {
+    } catch (const ruvia::http_error& error) {
         RUVIA_CHECK_EQ(std::string_view(error.what()),
             std::string_view("request validation failed"));
-        RUVIA_CHECK_EQ(error.issues().size(), std::size_t{1});
-        RUVIA_CHECK_EQ(error.issues()[0].field().size(), std::size_t{128});
-        RUVIA_CHECK_EQ(error.issues()[0].message().size(), std::size_t{256});
+        RUVIA_CHECK_EQ(error.validation_issues().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(error.validation_issues()[0].field().size(), std::size_t{128});
+        RUVIA_CHECK_EQ(error.validation_issues()[0].message().size(), std::size_t{256});
     }
 }
 
-RUVIA_TEST(validation_error_copy_move_and_assignment_preserve_owned_data) {
+RUVIA_TEST(http_error_copy_move_and_assignment_preserve_owned_issues) {
     counting_memory_resource resource;
     const auto exception = capture_validation_exception(&resource);
 
     try {
         std::rethrow_exception(exception);
-    } catch (const ruvia::validation_error& original) {
-        ruvia::validation_error copied(original);
-        ruvia::validation_error::issue_list_type empty_issues;
-        ruvia::validation_error copy_assigned(empty_issues);
+    } catch (const ruvia::http_error& original) {
+        ruvia::http_error copied(original);
+        ruvia::http_error copy_assigned({.status_ = ruvia::http_status::bad_request});
         copy_assigned = original;
 
-        ruvia::validation_error moved(std::move(copied));
-        ruvia::validation_error move_assigned(empty_issues);
+        ruvia::http_error moved(std::move(copied));
+        ruvia::http_error move_assigned({.status_ = ruvia::http_status::bad_request});
         move_assigned = std::move(moved);
 
         for (const auto* error : {&copy_assigned, &move_assigned}) {
-            RUVIA_CHECK_EQ(error->issues().size(), std::size_t{1});
-            RUVIA_CHECK_EQ(error->issues()[0].field().size(), std::size_t{128});
-            RUVIA_CHECK_EQ(error->issues()[0].message().size(), std::size_t{256});
+            RUVIA_CHECK_EQ(error->validation_issues().size(), std::size_t{1});
+            RUVIA_CHECK_EQ(error->validation_issues()[0].field().size(), std::size_t{128});
+            RUVIA_CHECK_EQ(error->validation_issues()[0].message().size(), std::size_t{256});
+            RUVIA_CHECK_EQ(error->info().status(), ruvia::http_status::unprocessable_content);
+            RUVIA_CHECK_EQ(error->info().code(), std::string_view("invalid_payload"));
             RUVIA_CHECK_EQ(std::string_view(error->what()),
                 std::string_view("payload failed validation"));
         }
-        RUVIA_CHECK_EQ(copied.issues().size(), std::size_t{0});
-        RUVIA_CHECK_EQ(moved.issues().size(), std::size_t{0});
+        RUVIA_CHECK_EQ(copied.validation_issues().size(), std::size_t{0});
+        RUVIA_CHECK_EQ(moved.validation_issues().size(), std::size_t{0});
     }
 
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
@@ -548,7 +549,7 @@ RUVIA_TEST(validator_throw_if_invalid_raises_on_issues) {
     bool threw = false;
     try {
         bad.throw_if_invalid();
-    } catch (const ruvia::validation_error&) {
+    } catch (const ruvia::http_error&) {
         threw = true;
     }
     RUVIA_CHECK(threw);
@@ -593,16 +594,16 @@ void check_owned_error(ruvia::testing::test_context& ruvia_ctx, const ruvia::val
         value.throw_if_invalid({.status_ = ruvia::http_status::unprocessable_content,
             .code_ = "invalid_payload",
             .message_ = "payload failed validation"});
-    } catch (const ruvia::validation_error& error) {
+    } catch (const ruvia::http_error& error) {
         rejected = true;
         RUVIA_CHECK_EQ(error.info().status(), ruvia::http_status::unprocessable_content);
         RUVIA_CHECK_EQ(error.info().code(), std::string_view("invalid_payload"));
         RUVIA_CHECK_EQ(std::string_view(error.what()), std::string_view("payload failed validation"));
-        RUVIA_CHECK_EQ(error.issues().size(), count);
-        if (error.issues().size() >= 2) {
-            RUVIA_CHECK_EQ(error.issues()[0].field(), std::string_view(std::string(128, 'f')));
-            RUVIA_CHECK_EQ(error.issues()[0].message(), std::string_view(std::string(256, 'm')));
-            RUVIA_CHECK_EQ(error.issues()[1].field(), std::string_view("secondary"));
+        RUVIA_CHECK_EQ(error.validation_issues().size(), count);
+        if (error.validation_issues().size() >= 2) {
+            RUVIA_CHECK_EQ(error.validation_issues()[0].field(), std::string_view(std::string(128, 'f')));
+            RUVIA_CHECK_EQ(error.validation_issues()[0].message(), std::string_view(std::string(256, 'm')));
+            RUVIA_CHECK_EQ(error.validation_issues()[1].field(), std::string_view("secondary"));
         }
     }
     RUVIA_CHECK(rejected);

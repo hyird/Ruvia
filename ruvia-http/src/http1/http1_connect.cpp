@@ -6,11 +6,14 @@ std::variant<http1_response_head_plan, http_protocol_error> prepare_http1_connec
     const http_response& response, http_protocol_version version) noexcept {
     if ((version != http_protocol_version::http10 && version != http_protocol_version::http11) ||
         !response.status().is_successful() || response.file_body() || !response.body_bytes().empty()) {
-        return http_protocol_error(http_status::internal_server_error, "invalid HTTP/1 CONNECT response head");
+        return http_protocol_error(http_status::internal_server_error,
+            "invalid_connect_response_head", "invalid HTTP/1 CONNECT response head");
     }
     for (const auto& header : response.headers()) {
         if (detail::http_field_name_in(header.name(), detail::http_message_framing_fields)) {
-            return http_protocol_error(http_status::internal_server_error, "CONNECT response cannot contain message framing fields");
+            return http_protocol_error(http_status::internal_server_error,
+                "connect_response_framing_fields",
+                "CONNECT response cannot contain message framing fields");
         }
     }
     const auto body = plan_http_response_body(http_known_method::connect, response.status());

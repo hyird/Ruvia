@@ -384,7 +384,7 @@ public:
 
     // Typed optional parsing with schema and field-rule validation. Only a
     // media-type mismatch yields nullopt; selected but malformed input throws
-    // HTTP 400, and rule violations throw validation_error.
+    // HTTP 400, and rule violations throw an http_error carrying the issues.
     template <typename t_type>
     [[nodiscard]] scoped_operation<std::optional<t_type>> json_if() const;
     template <typename t_type>

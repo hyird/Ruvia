@@ -206,36 +206,42 @@ enum class http_request_body_failure : std::uint8_t {
     http_request_body_failure failure) noexcept {
     switch (failure) {
         case http_request_body_failure::too_large:
-            return http_protocol_error(http_status::content_too_large, "request body is too large");
+            return http_protocol_error(
+                http_status::content_too_large, "request_body_too_large", "request body is too large");
         case http_request_body_failure::incomplete:
-            return http_protocol_error(http_status::bad_request, "incomplete request body");
+            return http_protocol_error(
+                http_status::bad_request, "incomplete_request_body", "incomplete request body");
     }
-    return http_protocol_error(http_status::bad_request, "invalid request body");
+    return http_protocol_error(http_status::bad_request, "invalid_request_body", "invalid request body");
 }
 
 [[nodiscard]] inline http_protocol_error http_request_chunk_decode_error(
     http1_chunk_decode_error error) noexcept {
     switch (error) {
         case http1_chunk_decode_error::invalid_framing:
-            return http_protocol_error(http_status::bad_request, "invalid chunked request body");
+            return http_protocol_error(
+                http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
         case http1_chunk_decode_error::body_limit_exceeded:
             return http_request_body_protocol_error(http_request_body_failure::too_large);
         case http1_chunk_decode_error::framing_limit_exceeded:
-            return http_protocol_error(
-                http_status::content_too_large, "request body framing is too large");
+            return http_protocol_error(http_status::content_too_large, "chunked_framing_too_large",
+                "request body framing is too large");
     }
-    return http_protocol_error(http_status::bad_request, "invalid chunked request body");
+    return http_protocol_error(
+        http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
 }
 
 [[nodiscard]] inline http_protocol_error http_request_transfer_coding_error(
     http_transfer_coding_decode_error error) noexcept {
     switch (error) {
         case http_transfer_coding_decode_error::invalid_content:
-            return http_protocol_error(http_status::bad_request, "invalid transfer-coding body");
+            return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body",
+                "invalid transfer-coding body");
         case http_transfer_coding_decode_error::decoded_size_exceeded:
             return http_request_body_protocol_error(http_request_body_failure::too_large);
     }
-    return http_protocol_error(http_status::bad_request, "invalid transfer-coding body");
+    return http_protocol_error(
+        http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
 }
 
 [[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_size_failure(

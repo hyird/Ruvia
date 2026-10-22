@@ -335,6 +335,18 @@ void worker_notification_state::complete_wait(
     continuation.resume();
 }
 
+namespace {
+
+// The only place a notification's state is built; both public constructors
+// hand their runtime's io_context and handle to this entry.
+[[nodiscard]] std::unique_ptr<worker_notification_state, pmr_object_deleter<worker_notification_state>>
+make_worker_notification_state(
+    asio::io_context& io_context, const worker_handle& worker, worker_notification_options options) {
+    return make_pmr_object<worker_notification_state>(process_resource(), io_context, worker, options);
+}
+
+}  // namespace
+
 }  // namespace ruvia::detail
 
 namespace ruvia {
@@ -354,17 +366,17 @@ worker_notification_wait_status worker_notification::wait_awaiter_type::await_re
     return owner_->state_->take_wait_result();
 }
 
-worker_notification::worker_notification(
-    worker_runtime& runtime, worker_notification_options options)
-    : state_(make_pmr_object<detail::worker_notification_state>(
-          process_resource(), runtime.io_context(), runtime.handle(), options)),
+worker_notification::worker_notification(state_pointer state) noexcept
+    : state_(std::move(state)),
       wait_awaiter_(*this) {}
 
 worker_notification::worker_notification(
+    worker_runtime& runtime, worker_notification_options options)
+    : worker_notification(detail::make_worker_notification_state(runtime.io_context(), runtime.handle(), options)) {}
+
+worker_notification::worker_notification(
     worker_runtime_context& runtime, worker_notification_options options)
-    : state_(make_pmr_object<detail::worker_notification_state>(
-          process_resource(), runtime.io_context(), runtime.handle(), options)),
-      wait_awaiter_(*this) {}
+    : worker_notification(detail::make_worker_notification_state(runtime.io_context(), runtime.handle(), options)) {}
 
 worker_notification::~worker_notification() = default;
 

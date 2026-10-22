@@ -48,21 +48,25 @@ RUVIA_TEST(http_header_value_rejects_injection) {
     RUVIA_CHECK(!is_valid_http_header_value(std::string_view("a\0b", 3)));
 }
 
-RUVIA_TEST(http_parse_error_messages) {
+RUVIA_TEST(http_parse_error_messages_and_codes) {
     const auto missing_host = http_parse_protocol_error(http_parse_error::missing_host);
     const auto header_too_large = http_parse_protocol_error(http_parse_error::header_too_large);
     const auto unsupported_version = http_parse_protocol_error(http_parse_error::unsupported_http_version);
     RUVIA_CHECK_EQ(std::string_view(missing_host.what()), std::string_view("missing Host header"));
+    RUVIA_CHECK_EQ(missing_host.code(), std::string_view("missing_host"));
     RUVIA_CHECK_EQ(
         std::string_view(header_too_large.what()), std::string_view("request header is too large"));
+    RUVIA_CHECK_EQ(header_too_large.code(), std::string_view("header_too_large"));
     RUVIA_CHECK_EQ(
         std::string_view(unsupported_version.what()), std::string_view("unsupported HTTP version"));
-    // The two Content-Length faults intentionally share one message.
+    RUVIA_CHECK_EQ(unsupported_version.code(), std::string_view("unsupported_http_version"));
+    // The two Content-Length faults carry distinct machine codes.
     const auto invalid_length = http_parse_protocol_error(http_parse_error::invalid_content_length);
     const auto conflicting_length =
         http_parse_protocol_error(http_parse_error::conflicting_content_length);
-    RUVIA_CHECK_EQ(
-        std::string_view(invalid_length.what()), std::string_view(conflicting_length.what()));
+    RUVIA_CHECK_EQ(invalid_length.code(), std::string_view("invalid_content_length"));
+    RUVIA_CHECK_EQ(conflicting_length.code(), std::string_view("conflicting_content_length"));
+    RUVIA_CHECK(invalid_length.status() == conflicting_length.status());
     // Reachable errors all map to a non-empty message.
     RUVIA_CHECK(
         std::string_view(http_parse_protocol_error(http_parse_error::invalid_transfer_encoding).what())

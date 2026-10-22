@@ -16,6 +16,7 @@
 #include "ruvia/http/http2_framing.h"
 
 #include "failing_memory_resource.h"
+#include "output_drain.h"
 #include "test_harness.h"
 
 namespace {
@@ -82,13 +83,12 @@ RUVIA_TEST(http2_public_receive_credit_retry_preserves_exact_window) {
             failing_memory_resource resource;
             {
                 auto client = ruvia::http2_connection::client({.resource_ = &resource});
-                const auto receive_window = advertised_receive_window(client.pending_output());
+                const auto receive_window = advertised_receive_window(ruvia::testing::drain_output(client));
                 RUVIA_CHECK(receive_window != 0);
-                (void)client.consume_output(client.pending_output().size());
                 const auto submitted = client.submit_request_head(
                     ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
                 RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
-                (void)client.consume_output(client.pending_output().size());
+                (void)ruvia::testing::drain_output(client);
 
                 std::pmr::string wire;
                 append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
@@ -120,7 +120,14 @@ RUVIA_TEST(http2_public_receive_credit_retry_preserves_exact_window) {
                 if (!wire.empty()) {
                     RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
                 }
-                const std::string prefix(client.pending_output());
+                // Output queued before the acknowledge (the SETTINGS and PING
+                // acknowledgements) must survive an allocation failure untouched,
+                // and a retry must append only the WINDOW_UPDATE frames.
+                std::pmr::string prefix;
+                append_frame(prefix, ruvia::http2_frame_type::settings, 0x1, 0, {});
+                for (std::size_t index = 0; index < prefix_frames; ++index) {
+                    append_frame(prefix, ruvia::http2_frame_type::ping, 0x1, 0, "12345678");
+                }
                 resource.fail_after(failure_point);
                 try {
                     RUVIA_CHECK(client.acknowledge(std::move(*credit)) ==
@@ -129,14 +136,21 @@ RUVIA_TEST(http2_public_receive_credit_retry_preserves_exact_window) {
                     ++allocation_failures;
                     resource.allow_allocations();
                     RUVIA_CHECK(credit->valid());
-                    RUVIA_CHECK(client.pending_output() == prefix);
+                    RUVIA_CHECK(ruvia::testing::drain_output(client) == std::string_view(prefix));
+                    prefix.clear();
                     RUVIA_CHECK(client.acknowledge(std::move(*credit)) ==
                                 ruvia::http2_received_data_acknowledge_status::acknowledged);
                 }
                 resource.allow_allocations();
                 RUVIA_CHECK(!credit->valid());
 
-                auto updates = client.pending_output().substr(prefix.size());
+                const auto output = ruvia::testing::drain_output(client);
+                RUVIA_CHECK(output.starts_with(prefix));
+                if (!output.starts_with(prefix)) {
+                    return;
+                }
+                std::string_view updates(output);
+                updates.remove_prefix(prefix.size());
                 std::size_t connection_updates = 0;
                 std::size_t stream_updates = 0;
                 while (!updates.empty()) {
@@ -155,7 +169,7 @@ RUVIA_TEST(http2_public_receive_credit_retry_preserves_exact_window) {
                 }
                 RUVIA_CHECK_EQ(connection_updates, std::size_t{1});
                 RUVIA_CHECK_EQ(stream_updates, std::size_t{1});
-                (void)client.consume_output(client.pending_output().size());
+                RUVIA_CHECK(!client.wants_write());
 
                 // One successful acknowledgement restores exactly one window,
                 // including after an allocation failure and retry.

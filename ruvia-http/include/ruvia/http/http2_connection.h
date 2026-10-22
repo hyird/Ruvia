@@ -71,7 +71,7 @@ struct http2_extended_connect_request_head_view final {
 };
 
 // Stable HTTP/2 sans-I/O driver. Feed transport bytes, drain typed events, and
-// flush pending_output(); the class owns all HPACK, stream and flow-control state.
+// write out take_output_batch(); the class owns all HPACK, stream and flow-control state.
 // The storage behind an accepted feed() input must remain alive and unchanged
 // until every event produced by that call has been taken and every event-derived
 // byte view has expired. Calling feed() again may invalidate those views; owning
@@ -123,16 +123,12 @@ public:
     template <detail::http_temporary_owning_char_string input_type>
     http2_feed_result feed(input_type&&) = delete;
     [[nodiscard]] std::optional<http2_event> next_event();
-    [[nodiscard]] std::string_view pending_output() const& noexcept;
-    std::string_view pending_output() const&& = delete;
-    [[nodiscard]] http2_output_consume_status consume_output(std::size_t bytes);
     void take_output(std::pmr::string& output);
     // Appends whole frame boundaries (the first frame may exceed max_bytes).
     // A complete unconsumed batch swaps storage when output is empty and its
     // allocator matches the connection; all other cases copy the selected bytes.
-    // On copy failure the output cursor and observer are untouched. After legacy
-    // partial-byte consume_output(), a cursor inside a segment returns unaligned;
-    // advance to its next boundary or drain the suffix with take_output().
+    // On copy failure the output cursor and observer are untouched. The cursor
+    // always rests on a frame boundary; take_output() drains every pending frame.
     // A client preface is treated as one indivisible segment.
     [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes,
         std::pmr::string& output, http2_data_output_observer_type observer = nullptr,
@@ -148,8 +144,6 @@ public:
         const http2_connect_request_head_view& request);
     [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(
         const http2_extended_connect_request_head_view& request);
-    // Bytes may borrow pending_output(); such input is copied in the connection
-    // resource before output growth can invalidate that source.
     [[nodiscard]] http2_data_submit_status submit_data(
         std::uint32_t stream_id, std::string_view bytes, http2_end_stream end_stream);
     [[nodiscard]] http2_finish_request_status finish_request(std::uint32_t stream_id,

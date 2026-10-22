@@ -124,32 +124,46 @@ RUVIA_MODEL(http_error_response_model,
 
 }  // namespace
 
-// http_error keeps the process resource. An exception object may escape the
-// worker that handles it: one thrown by a run_blocking callable is built on a
-// blocking-pool thread and rethrown on the worker, a task stores it in an
+// http_error defaults to the process resource. An exception object may escape
+// the worker that handles it: one thrown by a run_blocking callable is built on
+// a blocking-pool thread and rethrown on the worker, a task stores it in an
 // exception_ptr, application::run rethrows it to its caller, and a handler may
 // hand it to another thread. The thread that frees its text is unknown when it
 // is built, which rules out the worker's unsynchronized pool. Short codes and
 // messages (most framework errors) fit the strings' inline buffers and
-// allocate nothing.
+// allocate nothing. The dispatcher binds its own copies to the request arena.
 http_error::http_error(http_error_info_options options)
+    : http_error(options, process_resource()) {}
+
+http_error::http_error(http_error_info_options options, std::pmr::memory_resource* resource)
     : status_(options.status_),
-      status_text_(options.status_text_.view(), process_resource()),
-      code_(options.code_.view(), process_resource()),
-      message_(options.message_.view(), process_resource()) {}
+      status_text_(options.status_text_.view(), resource),
+      code_(options.code_.view(), resource),
+      message_(options.message_.view(), resource),
+      validation_issues_(
+          detail::clone_validation_issues(options.validation_issues_.view(), resource)) {}
 
 http_error::http_error(const http_error& other)
+    : http_error(other, other.resource()) {}
+
+http_error::http_error(const http_error& other, std::pmr::memory_resource* resource)
     : status_(other.status_),
-      status_text_(other.status_text_, process_resource()),
-      code_(other.code_, process_resource()),
-      message_(other.message_, process_resource()) {}
+      status_text_(other.status_text_, resource),
+      code_(other.code_, resource),
+      message_(other.message_, resource),
+      validation_issues_(detail::clone_validation_issues(other.validation_issues_, resource)) {}
 
 http_error& http_error::operator=(const http_error& other) {
     if (this != &other) {
+        auto copied_issues = detail::clone_validation_issues(other.validation_issues_, resource());
+        std::pmr::string copied_status_text(other.status_text_, resource());
+        std::pmr::string copied_code(other.code_, resource());
+        std::pmr::string copied_message(other.message_, resource());
+        validation_issues_.swap(copied_issues);
+        status_text_.swap(copied_status_text);
+        code_.swap(copied_code);
+        message_.swap(copied_message);
         status_ = other.status_;
-        status_text_ = other.status_text_;
-        code_ = other.code_;
-        message_ = other.message_;
     }
     return *this;
 }
@@ -159,8 +173,11 @@ const char* http_error::what() const noexcept {
 }
 
 http_error_info http_error::info() const& noexcept {
-    return http_error_info(
-        {.status_ = status_, .code_ = code_, .message_ = message_, .status_text_ = status_text_});
+    return http_error_info({.status_ = status_,
+        .code_ = code_,
+        .message_ = message_,
+        .status_text_ = status_text_,
+        .validation_issues_ = validation_issues_});
 }
 
 std::string_view default_error_code(http_status_code status) noexcept {

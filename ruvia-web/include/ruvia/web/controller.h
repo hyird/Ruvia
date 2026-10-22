@@ -49,6 +49,9 @@ public:
 
     static constexpr std::size_t ruvia_request_body_limit_bytes = max_bytes;
 
+    // Satisfies the middleware concept so the type can sit in a route's
+    // middleware list; the router drops the descriptor from the chain, so this
+    // never runs.
     task<void> handle(context&, next& next_value) {
         co_await next_value();
     }

@@ -19,11 +19,13 @@ application& application::database(db_registration_config config) {
             detail::validate_capability_alias(config.alias_.view(), "database alias must not be empty");
             detail::db_definition replacement{std::pmr::string(config.alias_.view(), resource),
                 detail::db_config_storage(config.config_, resource)};
-#ifdef RUVIA_ENABLE_REDIS
             if (config.query_cache_) {
+#ifdef RUVIA_ENABLE_REDIS
                 replacement.query_cache_.emplace(*config.query_cache_, resource);
-            }
+#else
+                throw std::invalid_argument("database query cache requires Redis support");
 #endif
+            }
             detail::upsert_named_capability_definition(state_value.databases_, std::move(replacement));
         });
 }

@@ -75,9 +75,9 @@ struct db_config final {
     std::optional<std::chrono::milliseconds> acquire_timeout_{std::chrono::seconds(5)};
 };
 
-#ifdef RUVIA_ENABLE_REDIS
-// Query-result caching stores rows in Redis, so it exists only in builds with
-// Redis support.
+// Query-result caching stores rows in Redis. The types are declared in every
+// build so the public layout does not depend on feature macros; registering a
+// cache in a build without Redis support is rejected at configuration time.
 struct db_cache_config final {
     std::chrono::milliseconds duration_{1000};
     bool always_enabled_{false};
@@ -91,7 +91,6 @@ struct db_query_cache_registration final {
     std::string redis_alias_{"default"};
     db_cache_config policy_{};
 };
-#endif
 
 struct db_cache_options final {
     borrowed_text id_{};

@@ -456,7 +456,11 @@ public:
             }
         }
         if (!s.returning_.empty()) {
-            output_.require_pg("RETURNING");
+            // MariaDB (>= 10.5) accepts RETURNING on INSERT and DELETE but not
+            // on UPDATE (MDEV-10014).
+            if (s.kind_ == db_query_kind::update) {
+                output_.require_pg("UPDATE ... RETURNING");
+            }
             output_.sql_ += " RETURNING ";
             expressions(s, s.returning_, depth + 1, true);
         }

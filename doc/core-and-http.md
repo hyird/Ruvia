@@ -89,7 +89,7 @@ pool.join();
 | `"ruvia/http/http_io_buffer.h"` | `class http_io_buffer final` | PMR 流式读写缓冲区：`prepare(n)`、`commit(n)`、`append(bytes)`、`view()`、`consume(n)`、`clear_retaining_small()` |
 | `"ruvia/http/http_protocol_version.h"` / `"ruvia/http/http_known_method.h"` | `http_protocol_version`（`http10`, `http11`, `http2`）、`http_scheme`（`http`, `https`）、`http_known_method`、`classify_http_method`、`is_valid_http_method_token` | 协议版本、Scheme 与 HTTP 方法分类及幂等/安全性判断 |
 | `"ruvia/http/http_status.h"` | `class http_status_code final`、`namespace ruvia::http_status`、`http_reason_phrase` | 强类型 HTTP 状态码（`100..599`）与标准状态码常量（`http_status::ok`、`not_found` 等） |
-| `"ruvia/http/http_protocol_error.h"` | `class http_protocol_error final : public std::exception`、`enum class http_parse_error` | 零动态分配的协议错误异常（携带对应 `http_status_code`）与解析错误枚举 |
+| `"ruvia/http/http_protocol_error.h"` | `class http_protocol_error final : public std::exception`、`enum class http_parse_error` | 零动态分配的协议错误异常（`http_protocol_error(status, code, message)`：携带 `http_status_code`、静态存储期的稳定 snake_case 机器码 `code()`（如 `missing_host`、`conflicting_content_length`）与定长诊断文本）与解析错误枚举 |
 | `"ruvia/http/http_request_target.h"` | `http_authority_view`、`http_origin_view`、`parse_http_authority`、`is_valid_http_origin_form_target`、`is_valid_http_connect_authority`、`is_valid_http_serialized_origin` | RFC 9110 / RFC 3986 请求目标、Authority 与 Origin 语法校验和解析 |
 | `"ruvia/http/url_encoding.h"` / `"ruvia/http/http_hex.h"` / `"ruvia/http/http_base64.h"` | `decode_url_component`、`validate_url_encoding`、`visit_url_encoded_pairs`、`http_encode_lower_hex`、`http_base64_encode`、`http_base64_decode` | URL 百分号/表单编解码、十六进制转换、标准与 URL-safe Base64 编解码 |
 
@@ -157,10 +157,12 @@ while (auto ev = conn.next_event()) {
     }
 }
 
-// 3. 取出待发往网络的编码字节：
-if (conn.wants_write()) {
-    std::string_view out = conn.pending_output();
-    // 写出 out 后调用 conn.consume_output(out.size());
+// 3. 取出待发往网络的编码字节（按整帧边界分批，游标始终停在帧边界）：
+std::pmr::string out(resource);
+while (conn.wants_write()) {
+    out.clear();
+    (void)conn.take_output_batch(16384, out);
+    // 写出 out
 }
 ```
 

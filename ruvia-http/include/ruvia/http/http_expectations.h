@@ -36,7 +36,8 @@ enum class http_server_expectation_plan : std::uint8_t {
 };
 
 [[nodiscard]] inline http_protocol_error http_unsupported_expectation_error() noexcept {
-    return http_protocol_error(http_status::expectation_failed, "unsupported Expect header");
+    return http_protocol_error(
+        http_status::expectation_failed, "unsupported_expectation", "unsupported Expect header");
 }
 
 // Incremental recipient-side state for the RFC 9110 Expect #list. Repeated field

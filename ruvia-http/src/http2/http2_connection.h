@@ -12,7 +12,7 @@
 // timeouts live entirely in the caller; any runtime can drive it, nghttp2-style.
 //
 // Design mirrors nghttp2's mem_recv / mem_send: feed() ~ nghttp2_session_mem_recv,
-// pending_output()/consume_output() ~ nghttp2_session_mem_send. Flow-control back
+// take_output_batch()/take_output() ~ nghttp2_session_mem_send. Flow-control back
 // pressure has explicit ownership: submit_data either accepts the full input (possibly
 // copying a deferred suffix) or accepts none until the prior queued input drains.
 // Final response Content-Length uses the same ownership boundary: accepted bytes are
@@ -130,17 +130,13 @@ public:
         std::uint32_t stream_id) const noexcept;
 
     // --- outbound --------------------------------------------------------------
-    // Bytes the core wants written to the peer (frame headers + payloads, batched).
-    [[nodiscard]] std::string_view pending_output() const& noexcept;
-    [[nodiscard]] std::string_view pending_output() const&& = delete;
-    // Acknowledges at most the current pending size. An out-of-range count is
-    // rejected without clearing bytes or advancing the cursor.
-    http2_output_consume_status consume_output(std::size_t bytes);
-    // Move ALL pending outbound bytes into `into` (allocator-matching swap when nothing
-    // was partially consumed, so the common path is copy-free) and reset the buffer.
-    // REQUIRED for any writer that awaits mid-write: a pending_output() view dangles if
-    // a concurrent submit reallocates the buffer during the write.
+    // Move ALL pending outbound bytes into `into` (allocator-matching swap when the
+    // cursor is at the buffer start, so the common path is copy-free) and reset the
+    // buffer. Writers own the bytes they await on; the connection never exposes a
+    // view into its outbound storage.
     void take_output(std::pmr::string& into);
+    // Moves whole frames up to max_bytes (the first frame may exceed it); the
+    // cursor always rests on a frame boundary.
     [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes,
         std::pmr::string& into, http2_data_output_observer_type observer, void* observer_context);
     [[nodiscard]] bool wants_write() const noexcept {
@@ -396,15 +392,13 @@ private:
         http2_stream_state& stream, std::string_view header_block, http2_end_stream end_stream,
         std::size_t additional_output_bytes = 0, std::size_t additional_output_segments = 0);
     struct prepared_data_submission final {
-        explicit prepared_data_submission(std::pmr::memory_resource* resource)
-            : owned_input_(resource) {}
+        prepared_data_submission() = default;
         prepared_data_submission(const prepared_data_submission&) = delete;
         prepared_data_submission& operator=(const prepared_data_submission&) = delete;
         prepared_data_submission(prepared_data_submission&&) = delete;
         prepared_data_submission& operator=(prepared_data_submission&&) = delete;
 
         std::string_view input_;
-        std::pmr::string owned_input_;
         std::optional<http2_pending_send> deferred_;
         std::size_t output_bytes_{0};
         std::size_t output_segments_{0};

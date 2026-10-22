@@ -39,9 +39,8 @@ struct app_state;
 struct db_registration_config final {
     borrowed_text alias_{"default"};
     db_config config_{};
-#ifdef RUVIA_ENABLE_REDIS
+    // Requires Redis support; without it, database() rejects a present value.
     std::optional<db_query_cache_registration> query_cache_{};
-#endif
 };
 #endif
 

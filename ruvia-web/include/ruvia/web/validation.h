@@ -31,19 +31,6 @@ enum class validation_target : std::uint8_t { json,
     cookie };
 namespace detail {
 
-[[nodiscard]] inline std::pmr::vector<validation_issue> clone_validation_issues(
-    std::span<const validation_issue> issues, std::pmr::memory_resource* resource) {
-    // Empty containers can allocate debug iterator proxies. Use a constructor
-    // that can propagate failure while the original diagnostics remain intact.
-    std::pmr::vector<validation_issue> copied(std::initializer_list<validation_issue>{}, resource);
-    const auto count = std::min(issues.size(), max_validation_issues);
-    copied.reserve(count);
-    for (const auto& issue : issues.first(count)) {
-        copied.push_back(validation_issue_access::copy(issue, resource));
-    }
-    return copied;
-}
-
 template <typename t_type>
 [[nodiscard]] std::string_view validation_string_view(const t_type& value) noexcept {
     if constexpr (requires { value.view(); }) {
@@ -55,87 +42,12 @@ template <typename t_type>
 
 }  // namespace detail
 
-struct validation_error_options final {
+// How validator::throw_if_invalid presents its issues: the http_error it throws
+// carries these values together with the collected validation issues.
+struct validation_failure_options final {
     http_status_code status_{http_status::bad_request};
     borrowed_text code_{"validation_failed"};
     borrowed_text message_{"request validation failed"};
-};
-
-// Like http_error, an exception that may be rethrown and destroyed on a thread
-// other than the one that built it, so its diagnostics live in the process
-// resource rather than a worker's unsynchronized pool. A validator is a plain
-// value and uses the resource it is given.
-class validation_error final : public std::exception {
-public:
-    using issue_list_type = std::pmr::vector<validation_issue>;
-
-    explicit validation_error(const issue_list_type& issues, validation_error_options options = {})
-        : issues_(detail::clone_validation_issues(issues, process_resource())),
-          status_code_(options.status_),
-          code_(options.code_.view(), process_resource()),
-          message_(options.message_.view(), process_resource()) {}
-
-    validation_error(const validation_error& other)
-        : issues_(detail::clone_validation_issues(other.issues_, process_resource())),
-          status_code_(other.status_code_),
-          code_(other.code_, process_resource()),
-          message_(other.message_, process_resource()) {}
-
-    validation_error& operator=(const validation_error& other) {
-        if (this == &other) {
-            return *this;
-        }
-
-        auto copied_issues = detail::clone_validation_issues(other.issues_, process_resource());
-        std::pmr::string copied_code(other.code_, process_resource());
-        std::pmr::string copied_message(other.message_, process_resource());
-        issues_.swap(copied_issues);
-        code_.swap(copied_code);
-        message_.swap(copied_message);
-        status_code_ = other.status_code_;
-        return *this;
-    }
-
-    validation_error(validation_error&& other) noexcept
-        : issues_(std::move(other.issues_)),
-          status_code_(other.status_code_),
-          code_(std::move(other.code_)),
-          message_(std::move(other.message_)) {}
-
-    validation_error& operator=(validation_error&& other) {
-        if (this == &other) {
-            return *this;
-        }
-
-        issues_ = std::move(other.issues_);
-        status_code_ = other.status_code_;
-        code_ = std::move(other.code_);
-        message_ = std::move(other.message_);
-        return *this;
-    }
-
-    [[nodiscard]] const char* what() const noexcept override {
-        return message_.c_str();
-    }
-
-    [[nodiscard]] const issue_list_type& issues() const& noexcept {
-        return issues_;
-    }
-    [[nodiscard]] const issue_list_type& issues() const&& = delete;
-
-    [[nodiscard]] http_error_info info() const& noexcept {
-        return http_error_info({.status_ = status_code_,
-            .code_ = code_,
-            .message_ = message_,
-            .validation_issues_ = issues_});
-    }
-    [[nodiscard]] http_error_info info() const&& = delete;
-
-private:
-    issue_list_type issues_{process_resource()};
-    http_status_code status_code_{http_status::bad_request};
-    std::pmr::string code_{process_resource()};
-    std::pmr::string message_{process_resource()};
 };
 
 // Diagnostics belong to the configured PMR resource. Copy and move construction
@@ -146,7 +58,7 @@ private:
 // empty source that can be reused with its original resource.
 class validator final {
 public:
-    using issue_list_type = validation_error::issue_list_type;
+    using issue_list_type = std::pmr::vector<validation_issue>;
 
     struct options_type final {
         std::pmr::memory_resource* resource_{nullptr};
@@ -274,9 +186,14 @@ public:
         return issues_.get_allocator().resource();
     }
 
-    void throw_if_invalid(validation_error_options options = {}) const& {
+    // Throws an http_error owning copies of the issues in the process resource,
+    // so the exception outlives this validator and its resource.
+    void throw_if_invalid(validation_failure_options options = {}) const& {
         if (!ok()) {
-            throw validation_error(issues_, options);
+            throw http_error({.status_ = options.status_,
+                .code_ = options.code_,
+                .message_ = options.message_,
+                .validation_issues_ = issues_});
         }
     }
 

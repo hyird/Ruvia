@@ -57,10 +57,12 @@ RUVIA_TEST(http_reason_phrase_does_not_mislabel_extension_statuses) {
 
 RUVIA_TEST(http_protocol_error_owns_bounded_diagnostic_without_allocation) {
     std::string source_value(200, 'x');
-    const http_protocol_error error(ruvia::http_status::content_too_large, source_value);
+    const http_protocol_error error(
+        ruvia::http_status::content_too_large, "body_too_large", source_value);
     source_value.assign(200, 'y');
 
     RUVIA_CHECK_EQ(error.status(), ruvia::http_status::content_too_large);
+    RUVIA_CHECK_EQ(error.code(), std::string_view("body_too_large"));
     const auto diagnostic = std::string_view(error.what());
     RUVIA_CHECK_EQ(diagnostic.size(), std::size_t{127});
     RUVIA_CHECK(diagnostic.find_first_not_of('x') == std::string_view::npos);

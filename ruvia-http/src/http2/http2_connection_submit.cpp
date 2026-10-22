@@ -299,7 +299,7 @@ http2_data_submit_status http2_connection::submit_data(
             throw std::logic_error("HTTP/2 request content was canceled");
         }
     }
-    prepared_data_submission prepared(resource_);
+    prepared_data_submission prepared;
     const auto status = prepare_data_submission(*stream, chunk, end_stream, stream->local_content(), prepared);
     if (status != http2_data_submit_status::accepted) {
         return status;
@@ -331,10 +331,6 @@ http2_data_submit_status http2_connection::prepare_data_submission(http2_stream_
             throw std::invalid_argument("HTTP/2 DATA exceeds declared Content-Length");
         case http2_local_content_check::length_incomplete:
             throw std::invalid_argument("HTTP/2 DATA ended before declared Content-Length");
-    }
-    if (http_text_overlaps(chunk, output_.pending())) {
-        prepared.owned_input_.assign(chunk);
-        chunk = prepared.owned_input_;
     }
     prepared.input_ = chunk;
     prepared.end_stream_ = end_stream;

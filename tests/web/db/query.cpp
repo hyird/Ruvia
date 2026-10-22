@@ -551,6 +551,35 @@ RUVIA_TEST(db_query_bulk_upsert_conditions_and_returning) {
     RUVIA_CHECK_EQ(statement.params().size(), std::size_t{3});
 }
 
+RUVIA_TEST(db_query_mariadb_returning_on_insert_and_delete_but_not_update) {
+    db_query upsert;
+    const std::array<std::string_view, 2> columns{"id", "revision"};
+    upsert.insert_into("device", columns);
+    const std::array row{upsert.value(db_value(7)), upsert.value(db_value(2))};
+    upsert.values(row);
+    upsert.on_conflict({.update_ = {{"revision", upsert.excluded("revision")}}, .any_unique_key_ = true});
+    const std::array returned{upsert.column("id"), upsert.alias(upsert.column("revision"), "rev")};
+    upsert.returning(returned);
+    const auto inserted = upsert.compile(db_driver::mariadb, nullptr);
+    RUVIA_CHECK_EQ(inserted.sql(), "INSERT INTO `device` (`id`, `revision`) VALUES (?, ?) ON DUPLICATE KEY UPDATE `revision` = VALUES(`revision`) RETURNING `id`, `revision` AS `rev`");
+    RUVIA_CHECK(inserted.returns_rows());
+
+    db_query removed;
+    removed.delete_from("device").where(removed.binary(removed.column("id"), op_type::equal, removed.value(db_value(7))));
+    const std::array removed_columns{removed.column("id")};
+    removed.returning(removed_columns);
+    const auto deleted = removed.compile(db_driver::mariadb, nullptr);
+    RUVIA_CHECK_EQ(deleted.sql(), "DELETE FROM `device` WHERE (`id` = ?) RETURNING `id`");
+
+    db_query updated;
+    updated.update("device").set("revision", updated.value(db_value(3)));
+    const std::array updated_columns{updated.column("id")};
+    updated.returning(updated_columns);
+    const auto updated_postgres = updated.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK(updated_postgres.returns_rows());
+    RUVIA_CHECK(testing::throws_on([&] { (void)updated.compile(db_driver::mariadb, nullptr); }));
+}
+
 RUVIA_TEST(db_query_set_operations_preserve_grouping_and_nested_limits) {
     db_query first, second, third;
     first.select(first.value(db_value(1)));
@@ -1086,7 +1115,8 @@ RUVIA_TEST(db_query_dml_and_conflict_overloads_cover_postgresql_and_mariadb) {
     returning.insert_into("cq_devices", {"id"}).values({returning.value(1)}).returning({returning.column("id")});
     const auto returning_statement = returning.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK(returning_statement.returns_rows());
-    RUVIA_CHECK(testing::throws_on([&] { (void)returning.compile(db_driver::mariadb, nullptr); }));
+    const auto maria_returning = returning.compile(db_driver::mariadb, nullptr);
+    RUVIA_CHECK_EQ(maria_returning.sql(), "INSERT INTO `cq_devices` (`id`) VALUES (?) RETURNING `id`");
 }
 
 RUVIA_TEST(db_query_lock_cte_and_set_operation_enumerations_cover_supported_and_rejected_paths) {

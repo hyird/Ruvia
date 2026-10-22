@@ -20,7 +20,7 @@ namespace {
 //
 // PING flood: every non-ACK PING is echoed as an ACK into the outbound buffer. Cap the
 // number of inbound PINGs seen since the owner last drained output; the counter resets on
-// every output drain (consume_output/take_output = ACKs flushed), so healthy keepalive
+// every output drain (take_output_batch/take_output = ACKs flushed), so healthy keepalive
 // never trips and only a peer piling on PINGs faster than we can flush the ACKs does.
 constexpr std::uint32_t http2_max_undrained_pings = 1000;
 // SETTINGS flood (CVE-2019-9515): every non-ACK SETTINGS frame is likewise echoed as a
@@ -63,19 +63,6 @@ http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_ro
 }
 
 // --- outbound byte buffer (batched writes) ------------------------------------
-
-std::string_view http2_connection::pending_output() const& noexcept {
-    return output_.pending();
-}
-
-http2_output_consume_status http2_connection::consume_output(std::size_t bytes_value) {
-    const auto status = output_.consume(bytes_value);
-    if (status == http2_output_consume_status::drained) {
-        consecutive_pings_ = 0;     // outbound (incl. PING ACKs) fully flushed
-        consecutive_settings_ = 0;  // outbound (incl. SETTINGS ACKs) fully flushed
-    }
-    return status;
-}
 
 http2_output_batch_result http2_connection::take_output_batch(std::size_t max_bytes,
     std::pmr::string& into, http2_data_output_observer_type observer, void* observer_context) {

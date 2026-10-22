@@ -38,10 +38,11 @@ std::pmr::string decode_http_request_content(
     }
     switch (std::get<http_content_decode_error>(result_value)) {
         case http_content_decode_error::unsupported_coding:
-            throw http_protocol_error(
-                http_status::unsupported_media_type, "request Content-Encoding is not supported");
+            throw http_protocol_error(http_status::unsupported_media_type,
+                "unsupported_content_coding", "request Content-Encoding is not supported");
         case http_content_decode_error::invalid_content:
-            throw http_protocol_error(http_status::bad_request, "failed to decode request body");
+            throw http_protocol_error(http_status::bad_request, "invalid_content_coding",
+                "failed to decode request body");
         case http_content_decode_error::decoded_size_exceeded:
             throw http_request_body_protocol_error(http_request_body_failure::too_large);
         case http_content_decode_error::decoder_failure:

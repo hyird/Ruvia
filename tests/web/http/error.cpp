@@ -2,7 +2,6 @@
 
 #include <exception>
 #include <memory_resource>
-#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -21,8 +20,6 @@ using ruvia::default_error_code;
 using ruvia::http_error;
 
 }  // namespace
-
-using validation_issues_owning_view_type = std::ranges::owning_view<ruvia::validation_error::issue_list_type>;
 
 RUVIA_TEST(default_error_code_mapping) {
     RUVIA_CHECK_EQ(

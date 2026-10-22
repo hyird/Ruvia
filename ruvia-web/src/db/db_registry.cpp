@@ -157,10 +157,11 @@ void detail::db_registry::close_now() noexcept {
 
 db_handle detail::db_registry::handle(const entry_type& entry, ::ruvia::operation_scope& operation_scope) const {
 #ifdef RUVIA_ENABLE_REDIS
-    return db_handle(pool_ref(entry.pool_), resource_, operation_scope, entry.cache_.get());
+    detail::db_query_cache_state* const cache = entry.cache_.get();
 #else
-    return db_handle(pool_ref(entry.pool_), resource_, operation_scope);
+    detail::db_query_cache_state* const cache = nullptr;
 #endif
+    return db_handle(pool_ref(entry.pool_), resource_, operation_scope, cache);
 }
 
 bool detail::db_registry::empty() const noexcept {

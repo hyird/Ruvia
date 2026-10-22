@@ -129,7 +129,7 @@ RUVIA_TEST(model_defaults_only_fill_optional_missing_values) {
     bool default_rule_rejected = false;
     try {
         (void)ruvia::from_form<invalid_default_value>("");
-    } catch (const ruvia::validation_error&) {
+    } catch (const ruvia::http_error&) {
         default_rule_rejected = true;
     }
     RUVIA_CHECK(default_rule_rejected);

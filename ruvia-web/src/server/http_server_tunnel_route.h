@@ -38,7 +38,8 @@ prepare_http1_tunnel_response_head_plan(
     }
     const auto upgrade = prepare_http1_connect_udp_response_head(head_response);
     if ((upgrade.index() != 0)) {
-        return http_protocol_error(http_status::internal_server_error, "invalid CONNECT-UDP response head");
+        return http_protocol_error(http_status::internal_server_error,
+            "invalid_connect_udp_response_head", "invalid CONNECT-UDP response head");
     }
     return std::get<0>(upgrade);
 }

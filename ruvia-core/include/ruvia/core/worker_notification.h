@@ -86,9 +86,12 @@ public:
     void close();
 
 private:
-    std::unique_ptr<detail::worker_notification_state,
-        pmr_object_deleter<detail::worker_notification_state>>
-        state_;
+    using state_pointer = std::unique_ptr<detail::worker_notification_state,
+        pmr_object_deleter<detail::worker_notification_state>>;
+
+    explicit worker_notification(state_pointer state) noexcept;
+
+    state_pointer state_;
     wait_awaiter_type wait_awaiter_;
 };
 

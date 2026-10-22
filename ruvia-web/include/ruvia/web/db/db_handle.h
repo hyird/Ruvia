@@ -41,9 +41,7 @@ class redis_handle;
 
 namespace detail {
 class db_client_state;
-#ifdef RUVIA_ENABLE_REDIS
 class db_query_cache_state;
-#endif
 struct db_query_backend;
 struct db_query_plan;
 }  // namespace detail
@@ -387,13 +385,10 @@ private:
             detail::map_db_query<result_type>(scope, std::move(task_value), resource_, std::move(mapper)));
     }
 
-#ifdef RUVIA_ENABLE_REDIS
+    // cache is nullptr when the alias has no query cache; without Redis
+    // support it is always nullptr.
     db_handle(detail::db_pool_ref_type client, std::pmr::memory_resource* resource,
         operation_scope& operation_scope, detail::db_query_cache_state* cache) noexcept;
-#else
-    db_handle(detail::db_pool_ref_type client, std::pmr::memory_resource* resource,
-        operation_scope& operation_scope) noexcept;
-#endif
     [[nodiscard]] detail::db_query_backend query_backend() const;
     static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::pmr::string sql,
         std::pmr::vector<db_value> params, std::pmr::memory_resource* resource,
@@ -402,9 +397,7 @@ private:
         operation_scope& operation_scope, operation_options operation_options,
         db_transaction_options transaction_options);
 
-#ifdef RUVIA_ENABLE_REDIS
     detail::db_query_cache_state* cache_{nullptr};
-#endif
     detail::db_pool_ref_type client_;
     std::pmr::memory_resource* resource_;
     operation_options options_;

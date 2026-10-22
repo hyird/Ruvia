@@ -647,6 +647,46 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
     }
 }
 
+RUVIA_TEST(db_repository_save_compiles_returning_on_every_driver_but_update_returning_only_on_postgresql) {
+    const std::array drivers{
+#ifdef RUVIA_ENABLE_POSTGRESQL
+        db_driver::postgresql,
+#endif
+#ifdef RUVIA_ENABLE_MARIADB
+        db_driver::mariadb,
+#endif
+    };
+    for (const auto driver : drivers) {
+        repository_runtime runtime;
+        test::with_connected_db_client(runtime.attachment_, db_config{.driver_ = driver}, [&](db_client& client) -> task<void> {
+            auto repository = client.handle().repository<entity_type>();
+            entity_type input;
+            input.set<"id">(1);
+            input.set<"name">("Ada");
+            // save() upserts through RETURNING; MariaDB accepts it on INSERT.
+            auto saved = repository.save(input);
+            (void)saved;
+            std::array<entity_type, 2> batch;
+            batch[0].set<"id">(1);
+            batch[0].set<"name">("Ada");
+            batch[1].set<"id">(2);
+            batch[1].set<"name">("Bob");
+            auto saved_many = repository.save(batch);
+            (void)saved_many;
+
+            auto updated = repository.update_builder();
+            updated.where(entity_type::column<"id">() == 1).set({entity_type::column<"name">() = "next"}).returning({{"id"}});
+            if (driver == db_driver::postgresql) {
+                auto one = updated.get_one();
+                (void)one;
+            } else {
+                RUVIA_CHECK(testing::throws_on([&] { (void)updated.get_one(); }));
+            }
+            co_return;
+        });
+    }
+}
+
 #ifdef RUVIA_ENABLE_POSTGRESQL
 RUVIA_DB_ENTITY(role_entity, "roles",
     db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,

@@ -35,11 +35,6 @@ public:
         : bytes_(std::string_view{}, resource),
           segments_(std::size_t{0}, resource) {}
 
-    [[nodiscard]] std::string_view pending() const& noexcept {
-        return std::string_view(bytes_).substr(consumed_);
-    }
-    [[nodiscard]] std::string_view pending() const&& = delete;
-
     [[nodiscard]] bool wants_write() const noexcept {
         return consumed_ < bytes_.size();
     }
@@ -63,24 +58,6 @@ public:
         if (!segments_.empty() && segments_.back().end_ > physical_checkpoint) {
             std::terminate();
         }
-    }
-
-    [[nodiscard]] http2_output_consume_status consume(std::size_t bytes_value) {
-        const auto remaining = bytes_.size() - consumed_;
-        if (bytes_value > remaining) {
-            throw std::out_of_range("HTTP/2 output consume byte count exceeds pending output");
-        }
-        if (bytes_value < remaining) {
-            consumed_ += bytes_value;
-            while (segment_offset_ < segments_.size() &&
-                   segments_[segment_offset_].end_ <= consumed_) {
-                ++segment_offset_;
-            }
-            compact_consumed_prefix();
-            return http2_output_consume_status::pending;
-        }
-        reset_after_drain(base_offset_ + bytes_.size());
-        return http2_output_consume_status::drained;
     }
 
     // Moves every pending byte into `into`. With matching allocators and no
@@ -145,7 +122,7 @@ public:
         const auto begin = bytes_.size();
         // A frame is the smallest wire-level transaction. Reserve the complete
         // frame before appending any part so a throwing PMR resource cannot leave
-        // a header or prefix without its payload in pending_output().
+        // a header or prefix without its payload in the pending output.
         reserve_additional(http2_frame_header_bytes + first.size() + second.size());
         append_raw(std::string_view(header.data(), header.size()));
         append_raw(first);
@@ -161,16 +138,12 @@ public:
         if (consumed_ == bytes_.size()) {
             return {http2_output_batch_status::empty, 0};
         }
-        if (segment_offset_ == segments_.size() || segments_[segment_offset_].begin_ != consumed_) {
-            throw std::logic_error("HTTP/2 output batch cursor is not aligned to a frame boundary");
-        }
+        // Every append records a segment, and the cursor only advances by whole
+        // segments, so the first pending segment always begins at consumed_.
         std::size_t end = consumed_;
         std::size_t segment_count = 0;
         for (std::size_t index = segment_offset_; index < segments_.size(); ++index) {
             const auto& segment = segments_[index];
-            if (segment.begin_ != end) {
-                throw std::logic_error("HTTP/2 output batch cursor is not aligned to a frame boundary");
-            }
             if (segment_count != 0 && segment.end_ - consumed_ > max_bytes) {
                 break;
             }
@@ -179,9 +152,6 @@ public:
             if (end - consumed_ >= max_bytes) {
                 break;
             }
-        }
-        if (segment_count == 0) {
-            throw std::logic_error("HTTP/2 output batch cursor is not aligned to a frame boundary");
         }
         const auto batch_bytes = end - consumed_;
         const bool transfer_storage = consumed_ == 0 && end == bytes_.size() &&
@@ -214,20 +184,28 @@ public:
         std::size_t total = 0;
         for (std::size_t index = segment_offset_; index < segments_.size(); ++index) {
             const auto& segment = segments_[index];
-            if (!segment.is_data_ || segment.stream_id_ != stream_id || consumed_ >= segment.end_) {
-                continue;
+            if (segment.is_data_ && segment.stream_id_ == stream_id) {
+                total += segment.end_ - segment.begin_ - http2_frame_header_bytes;
             }
-            const auto begin = std::max(consumed_, segment.begin_ + http2_frame_header_bytes);
-            total += segment.end_ - begin;
         }
         return total;
     }
 
+private:
+    // Advances the cursor past whole segments; the cursor always stays on a
+    // segment boundary, so no partial-segment bookkeeping exists.
     void consume_batch(std::size_t bytes_value) noexcept {
-        (void)consume(bytes_value);
+        if (bytes_value == bytes_.size() - consumed_) {
+            reset_after_drain(base_offset_ + bytes_.size());
+            return;
+        }
+        consumed_ += bytes_value;
+        while (segment_offset_ < segments_.size() && segments_[segment_offset_].end_ <= consumed_) {
+            ++segment_offset_;
+        }
+        compact_consumed_prefix();
     }
 
-private:
     void reset_after_drain(std::size_t logical_end) noexcept {
         bytes_.clear();
         segments_.clear();
@@ -243,8 +221,7 @@ private:
     }
 
     void compact_consumed_prefix() noexcept {
-        if (consumed_ < 64 * 1024 || consumed_ < bytes_.size() - consumed_ ||
-            (segment_offset_ < segments_.size() && segments_[segment_offset_].begin_ != consumed_)) {
+        if (consumed_ < 64 * 1024 || consumed_ < bytes_.size() - consumed_) {
             return;
         }
         const auto prefix = consumed_;

@@ -713,6 +713,30 @@ RUVIA_TEST(testing_facade_runs_fallback_handlers_that_carry_state) {
     RUVIA_CHECK_EQ(failed.body(), std::string_view("tenant-a:error"));
 }
 
+RUVIA_TEST(testing_facade_error_handler_throwing_validation_issues_keeps_its_status) {
+    // An http_error thrown inside on_error is answered with the default error
+    // response for that error, issues included; it is not an error-handler
+    // failure and must not be rewritten as a 500.
+    ruvia::test_app app;
+    app.on_error([](ruvia::context& c, ruvia::http_error_info) -> ruvia::task<ruvia::http_response> {
+        ruvia::validator checks;
+        std::optional<std::string> absent;
+        checks.required(absent, "email", "email is required");
+        checks.throw_if_invalid({.status_ = ruvia::http_status::unprocessable_content,
+            .code_ = "invalid_payload",
+            .message_ = "payload failed validation"});
+        co_return c.text("unreachable");
+    });
+
+    const auto failed = app.request(ruvia::test_request::get("/t/boom"));
+    RUVIA_CHECK_EQ(failed.status(), ruvia::http_status::unprocessable_content);
+    RUVIA_CHECK(failed.body().find("\"invalid_payload\"") != std::string_view::npos);
+    RUVIA_CHECK(failed.body().find("payload failed validation") != std::string_view::npos);
+    RUVIA_CHECK(failed.body().find("\"email\"") != std::string_view::npos);
+    RUVIA_CHECK(failed.body().find("email is required") != std::string_view::npos);
+    RUVIA_CHECK(failed.body().find("error_handler_failed") == std::string_view::npos);
+}
+
 RUVIA_TEST(testing_facade_error_responses_are_not_renegotiated_into_406) {
     // An error response is not a representation of the target resource, so a
     // refused coding must neither turn the 500 into a 406 nor run the error

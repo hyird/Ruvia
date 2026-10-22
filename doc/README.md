@@ -123,8 +123,8 @@ ruvia_link_controllers(my_service user_controllers)
 - **配置结构体字段命名**：所有配置/选项结构体（`*_config`、`*_options`、`*_rule` 等）的公开成员变量均以**下划线 `_` 结尾**（例如 `listen_config{.address_ = "0.0.0.0", .http_ = 8080}`），支持 C++20 指定初始化器（designated initializers）。
 - **错误处理形状**：
   - **正常协议/队列状态推进**：通过状态枚举或结果类型表示（如 `post_status::queue_full`、`channel_send_status::full`、`blocking_status::timed_out`、`worker_wait_status::closed`）。
-  - **操作失败或业务/协议错误**：抛出类型化异常（如路由中抛出 `ruvia::http_error` 或 `ruvia::validation_error` 由错误处理器转换为对应 HTTP 响应；客户端抛出 `http_client_error`、`websocket_client_error`、`db_error`、`redis_error`）。
-  - **纯解析/值校验边界**：返回 `std::optional<T>`、`std::variant<T, Error>`，或直接返回值并在格式/规则非法时抛出 `std::invalid_argument` / `ruvia::validation_error`（如 `ruvia::parse_integer<T>`、`ruvia::from_json<T>`）。
+  - **操作失败或业务/协议错误**：抛出类型化异常（如路由中抛出 `ruvia::http_error`（可携带校验 issues）由错误处理器转换为对应 HTTP 响应；协议原语抛出 `ruvia::http_protocol_error`，携带状态码与稳定机器码 `code()`；客户端抛出 `http_client_error`、`websocket_client_error`、`db_error`、`redis_error`）。
+  - **纯解析/值校验边界**：返回 `std::optional<T>`、`std::variant<T, Error>`，或直接返回值并在格式/规则非法时抛出 `std::invalid_argument` / 携带 issues 的 `ruvia::http_error`（如 `ruvia::parse_integer<T>`、`ruvia::from_json<T>`）。
 
 ---
 

@@ -78,11 +78,6 @@ enum class http2_end_stream : std::uint8_t {
     return value == http2_end_stream::end_stream;
 }
 
-enum class http2_output_consume_status : std::uint8_t {
-    pending,
-    drained,
-};
-
 enum class http2_output_batch_status : std::uint8_t { taken,
     empty };
 

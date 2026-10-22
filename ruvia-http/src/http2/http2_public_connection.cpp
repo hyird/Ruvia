@@ -330,13 +330,6 @@ std::optional<http2_event> http2_connection::next_event() {
     return std::optional<http2_event>(std::move(result_value));
 }
 
-std::string_view http2_connection::pending_output() const& noexcept {
-    return impl_->connection_.pending_output();
-}
-http2_output_consume_status http2_connection::consume_output(std::size_t bytes_value) {
-    impl_->connection_.retry_deferred_stream_leases();
-    return impl_->connection_.consume_output(bytes_value);
-}
 void http2_connection::take_output(std::pmr::string& output) {
     impl_->connection_.retry_deferred_stream_leases();
     impl_->connection_.take_output(output);

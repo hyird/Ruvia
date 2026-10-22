@@ -45,30 +45,19 @@ task<void> discard_rows_task(task<db_rows> rows_task) {
 
 }  // namespace
 
-#ifdef RUVIA_ENABLE_REDIS
 db_handle::db_handle(detail::db_pool_ref_type client, std::pmr::memory_resource* resource,
     ::ruvia::operation_scope& operation_scope, detail::db_query_cache_state* cache) noexcept
     : cache_(cache),
       client_(client),
       resource_(pmr_resource_or_default(resource)),
       registration_(operation_scope, this, &db_handle::expire_capability) {}
-#else
-db_handle::db_handle(detail::db_pool_ref_type client, std::pmr::memory_resource* resource,
-    ::ruvia::operation_scope& operation_scope) noexcept
-    : client_(client),
-      resource_(pmr_resource_or_default(resource)),
-      registration_(operation_scope, this, &db_handle::expire_capability) {}
-#endif
 
 db_handle::db_handle(const db_handle& other) noexcept
-    : client_(other.client_),
+    : cache_(other.cache_),
+      client_(other.client_),
       resource_(other.resource_),
       options_(other.options_),
-      registration_(other.registration_, this) {
-#ifdef RUVIA_ENABLE_REDIS
-    cache_ = other.cache_;
-#endif
-}
+      registration_(other.registration_, this) {}
 
 #ifdef RUVIA_ENABLE_REDIS
 db_query_result_cache db_handle::query_result_cache() const {
@@ -90,9 +79,7 @@ db_handle db_handle::with_options(operation_options options) const {
 
 void db_handle::expire_capability(void* target) noexcept {
     auto& handle = *static_cast<db_handle*>(target);
-#ifdef RUVIA_ENABLE_REDIS
     handle.cache_ = nullptr;
-#endif
     handle.client_ = detail::db_pool_ref_type{};
     handle.resource_ = nullptr;
     handle.options_ = {};

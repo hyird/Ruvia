@@ -155,9 +155,9 @@ task<void> session_middleware::commit(context& c) const {
         }
     };
     if (const auto* cleared = state_value.cleared()) {
-        detail::append_expired_session_cookie_header(staged, c.pool(), cookie_name_, secure);
+        detail::append_expired_session_cookie_header(staged, cookie_name_, secure);
         if (staged_overlay) {
-            detail::append_expired_session_cookie_header(*staged_overlay, c.pool(), cookie_name_, secure);
+            detail::append_expired_session_cookie_header(*staged_overlay, cookie_name_, secure);
         }
         if (cleared->old_id_.has_value()) {
             std::pmr::string key(c.pool());
@@ -186,9 +186,9 @@ task<void> session_middleware::commit(context& c) const {
             .message_ = "secure token generation failed"});
     }
     const auto new_id = *token;
-    detail::append_session_cookie_header(staged, c.pool(), cookie_name_, new_id, secure);
+    detail::append_session_cookie_header(staged, cookie_name_, new_id, secure);
     if (staged_overlay) {
-        detail::append_session_cookie_header(*staged_overlay, c.pool(), cookie_name_, new_id, secure);
+        detail::append_session_cookie_header(*staged_overlay, cookie_name_, new_id, secure);
     }
 
     std::pmr::string key(c.pool());

@@ -152,7 +152,8 @@ private:
 class multipart_boundary_parse_failure final {
 public:
     [[nodiscard]] http_protocol_error protocol_error() const noexcept {
-        return http_protocol_error(http_status::bad_request, "invalid multipart boundary");
+        return http_protocol_error(
+            http_status::bad_request, "multipart_invalid_boundary", "invalid multipart boundary");
     }
 
 private:
