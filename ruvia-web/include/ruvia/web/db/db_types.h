@@ -58,6 +58,10 @@ struct db_transaction_options final {
 // prepared statements per connection, so the server may reuse a generic plan
 // (see its plan_cache_mode); a pooler between client and server must support
 // protocol-level prepared statements. Streams run as unnamed statements.
+// Outside a transaction, concurrent PostgreSQL query() and execute() calls on
+// one worker share its connections in pipeline mode, several statements in
+// flight on one connection, each ending its own implicit transaction; session
+// state one of them changes (SET, an explicit BEGIN) is seen by the others.
 struct db_config final {
     db_driver driver_{db_driver::unspecified};
     // Host name or unbracketed address only; keep the port in port.

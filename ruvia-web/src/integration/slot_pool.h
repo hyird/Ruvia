@@ -88,6 +88,21 @@ public:
         policy_type::throw_acquire_failure(owner_, result_value.status());
     }
 
+    // Leases a free slot without waiting; nullopt while every slot is leased
+    // or the pool is closing. A free slot is exactly what acquire() leases
+    // without suspending.
+    [[nodiscard]] std::optional<std::size_t> try_acquire() {
+        auto acquire = scheduler_.acquire(std::nullopt);
+        if (!acquire.await_ready()) {
+            return std::nullopt;
+        }
+        const auto result_value = acquire.await_resume();
+        if (!result_value.has_value()) {
+            return std::nullopt;
+        }
+        return result_value.value();
+    }
+
     // A release that names no live lease is a caller bug and cannot be
     // reported through a noexcept path.
     void release(std::size_t slot) noexcept {
@@ -112,6 +127,12 @@ public:
 
     [[nodiscard]] bool closing() const noexcept {
         return scheduler_.closing();
+    }
+
+    // Starts an operation on a leased slot: clears a cancellation its previous
+    // operation left, while closing stays permanent.
+    void reset_abort(std::size_t slot) noexcept {
+        slots_[slot].abort_reason_ = closing() ? pool_slot_abort_reason::closing : pool_slot_abort_reason::none;
     }
 
     // Releases a lease on scope exit, however the operation between acquire
@@ -143,8 +164,7 @@ public:
     public:
         cancellation_guard(slot_pool& pool, std::size_t slot, const stop_token& stop_token_value)
             : registration_(pool.cancellation_target_, pool.slots_[slot].cancellation_id_) {
-            pool.slots_[slot].abort_reason_ =
-                pool.closing() ? pool_slot_abort_reason::closing : pool_slot_abort_reason::none;
+            pool.reset_abort(slot);
             registration_.arm(stop_token_value);
         }
         cancellation_guard(const cancellation_guard&) = delete;

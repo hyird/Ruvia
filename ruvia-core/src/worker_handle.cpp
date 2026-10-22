@@ -37,6 +37,13 @@ post_result_type worker_handle::post_task(move_only_function<void()> task_value)
                        : post_result_type::reject(post_status::worker_stopping, std::move(task_value));
 }
 
+void worker_handle::defer_resume(std::coroutine_handle<> continuation) const noexcept {
+    if (!dispatcher_) {
+        std::terminate();
+    }
+    dispatcher_->defer_or_terminate([continuation] { continuation.resume(); });
+}
+
 worker_handle detail::worker_handle_access::make(
     const std::shared_ptr<worker_dispatcher>& dispatcher) noexcept {
     return worker_handle(dispatcher);

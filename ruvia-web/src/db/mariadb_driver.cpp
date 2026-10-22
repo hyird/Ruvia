@@ -419,10 +419,10 @@ task<std::optional<db_row>> mariadb_driver::read_stream_row(pool_type& pool, std
         co_return std::nullopt;
     }
 
-    typename pool_type::leases_type::cancellation_guard cancellation(pool.leases(), index, options.stop_token_);
+    auto cancellation = pool.cancel_on_stop(index, options.stop_token_);
     auto* raw_result = static_cast<MYSQL_RES*>(result_value);
     try {
-        pool.leases().throw_if_aborted(index);
+        pool.throw_if_aborted(index);
         const auto deadline_value = mysql_stream_deadline(pool, options);
         MYSQL_ROW row = nullptr;
         int status = mysql_fetch_row_start(&row, raw_result);
@@ -455,7 +455,7 @@ task<std::optional<db_row>> mariadb_driver::read_stream_row(pool_type& pool, std
         discard_unbuffered_result(raw_result);
         pool.close_slot(index);
         cancellation.finish();
-        pool.leases().release(index);
+        pool.release_slot(index);
         throw;
     }
 
@@ -472,10 +472,10 @@ task<void> mariadb_driver::close_stream(pool_type& pool, std::size_t index, void
         co_return;
     }
 
-    typename pool_type::leases_type::cancellation_guard cancellation(pool.leases(), index, options.stop_token_);
+    auto cancellation = pool.cancel_on_stop(index, options.stop_token_);
     auto* raw_result = static_cast<MYSQL_RES*>(result_value);
     try {
-        pool.leases().throw_if_aborted(index);
+        pool.throw_if_aborted(index);
         const auto deadline_value = mysql_stream_deadline(pool, options);
         int status = mysql_free_result_start(raw_result);
         while (status != 0) {
@@ -490,12 +490,12 @@ task<void> mariadb_driver::close_stream(pool_type& pool, std::size_t index, void
         }
         co_await finish_mysql_results(pool, index, deadline_value);
         cancellation.finish();
-        pool.leases().release(index);
+        pool.release_slot(index);
     } catch (...) {
         discard_unbuffered_result(raw_result);
         pool.close_slot(index);
         cancellation.finish();
-        pool.leases().release(index);
+        pool.release_slot(index);
         throw;
     }
 }

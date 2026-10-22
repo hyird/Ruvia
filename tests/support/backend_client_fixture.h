@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -76,6 +77,17 @@ public:
         std::string routine_;
         // COPY keeps the connection in transfer state; no ReadyForQuery follows.
         postgres_copy_direction copy_{postgres_copy_direction::none};
+        // Flights read before anything is written: this reply answers the
+        // first and the replies after it answer the others, in one write, so a
+        // pipelining client must have sent them all before its first reply.
+        std::size_t batch_{1};
+        // After reading the batch, close the connection instead of answering.
+        bool drop_{false};
+        // The flight's Parse fails with error_ and keeps no statement, instead
+        // of its Bind failing.
+        bool parse_fails_{false};
+        // Nonzero: held, like deferred_, until release_hold() names it.
+        std::size_t hold_{0};
     };
 
     // One extended-protocol Parse message: the statement text, the parameter
@@ -90,16 +102,12 @@ public:
     explicit backend_startup_peer(protocol selected = protocol::postgresql, bool defer_authentication = true,
         after_startup behavior = after_startup::idle, std::vector<postgres_reply> replies = {},
         std::size_t connections = 1)
-        : gate_(io_, asio::steady_timer::time_point::max()),
-          defer_authentication_(defer_authentication),
-          after_startup_(behavior),
-          postgres_replies_(std::move(replies)),
-          startup_ready_(startup_.get_future()),
-          acceptor_(io_, {asio::ip::tcp::v4(), 0}),
-          sockets_(make_sockets(io_, connections)),
-          work_(asio::make_work_guard(io_)),
-          done_(asio::co_spawn(io_, serve(selected), asio::use_future)),
-          thread_([this] { io_.run(); }) {}
+        : backend_startup_peer(selected, defer_authentication, behavior, std::move(replies), {}, connections) {}
+
+    // A PostgreSQL peer whose connections, in accept order, each answer their
+    // own scripted replies.
+    explicit backend_startup_peer(std::vector<std::vector<postgres_reply>> connection_replies)
+        : backend_startup_peer(protocol::postgresql, false, after_startup::idle, {}, std::move(connection_replies), 0) {}
 
     ~backend_startup_peer() noexcept(false) {
         asio::post(io_, [this] {
@@ -141,6 +149,13 @@ public:
         });
     }
 
+    void release_hold(std::size_t hold) {
+        asio::post(io_, [this, hold] {
+            released_holds_.push_back(hold);
+            gate_.cancel();
+        });
+    }
+
     // Every Parse message received so far, read on the peer's own thread.
     [[nodiscard]] std::vector<postgres_parse> postgres_parses() {
         return asio::post(io_, asio::use_future([this] { return postgres_parses_; })).get();
@@ -172,6 +187,22 @@ public:
 #endif
 
 private:
+    backend_startup_peer(protocol selected, bool defer_authentication, after_startup behavior,
+        std::vector<postgres_reply> replies, std::vector<std::vector<postgres_reply>> connection_replies,
+        std::size_t connections)
+        : gate_(io_, asio::steady_timer::time_point::max()),
+          defer_authentication_(defer_authentication),
+          after_startup_(behavior),
+          postgres_replies_(std::move(replies)),
+          connection_replies_(std::move(connection_replies)),
+          connection_next_(connection_replies_.size(), 0),
+          startup_ready_(startup_.get_future()),
+          acceptor_(io_, {asio::ip::tcp::v4(), 0}),
+          sockets_(make_sockets(io_, std::max(connections, connection_replies_.size()))),
+          work_(asio::make_work_guard(io_)),
+          done_(asio::co_spawn(io_, serve(selected), asio::use_future)),
+          thread_([this] { io_.run(); }) {}
+
     static std::vector<asio::ip::tcp::socket> make_sockets(asio::io_context& io, std::size_t count) {
         std::vector<asio::ip::tcp::socket> sockets;
         sockets.reserve(count);
@@ -270,8 +301,11 @@ private:
     // Reads one flight of extended-protocol messages up to its Sync and
     // returns their types in order; nullopt when the client terminates.
     // Parse, Bind and Close keep the connection's named statements, as a
-    // server does.
-    asio::awaitable<std::optional<std::string>> postgres_flight(asio::ip::tcp::socket& socket) {
+    // server does. A Parse that `reply` makes fail keeps no statement, and a
+    // Bind of that name is recorded as 'b'; a Bind of any other name the
+    // session does not hold is a client defect.
+    asio::awaitable<std::optional<std::string>> postgres_flight(asio::ip::tcp::socket& socket,
+        const postgres_reply* reply, std::map<std::string, std::size_t>& statements) {
         std::string messages;
         for (;;) {
             std::array<unsigned char, 5> header{};
@@ -282,17 +316,19 @@ private:
             }
             std::vector<unsigned char> body(size - 4);
             co_await asio::async_read(socket, asio::buffer(body), asio::use_awaitable);
-            const char type = static_cast<char>(header[0]);
+            auto type = static_cast<char>(header[0]);
             if (type == 'X') {
                 co_return std::nullopt;
             }
             if (type == 'P') {
-                record_postgres_parse(body);
+                record_postgres_parse(body, statements, reply != nullptr && reply->parse_fails_);
             } else if (type == 'B') {
-                record_postgres_bind(body);
+                if (!record_postgres_bind(body, statements)) {
+                    type = 'b';
+                }
             } else if (type == 'C') {
                 if (!body.empty() && body[0] == 'S') {
-                    postgres_statements_.erase(text_at(body, 1).first);
+                    statements.erase(text_at(body, 1).first);
                 }
             }
             messages.push_back(type);
@@ -313,7 +349,8 @@ private:
     }
 
     // Parse: statement name, query text, Int16 count, then one Int32 OID each.
-    void record_postgres_parse(const std::vector<unsigned char>& body) {
+    void record_postgres_parse(
+        const std::vector<unsigned char>& body, std::map<std::string, std::size_t>& statements, bool fails) {
         auto [name, query_start] = text_at(body, 0);
         auto [sql, offset] = text_at(body, query_start);
         postgres_parse parsed;
@@ -329,20 +366,28 @@ private:
         for (std::size_t index = 0; index < count; ++index, offset += 4) {
             parsed.parameter_types_.push_back(integer(body.data() + offset));
         }
-        if (!name.empty() && postgres_statements_.contains(name)) {
+        if (!name.empty() && statements.contains(name) && statements.at(name) != failed_parse) {
             throw std::runtime_error("PostgreSQL Parse reuses a prepared statement name");
         }
         postgres_parses_.push_back(std::move(parsed));
-        postgres_statements_[name] = postgres_parses_.size() - 1;
+        statements[name] = fails ? failed_parse : postgres_parses_.size() - 1;
     }
 
-    // Bind: portal name, statement name, formats, then the values.
-    void record_postgres_bind(const std::vector<unsigned char>& body) {
+    // Marks a name whose Parse the script made fail: the server holds none.
+    static constexpr std::size_t failed_parse = std::numeric_limits<std::size_t>::max();
+
+    // Bind: portal name, statement name, formats, then the values. False for a
+    // name whose Parse failed.
+    [[nodiscard]] bool record_postgres_bind(
+        const std::vector<unsigned char>& body, const std::map<std::string, std::size_t>& statements) {
         const auto portal_end = text_at(body, 0).second;
         auto [name, offset] = text_at(body, portal_end);
-        const auto statement = postgres_statements_.find(name);
-        if (statement == postgres_statements_.end()) {
+        const auto statement = statements.find(name);
+        if (statement == statements.end()) {
             throw std::runtime_error("PostgreSQL Bind names no prepared statement");
+        }
+        if (statement->second == failed_parse) {
+            return false;
         }
         const std::string_view bytes(reinterpret_cast<const char*>(body.data()), body.size());
 
@@ -377,6 +422,7 @@ private:
                 offset += length;
             }
         }
+        return true;
     }
 
     static void postgres_error(std::string& response, const postgres_reply& reply) {
@@ -406,10 +452,24 @@ private:
                     message(response, '3', {});
                     break;
                 case 'P':
+                    if (reply.parse_fails_) {
+                        // The server skips the rest of the flight up to Sync.
+                        postgres_error(response, reply);
+                        message(response, 'Z', std::string_view(&reply.status_, 1));
+                        return;
+                    }
                     message(response, '1', {});
                     break;
+                case 'b': {
+                    const postgres_reply missing{.error_ = "prepared statement does not exist",
+                        .sql_state_ = "26000",
+                        .routine_ = "FetchPreparedStatement"};
+                    postgres_error(response, missing);
+                    message(response, 'Z', std::string_view(&reply.status_, 1));
+                    return;
+                }
                 case 'B':
-                    if (!reply.error_.empty()) {
+                    if (!reply.error_.empty() && !reply.parse_fails_) {
                         // The server skips the rest of the flight up to Sync.
                         postgres_error(response, reply);
                         message(response, 'Z', std::string_view(&reply.status_, 1));
@@ -481,7 +541,8 @@ private:
 
     // CommandComplete and ReadyForQuery never follow the partial row set.
     asio::awaitable<void> postgres_drop_mid_result(asio::ip::tcp::socket& socket) {
-        const auto messages = co_await postgres_flight(socket);
+        std::map<std::string, std::size_t> statements;
+        const auto messages = co_await postgres_flight(socket, nullptr, statements);
         if (!messages) {
             co_return;
         }
@@ -490,27 +551,49 @@ private:
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
     }
 
-    asio::awaitable<void> postgres_script(asio::ip::tcp::socket& socket) {
-        while (next_reply_ < postgres_replies_.size()) {
-            const auto messages = co_await postgres_flight(socket);
-            if (!messages) {
-                co_return;
+    [[nodiscard]] bool held(const postgres_reply& reply) const {
+        return (reply.deferred_ && !replies_released_) ||
+               (reply.hold_ != 0 && std::ranges::find(released_holds_, reply.hold_) == released_holds_.end());
+    }
+
+    // Answers `replies` from `next` in order, each batch of flights in one
+    // write. Returns true when a dropping reply closed the connection.
+    asio::awaitable<bool> postgres_script(asio::ip::tcp::socket& socket, std::vector<postgres_reply>& replies,
+        std::size_t& next, std::map<std::string, std::size_t>& statements) {
+        while (next < replies.size()) {
+            const auto& reply = replies[next];
+            std::vector<std::string> flights;
+            while (flights.size() < std::max<std::size_t>(reply.batch_, 1)) {
+                const auto answer = next + flights.size();
+                auto messages =
+                    co_await postgres_flight(socket, answer < replies.size() ? &replies[answer] : nullptr, statements);
+                if (!messages) {
+                    co_return false;
+                }
+                flights.push_back(std::move(*messages));
             }
-            if (next_reply_ == postgres_replies_.size()) {
-                co_return;
-            }
-            const auto& reply = postgres_replies_[next_reply_++];
-            if (reply.deferred_ && !replies_released_) {
+            while (held(reply) && !closing_) {
                 std::error_code ignored;
                 co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, ignored));
-                if (closing_) {
-                    co_return;
-                }
+            }
+            if (closing_) {
+                co_return false;
+            }
+            if (reply.drop_) {
+                ++next;
+                socket.close();
+                co_return true;
             }
             std::string response;
-            postgres_flight_response(response, *messages, reply);
+            for (const auto& messages : flights) {
+                if (next == replies.size()) {
+                    break;
+                }
+                postgres_flight_response(response, messages, replies[next++]);
+            }
             co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
         }
+        co_return false;
     }
 
     asio::awaitable<void> maria_packet(asio::ip::tcp::socket& socket, std::string_view payload, unsigned char sequence) {
@@ -590,10 +673,12 @@ private:
             try {
                 co_await serve_connection(selected, socket);
             } catch (const std::system_error& error) {
-                // EOF/reset are the client's public close path. Only cancellation
+                // EOF/reset/broken pipe are the client's public close path
+                // (a reply written after the client closed). Only cancellation
                 // caused by this peer's own teardown may suppress an aborted wait.
                 if (error.code() != asio::error::eof &&
                     error.code() != asio::error::connection_reset &&
+                    error.code() != asio::error::broken_pipe &&
                     !(closing_ && (error.code() == asio::error::operation_aborted ||
                                       error.code() == asio::error::bad_descriptor))) {
                     throw;
@@ -608,8 +693,9 @@ private:
 
     asio::awaitable<void> serve_connection(protocol selected, asio::ip::tcp::socket& socket) {
         co_await acceptor_.async_accept(socket, asio::use_awaitable);
+        const auto connection = accepted_++;
         // Named statements belong to one server session.
-        postgres_statements_.clear();
+        std::map<std::string, std::size_t> statements;
         if (selected == protocol::postgresql) {
             co_await postgres_startup(socket);
         } else if (selected == protocol::mariadb) {
@@ -627,8 +713,14 @@ private:
             socket.close();
             co_return;
         }
-        if (selected == protocol::postgresql && !postgres_replies_.empty()) {
-            co_await postgres_script(socket);
+        if (selected == protocol::postgresql) {
+            // A connection with a script of its own serves that one.
+            const bool own = connection < connection_replies_.size();
+            auto& replies = own ? connection_replies_[connection] : postgres_replies_;
+            auto& next = own ? connection_next_[connection] : next_reply_;
+            if (!replies.empty() && co_await postgres_script(socket, replies, next, statements)) {
+                co_return;
+            }
         }
         std::array<char, 64> buffer{};
         for (;;) {
@@ -641,9 +733,12 @@ private:
     bool defer_authentication_;
     after_startup after_startup_;
     std::vector<postgres_reply> postgres_replies_;
+    // Scripts of the connections that have their own, in accept order.
+    std::vector<std::vector<postgres_reply>> connection_replies_;
+    std::vector<std::size_t> connection_next_;
     std::vector<postgres_parse> postgres_parses_;
-    // Named statements of the current session, by name, as postgres_parses_ indices.
-    std::map<std::string, std::size_t> postgres_statements_;
+    std::vector<std::size_t> released_holds_;
+    std::size_t accepted_{0};
     std::size_t next_reply_{0};
     std::size_t startup_count_{0};
     bool replies_released_{false};

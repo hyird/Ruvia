@@ -53,8 +53,7 @@ public:
                 if (!queue_.commit_cancellation(waiter_id, continuation) || !continuation) {
                     return;
                 }
-                detail::worker_handle_access::defer_or_terminate(
-                    worker_, [continuation] { continuation.resume(); });
+                worker_.defer_resume(continuation);
                 return;
             }
             auto retained = shared_from_this();

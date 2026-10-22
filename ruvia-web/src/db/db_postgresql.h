@@ -56,18 +56,24 @@ struct postgresql_params final {
 // Entries live as long as the connection; the least recently used one is
 // closed on the server when a new one needs room.
 //
-// The pool leases a connection to one operation at a time, which owns the
-// cache for its duration; indices stay valid until that owner forgets or
-// inserts an entry.
+// Every statement in flight on a pipelined connection shares the cache. A
+// handle names one entry by position and generation, so forgetting or
+// replacing an entry never redirects another statement's handle to a
+// different statement; a stale handle is ignored.
 class postgresql_statement_cache final {
 public:
     static constexpr std::size_t capacity = 128;
     // "ruvia_", 32 lowercase hex digits of the key digest, and a NUL.
     using name_type = std::array<char, 39>;
 
+    struct handle final {
+        std::size_t index_;
+        std::uint64_t generation_;
+    };
+
     struct lookup final {
         // Absent on a first use, which runs as the unnamed statement.
-        std::optional<std::size_t> index_;
+        std::optional<handle> statement_;
         // The statement is new to the connection: Parse it before binding.
         bool inserted_{false};
         // A statement evicted to make room; it is still prepared on the server.
@@ -77,12 +83,13 @@ public:
     explicit postgresql_statement_cache(std::pmr::memory_resource* resource);
 
     [[nodiscard]] lookup find_or_insert(std::string_view sql, std::span<const unsigned int> types);
-    [[nodiscard]] const char* name(std::size_t index) const noexcept {
-        return entries_[index].name_.data();
+    // The name of the entry a lookup has just returned.
+    [[nodiscard]] const char* name(handle statement) const noexcept {
+        return entries_[statement.index_].name_.data();
     }
     // Drops an entry the server does not hold (a failed Parse) or no longer
-    // holds as cached (a stale statement).
-    void forget(std::size_t index);
+    // holds as cached (a stale statement), unless it was replaced since.
+    void forget(handle statement) noexcept;
     // A new connection starts without server-side statements.
     void clear() noexcept;
 
@@ -92,6 +99,9 @@ private:
         std::pmr::vector<unsigned int> types_;
         std::size_t hash_;
         std::uint64_t last_use_;
+        // Zero marks a forgotten entry, free for reuse. Never reused across
+        // clear(), so no handle outlives its entry unnoticed.
+        std::uint64_t generation_;
         name_type name_;
     };
 
@@ -101,6 +111,7 @@ private:
     std::array<std::size_t, capacity> first_uses_{};
     std::size_t next_first_use_{0};
     std::uint64_t clock_{0};
+    std::uint64_t generation_{0};
 };
 
 }  // namespace ruvia::detail

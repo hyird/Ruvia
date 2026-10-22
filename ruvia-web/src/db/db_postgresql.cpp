@@ -178,9 +178,10 @@ postgresql_statement_cache::lookup postgresql_statement_cache::find_or_insert(
     ++clock_;
     for (std::size_t index = 0; index < entries_.size(); ++index) {
         auto& existing = entries_[index];
-        if (existing.hash_ == hash && existing.sql_ == sql && std::ranges::equal(existing.types_, types)) {
+        if (existing.generation_ != 0 && existing.hash_ == hash && existing.sql_ == sql &&
+            std::ranges::equal(existing.types_, types)) {
             existing.last_use_ = clock_;
-            return {index};
+            return {handle{index, existing.generation_}};
         }
     }
     const auto first_use = std::ranges::find(first_uses_, hash);
@@ -194,22 +195,29 @@ postgresql_statement_cache::lookup postgresql_statement_cache::find_or_insert(
     // leaves every entry, and the server statement it names, intact.
     auto* resource = entries_.get_allocator().resource();
     entry added{std::pmr::string(sql, resource), std::pmr::vector<unsigned int>(types.begin(), types.end(), resource),
-        hash, clock_, postgresql_statement_name(sql, types, resource)};
-    if (entries_.size() < capacity) {
+        hash, clock_, generation_ + 1, postgresql_statement_name(sql, types, resource)};
+    // A forgotten entry is reused before the table grows; only a full table
+    // evicts a statement the server still holds.
+    const auto free_entry = std::ranges::find(entries_, std::uint64_t{0}, &entry::generation_);
+    lookup result{handle{static_cast<std::size_t>(free_entry - entries_.begin()), added.generation_}, true, std::nullopt};
+    if (free_entry != entries_.end()) {
+        *free_entry = std::move(added);
+    } else if (entries_.size() < capacity) {
         entries_.push_back(std::move(added));
-        return {entries_.size() - 1, true, std::nullopt};
+    } else {
+        const auto oldest = std::ranges::min_element(entries_, {}, &entry::last_use_);
+        result.statement_->index_ = static_cast<std::size_t>(oldest - entries_.begin());
+        result.evicted_ = oldest->name_;
+        *oldest = std::move(added);
     }
-    const auto oldest = std::ranges::min_element(entries_, {}, &entry::last_use_);
-    lookup result{static_cast<std::size_t>(oldest - entries_.begin()), true, oldest->name_};
-    *oldest = std::move(added);
+    ++generation_;
     return result;
 }
 
-void postgresql_statement_cache::forget(std::size_t index) {
-    if (index + 1 != entries_.size()) {
-        entries_[index] = std::move(entries_.back());
+void postgresql_statement_cache::forget(handle statement) noexcept {
+    if (statement.index_ < entries_.size() && entries_[statement.index_].generation_ == statement.generation_) {
+        entries_[statement.index_].generation_ = 0;
     }
-    entries_.pop_back();
 }
 
 void postgresql_statement_cache::clear() noexcept {

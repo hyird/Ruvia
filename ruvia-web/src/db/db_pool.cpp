@@ -121,7 +121,8 @@ db_pool<driver_type>::db_pool(asio::io_context& io_context, const worker_handle&
       resource_(pmr_resource_or_default(resource)),
       worker_(require_db_worker(worker_value)),
       slots_(resource_),
-      leases_(*this, config_.pool_size_per_worker_, worker_, resource_) {
+      leases_(*this, config_.pool_size_per_worker_, worker_, resource_),
+      state_(*this, worker_) {
     if (config_.driver_ != driver_type::driver) {
         throw std::invalid_argument(std::string(driver_type::name).append(" pool requires its own driver"));
     }
@@ -158,9 +159,58 @@ task<void> db_pool<driver_type>::connect() {
 template <typename driver_type>
 void db_pool<driver_type>::close_now() noexcept {
     (void)leases_.close();
+    state_.close();
     for (std::size_t index = 0; index < slots_.size(); ++index) {
         close_slot(index);
     }
+}
+
+template <typename driver_type>
+void db_pool<driver_type>::release_slot(std::size_t index) noexcept {
+    if (!state_.take_released_slot(index)) {
+        leases_.release(index);
+    }
+}
+
+template <typename driver_type>
+std::optional<std::uint64_t> db_pool<driver_type>::oldest_exclusive_arrival() const noexcept {
+    for (const auto* waiting = oldest_exclusive_; waiting != nullptr; waiting = waiting->next_) {
+        if (!waiting->stop_.stop_requested()) {
+            return waiting->arrival_;
+        }
+    }
+    return std::nullopt;
+}
+
+// Stamped and listed before its acquire is queued: the lease scheduler serves
+// its waiters in the same order.
+template <typename driver_type>
+db_pool<driver_type>::exclusive_wait::exclusive_wait(db_pool& pool, const stop_token& stop) noexcept
+    : pool_(pool),
+      stop_(stop),
+      arrival_(pool.next_arrival()),
+      previous_(pool.newest_exclusive_) {
+    if (previous_ != nullptr) {
+        previous_->next_ = this;
+    } else {
+        pool_.oldest_exclusive_ = this;
+    }
+    pool_.newest_exclusive_ = this;
+}
+
+template <typename driver_type>
+db_pool<driver_type>::exclusive_wait::~exclusive_wait() {
+    if (previous_ != nullptr) {
+        previous_->next_ = next_;
+    } else {
+        pool_.oldest_exclusive_ = next_;
+    }
+    if (next_ != nullptr) {
+        next_->previous_ = previous_;
+    } else {
+        pool_.newest_exclusive_ = previous_;
+    }
+    pool_.state_.exclusive_waiter_left();
 }
 
 template <typename driver_type>
@@ -376,8 +426,8 @@ task<result_type> db_pool<driver_type>::run_leased(std::pmr::string sql, std::pm
         throw std::invalid_argument("SQL must not be empty");
     }
     const operation_timeout timeout(options.timeout_);
-    const auto index = co_await leases_.acquire(timeout, config_.acquire_timeout_, options.stop_token_);
-    typename leases_type::lease_guard lease(leases_, index);
+    const auto index = co_await lease_acquire(*this, timeout, options.stop_token_);
+    pooled_lease lease(*this, index);
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     std::exception_ptr failure;
     try {
@@ -440,21 +490,31 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
     }
     co_await retire_failed_transaction_slot(index, resource, timeout, failure);
     cancellation.finish();
-    leases_.release(index);
+    release_slot(index);
     std::rethrow_exception(failure);
 }
 
 template <typename driver_type>
 task<db_rows> db_pool<driver_type>::query(std::pmr::string sql, std::pmr::vector<db_value> params,
     std::pmr::memory_resource* resource, operation_options options, operation_scope* scope) {
-    return run_leased<db_rows>(std::move(sql), std::move(params), resource, std::move(options), &driver_type::query, scope);
+    if constexpr (driver_type::pipelines_statements) {
+        return driver_type::query_pipelined(*this, std::move(sql), std::move(params), resource, std::move(options), scope);
+    } else {
+        return run_leased<db_rows>(
+            std::move(sql), std::move(params), resource, std::move(options), &driver_type::query, scope);
+    }
 }
 
 template <typename driver_type>
 task<db_exec_result> db_pool<driver_type>::execute(std::pmr::string sql, std::pmr::vector<db_value> params,
     std::pmr::memory_resource* resource, operation_options options, operation_scope* scope) {
-    return run_leased<db_exec_result>(
-        std::move(sql), std::move(params), resource, std::move(options), &driver_type::execute, scope);
+    if constexpr (driver_type::pipelines_statements) {
+        return driver_type::execute_pipelined(
+            *this, std::move(sql), std::move(params), resource, std::move(options), scope);
+    } else {
+        return run_leased<db_exec_result>(
+            std::move(sql), std::move(params), resource, std::move(options), &driver_type::execute, scope);
+    }
 }
 
 template <typename driver_type>
@@ -489,8 +549,7 @@ task<db_transaction> db_pool<driver_type>::begin_transaction(std::pmr::memory_re
     operation_options operation_options_value, db_transaction_options transaction_options) {
     const auto plan = make_db_transaction_start_plan(driver_type::driver, transaction_options);
     const operation_timeout timeout(operation_options_value.timeout_);
-    const auto index =
-        co_await leases_.acquire(timeout, config_.acquire_timeout_, operation_options_value.stop_token_);
+    const auto index = co_await lease_acquire(*this, timeout, operation_options_value.stop_token_);
     typename leases_type::cancellation_guard cancellation(leases_, index, operation_options_value.stop_token_);
     try {
         if (!plan.configure_.empty()) {
@@ -501,7 +560,7 @@ task<db_transaction> db_pool<driver_type>::begin_transaction(std::pmr::memory_re
     } catch (...) {
         close_slot(index);
         cancellation.finish();
-        leases_.release(index);
+        release_slot(index);
         throw;
     }
 }
@@ -528,7 +587,7 @@ task<void> db_pool<driver_type>::finish_transaction(std::size_t index, std::stri
         co_await retire_failed_transaction_slot(index, resource, timeout, failure);
     }
     cancellation.finish();
-    leases_.release(index);
+    release_slot(index);
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
@@ -552,7 +611,7 @@ void db_pool<driver_type>::abort_transaction(std::size_t slot) noexcept {
         return;
     }
     close_slot(slot);
-    leases_.release(slot);
+    release_slot(slot);
 }
 
 // An unbuffered statement holds its slot until the stream result ends. A
@@ -565,7 +624,7 @@ task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::p
         throw std::invalid_argument("SQL must not be empty");
     }
     const operation_timeout timeout(options.timeout_);
-    const auto index = co_await leases_.acquire(timeout, config_.acquire_timeout_, options.stop_token_);
+    const auto index = co_await lease_acquire(*this, timeout, options.stop_token_);
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     void* pending_result = nullptr;
     bool released = false;
@@ -579,7 +638,7 @@ task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::p
         if (!start.returns_rows_) {
             released = true;
             cancellation.finish();
-            leases_.release(index);
+            release_slot(index);
             throw std::invalid_argument("query_stream() requires row-producing SQL");
         }
         pending_result = start.result_;
@@ -593,7 +652,7 @@ task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::p
             driver_type::discard_stream(pending_result);
             close_slot(index);
             cancellation.finish();
-            leases_.release(index);
+            release_slot(index);
         }
         throw;
     }
@@ -625,7 +684,7 @@ void db_pool<driver_type>::abort_stream(std::size_t slot, void* result) noexcept
     }
     driver_type::discard_stream(result);
     close_slot(slot);
-    leases_.release(slot);
+    release_slot(slot);
 }
 
 #ifdef RUVIA_ENABLE_MARIADB

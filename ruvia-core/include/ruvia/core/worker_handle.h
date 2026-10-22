@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <coroutine>
 #include <cstdint>
 #include <memory>
 #include <string_view>
@@ -77,6 +78,21 @@ public:
             return snapshot.post_task(move_only_function<void()>(std::forward<fn_type>(fn)));
         }
     }
+
+    // Resumes `continuation` on this worker in a later turn, never inline --
+    // for a coroutine suspended in an operation this worker already runs.
+    // Requests made from one thread resume in the order they were made; there
+    // is no order between requests made from different threads (on a worker
+    // with a single owner, the worker's own requests reach the event loop only
+    // after its current handler returns). Unlike post() it cannot be refused by
+    // a full queue; on the worker's own thread it goes straight to the event
+    // loop without a type-erased callable. Requested from another thread once
+    // the worker's execution context has been detached, or on a handle without
+    // a worker, it terminates. A request the event loop is destroyed before
+    // running is dropped and the coroutine never resumes, so the worker must
+    // run until every operation it admitted has completed, as for any started
+    // task.
+    void defer_resume(std::coroutine_handle<> continuation) const noexcept;
 
 private:
     explicit worker_handle(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept;

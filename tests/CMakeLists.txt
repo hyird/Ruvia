@@ -85,6 +85,7 @@ if(RUVIA_BUILD_CORE)
         core/stop_token.cpp
         core/worker_notification.cpp
         core/worker_queue.cpp
+        core/worker_resume.cpp
         core/worker_runtime.cpp
         support/test_main.cpp)
     ruvia_add_test(ruvia_asio_task ruvia::core SOURCES core/asio_task.cpp)
@@ -174,6 +175,11 @@ if(RUVIA_BUILD_WEB)
     # Owns a multi-worker application whose document root changes under it.
     ruvia_add_web_standalone_test(ruvia_document_root_refresh_tests 60
         web/http/document_root_refresh.cpp)
+    # Replaces the global operator new to fail one large allocation on a
+    # database client's worker.
+    if(RUVIA_ENABLE_POSTGRESQL)
+        ruvia_add_web_standalone_test(ruvia_db_allocation_tests 30 web/db/pipeline_allocation.cpp)
+    endif()
 
     # Feature directories join the unit suite only when their feature is built.
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/*.cpp)
@@ -193,6 +199,7 @@ if(RUVIA_BUILD_WEB)
         if(NOT RUVIA_ENABLE_POSTGRESQL)
             list(REMOVE_ITEM _ruvia_web_feature_sources web/db/event_loop_client.cpp)
         endif()
+        list(REMOVE_ITEM _ruvia_web_feature_sources web/db/pipeline_allocation.cpp)
         list(APPEND _ruvia_web_unit_sources ${_ruvia_web_feature_sources})
     endif()
     list(APPEND _ruvia_web_unit_sources support/test_main.cpp)
