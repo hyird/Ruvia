@@ -121,6 +121,7 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_app_lifecycle 60 web/app/lifecycle.cpp)
     ruvia_add_web_standalone_test(ruvia_app_accept_ownership 60 web/app/accept_ownership.cpp)
     ruvia_add_web_standalone_test(ruvia_app_http2_drain 30 web/app/http2_drain.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/app/http2_request_limit.cpp)
     ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT
     # protocol token, makes every application in its executable fail startup, so

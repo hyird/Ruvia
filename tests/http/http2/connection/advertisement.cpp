@@ -78,9 +78,17 @@ RUVIA_TEST(http2_connection_advertisement_validates_stream_state_and_rejects_tun
     auto pushed = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/pushed"});
     RUVIA_CHECK(pushed.index() == 0);
     // Pushed stream in reserved (local) state cannot send ALTSVC before response headers open it.
+    // An interim response is a response HEADERS frame too (RFC 9113 §8.4.2): the
+    // stream is half-closed (remote) afterwards and the server may advertise on it.
+    std::uint32_t pushed_id = 0;
     if (pushed.index() == 0) {
-        RUVIA_CHECK(server.submit_alternative_service_advertisement(std::get<0>(pushed).stream_id(), "", "h3=\":443\"") ==
+        pushed_id = std::get<0>(pushed).stream_id();
+        RUVIA_CHECK(server.submit_alternative_service_advertisement(pushed_id, "", "h3=\":443\"") ==
                     ruvia::http2_submit_status::invalid_state);
+        RUVIA_CHECK(server.submit_interim_response_head(pushed_id, ruvia::http_interim_response_head(ruvia::http_status::early_hints)) ==
+                    ruvia::http2_submit_status::accepted);
+        RUVIA_CHECK(server.submit_alternative_service_advertisement(pushed_id, "", "h3=\":443\"") ==
+                    ruvia::http2_submit_status::accepted);
         (void)server.release(std::move(std::get<0>(pushed)));
     }
 
@@ -95,8 +103,15 @@ RUVIA_TEST(http2_connection_advertisement_validates_stream_state_and_rejects_tun
         (void)server.release(std::move(*req1->request_head()));
     }
     relay.transfer(server, client);
-    while (client.next_event()) {
+    bool pushed_altsvc_seen = false;
+    while (auto event = client.next_event()) {
+        if (const auto* advertisement = event->alternative_service_advertisement();
+            advertisement != nullptr && advertisement->stream_id_ == pushed_id) {
+            pushed_altsvc_seen = advertisement->field_value_ == "h3=\":443\"";
+        }
     }
+    RUVIA_CHECK(pushed_altsvc_seen);
+    RUVIA_CHECK(!client.connection_error());
 
     // 2. Open CONNECT tunnel rejects ALTSVC on stream with RST_STREAM(PROTOCOL_ERROR) and rejects server submission.
     (void)client.submit_request_head(ruvia::http2_regular_request_head_view{.authority_ = "example.test"});

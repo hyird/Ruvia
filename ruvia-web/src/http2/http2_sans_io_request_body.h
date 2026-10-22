@@ -161,10 +161,6 @@ public:
         return http2_request_body_store_status::stored;
     }
 
-    [[nodiscard]] std::size_t received_bytes() const noexcept {
-        return received_bytes_;
-    }
-
     [[nodiscard]] std::string_view bytes() const& noexcept {
         return bytes_;
     }
@@ -190,10 +186,6 @@ public:
         }
         received_bytes_ += data.size();
         return http2_request_body_store_status::stored;
-    }
-
-    [[nodiscard]] std::size_t received_bytes() const noexcept {
-        return received_bytes_;
     }
 
     [[nodiscard]] http2_sans_io_body_queue& queue() & noexcept {
@@ -241,31 +233,6 @@ public:
         return std::get_if<http2_streaming_request_body>(&storage_);
     }
     const http2_streaming_request_body* streaming() const&& = delete;
-
-    [[nodiscard]] http2_request_body_store_status store(
-        std::string_view data, protocol_byte_limit total_limit) {
-        if (auto* value = buffered()) {
-            return value->store(data, total_limit);
-        }
-        return http2_request_body_store_status::backlog_overflow;
-    }
-
-    [[nodiscard]] http2_request_body_store_status store(std::string_view data,
-        protocol_byte_limit total_limit, std::size_t streaming_backlog_limit,
-        http2_received_data_credit&& credit) {
-        if (auto* value = buffered()) {
-            return value->store(data, total_limit);
-        }
-        return std::get<http2_streaming_request_body>(storage_).store(
-            data, total_limit, streaming_backlog_limit, std::move(credit));
-    }
-
-    [[nodiscard]] std::size_t received_bytes() const noexcept {
-        if (const auto* value = buffered()) {
-            return value->received_bytes();
-        }
-        return std::get<http2_streaming_request_body>(storage_).received_bytes();
-    }
 
 private:
     friend class http2_sans_io_selected_route;

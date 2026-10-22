@@ -208,9 +208,11 @@ public:
             suspended = completion_.suspend(handle);
         }
         // Registered only once the wait really suspends. A stop requested since
-        // await_ready runs the callback inline, which defers the cancellation
-        // to this worker behind the suspension. The callback fits the inline
-        // storage of move_only_function, so registration cannot fail.
+        // await_ready runs the callback inline, which completes the wait as
+        // cancelled under the state lock before request_stop() returns, so a
+        // value sent on the same stack afterwards is queued, not delivered to a
+        // cancelled receiver. The callback fits the inline storage of
+        // move_only_function, so registration cannot fail.
         if (suspended && generation_ != 0) {
             register_cancellation();
         }
@@ -269,10 +271,12 @@ private:
         state_value->wait_slot_.cancel(generation);
     }
 
-    // The callback only forwards (state, generation) to the worker, which
-    // validates them under the state lock. The awaiter's state_ outlives the
-    // registration, whose teardown waits for a running callback, so the
-    // callback borrows it and copies the shared_ptr only into the posted work.
+    // The callback borrows the awaiter's state_, which outlives the
+    // registration (its teardown waits for a running callback), and takes the
+    // state lock itself: a stop requested from inside that lock -- a payload
+    // move or destructor running under it -- would self-deadlock, exactly as
+    // closing the domain from there would. The generation keeps a stale
+    // callback from cancelling a later wait on the same slot.
     void register_cancellation() {
         stop_token_.register_callback(stop_registration_,
             [state_value = &state_, generation = generation_] {

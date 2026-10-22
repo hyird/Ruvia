@@ -96,8 +96,12 @@ public:
     // Throws the HTTP client error of the transport's abort reason, if any.
     void throw_if_aborted() const;
 
-    // HTTP/2 (http2/http_client_http2.cpp).
-    [[nodiscard]] task<void> execute_http2(const http_client_request_storage& request,
+    // HTTP/2 (http2/http_client_http2.cpp). False when the multiplexed session
+    // had ended and its replacement connection negotiated HTTP/1.1 instead:
+    // nothing was sent, and the caller runs the request as an HTTP/1 exchange
+    // on that connection. (ensure_connected() already rejects that outcome for
+    // an http2_only client.)
+    [[nodiscard]] task<bool> execute_http2(const http_client_request_storage& request,
         const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value);
     void register_http2_stream(http2_stream& stream);
     void remove_http2_stream(http2_stream& stream) noexcept;

@@ -2945,6 +2945,11 @@ RUVIA_TEST(http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_mi
                         (void)connection.submit_data(
                             stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream);
                         (void)connection.release(std::move(*request));
+                        // GOAWAY(last_stream_id = 1) precedes the close so the
+                        // client retires this session deterministically: seen
+                        // before the next send it opens a new connection, seen
+                        // after it the unprocessed stream is retried on one.
+                        connection.begin_drain();
                         answered = true;
                     }
                 }
@@ -3002,7 +3007,6 @@ RUVIA_TEST(http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_mi
             RUVIA_CHECK_EQ(
                 std::string_view(reinterpret_cast<const char*>(first_body.bytes().data()), first_body.size()), "h2-ok");
         }
-        (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(30));
         {
             auto second = co_await negotiate_client.handle().send({.target_ = "/second"});
             RUVIA_CHECK(second.protocol_version() == ruvia::http_protocol_version::http11);

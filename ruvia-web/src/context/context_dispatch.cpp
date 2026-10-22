@@ -132,13 +132,15 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
             .resource_ = memory.resource(),
         },
         policy, services().for_subrequest(stop), memory, response);
-    if (response.file_body() || response.has_multipart_file_body()) {
-        throw std::logic_error("dispatch requires a buffered response");
-    }
     if (detail::http_response_needs_not_acceptable(admission.tail().coding_policy(), request, response) &&
         !response.status().is_error()) {
         response = co_await routes.handle_error(request, memory,
             http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
+    }
+    // The error handler answers the 406 with any response shape, so the file
+    // check covers whichever response is final.
+    if (response.file_body() || response.has_multipart_file_body()) {
+        throw std::logic_error("dispatch requires a buffered response");
     }
     dispatch_response result(pool());
     result.status_ = response.status();

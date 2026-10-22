@@ -383,7 +383,7 @@ task<void> http_client_connection::wait_for_http2_session_stop(
     }
 }
 
-task<void> http_client_connection::execute_http2(const http_client_request_storage& request,
+task<bool> http_client_connection::execute_http2(const http_client_request_storage& request,
     const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value) {
     const auto& config = pool_.config();
     auto* const resource = pool_.resource();
@@ -406,9 +406,7 @@ task<void> http_client_connection::execute_http2(const http_client_request_stora
             co_await wait_for_http2_session_stop(timeout, stop_token_value);
             co_await ensure_connected(timeout, timeout, stop_token_value, state_value);
             if (protocol_ != protocol_type::http2) {
-                close();
-                throw http_client_error(
-                    http_client_error::code_type::protocol_unavailable, "upstream no longer negotiated HTTP/2");
+                co_return false;
             }
         }
 
@@ -561,7 +559,7 @@ task<void> http_client_connection::execute_http2(const http_client_request_stora
                     throw http_client_error(*error, "HTTP/2 stream failed");
             }
         }
-        co_return;
+        co_return true;
     }
     throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/2 request retry exhausted");
 }

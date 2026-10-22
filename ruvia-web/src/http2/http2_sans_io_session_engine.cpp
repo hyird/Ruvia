@@ -327,12 +327,6 @@ struct http2_sans_io_session_engine::tunnel_upgrade_operation final {
             }
             head = std::move(std::get<0>(negotiated));
         }
-        if (engine_.connection_.draining()) {
-            engine_.reset_stream_no_throw(stream_id_, http2_error_code::refused_stream);
-            context_access::commit_upgrade(context_value);
-            engine_.wake_writer();
-            co_return;
-        }
         const auto committed = engine_.connection_.submit_connect_response_head(stream_id_, head);
         if (committed != http2_submit_status::accepted) {
             throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
@@ -376,12 +370,6 @@ struct http2_sans_io_session_engine::websocket_upgrade_operation final {
     [[nodiscard]] task<void> operator()(context& context_value) {
         const auto& options = engine_.session_.options();
         const auto response_headers_value = websocket_response_headers(context_value);
-        if (engine_.connection_.draining()) {
-            engine_.reset_stream_no_throw(stream_id_, http2_error_code::refused_stream);
-            context_access::commit_upgrade(context_value);
-            engine_.wake_writer();
-            co_return;
-        }
         const auto handshake_result = engine_.connection_.submit_websocket_handshake(stream_id_, request_,
             handshake_validation_,
             {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
@@ -890,10 +878,11 @@ void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event&
     }
     const auto total_limit =
         http_request_body_limit(selected_route->resolution(), request_body.mode(), admission_policy_);
-    const auto store_status = request_body.streaming() != nullptr
-                                  ? request_body.store(body_chunk.bytes(), total_limit,
+    auto* streaming_body = request_body.streaming();
+    const auto store_status = streaming_body != nullptr
+                                  ? streaming_body->store(body_chunk.bytes(), total_limit,
                                         options.server_.max_buffered_body_bytes_, body_chunk.take_credit())
-                                  : request_body.store(body_chunk.bytes(), total_limit);
+                                  : request_body.buffered()->store(body_chunk.bytes(), total_limit);
     if (store_status == http2_request_body_store_status::backlog_overflow) {
         reset_event_stream(stream_id, http2_error_code::cancel);
         return;
@@ -915,7 +904,7 @@ void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event&
         }
         return;
     }
-    if (request_body.streaming() != nullptr) {
+    if (streaming_body != nullptr) {
         auto* signal = stream_runtime->signal();
         if (signal == nullptr) {
             reset_event_stream(stream_id, http2_error_code::internal_error);

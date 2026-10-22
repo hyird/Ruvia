@@ -195,31 +195,21 @@ bool on_worker_token_cancellation_followed_by_owner_cancel_withdraws_callback() 
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 4});
     const auto worker_value = attachment.loop().handle();
     struct timer_owner final {
-        bool alive_{true};
-        bool callback_ran_{false};
-        bool observed_dead_owner_{false};
         ruvia::worker_timer_registration registration_;
-        ~timer_owner() {
-            alive_ = false;
-        }
     };
     auto owner = std::make_unique<timer_owner>();
+    // The posted cancellation turn runs only after this handler returns, so a
+    // callback that runs at all runs after the owner was destroyed.
     bool callback_ran = false;
-    bool observed_dead_owner = false;
     auto capture = std::make_shared<int>(1);
     std::weak_ptr<int> weak_capture = capture;
 
     asio::post(io_context, [&] {
-        auto* owner_ptr = owner.get();
         static_cast<void>(worker_value.schedule_timer(owner->registration_,
             std::chrono::steady_clock::now(),
-            [owner_ptr, &callback_ran, &observed_dead_owner, captured = std::move(capture)](
-                ruvia::worker_timer_outcome) {
+            [&callback_ran, captured = std::move(capture)](ruvia::worker_timer_outcome) {
                 static_cast<void>(captured);
                 callback_ran = true;
-                if (!owner_ptr->alive_) {
-                    observed_dead_owner = true;
-                }
             }));
         auto cancellation = owner->registration_.cancellation();
         cancellation.cancel();
@@ -228,7 +218,7 @@ bool on_worker_token_cancellation_followed_by_owner_cancel_withdraws_callback() 
         attachment.stop();
     });
     attachment.run();
-    return !callback_ran && !observed_dead_owner && weak_capture.expired();
+    return !callback_ran && weak_capture.expired();
 }
 
 ruvia::task<void> mark_after_sleep(
@@ -666,6 +656,7 @@ int main() {
         !explicit_timer_cancellation_notifies_after_quiet_destruction() ||
         !on_worker_token_cancellation_followed_by_owner_cancel_withdraws_callback() ||
         !stoppable_sleep_works() ||
+        !timed_primitives_report_timer_stop() || !expired_registration_reschedules_on_another_worker() ||
         !timer_callback_failure_preserves_remaining_operations() ||
         !self_rescheduling_due_timer_yields_to_other_handlers() ||
         !self_rescheduling_due_timer_preserves_other_expirations()) {

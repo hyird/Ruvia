@@ -54,10 +54,13 @@ http2_submit_status http2_connection::submit_alternative_service_advertisement(s
         return http2_submit_status::closed;
     }
     const auto* stream = stream_id != 0 ? find_stream(stream_id) : nullptr;
+    // A promised stream leaves reserved (local) with its first response
+    // HEADERS, interim or final (RFC 9113 §8.4.2); only the still-reserved
+    // stream may not carry ALTSVC (RFC 7838 §4).
     if (preface_phase_ != preface_phase_type::ready ||
         (stream_id != 0 &&
             (stream == nullptr || http2_stream_is_closed(*stream) ||
-                ((stream_id & 1U) == 0 && stream->local_send().head_pending() != nullptr) ||
+                stream->push_reservation() == http2_push_reservation::local ||
                 !http2_remote_final_head_decoded(*stream) || stream->tunnel().not_connect() == nullptr))) {
         return http2_submit_status::invalid_state;
     }

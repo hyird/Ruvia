@@ -307,8 +307,11 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
     if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
         // This lease shares a multiplexed session with background drivers and
         // possibly other requests; a request-local failure must not discard it.
-        co_await connection_value.execute_http2(request, timeout, stop_token_value, state_value);
-        co_return;
+        // A session that ended and was replaced by an HTTP/1.1 connection has
+        // sent nothing yet: the request continues as an HTTP/1 exchange below.
+        if (co_await connection_value.execute_http2(request, timeout, stop_token_value, state_value)) {
+            co_return;
+        }
     }
     // A negotiated HTTP/1 connection can have several operations that already
     // hold outer HTTP/2-capacity slots. Waiting for this connection's single
@@ -381,8 +384,13 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
             }
         }
     }
-    if (retry_as_http2) {
-        co_await connection_value.execute_http2(request, timeout, stop_token_value, state_value);
+    if (retry_as_http2 &&
+        !co_await connection_value.execute_http2(request, timeout, stop_token_value, state_value)) {
+        // One protocol change per request: the HTTP/2 session negotiated above
+        // ended before this request could use it and its replacement speaks
+        // HTTP/1.1 again.
+        throw http_client_error(
+            http_client_error::code_type::protocol_unavailable, "upstream renegotiated the protocol repeatedly");
     }
 }
 

@@ -243,6 +243,7 @@ public:
     RUVIA_GET("/sub-static", sub_static);
     RUVIA_POST("/sub-stream", sub_stream, ruvia::stream_body);
     RUVIA_GET("/sub-checks", sub_checks);
+    RUVIA_GET("/sub-refused-file", sub_refused_file);
     RUVIA_CONNECT("example.com:443", connect_authority);
     RUVIA_METHOD("PROPFIND", "/files", propfind);
     RUVIA_METHOD("PURGE", "/files", purge);
@@ -424,14 +425,17 @@ private:
         };
         static constexpr std::string_view cases[][2] = {{"/t/users/:id", "."}, {"/t/users/:id", ".."},
             {"/t/tree/*", "."}, {"/t/tree/*", ".."}, {"/t/tree/*", "./a"}, {"/t/tree/*", "a/../b"},
-            {"/t/tree/*", "a/."}, {"/t/tree/*", "a\\b"}, {"/t/tree/*", "/a"},
-            {"example.com:443", "a"}};
+            {"/t/tree/*", "a/."}, {"/t/tree/*", "a\\b"}, {"example.com:443", "a"}};
         std::pmr::string reply(c.arena());
         for (const auto& entry : cases) {
             reply.push_back(rejects(entry[0], entry[1]) ? 'x' : '-');
         }
         reply.push_back(' ');
         reply.append(c.url_for("/t/tree/*", {"a.b/..c/.d"}));
+        // Below the root a leading '/' is an empty segment the matcher strips
+        // again, so the value round-trips.
+        reply.push_back(' ');
+        reply.append(c.url_for("/t/tree/*", {"/a"}));
         co_return c.body(std::move(reply));
     }
 
@@ -480,6 +484,25 @@ private:
         reply.push_back(multipart_file_rejected ? '1' : '0');
         reply.push_back(not_acceptable.status() == ruvia::http_status::not_acceptable ? '1' : '0');
         co_return c.body(std::move(reply));
+    }
+
+    // A refused coding turns the buffered /t/hello answer into a 406 from the
+    // error handler, which this case's handler answers with a file: a shape
+    // dispatch cannot deliver, whichever step produced it.
+    ruvia::task<ruvia::http_response> sub_refused_file(ruvia::context& c) {
+        const ruvia::http_header_view encoding_headers[] = {{"Accept-Encoding", "identity;q=0"}};
+        try {
+            const auto refused = co_await c.dispatch({
+                .method_ = "GET",
+                .target_ = "/t/hello",
+                .headers_ = encoding_headers,
+            });
+            std::pmr::string reply("delivered:", c.arena());
+            reply.append(std::to_string(refused.body().size()));
+            co_return c.body(std::move(reply));
+        } catch (const std::logic_error&) {
+            co_return c.body("rejected");
+        }
     }
 };
 
@@ -1433,11 +1456,15 @@ RUVIA_TEST(testing_facade_reverse_routes_reject_dot_segments) {
 
     const auto links = app.request(ruvia::test_request::get("/t/dot-links"));
     RUVIA_CHECK_EQ(links.status(), ruvia::http_status::ok);
-    RUVIA_CHECK_EQ(links.body(), "xxxxxxxxxx /t/tree/a.b/..c/.d");
+    RUVIA_CHECK_EQ(links.body(), "xxxxxxxxx /t/tree/a.b/..c/.d /t/tree//a");
 
     const auto tree = app.request(ruvia::test_request::get("/t/tree/a.b/..c/.d"));
     RUVIA_CHECK_EQ(tree.status(), ruvia::http_status::ok);
     RUVIA_CHECK_EQ(tree.body(), "a.b/..c/.d");
+
+    const auto leading = app.request(ruvia::test_request::get("/t/tree//a"));
+    RUVIA_CHECK_EQ(leading.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(leading.body(), "/a");
 }
 
 RUVIA_TEST(testing_facade_wildcard_capture_rejects_encoded_separators) {
@@ -1480,6 +1507,34 @@ RUVIA_TEST(testing_facade_subrequest_rejects_non_buffered_routes_and_enforces_40
     const auto res = app.request(ruvia::test_request::get("/t/sub-checks"));
     RUVIA_CHECK_EQ(res.status(), ruvia::http_status::ok);
     RUVIA_CHECK_EQ(res.body(), "111");
+    fs::remove_all(dir, ignored);
+}
+
+RUVIA_TEST(testing_facade_subrequest_rejects_a_file_response_recovered_from_406) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_testing_facade_subrequest_406_file";
+    std::error_code ignored;
+    fs::remove_all(dir, ignored);
+    fs::create_directories(dir);
+    testing_facade_file_path() = dir / "large.bin";
+    // Larger than the inline-read limit, so the error handler's answer stays
+    // a file body instead of being read into the response.
+    const std::string large_payload(20000, 'L');
+    {
+        std::ofstream out(testing_facade_file_path(), std::ios::binary | std::ios::trunc);
+        out.write(large_payload.data(), static_cast<std::streamsize>(large_payload.size()));
+    }
+    ruvia::test_app app;
+    app.on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+        if (error.status() == ruvia::http_status::not_acceptable) {
+            co_return c.file({.path_ = testing_facade_file_path()});
+        }
+        c.status(error.status());
+        co_return c.text("err");
+    });
+    const auto res = app.request(ruvia::test_request::get("/t/sub-refused-file"));
+    RUVIA_CHECK_EQ(res.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(res.body(), "rejected");
     fs::remove_all(dir, ignored);
 }
 
