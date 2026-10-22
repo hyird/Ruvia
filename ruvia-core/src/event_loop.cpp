@@ -330,8 +330,9 @@ void event_loop_state::stop() noexcept {
     }
     const std::weak_ptr<event_loop_state> weak = weak_from_this();
     retirement_.set_finalize([weak] {
-        if (const auto state_value = weak.lock()) {
-            state_value->schedule_finalize_when_idle();
+        if (auto state_value = weak.lock()) {
+            auto* const state_ptr = state_value.get();
+            state_ptr->defer_finalize_stop(std::move(state_value));
         }
     });
     if (auto* attached = std::get_if<attached_context>(&context_ownership_)) {
@@ -341,13 +342,14 @@ void event_loop_state::stop() noexcept {
     }
     // close() can lose the race to a dispatcher that already set
     // accepting=false but has not yet called every shutdown listener. Do
-    // not seal the retirement gate until that first notification batch is
-    // fully complete, so every listener can acquire its cleanup lease.
+    // not seal the retirement gate until both that first notification batch
+    // and the worker's queued posts have drained, so every listener and
+    // draining post can acquire its cleanup lease.
     try {
         worker_handle_access::when_shutdown_notifications_complete(runtime_.handle(), [weak] {
             if (const auto state_value = weak.lock()) {
-                state_value->retirement_.seal();
                 state_value->retirement_.finish();
+                state_value->schedule_finalize_when_idle();
             }
         });
     } catch (...) {
@@ -359,9 +361,8 @@ void event_loop_state::schedule_finalize_when_idle() noexcept {
     const std::weak_ptr<event_loop_state> weak = weak_from_this();
     try {
         worker_handle_access::when_idle(runtime_.handle(), [weak] {
-            if (auto idle_state = weak.lock()) {
-                auto* const state_ptr = idle_state.get();
-                state_ptr->defer_finalize_stop(std::move(idle_state));
+            if (const auto idle_state = weak.lock()) {
+                idle_state->retirement_.seal();
             }
         });
     } catch (...) {

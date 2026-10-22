@@ -57,3 +57,35 @@ RUVIA_TEST(model_string_move_assignment_preserves_values_and_reclaims_storage) {
     RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
     RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
 }
+
+RUVIA_TEST(model_string_assign_owned_pmr_rvalue_rebinds_equivalent_resources) {
+    counting_memory_resource upstream;
+    {
+        ruvia::test::equivalent_tracking_resource source(upstream);
+        ruvia::test::equivalent_tracking_resource target(upstream);
+        RUVIA_CHECK(source.is_equal(target));
+
+        const std::string expected(200, 'a');
+        std::optional<ruvia::string> value(std::in_place, ruvia::model_options{.resource_ = &target});
+        {
+            std::pmr::string input(expected, &source);
+            value->assign_owned(std::move(input));
+        }
+        source.retire();
+        RUVIA_CHECK_EQ(value->view(), std::string_view(expected));
+        value.reset();
+        RUVIA_CHECK_EQ(source.callbacks_after_retirement(), std::size_t{0});
+
+        const std::string same_expected(200, 'b');
+        ruvia::string same_resource_target(ruvia::model_options{.resource_ = &target});
+        std::pmr::string same_resource_input(same_expected, &target);
+        const auto attempts = target.allocation_attempts();
+        target.reject_allocations_after(0);
+        same_resource_target.assign_owned(std::move(same_resource_input));
+        target.allow_allocations();
+        RUVIA_CHECK_EQ(target.allocation_attempts(), attempts);
+        RUVIA_CHECK_EQ(same_resource_target.view(), std::string_view(same_expected));
+    }
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
+}

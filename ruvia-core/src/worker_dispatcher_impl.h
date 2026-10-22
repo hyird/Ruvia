@@ -53,6 +53,7 @@ struct timer_slot final {
     std::atomic<std::uint64_t> active_generation_{0};
     std::size_t next_free_{no_timer_slot};
     bool occupied_{false};
+    bool cancel_requested_{false};
     move_only_function<void(worker_timer_outcome)> completion_;
 };
 
@@ -188,6 +189,8 @@ private:
     void fail_timers(std::string_view context_value, std::exception_ptr failure) noexcept;
     [[nodiscard]] bool has_timer(std::size_t slot, std::uint64_t generation) const noexcept;
     [[nodiscard]] bool has_occupied_timer(std::size_t slot, std::uint64_t generation) const noexcept;
+    [[nodiscard]] bool has_live_timer_entry(std::size_t slot, std::uint64_t generation) const noexcept;
+    void note_stale_timer() noexcept;
     // Deactivates an active slot, returns it to the free list, and hands back
     // its completion for the caller to invoke or destroy.
     [[nodiscard]] move_only_function<void(worker_timer_outcome)> release_timer_slot(std::size_t slot) noexcept;

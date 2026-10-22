@@ -97,8 +97,12 @@ ruvia::task<void> exercise_lease_and_close(
 
 ruvia::task<void> exercise_worker_bound_acquire_timeout(
     ruvia::pool_lease_scheduler& scheduler, bool& success) {
+    const auto zero_timeout = co_await scheduler.acquire(std::chrono::milliseconds(0));
+    const auto negative_timeout = co_await scheduler.acquire(std::chrono::milliseconds(-5));
     const auto result_value = co_await scheduler.acquire(std::chrono::milliseconds(1));
-    success = result_value.status() == ruvia::worker_wait_status::timed_out;
+    success = zero_timeout.status() == ruvia::worker_wait_status::timed_out &&
+              negative_timeout.status() == ruvia::worker_wait_status::timed_out &&
+              result_value.status() == ruvia::worker_wait_status::timed_out;
 }
 
 ruvia::task<void> exercise_saturated_acquire_timeout(
@@ -123,6 +127,33 @@ ruvia::task<void> exercise_acquire_cancellation(ruvia::pool_lease_scheduler& sch
     success = result_value.status() == ruvia::worker_wait_status::cancelled;
 }
 
+ruvia::task<void> exercise_nonpositive_timeout_does_not_steal_same_turn_release(
+    const ruvia::worker_handle& worker_value, bool& success) {
+    ruvia::pool_lease_scheduler scheduler(1, worker_value);
+    const auto first = co_await scheduler.acquire(std::chrono::milliseconds(0));
+    if (!first.has_value()) {
+        co_return;
+    }
+    bool zero_timed_out = false;
+    bool negative_timed_out = false;
+    ruvia::task_scope scope(worker_value);
+    scope.spawn([&]() -> ruvia::task<void> {
+        const auto outcome = co_await scheduler.acquire(std::chrono::milliseconds(0));
+        zero_timed_out = outcome.status() == ruvia::worker_wait_status::timed_out;
+    }());
+    scope.spawn([&]() -> ruvia::task<void> {
+        const auto outcome = co_await scheduler.acquire(std::chrono::milliseconds(-1));
+        negative_timed_out = outcome.status() == ruvia::worker_wait_status::timed_out;
+    }());
+    scheduler.release(first.value());
+    co_await scope.join();
+    const auto reacquired = co_await scheduler.acquire(std::chrono::milliseconds(0));
+    if (!reacquired.has_value() || reacquired.value() != first.value()) {
+        co_return;
+    }
+    scheduler.release(reacquired.value());
+    success = zero_timed_out && negative_timed_out;
+}
 ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
     asio::io_context& io_context, const ruvia::worker_handle& worker_value,
     counting_memory_resource& resource, std::size_t baseline_blocks,
@@ -270,17 +301,21 @@ int main() {
     ruvia::pool_lease_scheduler cancellation_scheduler(0, worker_value);
     bool lease_success = false;
     bool worker_timeout_success = false;
+    bool nonpositive_timeout_success = false;
     bool saturated_timeout_success = false;
     bool cancellation_success = false;
     bool pmr_lifecycle_success = false;
     ruvia::test::run_worker_tasks(runtime,
         exercise_lease_and_close(lease_scheduler, io_context, lease_success),
         exercise_worker_bound_acquire_timeout(worker_timeout_scheduler, worker_timeout_success),
+        exercise_nonpositive_timeout_does_not_steal_same_turn_release(
+            worker_value, nonpositive_timeout_success),
         exercise_saturated_acquire_timeout(saturated_timeout_scheduler, io_context, saturated_timeout_success),
         exercise_acquire_cancellation(cancellation_scheduler, io_context, worker_value, cancellation_success),
         exercise_pmr_test(io_context, worker_value, pmr_lifecycle_success));
     runtime.detach();
-    return lease_success && worker_timeout_success && saturated_timeout_success &&
+    return lease_success && worker_timeout_success && nonpositive_timeout_success &&
+                   saturated_timeout_success &&
                    cancellation_success && pmr_lifecycle_success &&
                    test_scheduler_owns_timeout_for_lazy_acquires() &&
                    test_scheduler_retains_worker_binding_for_lazy_acquires()

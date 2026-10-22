@@ -127,14 +127,14 @@ public:
             return;
         }
         aborted_ = true;
-        output_budget_.release(stream_id_);
-        output_budget_.wake();
         try {
             (void)connection_.submit_reset(stream_id_, http2_error_code::cancel);
         } catch (...) {
             // abort() is best-effort teardown; callers cannot observe reset
             // serialization failure on this noexcept cleanup path.
         }
+        output_budget_.release_and_reconcile(stream_id_, connection_);
+        output_budget_.wake();
         signal_.wake();
         wake_writer();
     }

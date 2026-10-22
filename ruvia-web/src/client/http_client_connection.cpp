@@ -219,11 +219,13 @@ task<void> http_client_connection::ensure_connected(
     const auto timeout = operation_timeout_value.constrained_by(config.connect_timeout_);
     const auto connected = co_await transport_.connect(timeout);
     if (!connected.ok()) {
+        close();
         throw_http_client_transport_error(connected, "upstream closed while connecting");
     }
     if (transport_.secure()) {
         const auto alpn = transport_.alpn();
         if (config.protocol_ == http_client_protocol::http2_only && alpn != "h2") {
+            close();
             throw http_client_error(
                 http_client_error::code_type::protocol_unavailable, "upstream did not negotiate HTTP/2");
         }

@@ -1,7 +1,9 @@
 #include "ruvia/core/socket.h"
 
 #include <array>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -89,6 +91,24 @@ namespace {
             return false;
         }
     }
+    if (zone_name.front() == '+' || zone_name.front() == '-') {
+        return false;
+    }
+    if (is_decimal_digit(zone_name.front())) {
+        if (zone_name.front() == '0') {
+            return false;
+        }
+        std::uint64_t scope_value = 0;
+        for (const char ch : zone_name) {
+            if (!is_decimal_digit(ch)) {
+                return false;
+            }
+            scope_value = scope_value * 10 + static_cast<std::uint64_t>(ch - '0');
+            if (scope_value > std::numeric_limits<asio::ip::scope_id_type>::max()) {
+                return false;
+            }
+        }
+    }
     return true;
 }
 
@@ -118,7 +138,7 @@ std::optional<asio::ip::address> parse_ip_address(std::string_view text) {
         const std::pmr::string owned(text, process_resource());
         return asio::ip::make_address_v6(owned.c_str(), error);
     }();
-    if (error) {
+    if (error || (text.find('%') != std::string_view::npos && address.scope_id() == 0)) {
         return std::nullopt;
     }
     return asio::ip::address(address);

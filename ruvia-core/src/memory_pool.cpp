@@ -49,6 +49,9 @@ private:
         if (alignment <= alignof(void*)) {
             return bytes_value;
         }
+        if (bytes_value == 0) {
+            return alignment;
+        }
         const auto rounded = (bytes_value + alignment - 1) & ~(alignment - 1);
         return rounded < bytes_value ? bytes_value : rounded;
     }

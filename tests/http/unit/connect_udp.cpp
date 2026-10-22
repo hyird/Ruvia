@@ -58,6 +58,11 @@ RUVIA_TEST(http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
         std::pmr::get_default_resource());
     RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(abs_req));
     RUVIA_CHECK(!ruvia::validate_http_connect_udp_request(std::get<ruvia::http_request>(abs_req)).has_value());
+    const auto abs_query_req = ruvia::make_parsed_http_request("GET",
+        "https://example.test/.well-known/masque/udp/192.0.2.1/443/?target=1", fields, {},
+        std::pmr::get_default_resource());
+    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(abs_query_req));
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request(std::get<ruvia::http_request>(abs_query_req)).has_value());
 }
 RUVIA_TEST(http_udp_capsule_session_checks_context_size_and_half_close) {
     ruvia::http_datagram_session session;
@@ -103,6 +108,15 @@ RUVIA_TEST(http_connect_udp_response_preparation_owns_required_fields_and_http1_
             RUVIA_CHECK(head.view().find("Transfer-Encoding:") == std::string_view::npos);
         }
     }
+    ruvia::http_response parameterized;
+    parameterized.status(ruvia::http_status::ok);
+    parameterized.header("Capsule-Protocol", "?1;version=1");
+    auto prepared_param = ruvia::prepare_http_connect_udp_response(
+        std::move(parameterized), ruvia::http_protocol_version::http2);
+    RUVIA_CHECK(prepared_param.index() == 0);
+    if (prepared_param.index() == 0) {
+        RUVIA_CHECK_EQ(std::get<0>(prepared_param).header("capsule-protocol").value_or(""), "?1;version=1");
+    }
     for (const auto field : {"Content-Length", "Transfer-Encoding", "Content-Type", "Content-Encoding", "Connection", "Upgrade", "Trailer"}) {
         ruvia::http_response invalid;
         invalid.header(field, field == std::string_view("Content-Length") ? "0" : field == std::string_view("Content-Type") ? "application/octet-stream"
@@ -138,6 +152,15 @@ RUVIA_TEST(http_connect_udp_http1_request_writer_generates_upgrade_without_messa
     const std::array invalid{ruvia::http_header_view{"Capsule-Protocol", "?0"}};
     auto disabled = writer.prepare_connect_udp(origin, "/udp", invalid, buffer);
     RUVIA_CHECK(std::holds_alternative<ruvia::http1_client_request_prepare_error>(disabled));
+    auto bad_target = writer.prepare_connect_udp(origin, "relative", fields_value, buffer);
+    RUVIA_CHECK(std::holds_alternative<ruvia::http1_client_request_prepare_error>(bad_target) &&
+                std::get<ruvia::http1_client_request_prepare_error>(bad_target) ==
+                    ruvia::http1_client_request_prepare_error::invalid_target);
+    const std::array with_host{fields_value[0], ruvia::http_header_view{"Host", "[::1]:8443"}};
+    auto managed_host = writer.prepare_connect_udp(origin, "/udp", with_host, buffer);
+    RUVIA_CHECK(std::holds_alternative<ruvia::http1_client_request_prepare_error>(managed_host) &&
+                std::get<ruvia::http1_client_request_prepare_error>(managed_host) ==
+                    ruvia::http1_client_request_prepare_error::host_header_managed_by_writer);
 }
 
 RUVIA_TEST(http_connect_udp_http2_uses_extended_connect_without_upgrade_fields) {

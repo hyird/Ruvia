@@ -21,17 +21,58 @@ redis_key_value::redis_key_value(const redis_key_value& other, allocator_type al
       value_(other.value_, allocator.resource()) {}
 
 redis_key_value::redis_key_value(redis_key_value&& other, allocator_type allocator)
-    : key_(std::move(other.key_), allocator.resource()),
-      value_(std::move(other.value_), allocator.resource()) {}
+    : key_(detail::rebind_owned_storage(other.key_, allocator.resource(), other.value_)),
+      value_(detail::rebind_owned_storage(other.value_, allocator.resource(), other.key_)) {
+    other.key_.clear();
+    other.value_.clear();
+}
+
+redis_key_value& redis_key_value::operator=(const redis_key_value& other) {
+    if (this != &other) {
+        redis_key_value owned(other, allocator_type(key_.get_allocator().resource()));
+        key_.swap(owned.key_);
+        value_.swap(owned.value_);
+    }
+    return *this;
+}
+
+redis_key_value& redis_key_value::operator=(redis_key_value&& other) {
+    if (this != &other) {
+        redis_key_value owned(std::move(other), allocator_type(key_.get_allocator().resource()));
+        key_.swap(owned.key_);
+        value_.swap(owned.value_);
+    }
+    return *this;
+}
 
 redis_scored_value::redis_scored_value(const redis_scored_value& other, allocator_type allocator)
     : value_(other.value_, allocator.resource()),
       score_(other.score_) {}
 
 redis_scored_value::redis_scored_value(redis_scored_value&& other, allocator_type allocator)
-    : value_(std::move(other.value_), allocator.resource()),
-      score_(other.score_) {}
+    : value_(detail::rebind_owned_storage(other.value_, allocator.resource())),
+      score_(other.score_) {
+    other.value_.clear();
+    other.score_ = 0;
+}
 
+redis_scored_value& redis_scored_value::operator=(const redis_scored_value& other) {
+    if (this != &other) {
+        redis_scored_value owned(other, allocator_type(value_.get_allocator().resource()));
+        value_.swap(owned.value_);
+        score_ = owned.score_;
+    }
+    return *this;
+}
+
+redis_scored_value& redis_scored_value::operator=(redis_scored_value&& other) {
+    if (this != &other) {
+        redis_scored_value owned(std::move(other), allocator_type(value_.get_allocator().resource()));
+        value_.swap(owned.value_);
+        score_ = owned.score_;
+    }
+    return *this;
+}
 redis_scan_result& redis_scan_result::operator=(redis_scan_result&& other) {
     if (this != &other) {
         auto owned = detail::rebind_owned_storage(other.values_, values_.get_allocator().resource());

@@ -236,12 +236,14 @@ struct db_expr_tree final {
     explicit db_expr_tree(std::pmr::memory_resource* resource)
         : resource_(pmr_resource_or_default(resource)),
           nodes_(resource_),
-          queries_(resource_) {}
+          queries_(resource_),
+          table_(resource_) {}
 
     db_expr_tree(const db_expr_tree& other, std::pmr::memory_resource* resource)
         : resource_(pmr_resource_or_default(resource)),
           nodes_(resource_),
           queries_(resource_),
+          table_(other.table_, resource_),
           root_(other.root_) {
         nodes_.reserve(other.nodes_.size());
         for (const auto& node : other.nodes_) {
@@ -256,6 +258,7 @@ struct db_expr_tree final {
     std::pmr::memory_resource* resource_;
     std::pmr::vector<db_query_node> nodes_;
     std::pmr::vector<db_query> queries_;
+    std::pmr::string table_;
     std::size_t root_{no_db_node};
 };
 
@@ -430,8 +433,10 @@ db_expression db_owned_expression::import_into(db_query& target, std::string_vie
             return target.value(db_value(scalar_.bool_value_));
         case leaf_kind::tree: {
             auto& target_storage = target.storage();
-            const auto source_qualifier = alias.empty() ? std::string_view{} : table;
-            const auto target_qualifier = alias.empty() ? std::string_view{} : alias;
+            const auto source_table = !tree_->table_.empty() ? std::string_view(tree_->table_) : table;
+            const bool rewrite = !aliased_ && !source_table.empty() && !alias.empty();
+            const auto source_qualifier = rewrite ? source_table : std::string_view{};
+            const auto target_qualifier = rewrite ? alias : std::string_view{};
             if (!source_qualifier.empty()) {
                 require_name(source_qualifier, true);
                 require_name(target_qualifier, true);
@@ -484,6 +489,9 @@ std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
             if (borrowed_.empty() || borrowed_.node_ >= borrowed_.owner_->nodes_.size()) {
                 throw std::invalid_argument("cannot import an empty database expression");
             }
+            if (!aliased_ && !table_.empty() && target.table_.empty()) {
+                target.table_ = table_;
+            }
             std::pmr::vector<std::size_t> mapped(borrowed_.owner_->nodes_.size(), no_db_node, target.resource_);
             return import_borrowed_node_to_tree(
                 *borrowed_.owner_, target, mapped, aliased_, borrowed_.node_, 0);
@@ -527,6 +535,9 @@ std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
         case leaf_kind::bool_value:
             return push_tree_value(target, db_value(scalar_.bool_value_));
         case leaf_kind::tree: {
+            if (!aliased_ && !tree_->table_.empty() && target.table_.empty()) {
+                target.table_ = tree_->table_;
+            }
             const auto node_offset = target.nodes_.size();
             const auto query_offset = target.queries_.size();
             target.queries_.reserve(query_offset + tree_->queries_.size());
@@ -567,12 +578,17 @@ db_owned_expression db_owned_expression::from_expression(
     if (expression.empty() || expression.node_ >= expression.owner_->nodes_.size()) {
         throw std::invalid_argument("cannot construct an owned expression from an empty expression");
     }
-    auto tree = allocate_tree(expression.owner_->resource_);
+    if (!table.empty()) {
+        require_name(table, true);
+    }
+    auto tree = allocate_tree();
+    if (!aliased) {
+        tree->table_ = table;
+    }
     std::pmr::vector<std::size_t> mapped(expression.owner_->nodes_.size(), no_db_node, tree->resource_);
     tree->root_ = import_borrowed_node_to_tree(
         *expression.owner_, *tree, mapped, aliased, expression.node_, 0);
     auto result = from_tree(std::move(tree));
-    result.table_ = table;
     result.aliased_ = aliased;
     return result;
 }
@@ -979,6 +995,7 @@ db_owned_expression db_owned_expression::make_binary(
         node_value.right_ = right_idx;
         node_value.binary_ = op;
         lhs.tree_->root_ = push_tree_node(*lhs.tree_, std::move(node_value));
+        lhs.aliased_ = false;
         return std::move(lhs);
     }
     return make_binary(std::as_const(lhs), op, rhs);
@@ -1003,6 +1020,7 @@ db_owned_expression db_owned_expression::make_unary(
         node_value.left_ = op_idx;
         node_value.unary_ = op;
         operand.tree_->root_ = push_tree_node(*operand.tree_, std::move(node_value));
+        operand.aliased_ = false;
         return std::move(operand);
     }
     return make_unary(op, std::as_const(operand));

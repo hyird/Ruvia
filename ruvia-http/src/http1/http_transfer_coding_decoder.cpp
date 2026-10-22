@@ -27,6 +27,9 @@ public:
     transfer_coding_decoder& operator=(const transfer_coding_decoder&) = delete;
     [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output) noexcept;
     [[nodiscard]] http_transfer_coding_decode_result finish_input() noexcept;
+    [[nodiscard]] bool received_input() const noexcept {
+        return received_input_;
+    }
 
 private:
     struct inflate_step_result {
@@ -395,6 +398,7 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_in
         return http_transfer_coding_decode_result(
             http_transfer_coding_decode_failure(0, *impl_->failure_));
     }
+    const bool wire_received_input = impl_->stages_[0].decoder_.received_input();
     for (std::size_t index = 0; index < impl_->stages_.size(); ++index) {
         auto& stage = impl_->stages_[index];
         if (index + 1 < impl_->stages_.size() && stage.begin_ != stage.end_) {
@@ -402,6 +406,11 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_in
         }
         if (stage.complete_) {
             continue;
+        }
+        if (index > 0 && wire_received_input && !stage.decoder_.received_input()) {
+            impl_->failure_ = http_transfer_coding_decode_error::invalid_content;
+            return http_transfer_coding_decode_result(
+                http_transfer_coding_decode_failure(0, *impl_->failure_));
         }
         const auto finished = stage.decoder_.finish_input();
         if (const auto* protocol_failure = finished.failure()) {

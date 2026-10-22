@@ -233,9 +233,9 @@ template <typename t_type>
     if (!parsed_value) {
         throw std::invalid_argument("invalid JSON value");
     }
-    if constexpr (detail::is_model<t_type>) {
+    if constexpr (detail::model_validation_access::contains_model<t_type>()) {
         validator validator_value({.resource_ = resource});
-        validate_model(*parsed_value, validator_value);
+        detail::model_validation_access::validate_value(*parsed_value, validator_value);
         validator_value.throw_if_invalid();
     }
     return std::move(*parsed_value);

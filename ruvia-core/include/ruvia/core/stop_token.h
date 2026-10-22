@@ -317,8 +317,9 @@ private:
             }
             auto callback = callback_state_->take();
             callback_state_.reset();
-            phase_.store(registration_phase_type::idle, std::memory_order_release);
-            if (callback.has_value()) {
+            const auto previous_phase =
+                phase_.exchange(registration_phase_type::idle, std::memory_order_acq_rel);
+            if (previous_phase != registration_phase_type::reset_pending && callback.has_value()) {
                 (*callback)();
             }
             return;

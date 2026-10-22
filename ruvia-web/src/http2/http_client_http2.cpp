@@ -266,6 +266,9 @@ void http_client_connection::on_http2_data_drained(std::uint32_t stream_id) noex
 void http_client_connection::on_http2_failure(
     const client_transport_result& transport, std::exception_ptr failure) noexcept {
     connected_ = false;
+    if (pool_.config().protocol_ == http_client_protocol::negotiate) {
+        protocol_ = protocol_type::unknown;
+    }
     auto stream_error = http_client_error::code_type::io_error;
     if (const auto reason = transport_.abort_reason(); reason != client_abort_reason::none) {
         stream_error = http_client_abort_error(reason);
@@ -403,6 +406,7 @@ task<void> http_client_connection::execute_http2(const http_client_request_stora
             co_await wait_for_http2_session_stop(timeout, stop_token_value);
             co_await ensure_connected(timeout, timeout, stop_token_value, state_value);
             if (protocol_ != protocol_type::http2) {
+                close();
                 throw http_client_error(
                     http_client_error::code_type::protocol_unavailable, "upstream no longer negotiated HTTP/2");
             }

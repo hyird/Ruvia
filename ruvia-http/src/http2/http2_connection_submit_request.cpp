@@ -10,6 +10,7 @@
 #include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_header_rules.h"
+#include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_request_headers.h"
 #include "http2/http2_websocket_handshake.h"
 #include "parser/http_request_target.h"
@@ -324,7 +325,8 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     const auto* parent_value = find_stream(associated_stream_id);
     if (role_ != http2_role::server || preface_phase_ != preface_phase_type::ready ||
         local_connection_state_.open() == nullptr || peer_goaway_ || !parent_value || parent_value->is_aborted() ||
-        (associated_stream_id & 1U) == 0 || parent_value->local_send().end_stream_committed() ||
+        (associated_stream_id & 1U) == 0 || !http2_remote_final_head_decoded(*parent_value) ||
+        parent_value->tunnel().not_connect() == nullptr || parent_value->local_send().end_stream_committed() ||
         parent_value->local_send().end_stream_queued() || next_push_stream_id_ > 0x7fffffffU) {
         return error_type::invalid_state;
     }

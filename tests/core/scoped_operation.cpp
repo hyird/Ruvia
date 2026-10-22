@@ -998,3 +998,121 @@ RUVIA_TEST(scoped_capability_cleanup_can_reenter_scope_close) {
     scope.close();
     RUVIA_CHECK_EQ(expired, 1);
 }
+
+RUVIA_TEST(scoped_capability_cleanup_can_reenter_scope_close_during_join_resume) {
+    ruvia::event_loop_pool loops({.loop_count_ = 1});
+    const auto loop = loops.loop(0);
+    const auto worker_value = loop.handle();
+    ruvia::worker_signal signal(worker_value);
+    ruvia::operation_scope scope;
+    int expired = 0;
+    struct reentrant_closer final {
+        ruvia::operation_scope* scope_;
+        int* expired_;
+    } state{&scope, &expired};
+    ruvia::scoped_capability_registration registration(
+        scope, &state, [](void* raw) noexcept {
+            auto* value = static_cast<reentrant_closer*>(raw);
+            ++*value->expired_;
+            value->scope_->close();
+        });
+    struct helpers final {
+        static ruvia::task<void> wait_for_signal(ruvia::worker_signal& sig) {
+            static_cast<void>(co_await sig.wait());
+        }
+        static ruvia::task<void> run_operation(ruvia::scoped_operation<void>& op) {
+            co_await std::move(op);
+        }
+        static ruvia::task<void> run_join(ruvia::operation_scope& target_scope, bool& completed) {
+            co_await target_scope.close_and_join();
+            completed = true;
+        }
+        static ruvia::task<void> drive(const ruvia::worker_handle& worker, ruvia::worker_signal& sig,
+            ruvia::operation_scope& target_scope, ruvia::scoped_operation<void>& op, bool& completed) {
+            ruvia::task_scope tasks(worker);
+            tasks.spawn(run_operation(op));
+            tasks.spawn(run_join(target_scope, completed));
+            sig.notify();
+            co_await tasks.join();
+        }
+    };
+    auto operation = ruvia::make_scoped_operation(scope, helpers::wait_for_signal(signal));
+    bool joined_completed = false;
+    auto root = loop.start(helpers::drive(worker_value, signal, scope, operation, joined_completed));
+    loops.start();
+    root.get();
+    RUVIA_CHECK(joined_completed);
+    RUVIA_CHECK_EQ(expired, 1);
+    loops.stop();
+    loops.join();
+}
+
+RUVIA_TEST(scoped_operation_close_drain_allows_reentrant_join_to_destroy_scope_inline) {
+    ruvia::event_loop_pool loops({.loop_count_ = 1});
+    const auto loop = loops.loop(0);
+    const auto worker_value = loop.handle();
+    counting_resource resource;
+    int expired_count = 0;
+    bool join_destroyed_scope = false;
+    struct inline_destroy_input final {
+        inline_destroy_input(counting_resource& res, ruvia::task_scope& children,
+            std::unique_ptr<ruvia::operation_scope>& owned_scope, int& expired, bool& destroyed)
+            : payload_(512, 'd', &res),
+              children_(&children),
+              owned_scope_(&owned_scope),
+              expired_(&expired),
+              destroyed_(&destroyed) {}
+        inline_destroy_input(const inline_destroy_input&) = delete;
+        inline_destroy_input& operator=(const inline_destroy_input&) = delete;
+        inline_destroy_input(inline_destroy_input&& other) noexcept
+            : payload_(std::move(other.payload_)),
+              children_(std::exchange(other.children_, nullptr)),
+              owned_scope_(other.owned_scope_),
+              expired_(other.expired_),
+              destroyed_(other.destroyed_) {}
+        inline_destroy_input& operator=(inline_destroy_input&&) = delete;
+        static ruvia::task<void> join_and_reset(
+            std::unique_ptr<ruvia::operation_scope>* owned_scope, int* expired, bool* destroyed) {
+            co_await (*owned_scope)->close_and_join();
+            *destroyed = (*expired == 1);
+            owned_scope->reset();
+        }
+        ~inline_destroy_input() noexcept {
+            if (children_ == nullptr) {
+                return;
+            }
+            children_->spawn(join_and_reset(owned_scope_, expired_, destroyed_));
+        }
+        std::pmr::string payload_;
+        ruvia::task_scope* children_;
+        std::unique_ptr<ruvia::operation_scope>* owned_scope_;
+        int* expired_;
+        bool* destroyed_;
+    };
+    struct helpers final {
+        static ruvia::task<void> cold_body(inline_destroy_input input) {
+            static_cast<void>(input);
+            co_return;
+        }
+        static ruvia::task<void> drive(const ruvia::worker_handle& worker, counting_resource& res,
+            int& expired, bool& destroyed) {
+            ruvia::task_scope children(worker);
+            auto owned_scope = std::make_unique<ruvia::operation_scope>();
+            test_scoped_capability capability(*owned_scope, expired);
+            {
+                auto cold_op = ruvia::make_scoped_operation(*owned_scope,
+                    cold_body(inline_destroy_input(res, children, owned_scope, expired, destroyed)));
+                owned_scope->close();
+            }
+            co_await children.join();
+        }
+    };
+    auto root = loop.start(helpers::drive(worker_value, resource, expired_count, join_destroyed_scope));
+    loops.start();
+    root.get();
+    RUVIA_CHECK(join_destroyed_scope);
+    RUVIA_CHECK_EQ(expired_count, 1);
+    RUVIA_CHECK_EQ(resource.in_use_allocations_, 0U);
+    loops.stop();
+    loops.join();
+}

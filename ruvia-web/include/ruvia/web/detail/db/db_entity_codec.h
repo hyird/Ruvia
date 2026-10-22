@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -85,14 +86,23 @@ void decode_array_element(std::string_view text, t_type& value, std::pmr::memory
         } else {
             throw db_conversion_error(db_conversion_error::code_type::invalid_format, "invalid boolean array element");
         }
-    } else {
+    } else if constexpr (std::is_floating_point_v<t_type>) {
         const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
-        if (ec != std::errc{} || end != text.data() + text.size()) {
-            throw db_conversion_error(ec == std::errc::result_out_of_range
+        if (ec != std::errc{} || end != text.data() + text.size() || !std::isfinite(value)) {
+            throw db_conversion_error(ec == std::errc::result_out_of_range && end == text.data() + text.size()
                                           ? db_conversion_error::code_type::out_of_range
                                           : db_conversion_error::code_type::invalid_format,
                 "invalid array element");
         }
+    } else {
+        const auto parsed = parse_integer<t_type>(text);
+        if (const auto* ec = std::get_if<integer_parse_error>(&parsed)) {
+            throw db_conversion_error(*ec == integer_parse_error::out_of_range
+                                          ? db_conversion_error::code_type::out_of_range
+                                          : db_conversion_error::code_type::invalid_format,
+                "invalid array element");
+        }
+        value = std::get<t_type>(parsed);
     }
     (void)resource;
 }

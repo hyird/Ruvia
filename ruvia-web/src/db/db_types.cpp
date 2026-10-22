@@ -7,6 +7,8 @@
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
+#include "util/pmr_owned_storage.h"
+
 namespace ruvia {
 
 db_field::db_field(std::pmr::memory_resource* resource)
@@ -40,10 +42,10 @@ db_field& db_field::operator=(db_field&& other) {
         return *this;
     }
     if (auto* owned = std::get_if<std::pmr::string>(&other.storage_)) {
+        auto replacement = detail::rebind_owned_storage(*owned, resource_);
         if (auto* destination = std::get_if<std::pmr::string>(&storage_)) {
-            *destination = std::move(*owned);
+            destination->swap(replacement);
         } else {
-            std::pmr::string replacement(std::move(*owned), resource_);
             storage_.emplace<std::pmr::string>(std::move(replacement));
         }
     } else if (const auto* borrowed = std::get_if<borrowed_text>(&other.storage_)) {

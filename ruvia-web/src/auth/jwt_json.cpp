@@ -78,7 +78,7 @@ template <typename visitor_type>
                fractional_text.back() == '\r' || fractional_text.back() == '\n')) {
         fractional_text.remove_suffix(1);
     }
-    const auto parsed_fractional = detail::parse_decimal_number(fractional_text);
+    const auto parsed_fractional = detail::parse_decimal_number<long double>(fractional_text);
     if (!parsed_fractional || !std::isfinite(*parsed_fractional)) {
         return std::nullopt;
     }

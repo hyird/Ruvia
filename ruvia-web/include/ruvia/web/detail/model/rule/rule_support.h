@@ -33,11 +33,14 @@ template <typename t_type>
 
 [[nodiscard]] inline bool is_email_like(std::string_view value) noexcept {
     const auto at = value.find('@');
-    if (at == std::string_view::npos || at == 0 || at + 1 >= value.size()) {
+    if (at == std::string_view::npos || at == 0 || at + 1 >= value.size() ||
+        value.find('@', at + 1) != std::string_view::npos) {
         return false;
     }
-    const auto dot = value.find('.', at + 1);
-    if (dot == std::string_view::npos || dot + 1 >= value.size()) {
+    const auto domain = value.substr(at + 1);
+    if (domain.front() == '.' || domain.back() == '.' ||
+        domain.find('.') == std::string_view::npos ||
+        domain.find("..") != std::string_view::npos) {
         return false;
     }
     for (const char c : value) {

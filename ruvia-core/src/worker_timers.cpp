@@ -125,6 +125,7 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
     }
     slot.next_free_ = no_timer_slot;
     slot.occupied_ = true;
+    slot.cancel_requested_ = false;
     slot.completion_ = std::move(completion);
     slot.active_generation_.store(slot.generation_, std::memory_order_release);
     try {
@@ -189,23 +190,32 @@ void worker_dispatcher::request_timer_cancellation(
             return;
         }
     }
-    // The caller is running synchronously on the worker; delivering its own
-    // completion here would re-enter it, so the completion is posted.
-    auto completion = take_timer(slot, generation);
-    if (notify && completion) {
-        defer_or_terminate([completion = std::move(completion)]() mutable {
-            completion(worker_timer_outcome::cancelled);
-        });
+    if (!notify) {
+        static_cast<void>(take_timer(slot, generation));
+        return;
     }
+    if (!has_occupied_timer(slot, generation)) {
+        return;
+    }
+    auto& slot_state = timer_slots_[slot];
+    if (slot_state.cancel_requested_) {
+        return;
+    }
+    slot_state.cancel_requested_ = true;
+    note_stale_timer();
+    // The caller is running synchronously on the worker; delivering its own
+    // completion here would re-enter it, so the completion is posted. Deferring
+    // slot extraction lets a subsequent registration.cancel() or destruction on
+    // this worker withdraw the callback before the posted turn runs.
+    defer_or_terminate([self = shared_from_this(), slot, generation] {
+        auto completion = self->take_timer(slot, generation);
+        if (completion) {
+            completion(worker_timer_outcome::cancelled);
+        }
+    });
 }
 
-move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(
-    std::size_t slot_index, std::uint64_t generation) noexcept {
-    if (!has_occupied_timer(slot_index, generation)) {
-        return {};
-    }
-    const bool active = has_timer(slot_index, generation);
-    auto completion = release_timer_slot(slot_index);
+void worker_dispatcher::note_stale_timer() noexcept {
     ++stale_timer_count_;
     if (stale_timer_count_ == timers_.size()) {
         // Nothing live remains: drop the heap and the armed wait so an idle
@@ -219,13 +229,24 @@ move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(
         }
     } else if (stale_timer_count_ >= 64 && stale_timer_count_ * 2 >= timers_.size()) {
         std::erase_if(timers_, [this](const timer_entry& entry_value) {
-            return !has_occupied_timer(entry_value.slot_, entry_value.generation_);
+            return !has_live_timer_entry(entry_value.slot_, entry_value.generation_);
         });
         std::ranges::make_heap(timers_, timer_entry_later{});
         stale_timer_count_ = 0;
     }
-    // Otherwise the armed wait stays: it fires no later than any live entry,
-    // and fire_timers() skips the stale one.
+}
+
+move_only_function<void(worker_timer_outcome)> worker_dispatcher::take_timer(
+    std::size_t slot_index, std::uint64_t generation) noexcept {
+    if (!has_occupied_timer(slot_index, generation)) {
+        return {};
+    }
+    const bool active = has_timer(slot_index, generation);
+    const bool already_stale = timer_slots_[slot_index].cancel_requested_;
+    auto completion = release_timer_slot(slot_index);
+    if (!already_stale) {
+        note_stale_timer();
+    }
     return active ? std::move(completion) : move_only_function<void(worker_timer_outcome)>{};
 }
 
@@ -275,7 +296,7 @@ void worker_dispatcher::arm_timer() {
         timer_armed_ = false;
     }
     while (!timers_.empty() &&
-           !has_occupied_timer(timers_.front().slot_, timers_.front().generation_)) {
+           !has_live_timer_entry(timers_.front().slot_, timers_.front().generation_)) {
         std::ranges::pop_heap(timers_, timer_entry_later{});
         timers_.pop_back();
         if (stale_timer_count_ != 0) {
@@ -314,7 +335,7 @@ void worker_dispatcher::fire_timers() {
             std::ranges::pop_heap(timers_, timer_entry_later{});
             auto entry_value = std::move(timers_.back());
             timers_.pop_back();
-            if (!has_occupied_timer(entry_value.slot_, entry_value.generation_)) {
+            if (!has_live_timer_entry(entry_value.slot_, entry_value.generation_)) {
                 if (stale_timer_count_ != 0) {
                     --stale_timer_count_;
                 }
@@ -362,10 +383,15 @@ bool worker_dispatcher::has_occupied_timer(std::size_t slot, std::uint64_t gener
            timer_slots_[slot].generation_ == generation;
 }
 
+bool worker_dispatcher::has_live_timer_entry(std::size_t slot, std::uint64_t generation) const noexcept {
+    return has_occupied_timer(slot, generation) && !timer_slots_[slot].cancel_requested_;
+}
+
 move_only_function<void(worker_timer_outcome)> worker_dispatcher::release_timer_slot(
     std::size_t slot_index) noexcept {
     auto& slot = timer_slots_[slot_index];
     slot.occupied_ = false;
+    slot.cancel_requested_ = false;
     slot.active_generation_.store(0, std::memory_order_release);
     auto completion = std::move(slot.completion_);
     slot.next_free_ = free_timer_slot_;

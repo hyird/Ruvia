@@ -113,41 +113,77 @@ struct is_optional<std::optional<t_type>> : std::true_type {
 
 template <typename t_type, typename v_type>
 void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource* resource) {
+    constexpr bool movable_rvalue =
+        !std::is_lvalue_reference_v<v_type> && !std::is_const_v<std::remove_reference_t<v_type>>;
     if constexpr (std::is_same_v<t_type, string>) {
+        if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, string>) {
+            if (value.resource() == resource) {
+                string owned(std::move(value));
+                commit_entity_value(out, std::move(owned));
+                return;
+            }
+        }
         auto owned = string(std::string_view(value), model_options{.resource_ = resource});
         commit_entity_value(out, std::move(owned));
     } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
-        out = std::forward<v_type>(value);
+        if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, std::pmr::string>) {
+            if (value.get_allocator().resource() == resource) {
+                std::pmr::string owned(std::move(value));
+                commit_entity_value(out, std::move(owned));
+                return;
+            }
+        }
+        std::pmr::string owned(std::string_view(value), resource);
+        commit_entity_value(out, std::move(owned));
     } else if constexpr (is_optional<t_type>::value) {
         if (!value) {
             out.reset();
         } else {
             using element_type = typename is_optional<t_type>::value_type;
             auto owned = entity_value_slot<element_type>::make_value(resource);
-            assign_entity_value(owned, *value, resource);
+            if constexpr (movable_rvalue) {
+                assign_entity_value(owned, std::move(*value), resource);
+            } else {
+                assign_entity_value(owned, *value, resource);
+            }
             out.emplace(std::move(owned));
         }
     } else if constexpr (is_pmr_vector<t_type>::value) {
         using element_type = typename is_pmr_vector<t_type>::value_type;
         if constexpr (std::is_arithmetic_v<element_type>) {
-            out = std::forward<v_type>(value);
+            if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, t_type>) {
+                if (value.get_allocator().resource() == resource) {
+                    t_type owned(std::move(value));
+                    commit_entity_value(out, std::move(owned));
+                    return;
+                }
+            }
+            t_type owned(value.begin(), value.end(), resource);
+            commit_entity_value(out, std::move(owned));
         } else if constexpr (std::is_same_v<element_type, std::pmr::string>) {
             auto owned = entity_value_slot<t_type>::make_value(resource);
             owned.reserve(value.size());
             for (auto& item : value) {
-                if constexpr (std::is_lvalue_reference_v<v_type>) {
-                    owned.emplace_back(item);
-                } else {
-                    owned.emplace_back(std::move(item));
+                if constexpr (movable_rvalue &&
+                              std::is_same_v<std::remove_cvref_t<decltype(item)>, std::pmr::string>) {
+                    if (item.get_allocator().resource() == resource) {
+                        owned.emplace_back(std::move(item));
+                        continue;
+                    }
                 }
+                owned.emplace_back(std::string_view(item));
             }
             commit_entity_value(out, std::move(owned));
         } else {
             auto owned = entity_value_slot<t_type>::make_value(resource);
             owned.reserve(value.size());
-            for (const auto& item : value) {
+            for (auto& item : value) {
                 auto element = entity_value_slot<element_type>::make_value(resource);
-                assign_entity_value(element, item, resource);
+                if constexpr (movable_rvalue) {
+                    assign_entity_value(element, std::move(item), resource);
+                } else {
+                    assign_entity_value(element, item, resource);
+                }
                 owned.push_back(std::move(element));
             }
             commit_entity_value(out, std::move(owned));

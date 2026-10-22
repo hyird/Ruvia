@@ -2778,3 +2778,255 @@ RUVIA_TEST(http_capsule_client_retains_payloads_across_reads_and_rejects_truncat
         run_operation(worker, io, operation);
     }
 }
+
+RUVIA_TEST(http2_cold_start_cancelled_waiter_does_not_close_active_session) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    ruvia::worker_signal peer_done(worker.handle_);
+    std::exception_ptr peer_failure;
+    bool peer_finished = false;
+    ruvia::stop_source cancel_second;
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await acceptor.async_accept(asio::use_awaitable);
+        // Cancel the second queued request while the first is completing the
+        // HTTP/2 connection preface, so the second wakes from http1_scheduler_
+        // after protocol_ is already http2.
+        cancel_second.request_stop();
+        auto connection = ruvia::http2_connection::server();
+        std::array<char, 16384> input{};
+        std::pmr::string output;
+        bool answered = false;
+        for (;;) {
+            if (connection.wants_write()) {
+                output.clear();
+                connection.take_output(output);
+                co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
+            }
+            if (answered && !connection.wants_write()) {
+                co_return;
+            }
+            const auto count = co_await socket.async_read_some(asio::buffer(input), asio::use_awaitable);
+            const auto bytes = std::string_view(input.data(), count);
+            for (;;) {
+                const auto status = connection.feed(bytes);
+                if (status == ruvia::http2_feed_result::protocol_failure) {
+                    throw std::runtime_error("invalid HTTP/2 input");
+                }
+                while (auto event = connection.next_event()) {
+                    auto* request = event->request_head();
+                    if (request == nullptr) {
+                        continue;
+                    }
+                    const auto stream_id = request->stream_id();
+                    const auto built = request->build_request();
+                    ruvia::http_response response;
+                    response.body("first-ok");
+                    const auto head = connection.submit_response_head(
+                        stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
+                    if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) ||
+                        connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream) !=
+                            ruvia::http2_data_submit_status::accepted ||
+                        connection.release(std::move(*request)) != ruvia::http2_server_request_release_status::released) {
+                        throw std::runtime_error("HTTP/2 response submission failed");
+                    }
+                    answered = true;
+                }
+                if (status != ruvia::http2_feed_result::events_pending) {
+                    break;
+                }
+            }
+        }
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+        peer_finished = true;
+        peer_done.notify();
+    });
+    auto config = local_http_client_config(acceptor.local_endpoint().port());
+    config.connection_count_ = 1;
+    config.protocol_ = ruvia::http_client_protocol::http2_only;
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    const auto send_first = [](ruvia::http_client& c, bool& ok_out) -> ruvia::task<void> {
+        auto response = co_await c.handle().send({.target_ = "/first"});
+        const auto body = co_await response.body().read_all();
+        ok_out = response.status() == ruvia::http_status::ok &&
+                 std::string_view(reinterpret_cast<const char*>(body.bytes().data()), body.size()) == "first-ok";
+    };
+    const auto send_second = [](ruvia::http_client& c, ruvia::stop_token token,
+                                 bool& cancelled_out) -> ruvia::task<void> {
+        try {
+            (void)co_await c.with_options({.stop_token_ = std::move(token)}).send({.target_ = "/second"});
+        } catch (const ruvia::http_client_error& error) {
+            cancelled_out = error.code() == ruvia::http_client_error::code_type::cancelled;
+        }
+    };
+    auto operation = [&]() -> ruvia::task<void> {
+        const acceptor_closer closer{acceptor};
+        ruvia::task_scope tasks(worker.handle_);
+        bool first_ok = false;
+        bool second_cancelled = false;
+        tasks.spawn(send_first(client, first_ok));
+        tasks.spawn(send_second(client, cancel_second.token(), second_cancelled));
+        co_await tasks.join();
+        RUVIA_CHECK(first_ok);
+        RUVIA_CHECK(second_cancelled);
+        while (!peer_finished) {
+            co_await peer_done.wait();
+        }
+        if (peer_failure) {
+            std::rethrow_exception(peer_failure);
+        }
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
+RUVIA_TEST(http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_mismatch) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::tls_identity identity("localhost");
+    std::atomic<bool> offer_h2{true};
+    SSL_CTX_set_alpn_select_cb(
+        identity.context_.native_handle(),
+        [](SSL*, const unsigned char** out, unsigned char* outlen, const unsigned char* in, unsigned int inlen,
+            void* arg) -> int {
+            const bool want_h2 = static_cast<std::atomic<bool>*>(arg)->load();
+            const std::string_view target = want_h2 ? "h2" : "http/1.1";
+            unsigned int pos = 0;
+            while (pos < inlen) {
+                const unsigned int len = in[pos++];
+                if (pos + len <= inlen &&
+                    std::string_view(reinterpret_cast<const char*>(in + pos), len) == target) {
+                    *out = in + pos;
+                    *outlen = static_cast<unsigned char>(len);
+                    return SSL_TLSEXT_ERR_OK;
+                }
+                pos += len;
+            }
+            return SSL_TLSEXT_ERR_NOACK;
+        },
+        &offer_h2);
+
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    ruvia::worker_signal peer_done(worker.handle_);
+    std::exception_ptr peer_failure;
+    bool peer_finished = false;
+    bool mismatch_socket_closed = false;
+    const auto serve = [&]() -> asio::awaitable<void> {
+        // 1st connection: negotiate h2, serve one request, then close.
+        {
+            asio::ssl::stream<asio::ip::tcp::socket> stream(
+                co_await acceptor.async_accept(asio::use_awaitable), identity.context_);
+            co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+            auto connection = ruvia::http2_connection::server();
+            std::array<char, 16384> input{};
+            std::pmr::string output;
+            bool answered = false;
+            for (;;) {
+                if (connection.wants_write()) {
+                    output.clear();
+                    connection.take_output(output);
+                    co_await asio::async_write(stream, asio::buffer(output), asio::use_awaitable);
+                }
+                if (answered && !connection.wants_write()) {
+                    break;
+                }
+                const auto count = co_await stream.async_read_some(asio::buffer(input), asio::use_awaitable);
+                (void)connection.feed(std::string_view(input.data(), count));
+                while (auto event = connection.next_event()) {
+                    if (auto* request = event->request_head()) {
+                        const auto stream_id = request->stream_id();
+                        const auto built = request->build_request();
+                        ruvia::http_response response;
+                        response.body("h2-ok");
+                        (void)connection.submit_response_head(stream_id, response,
+                            ruvia::plan_buffered_http_response_write(built.known_method(), response));
+                        (void)connection.submit_data(
+                            stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream);
+                        (void)connection.release(std::move(*request));
+                        answered = true;
+                    }
+                }
+            }
+            offer_h2.store(false);
+            std::error_code ignored;
+            stream.lowest_layer().close(ignored);
+        }
+        // 2nd connection: negotiate http/1.1 for the negotiate client.
+        {
+            asio::ssl::stream<asio::ip::tcp::socket> stream(
+                co_await acceptor.async_accept(asio::use_awaitable), identity.context_);
+            co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+            asio::streambuf request;
+            co_await asio::async_read_until(stream, request, "\r\n\r\n", asio::use_awaitable);
+            constexpr std::string_view reply = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nh1-ok";
+            co_await asio::async_write(stream, asio::buffer(reply), asio::use_awaitable);
+        }
+        // 3rd connection: http2_only client rejects http/1.1 ALPN and closes socket.
+        {
+            asio::ssl::stream<asio::ip::tcp::socket> stream(
+                co_await acceptor.async_accept(asio::use_awaitable), identity.context_);
+            co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+            std::array<char, 16> buf{};
+            std::error_code read_ec;
+            (void)co_await stream.next_layer().async_read_some(
+                asio::buffer(buf), asio::redirect_error(asio::use_awaitable, read_ec));
+            mismatch_socket_closed =
+                read_ec == asio::error::eof || read_ec == asio::error::connection_reset;
+        }
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+        peer_finished = true;
+        peer_done.notify();
+    });
+    auto config = local_http_client_config(acceptor.local_endpoint().port());
+    config.scheme_ = ruvia::http_scheme::https;
+    config.host_ = "localhost";
+    config.tls_.ca_file_ = identity.ca_file_.string();
+    config.connection_count_ = 1;
+    config.protocol_ = ruvia::http_client_protocol::negotiate;
+    ruvia::http_client negotiate_client(worker.attachment_.loop(), config);
+
+    auto h2_only_config = config;
+    h2_only_config.protocol_ = ruvia::http_client_protocol::http2_only;
+    ruvia::http_client h2_only_client(worker.attachment_.loop(), h2_only_config);
+
+    auto operation = [&]() -> ruvia::task<void> {
+        const acceptor_closer closer{acceptor};
+        {
+            auto first = co_await negotiate_client.handle().send({.target_ = "/first"});
+            RUVIA_CHECK(first.protocol_version() == ruvia::http_protocol_version::http2);
+            const auto first_body = co_await first.body().read_all();
+            RUVIA_CHECK_EQ(
+                std::string_view(reinterpret_cast<const char*>(first_body.bytes().data()), first_body.size()), "h2-ok");
+        }
+        (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(30));
+        {
+            auto second = co_await negotiate_client.handle().send({.target_ = "/second"});
+            RUVIA_CHECK(second.protocol_version() == ruvia::http_protocol_version::http11);
+            const auto second_body = co_await second.body().read_all();
+            RUVIA_CHECK_EQ(
+                std::string_view(reinterpret_cast<const char*>(second_body.bytes().data()), second_body.size()), "h1-ok");
+        }
+        bool protocol_unavailable = false;
+        try {
+            (void)co_await h2_only_client.handle().send({.target_ = "/mismatch"});
+        } catch (const ruvia::http_client_error& error) {
+            protocol_unavailable = error.code() == ruvia::http_client_error::code_type::protocol_unavailable;
+        }
+        RUVIA_CHECK(protocol_unavailable);
+        while (!peer_finished) {
+            co_await peer_done.wait();
+        }
+        if (peer_failure) {
+            std::rethrow_exception(peer_failure);
+        }
+        RUVIA_CHECK(mismatch_socket_closed);
+        co_await negotiate_client.shutdown();
+        co_await h2_only_client.shutdown();
+    };
+    run_operation(worker, io, operation);
+    SSL_CTX_set_alpn_select_cb(identity.context_.native_handle(), nullptr, nullptr);
+}

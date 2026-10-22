@@ -806,6 +806,27 @@ RUVIA_TEST(event_loop_cleanup_can_be_drained_without_starting_business_workers) 
     RUVIA_CHECK(!loop.valid());
 }
 
+RUVIA_TEST(event_loop_draining_post_can_schedule_defer_cleanup_after_stop) {
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    const auto loop = pool.loop(0);
+    const auto worker_value = loop.handle();
+    bool post_ran = false;
+    bool cleanup_scheduled = false;
+    bool cleanup_ran = false;
+    RUVIA_CHECK_EQ(loop.post([loop, worker_value, &post_ran, &cleanup_scheduled, &cleanup_ran] {
+        post_ran = worker_value.is_current();
+        cleanup_scheduled = loop.defer_cleanup([worker_value, &cleanup_ran] {
+            cleanup_ran = worker_value.is_current();
+        });
+    }),
+        ruvia::post_status::accepted);
+    pool.stop();
+    pool.join();
+    RUVIA_CHECK(post_ran);
+    RUVIA_CHECK(cleanup_scheduled);
+    RUVIA_CHECK(cleanup_ran);
+}
+
 RUVIA_TEST(worker_runtime_retains_control_payload_until_owner_completion) {
     ruvia::worker_runtime runtime;
     std::promise<void> initialized;

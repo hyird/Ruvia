@@ -26,6 +26,7 @@
 #include "server/http_request_admission.h"
 #include "server/http_server_options.h"
 #include "server/http_server_options_validation.h"
+#include "server/response_file_source.h"
 #include "server/worker_codecs.h"
 #include "util/config_validation.h"
 
@@ -111,6 +112,9 @@ struct test_app::impl_type final {
                     .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
                     .http_client_result_budget_ = options_.server_.http_client_result_budget_,
                     .env_ = &env_,
+                    .trusted_proxies_ =
+                        options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
+                    .precompressed_static_files_ = options_.compression_.has_value(),
                 });
             event_loop_pool_.start();
             event_loop_.start(capabilities_->start()).get();
@@ -190,8 +194,26 @@ struct test_app::impl_type final {
         // either. Writer-synthesized fields (Content-Length, Date, Connection)
         // are framing concerns and stay absent here.
         if (!prepared.write_plan_.body_suppressed()) {
-            const auto body = response.body_bytes();
-            result_value.body_.assign(reinterpret_cast<const char*>(body.data()), body.size());
+            if (response.file_body() || response.has_multipart_file_body()) {
+                detail::response_file_source source(response,
+                    {.pool_ = nullptr,
+                        .worker_ = worker_,
+                        .stop_ = stop_token_,
+                        .resource_ = request_memory_value.resource()});
+                for (;;) {
+                    const auto chunk = co_await source.next();
+                    if (chunk.kind() == detail::response_body_chunk::kind_type::end) {
+                        break;
+                    }
+                    if (chunk.kind() == detail::response_body_chunk::kind_type::failed) {
+                        throw std::runtime_error("failed to read file response in test_app");
+                    }
+                    result_value.body_.append(chunk.bytes());
+                }
+            } else {
+                const auto body = response.body_bytes();
+                result_value.body_.assign(reinterpret_cast<const char*>(body.data()), body.size());
+            }
         }
         co_return result_value;
     }

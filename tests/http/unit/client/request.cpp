@@ -936,3 +936,51 @@ RUVIA_TEST(http1_client_request_context_binds_the_actual_close_signal) {
             std::string_view("GET / HTTP/1.1\r\nHost: example.test\r\nConnection: close\r\n\r\n"));
     }
 }
+
+RUVIA_TEST(http1_client_request_writer_prepare_connect_udp_preserves_specific_prepare_errors) {
+    const auto origin = http_origin_view::https({.host_ = "example.test", .port_ = 443});
+    const std::array valid_capsule{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
+    std::array<char, 256> untouched;
+    untouched.fill('z');
+
+    const auto expect_error = [&](std::string_view target, std::span<const ruvia::http_header_view> headers,
+                                  http1_client_request_prepare_error expected) {
+        const auto result = http1_client_request_writer().prepare_connect_udp(origin, target, headers, untouched);
+        const auto* failure = std::get_if<http1_client_request_prepare_error>(&result);
+        RUVIA_CHECK(failure != nullptr);
+        if (failure != nullptr) {
+            RUVIA_CHECK(*failure == expected);
+        }
+        RUVIA_CHECK(std::ranges::all_of(untouched, [](char c) { return c == 'z'; }));
+    };
+
+    expect_error("relative", valid_capsule, http1_client_request_prepare_error::invalid_target);
+    expect_error("*", valid_capsule, http1_client_request_prepare_error::invalid_target);
+
+    const std::array host_headers{valid_capsule[0], ruvia::http_header_view{"Host", "example.test"}};
+    expect_error("/udp", host_headers, http1_client_request_prepare_error::host_header_managed_by_writer);
+
+    const std::array length_headers{valid_capsule[0], ruvia::http_header_view{"Content-Length", "0"}};
+    expect_error("/udp", length_headers, http1_client_request_prepare_error::content_length_managed_by_writer);
+
+    const std::array te_headers{valid_capsule[0], ruvia::http_header_view{"Transfer-Encoding", "chunked"}};
+    expect_error("/udp", te_headers, http1_client_request_prepare_error::transfer_encoding_unsupported);
+
+    const std::array trailer_headers{valid_capsule[0], ruvia::http_header_view{"Trailer", "X-Test"}};
+    expect_error("/udp", trailer_headers, http1_client_request_prepare_error::trailer_section_unsupported);
+
+    const std::array expect_headers{valid_capsule[0], ruvia::http_header_view{"Expect", "100-continue"}};
+    expect_error("/udp", expect_headers, http1_client_request_prepare_error::expect_header_managed_by_writer);
+
+    std::array<ruvia::http_header_view, ruvia::max_http_header_fields> many_headers;
+    many_headers.fill(ruvia::http_header_view{"X-Test", "1"});
+    many_headers[0] = valid_capsule[0];
+    expect_error("/udp", many_headers, http1_client_request_prepare_error::too_many_headers);
+
+    std::string huge_target(ruvia::max_http_header_bytes, 'a');
+    huge_target.front() = '/';
+    expect_error(huge_target, valid_capsule, http1_client_request_prepare_error::header_too_large);
+
+    const std::array content_type_headers{valid_capsule[0], ruvia::http_header_view{"Content-Type", "application/octet-stream"}};
+    expect_error("/udp", content_type_headers, http1_client_request_prepare_error::invalid_header);
+}

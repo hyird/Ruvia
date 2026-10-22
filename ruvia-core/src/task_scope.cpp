@@ -151,6 +151,10 @@ void task_scope::finish(node_type* node_value) noexcept {
         }
     }
 
+    if (notify_stop) {
+        request_stop();
+    }
+
     const bool last_active = --active_ == 0;
     std::coroutine_handle<> join_continuation{};
     if (last_active) {
@@ -158,10 +162,6 @@ void task_scope::finish(node_type* node_value) noexcept {
             join_continuation = joining->continuation();
             lifecycle_.template emplace<task_scope_joined_type>();
         }
-    }
-
-    if (notify_stop) {
-        request_stop();
     }
 
     std::pmr::polymorphic_allocator<node_type> allocator(resource_);

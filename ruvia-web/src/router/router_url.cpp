@@ -91,7 +91,7 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
             // separator, so neither '\' nor a leading '/' at the root (which
             // could only be spelled "%2F" to avoid a network-path "//") would
             // ever route back to this value.
-            if (value.find('\\') != std::string_view::npos || (url.empty() && value.starts_with('/'))) {
+            if (value.find('\\') != std::string_view::npos || value.starts_with('/')) {
                 throw std::invalid_argument("url_for '*' value has a separator the route cannot capture");
             }
             // An empty capture addresses the bare mount path itself, which is

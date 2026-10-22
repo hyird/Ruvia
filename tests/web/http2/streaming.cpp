@@ -49,6 +49,7 @@ class sleeping_stream_routes final {
     RUVIA_POST("/http2-count-upload", count_upload, ruvia::stream_body);
     RUVIA_GET("/http2-quiet-sse", quiet_sse);
     RUVIA_POST("/http2-post-sse", post_sse);
+    RUVIA_GET("/http2-paced-sse", paced_sse);
     RUVIA_ROUTES_END
 
     // Streams the request body and answers with the byte count.
@@ -57,6 +58,14 @@ class sleeping_stream_routes final {
         const auto received = co_await context_value.req().text();
         auto writer = context_value.stream_sse();
         co_await writer.write({.data_ = received});
+    }
+
+    ruvia::task<void> paced_sse(ruvia::context& context_value) {
+        auto writer = context_value.stream_sse();
+        for (int i = 0; i < 4; ++i) {
+            co_await writer.write({.data_ = "tick"});
+            (void)co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(35));
+        }
     }
 
     ruvia::task<ruvia::http_response> count_upload(ruvia::context& context_value) {
@@ -478,5 +487,62 @@ RUVIA_TEST(http2_expect_continue_is_answered_when_the_content_is_consumed) {
         RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("404"));
         client.close();
     }
+    server.finish();
+}
+
+// A GET/SSE stream whose request body is already closed (END_STREAM on HEADERS)
+// must not be held in connection_scanner::phase::reading_payload and killed by
+// request_body_timeout_ or body_completion_timeout_ while streaming responses.
+RUVIA_TEST(http2_sse_response_is_not_killed_by_request_body_completion_timeout) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io,
+        ruvia::server_config{
+            .worker_count_ = 1,
+            .idle_timeout_ = std::chrono::milliseconds(2000),
+            .connection_scan_interval_ = std::chrono::milliseconds(10),
+            .request_header_timeout_ = std::chrono::milliseconds(500),
+            .request_body_timeout_ = std::chrono::milliseconds(60),
+            .body_completion_timeout_ = std::chrono::milliseconds(80),
+        });
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::hpack_decoder decoder({.resource_ = &resource});
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    asio::write(client, asio::buffer(request_wire(&resource, "GET", "/http2-paced-sse", {})));
+    client.non_blocking(true);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    std::string status;
+    std::string body;
+    bool ended = false;
+    while (!ended) {
+        const auto frame = http2_streaming_test::read_frame(client, deadline);
+        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
+            (frame.header_.flags_ & 0x1) == 0) {
+            std::string ack;
+            append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
+            asio::write(client, asio::buffer(ack));
+            continue;
+        }
+        RUVIA_CHECK(frame.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway));
+        RUVIA_CHECK(frame.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));
+        if (frame.header_.stream_id_ != 1) {
+            continue;
+        }
+        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
+            (void)decoder.decode(frame.payload_, [&](std::string_view name, std::string_view value) {
+                if (name == ":status") {
+                    status = value;
+                }
+                return true;
+            });
+            ended = (frame.header_.flags_ & 0x1) != 0;
+        } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
+            body.append(frame.payload_);
+            ended = (frame.header_.flags_ & 0x1) != 0;
+        }
+    }
+    RUVIA_CHECK_EQ(status, std::string("200"));
+    RUVIA_CHECK_EQ(body, std::string("data: tick\n\ndata: tick\n\ndata: tick\n\ndata: tick\n\n"));
+    client.close();
     server.finish();
 }

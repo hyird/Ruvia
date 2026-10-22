@@ -240,11 +240,11 @@ public:
     redis_key_value(const redis_key_value& other, allocator_type allocator);
     redis_key_value(redis_key_value&& other, allocator_type allocator);
     redis_key_value(const redis_key_value&) = default;
-    redis_key_value& operator=(const redis_key_value&) = default;
+    redis_key_value& operator=(const redis_key_value& other);
     redis_key_value(redis_key_value&&) noexcept = default;
     // A different PMR resource can require allocation during assignment.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    redis_key_value& operator=(redis_key_value&&) = default;
+    redis_key_value& operator=(redis_key_value&& other);
 
     [[nodiscard]] std::string_view key() const& noexcept {
         return key_;
@@ -273,11 +273,11 @@ public:
     redis_scored_value(const redis_scored_value& other, allocator_type allocator);
     redis_scored_value(redis_scored_value&& other, allocator_type allocator);
     redis_scored_value(const redis_scored_value&) = default;
-    redis_scored_value& operator=(const redis_scored_value&) = default;
+    redis_scored_value& operator=(const redis_scored_value& other);
     redis_scored_value(redis_scored_value&&) noexcept = default;
     // A different PMR resource can require allocation during assignment.
     // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    redis_scored_value& operator=(redis_scored_value&&) = default;
+    redis_scored_value& operator=(redis_scored_value&& other);
 
     [[nodiscard]] std::string_view value() const& noexcept {
         return value_;

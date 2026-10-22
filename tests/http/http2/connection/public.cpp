@@ -3974,3 +3974,46 @@ RUVIA_TEST(http2_public_outbound_request_headers_and_trailers_lowercase_standard
         (void)server.release(std::move(*parent));
     }
 }
+
+RUVIA_TEST(http2_public_rejected_connect_with_invalid_terminal_length_resets_without_data_frame) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    const auto submitted = client.submit_request_head(
+        ruvia::http2_connect_request_head_view{.authority_ = "example.test:443"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
+    if (!std::holds_alternative<std::uint32_t>(submitted)) {
+        return;
+    }
+    const auto stream_id = std::get<std::uint32_t>(submitted);
+    (void)ruvia::testing::drain_output(client);
+
+    std::pmr::string wire(&resource);
+    append_peer_settings(wire);
+    std::pmr::string block(&resource);
+    ruvia::hpack_encoder::encode_header(block, ":status", "403");
+    ruvia::hpack_encoder::encode_header(block, "content-length", "5");
+    append_frame(wire, ruvia::http2_frame_type::headers, 0x5, stream_id, block);
+
+    RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+    const auto closed = client.next_event();
+    RUVIA_CHECK(closed && closed->stream_closed());
+    if (closed && closed->stream_closed()) {
+        RUVIA_CHECK_EQ(closed->stream_closed()->stream_id(), stream_id);
+        RUVIA_CHECK(closed->stream_closed()->error() == ruvia::http2_error_code::protocol_error);
+    }
+
+    const auto out = ruvia::testing::drain_output(client);
+    // Peer SETTINGS generates a 9-byte SETTINGS ACK, followed only by the 13-byte RST_STREAM
+    // (no spurious 9-byte DATA(END_STREAM) frame may be emitted before RST_STREAM).
+    RUVIA_CHECK_EQ(out.size(), ruvia::http2_frame_header_bytes + ruvia::http2_frame_header_bytes + 4);
+    if (out.size() >= ruvia::http2_frame_header_bytes * 2 + 4) {
+        const auto rst = ruvia::parse_http2_frame_header(
+            std::span(out.data() + ruvia::http2_frame_header_bytes, ruvia::http2_frame_header_bytes));
+        RUVIA_CHECK(rst.has_value());
+        if (rst) {
+            RUVIA_CHECK_EQ(rst->type_, static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));
+            RUVIA_CHECK_EQ(rst->stream_id_, stream_id);
+            RUVIA_CHECK_EQ(rst->length_, std::uint32_t{4});
+        }
+    }
+}

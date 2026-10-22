@@ -356,23 +356,29 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
         } release{connection_value.http1_scheduler_, slot};
 
         throw_if_abandoned(state_value);
-        // A previous HTTP/1 exchange may have closed this connection while this
-        // request waited for the serial exchange slot. Reconnect only after
-        // acquiring that slot, so the connection cannot be replaced underneath
-        // an active HTTP/1 exchange. Every failure below closes the connection
-        // before the slot is released; pool handoff resumes the next waiter
-        // synchronously.
-        try {
-            co_await connection_value.ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
-            if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
-                retry_as_http2 = true;
-            } else {
-                http1_client_exchange exchange(*this, connection_value);
-                co_await exchange.run(request, timeout, stop_token_value, state_value);
+        if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
+            retry_as_http2 = true;
+        } else {
+            // A previous HTTP/1 exchange may have closed this connection while this
+            // request waited for the serial exchange slot. Reconnect only after
+            // acquiring that slot, so the connection cannot be replaced underneath
+            // an active HTTP/1 exchange. Every failure below closes the connection
+            // before the slot is released; pool handoff resumes the next waiter
+            // synchronously.
+            try {
+                co_await connection_value.ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
+                if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
+                    retry_as_http2 = true;
+                } else {
+                    http1_client_exchange exchange(*this, connection_value);
+                    co_await exchange.run(request, timeout, stop_token_value, state_value);
+                }
+            } catch (...) {
+                if (connection_value.protocol_ != http_client_connection::protocol_type::http2) {
+                    connection_value.close();
+                }
+                throw;
             }
-        } catch (...) {
-            connection_value.close();
-            throw;
         }
     }
     if (retry_as_http2) {

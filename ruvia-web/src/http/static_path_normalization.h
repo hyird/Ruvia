@@ -68,6 +68,9 @@ namespace ruvia::detail {
             throw_invalid_static_file_path();
         }
         const auto segment = input.substr(cursor_value, end - cursor_value);
+        if (segment.empty() && stop != std::string_view::npos) {
+            throw_invalid_static_file_path();
+        }
         if (segment.empty() || segment == "." || segment == ".." ||
             (stop != std::string_view::npos && input[stop] == '\\')) {
             break;
@@ -90,6 +93,9 @@ namespace ruvia::detail {
         }
         const auto segment = input.substr(cursor_value, end - cursor_value);
 
+        if (segment.empty() && stop != std::string_view::npos) {
+            throw_invalid_static_file_path();
+        }
         if (!segment.empty() && segment != ".") {
             if (segment == "..") {
                 if (storage.empty()) {

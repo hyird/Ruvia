@@ -293,11 +293,14 @@ bool detail::static_root_access::is_indexed_directory(
 
 std::optional<detail::static_root_entry_view> detail::static_root_access::resolve(
     const static_root& root, std::string_view& relative, std::pmr::string& storage) {
+    const bool directory_slash =
+        !relative.empty() && (relative.back() == '/' || relative.back() == '\\');
     relative = normalize_static_relative_path(relative, storage);
     if (relative.empty() && !has_directory_index(root)) {
         throw_invalid_static_file_path();
     }
-    auto entry_value = find(root, relative);
+    auto entry_value =
+        directory_slash ? std::optional<detail::static_root_entry_view>{} : find(root, relative);
     if (!entry_value.has_value() && is_indexed_directory(root, relative)) {
         // A normalized path never ends with '/'.
         if (relative.data() != storage.data()) {

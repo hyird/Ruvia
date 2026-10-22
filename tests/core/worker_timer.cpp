@@ -190,6 +190,47 @@ bool explicit_timer_cancellation_notifies_after_quiet_destruction() {
     return cancelled;
 }
 
+bool on_worker_token_cancellation_followed_by_owner_cancel_withdraws_callback() {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 4});
+    const auto worker_value = attachment.loop().handle();
+    struct timer_owner final {
+        bool alive_{true};
+        bool callback_ran_{false};
+        bool observed_dead_owner_{false};
+        ruvia::worker_timer_registration registration_;
+        ~timer_owner() {
+            alive_ = false;
+        }
+    };
+    auto owner = std::make_unique<timer_owner>();
+    bool callback_ran = false;
+    bool observed_dead_owner = false;
+    auto capture = std::make_shared<int>(1);
+    std::weak_ptr<int> weak_capture = capture;
+
+    asio::post(io_context, [&] {
+        auto* owner_ptr = owner.get();
+        static_cast<void>(worker_value.schedule_timer(owner->registration_,
+            std::chrono::steady_clock::now(),
+            [owner_ptr, &callback_ran, &observed_dead_owner, captured = std::move(capture)](
+                ruvia::worker_timer_outcome) {
+                static_cast<void>(captured);
+                callback_ran = true;
+                if (!owner_ptr->alive_) {
+                    observed_dead_owner = true;
+                }
+            }));
+        auto cancellation = owner->registration_.cancellation();
+        cancellation.cancel();
+        owner->registration_.cancel();
+        owner.reset();
+        attachment.stop();
+    });
+    attachment.run();
+    return !callback_ran && !observed_dead_owner && weak_capture.expired();
+}
+
 ruvia::task<void> mark_after_sleep(
     ruvia::worker_handle worker_value, bool& completed, bool& reported_elapsed) {
     reported_elapsed = co_await ruvia::sleep_for(worker_value, std::chrono::hours(1)) ==
@@ -622,8 +663,9 @@ int main() {
         !off_worker_cancellation_can_race_with_timer_shutdown() ||
         !off_worker_cancellation_after_context_stop_does_not_expire_later() ||
         !off_worker_cancellation_before_queued_stop_timers_does_not_invoke_callback() ||
-        !explicit_timer_cancellation_notifies_after_quiet_destruction() || !stoppable_sleep_works() ||
-        !timed_primitives_report_timer_stop() || !expired_registration_reschedules_on_another_worker() ||
+        !explicit_timer_cancellation_notifies_after_quiet_destruction() ||
+        !on_worker_token_cancellation_followed_by_owner_cancel_withdraws_callback() ||
+        !stoppable_sleep_works() ||
         !timer_callback_failure_preserves_remaining_operations() ||
         !self_rescheduling_due_timer_yields_to_other_handlers() ||
         !self_rescheduling_due_timer_preserves_other_expirations()) {

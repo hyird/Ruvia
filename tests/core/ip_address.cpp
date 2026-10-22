@@ -97,3 +97,18 @@ RUVIA_TEST(ip_address_parsing_returns_long_input_pmr_storage) {
     RUVIA_CHECK_EQ(resource.live_, std::size_t{0});
     RUVIA_CHECK_EQ(resource.allocations_, resource.returns_);
 }
+
+RUVIA_TEST(ip_address_parsing_rejects_invalid_ipv6_zone_identifiers) {
+    for (const std::string_view text : {
+             "fe80::1%0",
+             "fe80::1%01",
+             "fe80::1%-1",
+             "fe80::1%+1",
+             "fe80::1%12abc",
+             "fe80::1%4294967296",
+             "fe80::1%99999999999999999999",
+             "fe80::1%nonexistent_ruvia_zone_id",
+         }) {
+        RUVIA_CHECK(!ruvia::parse_ip_address(text).has_value());
+    }
+}

@@ -46,8 +46,8 @@ struct document_root_fallback final {
 };
 
 [[nodiscard]] document_root_fallback select_document_root_fallback(
-    const detail::document_root_binding& document_root, const http_request& request,
-    request_memory& memory, const detail::context_services& services,
+    const detail::route_table& routes, const detail::document_root_binding& document_root,
+    const http_request& request, request_memory& memory, const detail::context_services& services,
     detail::static_file_selection_mode static_file_mode) {
     const auto* const root = document_root.root();
     const auto method = request.known_method();
@@ -56,18 +56,31 @@ struct document_root_fallback final {
     // probed as a file name. resolve() has already rejected dot segments.
     // static_file takes a decoded file path: decode it here, once, so a name
     // holding an encoded octet ("%20", UTF-8) resolves (RFC 3986 2.1, 6.2.2.2).
-    if (root == nullptr || !request.path().starts_with('/')) {
+    if (root == nullptr || !request.path().starts_with('/') ||
+        request.path().find("//") != std::string_view::npos) {
         return {};
     }
     auto relative = request.path();
     relative.remove_prefix(1);
     std::optional<std::pmr::string> decoded;
     if (has_url_encoding(relative, url_decode_mode::percent)) {
-        decoded = detail::decode_request_path(relative, memory.resource());
+        decoded = detail::decode_request_path(request.path(), memory.resource());
         if (!decoded) {
             return {};
         }
-        relative = *decoded;
+        if (*decoded != request.path()) {
+            const auto decoded_resolution = routes.resolve(detail::route_request_view{
+                .known_method_ = http_known_method::options,
+                .method_ = "OPTIONS",
+                .path_ = *decoded,
+            });
+            if (decoded_resolution.resolved() != nullptr ||
+                decoded_resolution.method_not_allowed() != nullptr ||
+                decoded_resolution.rejected() != nullptr) {
+                return {};
+            }
+        }
+        relative = std::string_view(*decoded).substr(1);
     }
 
     if (method != http_known_method::get && method != http_known_method::head) {
@@ -139,7 +152,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             auto fallback = resolution.rejected() != nullptr
                                 ? document_root_fallback{}
                                 : select_document_root_fallback(
-                                      document_root, request, memory, services, static_file_mode);
+                                      *this, document_root, request, memory, services, static_file_mode);
             auto& unmatched_response = fallback.response_;
             // One handle_error co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's

@@ -475,6 +475,31 @@ RUVIA_TEST(jwt_not_before_delay_never_starts_before_the_requested_time) {
     RUVIA_CHECK(*immediate_payload.not_before() <= clock_type::now());
 }
 
+RUVIA_TEST(jwt_expires_in_never_expires_before_requested_duration_or_not_before) {
+    using clock_type = std::chrono::system_clock;
+    using namespace std::chrono;
+
+    auto before = clock_type::now();
+    while (before - floor<seconds>(before) < milliseconds(150) ||
+           before - floor<seconds>(before) > milliseconds(750)) {
+        std::this_thread::sleep_for(milliseconds(10));
+        before = clock_type::now();
+    }
+    auto options = sign_options(secret);
+    options.not_before_delay_ = seconds(1);
+    options.expires_in_ = seconds(2);
+    const auto token = sign(options);
+    const auto after = clock_type::now();
+    const auto payload_value = decode_jwt_unverified(token);
+    RUVIA_CHECK(payload_value.expires_at().has_value());
+    RUVIA_CHECK(payload_value.not_before().has_value());
+    if (payload_value.expires_at() && payload_value.not_before()) {
+        RUVIA_CHECK(*payload_value.expires_at() >= before + seconds(2));
+        RUVIA_CHECK(*payload_value.expires_at() < after + seconds(3));
+        RUVIA_CHECK(*payload_value.expires_at() > *payload_value.not_before());
+    }
+}
+
 RUVIA_TEST(jwt_time_options_reject_negative_offsets) {
     auto negative_expiration = sign_options(secret);
     negative_expiration.expires_in_ = std::chrono::seconds(-1);

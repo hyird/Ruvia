@@ -3,6 +3,7 @@
 #include "ruvia/http/http_connection_advertisement.h"
 
 #include "http2/http2_connection.h"
+#include "http2/http2_remote_receive_semantics.h"
 
 namespace ruvia::detail {
 bool http2_connection::process_advertisement(const http2_frame_header& header_value, std::string_view payload_value) {
@@ -52,7 +53,12 @@ http2_submit_status http2_connection::submit_alternative_service_advertisement(s
     if (local_connection_state_.fatal_failure() != nullptr || peer_goaway_) {
         return http2_submit_status::closed;
     }
-    if (preface_phase_ != preface_phase_type::ready || (stream_id != 0 && find_stream(stream_id) == nullptr)) {
+    const auto* stream = stream_id != 0 ? find_stream(stream_id) : nullptr;
+    if (preface_phase_ != preface_phase_type::ready ||
+        (stream_id != 0 &&
+            (stream == nullptr || http2_stream_is_closed(*stream) ||
+                ((stream_id & 1U) == 0 && stream->local_send().head_pending() != nullptr) ||
+                !http2_remote_final_head_decoded(*stream) || stream->tunnel().not_connect() == nullptr))) {
         return http2_submit_status::invalid_state;
     }
     const auto bytes_value = encode_http2_alternative_service_frame(stream_id, origin, value, peer_settings_.max_frame_size(), resource_);

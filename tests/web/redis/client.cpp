@@ -375,7 +375,13 @@ void check_redis_result_rebinding(ruvia::testing::test_context& ruvia_ctx, const
 
 template <typename result_type>
 void check_redis_result_seed(ruvia::testing::test_context& ruvia_ctx, const result_type& actual, const result_type& seed) {
-    if constexpr (std::same_as<result_type, ruvia::redis_value>) {
+    if constexpr (std::same_as<result_type, ruvia::redis_key_value>) {
+        RUVIA_CHECK_EQ(actual.key(), seed.key());
+        RUVIA_CHECK_EQ(actual.value(), seed.value());
+    } else if constexpr (std::same_as<result_type, ruvia::redis_scored_value>) {
+        RUVIA_CHECK_EQ(actual.value(), seed.value());
+        RUVIA_CHECK_EQ(actual.score(), seed.score());
+    } else if constexpr (std::same_as<result_type, ruvia::redis_value>) {
         RUVIA_CHECK_EQ(actual.kind(), seed.kind());
         if (actual.kind() == ruvia::redis_value::kind_type::integer) {
             RUVIA_CHECK_EQ(actual.integer(), seed.integer());
@@ -410,7 +416,9 @@ template <typename result_type, typename check_type>
 void check_redis_result_move_guarantees(ruvia::testing::test_context& ruvia_ctx, const result_type& original,
     const result_type& seed, bool allocator_move, check_type check) {
     ruvia::test::counting_memory_resource upstream;
-    for (const auto allowance : {std::size_t{0}, std::size_t{1}}) {
+    const std::size_t max_failing_allowance =
+        std::same_as<result_type, ruvia::redis_scored_value> ? std::size_t{0} : std::size_t{1};
+    for (std::size_t allowance = 0; allowance <= max_failing_allowance; ++allowance) {
         {
             equivalent_tracking_resource source(upstream);
             equivalent_tracking_resource target(upstream);
@@ -629,9 +637,9 @@ RUVIA_TEST(redis_composite_results_rebind_equivalent_resource_owners) {
         "*2\r\n$2\r\n12\r\n*2\r\n" + redis_bulk_reply(key_name) + "$6\r\nsecond\r\n",
         "*2\r\n$1\r\n0\r\n*0\r\n",
         "*2\r\n$1\r\n0\r\n*2\r\n" + bulk_field + bulk_value,
-        "*2\r\n$1\r\n5\r\n*0\r\n",
+        "*2\r\n$1\r\n5\r\n*2\r\n" + redis_bulk_reply(std::string(120, 'x')) + redis_bulk_reply(std::string(120, 'y')),
         "*2\r\n$1\r\n9\r\n*2\r\n" + redis_bulk_reply(member_name) + "$3\r\n1.5\r\n",
-        "*2\r\n$1\r\n0\r\n*0\r\n",
+        "*2\r\n$1\r\n0\r\n*2\r\n" + redis_bulk_reply(std::string(120, 'z')) + "$3\r\n2.5\r\n",
     });
     ruvia::redis_config config;
     config.host_ = "127.0.0.1";
@@ -692,6 +700,20 @@ RUVIA_TEST(redis_composite_results_rebind_equivalent_resource_owners) {
             const auto& stream = grouped->streams()[0];
             check_redis_result_rebinding(ruvia_ctx, stream.entries()[0], stream.entries()[1], allocator_move, check_entry);
             check_redis_result_rebinding(ruvia_ctx, stream, grouped->streams()[1], allocator_move, check_stream);
+            if (hashed.entries().size() == 1 && hash_seed.entries().size() == 1) {
+                check_redis_result_rebinding(ruvia_ctx, hashed.entries()[0], hash_seed.entries()[0], allocator_move,
+                    [&](const ruvia::redis_key_value& kv) {
+                        RUVIA_CHECK_EQ(kv.key(), std::string_view(field_name));
+                        RUVIA_CHECK_EQ(kv.value(), std::string_view(field_value));
+                    });
+            }
+            if (scored.entries().size() == 1 && score_seed.entries().size() == 1) {
+                check_redis_result_rebinding(ruvia_ctx, scored.entries()[0], score_seed.entries()[0], allocator_move,
+                    [&](const ruvia::redis_scored_value& sv) {
+                        RUVIA_CHECK_EQ(sv.value(), std::string_view(member_name));
+                        RUVIA_CHECK_EQ(sv.score(), 1.5);
+                    });
+            }
         }
         static_assert(!std::is_copy_constructible_v<ruvia::redis_x_read_group_result>);
         static_assert(!std::is_copy_assignable_v<ruvia::redis_x_read_group_result>);

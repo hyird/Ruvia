@@ -216,19 +216,24 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     // its stop token.
     if (timeout_.has_value() && owner_->worker_.valid()) {
         try {
-            owner_->worker_.schedule_timer(deadline_timer_, worker_timer_deadline_after(*timeout_),
+            const auto status = owner_->worker_.schedule_timer(deadline_timer_,
+                worker_timer_deadline_after(*timeout_),
                 [waiter_state, waiter_id](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         (void)waiter_state->queue_.expire(waiter_id);
                     }
                 });
+            if (status == worker_timer_schedule_status::scheduled &&
+                *timeout_ <= std::chrono::milliseconds::zero()) {
+                complete(worker_wait_status::timed_out);
+            }
         } catch (...) {
             waiter_state->queue_.remove(*this);
             throw;
         }
     }
 
-    if (stop_token_.stoppable()) {
+    if (!result_.has_value() && stop_token_.stoppable()) {
         stop_token_.register_callback(
             stop_registration_, [waiter_state, waiter_id] { waiter_state->request_cancellation(waiter_id); });
         if (stop_token_.stop_requested()) {

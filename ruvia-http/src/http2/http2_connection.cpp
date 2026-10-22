@@ -386,7 +386,7 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
         std::ranges::sort(std::span(unprocessed_stream_ids).first(unprocessed_count));
     } else {
         streams_.for_each([&](http2_stream_state& stream) {
-            if ((stream.id() & 1U) == 0 && stream.id() > goaway.last_stream_id() && !stream.is_aborted()) {
+            if ((stream.id() & 1U) == 0 && stream.id() > goaway.last_stream_id() && !http2_stream_is_closed(stream)) {
                 unprocessed_stream_ids[unprocessed_count++] = stream.id();
             }
         });
@@ -538,16 +538,36 @@ bool http2_connection::process_frame(const http2_frame_header& header_value, std
         append_goaway(http2_error_code::protocol_error, "expected CONTINUATION");
         return false;
     }
-    if (auto* stream = find_stream(header_value.stream_id_); stream && !stream->is_aborted() && header_value.type_ <= 9) {
-        const auto reservation = stream->push_reservation();
-        const auto type = static_cast<http2_frame_type>(header_value.type_);
-        const bool permitted = type == http2_frame_type::rst_stream || type == http2_frame_type::priority ||
-                               (reservation == http2_push_reservation::local && type == http2_frame_type::window_update) ||
-                               (reservation == http2_push_reservation::remote &&
-                                   (type == http2_frame_type::headers || type == http2_frame_type::continuation));
-        if (reservation != http2_push_reservation::none && !permitted) {
-            append_goaway(http2_error_code::protocol_error, "frame on reserved push stream");
-            return false;
+    const auto type = static_cast<http2_frame_type>(header_value.type_);
+    const bool known_frame = header_value.type_ <= 9 || type == http2_frame_type::alternative_service ||
+                             type == http2_frame_type::origin || type == http2_frame_type::priority_update;
+    if (auto* stream = find_stream(header_value.stream_id_); stream && !stream->is_aborted()) {
+        if (known_frame) {
+            const auto reservation = stream->push_reservation();
+            const bool permitted = type == http2_frame_type::rst_stream || type == http2_frame_type::priority ||
+                                   (reservation == http2_push_reservation::local && type == http2_frame_type::window_update) ||
+                                   (reservation == http2_push_reservation::remote &&
+                                       (type == http2_frame_type::headers || type == http2_frame_type::continuation));
+            if (reservation != http2_push_reservation::none && !permitted) {
+                append_goaway(http2_error_code::protocol_error, "frame on reserved push stream");
+                return false;
+            }
+        }
+        if (!http2_stream_is_closed(*stream) && stream->tunnel().open() != nullptr &&
+            (type == http2_frame_type::origin || type == http2_frame_type::alternative_service || !known_frame)) {
+            // RFC 9113 8.5 narrows connected streams to DATA and the three
+            // stream-management frame types, even though unknown frames are
+            // normally ignored elsewhere.
+            const auto output_checkpoint = output_.checkpoint();
+            try {
+                output_.append_rst_stream(header_value.stream_id_, http2_error_code::protocol_error);
+                close_stream(header_value.stream_id_, http2_stream_close_source::local,
+                    http2_error_code::protocol_error);
+            } catch (...) {
+                output_.rollback_to(output_checkpoint);
+                throw;
+            }
+            return true;
         }
     }
     switch (static_cast<http2_frame_type>(header_value.type_)) {
@@ -577,24 +597,6 @@ bool http2_connection::process_frame(const http2_frame_header& header_value, std
         case http2_frame_type::push_promise:
             return process_push_promise(header_value, payload_value);
         default:
-            if (header_value.stream_id_ != 0) {
-                if (auto* stream = find_stream(header_value.stream_id_);
-                    stream != nullptr && !http2_stream_is_closed(*stream) &&
-                    stream->tunnel().open() != nullptr) {
-                    // RFC 9113 8.5 narrows connected streams to DATA and the three
-                    // stream-management frame types, even though unknown frames are
-                    // normally ignored elsewhere.
-                    const auto output_checkpoint = output_.checkpoint();
-                    try {
-                        output_.append_rst_stream(header_value.stream_id_, http2_error_code::protocol_error);
-                        close_stream(header_value.stream_id_, http2_stream_close_source::local,
-                            http2_error_code::protocol_error);
-                    } catch (...) {
-                        output_.rollback_to(output_checkpoint);
-                        throw;
-                    }
-                }
-            }
             return true;
     }
 }

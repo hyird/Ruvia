@@ -134,8 +134,6 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
             }
             return encode_redis_number(number, resource);
         }
-        case redis_literal_kind::boolean:
-            return encode_redis_scalar(value.boolean_value(), resource);
         default:
             throw std::invalid_argument("Redis numeric predicate requires a numeric value");
     }
@@ -162,15 +160,23 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
         }
         return std::pmr::string(value.text(), resource);
     }
+    constexpr auto max_signed = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     switch (value.kind()) {
         case redis_literal_kind::signed_integer:
+            if (column_kind == redis_column_kind::unsigned_value && value.signed_value() < 0) {
+                throw std::invalid_argument("Redis integer primary key is invalid");
+            }
             return encode_redis_number(value.signed_value(), resource);
         case redis_literal_kind::unsigned_integer:
+            if (column_kind == redis_column_kind::signed_value && value.unsigned_value() > max_signed) {
+                throw std::invalid_argument("Redis integer primary key is invalid");
+            }
             return encode_redis_number(value.unsigned_value(), resource);
         case redis_literal_kind::real: {
             const double number = value.real_value();
             if (!std::isfinite(number) || std::trunc(number) != number ||
-                std::fabs(number) > redis_max_exact_integer) {
+                std::fabs(number) > redis_max_exact_integer ||
+                (column_kind == redis_column_kind::unsigned_value && number < 0.0)) {
                 throw std::invalid_argument("Redis integer primary key is invalid");
             }
             return encode_redis_number(static_cast<std::int64_t>(number), resource);
@@ -363,6 +369,10 @@ private:
         const auto comparison = column_comparison(mapping_, nodes, node);
         const auto field = comparison.column_.name_;
         const auto& value = comparison.operand_.literal_;
+        if (comparison.column_.primary_key_ && comparison.column_.kind_ == redis_column_kind::text &&
+            value.kind() == redis_literal_kind::string && value.text().empty()) {
+            throw std::invalid_argument("Redis primary key cannot be empty");
+        }
         switch (index_kind(mapping_, field)) {
             case redis_index_kind::tag:
                 append_tag_comparison(output, field, value, comparison.column_.kind_, node.binary_, resource_);
@@ -412,6 +422,10 @@ private:
             const auto& value = nodes[items[index]].literal_;
             if (value.kind() == redis_literal_kind::null) {
                 throw std::invalid_argument("Redis IN list requires non-null literal values");
+            }
+            if (comparison.column_.primary_key_ && comparison.column_.kind_ == redis_column_kind::text &&
+                value.kind() == redis_literal_kind::string && value.text().empty()) {
+                throw std::invalid_argument("Redis primary key cannot be empty");
             }
             if (kind == redis_index_kind::tag) {
                 append_tag_term(output, field, canonical_tag(value, comparison.column_.kind_, resource_));

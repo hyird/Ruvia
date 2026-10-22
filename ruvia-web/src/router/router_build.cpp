@@ -220,6 +220,10 @@ void detail::router::build_url_patterns() {
     auto& patterns = plan_->url_patterns_;
     patterns.reserve(plan_->routes_.size());
     for (const auto& route : plan_->routes_) {
+        const auto* tunnel = route.endpoint().tunnel();
+        if (tunnel != nullptr && tunnel->protocol().empty()) {
+            continue;
+        }
         patterns.push_back(route.path());
     }
     std::ranges::sort(patterns);

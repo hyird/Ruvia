@@ -208,7 +208,7 @@ void http2_sans_io_session_engine::finish_drain_if_ready() noexcept {
 
 void http2_sans_io_session_engine::set_inactivity_phase() noexcept {
     session_.scanner_entry().set_phase(http2_sans_io_inactivity_phase(
-        connection_.header_block_in_progress(), stream_runtimes_.size(),
+        connection_.header_block_in_progress(), stream_runtimes_.open_request_body_count(),
         stream_runtimes_.tunnel_count() != 0));
 }
 
@@ -326,6 +326,12 @@ struct http2_sans_io_session_engine::tunnel_upgrade_operation final {
             }
             head = std::move(std::get<0>(negotiated));
         }
+        if (engine_.connection_.draining()) {
+            engine_.reset_stream_no_throw(stream_id_, http2_error_code::refused_stream);
+            context_access::commit_upgrade(context_value);
+            engine_.wake_writer();
+            co_return;
+        }
         const auto committed = engine_.connection_.submit_connect_response_head(stream_id_, head);
         if (committed != http2_submit_status::accepted) {
             throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
@@ -369,6 +375,12 @@ struct http2_sans_io_session_engine::websocket_upgrade_operation final {
     [[nodiscard]] task<void> operator()(context& context_value) {
         const auto& options = engine_.session_.options();
         const auto response_headers_value = websocket_response_headers(context_value);
+        if (engine_.connection_.draining()) {
+            engine_.reset_stream_no_throw(stream_id_, http2_error_code::refused_stream);
+            context_access::commit_upgrade(context_value);
+            engine_.wake_writer();
+            co_return;
+        }
         const auto handshake_result = engine_.connection_.submit_websocket_handshake(stream_id_, request_,
             handshake_validation_,
             {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
@@ -643,6 +655,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             (void)connection_.release(std::move(*request_head));
         }
     }
+    output_budget_.release_and_reconcile(stream_id, connection_);
     remove_stream_runtime(stream_id);
     wake_writer();
 }
@@ -718,6 +731,10 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
         return;
     }
     const bool connect_request = snapshot.connect_pending_;
+    if (snapshot.body_open_ && !connect_request &&
+        stream_runtimes_.mark_request_body_open(stream_id)) {
+        set_inactivity_phase();
+    }
     const auto* selected_route = stream_runtime->selected_route();
     const bool resolved_route = selected_route != nullptr && selected_route->resolution().resolved() != nullptr;
     const bool streaming_body = !connect_request && selected_route != nullptr &&
@@ -835,6 +852,9 @@ void http2_sans_io_session_engine::on_message_end(const http2_message_end_event&
     if (stream_runtime == nullptr) {
         reset_event_stream(stream_id, http2_error_code::internal_error);
         return;
+    }
+    if (stream_runtimes_.mark_request_body_closed(stream_id)) {
+        set_inactivity_phase();
     }
     for (const auto& field : message_end.trailers()) {
         if (stream_runtime->trailers().append(field.name(), field.value()).has_value()) {

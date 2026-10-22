@@ -107,6 +107,13 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     const auto& request = *parsed;
     const auto& routes = *services().routes();
     const auto resolution = routes.resolve(request);
+    if (const auto* resolved = resolution.resolved()) {
+        const auto& endpoint = resolved->route().endpoint();
+        if (endpoint.buffered() == nullptr ||
+            endpoint.request_body_mode() != detail::request_body_mode::buffered) {
+            throw std::logic_error("dispatch requires a buffered route");
+        }
+    }
     const auto stop = combine_stop_tokens(capabilities_.stop_token(), std::move(stop_token_value));
     if (stop.stop_requested()) {
         throw std::system_error(asio::error::operation_aborted);
@@ -117,7 +124,7 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
         .apply_rate_limit_ = false,
     };
     http_response response(memory.resource());
-    (void)co_await detail::admit_and_dispatch_buffered_request(routes,
+    auto admission = co_await detail::admit_and_dispatch_buffered_request(routes,
         {
             .request_ = request,
             .resolution_ = resolution,
@@ -125,8 +132,13 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
             .resource_ = memory.resource(),
         },
         policy, services().for_subrequest(stop), memory, response);
-    if (response.file_body()) {
+    if (response.file_body() || response.has_multipart_file_body()) {
         throw std::logic_error("dispatch requires a buffered response");
+    }
+    if (detail::http_response_needs_not_acceptable(admission.tail().coding_policy(), request, response) &&
+        !response.status().is_error()) {
+        response = co_await routes.handle_error(request, memory,
+            http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
     }
     dispatch_response result(pool());
     result.status_ = response.status();

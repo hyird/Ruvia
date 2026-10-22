@@ -39,6 +39,25 @@ struct model_validation_access final {
     }
 
     template <typename value_type>
+    [[nodiscard]] static consteval bool contains_model() noexcept {
+        using t_type = std::remove_cvref_t<value_type>;
+        if constexpr (is_model<t_type>) {
+            return true;
+        } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
+            return contains_model<typename t_type::value_type>();
+        } else {
+            return false;
+        }
+    }
+
+    template <typename value_type, typename validator_type>
+    static void validate_value(const value_type& value, validator_type& validator_value) {
+        model::model_issue_sink sink(validator_value);
+        const model::model_path root;
+        validate_value_structure(value, root, sink);
+        validate_nested_field_rules(value, root, sink);
+    }
+    template <typename value_type>
     [[nodiscard]] static bool value_structure_valid(const value_type& value) {
         using t_type = std::remove_cvref_t<value_type>;
         if constexpr (is_model<t_type>) {

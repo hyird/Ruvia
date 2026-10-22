@@ -194,6 +194,9 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
             if (!stream.reject_connect()) {
                 return header_decode_status::protocol_error;
             }
+            if (http2_remote_peer_half_closed(stream) && !stream.remote_content().terminal_length_valid()) {
+                return header_decode_status::protocol_error;
+            }
             output_.append_frame(http2_frame_type::data, http2_flag_end_stream, stream.id(), {});
             (void)stream.reject_local_connect();
         }

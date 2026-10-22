@@ -41,8 +41,11 @@ public:
     }
 
     void assign_owned(std::pmr::string&& value, std::pmr::memory_resource* resource) {
-        std::pmr::string owned(std::move(value), resource);
-        value_.emplace<std::pmr::string>(std::move(owned));
+        if (value.get_allocator().resource() == resource) {
+            value_.emplace<std::pmr::string>(std::move(value));
+            return;
+        }
+        assign_owned(std::string_view(value), resource);
     }
 
     [[nodiscard]] model_text_storage rebind(std::pmr::memory_resource* resource) const& {

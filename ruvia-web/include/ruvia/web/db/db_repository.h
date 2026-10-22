@@ -239,9 +239,11 @@ db_expression entity_column_value(db_query& query, const e_type& entity) {
 template <typename e_type>
 struct db_map_projection final {
     static_assert(sql_entity<e_type> || sql_projection<e_type>, "SQL results require a SQL entity or a db_projection");
-    explicit db_map_projection(std::span<const std::pmr::string> selected) {
-        for (const auto& name : selected) {
-            require_entity_column<e_type>(name);
+    explicit db_map_projection(std::span<const std::pmr::string> selected, bool allow_extra_columns = false) {
+        if (!allow_extra_columns) {
+            for (const auto& name : selected) {
+                require_entity_column<e_type>(name);
+            }
         }
         for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t index> {
             selected_columns_[index] = selected.empty() || std::ranges::find(selected, c_type::name.view()) != selected.end();
@@ -469,28 +471,34 @@ public:
         if (fields_value.empty()) {
             throw std::invalid_argument("add_select requires at least one field");
         }
+        auto next_selected = selected_;
+        if (next_selected.empty()) {
+            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
+                next_selected.emplace_back(c_type::name.view());
+            });
+        }
         const auto qualifier = alias_.empty() ? entity_type::table_name() : std::string_view(alias_);
         const auto alias = qualifier == entity_type::table_name() ? std::string_view{} : qualifier;
+        std::pmr::vector<db_expression> expressions(query_.resource());
+        expressions.reserve(fields_value.size());
         for (const auto& field : fields_value) {
-            if (field.column_.empty()) {
-                throw std::invalid_argument("projection requires nonempty field names");
+            if (field.column_.empty() ||
+                std::ranges::find(next_selected, std::string_view(field.column_)) != next_selected.end()) {
+                throw std::invalid_argument("projection requires unique nonempty field names");
             }
             if (!field.has_expression()) {
                 detail::require_entity_column<entity_type>(field.column_);
-                if (!selected_.empty() && std::ranges::find(selected_, std::string_view(field.column_)) == selected_.end()) {
-                    selected_.emplace_back(field.column_);
-                }
-                query_.add_select(query_.alias(query_.column(field.column_, qualifier), field.column_));
+                expressions.push_back(query_.alias(query_.column(field.column_, qualifier), field.column_));
             } else {
-                if constexpr (sql_entity<entity_type>) {
-                    if (detail::has_entity_column<entity_type>(field.column_) && !selected_.empty() &&
-                        std::ranges::find(selected_, std::string_view(field.column_)) == selected_.end()) {
-                        selected_.emplace_back(field.column_);
-                    }
-                }
-                query_.add_select(query_.alias(field.expression(query_, entity_type::table_name(), alias), field.column_));
+                expressions.push_back(
+                    query_.alias(field.expression(query_, entity_type::table_name(), alias), field.column_));
             }
+            next_selected.emplace_back(field.column_);
         }
+        for (const auto expression : expressions) {
+            query_.add_select(expression);
+        }
+        selected_ = std::move(next_selected);
         return *this;
     }
     db_query_builder& add_select(std::initializer_list<db_selection> fields_value) {
@@ -830,7 +838,7 @@ public:
     }
     template <typename output_type = entity_type>
     [[nodiscard]] scoped_operation<std::pair<entity_rows<output_type>, db_rows>> get_raw_and_entities() const {
-        auto mapper = projection_mapper<output_type>();
+        auto mapper = projection_mapper<output_type>(true);
         auto active_query = effective_query();
         const auto& target_query = active_query ? *active_query : query_;
         return executor_.template query_mapped<std::pair<entity_rows<output_type>, db_rows>>(
@@ -920,14 +928,14 @@ private:
         return imported;
     }
     template <typename output_type>
-    detail::db_map_projection<output_type> projection_mapper() const {
+    detail::db_map_projection<output_type> projection_mapper(bool allow_extra_columns = false) const {
         if constexpr (!std::same_as<output_type, entity_type>) {
             require_plain_projection();
             if (selected_.empty()) {
                 throw std::invalid_argument("DTO mapping requires an explicit projection");
             }
         }
-        return detail::db_map_projection<output_type>(selected_);
+        return detail::db_map_projection<output_type>(selected_, allow_extra_columns);
     }
     db_query_builder(detail::db_repository_input_type<executor_type> executor, std::string_view alias)
         : executor_(executor),

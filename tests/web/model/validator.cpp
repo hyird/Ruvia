@@ -830,3 +830,46 @@ RUVIA_TEST(validator_model_paths_are_built_only_for_emitted_issues) {
     }
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }
+
+namespace {
+
+RUVIA_MODEL(email_rule_model,
+    RUVIA_REQUIRED_FIELD(mail, ruvia::string, RUVIA_EMAIL("invalid email")));
+
+}  // namespace
+
+RUVIA_TEST(model_email_rule_rejects_empty_domain_labels_and_multiple_at_signs) {
+    for (const auto* valid : {
+             R"({"mail":"user@example.com"})",
+             R"({"mail":"first.last@sub.example.co.uk"})",
+             R"({"mail":"用户@例子.测试"})",
+         }) {
+        const auto parsed = ruvia::from_json<email_rule_model>(valid);
+        validator result;
+        ruvia::validate_model(parsed, result);
+        RUVIA_CHECK(result.ok());
+    }
+
+    for (const auto* invalid : {
+             R"({"mail":"a@.b"})",
+             R"({"mail":"a@b.c."})",
+             R"({"mail":"a@b..c"})",
+             R"({"mail":"a@@b.c"})",
+             R"({"mail":"a@b@c.d"})",
+             R"({"mail":"@example.com"})",
+             R"({"mail":"user@example"})",
+         }) {
+        bool rejected = false;
+        try {
+            (void)ruvia::from_json<email_rule_model>(invalid);
+        } catch (const ruvia::http_error& error) {
+            rejected = true;
+            RUVIA_CHECK_EQ(error.validation_issues().size(), std::size_t{1});
+            if (error.validation_issues().size() == 1) {
+                RUVIA_CHECK_EQ(error.validation_issues()[0].field(), std::string_view("mail"));
+                RUVIA_CHECK_EQ(error.validation_issues()[0].code(), std::string_view("email"));
+            }
+        }
+        RUVIA_CHECK(rejected);
+    }
+}

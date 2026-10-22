@@ -40,6 +40,7 @@ http2_buffered_response_writer::http2_buffered_response_writer(ruvia::http2_conn
       file_io_(std::move(file_io)) {}
 
 void http2_buffered_response_writer::wake_writer() noexcept {
+    output_budget_.wake();
     write_signal_.notify();
 }
 
@@ -88,6 +89,7 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
         // Invalid final metadata cannot leave an open peer stream waiting for a
         // response that the transactional head submission rejected.
         submit_reset_no_throw(connection_, stream_id, http2_error_code::internal_error);
+        output_budget_.release_and_reconcile(stream_id, connection_);
         wake_writer();
         co_return std::nullopt;
     }
@@ -96,6 +98,7 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
     const auto committed_status = submitted_head->response_status();
     const auto fail_after_commit = [this, stream_id, committed_status]() noexcept -> std::optional<http_status_code> {
         submit_reset_no_throw(connection_, stream_id, http2_error_code::internal_error);
+        output_budget_.release_and_reconcile(stream_id, connection_);
         wake_writer();
         return committed_status;
     };

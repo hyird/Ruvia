@@ -201,7 +201,8 @@ struct request_head_write_plan final {
     std::string_view method, http_known_method known_method, std::string_view target,
     std::span<const http_header_view> headers, http_client_request_content_view content,
     std::span<char> head_buffer, http1_client_request_wire_policy policy,
-    std::pmr::memory_resource* resource, const http1_client_request_head_view* streaming = nullptr) {
+    std::pmr::memory_resource* resource, const http1_client_request_head_view* streaming = nullptr,
+    bool connect_udp = false) {
     const bool connect = known_method == http_known_method::connect;
     request_header_facts header_facts;
     http1_client_request_prepare_error error = http1_client_request_prepare_error::invalid_header;
@@ -278,6 +279,18 @@ struct request_head_write_plan final {
         !head_budget.add(crlf.size())) {
         return detail::http1_client_request_prepare_result_access::failure(
             http1_client_request_prepare_error::header_too_large);
+    }
+    if (connect_udp &&
+        validate_http_connect_udp_request({
+                                              .version_ = http_protocol_version::http11,
+                                              .method_ = "GET",
+                                              .authority_ = origin.host(),
+                                              .path_ = target,
+                                              .headers_ = std::span(headers.data(), headers.size() + 1),
+                                          })
+            .has_value()) {
+        return detail::http1_client_request_prepare_result_access::failure(
+            http1_client_request_prepare_error::invalid_header);
     }
     const auto head_bytes = head_budget.bytes();
     if (head_buffer.size() < head_bytes) {
@@ -411,6 +424,10 @@ std::variant<prepared_http1_client_request, http1_client_request_buffer_too_smal
     http1_client_request_prepare_error>
 http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
     borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer) const {
+    http_known_method known_method = http_known_method::unknown;
+    if (const auto error = validate_non_connect_request_line("GET", target.view(), {}, known_method)) {
+        return detail::http1_client_request_prepare_result_access::failure(*error);
+    }
     std::pmr::vector<http_header_view> fields(resource_);
     fields.reserve(headers.size() + 3);
     for (const auto& field : headers) {
@@ -422,11 +439,9 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
     fields.emplace_back("Connection", "Upgrade");
     fields.emplace_back("Upgrade", "connect-udp");
     fields.emplace_back("Host", origin.host());
-    if (validate_http_connect_udp_request({.version_ = http_protocol_version::http11, .method_ = "GET", .authority_ = origin.host(), .path_ = target.view(), .headers_ = fields}).has_value()) {
-        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_header);
-    }
-    fields.pop_back();
-    return prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = fields}, head_buffer);
+    return prepare_request(origin, "GET", known_method, target.view(),
+        std::span<const http_header_view>(fields).first(fields.size() - 1),
+        http_client_request_content_view::none(), head_buffer, {}, resource_, nullptr, true);
 }
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,

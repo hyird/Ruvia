@@ -51,6 +51,14 @@ const ruvia::redis_repository_config test_redis_repository_config{
     .indexes_ = {{.field_ = "name", .kind_ = redis_index_kind::tag}},
 };
 
+RUVIA_REDIS_ENTITY(test_redis_unsigned_pk_user, "upk_users",
+    RUVIA_REDIS_COLUMN(id, std::uint64_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(name, std::pmr::string));
+
+RUVIA_REDIS_ENTITY(test_redis_signed_pk_user, "spk_users",
+    RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(name, std::pmr::string));
+
 class redis_test_worker final {
 public:
     explicit redis_test_worker(asio::io_context& io_context)
@@ -678,6 +686,55 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
         }));
         RUVIA_CHECK(throws_invalid_argument([&] {
             (void)repository.exists({.order_ = ruvia::redis_find_order{.field_ = "missing_field"}});
+        }));
+
+        const ruvia::redis_repository_config indexed_user_config{
+            .prefix_ = "users",
+            .indexes_ = {
+                {.field_ = "id", .kind_ = redis_index_kind::tag},
+                {.field_ = "age", .kind_ = redis_index_kind::numeric},
+            },
+        };
+        const auto indexed_users = client.handle().repository<test_redis_user>(indexed_user_config);
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)indexed_users.find({.where_ = test_redis_user::column<"age">() == true});
+        }));
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)indexed_users.find({.where_ = test_redis_user::column<"age">().in({true, false})});
+        }));
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)indexed_users.find({.where_ = test_redis_user::column<"id">() == ""});
+        }));
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)indexed_users.find({.where_ = test_redis_user::column<"id">().in({"u-1", ""})});
+        }));
+
+        const auto unsigned_repo = client.handle().repository<test_redis_unsigned_pk_user>(
+            {.prefix_ = "upk_users", .indexes_ = {{.field_ = "id", .kind_ = redis_index_kind::numeric}}});
+        test_redis_unsigned_pk_user unsigned_changes;
+        unsigned_changes.set<"name">("Alice");
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)unsigned_repo.find_one({.where_ = test_redis_unsigned_pk_user::column<"id">() == -1});
+        }));
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)unsigned_repo.find_one({.where_ = test_redis_unsigned_pk_user::column<"id">() == -1.0});
+        }));
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)unsigned_repo.update(test_redis_unsigned_pk_user::column<"id">() == -1, unsigned_changes);
+        }));
+
+        const auto signed_repo = client.handle().repository<test_redis_signed_pk_user>(
+            {.prefix_ = "spk_users", .indexes_ = {{.field_ = "id", .kind_ = redis_index_kind::numeric}}});
+        test_redis_signed_pk_user signed_changes;
+        signed_changes.set<"name">("Bob");
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)signed_repo.find_one({.where_ = test_redis_signed_pk_user::column<"id">() ==
+                                                  std::numeric_limits<std::uint64_t>::max()});
+        }));
+        RUVIA_CHECK(throws_invalid_argument([&] {
+            (void)signed_repo.update(
+                test_redis_signed_pk_user::column<"id">() == std::numeric_limits<std::uint64_t>::max(),
+                signed_changes);
         }));
         co_return;
     });

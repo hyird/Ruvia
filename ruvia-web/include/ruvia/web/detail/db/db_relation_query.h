@@ -113,6 +113,12 @@ public:
         if (source_alias.empty() || relation_name.empty() || relation_name.find('.') != std::string_view::npos) {
             throw std::invalid_argument("relation join path requires a direct relation or alias.relation");
         }
+        if (source_alias != root_alias) {
+            throw std::invalid_argument("unknown database entity relation");
+        }
+        if (uses_source_name(query, alias)) {
+            throw std::invalid_argument("relation join alias is already in use");
+        }
         bool found = false;
         for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t> {
             if (relation_name != relation_type::name.view()) {

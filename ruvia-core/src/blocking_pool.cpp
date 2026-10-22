@@ -29,11 +29,17 @@ namespace {
 }
 
 [[nodiscard]] std::size_t resolve_queue_capacity(
-    std::size_t requested, std::size_t thread_count) noexcept {
-    if (requested != 0) {
-        return requested;
+    std::size_t requested, std::size_t thread_count) {
+    constexpr std::size_t default_per_thread_capacity = 64;
+    if (requested == 0 &&
+        thread_count > std::numeric_limits<std::size_t>::max() / default_per_thread_capacity) {
+        throw std::invalid_argument("blocking pool storage capacity is out of range");
     }
-    return thread_count * 64;
+    const auto capacity = requested != 0 ? requested : thread_count * default_per_thread_capacity;
+    if (thread_count > std::numeric_limits<std::size_t>::max() - capacity) {
+        throw std::invalid_argument("blocking pool storage capacity is out of range");
+    }
+    return capacity;
 }
 
 }  // namespace

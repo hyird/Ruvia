@@ -264,14 +264,9 @@ private:
         completion_.continuation().resume();
     }
 
-    static void cancel_generation_on_worker(state_type& state_value, std::uint64_t generation) {
-        auto lock = state_value.lock_state();
-        state_value.wait_slot_.cancel(generation);
-    }
-
     static void request_cancellation(const std::shared_ptr<state_type>& state_value, std::uint64_t generation) {
-        (void)worker_handle_access::defer_if_attached(state_value->worker_,
-            [state_value, generation] { cancel_generation_on_worker(*state_value, generation); });
+        auto lock = state_value->lock_state();
+        state_value->wait_slot_.cancel(generation);
     }
 
     // The callback only forwards (state, generation) to the worker, which

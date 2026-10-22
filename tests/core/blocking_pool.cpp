@@ -804,3 +804,26 @@ RUVIA_TEST(blocking_pool_callable_moves_and_destruction_allow_reentry) {
 RUVIA_TEST(blocking_pool_callable_move_can_stop_before_publication) {
     RUVIA_CHECK(test_callable_move_can_stop_pool_before_publication());
 }
+
+RUVIA_TEST(blocking_pool_rejects_overflowing_capacity_options) {
+    constexpr std::size_t wrapped_threads =
+        std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 6);
+    for (const blocking_pool_options options : {
+             blocking_pool_options{.thread_count_ = wrapped_threads, .queue_capacity_ = 0},
+             blocking_pool_options{
+                 .thread_count_ = (std::numeric_limits<std::size_t>::max() / 64) + 1,
+                 .queue_capacity_ = 0},
+             blocking_pool_options{
+                 .thread_count_ = std::numeric_limits<std::size_t>::max(),
+                 .queue_capacity_ = 1},
+         }) {
+        bool rejected = false;
+        try {
+            blocking_pool pool(options);
+            static_cast<void>(pool);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+}

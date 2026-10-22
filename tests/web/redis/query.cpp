@@ -60,3 +60,20 @@ RUVIA_TEST(redis_predicate_supports_copy_and_where_or_where_combination) {
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
 }
+
+namespace {
+RUVIA_REDIS_ENTITY(redis_unsigned_pk_entity, "unsigned-pk",
+    RUVIA_REDIS_COLUMN(id, std::uint64_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(name, ruvia::string));
+
+RUVIA_REDIS_ENTITY(redis_signed_pk_entity, "signed-pk",
+    RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(name, ruvia::string));
+}  // namespace
+
+RUVIA_TEST(redis_predicate_holds_signed_and_unsigned_primary_key_comparisons) {
+    const auto unsigned_eq = redis_unsigned_pk_entity::column<"id">() == std::uint64_t{42};
+    const auto signed_eq = redis_signed_pk_entity::column<"id">() == std::int64_t{-7};
+    RUVIA_CHECK(!unsigned_eq.empty());
+    RUVIA_CHECK(!signed_eq.empty());
+}

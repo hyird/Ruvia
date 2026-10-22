@@ -77,6 +77,9 @@ struct pattern_class_member final {
 
 [[nodiscard]] constexpr bool valid_pattern_class(std::string_view pattern, std::size_t begin,
     std::size_t end) noexcept {
+    if (begin >= end) {
+        return false;
+    }
     for (std::size_t cursor = begin; cursor < end;) {
         pattern_class_member member;
         if (!consume_pattern_class_member(pattern, end, cursor, member)) {

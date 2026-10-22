@@ -10,7 +10,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -23,7 +26,9 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/security_headers.h"
 #include "ruvia/web/session.h"
+#include "ruvia/web/static_files.h"
 #include "ruvia/web/testing.h"
+#include "ruvia/web/validation.h"
 
 RUVIA_MODEL(testing_facade_echo, RUVIA_OPTIONAL_FIELD(value, ruvia::string));
 
@@ -37,6 +42,15 @@ struct testing_facade_counter final {
     int count_{0};
 };
 
+std::filesystem::path& testing_facade_file_path() {
+    static std::filesystem::path path;
+    return path;
+}
+
+std::optional<ruvia::static_root>& testing_facade_static_root() {
+    static std::optional<ruvia::static_root> root;
+    return root;
+}
 struct testing_facade_startup_failure_state final {};
 
 class testing_facade_startup_error final : public std::runtime_error {
@@ -225,6 +239,11 @@ public:
     RUVIA_GET("/worker", worker);
     RUVIA_GET("/partial", partial);
     RUVIA_GET("/subrequest", subrequest);
+    RUVIA_GET("/sub-file", sub_file);
+    RUVIA_GET("/sub-static", sub_static);
+    RUVIA_POST("/sub-stream", sub_stream, ruvia::stream_body);
+    RUVIA_GET("/sub-checks", sub_checks);
+    RUVIA_CONNECT("example.com:443", connect_authority);
     RUVIA_METHOD("PROPFIND", "/files", propfind);
     RUVIA_METHOD("PURGE", "/files", purge);
     RUVIA_METHOD("PROPFIND", "/dav-only", dav_only);
@@ -405,13 +424,61 @@ private:
         };
         static constexpr std::string_view cases[][2] = {{"/t/users/:id", "."}, {"/t/users/:id", ".."},
             {"/t/tree/*", "."}, {"/t/tree/*", ".."}, {"/t/tree/*", "./a"}, {"/t/tree/*", "a/../b"},
-            {"/t/tree/*", "a/."}, {"/t/tree/*", "a\\b"}};
+            {"/t/tree/*", "a/."}, {"/t/tree/*", "a\\b"}, {"/t/tree/*", "/a"},
+            {"example.com:443", "a"}};
         std::pmr::string reply(c.arena());
         for (const auto& entry : cases) {
             reply.push_back(rejects(entry[0], entry[1]) ? 'x' : '-');
         }
         reply.push_back(' ');
         reply.append(c.url_for("/t/tree/*", {"a.b/..c/.d"}));
+        co_return c.body(std::move(reply));
+    }
+
+    ruvia::task<void> connect_authority(ruvia::context&) {
+        co_return;
+    }
+
+    ruvia::task<ruvia::http_response> sub_file(ruvia::context& c) {
+        co_return c.file({.path_ = testing_facade_file_path()});
+    }
+
+    ruvia::task<ruvia::http_response> sub_static(ruvia::context& c) {
+        co_return c.static_file(*testing_facade_static_root(), {.relative_path_ = "asset.txt"});
+    }
+
+    ruvia::task<ruvia::http_response> sub_stream(ruvia::context& c) {
+        co_return c.text("stream");
+    }
+
+    ruvia::task<ruvia::http_response> sub_checks(ruvia::context& c) {
+        bool stream_rejected = false;
+        try {
+            (void)co_await c.dispatch({.method_ = "POST", .target_ = "/t/sub-stream", .body_ = "abc"});
+        } catch (const std::logic_error&) {
+            stream_rejected = true;
+        }
+        bool multipart_file_rejected = false;
+        try {
+            const ruvia::http_header_view range_headers[] = {{"Range", "bytes=0-1, 4-5"}};
+            (void)co_await c.dispatch({
+                .method_ = "GET",
+                .target_ = "/t/sub-file",
+                .headers_ = range_headers,
+            });
+        } catch (const std::logic_error&) {
+            multipart_file_rejected = true;
+        }
+        const ruvia::http_header_view encoding_headers[] = {{"Accept-Encoding", "identity;q=0"}};
+        const auto not_acceptable = co_await c.dispatch({
+            .method_ = "GET",
+            .target_ = "/t/hello",
+            .headers_ = encoding_headers,
+        });
+        std::pmr::string reply(c.arena());
+        reply.push_back(stream_rejected ? '1' : '0');
+        reply.push_back(multipart_file_rejected ? '1' : '0');
+        reply.push_back(not_acceptable.status() == ruvia::http_status::not_acceptable ? '1' : '0');
         co_return c.body(std::move(reply));
     }
 };
@@ -1366,7 +1433,7 @@ RUVIA_TEST(testing_facade_reverse_routes_reject_dot_segments) {
 
     const auto links = app.request(ruvia::test_request::get("/t/dot-links"));
     RUVIA_CHECK_EQ(links.status(), ruvia::http_status::ok);
-    RUVIA_CHECK_EQ(links.body(), "xxxxxxxx /t/tree/a.b/..c/.d");
+    RUVIA_CHECK_EQ(links.body(), "xxxxxxxxxx /t/tree/a.b/..c/.d");
 
     const auto tree = app.request(ruvia::test_request::get("/t/tree/a.b/..c/.d"));
     RUVIA_CHECK_EQ(tree.status(), ruvia::http_status::ok);
@@ -1396,4 +1463,64 @@ RUVIA_TEST(testing_facade_wildcard_capture_rejects_encoded_separators) {
     const auto named = app.request(ruvia::test_request::get("/t/users/a%2Fb"));
     RUVIA_CHECK_EQ(named.status(), ruvia::http_status::ok);
     RUVIA_CHECK_EQ(named.body(), "a/b");
+}
+
+RUVIA_TEST(testing_facade_subrequest_rejects_non_buffered_routes_and_enforces_406) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_testing_facade_subrequest_file";
+    std::error_code ignored;
+    fs::remove_all(dir, ignored);
+    fs::create_directories(dir);
+    testing_facade_file_path() = dir / "sample.bin";
+    {
+        std::ofstream out(testing_facade_file_path(), std::ios::binary | std::ios::trunc);
+        out << "0123456789abcdef";
+    }
+    ruvia::test_app app;
+    const auto res = app.request(ruvia::test_request::get("/t/sub-checks"));
+    RUVIA_CHECK_EQ(res.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(res.body(), "111");
+    fs::remove_all(dir, ignored);
+}
+
+RUVIA_TEST(testing_facade_reads_file_bodies_and_negotiates_precompressed_static_files) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_testing_facade_files";
+    std::error_code ignored;
+    fs::remove_all(dir, ignored);
+    fs::create_directories(dir);
+    testing_facade_file_path() = dir / "large.bin";
+    const std::string large_payload(20000, 'L');
+    {
+        std::ofstream out(testing_facade_file_path(), std::ios::binary | std::ios::trunc);
+        out.write(large_payload.data(), static_cast<std::streamsize>(large_payload.size()));
+    }
+    {
+        std::ofstream out(dir / "asset.txt", std::ios::binary | std::ios::trunc);
+        out << "plain-asset-body";
+    }
+    {
+        std::ofstream out(dir / "asset.txt.gz", std::ios::binary | std::ios::trunc);
+        out << "gz-sidecar-bytes";
+    }
+    ruvia::static_root_options static_opts;
+    static_opts.file_types_ =
+        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    testing_facade_static_root().emplace(dir, std::move(static_opts));
+
+    ruvia::test_app app;
+    const auto full_file = app.request(ruvia::test_request::get("/t/sub-file"));
+    RUVIA_CHECK_EQ(full_file.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(full_file.body(), large_payload);
+
+    const auto multi_range =
+        app.request(ruvia::test_request::get("/t/sub-file").header("Range", "bytes=0-1, 4-5"));
+    RUVIA_CHECK_EQ(multi_range.status(), ruvia::http_status::partial_content);
+    RUVIA_CHECK(multi_range.body().find("LL") != std::string_view::npos);
+
+    const auto direct_static = app.request(ruvia::test_request::get("/t/sub-static"));
+    RUVIA_CHECK_EQ(direct_static.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(direct_static.body(), "plain-asset-body");
+    testing_facade_static_root().reset();
+    fs::remove_all(dir, ignored);
 }

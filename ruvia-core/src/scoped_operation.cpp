@@ -20,6 +20,9 @@ struct operation_scope::drain_guard final {
         auto* scope = registration_.scope_;
         registration_.phase_ = detail::scoped_operation_registration::phase::expired;
         scope->unlink(registration_);
+        if (scope->head_ == nullptr && scope->join_continuation_ == nullptr) {
+            scope->expire_capabilities();
+        }
         // Join may retire this scope's owner inline. No further scope access.
         scope->resume_joiner();
     }
@@ -49,8 +52,9 @@ struct operation_scope::join_awaiter final {
 };
 
 void operation_scope::close() noexcept {
-    if (head_ == nullptr && capability_head_ == nullptr) {
+    if (head_ == nullptr) {
         active_ = false;
+        expire_capabilities();
         return;
     }
     for (auto* operation = head_; operation != nullptr; operation = operation->next_) {
@@ -60,9 +64,6 @@ void operation_scope::close() noexcept {
         }
     }
     expire_for_join();
-    if (head_ == nullptr) {
-        expire_capabilities();
-    }
 }
 
 task<void> operation_scope::close_and_join() & {
@@ -112,8 +113,8 @@ void operation_scope::resume_joiner() noexcept {
     if (head_ != nullptr || join_continuation_ == nullptr) {
         return;
     }
-    expire_capabilities();
     auto continuation = std::exchange(join_continuation_, {});
+    expire_capabilities();
     join_complete_ = true;
     continuation.resume();
 }

@@ -614,3 +614,50 @@ RUVIA_TEST(json_budget_failure_releases_partial_results_and_preserves_retained_v
     }
     RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
 }
+
+RUVIA_TEST(model_json_codec_validates_field_rules_on_root_and_nested_model_arrays) {
+    predicate_evaluations = 0;
+    const auto valid_dense = ruvia::from_json<ruvia::array<codec_rules>>(R"([{"value":"valid"}])");
+    RUVIA_CHECK_EQ(valid_dense.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(predicate_evaluations, std::size_t{1});
+
+    const auto valid_boxed = ruvia::from_json<ruvia::boxed_array<codec_rules>>(R"([{"value":"valid"}])");
+    RUVIA_CHECK_EQ(valid_boxed.size(), std::size_t{1});
+    RUVIA_CHECK_EQ(predicate_evaluations, std::size_t{2});
+
+    for (const bool boxed : {false, true}) {
+        bool rejected = false;
+        try {
+            if (boxed) {
+                (void)ruvia::from_json<ruvia::boxed_array<codec_rules>>(
+                    R"([{"value":"valid"},{"value":"invalid"}])");
+            } else {
+                (void)ruvia::from_json<ruvia::array<codec_rules>>(
+                    R"([{"value":"valid"},{"value":"invalid"}])");
+            }
+        } catch (const ruvia::http_error& error) {
+            rejected = true;
+            RUVIA_CHECK_EQ(error.validation_issues().size(), std::size_t{1});
+            if (error.validation_issues().size() == 1) {
+                RUVIA_CHECK_EQ(error.validation_issues()[0].field(), std::string_view("[1].value"));
+                RUVIA_CHECK_EQ(error.validation_issues()[0].code(), std::string_view("custom"));
+                RUVIA_CHECK_EQ(error.validation_issues()[0].message(), std::string_view("not valid"));
+            }
+        }
+        RUVIA_CHECK(rejected);
+    }
+
+    bool nested_rejected = false;
+    try {
+        (void)ruvia::from_json<ruvia::array<ruvia::array<codec_rules>>>(
+            R"([[{"value":"valid"}],[{"value":"bad"}]])");
+    } catch (const ruvia::http_error& error) {
+        nested_rejected = true;
+        RUVIA_CHECK_EQ(error.validation_issues().size(), std::size_t{1});
+        if (error.validation_issues().size() == 1) {
+            RUVIA_CHECK_EQ(error.validation_issues()[0].field(), std::string_view("[1][0].value"));
+            RUVIA_CHECK_EQ(error.validation_issues()[0].code(), std::string_view("custom"));
+        }
+    }
+    RUVIA_CHECK(nested_rejected);
+}

@@ -326,8 +326,13 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
     }
     detail::jwt_append_json_member(payload, first, "iat", detail::jwt_epoch_seconds(now));
     if (options.expires_in_.has_value()) {
-        detail::jwt_append_json_member(payload, first, "exp",
-            detail::jwt_epoch_seconds(detail::jwt_time_with_offset(now, *options.expires_in_)));
+        const auto requested = detail::jwt_time_with_offset(now, *options.expires_in_);
+        const auto expires_seconds = options.expires_in_->count() == 0
+                                         ? detail::jwt_epoch_seconds(requested)
+                                         : std::chrono::ceil<std::chrono::seconds>(
+                                               requested.time_since_epoch())
+                                               .count();
+        detail::jwt_append_json_member(payload, first, "exp", expires_seconds);
     }
     if (options.not_before_delay_.has_value()) {
         const auto requested = detail::jwt_time_with_offset(now, *options.not_before_delay_);

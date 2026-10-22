@@ -506,3 +506,52 @@ RUVIA_TEST(stop_token_registration_synchronous_race_leaves_registration_idle_and
     third.request_stop();
     RUVIA_CHECK_EQ(calls.load(std::memory_order_relaxed), 12);
 }
+
+RUVIA_TEST(stop_token_registration_reset_pending_before_stop_already_requested_suppresses_callback) {
+    ruvia::stop_source first;
+    ruvia::stop_source second;
+    ruvia::stop_registration registration;
+    std::atomic_int moves{0};
+    std::atomic_int calls{0};
+
+    struct state_type final {
+        ruvia::stop_source* source_{};
+        ruvia::stop_registration* registration_{};
+        std::atomic_int* moves_{};
+        std::atomic_int* calls_{};
+    } state{
+        .source_ = &first,
+        .registration_ = &registration,
+        .moves_ = &moves,
+        .calls_ = &calls,
+    };
+
+    struct reset_then_stop_on_move final {
+        state_type* state_{};
+
+        explicit reset_then_stop_on_move(state_type& state_value) noexcept
+            : state_(&state_value) {}
+        reset_then_stop_on_move(const reset_then_stop_on_move&) = delete;
+        reset_then_stop_on_move& operator=(const reset_then_stop_on_move&) = delete;
+        reset_then_stop_on_move(reset_then_stop_on_move&& other) noexcept
+            : state_(other.state_) {
+            if (state_->moves_->fetch_add(1, std::memory_order_relaxed) + 1 == move_into_callback_state) {
+                state_->registration_->reset();
+                state_->source_->request_stop();
+            }
+        }
+        reset_then_stop_on_move& operator=(reset_then_stop_on_move&&) = delete;
+
+        void operator()() const noexcept {
+            state_->calls_->fetch_add(1, std::memory_order_relaxed);
+        }
+    };
+
+    auto token = ruvia::combine_stop_tokens(first.token(), second.token());
+    token.register_callback(registration, reset_then_stop_on_move(state));
+    RUVIA_CHECK(first.stop_requested());
+    RUVIA_CHECK(!registration.registered());
+    RUVIA_CHECK_EQ(calls.load(std::memory_order_relaxed), 0);
+    second.request_stop();
+    RUVIA_CHECK_EQ(calls.load(std::memory_order_relaxed), 0);
+}

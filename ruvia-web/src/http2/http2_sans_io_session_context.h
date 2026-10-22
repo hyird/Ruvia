@@ -47,10 +47,13 @@ private:
 };
 
 [[nodiscard]] inline connection_scanner::phase http2_sans_io_inactivity_phase(
-    bool header_block_in_progress, std::size_t active_runtime_count,
+    bool header_block_in_progress, std::size_t open_request_body_count,
     bool websocket_tunnel_active) noexcept {
     if (header_block_in_progress) {
         return connection_scanner::phase::reading_initial;
+    }
+    if (open_request_body_count != 0) {
+        return connection_scanner::phase::reading_payload;
     }
     if (websocket_tunnel_active) {
         // A successful RFC 8441 tunnel is long-lived, not a stalled request body.
@@ -58,8 +61,7 @@ private:
         // cannot hold the connection open indefinitely.
         return connection_scanner::phase::long_lived;
     }
-    return active_runtime_count == 0 ? connection_scanner::phase::idle
-                                     : connection_scanner::phase::reading_payload;
+    return connection_scanner::phase::idle;
 }
 
 }  // namespace ruvia::detail

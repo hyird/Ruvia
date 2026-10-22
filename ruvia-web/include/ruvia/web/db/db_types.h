@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -19,6 +20,7 @@
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/client_tls_config.h"
+#include "ruvia/web/integer.h"
 #include "ruvia/web/model.h"
 
 namespace ruvia {
@@ -317,18 +319,27 @@ public:
             }
             throw db_conversion_error(
                 db_conversion_error::code_type::invalid_format, "database field is not a boolean");
-        } else {
+        } else if constexpr (std::is_floating_point_v<t_type>) {
             t_type converted{};
             const auto* first = source_value->data();
             const auto* last = first + source_value->size();
             const auto [end, error] = std::from_chars(first, last, converted);
-            if (error != std::errc{} || end != last) {
-                throw db_conversion_error(error == std::errc::result_out_of_range
+            if (error != std::errc{} || end != last || !std::isfinite(converted)) {
+                throw db_conversion_error(error == std::errc::result_out_of_range && end == last
                                               ? db_conversion_error::code_type::out_of_range
                                               : db_conversion_error::code_type::invalid_format,
                     "database field has an invalid numeric value");
             }
             return converted;
+        } else {
+            const auto parsed = parse_integer<t_type>(*source_value);
+            if (const auto* error = std::get_if<integer_parse_error>(&parsed)) {
+                throw db_conversion_error(*error == integer_parse_error::out_of_range
+                                              ? db_conversion_error::code_type::out_of_range
+                                              : db_conversion_error::code_type::invalid_format,
+                    "database field has an invalid numeric value");
+            }
+            return std::get<t_type>(parsed);
         }
     }
 

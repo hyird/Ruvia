@@ -486,6 +486,28 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     }
 
     {
+        ruvia::stop_source source;
+        auto [same_stack_sender, same_stack_receiver] =
+            ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
+        bool first_cancelled = false;
+        ruvia::task_scope scope(worker_value);
+        scope.spawn([](ruvia::channel_receiver<int>& rx, ruvia::stop_token token, bool& cancelled) -> ruvia::task<void> {
+            const auto outcome = co_await rx.receive(std::move(token));
+            cancelled = outcome.status() == ruvia::worker_wait_status::cancelled;
+        }(same_stack_receiver, source.token(), first_cancelled));
+        source.request_stop();
+        if (!same_stack_sender.send(77).accepted()) {
+            same_stack_receiver.close();
+            co_await scope.join();
+            co_return;
+        }
+        co_await scope.join();
+        const auto queued = co_await same_stack_receiver.receive();
+        if (!first_cancelled || !queued.has_value() || queued.value() != 77) {
+            co_return;
+        }
+    }
+    {
         auto [close_sender, close_receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
         bool pending_closed = false;
         ruvia::task_scope scope(worker_value);

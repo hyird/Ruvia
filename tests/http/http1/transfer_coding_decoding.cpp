@@ -130,6 +130,23 @@ RUVIA_TEST(transfer_coding_stack_rejects_truncated_inner_stream) {
     RUVIA_CHECK(finish_value.failure() != nullptr);
 }
 
+RUVIA_TEST(transfer_coding_stack_rejects_empty_inner_stream_after_non_empty_outer_wire) {
+    const auto wire = zlib_deflate_compress("");
+    RUVIA_CHECK(!wire.empty());
+    constexpr std::array codings{http_transfer_coding::gzip, http_transfer_coding::deflate};
+    ruvia::http_transfer_coding_stack_decoder stack(
+        codings, std::pmr::get_default_resource(), protocol_byte_limit::limited(1024));
+    std::array<char, 64> scratch{};
+    const auto decoded = stack.decode(wire, scratch);
+    RUVIA_CHECK_EQ(decoded.consumed_bytes(), wire.size());
+    RUVIA_CHECK(decoded.need_input() != nullptr);
+    const auto finish_value = stack.finish_input();
+    RUVIA_CHECK(finish_value.failure() != nullptr);
+    if (const auto* failure = finish_value.failure()) {
+        RUVIA_CHECK(failure->error() == ruvia::http_transfer_coding_decode_error::invalid_content);
+    }
+}
+
 RUVIA_TEST(transfer_coding_stack_construction_failure_releases_partial_state) {
     constexpr std::array codings{http_transfer_coding::gzip, http_transfer_coding::deflate};
     decoder_memory_resource baseline;

@@ -177,6 +177,18 @@ private:
         return tunnel_;
     }
 
+    void mark_request_body_open() noexcept {
+        request_body_open_ = true;
+    }
+
+    void mark_request_body_closed() noexcept {
+        request_body_open_ = false;
+    }
+
+    [[nodiscard]] bool request_body_open() const noexcept {
+        return request_body_open_;
+    }
+
     std::uint32_t stream_id_;
     std::uint32_t push_parent_{};
     std::pmr::memory_resource* resource_;
@@ -186,6 +198,7 @@ private:
     std::optional<http2_sans_io_selected_route> selected_route_;
     std::optional<http2_request_head_event> request_head_;
     bool tunnel_{false};
+    bool request_body_open_{false};
 };
 
 // Stable per-stream Web runtime storage. The common multiplexing case uses inline
@@ -278,6 +291,26 @@ public:
         return true;
     }
 
+    [[nodiscard]] bool mark_request_body_open(std::uint32_t stream_id) noexcept {
+        auto* runtime = find(stream_id);
+        if (runtime == nullptr || runtime->request_body_open()) {
+            return false;
+        }
+        runtime->mark_request_body_open();
+        ++open_request_body_count_;
+        return true;
+    }
+
+    [[nodiscard]] bool mark_request_body_closed(std::uint32_t stream_id) noexcept {
+        auto* runtime = find(stream_id);
+        if (runtime == nullptr || !runtime->request_body_open()) {
+            return false;
+        }
+        runtime->mark_request_body_closed();
+        --open_request_body_count_;
+        return true;
+    }
+
     [[nodiscard]] bool remove(std::uint32_t stream_id) noexcept {
         for (auto& slot : inline_) {
             if (slot && slot->stream_id() == stream_id) {
@@ -310,6 +343,10 @@ public:
         return tunnel_count_;
     }
 
+    [[nodiscard]] std::size_t open_request_body_count() const noexcept {
+        return open_request_body_count_;
+    }
+
     template <typename callback>
     void for_each(callback&& callback_value) {
         for (auto& slot : inline_) {
@@ -336,6 +373,9 @@ private:
         if (runtime.tunnel()) {
             --tunnel_count_;
         }
+        if (runtime.request_body_open()) {
+            --open_request_body_count_;
+        }
     }
 
     std::pmr::memory_resource* resource_;
@@ -345,6 +385,7 @@ private:
     std::pmr::vector<overflow_runtime_type> overflow_;
     std::size_t size_{0};
     std::size_t tunnel_count_{0};
+    std::size_t open_request_body_count_{0};
 };
 
 }  // namespace ruvia::detail

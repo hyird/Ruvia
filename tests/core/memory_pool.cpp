@@ -615,3 +615,32 @@ RUVIA_TEST(request_memory_fork_uses_the_configured_initial_buffer_bytes) {
     RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
     RUVIA_CHECK(upstream.matched_returns_);
 }
+
+RUVIA_TEST(memory_pools_honor_max_align_for_zero_byte_allocations) {
+    constexpr std::size_t alignment = alignof(std::max_align_t);
+    std::array<void*, 8> process_blocks{};
+    for (auto& block : process_blocks) {
+        block = ruvia::process_resource()->allocate(0, alignment);
+        RUVIA_CHECK(block != nullptr);
+        RUVIA_CHECK_EQ(reinterpret_cast<std::uintptr_t>(block) % alignment, std::uintptr_t{0});
+    }
+    for (auto* block : process_blocks) {
+        ruvia::process_resource()->deallocate(block, 0, alignment);
+    }
+
+    counting_resource upstream;
+    {
+        ruvia::worker_memory worker(upstream);
+        std::array<void*, 8> worker_blocks{};
+        for (auto& block : worker_blocks) {
+            block = worker.resource()->allocate(0, alignment);
+            RUVIA_CHECK(block != nullptr);
+            RUVIA_CHECK_EQ(reinterpret_cast<std::uintptr_t>(block) % alignment, std::uintptr_t{0});
+        }
+        for (auto* block : worker_blocks) {
+            worker.resource()->deallocate(block, 0, alignment);
+        }
+    }
+    RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
+    RUVIA_CHECK(upstream.matched_returns_);
+}

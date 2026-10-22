@@ -18,7 +18,8 @@ bool http2_connection::process_push_promise(const http2_frame_header& header_val
     const bool canceled_parent = parent_value ? parent_value->is_aborted() &&
                                                     parent_value->local_send().aborted()->source() == http2_stream_close_source::local
                                               : closed_streams_.source(header_value.stream_id_) == http2_stream_close_source::local;
-    if (!canceled_parent && (!parent_value || http2_remote_peer_half_closed(*parent_value))) {
+    if ((parent_value != nullptr && parent_value->tunnel().not_connect() == nullptr) ||
+        (!canceled_parent && (!parent_value || http2_remote_peer_half_closed(*parent_value)))) {
         append_goaway(http2_error_code::protocol_error, "PUSH_PROMISE on closed or idle stream");
         return false;
     }
@@ -105,6 +106,15 @@ bool http2_connection::finish_push_promise(std::string_view block) {
     if (status != header_decode_status::ok ||
         (scratch.request_method() != "GET" && scratch.request_method() != "HEAD")) {
         output_.append_rst_stream(scratch.id(), http2_error_code::protocol_error);
+        hpack_transaction.commit();
+        stream_transaction.commit();
+        last_peer_push_stream_id_ = scratch.id();
+        last_stream_id_ = scratch.id();
+        return true;
+    }
+    if (const auto* graceful_drain = local_connection_state_.graceful_drain();
+        graceful_drain != nullptr && scratch.id() > graceful_drain->last_stream_id()) {
+        output_.append_rst_stream(scratch.id(), http2_error_code::refused_stream);
         hpack_transaction.commit();
         stream_transaction.commit();
         last_peer_push_stream_id_ = scratch.id();

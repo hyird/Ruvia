@@ -1799,4 +1799,47 @@ RUVIA_TEST(db_expr_and_db_tuple_compose_without_external_query) {
     RUVIA_CHECK(compiled.sql().find("ROW(\"alert_state\".\"device_id\", \"alert_state\".\"message_id\") IN (ROW(") != std::string_view::npos);
 }
 
+RUVIA_TEST(db_expr_from_expression_outlives_source_query_resource_and_maps_table_qualifier) {
+    db_expr owned_expr;
+    db_expr aliased_expr;
+    db_predicate owned_pred;
+    {
+        test::tracking_resource temp_resource;
+        {
+            db_query source(&temp_resource);
+            auto col = source.column("nickname", "users");
+            auto pred = source.binary(col, db_binary_operator::equal, source.value(std::string(200, 'a')));
+            owned_expr = db_expr::from_expression(col, std::string("users"), false);
+            aliased_expr = db_expr::from_expression(source.column("nickname", "u"), std::string("u"), true);
+            owned_pred = db_predicate::from_expression(pred);
+        }
+        temp_resource.release();
+        RUVIA_CHECK(!temp_resource.deallocated_after_release());
+
+        db_query target;
+        target.select({
+                          owned_expr.expression(target, {}, "u"),
+                          aliased_expr.expression(target, "u", "ignored"),
+                      })
+            .from("users", "u")
+            .where(owned_pred.expression(target, "users", "u"));
+        const auto compiled = target.compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(compiled.sql(),
+            R"(SELECT "u"."nickname", "u"."nickname" FROM "users" AS "u" WHERE ("u"."nickname" = $1))");
+        RUVIA_CHECK_EQ(compiled.params().size(), std::size_t{1});
+
+        const auto combined = owned_expr.concat("_suffix");
+        db_query combined_target;
+        combined_target.select(combined.expression(combined_target, {}, "u")).from("users", "u");
+        const auto combined_compiled = combined_target.compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(combined_compiled.sql(),
+            R"(SELECT ("u"."nickname" || $1) FROM "users" AS "u")");
+
+        owned_expr = {};
+        aliased_expr = {};
+        owned_pred = {};
+        RUVIA_CHECK(!temp_resource.deallocated_after_release());
+    }
+}
+
 }  // namespace

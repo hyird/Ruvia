@@ -2175,6 +2175,26 @@ bool test_root_tasks_join_nested_scopes_during_stop() {
     return child_done && middle_done && root_done;
 }
 
+bool test_draining_post_can_schedule_defer_cleanup_during_stop() {
+    ruvia::event_loop_pool pool({.loop_count_ = 1, .queue_capacity_ = 4});
+    const auto loop = pool.loop(0);
+    const auto worker_value = loop.handle();
+    bool post_ran = false;
+    bool cleanup_scheduled = false;
+    bool cleanup_ran = false;
+    if (loop.post([loop, worker_value, &post_ran, &cleanup_scheduled, &cleanup_ran] {
+            post_ran = worker_value.is_current();
+            cleanup_scheduled = loop.defer_cleanup([worker_value, &cleanup_ran] {
+                cleanup_ran = worker_value.is_current();
+            });
+        }) != ruvia::post_status::accepted) {
+        return false;
+    }
+    pool.stop();
+    pool.join();
+    return post_ran && cleanup_scheduled && cleanup_ran;
+}
+
 }  // namespace
 
 int main() {
@@ -2264,7 +2284,9 @@ int main() {
                    run("root_result_owns_pmr_storage_past_pool_retirement",
                        test_root_task_result_owns_pmr_storage_past_pool_retirement) &&
                    run("root_task_delivers_const_result",
-                       test_root_task_delivers_const_result)
+                       test_root_task_delivers_const_result) &&
+                   run("draining_post_can_schedule_defer_cleanup_during_stop",
+                       test_draining_post_can_schedule_defer_cleanup_during_stop)
                ? 0
                : 1;
 }

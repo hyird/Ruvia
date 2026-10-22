@@ -63,6 +63,10 @@ RUVIA_DB_PROJECTION(item_summary,
     RUVIA_DB_COLUMN(id, std::int64_t),
     RUVIA_DB_COLUMN(label, std::pmr::string),
     RUVIA_DB_COLUMN(rank, std::int64_t))
+RUVIA_DB_PROJECTION(entity_with_rank,
+    RUVIA_DB_COLUMN(id, std::int64_t),
+    RUVIA_DB_COLUMN(name, std::pmr::string),
+    RUVIA_DB_COLUMN(rank, std::int64_t))
 
 RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
     repository_runtime runtime;
@@ -142,6 +146,57 @@ RUVIA_TEST(db_repository_consumes_selected_projection_rows_and_owns_selection) {
         builder.select({{"label", expressions.column("name", "i")}});
         const auto empty = co_await builder.get_one<item_summary>();
         RUVIA_CHECK(!empty.has_value());
+    });
+}
+
+RUVIA_TEST(db_repository_add_select_maps_computed_dto_columns_and_rejects_duplicate_names) {
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle,
+        {{.column_ = "id", .rows_ = {"7"}},
+            {.column_ = "id", .rows_ = {}}});
+    repository_runtime runtime;
+    db_client client(runtime.attachment_.loop(), peer.config());
+    test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
+        auto repository = connected.handle().repository<entity_type>();
+
+        auto explicit_qb = repository.query_builder("i");
+        explicit_qb.select({"id"})
+            .add_select(entity_type::column<"name">("i"), "label");
+        RUVIA_CHECK(testing::throws_on([&] { explicit_qb.add_select("id"); }));
+        RUVIA_CHECK(testing::throws_on([&] { explicit_qb.add_select(db_expr::value(1), "label"); }));
+        RUVIA_CHECK(testing::throws_on([&] { (void)explicit_qb.get_many(); }));
+        bool missing_label = false;
+        try {
+            (void)co_await explicit_qb.get_one<item_summary>();
+        } catch (const db_conversion_error& error) {
+            missing_label = error.code() == db_conversion_error::code_type::missing_column;
+        }
+        RUVIA_CHECK(missing_label);
+
+        auto default_qb = repository.query_builder("i");
+        RUVIA_CHECK(testing::throws_on([&] { default_qb.add_select("id"); }));
+        default_qb.add_select(db_expr::value(5), "rank");
+        RUVIA_CHECK(testing::throws_on([&] { default_qb.add_select(db_expr::value(6), "rank"); }));
+        RUVIA_CHECK(testing::throws_on([&] { (void)default_qb.get_many(); }));
+        const auto many = co_await default_qb.get_many<entity_with_rank>();
+        RUVIA_CHECK(many.empty());
+    });
+}
+
+RUVIA_TEST(db_repository_relation_joins_validate_source_and_target_aliases) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
+        auto parents = client.handle().repository<parent>();
+        auto qb = parents.query_builder("p");
+        RUVIA_CHECK(testing::throws_on([&] { qb.left_join("bogus.children", "c"); }));
+        RUVIA_CHECK(testing::throws_on([&] { qb.inner_join("bogus.children", "c"); }));
+        RUVIA_CHECK(testing::throws_on([&] { qb.left_join("children", "p"); }));
+        qb.left_join("p.children", "c");
+        RUVIA_CHECK(testing::throws_on([&] { qb.inner_join("children", "c"); }));
+        const auto statement = qb.get_query_and_parameters();
+        RUVIA_CHECK_EQ(statement.sql(),
+            R"(SELECT "p"."id" FROM "parents" AS "p" LEFT JOIN "children" AS "c" ON ("p"."id" = "c"."parent_id"))");
+        co_return;
     });
 }
 

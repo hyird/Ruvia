@@ -161,7 +161,7 @@ bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept {
                "connect-udp");
 }
 std::optional<http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept {
-    const auto path = request.target_form() == http_request_target_form::absolute && request.query_string().empty()
+    const auto path = request.target_form() == http_request_target_form::absolute
                           ? request.path()
                           : request.target();
     return validate_http_connect_udp_request({.version_ = request.protocol_version(), .method_ = request.method(), .scheme_ = request.scheme(), .authority_ = request.authority().empty() ? detail::request_known_header(request, detail::request_header_kind::host) : request.authority(), .path_ = path, .headers_ = request.headers()});
@@ -185,7 +185,9 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
             return http_connect_udp_error::invalid_response;
         }
     }
-    response.header("Capsule-Protocol", "?1");
+    if (!capsule) {
+        response.header("Capsule-Protocol", "?1");
+    }
     if (version == http_protocol_version::http11) {
         response.status_code_ = http_status::switching_protocols;
         response.header("Connection", "Upgrade");
