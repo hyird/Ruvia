@@ -9,8 +9,10 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "ruvia/core/scoped_operation.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/redis/redis_entity_codec.h"
 #include "ruvia/web/detail/redis/redis_entity_key.h"
 #include "ruvia/web/detail/redis/redis_query_compile.h"
@@ -18,12 +20,70 @@
 #include "ruvia/web/detail/redis/redis_repository_mapping.h"
 #include "ruvia/web/entity_rows.h"
 #include "ruvia/web/redis/redis_entity.h"
-#include "ruvia/web/redis/redis_find_options.h"
 #include "ruvia/web/redis/redis_handle.h"
-#include "ruvia/web/redis/redis_repository_types.h"
-#include "ruvia/web/redis/redis_write_result.h"
 
 namespace ruvia {
+
+enum class redis_order_direction : std::uint8_t {
+    asc,
+    desc,
+};
+
+struct redis_find_order final {
+    borrowed_text field_{};
+    redis_order_direction direction_{redis_order_direction::asc};
+};
+
+// RediSearch always pages results; this page size applies when `take_` is unset.
+inline constexpr std::uint64_t redis_find_default_take = 100;
+
+// Redis filters and pagination have no SQL relation, lock or cache options.
+// With `take_` unset, find() returns every match or throws redis_error
+// (command_error) when more than redis_find_default_take entities match after
+// `skip_`; it never truncates silently. find_and_count() returns one page of
+// that size together with the total count.
+struct redis_find_options final {
+    redis_predicate where_{};
+    std::optional<redis_find_order> order_{};
+    std::optional<std::uint64_t> skip_{};
+    std::optional<std::uint64_t> take_{};
+};
+
+enum class redis_index_kind : std::uint8_t {
+    none,
+    tag,
+    text,
+    numeric,
+};
+
+struct redis_index_config final {
+    borrowed_text field_{};
+    redis_index_kind kind_{redis_index_kind::tag};
+    bool sortable_{false};
+};
+
+struct redis_repository_config final {
+    borrowed_text prefix_{};
+    std::vector<redis_index_config> indexes_{};
+};
+
+// Omitted expiration preserves an existing TTL; new entities are persistent.
+struct redis_write_options final {
+    std::optional<std::chrono::milliseconds> ttl_{};
+    bool persist_{false};
+};
+
+class redis_write_result final {
+public:
+    explicit constexpr redis_write_result(std::uint64_t affected_entities) noexcept
+        : affected_entities_(affected_entities) {}
+    [[nodiscard]] constexpr std::uint64_t affected_entities() const noexcept {
+        return affected_entities_;
+    }
+
+private:
+    std::uint64_t affected_entities_{};
+};
 
 template <typename entity_type>
 class redis_repository final {
@@ -76,7 +136,7 @@ public:
     [[nodiscard]] scoped_operation<std::optional<entity_type>> find_one(
         const redis_find_options& options) const {
         const auto memory = resource();
-        const bool plain = options.order_.empty() && !options.skip_ && !options.take_;
+        const bool plain = !options.order_.has_value() && !options.skip_ && !options.take_;
         if (plain) {
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, memory)) {
                 auto key = detail::redis_entity_key(mapping().prefix_, *id, memory);
@@ -114,7 +174,7 @@ public:
     [[nodiscard]] scoped_operation<bool> exists(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
-        if (options.order_.empty() && !options.skip_ && !options.take_) {
+        if (!options.order_.has_value() && !options.skip_ && !options.take_) {
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, memory)) {
                 const auto key = detail::redis_entity_key(mapping().prefix_, *id, memory);
                 return handle_.exists(key);
@@ -274,6 +334,11 @@ private:
     std::optional<detail::redis_mapping> mapping_;
     scoped_capability_registration registration_;
 };
+
+template <typename entity_type>
+redis_repository<entity_type> redis_handle::get_repository() const {
+    return get_repository<entity_type>(redis_repository_config{});
+}
 
 template <typename entity_type>
 redis_repository<entity_type> redis_handle::get_repository(const redis_repository_config& config) const {

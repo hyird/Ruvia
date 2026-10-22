@@ -53,9 +53,9 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
             error.pop_back();
         }
     }
-    return db_error(error_code, db_driver::postgresql, std::move(error), std::nullopt,
-        state_value == nullptr ? std::string{} : std::string(state_value),
-        constraint == nullptr ? std::string{} : std::string(constraint));
+    return db_error(error_code, db_driver::postgresql, error, std::nullopt,
+        state_value == nullptr ? std::string_view{} : std::string_view(state_value),
+        constraint == nullptr ? std::string_view{} : std::string_view(constraint));
 }
 
 postgresql_params::postgresql_params(std::pmr::memory_resource* resource)

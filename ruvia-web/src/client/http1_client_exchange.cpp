@@ -28,7 +28,7 @@
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request_target.h"
-#include "ruvia/http/http_response_body_decoding.h"
+#include "ruvia/http/http_response_server.h"
 
 #include "body/http_body_buffer.h"
 #include "client/http1_request_head.h"
@@ -203,7 +203,7 @@ task<void> http1_client_exchange::run(
     if (!prepared) {
         throw http_client_error(http_client_error::code_type::invalid_request,
             prepared_result.failure()
-                ? std::string(http1_client_request_prepare_error_message(prepared_result.failure()->error()))
+                ? std::string(http1_client_request_prepare_error_message(*prepared_result.failure()))
                 : "HTTP request head is too large");
     }
     http1_client_response_parser parser(prepared->exchange_state(), {.resource_ = response_resource});
@@ -387,7 +387,7 @@ std::optional<http1_parsed_client_response_head> http1_client_exchange::take_fin
         auto parse_result = parser.parse(read_buffer.view());
         if (parse_result.failure()) {
             throw http_client_error(http_client_error::code_type::protocol_error,
-                std::string(http1_client_response_parse_error_message(parse_result.failure()->error())));
+                std::string(http1_client_response_parse_error_message(*parse_result.failure())));
         }
         if (parse_result.need_more()) {
             if (read_buffer.size() >= max_http_header_bytes) {

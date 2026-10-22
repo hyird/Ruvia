@@ -6,10 +6,10 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_request_content_decoding.h"
 
 #include "http1_request_message_fixture.h"
 #include "request_header_memory_fixture.h"
@@ -117,8 +117,7 @@ RUVIA_TEST(request_content_coding_accumulates_repeated_header_fields_in_order) {
         "POST", "/", headers, {}, std::pmr::get_default_resource());
     RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
     const auto& request = std::get<ruvia::http_request>(parsed_request);
-    std::pmr::monotonic_buffer_resource resource;
-    const auto coding = request_content_coding(request, &resource);
+    const auto coding = request_content_coding(request);
     RUVIA_CHECK(coding.invalid() == nullptr);
     RUVIA_CHECK(coding.unsupported() == nullptr);
     RUVIA_CHECK_EQ(coding.codings().size(), 2U);
@@ -135,8 +134,7 @@ RUVIA_TEST(request_content_coding_combines_field_lines_with_list_semantics) {
     RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
     const auto& request = std::get<ruvia::http_request>(parsed_request);
 
-    std::pmr::monotonic_buffer_resource resource;
-    const auto coding = request_content_coding(request, &resource);
+    const auto coding = request_content_coding(request);
     RUVIA_CHECK(coding.invalid() == nullptr);
     RUVIA_CHECK(coding.unsupported() == nullptr);
     RUVIA_CHECK_EQ(coding.codings().size(), 1U);

@@ -23,47 +23,15 @@
 
 namespace ruvia::detail {
 
-class http_upgrade_route_outcome final {
-public:
-    // The session ran and was finished; the request is complete.
-    [[nodiscard]] static http_upgrade_route_outcome make_upgraded() noexcept {
-        return http_upgrade_route_outcome();
-    }
-
-    // The terminal ran but no session remains (e.g. the upgrade head write
-    // failed): output may be partially committed, so the connection is closed
-    // instead of answering.
-    [[nodiscard]] static http_upgrade_route_outcome make_abandoned() noexcept {
-        return http_upgrade_route_outcome();
-    }
-
-    [[nodiscard]] static http_upgrade_route_outcome make_buffered(http_response response) noexcept {
-        return http_upgrade_route_outcome(std::move(response));
-    }
-
-    // The application answered without upgrading: a buffered response still
-    // has to go through the buffered response tail.
-    [[nodiscard]] http_response* response() & noexcept {
-        return response_ ? &*response_ : nullptr;
-    }
-    http_response* response() && = delete;
-
-private:
-    http_upgrade_route_outcome() noexcept = default;
-
-    explicit http_upgrade_route_outcome(http_response response) noexcept
-        : response_(std::move(response)) {}
-
-    std::optional<http_response> response_;
-};
-
 // `establish(context&) -> task<void>` commits the upgrade response head,
 // emplaces `session` and runs the route's stream handler on it.
 // `finish(session_type&, std::exception_ptr) -> task<void>` closes an
 // established session and reports a handler failure; it always runs once a
 // session exists, before any handler exception is surfaced.
+// Returns a buffered response only when the application answered without
+// upgrading; an established or abandoned upgrade returns std::nullopt.
 template <typename session_type, typename establish_type, typename finish_type>
-[[nodiscard]] task<http_upgrade_route_outcome> run_http_upgrade_route(
+[[nodiscard]] task<std::optional<http_response>> run_http_upgrade_route(
     const route_table& routes, const http_request& request, const resolved_route& resolved, request_memory& memory,
     context_services services, std::optional<session_type>& session, establish_type& establish,
     finish_type& finish) {
@@ -77,15 +45,12 @@ template <typename session_type, typename establish_type, typename finish_type>
     }
     if (session.has_value()) {
         co_await finish(*session, failure);
-        co_return http_upgrade_route_outcome::make_upgraded();
+        co_return std::nullopt;
     }
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
-    if (buffered.has_value()) {
-        co_return http_upgrade_route_outcome::make_buffered(std::move(*buffered));
-    }
-    co_return http_upgrade_route_outcome::make_abandoned();
+    co_return buffered;
 }
 
 }  // namespace ruvia::detail

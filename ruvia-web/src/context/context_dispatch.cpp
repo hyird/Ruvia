@@ -116,24 +116,15 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
         .max_buffered_body_bytes_ = services().max_decoded_body_bytes(),
         .apply_rate_limit_ = false,
     };
-    auto admission = detail::admit_http_request(
+    http_response response({.resource_ = memory.resource()});
+    (void)co_await detail::admit_and_dispatch_buffered_request(routes,
         {
             .request_ = request,
             .resolution_ = resolution,
             .coding_ = http_response_coding_selection_for(request),
             .resource_ = memory.resource(),
         },
-        policy, services().for_subrequest(stop));
-    const auto* rejection = admission.rejection();
-    http_response response({.resource_ = memory.resource()});
-    if (rejection != nullptr) {
-        response = co_await detail::respond_http_request_rejection(
-            routes, request, memory, *rejection, admission.services());
-    } else {
-        co_await routes.dispatch_buffered_response(request, resolution, memory,
-            detail::document_root_binding::none(), admission.services(),
-            detail::static_file_selection_mode::identity_only, response);
-    }
+        policy, services().for_subrequest(stop), memory, response);
     if (response.file_body()) {
         throw std::logic_error("dispatch requires a buffered response");
     }
@@ -145,7 +136,7 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     }
     result.headers_.reserve(response.headers().size());
     for (const auto& header : response.headers()) {
-        result.headers_.push_back(http_header::copy_of(header.name(), header.value(), pool()));
+        result.headers_.emplace_back(header.name(), header.value(), pool());
     }
     co_return result;
 }

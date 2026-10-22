@@ -42,11 +42,15 @@ inline void require_db_dialect(db_driver driver) {
     return characters <= 64;
 }
 
-inline void append_db_identifier(std::pmr::string& output, std::string_view name, db_driver driver) {
+inline void validate_db_identifier(std::string_view name, db_driver driver) {
     require_db_dialect(driver);
     if (name.empty() || name.find('\0') != std::string_view::npos || !fits_db_identifier_limit(name, driver)) {
         throw std::invalid_argument("invalid or overlong database identifier");
     }
+}
+
+inline void append_db_identifier(std::pmr::string& output, std::string_view name, db_driver driver) {
+    validate_db_identifier(name, driver);
     const char quote = driver == db_driver::postgresql ? '"' : '`';
     output.push_back(quote);
     for (const char ch : name) {

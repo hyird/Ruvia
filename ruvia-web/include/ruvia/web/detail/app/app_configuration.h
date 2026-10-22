@@ -12,7 +12,7 @@
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
 #include "ruvia/web/detail/util/registration_resource.h"
-#include "ruvia/web/error_handlers.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
 
 namespace ruvia::detail {

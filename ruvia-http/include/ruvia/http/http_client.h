@@ -1,7 +1,5 @@
 #pragma once
 
-#include "ruvia/http/attributes.h"
-
 // Outbound HTTP client protocol models.
 //
 // OWNERSHIP: these are transport-free HTTP values. http_origin_view and
@@ -165,6 +163,16 @@ struct http_client_request_view {
     // small set of facts needed by the later response exchange.
     std::span<const http_header_view> headers_{};
     http_client_request_content_view content_{http_client_request_content_view::none()};
+};
+
+// Borrowed only until open_tunnel() returns its cold operation. Normal CONNECT
+// uses authority-form and leaves protocol/target empty. Extended CONNECT uses
+// protocol, authority and an origin-form target on HTTP/2.
+struct http_client_tunnel_request_view final {
+    std::string_view authority_{};
+    std::string_view protocol_{};
+    std::string_view target_{};
+    std::span<const http_header_view> headers_{};
 };
 
 }  // namespace ruvia

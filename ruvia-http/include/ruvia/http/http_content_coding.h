@@ -6,17 +6,20 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_status.h"
 
 namespace ruvia {
 
 class http_response_headers;
+class http_request;
 
 namespace detail {
 struct http_content_coding_field_result_access;
@@ -117,14 +120,33 @@ private:
 // Parses one logical Content-Encoding field value using recipient list rules.
 // Empty list members are ignored; an empty value therefore means identity.
 [[nodiscard]] http_content_coding_field_result parse_http_content_coding(
-    std::string_view value, std::pmr::memory_resource* resource = nullptr) noexcept;
+    std::string_view value) noexcept;
 
 // Folds every Content-Encoding header line into one recipient-side decision.
 [[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(
-    std::span<const http_header> headers,
-    std::pmr::memory_resource* resource = nullptr) noexcept;
+    std::span<const http_header> headers) noexcept;
 [[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(
-    const http_response_headers& headers,
-    std::pmr::memory_resource* resource = nullptr) noexcept;
+    const http_response_headers& headers) noexcept;
 
+// Uses the parser's classified header descriptors without rescanning wire names.
+// Admission keeps Content-Encoding opaque. Inspect invalid()/unsupported()
+// before using codings(); an empty span in either error state is not identity.
+[[nodiscard]] http_content_coding_field_result request_content_coding(
+    const http_request& request) noexcept;
+
+enum class http_content_decode_error : std::uint8_t {
+    unsupported_coding,
+    invalid_content,
+    decoded_size_exceeded,
+    decoder_failure
+};
+
+struct http_content_decode_options final {
+    std::size_t max_decoded_bytes_{};
+    std::pmr::memory_resource* resource_{nullptr};
+};
+
+[[nodiscard]] std::pmr::string decode_http_request_content(
+    std::span<const http_content_coding> codings, std::string_view body,
+    http_content_decode_options options = {});
 }  // namespace ruvia

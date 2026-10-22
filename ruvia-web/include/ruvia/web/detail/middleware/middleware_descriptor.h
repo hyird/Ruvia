@@ -21,7 +21,7 @@ namespace detail {
 
 class controller_middleware_descriptor;
 
-template <middleware middleware_t_type, typename args_t_type>
+template <middleware middleware_type, typename args_type>
 [[nodiscard]] controller_middleware_descriptor describe_middleware(const void* args) noexcept;
 
 class controller_middleware_descriptor final {
@@ -90,7 +90,7 @@ public:
     }
 
 private:
-    template <middleware middleware_t_type, typename args_t_type>
+    template <middleware middleware_type, typename args_type>
     friend controller_middleware_descriptor describe_middleware(const void* args) noexcept;
 
     constexpr controller_middleware_descriptor(invoke_type invoke, create_type create, destroy_type destroy,

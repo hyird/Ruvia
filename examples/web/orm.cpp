@@ -47,7 +47,7 @@ auto migrations() {
     db_query expressions;
     db_schema schema({.driver_ = db_driver::postgresql});
     schema.create_table<device>({.if_not_exists_ = true});
-    schema.create_index({.name_ = "orm_demo_device_labels", .table_ = device::table_name().data(), .keys_ = {{.column_ = "labels"}}, .if_not_exists_ = true, .method_ = db_index_method::gin});
+    schema.create_index({.name_ = "orm_demo_device_labels", .table_ = device::table_name(), .keys_ = {{.column_ = "labels"}}, .if_not_exists_ = true, .method_ = db_index_method::gin});
 
     db_procedure version;
     auto changed = expressions.binary(expressions.column("name", "new"), db_binary_operator::is_distinct_from, expressions.column("name", "old"));
@@ -57,7 +57,7 @@ auto migrations() {
     version.return_value(expressions.column("new"));
     schema.create_trigger_function("orm_demo_version", version, true);
     schema.drop_trigger(device::table_name(), "orm_demo_version", true);
-    schema.create_trigger({.name_ = "orm_demo_version", .table_ = std::string(device::table_name()), .function_ = "orm_demo_version", .events_ = {db_trigger_event::update}});
+    schema.create_trigger({.name_ = "orm_demo_version", .table_ = device::table_name(), .function_ = "orm_demo_version", .events_ = {db_trigger_event::update}});
     return schema.compile("orm_demo_001");
 }
 

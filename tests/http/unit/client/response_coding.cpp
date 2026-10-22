@@ -47,8 +47,7 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
     for (const auto& test : cases) {
         auto parsed_value = parse_response("GET", test.headers_);
         RUVIA_CHECK_EQ(parsed_value.head_.status(), ruvia::http_status::ok);
-        std::pmr::monotonic_buffer_resource resource;
-        const auto coding = ruvia::parse_http_content_coding_headers(parsed_value.head_.headers(), &resource);
+        const auto coding = ruvia::parse_http_content_coding_headers(parsed_value.head_.headers());
         RUVIA_CHECK(coding.invalid() == nullptr);
         RUVIA_CHECK((coding.unsupported() != nullptr) == test.unsupported_);
         RUVIA_CHECK_EQ(coding.codings().size(), test.expected_.size());
@@ -63,8 +62,7 @@ RUVIA_TEST(http_client_content_encoding_ignores_empty_list_members) {
         "HTTP/1.1 200 OK\r\n"
         "Content-Encoding: , gzip,,\r\n"
         "Content-Length: 0");
-    std::pmr::monotonic_buffer_resource resource;
-    const auto coding = ruvia::parse_http_content_coding_headers(tolerant.head_.headers(), &resource);
+    const auto coding = ruvia::parse_http_content_coding_headers(tolerant.head_.headers());
     RUVIA_CHECK(coding.unsupported() == nullptr);
     RUVIA_CHECK_EQ(coding.codings().size(), 1U);
     if (!coding.codings().empty()) {

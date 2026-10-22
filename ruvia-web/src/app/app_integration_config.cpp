@@ -1,4 +1,4 @@
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 
 #include "app/app_config_mutation.h"
 #include "integration/named_capability.h"

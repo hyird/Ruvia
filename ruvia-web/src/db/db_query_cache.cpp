@@ -14,7 +14,6 @@
 #include "ruvia/web/detail/db/db_utils.h"
 #include "ruvia/web/detail/db/db_value_access.h"
 
-#include "db/db_cache_shape.h"
 #include "db/db_config_storage.h"
 
 namespace ruvia::detail {

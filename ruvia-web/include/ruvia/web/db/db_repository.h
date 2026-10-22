@@ -12,9 +12,8 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/db/db_find_options.h"
 #include "ruvia/web/db/db_handle.h"
-#include "ruvia/web/db/db_projection.h"
+#include "ruvia/web/db/db_predicate.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/detail/db/db_entity_codec.h"
 #include "ruvia/web/detail/db/db_relation_query.h"
@@ -25,9 +24,27 @@ namespace ruvia {
 template <typename entity_type, typename executor_type>
 class db_write_query_builder;
 
+struct db_find_order final {
+    borrowed_text column_{};
+    db_order_direction direction_{db_order_direction::asc};
+    db_nulls_order nulls_{db_nulls_order::default_value};
+};
+
+struct db_find_options final {
+    std::vector<borrowed_text> select_{};
+    db_predicate where_{};
+    std::vector<borrowed_text> relations_{};
+    std::vector<db_find_order> order_{};
+    std::optional<std::uint64_t> skip_{};
+    std::optional<std::uint64_t> take_{};
+    std::optional<db_lock_options> lock_{};
+    db_cache_setting_type cache_{};
+    bool with_deleted_{false};
+};
+
 struct db_upsert_options final {
-    std::vector<std::string> conflict_paths_{};
-    std::vector<std::string> update_columns_{};
+    std::vector<borrowed_text> conflict_paths_{};
+    std::vector<borrowed_text> update_columns_{};
     bool do_nothing_{false};
     bool any_unique_key_{false};
     bool skip_update_if_no_values_changed_{false};
@@ -39,7 +56,8 @@ struct db_upsert_options final {
 class db_values_builder final {
 public:
     explicit db_values_builder(std::span<const std::string_view> columns, std::pmr::memory_resource* resource = nullptr)
-        : query_(resource) {
+        : query_(resource),
+          columns_(query_.resource()) {
         if (columns.empty()) {
             throw std::invalid_argument("db_values_builder requires at least one column");
         }
@@ -70,13 +88,13 @@ public:
     [[nodiscard]] const db_query& query() const noexcept {
         return query_;
     }
-    [[nodiscard]] const std::vector<std::string>& columns() const noexcept {
+    [[nodiscard]] const std::pmr::vector<std::pmr::string>& columns() const noexcept {
         return columns_;
     }
 
 private:
     db_query query_;
-    std::vector<std::string> columns_;
+    std::pmr::vector<std::pmr::string> columns_;
 };
 
 namespace detail {
@@ -321,8 +339,10 @@ std::pmr::vector<std::pmr::string> apply_projection(db_query& query, std::span<c
 [[nodiscard]] std::pmr::string format_truncate_table(std::string_view table, db_driver driver, std::pmr::memory_resource* resource);
 
 template <typename entity_type, typename c_type>
-void append_upsert_column_from_list(db_query& query, db_conflict_options& conflict,
-    std::span<const std::string_view> inserted_columns, const db_upsert_options& options, std::string_view qualifier) {
+void append_upsert_column_from_list(db_query& query,
+    std::pmr::vector<std::pair<std::string_view, db_expression>>& updates,
+    db_expression& update_where, std::span<const std::string_view> inserted_columns,
+    const db_upsert_options& options, std::string_view qualifier) {
     const auto name = c_type::name.view();
     const auto custom_value = std::ranges::find_if(
         options.update_expressions_, [name](const auto& item) { return item.column_ == name; });
@@ -332,10 +352,10 @@ void append_upsert_column_from_list(db_query& query, db_conflict_options& confli
             if constexpr (!c_type::options.primary_key_ && !c_type::options.generated_ &&
                           is_writable_entity_column_descriptor<c_type>()) {
                 selected = std::ranges::find(inserted_columns, name) != inserted_columns.end() &&
-                           std::ranges::find(options.conflict_paths_, name) == options.conflict_paths_.end();
+                           std::ranges::find(options.conflict_paths_, borrowed_text(name)) == options.conflict_paths_.end();
             }
         } else if constexpr (is_writable_entity_column_descriptor<c_type>()) {
-            selected = std::ranges::find(options.update_columns_, name) != options.update_columns_.end();
+            selected = std::ranges::find(options.update_columns_, borrowed_text(name)) != options.update_columns_.end();
         }
     }
     if (!selected) {
@@ -344,31 +364,26 @@ void append_upsert_column_from_list(db_query& query, db_conflict_options& confli
     auto value = custom_value == options.update_expressions_.end()
                      ? query.excluded(name)
                      : custom_value->expression(query, entity_type::table_name(), qualifier == entity_type::table_name() ? std::string_view{} : qualifier);
-    conflict.update_.push_back({std::string(name), value});
+    updates.emplace_back(name, value);
     if (options.skip_update_if_no_values_changed_) {
         auto changed = query.binary(
             query.column(name, qualifier), db_binary_operator::is_distinct_from, value);
-        conflict.update_where_ = conflict.update_where_.empty()
-                                     ? changed
-                                     : query.binary(conflict.update_where_, db_binary_operator::or_value, changed);
+        update_where = update_where.empty()
+                           ? changed
+                           : query.binary(update_where, db_binary_operator::or_value, changed);
     }
 }
 
 template <typename entity_type>
 void apply_entity_upsert(db_query& query, std::span<const std::string_view> inserted_columns,
-    const db_upsert_options& options, db_driver driver, std::string_view qualifier = entity_type::table_name()) {
+    const db_upsert_options& options, db_driver driver, std::string_view qualifier) {
     if ((options.skip_update_if_no_values_changed_ || !options.index_predicate_.empty() ||
             !options.update_where_.empty()) &&
         driver != db_driver::postgresql) {
         throw std::invalid_argument("conditional repository upsert requires PostgreSQL");
     }
     const auto alias = qualifier == entity_type::table_name() ? std::string_view{} : qualifier;
-    db_conflict_options conflict{
-        .columns_ = options.conflict_paths_,
-        .do_nothing_ = options.do_nothing_,
-        .any_unique_key_ = options.any_unique_key_,
-    };
-    conflict.target_where_ = options.index_predicate_.expression(query, entity_type::table_name(), alias);
+    const auto target_where = options.index_predicate_.expression(query, entity_type::table_name(), alias);
     for (const auto& name : options.conflict_paths_) {
         require_entity_column<entity_type>(name);
     }
@@ -393,21 +408,26 @@ void apply_entity_upsert(db_query& query, std::span<const std::string_view> inse
     if (options.do_nothing_ && !options.update_where_.empty()) {
         throw std::invalid_argument("upsert update condition requires an update action");
     }
-    if (!options.do_nothing_) {
+    std::pmr::vector<std::pair<std::string_view, db_expression>> updates(query.resource());
+    db_expression update_where;
+    bool do_nothing = options.do_nothing_;
+    if (!do_nothing) {
         for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
-            append_upsert_column_from_list<entity_type, c_type>(query, conflict, inserted_columns, options, qualifier);
+            append_upsert_column_from_list<entity_type, c_type>(
+                query, updates, update_where, inserted_columns, options, qualifier);
         });
-        if (conflict.update_.empty() && driver == db_driver::postgresql) {
-            conflict.do_nothing_ = true;
+        if (updates.empty() && driver == db_driver::postgresql) {
+            do_nothing = true;
         }
     }
     if (!options.update_where_.empty()) {
         auto condition = options.update_where_.expression(query, entity_type::table_name(), alias);
-        conflict.update_where_ = conflict.update_where_.empty()
-                                     ? condition
-                                     : query.binary(conflict.update_where_, db_binary_operator::and_value, condition);
+        update_where = update_where.empty()
+                           ? condition
+                           : query.binary(update_where, db_binary_operator::and_value, condition);
     }
-    query.on_conflict(conflict);
+    query.set_conflict(options.conflict_paths_, {}, target_where, updates, update_where,
+        do_nothing, options.any_unique_key_);
 }
 
 template <typename executor_type>
@@ -439,14 +459,14 @@ public:
         return select(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
     }
     db_query_builder& select(std::span<const std::string_view> columns) {
-        std::vector<db_selection> selections;
+        std::pmr::vector<db_selection> selections(query_.resource());
         selections.reserve(columns.size());
         for (const auto column : columns) {
-            selections.push_back({std::string(column)});
+            selections.emplace_back(column);
         }
         return select(selections);
     }
-    db_query_builder& select(const db_expr& expression, std::string_view alias_name) {
+    db_query_builder& select(const db_expr& expression, borrowed_text alias_name) {
         return select({expression.as(alias_name)});
     }
     db_query_builder& add_select(std::span<const db_selection> fields_value) {
@@ -482,9 +502,9 @@ public:
         return add_select(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
     }
     db_query_builder& add_select(std::string_view column) {
-        return add_select({db_selection{std::string(column)}});
+        return add_select({db_selection{column}});
     }
-    db_query_builder& add_select(const db_expr& expression, std::string_view alias_name) {
+    db_query_builder& add_select(const db_expr& expression, borrowed_text alias_name) {
         return add_select({expression.as(alias_name)});
     }
     db_query_builder& from_nothing() {
@@ -619,7 +639,7 @@ public:
     }
     db_query_builder& with(std::string_view name, const db_values_builder& values,
         db_materialization materialization = db_materialization::default_value) {
-        query_.with(name, values.query(), {.materialization_ = materialization, .columns_ = values.columns()});
+        query_.with_columns(name, values.query(), materialization, values.columns());
         return *this;
     }
     db_query_builder& from_cte(std::string_view name) {
@@ -1319,29 +1339,22 @@ public:
         if (!inserting_) {
             throw std::invalid_argument("on_conflict requires an insert builder");
         }
-        db_conflict_options imported{
-            .columns_ = conflict.columns_,
-            .constraint_ = conflict.constraint_,
-            .do_nothing_ = conflict.do_nothing_,
-            .any_unique_key_ = conflict.any_unique_key_,
-        };
         for (const auto& name : conflict.columns_) {
             detail::require_entity_column<entity_type>(name);
         }
-        if (!conflict.target_where_.empty()) {
-            imported.target_where_ = query_.import_expression(conflict.target_where_);
-        }
-        if (!conflict.update_where_.empty()) {
-            imported.update_where_ = query_.import_expression(conflict.update_where_);
-        }
+        const auto target_where = conflict.target_where_.empty() ? db_expression{} : query_.import_expression(conflict.target_where_);
+        const auto update_where = conflict.update_where_.empty() ? db_expression{} : query_.import_expression(conflict.update_where_);
+        std::pmr::vector<std::pair<std::string_view, db_expression>> updates(query_.resource());
+        updates.reserve(conflict.update_.size());
         for (const auto& item : conflict.update_) {
             detail::require_entity_column<entity_type>(item.column_);
             if (detail::is_generated_entity_column<entity_type>(item.column_) || item.empty()) {
                 throw std::invalid_argument("conflict update requires a writable entity column and expression");
             }
-            imported.update_.push_back({item.column_, item.expression(query_, entity_type::table_name(), alias_)});
+            updates.emplace_back(item.column_, item.expression(query_, entity_type::table_name(), alias_));
         }
-        query_.on_conflict(imported);
+        query_.set_conflict(conflict.columns_, conflict.constraint_, target_where, updates, update_where,
+            conflict.do_nothing_, conflict.any_unique_key_);
         return *this;
     }
     db_write_query_builder& on_conflict(const db_upsert_options& options) {
@@ -1374,7 +1387,7 @@ public:
     }
     db_write_query_builder& with(std::string_view name, const db_values_builder& values,
         db_materialization materialization = db_materialization::default_value) {
-        query_.with(name, values.query(), {.materialization_ = materialization, .columns_ = values.columns()});
+        query_.with_columns(name, values.query(), materialization, values.columns());
         return *this;
     }
     db_write_query_builder& returning(std::span<const db_selection> fields = {}) {
@@ -1397,10 +1410,10 @@ public:
         return returning(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
     }
     db_write_query_builder& returning(std::span<const std::string_view> columns) {
-        std::vector<db_selection> selections;
+        std::pmr::vector<db_selection> selections(query_.resource());
         selections.reserve(columns.size());
         for (const auto column : columns) {
-            selections.push_back({std::string(column)});
+            selections.emplace_back(column);
         }
         return returning(selections);
     }
@@ -1743,32 +1756,54 @@ private:
             if (!all_keys_set) {
                 return insert_query(entities);
             }
-            db_upsert_options options;
-            if (executor_.query_driver() == db_driver::postgresql) {
-                options.conflict_paths_.assign(keys.begin(), keys.end());
-            } else {
-                options.any_unique_key_ = true;
-            }
+            std::pmr::vector<std::string_view> columns(executor_.query_resource());
+            auto query = insert_query(entities, &columns);
+            const auto driver = executor_.query_driver();
             constexpr auto upd_col = detail::update_date_column<entity_type>();
-            if constexpr (!upd_col.empty()) {
-                options.update_expressions_.push_back({std::string(upd_col), db_expr::now()});
-            }
             constexpr auto ver_col = detail::version_column<entity_type>();
-            if constexpr (!ver_col.empty()) {
-                options.update_expressions_.push_back({std::string(ver_col),
-                    db_expr::column(ver_col, entity_type::table_name()) + 1});
+            std::pmr::vector<borrowed_text> conflict_columns(query.resource());
+            if (driver == db_driver::postgresql) {
+                conflict_columns.assign(keys.begin(), keys.end());
             }
-            return upsert_query(entities, options);
+            std::pmr::vector<std::pair<std::string_view, db_expression>> updates(query.resource());
+            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
+                if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
+                    constexpr auto name = c_type::name.view();
+                    if constexpr (!upd_col.empty() && name == upd_col) {
+                        updates.emplace_back(name, query.call("now"));
+                    } else if constexpr (!ver_col.empty() && name == ver_col) {
+                        updates.emplace_back(name,
+                            query.binary(query.column(name, entity_type::table_name()), db_binary_operator::add, query.value(1)));
+                    } else if constexpr (!c_type::options.primary_key_ && !c_type::options.generated_) {
+                        std::size_t set_count = 0;
+                        for (const auto& entity : entities) {
+                            if (entity.template is_set<c_type::name>()) {
+                                ++set_count;
+                            }
+                        }
+                        if (set_count != 0 && set_count != entities.size()) {
+                            throw std::invalid_argument("bulk upsert requires identical set columns or explicit update_columns");
+                        }
+                        if (std::ranges::find(columns, name) != columns.end()) {
+                            updates.emplace_back(name, query.excluded(name));
+                        }
+                    }
+                }
+            });
+            const bool do_nothing = updates.empty() && driver == db_driver::postgresql;
+            const bool any_unique_key = driver != db_driver::postgresql;
+            query.set_conflict(conflict_columns, {}, {}, updates, {}, do_nothing, any_unique_key);
+            return query;
         }
     }
     [[nodiscard]] db_query_builder<entity_type, executor_type> find_builder(const db_find_options& options) const {
         auto builder = create_query_builder();
         builder.with_deleted(options.with_deleted_);
         if (!options.select_.empty()) {
-            std::vector<db_selection> selections;
+            std::pmr::vector<db_selection> selections(builder.query_.resource());
             selections.reserve(options.select_.size());
             for (const auto& col : options.select_) {
-                selections.push_back({col});
+                selections.emplace_back(col);
             }
             builder.select(selections);
         }

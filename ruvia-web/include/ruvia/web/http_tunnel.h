@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <concepts>
 #include <cstddef>
 #include <memory_resource>
@@ -17,11 +18,20 @@
 #include "ruvia/web/http_datagram_stream.h"
 
 namespace ruvia {
+
+struct http_tunnel_route_config final {
+    // Once the handler returns, bound flushing the local FIN and draining peer
+    // input. A handler may half-close and continue reading without this deadline.
+    std::chrono::milliseconds peer_transport_fin_timeout_{5000};
+    // Declares HTTP Datagram semantics (capsules) for an upgrade-protocol
+    // tunnel. CONNECT-UDP enables this automatically.
+    bool datagrams_{};
+};
+
 namespace detail {
 template <typename stream_type>
 class http_tunnel_session;
 }
-
 // An established CONNECT byte stream. The session owns this facade and its
 // allocator. Received chunks own their storage until destruction; it counts
 // against the connection's and the worker's inbound buffer budgets

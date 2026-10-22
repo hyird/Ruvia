@@ -45,8 +45,8 @@ public:
     };
     struct not_modified_type final {};
     struct precondition_failed_type final {};
-    using range_unsatisfiable_type = http_byte_range_unsatisfiable;
-    using partial_type = http_resolved_byte_range;
+    struct range_unsatisfiable_type final {};
+    using partial_type = http_byte_range;
     using multipart = http_byte_range_set;
 
     [[nodiscard]] const full_type* full() const& noexcept;

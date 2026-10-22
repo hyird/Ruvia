@@ -24,23 +24,24 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/http/attributes.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/cookies.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
+#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_native_path.h"
+#include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_push.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/conn_info.h"
-#include "ruvia/web/context_request.h"
+#include "ruvia/web/detail/http/context/request_bindings.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
 #include "ruvia/web/detail/model/traits.h"
 #include "ruvia/web/dispatch.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/model_types.h"
 #include "ruvia/web/request_fields.h"
-#include "ruvia/web/static_text.h"
-
 namespace ruvia {
 
 class context;
@@ -71,9 +72,21 @@ class context_request_body_source;
 class context_response_output;
 class context_response_state;
 class context_session_state;
-class request_bindings;
 template <typename t_type>
-class request_binding_handle;
+[[nodiscard]] request_binding_handle<t_type> bind_validated_model(context& context_value, const t_type& model);
+template <typename t_type>
+    requires(!std::is_lvalue_reference_v<t_type>)
+request_binding_handle<std::remove_cvref_t<t_type>> bind_validated_model(context&, t_type&&) = delete;
+
+[[noreturn]] void throw_invalid_json_content_type();
+[[noreturn]] void throw_invalid_json_body();
+[[noreturn]] void throw_invalid_form_content_type();
+[[noreturn]] void throw_invalid_form_body();
+[[noreturn]] void throw_invalid_query();
+[[noreturn]] void throw_invalid_param();
+[[noreturn]] void throw_invalid_header();
+[[noreturn]] void throw_invalid_cookie();
+
 class request_query_values;
 enum class static_file_selection_mode : std::uint8_t;
 struct context_access;
@@ -84,6 +97,117 @@ struct session_access;
 template <typename t_type>
 using request_state_binding_type = detail::request_binding_handle<t_type>;
 
+// Explicit opt-in for zero-copy response bodies: the response borrows these
+// bytes instead of copying them. The consteval constructors accept only
+// constant expressions that refer to static storage, such as string literals
+// and namespace-scope or static constexpr arrays and views; frame-local or
+// runtime buffers do not compile. Every other string handed to a context body
+// builder is copied into response-owned storage.
+class static_text final {
+public:
+    // Keeps embedded NUL bytes and drops only the literal's terminator.
+    template <std::size_t n>
+    consteval explicit static_text(const char (&literal)[n]) noexcept
+        : value_(literal, n > 0 && literal[n - 1] == '\0' ? n - 1 : n) {}
+
+    consteval explicit static_text(std::string_view value) noexcept
+        : value_(value) {}
+
+    [[nodiscard]] constexpr std::string_view view() const noexcept {
+        return value_;
+    }
+
+private:
+    std::string_view value_;
+};
+
+struct signed_cookie_lookup_options final {
+    borrowed_text name_{};
+    borrowed_text secret_{};
+};
+
+// Borrow-only request facade. Returned fields and body views belong to context,
+// not this by-value facade. Model validation belongs to route middleware.
+class context_request final {
+public:
+    [[nodiscard]] std::string_view method() const noexcept;
+    [[nodiscard]] http_known_method known_method() const noexcept;
+    [[nodiscard]] std::string_view path() const noexcept;
+    [[nodiscard]] std::string_view scheme() const noexcept;
+    [[nodiscard]] std::string_view authority() const noexcept;
+    [[nodiscard]] std::string_view target() const noexcept;
+    [[nodiscard]] http_protocol_version protocol_version() const noexcept;
+    [[nodiscard]] http_request_target_form target_form() const noexcept;
+    [[nodiscard]] std::string_view route_path() const noexcept;
+    // Initial RFC 9218 Priority fields.
+    [[nodiscard]] http_priority priority() const noexcept;
+
+    // Accept uses media ranges; language uses RFC 4647 basic filtering;
+    // charset matches tokens or '*'; encoding also handles coding aliases and
+    // the default acceptability of identity.
+    enum class negotiable_type : std::uint8_t { media_type,
+        language,
+        encoding,
+        charset };
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const;
+    // Read after body completion to observe the complete terminal section.
+    // Trailers never replace initial headers or change route selection.
+    [[nodiscard]] std::span<const http_header> trailers() const noexcept;
+    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const noexcept;
+    [[nodiscard]] bool accepts(std::string_view media_type) const noexcept;
+    // Client weights select a caller-owned supported value; server order breaks
+    // ties. An absent field selects the first offer, no acceptable offer is nullopt.
+    [[nodiscard]] std::optional<std::string_view> negotiate(
+        negotiable_type field, std::span<const std::string_view> supported) const noexcept;
+    [[nodiscard]] std::optional<std::string_view> negotiate(
+        negotiable_type field, std::initializer_list<std::string_view> supported) const noexcept {
+        return negotiate(field, std::span<const std::string_view>(supported.begin(), supported.size()));
+    }
+    [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
+    [[nodiscard]] std::span<const std::string_view> queries(std::string_view name) const;
+    [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
+    [[nodiscard]] std::optional<std::string_view> param(std::string_view name) const;
+
+    // Materialized once in request order, preserving duplicates. Header names
+    // retain their semantic spelling; header get/count
+    // and header_model binding compare names ASCII case-insensitively.
+    [[nodiscard]] const request_name_value_list& header_fields() const;
+    [[nodiscard]] const request_name_value_list& query_fields() const;
+    [[nodiscard]] const request_name_value_list& cookie_fields() const;
+    [[nodiscard]] const request_name_value_list& param_fields() const;
+    [[nodiscard]] std::optional<std::string_view> signed_cookie(signed_cookie_lookup_options options) const;
+
+    // Buffered views borrow context storage; read the media type with header("Content-Type").
+    [[nodiscard]] scoped_operation<std::string_view> text() const;
+    [[nodiscard]] scoped_operation<std::span<const std::byte>> bytes() const;
+    scoped_operation<void> discard_body() const;
+
+    // Typed optional parsing with schema and field-rule validation. Only a
+    // media-type mismatch yields nullopt; selected but malformed input throws
+    // HTTP 400, and rule violations throw validation_error.
+    template <typename t_type>
+    [[nodiscard]] scoped_operation<std::optional<t_type>> json_if() const;
+    template <typename t_type>
+    [[nodiscard]] scoped_operation<std::optional<t_type>> form_if() const;
+    template <typename t_type>
+    [[nodiscard]] const t_type& validated() const;
+
+    // Multipart remains a flat protocol representation, without dotted paths
+    // or implicit array/group interpretation. Streaming is explicit-route only.
+    // multipart() decodes a supported Content-Encoding; multipart_reader()
+    // decodes none, so a coded body is refused with 415 and an invalid
+    // Content-Encoding field with 400.
+    [[nodiscard]] scoped_operation<std::pmr::vector<multipart_part>> multipart() const;
+    [[nodiscard]] ::ruvia::body_reader& body_reader() const;
+    [[nodiscard]] ::ruvia::multipart_reader multipart_reader() const;
+
+private:
+    friend class context;
+    explicit constexpr context_request(const context& context_value RUVIA_LIFETIMEBOUND) noexcept
+        : context_(&context_value) {}
+
+    const context* context_{nullptr};
+};
 struct redirect_response_options final {
     // URI reference: preserves existing %HH escapes and the first '#' separator;
     // subsequent '#' bytes are encoded as %23. CR and LF are rejected.
@@ -176,8 +300,6 @@ private:
         detail::static_file_selection_mode mode) const;
 
 public:
-    using header_options_type = http_response_header_options;
-
     // Sends a bodyless 1xx head before the final response. Fields are copied
     // before return; the operation and its storage retire on the owning worker.
     // Output is linear when started. Unstarted operations may coexist and do not
@@ -374,11 +496,7 @@ public:
     // response and also become the metadata of a response that replaces it.
     void status(http_status_code status_code);
 
-    void header(std::string_view name, std::string_view value) {
-        header(name, value, header_options_type{});
-    }
-
-    void header(std::string_view name, std::string_view value, header_options_type options);
+    void header(std::string_view name, std::string_view value, http_response_header_options options = {});
     // Response priority hints for downstream intermediaries. Absent members
     // stay absent so the intermediary can merge them with client parameters.
     void priority(http_priority_fields fields);
@@ -464,34 +582,11 @@ private:
     // `fields`: method, target, body, then header name/value pairs (owned copies).
     [[nodiscard]] task<dispatch_response> dispatch_task(
         std::pmr::vector<std::pmr::string> fields, ::ruvia::stop_token stop);
-    [[nodiscard]] task<std::string_view> request_body() const;
-    task<void> request_discard_body() const;
-    [[nodiscard]] task<std::pmr::vector<multipart_part>> request_multipart() const;
-    [[nodiscard]] body_reader& request_body_reader() const;
-    [[nodiscard]] multipart_reader request_multipart_reader() const;
-    [[nodiscard]] std::optional<std::string_view> route_param(std::string_view name) const;
-    void ensure_route_params() const;
-    [[nodiscard]] bool request_accepts(std::string_view media_type) const noexcept;
-    [[nodiscard]] std::optional<std::string_view> request_negotiate(context_request::negotiable_type field,
-        std::span<const std::string_view> supported) const noexcept;
-    void ensure_request_query() const;
-    [[nodiscard]] std::optional<std::string_view> request_query(std::string_view name) const;
-    [[nodiscard]] const request_name_value_list& request_query() const;
-    [[nodiscard]] const detail::request_query_values& request_queries() const;
-    [[nodiscard]] std::optional<std::string_view> request_cookie(std::string_view name) const;
-    [[nodiscard]] const request_name_value_list& request_cookies() const;
-    [[nodiscard]] multipart_boundary get_multipart_boundary() const;
-
-    [[nodiscard]] bool request_content_type_matches(std::string_view expected) const noexcept;
-
     context& set_stable_response_header(std::string_view name, std::string_view value);
     void apply_response_state(http_response& response, std::optional<http_status_code> status_code) const;
 
     [[nodiscard]] http_response json_serialized(std::pmr::string& body) const;
 
-    [[nodiscard]] const request_name_value_list& request_headers() const;
-    [[nodiscard]] std::optional<std::string_view> request_header(std::string_view name) const;
-    [[nodiscard]] const request_name_value_list& route_params() const;
     [[nodiscard]] std::pmr::string& decoded_body() const;
     [[nodiscard]] detail::context_request_storage& request_storage() const;
     [[nodiscard]] detail::context_services& services() noexcept;
@@ -541,13 +636,6 @@ private:
     // memory resource are still alive.
     mutable ::ruvia::operation_scope operation_scope_;
 };
-
-namespace detail {
-
-template <typename t_type>
-request_binding_handle<t_type> bind_validated_model(context& context_value, const t_type& model);
-
-}  // namespace detail
 
 }  // namespace ruvia
 

@@ -15,12 +15,12 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_cookie_fields.h"
-#include "ruvia/http/http_request_content_decoding.h"
+#include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/http/request/request_fields_access.h"
 #include "ruvia/web/detail/model/parse/parser.h"
-#include "ruvia/web/model_json.h"
+#include "ruvia/web/model.h"
 #include "ruvia/web/multipart_reader.h"
 #include "ruvia/web/streaming.h"
 
@@ -93,50 +93,36 @@ namespace {
     }
     return storage.emplace_back(std::move(*decoded));
 }
-
-}  // namespace
-
-const request_name_value_list& context::request_headers() const {
-    auto& cache = request_storage().headers_;
-    if (!cache) {
-        cache.emplace(detail::request_name_value_list_access::borrow_headers(request_.headers()));
-    }
-    return *cache;
-}
-
-std::optional<std::string_view> context::request_header(std::string_view name) const {
-    return request_.header(name);
-}
-
-void context::ensure_request_query() const {
-    auto& cache = request_storage().query_;
+// Storage capacity is fixed by ensure_request_query before any view escapes.
+void ensure_request_query(const context& context_value, const http_request& request,
+    detail::context_request_storage& request_storage) {
+    auto& cache = request_storage.query_;
     if (cache) {
         return;
     }
-    if (request_storage_->query_invalid_) {
+    if (request_storage.query_invalid_) {
         detail::throw_invalid_query();
     }
     // Percent-encoding is validated while decoding each component. Unencoded
     // names and values borrow the request query string instead of copying.
-    std::pmr::vector<std::pmr::string> storage(arena());
+    std::pmr::vector<std::pmr::string> storage(context_value.arena());
     // Publish views only after capacity is fixed: moving a short string during
     // vector growth invalidates views into its inline buffer. Count decoded
     // owners exactly so unencoded fields do not reserve unused string storage.
     std::size_t decoded_component_count = 0;
     std::size_t pair_count = 0;
-    (void)visit_url_encoded_pairs(request_.query_string(),
+    (void)visit_url_encoded_pairs(request.query_string(),
         [&decoded_component_count, &pair_count](std::string_view name, std::string_view value) {
             ++pair_count;
             decoded_component_count += has_url_encoding(name, url_decode_mode::form);
             decoded_component_count += has_url_encoding(value, url_decode_mode::form);
         });
-    auto query = detail::request_name_value_list_access::make(arena());
+    auto query = detail::request_name_value_list_access::make(context_value.arena());
     detail::request_name_value_list_access::reserve(query, pair_count);
     if (decoded_component_count == 0) {
         (void)visit_url_encoded_pairs(
-            request_.query_string(), [&query](std::string_view key, std::string_view value) {
-                detail::request_name_value_list_access::push_back(
-                    query, detail::request_name_value_view_access::make(key, value));
+            request.query_string(), [&query](std::string_view key, std::string_view value) {
+                detail::request_name_value_list_access::push_back(query, http_header_view{key, value});
                 return true;
             });
         cache.emplace(std::move(storage), std::move(query));
@@ -144,147 +130,63 @@ void context::ensure_request_query() const {
     }
     storage.reserve(decoded_component_count);
     bool valid = true;
-    const bool completed = visit_url_encoded_pairs(request_.query_string(),
+    const bool completed = visit_url_encoded_pairs(request.query_string(),
         [&storage, &query, &valid](std::string_view key, std::string_view value) {
-            const auto name =
-                borrow_or_decode_query_component(storage, key);
-            const auto decoded_value =
-                borrow_or_decode_query_component(storage, value);
+            const auto name = borrow_or_decode_query_component(storage, key);
+            const auto decoded_value = borrow_or_decode_query_component(storage, value);
             if (!name || !decoded_value) {
                 valid = false;
                 return false;
             }
             detail::request_name_value_list_access::push_back(
-                query, detail::request_name_value_view_access::make(*name, *decoded_value));
+                query, http_header_view{*name, *decoded_value});
             return true;
         });
     if (!completed || !valid) {
-        request_storage_->query_invalid_ = true;
+        request_storage.query_invalid_ = true;
         detail::throw_invalid_query();
     }
 
     cache.emplace(std::move(storage), std::move(query));
 }
 
-const request_name_value_list& context::request_query() const {
-    ensure_request_query();
-    return request_storage_->query_->fields();
-}
-
-std::optional<std::string_view> context::request_query(std::string_view name) const {
-    ensure_request_query();
-    return request_storage_->query_->fields().get(name);
-}
-
-const detail::request_query_values& context::request_queries() const {
-    ensure_request_query();
-    return request_storage_->query_->values();
-}
-
-std::optional<std::string_view> context::request_cookie(std::string_view name) const {
-    return request_.cookie(name);
-}
-
-const request_name_value_list& context::request_cookies() const {
-    auto& cache = request_storage().cookies_;
-    if (!cache) {
-        auto cookies = detail::request_name_value_list_access::make(arena());
-        if (request_.header("Cookie").has_value()) {
-            detail::request_name_value_list_access::reserve(cookies, 8);
-            for (const auto& header : request_.headers()) {
-                if (!http_ascii_equals_ignore_case(header.name(), "Cookie")) {
-                    continue;
-                }
-                http_visit_cookie_pairs(header.value(), [&cookies](std::string_view key,
-                                                            std::string_view value) {
-                    detail::request_name_value_list_access::push_back(
-                        cookies, detail::request_name_value_view_access::make(key, value));
-                    return true;
-                });
-            }
-        }
-        cache.emplace(std::move(cookies));
-    }
-    return *cache;
-}
-
-void context::ensure_route_params() const {
-    auto& cache = request_storage().route_params_;
+void ensure_route_params(const context& context_value, const std::string_view* param_names,
+    const std::string_view* param_values, std::size_t param_count,
+    detail::context_request_storage& request_storage) {
+    auto& cache = request_storage.route_params_;
     if (cache) {
         return;
     }
-    if (request_storage_->route_params_invalid_) {
+    if (request_storage.route_params_invalid_) {
         detail::throw_invalid_param();
     }
     // Route names and unencoded captures already borrow stable route/request
     // storage. Own only decoded values. Invalid percent-escapes fail in decode
     // rather than in a separate pre-scan of the same captures.
-    std::pmr::vector<std::pmr::string> storage(arena());
-    auto params = detail::request_name_value_list_access::make(arena());
-    storage.reserve(param_count_);
-    detail::request_name_value_list_access::reserve(params, param_count_);
-    for (std::size_t i = 0; i < param_count_; ++i) {
-        auto value = param_values_[i];
+    std::pmr::vector<std::pmr::string> storage(context_value.arena());
+    auto params = detail::request_name_value_list_access::make(context_value.arena());
+    storage.reserve(param_count);
+    detail::request_name_value_list_access::reserve(params, param_count);
+    for (std::size_t i = 0; i < param_count; ++i) {
+        auto value = param_values[i];
         if (has_url_encoding(value, url_decode_mode::percent)) {
             // The wildcard capture is a path tail handed to static_file as is,
             // so it decodes under the same request-path rule as the document
             // root: no escape may reveal a separator the router never split on.
-            auto decoded = param_names_[i] == "*"
-                               ? detail::decode_request_path(value, arena())
-                               : decode_url_component(value, {.mode_ = url_decode_mode::percent, .resource_ = arena()});
+            auto decoded = param_names[i] == "*"
+                               ? detail::decode_request_path(value, context_value.arena())
+                               : decode_url_component(
+                                     value, {.mode_ = url_decode_mode::percent, .resource_ = context_value.arena()});
             if (!decoded) {
-                request_storage_->route_params_invalid_ = true;
+                request_storage.route_params_invalid_ = true;
                 detail::throw_invalid_param();
             }
             value = storage.emplace_back(std::move(*decoded));
         }
-        detail::request_name_value_list_access::push_back(
-            params, detail::request_name_value_view_access::make(param_names_[i], value));
+        detail::request_name_value_list_access::push_back(params, http_header_view{param_names[i], value});
     }
     cache.emplace(std::move(storage), std::move(params));
 }
-
-const request_name_value_list& context::route_params() const {
-    ensure_route_params();
-    return request_storage_->route_params_->fields_;
-}
-
-std::optional<std::string_view> context::route_param(std::string_view name) const {
-    ensure_route_params();
-    return request_storage_->route_params_->fields_.get(name);
-}
-
-bool context::request_accepts(std::string_view media_type) const noexcept {
-    // RFC 9110 5.3: multiple Accept field lines are equivalent to a single value
-    // comma-joining them. request_known_header returns only one stored slot, so a
-    // client that sent Accept across several lines had all but one ignored. Fold
-    // every Accept line into one best-match accumulator (equivalent to the joined
-    // value, and correct for a q=0 exclusion spread across lines) without
-    // allocating to concatenate.
-    if (!request_.header("Accept").has_value()) {
-        return true;
-    }
-    http_accept_match match;
-    bool saw_accept = false;
-    const auto headers = request_.headers();
-    for (const auto& header : headers) {
-        if (!http_ascii_equals_ignore_case(header.name(), "Accept")) {
-            continue;
-        }
-        saw_accept = true;
-        if (!header.value().empty()) {
-            match.update_media_type(header.value(), media_type);
-        }
-    }
-    // Only absence means no preference. A present but empty Accept field is an
-    // empty media-range list and therefore matches no representation.
-    if (!saw_accept) {
-        return true;
-    }
-    return match.matched();
-}
-
-namespace {
 
 [[nodiscard]] std::string_view negotiation_header_name(context_request::negotiable_type field) noexcept {
     switch (field) {
@@ -300,38 +202,217 @@ namespace {
     return "Accept";
 }
 
+[[nodiscard]] multipart_boundary get_multipart_boundary(const http_request& request) {
+    const auto boundary = parse_multipart_boundary(
+        request.header("Content-Type").value_or(std::string_view{}));
+    if (const auto* parsed = boundary.boundary()) {
+        return *parsed;
+    }
+    if (boundary.not_applicable() != nullptr) {
+        throw http_error({.status_ = http_status::unsupported_media_type,
+            .code_ = "unsupported_media_type",
+            .message_ = "request body must be multipart/form-data"});
+    }
+    if (const auto* failure = boundary.failure()) {
+        throw failure->protocol_error();
+    }
+    throw std::logic_error("unexpected multipart boundary parse result");
+}
+
 }  // namespace
 
-std::optional<std::string_view> context::request_negotiate(
-    context_request::negotiable_type field, std::span<const std::string_view> supported) const noexcept {
+std::string_view context_request::method() const noexcept {
+    return context_->request_.method();
+}
+
+http_known_method context_request::known_method() const noexcept {
+    return context_->request_.known_method();
+}
+
+std::string_view context_request::path() const noexcept {
+    return context_->request_.path();
+}
+
+std::string_view context_request::scheme() const noexcept {
+    return context_->request_.scheme();
+}
+
+std::string_view context_request::authority() const noexcept {
+    return context_->request_.authority();
+}
+
+std::string_view context_request::target() const noexcept {
+    return context_->request_.target();
+}
+
+http_protocol_version context_request::protocol_version() const noexcept {
+    return context_->request_.protocol_version();
+}
+
+http_request_target_form context_request::target_form() const noexcept {
+    return context_->request_.target_form();
+}
+
+std::string_view context_request::route_path() const noexcept {
+    return context_->route_path_;
+}
+
+http_priority context_request::priority() const noexcept {
+    if (const auto* update = context_->services().request_priority_update(); update != nullptr && *update) {
+        return **update;
+    }
+    const auto parsed_value = parse_http_priority(context_->request_.headers());
+    return (parsed_value.index() == 0) ? std::get<0>(parsed_value).request_priority() : http_priority{};
+}
+
+void context::priority(http_priority_fields fields_value) {
+    std::array<char, 12> value{};
+    const auto encoded = encode_http_priority(value, fields_value);
+    if ((encoded.index() != 0)) {
+        throw std::invalid_argument("invalid HTTP priority parameters");
+    }
+    header("Priority", std::string_view(value.data(), std::get<0>(encoded)));
+}
+
+std::optional<std::string_view> context_request::header(std::string_view name) const {
+    return context_->request_.header(name);
+}
+
+std::span<const http_header> context_request::trailers() const noexcept {
+    return context_->services().request_trailers() != nullptr ? context_->services().request_trailers()->fields()
+                                                              : std::span<const http_header>{};
+}
+
+std::optional<std::string_view> context_request::trailer(std::string_view name) const noexcept {
+    return context_->services().request_trailers() != nullptr ? context_->services().request_trailers()->field(name)
+                                                              : std::nullopt;
+}
+
+const request_name_value_list& context_request::header_fields() const {
+    auto& cache = context_->request_storage().headers_;
+    if (!cache) {
+        cache.emplace(detail::request_name_value_list_access::borrow_headers(context_->request_.headers()));
+    }
+    return *cache;
+}
+
+const request_name_value_list& context_request::query_fields() const {
+    auto& storage = context_->request_storage();
+    ensure_request_query(*context_, context_->request_, storage);
+    return storage.query_->fields();
+}
+
+std::optional<std::string_view> context_request::query(std::string_view name) const {
+    auto& storage = context_->request_storage();
+    ensure_request_query(*context_, context_->request_, storage);
+    return storage.query_->fields().get(name);
+}
+
+std::span<const std::string_view> context_request::queries(std::string_view name) const {
+    auto& storage = context_->request_storage();
+    ensure_request_query(*context_, context_->request_, storage);
+    return storage.query_->values().values(name);
+}
+
+std::optional<std::string_view> context_request::cookie(std::string_view name) const {
+    return context_->request_.cookie(name);
+}
+
+const request_name_value_list& context_request::cookie_fields() const {
+    auto& cache = context_->request_storage().cookies_;
+    if (!cache) {
+        auto cookies = detail::request_name_value_list_access::make(context_->arena());
+        if (context_->request_.header("Cookie").has_value()) {
+            detail::request_name_value_list_access::reserve(cookies, 8);
+            for (const auto& header_field : context_->request_.headers()) {
+                if (!http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
+                    continue;
+                }
+                http_visit_cookie_pairs(
+                    header_field.value(), [&cookies](std::string_view key, std::string_view value) {
+                        detail::request_name_value_list_access::push_back(
+                            cookies, http_header_view{key, value});
+                        return true;
+                    });
+            }
+        }
+        cache.emplace(std::move(cookies));
+    }
+    return *cache;
+}
+
+const request_name_value_list& context_request::param_fields() const {
+    auto& storage = context_->request_storage();
+    ensure_route_params(*context_, context_->param_names_, context_->param_values_, context_->param_count_, storage);
+    return storage.route_params_->fields_;
+}
+
+std::optional<std::string_view> context_request::param(std::string_view name) const {
+    auto& storage = context_->request_storage();
+    ensure_route_params(*context_, context_->param_names_, context_->param_values_, context_->param_count_, storage);
+    return storage.route_params_->fields_.get(name);
+}
+
+bool context_request::accepts(std::string_view media_type) const noexcept {
+    // RFC 9110 5.3: multiple Accept field lines are equivalent to a single value
+    // comma-joining them. request_known_header returns only one stored slot, so a
+    // client that sent Accept across several lines had all but one ignored. Fold
+    // every Accept line into one best-match accumulator (equivalent to the joined
+    // value, and correct for a q=0 exclusion spread across lines) without
+    // allocating to concatenate.
+    if (!context_->request_.header("Accept").has_value()) {
+        return true;
+    }
+    http_accept_match match;
+    bool saw_accept = false;
+    const auto headers = context_->request_.headers();
+    for (const auto& header_field : headers) {
+        if (!http_ascii_equals_ignore_case(header_field.name(), "Accept")) {
+            continue;
+        }
+        saw_accept = true;
+        if (!header_field.value().empty()) {
+            match.update_media_type(header_field.value(), media_type);
+        }
+    }
+    // Only absence means no preference. A present but empty Accept field is an
+    // empty media-range list and therefore matches no representation.
+    if (!saw_accept) {
+        return true;
+    }
+    return match.matched();
+}
+
+std::optional<std::string_view> context_request::negotiate(
+    negotiable_type field, std::span<const std::string_view> supported) const noexcept {
     if (supported.empty()) {
         return std::nullopt;
     }
 
     const auto header_name = negotiation_header_name(field);
-    if (!request_.header(header_name).has_value()) {
+    if (!context_->request_.header(header_name).has_value()) {
         return supported.front();
     }
-    const bool media_type = field == context_request::negotiable_type::media_type;
-    const bool encoding = field == context_request::negotiable_type::encoding;
+    const bool media_type = field == negotiable_type::media_type;
+    const bool encoding = field == negotiable_type::encoding;
     // Only Accept-Language needs prefix matching in the generic token parser.
-    const auto token_mode = field == context_request::negotiable_type::language
+    const auto token_mode = field == negotiable_type::language
                                 ? http_accept_token_match_mode::language_prefix
                                 : http_accept_token_match_mode::exact;
 
     std::array<std::string_view, max_http_header_fields> field_values{};
     std::size_t field_value_count = 0;
     bool saw_field = false;
-    const auto headers = request_.headers();
-    for (const auto& header : headers) {
-        if (!http_ascii_equals_ignore_case(header.name(), header_name)) {
+    const auto headers = context_->request_.headers();
+    for (const auto& header_field : headers) {
+        if (!http_ascii_equals_ignore_case(header_field.name(), header_name)) {
             continue;
         }
         saw_field = true;
-        if (header.value().empty() || field_value_count == field_values.size()) {
+        if (header_field.value().empty() || field_value_count == field_values.size()) {
             continue;
         }
-        field_values[field_value_count++] = header.value();
+        field_values[field_value_count++] = header_field.value();
     }
 
     if (!saw_field) {
@@ -370,55 +451,58 @@ std::optional<std::string_view> context::request_negotiate(
     return best;
 }
 
-task<std::string_view> context::request_body() const {
-    if (body_decoded_) {
-        const auto& decoded = *request_storage_->decoded_body_;
+scoped_operation<std::string_view> context_request::text() const {
+    const auto run = [](const context* context_value) -> task<std::string_view> {
+        if (context_value->body_decoded_) {
+            const auto& decoded = *context_value->request_storage_->decoded_body_;
+            co_return std::string_view(decoded);
+        }
+
+        std::string_view raw;
+        if (const auto* lazy = context_value->request_body_source().lazy()) {
+            raw = co_await lazy->loader().read_all();
+        } else if (context_value->request_body_source().streaming() != nullptr) {
+            throw std::logic_error("streaming request body cannot be buffered");
+        } else {
+            raw = as_chars(context_value->request_.body_bytes());
+        }
+        if (context_value->body_identity_) {
+            co_return raw;
+        }
+
+        // Transparently decode a request body whose Content-Encoding we understand,
+        // so handlers always see the decoded representation (RFC 9110 §8.4).
+        auto* const decode_resource = context_value->services().inbound_buffer_pool() != nullptr
+                                          ? context_value->services().inbound_buffer_pool()
+                                          : context_value->pool();
+        const auto parsed_coding = request_content_coding(context_value->request_);
+        if (const auto* invalid = parsed_coding.invalid()) {
+            throw http_protocol_error(invalid->status(), "invalid request Content-Encoding");
+        }
+        if (parsed_coding.unsupported() != nullptr) {
+            throw detail::unsupported_request_content_coding(http_supported_request_content_codings());
+        }
+        const auto codings = parsed_coding.codings();
+        if (codings.empty()) {
+            context_value->body_identity_ = true;
+            co_return raw;
+        }
+        auto& decoded = context_value->decoded_body();
+        decoded = decode_http_request_content(codings, raw,
+            {.max_decoded_bytes_ = context_value->services().max_decoded_request_body_bytes(),
+                .resource_ = decode_resource});
+        context_value->body_decoded_ = true;
         co_return std::string_view(decoded);
-    }
+    };
+    return ::ruvia::make_scoped_operation(context_->operation_scope_, run(context_));
+}
 
-    std::string_view raw;
-    if (const auto* lazy = request_body_source().lazy()) {
-        raw = co_await lazy->loader().read_all();
-    } else if (request_body_source().streaming() != nullptr) {
-        throw std::logic_error("streaming request body cannot be buffered");
-    } else {
-        raw = as_chars(request_.body_bytes());
-    }
-    if (body_identity_) {
-        co_return raw;
-    }
-
-    // Transparently decode a request body whose Content-Encoding we understand,
-    // so handlers always see the decoded representation (RFC 9110 §8.4).
-    auto* const decode_resource = services().inbound_buffer_pool() != nullptr ? services().inbound_buffer_pool() : pool();
-    const auto parsed_coding = request_content_coding(request_);
-    if (const auto* invalid = parsed_coding.invalid()) {
-        throw http_protocol_error(invalid->status(), "invalid request Content-Encoding");
-    }
-    if (parsed_coding.unsupported() != nullptr) {
-        throw detail::unsupported_request_content_coding(http_supported_request_content_codings());
-    }
-    const auto codings = parsed_coding.codings();
-    if (codings.empty()) {
-        body_identity_ = true;
-        co_return raw;
-    }
-    auto decode_result = decode_http_request_content(codings, raw,
-        {.max_decoded_bytes_ = services().max_decoded_request_body_bytes(), .resource_ = decode_resource});
-    auto* decoded_content = decode_result.decoded();
-    if (decoded_content == nullptr) {
-        if (const auto* failure = decode_result.protocol_failure()) {
-            throw failure->protocol_error();
-        }
-        if (decode_result.decoder_failure() != nullptr) {
-            throw std::runtime_error("request content decoder failed");
-        }
-        throw std::logic_error("unexpected request content decode result");
-    }
-    auto& decoded = decoded_body();
-    decoded = std::move(*decoded_content);
-    body_decoded_ = true;
-    co_return std::string_view(decoded);
+scoped_operation<std::span<const std::byte>> context_request::bytes() const {
+    const auto run = [](const context* context_value) -> task<std::span<const std::byte>> {
+        const auto body = co_await context_value->req().text();
+        co_return std::as_bytes(std::span(body));
+    };
+    return ::ruvia::make_scoped_operation(context_->operation_scope_, run(context_));
 }
 
 std::optional<std::string_view> context_request::signed_cookie(
@@ -443,41 +527,42 @@ std::optional<std::string_view> context_request::signed_cookie(
     return value;
 }
 
-bool context::request_content_type_matches(std::string_view expected) const noexcept {
-    return detail::content_type_matches(request_.header("Content-Type").value_or(std::string_view{}),
-        expected);
+scoped_operation<std::pmr::vector<multipart_part>> context_request::multipart() const {
+    const auto run = [](const context* context_value) -> task<std::pmr::vector<multipart_part>> {
+        const auto boundary = get_multipart_boundary(context_value->request_);
+        const auto request_body = co_await context_value->req().text();
+        co_return parse_multipart_body(request_body, {.boundary_ = boundary, .resource_ = context_value->arena()});
+    };
+    return ::ruvia::make_scoped_operation(context_->operation_scope_, run(context_));
 }
 
-task<std::pmr::vector<multipart_part>> context::request_multipart() const {
-    const auto boundary = get_multipart_boundary();
-    const auto request_body = co_await this->request_body();
-    co_return parse_multipart_body(request_body, {.boundary_ = boundary, .resource_ = arena()});
-}
-
-task<void> context::request_discard_body() const {
-    if (const auto* lazy = request_body_source().lazy()) {
-        co_await lazy->loader().discard();
-        co_return;
-    }
-    if (const auto* streaming = request_body_source().streaming()) {
-        while (co_await streaming->reader().read()) {
+scoped_operation<void> context_request::discard_body() const {
+    const auto run = [](const context* context_value) -> task<void> {
+        if (const auto* lazy = context_value->request_body_source().lazy()) {
+            co_await lazy->loader().discard();
+            co_return;
         }
-    }
+        if (const auto* streaming = context_value->request_body_source().streaming()) {
+            while (co_await streaming->reader().read()) {
+            }
+        }
+    };
+    return ::ruvia::make_scoped_operation(context_->operation_scope_, run(context_));
 }
 
-body_reader& context::request_body_reader() const {
-    const auto* streaming = request_body_source().streaming();
+body_reader& context_request::body_reader() const {
+    const auto* streaming = context_->request_body_source().streaming();
     if (streaming == nullptr) {
         throw std::logic_error("request body is not streamable");
     }
     return streaming->reader();
 }
 
-multipart_reader context::request_multipart_reader() const {
-    const auto boundary = get_multipart_boundary();
+multipart_reader context_request::multipart_reader() const {
+    const auto boundary = get_multipart_boundary(context_->request_);
     // The reader parses raw body bytes as they arrive and decodes no content
     // coding, so only an identity body is accepted.
-    const auto parsed_coding = request_content_coding(request_);
+    const auto parsed_coding = request_content_coding(context_->request_);
     if (const auto* invalid = parsed_coding.invalid()) {
         throw http_protocol_error(invalid->status(), "invalid request Content-Encoding");
     }
@@ -486,24 +571,6 @@ multipart_reader context::request_multipart_reader() const {
     if (parsed_coding.unsupported() != nullptr || coded) {
         throw detail::unsupported_request_content_coding("identity");
     }
-    return multipart_reader(request_body_reader(), {.boundary_ = boundary, .resource_ = pool()});
+    return ::ruvia::multipart_reader(body_reader(), {.boundary_ = boundary, .resource_ = context_->pool()});
 }
-
-multipart_boundary context::get_multipart_boundary() const {
-    const auto boundary = parse_multipart_boundary(
-        request_.header("Content-Type").value_or(std::string_view{}));
-    if (const auto* parsed = boundary.boundary()) {
-        return *parsed;
-    }
-    if (boundary.not_applicable() != nullptr) {
-        throw http_error({.status_ = http_status::unsupported_media_type,
-            .code_ = "unsupported_media_type",
-            .message_ = "request body must be multipart/form-data"});
-    }
-    if (const auto* failure = boundary.failure()) {
-        throw failure->protocol_error();
-    }
-    throw std::logic_error("unexpected multipart boundary parse result");
-}
-
 }  // namespace ruvia

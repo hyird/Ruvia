@@ -34,14 +34,14 @@ enum class form_value_encoding : std::uint8_t { url_encoded,
     return std::nullopt;
 }
 
-template <typename number_t_type>
-[[nodiscard]] std::optional<number_t_type> parse_form_number(std::string_view decoded) {
+template <typename number_type>
+[[nodiscard]] std::optional<number_type> parse_form_number(std::string_view decoded) {
     if (decoded.empty()) {
         return std::nullopt;
     }
-    number_t_type parsed_value{};
-    if constexpr (std::is_floating_point_v<number_t_type>) {
-        const auto value = detail::parse_decimal_number<number_t_type>(decoded);
+    number_type parsed_value{};
+    if constexpr (std::is_floating_point_v<number_type>) {
+        const auto value = detail::parse_decimal_number<number_type>(decoded);
         if ((value.index() != 0)) {
             return std::nullopt;
         }
@@ -56,7 +56,7 @@ template <typename number_t_type>
             return std::nullopt;
         }
     } else {
-        const auto integer = parse_integer<number_t_type>(decoded);
+        const auto integer = parse_integer<number_type>(decoded);
         if ((integer.index() != 0)) {
             return std::nullopt;
         }
@@ -68,7 +68,7 @@ template <typename number_t_type>
 template <typename t_type>
 [[nodiscard]] std::optional<t_type> parse_form_value(resolved_pmr_resource_tag, std::string_view input,
     form_value_encoding encoding, std::pmr::memory_resource* resource, model_string_storage string_storage) {
-    using field_t_type = std::remove_cvref_t<t_type>;
+    using field_type = std::remove_cvref_t<t_type>;
 
     std::optional<std::pmr::string> decoded_storage;
     auto decoded = input;
@@ -81,35 +81,35 @@ template <typename t_type>
         decoded = std::string_view(*decoded_storage);
     }
 
-    if constexpr (is_ruvia_string<field_t_type>) {
+    if constexpr (is_ruvia_string<field_type>) {
         if (!decoded_storage.has_value()) {
             if (string_storage == model_string_storage::owned) {
-                return field_t_type(decoded, ::ruvia::model_options{.resource_ = resource});
+                return field_type(decoded, ::ruvia::model_options{.resource_ = resource});
             }
             return model_value_factory::make_string(decoded, resource);
         }
-        field_t_type value = make_request_value<field_t_type>(resolved_pmr_resource_tag{}, resource);
+        field_type value = make_request_value<field_type>(resolved_pmr_resource_tag{}, resource);
         value.assign_owned(std::move(*decoded_storage));
         return value;
-    } else if constexpr (std::is_same_v<field_t_type, std::string_view>) {
+    } else if constexpr (std::is_same_v<field_type, std::string_view>) {
         if (decoded_storage.has_value()) {
             return std::nullopt;
         }
         return decoded;
-    } else if constexpr (is_ruvia_scalar<field_t_type>) {
-        using scalar_t_type = model_scalar_value_t_type<field_t_type>;
-        if constexpr (std::is_same_v<scalar_t_type, bool>) {
+    } else if constexpr (is_ruvia_scalar<field_type>) {
+        using scalar_type = model_scalar_value_type<field_type>;
+        if constexpr (std::is_same_v<scalar_type, bool>) {
             const auto parsed_value = parse_form_bool(decoded);
             if (!parsed_value.has_value()) {
                 return std::nullopt;
             }
-            return field_t_type(*parsed_value);
+            return field_type(*parsed_value);
         } else {
-            const auto parsed_value = parse_form_number<scalar_t_type>(decoded);
+            const auto parsed_value = parse_form_number<scalar_type>(decoded);
             if (!parsed_value.has_value()) {
                 return std::nullopt;
             }
-            return field_t_type(*parsed_value);
+            return field_type(*parsed_value);
         }
     } else {
         return std::nullopt;

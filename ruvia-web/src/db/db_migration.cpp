@@ -43,10 +43,7 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
     if (!detail::is_valid_migration_table_name(options.table_)) {
         throw std::invalid_argument("database migration table has an invalid backend identifier");
     }
-    // The backend's identifier limit is the quoting rule's; quoting once here
-    // refuses an overlong name at configuration time rather than at run time.
-    std::pmr::string quoted;
-    detail::append_db_identifier(quoted, options.table_, driver);
+    detail::validate_db_identifier(options.table_, driver);
     if (options.lock_timeout_.count() <= 0) {
         throw std::invalid_argument("database migration lock timeout must be greater than zero");
     }

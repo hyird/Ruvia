@@ -209,4 +209,27 @@ RUVIA_TEST(db_entity_rows_reject_elements_from_a_different_memory_resource) {
     RUVIA_CHECK_EQ(entity_resource.allocation_count(), entity_resource.deallocation_count());
 }
 
+RUVIA_DB_PROJECTION(entity_projection,
+    RUVIA_DB_COLUMN(id, int),
+    RUVIA_DB_COLUMN(name, std::pmr::string))
+
+RUVIA_TEST(db_entities_projections_and_rows_construct_from_resource_owners) {
+    ruvia::test::counting_memory_resource resource;
+    entity owner_entity(&resource);
+    entity from_owner(owner_entity);
+    RUVIA_CHECK_EQ(from_owner.resource(), &resource);
+
+    ruvia::db_entity<"raw", ruvia::db_column<"id", int>> raw_from_owner(owner_entity);
+    RUVIA_CHECK_EQ(raw_from_owner.resource(), &resource);
+
+    entity_projection proj_from_owner(owner_entity);
+    RUVIA_CHECK_EQ(proj_from_owner.resource(), &resource);
+
+    ruvia::db_projection<ruvia::db_column<"id", int>> raw_proj_from_owner(owner_entity);
+    RUVIA_CHECK_EQ(raw_proj_from_owner.resource(), &resource);
+
+    ruvia::entity_rows<entity> rows(owner_entity);
+    RUVIA_CHECK_EQ(rows.resource(), &resource);
+}
+
 }  // namespace

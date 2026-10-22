@@ -17,7 +17,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_datagram.h"
-#include "ruvia/web/http_client_tunnel.h"
+#include "ruvia/web/http_client_handle.h"
 #include "ruvia/web/http_tunnel.h"
 
 #include "client/http_client_response_memory.h"
@@ -160,16 +160,17 @@ public:
         }
         co_return true;
     }
-    [[nodiscard]] task<void> send_bytes(std::string_view bytes_value) {
-        const auto limit = client_ ? client_->response_.state_->tunnel_->config_.max_chunk_bytes_ : std::size_t{4096};
-        while (!bytes_value.empty()) {
-            const auto chunk = bytes_value.substr(0, limit);
-            if (server_) {
-                co_await server_->write(chunk);
-            } else {
-                co_await client_->write(chunk);
-            }
-            bytes_value.remove_prefix(chunk.size());
+    [[nodiscard]] task<void> send_bytes(std::pmr::string&& bytes_value) {
+        if (server_ != nullptr) {
+            co_await server_->write(std::move(bytes_value));
+            co_return;
+        }
+        const auto limit = client_->response_.state_->tunnel_->config_.max_chunk_bytes_;
+        std::string_view remaining = bytes_value;
+        while (!remaining.empty()) {
+            const auto chunk = remaining.substr(0, limit);
+            co_await client_->write(chunk);
+            remaining.remove_prefix(chunk.size());
         }
     }
     const worker_handle& worker_;

@@ -37,7 +37,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/one_shot.h"
 #include "ruvia/core/task.h"

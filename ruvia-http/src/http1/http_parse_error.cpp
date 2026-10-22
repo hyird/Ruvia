@@ -1,4 +1,4 @@
-#include "ruvia/http/http_parse_error.h"
+#include "ruvia/http/http_protocol_error.h"
 
 namespace ruvia {
 

@@ -66,19 +66,19 @@ template <typename t_type>
 
 template <typename t_type>
 [[nodiscard]] constexpr std::string_view expected_type_name() noexcept {
-    using value_t_type = std::remove_cvref_t<t_type>;
-    if constexpr (detail::is_ruvia_bytes<value_t_type>) {
+    using value_type = std::remove_cvref_t<t_type>;
+    if constexpr (detail::is_ruvia_bytes<value_type>) {
         return "must be a padded base64 string";
-    } else if constexpr (detail::is_ruvia_string<value_t_type>) {
+    } else if constexpr (detail::is_ruvia_string<value_type>) {
         return "must be a string";
-    } else if constexpr (detail::is_ruvia_array<value_t_type> || detail::is_ruvia_boxed_array<value_t_type>) {
+    } else if constexpr (detail::is_ruvia_array<value_type> || detail::is_ruvia_boxed_array<value_type>) {
         return "must be an array";
-    } else if constexpr (detail::is_ruvia_json_object<value_t_type> || is_model<value_t_type>) {
+    } else if constexpr (detail::is_ruvia_json_object<value_type> || is_model<value_type>) {
         return "must be an object";
-    } else if constexpr (detail::is_ruvia_json_value<value_t_type>) {
+    } else if constexpr (detail::is_ruvia_json_value<value_type>) {
         return "must be a JSON value";
-    } else if constexpr (detail::is_ruvia_scalar<value_t_type>) {
-        if constexpr (std::is_same_v<detail::model_scalar_value_t_type<value_t_type>, bool>) {
+    } else if constexpr (detail::is_ruvia_scalar<value_type>) {
+        if constexpr (std::is_same_v<detail::model_scalar_value_type<value_type>, bool>) {
             return "must be a boolean";
         } else {
             return "must be a number";
@@ -90,17 +90,17 @@ template <typename t_type>
 
 template <typename t_type>
 [[nodiscard]] constexpr bool model_has_size_rule() noexcept {
-    using value_t_type = std::remove_cvref_t<t_type>;
-    return detail::is_ruvia_string<value_t_type> || detail::is_ruvia_bytes<value_t_type> ||
-           detail::is_ruvia_array<value_t_type> || detail::is_ruvia_boxed_array<value_t_type>;
+    using value_type = std::remove_cvref_t<t_type>;
+    return detail::is_ruvia_string<value_type> || detail::is_ruvia_bytes<value_type> ||
+           detail::is_ruvia_array<value_type> || detail::is_ruvia_boxed_array<value_type>;
 }
 
 template <typename t_type>
 [[nodiscard]] constexpr bool model_has_number_rule() noexcept {
-    using value_t_type = std::remove_cvref_t<t_type>;
-    if constexpr (detail::is_ruvia_scalar<value_t_type>) {
-        using scalar_t_type = detail::model_scalar_value_t_type<value_t_type>;
-        return std::is_arithmetic_v<scalar_t_type> && !std::is_same_v<scalar_t_type, bool>;
+    using value_type = std::remove_cvref_t<t_type>;
+    if constexpr (detail::is_ruvia_scalar<value_type>) {
+        using scalar_type = detail::model_scalar_value_type<value_type>;
+        return std::is_arithmetic_v<scalar_type> && !std::is_same_v<scalar_type, bool>;
     } else {
         return false;
     }
@@ -155,10 +155,10 @@ private:
 
 // Forwards issues to a validator, rendering their paths into one scratch
 // string that is created by the first issue and reused for later ones.
-template <typename validator_t_type>
+template <typename validator_type>
 class model_issue_sink final {
 public:
-    explicit model_issue_sink(validator_t_type& validator_value) noexcept
+    explicit model_issue_sink(validator_type& validator_value) noexcept
         : validator_(validator_value) {}
 
     [[nodiscard]] bool full() const noexcept {
@@ -174,14 +174,14 @@ public:
     }
 
 private:
-    validator_t_type& validator_;
+    validator_type& validator_;
     std::optional<std::pmr::string> path_;
 };
 
 template <typename rule_type>
 [[nodiscard]] constexpr bool is_default_rule() noexcept {
-    using rule_t_type = std::remove_cvref_t<rule_type>;
-    return requires { typename rule_t_type::ruvia_default_rule_marker_type; };
+    using unwrapped_rule_type = std::remove_cvref_t<rule_type>;
+    return requires { typename unwrapped_rule_type::ruvia_default_rule_marker_type; };
 }
 
 template <auto provider>
@@ -196,20 +196,20 @@ struct initial final {
 
 template <typename rule_type>
 [[nodiscard]] constexpr bool is_initial_rule() noexcept {
-    using rule_t_type = std::remove_cvref_t<rule_type>;
-    return requires { typename rule_t_type::ruvia_initial_rule_marker_type; };
+    using unwrapped_rule_type = std::remove_cvref_t<rule_type>;
+    return requires { typename unwrapped_rule_type::ruvia_initial_rule_marker_type; };
 }
 
 template <typename rule_type>
 [[nodiscard]] constexpr bool is_model_option() noexcept {
-    using rule_t_type = std::remove_cvref_t<rule_type>;
-    return requires { typename rule_t_type::ruvia_model_option_marker_type; };
+    using unwrapped_rule_type = std::remove_cvref_t<rule_type>;
+    return requires { typename unwrapped_rule_type::ruvia_model_option_marker_type; };
 }
 
 template <typename rule_type>
 [[nodiscard]] constexpr bool is_validation_rule() noexcept {
-    using rule_t_type = std::remove_cvref_t<rule_type>;
-    return requires { typename rule_t_type::ruvia_validation_rule_marker_type; };
+    using unwrapped_rule_type = std::remove_cvref_t<rule_type>;
+    return requires { typename unwrapped_rule_type::ruvia_validation_rule_marker_type; };
 }
 
 }  // namespace ruvia::detail::model

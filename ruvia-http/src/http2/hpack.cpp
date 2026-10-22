@@ -35,7 +35,7 @@ void hpack_decoder::set_max_dynamic_table_size(std::size_t bytes_value) {
     impl_->decoder_.set_max_dynamic_table_size(bytes_value);
 }
 
-hpack_decode_result hpack_decoder::decode_with_callback(
+std::optional<hpack_decode_error> hpack_decoder::decode_with_callback(
     std::string_view block, void* target, header_callback_type callback_value) {
     return impl_->decoder_.decode(block, target, callback_value);
 }

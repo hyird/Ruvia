@@ -13,7 +13,6 @@
 #include <string>
 
 #include "ruvia/web/app.h"
-#include "ruvia/web/body_limit.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/csrf.h"
 #include "ruvia/web/dispatch.h"

@@ -43,22 +43,20 @@ inline constexpr bool is_ruvia_json_object = std::is_same_v<std::remove_cvref_t<
 template <typename t_type>
 struct ruvia_array_traits : std::false_type {};
 
-template <typename value_t_type>
-struct ruvia_array_traits<array<value_t_type>> : std::true_type {
-    using value_type = value_t_type;
+template <typename element_type>
+struct ruvia_array_traits<array<element_type>> : std::true_type {
+    using value_type = element_type;
 };
-
 template <typename t_type>
 inline constexpr bool is_ruvia_array = ruvia_array_traits<std::remove_cvref_t<t_type>>::value;
 
 template <typename t_type>
 struct ruvia_boxed_array_traits : std::false_type {};
 
-template <typename value_t_type>
-struct ruvia_boxed_array_traits<boxed_array<value_t_type>> : std::true_type {
-    using value_type = value_t_type;
+template <typename element_type>
+struct ruvia_boxed_array_traits<boxed_array<element_type>> : std::true_type {
+    using value_type = element_type;
 };
-
 template <typename t_type>
 inline constexpr bool is_ruvia_boxed_array = ruvia_boxed_array_traits<std::remove_cvref_t<t_type>>::value;
 
@@ -69,9 +67,9 @@ template <>
 struct ruvia_scalar_traits<bool_value> : std::true_type {
     using value_type = bool;
 };
-template <typename value_t_type>
-struct ruvia_scalar_traits<integer_value<value_t_type>> : std::true_type {
-    using value_type = value_t_type;
+template <typename integer_type>
+struct ruvia_scalar_traits<integer_value<integer_type>> : std::true_type {
+    using value_type = integer_type;
 };
 template <>
 struct ruvia_scalar_traits<float_value> : std::true_type {
@@ -86,7 +84,7 @@ template <typename t_type>
 inline constexpr bool is_ruvia_scalar = ruvia_scalar_traits<std::remove_cvref_t<t_type>>::value;
 
 template <typename t_type>
-using model_scalar_value_t_type = typename ruvia_scalar_traits<std::remove_cvref_t<t_type>>::value_type;
+using model_scalar_value_type = typename ruvia_scalar_traits<std::remove_cvref_t<t_type>>::value_type;
 
 template <typename t_type>
 inline constexpr bool is_form_field = is_ruvia_string<t_type> || is_ruvia_scalar<t_type>;
@@ -99,11 +97,11 @@ template <typename t_type>
 inline constexpr bool model_field_value = is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> ||
                                           is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type> || is_model<t_type>;
 
-template <typename value_t_type>
-inline constexpr bool model_field_value<array<value_t_type>> = model_field_value<std::remove_cvref_t<value_t_type>>;
+template <typename value_type>
+inline constexpr bool model_field_value<array<value_type>> = model_field_value<std::remove_cvref_t<value_type>>;
 
-template <typename value_t_type>
-inline constexpr bool model_field_value<boxed_array<value_t_type>> = model_field_value<std::remove_cvref_t<value_t_type>>;
+template <typename value_type>
+inline constexpr bool model_field_value<boxed_array<value_type>> = model_field_value<std::remove_cvref_t<value_type>>;
 
 template <typename t_type>
 inline constexpr bool is_model_field = model_field_value<std::remove_cvref_t<t_type>>;
@@ -112,11 +110,11 @@ template <typename t_type>
 inline constexpr bool model_json_value =
     is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_scalar<t_type> || is_model<t_type>;
 
-template <typename value_t_type>
-inline constexpr bool model_json_value<array<value_t_type>> = model_json_value<std::remove_cvref_t<value_t_type>>;
+template <typename value_type>
+inline constexpr bool model_json_value<array<value_type>> = model_json_value<std::remove_cvref_t<value_type>>;
 
-template <typename value_t_type>
-inline constexpr bool model_json_value<boxed_array<value_t_type>> = model_json_value<std::remove_cvref_t<value_t_type>>;
+template <typename value_type>
+inline constexpr bool model_json_value<boxed_array<value_type>> = model_json_value<std::remove_cvref_t<value_type>>;
 
 template <typename t_type>
 inline constexpr bool is_model_json_value = model_json_value<std::remove_cvref_t<t_type>>;

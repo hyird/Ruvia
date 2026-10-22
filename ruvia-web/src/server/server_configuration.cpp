@@ -1,4 +1,4 @@
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 
 #include "server/http_server_options_validation.h"
 #include "util/config_validation.h"

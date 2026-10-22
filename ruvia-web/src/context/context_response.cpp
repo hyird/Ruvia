@@ -56,7 +56,7 @@ void context::remove_header(std::string_view name) {
     response_state().update_metadata([name](http_response& response) { response.remove_header(name); });
 }
 
-void context::header(std::string_view name, std::string_view value, header_options_type options) {
+void context::header(std::string_view name, std::string_view value, http_response_header_options options) {
     response_state().update_metadata(
         [&](http_response& response) { response.header(name, value, options); });
 }

@@ -21,7 +21,7 @@ struct http1_client_response_parse_result_access final {
 
     [[nodiscard]] static http1_client_response_parse_result failure(
         http1_client_response_parse_error error) noexcept {
-        return http1_client_response_parse_result(http1_client_response_parse_failure(error));
+        return http1_client_response_parse_result(error);
     }
 
     [[nodiscard]] static http1_client_response_parse_result terminal(bool completed) noexcept {

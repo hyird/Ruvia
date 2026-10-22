@@ -34,17 +34,7 @@ application& application::compression(compression_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change compression config while app is running",
         [config = std::move(config)](detail::app_state& state_value) mutable {
-            detail::ensure_positive_size(
-                config.min_bytes_, "compression minimum size must be greater than zero");
-            if (config.sync_bytes_ < config.min_bytes_) {
-                throw std::invalid_argument(
-                    "compression synchronous size must not be smaller than the minimum size");
-            }
-            if (config.max_bytes_ < config.sync_bytes_) {
-                throw std::invalid_argument(
-                    "compression maximum size must not be smaller than the synchronous size");
-            }
-            state_value.options_.compression_ = std::move(config);
+            state_value.options_.set_compression(std::move(config));
         });
 }
 
@@ -57,10 +47,9 @@ application& application::compression(std::nullptr_t) {
 application& application::cors(cors_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change CORS config while app is running", [&config](detail::app_state& state_value) {
-            state_value.options_.cors_ = detail::make_cors_options(config, process_resource());
+            state_value.options_.set_cors(config);
         });
 }
-
 application& application::cors(std::nullptr_t) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change CORS config while app is running",

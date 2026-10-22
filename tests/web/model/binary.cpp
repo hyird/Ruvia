@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "ruvia/web/model.h"
-#include "ruvia/web/model_json.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"

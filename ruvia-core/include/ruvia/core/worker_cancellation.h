@@ -9,7 +9,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
 

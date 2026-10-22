@@ -135,7 +135,7 @@ private:
                     }
                     return true;
                 });
-                if (!decoded.decoded() || (header->flags_ & 4U) == 0) {
+                if (decoded.has_value() || (header->flags_ & 4U) == 0) {
                     throw std::runtime_error("invalid client request fields");
                 }
                 ++requests_;

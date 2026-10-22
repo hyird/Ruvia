@@ -130,19 +130,19 @@ bool is_valid_http_content_encoding_field_value(std::string_view value, http_fie
 namespace ruvia {
 
 http_content_coding_field_result parse_http_content_coding(
-    std::string_view value, std::pmr::memory_resource*) noexcept {
+    std::string_view value) noexcept {
     detail::http_content_coding_field_parser parser;
     parser.update(value);
     return parser.finish();
 }
 
 http_content_coding_field_result parse_http_content_coding_headers(
-    std::span<const http_header> headers, std::pmr::memory_resource*) noexcept {
+    std::span<const http_header> headers) noexcept {
     return detail::http_content_coding_from_headers(headers);
 }
 
 http_content_coding_field_result parse_http_content_coding_headers(
-    const http_response_headers& headers, std::pmr::memory_resource*) noexcept {
+    const http_response_headers& headers) noexcept {
     detail::http_content_coding_field_parser parser;
     if (!detail::response_has_known_header(headers, detail::response_header_content_encoding)) {
         return parser.finish();

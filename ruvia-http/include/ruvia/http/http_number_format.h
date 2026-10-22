@@ -43,8 +43,8 @@ inline void http_append_unsigned(std::pmr::string& output, std::uint64_t value) 
 
 // Append the shortest decimal form of an arithmetic value; `error_message` is
 // thrown as std::logic_error if formatting fails.
-template <typename number_t_type>
-void http_append_formatted_number(std::pmr::string& output, number_t_type value, const char* error_message) {
+template <typename number_type>
+void http_append_formatted_number(std::pmr::string& output, number_type value, const char* error_message) {
     std::array<char, 64> buffer;
     const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
     if (ec != std::errc{}) {
@@ -55,8 +55,8 @@ void http_append_formatted_number(std::pmr::string& output, number_t_type value,
 
 // Floating-point variant that rejects NaN and infinities with
 // std::invalid_argument before touching `output`.
-template <typename number_t_type>
-void http_append_formatted_finite_number(std::pmr::string& output, number_t_type value,
+template <typename number_type>
+void http_append_formatted_finite_number(std::pmr::string& output, number_type value,
     const char* finite_error_message, const char* format_error_message) {
     if (!std::isfinite(value)) {
         throw std::invalid_argument(finite_error_message);

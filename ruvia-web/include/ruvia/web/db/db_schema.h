@@ -51,13 +51,13 @@ enum class db_function_volatility : std::uint8_t { volatile_value,
     immutable };
 
 struct db_function_parameter final {
-    std::string name_{};
+    borrowed_text name_{};
     db_type_definition type_{};
     db_expression default_value_{};
 };
 
 struct db_function_definition final {
-    std::string name_{};
+    borrowed_text name_{};
     std::vector<db_function_parameter> parameters_{};
     db_type_definition return_type_{};
     bool returns_set_{false};
@@ -65,51 +65,51 @@ struct db_function_definition final {
     db_function_volatility volatility_{db_function_volatility::volatile_value};
     bool strict_{false};
     bool replace_{false};
-    std::string body_{};
+    borrowed_text body_{};
 };
 
 struct db_trigger_definition final {
-    std::string name_{};
-    std::string table_{};
-    std::string function_{};
+    borrowed_text name_{};
+    borrowed_text table_{};
+    borrowed_text function_{};
     db_trigger_timing timing_{db_trigger_timing::before};
     std::vector<db_trigger_event> events_{};
     bool for_each_row_{true};
-    std::vector<std::string> update_columns_{};
-    std::string old_table_{};
-    std::string new_table_{};
+    std::vector<borrowed_text> update_columns_{};
+    borrowed_text old_table_{};
+    borrowed_text new_table_{};
     db_expression when_{};
-    std::vector<std::string> arguments_{};
+    std::vector<borrowed_text> arguments_{};
 };
 
 struct db_schema_column final {
-    std::string name_{};
+    borrowed_text name_{};
     db_type_definition type_{};
     bool nullable_{false};
     bool primary_key_{false};
     bool unique_{false};
     db_identity identity_{db_identity::none};
-    db_query::expr_type default_value_{};
+    db_expression default_value_{};
     db_generated_type generated_type_{db_generated_type::none};
     db_expression as_expression_{};
 };
 
 struct db_schema_constraint final {
-    std::string name_{};
+    borrowed_text name_{};
     db_constraint_kind kind_{db_constraint_kind::check};
-    std::vector<std::string> columns_{};
-    std::string referenced_table_{};
-    std::vector<std::string> referenced_columns_{};
+    std::vector<borrowed_text> columns_{};
+    borrowed_text referenced_table_{};
+    std::vector<borrowed_text> referenced_columns_{};
     db_referential_action on_delete_{db_referential_action::no_action};
     db_referential_action on_update_{db_referential_action::no_action};
     bool deferrable_{false};
     bool initially_deferred_{false};
     bool not_valid_{false};
-    db_query::expr_type check_{};
+    db_expression check_{};
 };
 
 struct db_table_definition final {
-    std::string name_{};
+    borrowed_text name_{};
     std::vector<db_schema_column> columns_{};
     std::vector<db_schema_constraint> constraints_{};
     bool if_not_exists_{false};
@@ -118,23 +118,23 @@ struct db_table_definition final {
 };
 
 struct db_index_key final {
-    std::string column_{};
-    db_query::expr_type expression_{};
+    borrowed_text column_{};
+    db_expression expression_{};
     db_order_direction order_{db_order_direction::asc};
     db_nulls_order nulls_{db_nulls_order::default_value};
-    std::string operator_class_{};
+    borrowed_text operator_class_{};
 };
 
 struct db_index_definition final {
-    std::string name_{};
-    std::string table_{};
+    borrowed_text name_{};
+    borrowed_text table_{};
     std::vector<db_index_key> keys_{};
     bool unique_{false};
     bool if_not_exists_{false};
     bool concurrently_{false};
     db_index_method method_{db_index_method::btree};
-    std::vector<std::string> include_{};
-    db_query::expr_type where_{};
+    std::vector<borrowed_text> include_{};
+    db_expression where_{};
 };
 
 struct db_schema_options final {
@@ -143,11 +143,11 @@ struct db_schema_options final {
 };
 
 struct db_column_default final {
-    std::string column_{};
+    borrowed_text column_{};
     db_expression value_{};
 };
 struct db_column_generated final {
-    std::string column_{};
+    borrowed_text column_{};
     db_expression expression_{};
 };
 struct db_entity_table_options final {
@@ -159,25 +159,25 @@ struct db_entity_table_options final {
     bool unlogged_{false};
 };
 struct db_table_option final {
-    std::string name_{};
-    std::variant<bool, std::int64_t, std::string> value_{false};
+    borrowed_text name_{};
+    std::variant<bool, std::int64_t, borrowed_text> value_{false};
 };
 struct db_hypertable_options final {
-    std::string table_{};
-    std::string time_column_{};
+    borrowed_text table_{};
+    borrowed_text time_column_{};
     db_expression chunk_interval_{};
     bool create_default_indexes_{true};
     bool if_not_exists_{false};
     bool migrate_data_{false};
 };
 struct db_compression_order final {
-    std::string column_{};
+    borrowed_text column_{};
     db_order_direction direction_{db_order_direction::asc};
     db_nulls_order nulls_{db_nulls_order::default_value};
 };
 struct db_compression_options final {
     bool enabled_{true};
-    std::vector<std::string> segment_by_{};
+    std::vector<borrowed_text> segment_by_{};
     std::vector<db_compression_order> order_by_{};
 };
 
@@ -204,9 +204,9 @@ public:
     void add_column(std::string_view table, const db_schema_column& column, bool if_not_exists = false);
     void drop_column(std::string_view table, std::string_view column, db_drop_behavior behavior = db_drop_behavior::restrict, bool if_exists = false);
     void rename_column(std::string_view table, std::string_view column, std::string_view name);
-    void alter_column_type(std::string_view table, std::string_view column, const db_type_definition& type, db_query::expr_type using_value = {});
+    void alter_column_type(std::string_view table, std::string_view column, const db_type_definition& type, db_expression using_value = {});
     void set_column_nullable(std::string_view table, std::string_view column, bool nullable);
-    void set_column_default(std::string_view table, std::string_view column, db_query::expr_type expression);
+    void set_column_default(std::string_view table, std::string_view column, db_expression expression);
     void drop_column_default(std::string_view table, std::string_view column);
     void add_constraint(std::string_view table, const db_schema_constraint& constraint);
     void drop_constraint(std::string_view table, std::string_view name, db_drop_behavior behavior = db_drop_behavior::restrict, bool if_exists = false);
@@ -220,7 +220,7 @@ public:
     void create_view(std::string_view name, const db_query& query, bool replace = false, bool materialized = false);
     void drop_view(std::string_view name, bool materialized = false, db_drop_behavior behavior = db_drop_behavior::restrict, bool if_exists = false);
     void execute(const db_query& query);
-    void perform(db_query::expr_type expression);
+    void perform(db_expression expression);
     void run(const db_procedure& procedure);
     void create_trigger_function(std::string_view name, const db_procedure& procedure, bool replace = false);
     void drop_trigger_function(std::string_view name, db_drop_behavior behavior = db_drop_behavior::restrict, bool if_exists = false);
@@ -262,7 +262,7 @@ private:
     void append_type(std::pmr::string& sql, const db_type_definition& type) const;
     void append_column(std::pmr::string& sql, const db_schema_column& column) const;
     void append_constraint(std::pmr::string& sql, const db_schema_constraint& constraint) const;
-    void append_expression(std::pmr::string& sql, db_query::expr_type expression) const;
+    void append_expression(std::pmr::string& sql, db_expression expression) const;
     template <typename column_type>
     static db_type_definition entity_column_type() {
         db_type_definition type{.data_type_ = column_type::data_type, .length_ = column_type::options.length_, .precision_ = column_type::options.precision_, .scale_ = column_type::options.scale_};
@@ -290,15 +290,15 @@ private:
 
 template <typename entity_type>
 void db_schema::create_table(const db_entity_table_options& options) {
-    db_table_definition table_value{.name_ = std::string(entity_type::table_name()), .constraints_ = options.constraints_, .if_not_exists_ = options.if_not_exists_, .temporary_ = options.temporary_, .unlogged_ = options.unlogged_};
+    db_table_definition table_value{.name_ = entity_type::table_name(), .constraints_ = options.constraints_, .if_not_exists_ = options.if_not_exists_, .temporary_ = options.temporary_, .unlogged_ = options.unlogged_};
     db_query defaults(resource_);
-    std::vector<std::string> primary;
+    std::vector<borrowed_text> primary;
     bool conflicting_generation = false;
     bool conflicting_read_only = false;
     detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
         conflicting_generation |= c_type::options.generated_ && c_type::options.generated_type_ != db_generated_type::none;
         conflicting_read_only |= c_type::options.read_only_ && (c_type::options.generated_ || c_type::options.generated_type_ != db_generated_type::none);
-        db_schema_column column{.name_ = std::string(c_type::name.view()),
+        db_schema_column column{.name_ = c_type::name.view(),
             .type_ = entity_column_type<c_type>(),
             .nullable_ = c_type::options.nullable_ || c_type::options.delete_date_,
             .generated_type_ = c_type::options.generated_type_};
@@ -380,10 +380,14 @@ void db_schema::create_table(const db_entity_table_options& options) {
             throw std::invalid_argument("entity default requires a known column and an expression");
         }
     }
+    std::pmr::vector<std::pmr::string> generated_names(resource_);
+    generated_names.reserve(1 + std::tuple_size_v<typename entity_type::relations_type> * 2);
     if (!primary.empty()) {
         const auto dot = entity_type::table_name().rfind('.');
         const auto local = entity_type::table_name().substr(dot == std::string_view::npos ? 0 : dot + 1);
-        table_value.constraints_.push_back({.name_ = std::string(local) + "_pkey", .kind_ = db_constraint_kind::primary_key, .columns_ = std::move(primary)});
+        auto& pkey_name = generated_names.emplace_back(local);
+        pkey_name += "_pkey";
+        table_value.constraints_.push_back({.name_ = pkey_name, .kind_ = db_constraint_kind::primary_key, .columns_ = std::move(primary)});
     }
     detail::for_each_descriptor<typename entity_type::relations_type>([&]<typename r_type, std::size_t> {
         if constexpr (!r_type::is_collection && r_type::is_owning) {
@@ -391,12 +395,19 @@ void db_schema::create_table(const db_entity_table_options& options) {
             using mapping_type = detail::db_relation_mapping<entity_type, r_type>;
             using target_type = typename r_type::target_entity_type;
             const auto local_table = entity_type::table_name().substr(entity_type::table_name().rfind('.') == std::string_view::npos ? 0 : entity_type::table_name().rfind('.') + 1);
-            const auto prefix = std::string(local_table) + "_" + std::string(r_type::name.view());
-            db_schema_constraint fk{.name_ = prefix + "_fkey", .kind_ = db_constraint_kind::foreign_key, .referenced_table_ = std::string(target_type::table_name())};
+            auto& fkey_name = generated_names.emplace_back(local_table);
+            fkey_name.push_back('_');
+            fkey_name.append(r_type::name.view());
+            fkey_name.append("_fkey");
+            db_schema_constraint fk{.name_ = fkey_name, .kind_ = db_constraint_kind::foreign_key, .referenced_table_ = target_type::table_name()};
             detail::for_each_descriptor<typename mapping_type::join_columns_type>([&]<typename j_type, std::size_t> { fk.columns_.emplace_back(j_type::local.view()); fk.referenced_columns_.emplace_back(j_type::referenced.view()); });
             table_value.constraints_.push_back(std::move(fk));
             if constexpr (r_type::kind == db_relation_kind::one_to_one) {
-                table_value.constraints_.push_back({.name_ = prefix + "_key", .kind_ = db_constraint_kind::unique, .columns_ = table_value.constraints_.back().columns_});
+                auto& key_name = generated_names.emplace_back(local_table);
+                key_name.push_back('_');
+                key_name.append(r_type::name.view());
+                key_name.append("_key");
+                table_value.constraints_.push_back({.name_ = key_name, .kind_ = db_constraint_kind::unique, .columns_ = table_value.constraints_.back().columns_});
             }
         }
     });
@@ -410,28 +421,35 @@ void db_schema::create_relation_tables() {
             detail::validate_db_relation<entity_type, r_type>();
             using m_type = detail::db_relation_mapping<entity_type, r_type>;
             using target_type = typename r_type::target_entity_type;
-            db_table_definition table_value{.name_ = std::string(m_type::table_name())};
+            db_table_definition table_value{.name_ = m_type::table_name()};
             const auto dot = m_type::table_name().rfind('.');
-            const auto local_table = std::string(m_type::table_name().substr(dot == std::string_view::npos ? 0 : dot + 1));
-            const auto add_side = [&]<typename referenced_entity_type, typename columns_type>(std::string_view side) {
-                db_schema_constraint fk{.name_ = local_table + "_" + std::string(side) + "_fkey",
+            const auto local_table = m_type::table_name().substr(dot == std::string_view::npos ? 0 : dot + 1);
+            std::pmr::string owner_fk_name(local_table, resource_);
+            owner_fk_name += "_owner_fkey";
+            std::pmr::string inverse_fk_name(local_table, resource_);
+            inverse_fk_name += "_inverse_fkey";
+            std::pmr::string pkey_name(local_table, resource_);
+            pkey_name += "_pkey";
+            const auto add_side = [&]<typename referenced_entity_type, typename columns_type>(const std::pmr::string& fk_name) {
+                db_schema_constraint fk{.name_ = fk_name,
                     .kind_ = db_constraint_kind::foreign_key,
-                    .referenced_table_ = std::string(referenced_entity_type::table_name())};
+                    .referenced_table_ = referenced_entity_type::table_name()};
                 detail::for_each_descriptor<columns_type>([&]<typename j_type, std::size_t> {
                     using c_type = std::tuple_element_t<referenced_entity_type::template column_index<j_type::referenced>(), typename referenced_entity_type::columns_type>;
-                    table_value.columns_.push_back({.name_ = std::string(j_type::local.view()), .type_ = entity_column_type<c_type>(), .nullable_ = false});
+                    table_value.columns_.push_back({.name_ = j_type::local.view(), .type_ = entity_column_type<c_type>(), .nullable_ = false});
                     fk.columns_.emplace_back(j_type::local.view());
                     fk.referenced_columns_.emplace_back(j_type::referenced.view());
                 });
                 table_value.constraints_.push_back(std::move(fk));
             };
-            add_side.template operator()<entity_type, typename m_type::source_columns_type>("owner");
-            add_side.template operator()<target_type, typename m_type::target_columns_type>("inverse");
-            std::vector<std::string> primary;
+            add_side.template operator()<entity_type, typename m_type::source_columns_type>(owner_fk_name);
+            add_side.template operator()<target_type, typename m_type::target_columns_type>(inverse_fk_name);
+            std::vector<borrowed_text> primary;
+            primary.reserve(table_value.columns_.size());
             for (const auto& column : table_value.columns_) {
                 primary.push_back(column.name_);
             }
-            table_value.constraints_.push_back({.name_ = local_table + "_pkey", .kind_ = db_constraint_kind::primary_key, .columns_ = std::move(primary)});
+            table_value.constraints_.push_back({.name_ = pkey_name, .kind_ = db_constraint_kind::primary_key, .columns_ = std::move(primary)});
             create_table(table_value);
         }
     });

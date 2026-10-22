@@ -1,9 +1,12 @@
-#include "ruvia/http/http_request_content_decoding.h"
-
 #include <cstddef>
+#include <stdexcept>
 #include <utility>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http_content_codec.h"
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_body_failure.h"
 
 #include "coding/http_content_coding.h"
 #include "request/http_request_access.h"
@@ -11,7 +14,7 @@
 namespace ruvia {
 
 http_content_coding_field_result request_content_coding(
-    const http_request& request, std::pmr::memory_resource*) noexcept {
+    const http_request& request) noexcept {
     detail::http_content_coding_field_parser parser;
     if (!detail::request_has_known_header(request, detail::request_header_kind::content_encoding)) {
         return parser.finish();
@@ -24,6 +27,27 @@ http_content_coding_field_result request_content_coding(
         }
     }
     return parser.finish();
+}
+
+std::pmr::string decode_http_request_content(
+    std::span<const http_content_coding> codings, std::string_view body,
+    http_content_decode_options options) {
+    auto result_value = decode_http_content(codings, body, options);
+    if (auto* decoded = std::get_if<std::pmr::string>(&result_value)) {
+        return std::move(*decoded);
+    }
+    switch (std::get<http_content_decode_error>(result_value)) {
+        case http_content_decode_error::unsupported_coding:
+            throw http_protocol_error(
+                http_status::unsupported_media_type, "request Content-Encoding is not supported");
+        case http_content_decode_error::invalid_content:
+            throw http_protocol_error(http_status::bad_request, "failed to decode request body");
+        case http_content_decode_error::decoded_size_exceeded:
+            throw http_request_body_failure::too_large().protocol_error();
+        case http_content_decode_error::decoder_failure:
+            throw std::runtime_error("request content decoder failed");
+    }
+    throw std::runtime_error("request content decoder failed");
 }
 
 }  // namespace ruvia

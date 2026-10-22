@@ -6,7 +6,7 @@
 
 #include "ruvia/core/error_text.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/model.h"

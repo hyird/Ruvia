@@ -155,7 +155,7 @@ inline http1_client_response_parse_error parse_failure_error(std::string_view me
     if (failure == nullptr) {
         throw std::runtime_error("test expected an HTTP/1 response parse failure");
     }
-    return failure->error();
+    return *failure;
 }
 
 class counting_memory_resource final : public std::pmr::memory_resource {

@@ -9,7 +9,6 @@
 #include <string_view>
 
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/web/db/db_cache.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "client/client_tls_config_storage.h"

@@ -4,7 +4,7 @@
 #include <string_view>
 
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_origin.h"
+#include "ruvia/http/http_request_target.h"
 
 #include "test_harness.h"
 

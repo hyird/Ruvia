@@ -82,39 +82,39 @@ template <typename t_type>
     model_string_storage string_storage, json_parse_budget& budget);
 
 struct model_parse_access final {
-    template <typename model_t_type>
-    [[nodiscard]] static std::optional<model_t_type> parse_value(std::string_view& input,
+    template <typename model_type>
+    [[nodiscard]] static std::optional<model_type> parse_value(std::string_view& input,
         std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
         json_parse_budget& budget) {
         if (depth > max_json_depth) {
             return std::nullopt;
         }
-        auto value = model::model_access::empty<model_t_type>(resource);
+        auto value = model::model_access::empty<model_type>(resource);
         if (!materialize_json(value, input, depth, string_storage, budget)) {
             return std::nullopt;
         }
         return value;
     }
 
-    template <typename model_t_type>
-    [[nodiscard]] static std::optional<model_t_type> parse_json_borrowed(
+    template <typename model_type>
+    [[nodiscard]] static std::optional<model_type> parse_json_borrowed(
         std::string_view body, std::pmr::memory_resource* resource) {
-        auto value = parse_json_borrowed_partial<model_t_type>(body, resource);
+        auto value = parse_json_borrowed_partial<model_type>(body, resource);
         if (!has_valid_structure(value)) {
             return std::nullopt;
         }
         return value;
     }
 
-    template <typename model_t_type>
-    [[nodiscard]] static std::optional<model_t_type> parse_json_borrowed_partial(
+    template <typename model_type>
+    [[nodiscard]] static std::optional<model_type> parse_json_borrowed_partial(
         std::string_view body, std::pmr::memory_resource* resource) {
         json_parse_budget budget;
-        if (!budget.consume_bytes(sizeof(model_t_type))) {
+        if (!budget.consume_bytes(sizeof(model_type))) {
             return std::nullopt;
         }
         auto input = body;
-        auto value = parse_value<model_t_type>(input, resource, 0, model_string_storage::borrowed, budget);
+        auto value = parse_value<model_type>(input, resource, 0, model_string_storage::borrowed, budget);
         skip_json_whitespace(input);
         if (!value || !input.empty()) {
             return std::nullopt;
@@ -122,10 +122,10 @@ struct model_parse_access final {
         return value;
     }
 
-    template <typename model_t_type>
-    [[nodiscard]] static std::optional<model_t_type> parse_form_owned(
+    template <typename model_type>
+    [[nodiscard]] static std::optional<model_type> parse_form_owned(
         std::string_view body, std::pmr::memory_resource* resource) {
-        auto value = materialize_form_input<model_t_type>(
+        auto value = materialize_form_input<model_type>(
             make_form_model_input(body, resource, model_string_storage::owned));
         if (!has_valid_structure(value)) {
             return std::nullopt;
@@ -133,26 +133,26 @@ struct model_parse_access final {
         return value;
     }
 
-    template <typename model_t_type>
-    [[nodiscard]] static std::optional<model_t_type> parse_form_borrowed(
+    template <typename model_type>
+    [[nodiscard]] static std::optional<model_type> parse_form_borrowed(
         std::string_view body, std::pmr::memory_resource* resource) {
-        auto value = parse_form_borrowed_partial<model_t_type>(body, resource);
+        auto value = parse_form_borrowed_partial<model_type>(body, resource);
         if (!has_valid_structure(value)) {
             return std::nullopt;
         }
         return value;
     }
 
-    template <typename model_t_type>
-    [[nodiscard]] static std::optional<model_t_type> parse_form_borrowed_partial(
+    template <typename model_type>
+    [[nodiscard]] static std::optional<model_type> parse_form_borrowed_partial(
         std::string_view body, std::pmr::memory_resource* resource) {
-        return materialize_form_input<model_t_type>(make_form_model_input(body, resource));
+        return materialize_form_input<model_type>(make_form_model_input(body, resource));
     }
 
-    template <typename model_t_type>
-    [[nodiscard]] static std::optional<model_t_type> parse_form_fields_partial(
+    template <typename model_type>
+    [[nodiscard]] static std::optional<model_type> parse_form_fields_partial(
         const request_name_value_list& fields_value, std::pmr::memory_resource* resource) {
-        return materialize_form_input<model_t_type>(make_form_fields_model_input(fields_value, resource));
+        return materialize_form_input<model_type>(make_form_fields_model_input(fields_value, resource));
     }
 
 private:
@@ -176,8 +176,8 @@ private:
         return value;
     }
 
-    template <typename slot_t_type>
-    [[nodiscard]] static bool parse_json_field_slot(slot_t_type& slot, std::string_view& value_input,
+    template <typename slot_type>
+    [[nodiscard]] static bool parse_json_field_slot(slot_type& slot, std::string_view& value_input,
         std::pmr::memory_resource* resource, std::size_t depth,
         model_string_storage string_storage, json_parse_budget& budget) {
         if (slot.is_present()) {
@@ -185,12 +185,12 @@ private:
             return budget.skip_value(value_input, depth + 1);
         }
         const auto original_input = value_input;
-        using slot_type = std::remove_cvref_t<slot_t_type>;
-        using value_type = typename slot_type::value_type;
+        using unwrapped_slot_type = std::remove_cvref_t<slot_type>;
+        using value_type = typename unwrapped_slot_type::value_type;
         auto null_input = value_input;
         if (consume_json_literal(null_input, "null")) {
             value_input = null_input;
-            if constexpr (slot_type::nullable) {
+            if constexpr (unwrapped_slot_type::nullable) {
                 slot.mark_null();
             } else {
                 slot.mark_invalid_type();
@@ -255,15 +255,15 @@ private:
         return valid;
     }
 
-    template <typename slot_t_type>
-    static void bind_form_field_slot(slot_t_type& slot, std::string_view field_value,
+    template <typename slot_type>
+    static void bind_form_field_slot(slot_type& slot, std::string_view field_value,
         form_value_encoding encoding, std::pmr::memory_resource* resource,
         model_string_storage string_storage) {
         if (slot.is_present()) {
             slot.mark_duplicate();
             return;
         }
-        using value_type = typename std::remove_cvref_t<slot_t_type>::value_type;
+        using value_type = typename std::remove_cvref_t<slot_type>::value_type;
         // Name/value inputs only carry strings and scalars. A value for any
         // other field is a type error, never an absence that a default fills.
         if constexpr (is_form_field<value_type>) {
@@ -327,35 +327,35 @@ private:
     }
 };
 
-template <typename sequence_t_type>
+template <typename sequence_type>
 struct json_sequence_value_traits;
 
-template <typename value_t_type>
-struct json_sequence_value_traits<array<value_t_type>> {
-    using value_type = value_t_type;
+template <typename element_type>
+struct json_sequence_value_traits<array<element_type>> {
+    using value_type = element_type;
 
-    static void emplace(array<value_t_type>& value, value_t_type&& element) {
+    static void emplace(array<element_type>& value, element_type&& element) {
         model_value_factory::emplace_parsed(value, std::move(element));
     }
 };
 
-template <typename value_t_type>
-struct json_sequence_value_traits<boxed_array<value_t_type>> {
-    using value_type = value_t_type;
+template <typename element_type>
+struct json_sequence_value_traits<boxed_array<element_type>> {
+    using value_type = element_type;
 
-    static void emplace(boxed_array<value_t_type>& value, value_t_type&& element) {
+    static void emplace(boxed_array<element_type>& value, element_type&& element) {
         model_value_factory::emplace_parsed(value, std::move(element));
     }
 };
 
-template <typename sequence_t_type>
-[[nodiscard]] std::optional<sequence_t_type> parse_json_sequence_value(std::string_view& input,
+template <typename sequence_type>
+[[nodiscard]] std::optional<sequence_type> parse_json_sequence_value(std::string_view& input,
     std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
     json_parse_budget& budget) {
-    using traits_type = json_sequence_value_traits<std::remove_cvref_t<sequence_t_type>>;
-    using element_t_type = typename traits_type::value_type;
+    using traits_type = json_sequence_value_traits<std::remove_cvref_t<sequence_type>>;
+    using element_type = typename traits_type::value_type;
 
-    sequence_t_type value = make_request_value<sequence_t_type>(resource);
+    sequence_type value = make_request_value<sequence_type>(resource);
     const bool consumed = consume_json_array_elements(input, depth,
         [&value, resource, depth, string_storage, &budget](std::string_view& element_input) {
             if (!budget.consume_element()) {
@@ -363,12 +363,12 @@ template <typename sequence_t_type>
             }
             // Four element slots cover all geometric vector allocations, including
             // old buffers held by an arena. Boxed values additionally own pointers.
-            constexpr auto element_bytes = 4 * (sizeof(element_t_type) + sizeof(element_t_type*));
+            constexpr auto element_bytes = 4 * (sizeof(element_type) + sizeof(element_type*));
             if (!budget.consume_bytes(element_bytes)) {
                 return false;
             }
             auto element =
-                parse_json_value<element_t_type>(element_input, resource, depth + 1, string_storage, budget);
+                parse_json_value<element_type>(element_input, resource, depth + 1, string_storage, budget);
             if (!element.has_value()) {
                 return false;
             }
@@ -385,12 +385,12 @@ template <typename t_type>
 [[nodiscard]] std::optional<t_type> parse_json_value(std::string_view& input,
     std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
     json_parse_budget& budget) {
-    using field_t_type = std::remove_cvref_t<t_type>;
+    using field_type = std::remove_cvref_t<t_type>;
     if (depth > max_json_depth || budget.exhausted()) {
         return std::nullopt;
     }
     auto remaining = input;
-    if constexpr (is_ruvia_string<field_t_type>) {
+    if constexpr (is_ruvia_string<field_type>) {
         const auto parsed_value = parse_json_string(remaining);
         if (!parsed_value.has_value()) {
             return std::nullopt;
@@ -404,7 +404,7 @@ template <typename t_type>
         if (parsed_value->encoding() == json_string_encoding::literal) {
             input = remaining;
             if (string_storage == model_string_storage::owned) {
-                return field_t_type(parsed_value->raw(), ::ruvia::model_options{.resource_ = resource});
+                return field_type(parsed_value->raw(), ::ruvia::model_options{.resource_ = resource});
             }
             return model_value_factory::make_string(parsed_value->raw(), resource);
         }
@@ -413,10 +413,10 @@ template <typename t_type>
         if (!decoded.has_value()) {
             return std::nullopt;
         }
-        field_t_type value = make_request_value<field_t_type>(resource);
+        field_type value = make_request_value<field_type>(resource);
         value.assign_owned(std::move(*decoded));
         return value;
-    } else if constexpr (is_ruvia_bytes<field_t_type>) {
+    } else if constexpr (is_ruvia_bytes<field_type>) {
         // Escaped base64 may allocate both a decoded token and a byte value.
         const auto token = parse_json_string(remaining);
         if (!token || !budget.consume_bytes(token->raw().size()) ||
@@ -438,24 +438,24 @@ template <typename t_type>
         }
         input = remaining;
         return value;
-    } else if constexpr (std::is_same_v<field_t_type, std::string_view>) {
+    } else if constexpr (std::is_same_v<field_type, std::string_view>) {
         const auto parsed_value = parse_json_string(remaining);
         if (!parsed_value.has_value() || parsed_value->encoding() != json_string_encoding::literal) {
             return std::nullopt;
         }
         input = remaining;
         return parsed_value->raw();
-    } else if constexpr (is_ruvia_array<field_t_type> || is_ruvia_boxed_array<field_t_type>) {
-        auto parsed_value = parse_json_sequence_value<field_t_type>(remaining, resource, depth, string_storage, budget);
+    } else if constexpr (is_ruvia_array<field_type> || is_ruvia_boxed_array<field_type>) {
+        auto parsed_value = parse_json_sequence_value<field_type>(remaining, resource, depth, string_storage, budget);
         if (!parsed_value.has_value()) {
             return std::nullopt;
         }
         input = remaining;
         return parsed_value;
-    } else if constexpr (is_ruvia_scalar<field_t_type>) {
-        using scalar_t_type = model_scalar_value_t_type<field_t_type>;
-        scalar_t_type parsed_value{};
-        if constexpr (std::is_same_v<scalar_t_type, bool>) {
+    } else if constexpr (is_ruvia_scalar<field_type>) {
+        using scalar_type = model_scalar_value_type<field_type>;
+        scalar_type parsed_value{};
+        if constexpr (std::is_same_v<scalar_type, bool>) {
             if (consume_json_literal(remaining, "true")) {
                 parsed_value = true;
             } else if (consume_json_literal(remaining, "false")) {
@@ -469,17 +469,17 @@ template <typename t_type>
             }
         }
         input = remaining;
-        return field_t_type(parsed_value);
-    } else if constexpr (is_model<field_t_type>) {
+        return field_type(parsed_value);
+    } else if constexpr (is_model<field_type>) {
         auto nested =
-            model_parse_access::parse_value<field_t_type>(remaining, resource, depth, string_storage, budget);
+            model_parse_access::parse_value<field_type>(remaining, resource, depth, string_storage, budget);
         if (!nested.has_value()) {
             return std::nullopt;
         }
         input = remaining;
         return nested;
     } else {
-        static_assert(always_false<field_t_type>, "RUVIA_MODEL JSON field type is not supported");
+        static_assert(always_false<field_type>, "RUVIA_MODEL JSON field type is not supported");
     }
 }
 

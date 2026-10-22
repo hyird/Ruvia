@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "ruvia/http/hpack_protocol_types.h"
+#include "ruvia/http/hpack.h"
 
 namespace ruvia::detail {
 
@@ -11,11 +11,11 @@ enum class header_decode_status : std::uint8_t { ok,
     compression_error };
 
 [[nodiscard]] inline header_decode_status http2_classify_header_decode_result(
-    const hpack_decode_result& result_value) noexcept {
-    if (result_value.decoded()) {
+    std::optional<hpack_decode_error> error) noexcept {
+    if (!error.has_value()) {
         return header_decode_status::ok;
     }
-    return result_value.error() == hpack_decode_error::callback_rejected
+    return *error == hpack_decode_error::callback_rejected
                ? header_decode_status::protocol_error
                : header_decode_status::compression_error;
 }

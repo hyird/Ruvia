@@ -1,6 +1,5 @@
 #include <string_view>
 
-#include "ruvia/http/http2_cleartext_preface.h"
 #include "ruvia/http/http2_framing.h"
 
 #include "test_harness.h"

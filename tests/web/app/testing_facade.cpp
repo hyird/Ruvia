@@ -582,7 +582,7 @@ RUVIA_TEST(testing_facade_applies_app_level_configuration) {
     RUVIA_CHECK_EQ(global_miss.body(), std::string_view("custom-miss"));
 
     // 405 keeps flowing through the production fallback path too.
-    const auto not_allowed = app.request(ruvia::test_request::del("/t/hello"));
+    const auto not_allowed = app.request(ruvia::test_request::delete_request("/t/hello"));
     RUVIA_CHECK(not_allowed.status() == ruvia::http_status::method_not_allowed);
 
     // The route table is sealed after the first request.

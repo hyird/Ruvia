@@ -18,7 +18,7 @@
 #include "ruvia/http/websocket_subprotocol_set.h"
 #include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/detail/router/route_modes.h"
-#include "ruvia/web/http_tunnel_route_config.h"
+#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
 #include "websocket/websocket_heartbeat_config_validation.h"

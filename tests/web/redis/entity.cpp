@@ -103,3 +103,18 @@ RUVIA_TEST(redis_entity_failed_owning_assignment_preserves_each_column_state) {
         }
     }
 }
+
+RUVIA_REDIS_ENTITY(redis_byte_numbers, "byte_numbers",
+    RUVIA_REDIS_COLUMN(id, std::int8_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(flags, std::uint8_t));
+
+RUVIA_TEST(redis_entity_constructs_from_resource_owner_and_supports_8bit_integers) {
+    ruvia::test::counting_memory_resource resource;
+    redis_user owner_user(&resource);
+    redis_byte_numbers numbers(owner_user);
+    RUVIA_CHECK_EQ(numbers.resource(), &resource);
+    numbers.set<"id">(std::int8_t{-12});
+    numbers.set<"flags">(std::uint8_t{250});
+    RUVIA_CHECK_EQ(numbers.get<"id">(), std::int8_t{-12});
+    RUVIA_CHECK_EQ(numbers.get<"flags">(), std::uint8_t{250});
+}

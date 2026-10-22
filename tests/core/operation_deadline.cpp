@@ -1,5 +1,3 @@
-#include "ruvia/core/operation_deadline.h"
-
 #include <chrono>
 #include <cstdint>
 
@@ -13,7 +11,7 @@ enum class deadline_kind : std::uint8_t { read,
 bool operation_deadline_transitions_are_exclusive() {
     using deadline_type = ruvia::operation_deadline<deadline_kind>;
     deadline_type deadline;
-    const auto now = deadline_type::clock::time_point{};
+    const auto now = deadline_type::clock_type::time_point{};
     if (deadline.kind() != nullptr || deadline.expired() || deadline.clear()) {
         return false;
     }
@@ -43,7 +41,7 @@ bool operation_deadline_transitions_are_exclusive() {
     }
     unlabelled.arm(std::optional<std::chrono::milliseconds>{std::chrono::milliseconds(0)});
     return unlabelled.kind() != nullptr &&
-           unlabelled.expire(ruvia::operation_deadline<>::clock::now()).has_value() &&
+           unlabelled.expire(ruvia::operation_deadline<>::clock_type::now()).has_value() &&
            unlabelled.expired() && unlabelled.clear();
 }
 

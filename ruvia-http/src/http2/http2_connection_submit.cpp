@@ -136,16 +136,14 @@ http2_connection::submit_response_head(
     if (successful_connect) {
         return http2_response_head_submit_error::invalid_state;
     }
-    const auto control_result = http2_final_response_control_plan(response);
-    const auto* http2_control = control_result.control();
-    if (http2_control == nullptr) {
+    if (http2_final_response_control_plan(response).has_value()) {
         return http2_response_head_submit_error::invalid_message;
     }
 
     const auto head_plan_result = http2_buffered_response_head_plan(write_plan, response);
-    const auto* head_plan = head_plan_result.plan();
+    const auto* head_plan = std::get_if<http2_response_head_plan>(&head_plan_result);
     if (head_plan == nullptr) {
-        const auto error = head_plan_result.failure()->error();
+        const auto error = std::get<http2_response_head_plan_error>(head_plan_result);
         const bool response_plan_mismatch =
             error == http2_response_head_plan_error::response_status_mismatch ||
             error == http2_response_head_plan_error::response_representation_mismatch;
@@ -153,7 +151,7 @@ http2_connection::submit_response_head(
                    ? http2_response_head_submit_error::response_plan_mismatch
                    : http2_response_head_submit_error::invalid_message;
     }
-    if (!append_http2_response_headers(*stream, response, *head_plan, *http2_control)) {
+    if (!append_http2_response_headers(*stream, response, *head_plan)) {
         return http2_response_head_submit_error::invalid_message;
     }
     std::optional<std::pmr::string> retired_header_block;
@@ -209,9 +207,7 @@ http2_connection::submit_streaming_response_head(
     if (!prepared_commit_plan.trailer_intent_allowed()) {
         return http2_response_head_submit_error::invalid_message;
     }
-    const auto control_result = http2_final_response_control_plan(head);
-    const auto* http2_control = control_result.control();
-    if (http2_control == nullptr) {
+    if (http2_final_response_control_plan(head).has_value()) {
         return http2_response_head_submit_error::invalid_message;
     }
     auto stream_head =
@@ -223,11 +219,11 @@ http2_connection::submit_streaming_response_head(
     // DATA-open.
     const auto head_plan_result =
         http2_streaming_response_head_plan(commit_plan.body_plan(), stream_head.response());
-    const auto* head_plan = head_plan_result.plan();
+    const auto* head_plan = std::get_if<http2_response_head_plan>(&head_plan_result);
     if (head_plan == nullptr) {
         return http2_response_head_submit_error::invalid_message;
     }
-    if (!append_http2_response_headers(*stream, stream_head.response(), *head_plan, *http2_control)) {
+    if (!append_http2_response_headers(*stream, stream_head.response(), *head_plan)) {
         return http2_response_head_submit_error::invalid_message;
     }
     const auto end_stream =
@@ -436,14 +432,12 @@ http2_submit_status http2_connection::submit_connect_response_head(
     if (!http2_is_valid_connect_response_head(response)) {
         return http2_submit_status::invalid_message;
     }
-    const auto control_result = http2_final_response_control_plan(response);
-    const auto* http2_control = control_result.control();
-    if (http2_control == nullptr) {
+    if (http2_final_response_control_plan(response).has_value()) {
         return http2_submit_status::invalid_message;
     }
     const auto head_plan_result = http2_connect_response_head_plan(
         plan_http_response_body(http_known_method::connect, response.status()));
-    const auto* head_plan = head_plan_result.plan();
+    const auto* head_plan = std::get_if<http2_response_head_plan>(&head_plan_result);
     if (head_plan == nullptr) {
         return http2_submit_status::invalid_message;
     }
@@ -451,7 +445,7 @@ http2_submit_status http2_connection::submit_connect_response_head(
     if (terminal_remote_half) {
         reserve_event_slots(1);
     }
-    if (!append_http2_response_headers(*stream, response, *head_plan, *http2_control)) {
+    if (!append_http2_response_headers(*stream, response, *head_plan)) {
         return http2_submit_status::invalid_message;
     }
     commit_connect_response_head(*stream, terminal_remote_half);

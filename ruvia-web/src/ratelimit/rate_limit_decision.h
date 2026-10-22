@@ -11,10 +11,10 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline rate_limit_decision decide_request_rate_limit(
+[[nodiscard]] inline std::optional<rate_limit_rejection> decide_request_rate_limit(
     rate_limiter* limiter, std::string_view remote_address) noexcept {
     if (limiter == nullptr || !limiter->has_default_rule()) {
-        return rate_limit_decision::allow();
+        return std::nullopt;
     }
     char key_buffer[rate_limit_key_buffer_bytes];
     return limiter->allow_default(rate_limit_key_for(remote_address, key_buffer));

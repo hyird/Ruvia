@@ -130,11 +130,11 @@ template <typename stream_type>
     };
     // The TLS output pump must be stopped and joined on every exit, including
     // a handler failure that run_http_upgrade_route surfaces.
-    std::optional<http_upgrade_route_outcome> outcome;
+    std::optional<http_response> buffered;
     std::exception_ptr failure;
     try {
-        outcome.emplace(co_await run_http_upgrade_route(d.routes_, d.parsed_.request_,
-            resolved, d.request_memory_, d.base_route_services_, tunnel, upgrade, upgrade));
+        buffered = co_await run_http_upgrade_route(d.routes_, d.parsed_.request_,
+            resolved, d.request_memory_, d.base_route_services_, tunnel, upgrade, upgrade);
     } catch (...) {
         failure = std::current_exception();
     }
@@ -147,7 +147,7 @@ template <typename stream_type>
     if (failure) {
         std::rethrow_exception(failure);
     }
-    if (auto* buffered = outcome->response()) {
+    if (buffered) {
         d.response_ = std::move(*buffered);
         co_return finalize_closing_route_response(d.response_, d.parsed_.connection_plan_);
     }

@@ -17,13 +17,13 @@ struct middleware_scope_options final {
 
 namespace detail {
 
-template <typename middleware_t_type>
+template <typename middleware_type>
 concept void_handle_middleware =
-    requires { static_cast<task<void> (middleware_t_type::*)(context&, next&)>(&middleware_t_type::handle); };
+    requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::handle); };
 
-template <typename middleware_t_type>
+template <typename middleware_type>
 concept response_handle_middleware = requires {
-    static_cast<task<http_response> (middleware_t_type::*)(context&, next&)>(&middleware_t_type::handle);
+    static_cast<task<http_response> (middleware_type::*)(context&, next&)>(&middleware_type::handle);
 };
 
 }  // namespace detail
@@ -40,9 +40,9 @@ concept response_handle_middleware = requires {
 // use<T>() call site needs controller.h, testing.h, or
 // detail/middleware/middleware_registration.h. This header stays free of
 // context so app.h does not pull it in.
-template <typename middleware_t_type>
-concept middleware = std::is_class_v<middleware_t_type> && std::is_final_v<middleware_t_type> &&
-                     (detail::void_handle_middleware<middleware_t_type> ||
-                         detail::response_handle_middleware<middleware_t_type>);
+template <typename middleware_type>
+concept middleware = std::is_class_v<middleware_type> && std::is_final_v<middleware_type> &&
+                     (detail::void_handle_middleware<middleware_type> ||
+                         detail::response_handle_middleware<middleware_type>);
 
 }  // namespace ruvia

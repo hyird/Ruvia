@@ -11,7 +11,7 @@
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http_accept_encoding.h"
-#include "ruvia/http/http_parse_error.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
 
 namespace ruvia {

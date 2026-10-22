@@ -14,7 +14,6 @@
 #include <string>
 
 #include "ruvia/web/app.h"
-#include "ruvia/web/body_limit.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/redis/redis.h"

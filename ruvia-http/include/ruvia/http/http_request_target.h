@@ -77,4 +77,6 @@ private:
 // scheme default port. Invalid authorities never compare equal.
 [[nodiscard]] bool http_authorities_equal(borrowed_text left, borrowed_text right, std::uint16_t default_port) noexcept;
 
+// Validates a WHATWG serialized origin, not a general URI or origin list.
+[[nodiscard]] bool is_valid_http_serialized_origin(std::string_view value) noexcept;
 }  // namespace ruvia

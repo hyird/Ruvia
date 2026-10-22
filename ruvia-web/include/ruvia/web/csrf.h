@@ -4,12 +4,12 @@
 #include <string>
 
 #include "ruvia/core/task.h"
-#include "ruvia/web/context.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 #include "ruvia/web/next.h"
 
 namespace ruvia {
 
+class context;
 struct csrf_protection_config final {
     std::string cookie_name_{"XSRF-TOKEN"};
     std::string header_name_{"X-XSRF-TOKEN"};

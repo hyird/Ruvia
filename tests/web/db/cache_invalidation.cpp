@@ -35,11 +35,9 @@
 
 #include "ruvia/core/event_loop_attachment.h"
 #include "ruvia/core/task.h"
-#include "ruvia/web/db/db_cache.h"
 #include "ruvia/web/db/db_client.h"
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_handle.h"
-#include "ruvia/web/db/db_query_result_cache.h"
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/redis/redis_client.h"
 #include "ruvia/web/redis/redis_handle.h"

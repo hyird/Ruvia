@@ -8,63 +8,24 @@
 #include <optional>
 #include <string_view>
 #include <type_traits>
-#include <variant>
 #include <vector>
 
-#include "ruvia/web/rate_limit_rule.h"
+#include "ruvia/web/rate_limit.h"
 
 namespace ruvia::detail {
 
-class rate_limit_allowed final {
-private:
-    constexpr rate_limit_allowed() noexcept = default;
-    friend class rate_limit_decision;
-};
-
 class rate_limit_rejection final {
 public:
+    explicit constexpr rate_limit_rejection(std::chrono::milliseconds retry_after) noexcept
+        : retry_after_(retry_after) {}
+
     [[nodiscard]] constexpr std::chrono::milliseconds retry_after() const noexcept {
         return retry_after_;
     }
 
 private:
-    explicit constexpr rate_limit_rejection(std::chrono::milliseconds retry_after) noexcept
-        : retry_after_(retry_after) {}
-
     std::chrono::milliseconds retry_after_;
-    friend class rate_limit_decision;
 };
-
-class rate_limit_decision final {
-public:
-    [[nodiscard]] static constexpr rate_limit_decision allow() noexcept {
-        return rate_limit_decision(rate_limit_allowed{});
-    }
-
-    [[nodiscard]] static constexpr rate_limit_decision reject(
-        std::chrono::milliseconds retry_after) noexcept {
-        return rate_limit_decision(rate_limit_rejection(retry_after));
-    }
-
-    [[nodiscard]] constexpr const rate_limit_rejection* rejection() const& noexcept {
-        return std::get_if<rate_limit_rejection>(&value_);
-    }
-
-    [[nodiscard]] const rate_limit_rejection* rejection() const&& = delete;
-
-private:
-    explicit constexpr rate_limit_decision(rate_limit_allowed allowed) noexcept
-        : value_(allowed) {}
-
-    explicit constexpr rate_limit_decision(rate_limit_rejection rejection) noexcept
-        : value_(rejection) {}
-
-    std::variant<rate_limit_allowed, rate_limit_rejection> value_;
-};
-
-static_assert(std::is_trivially_copyable_v<rate_limit_decision>);
-static_assert(sizeof(rate_limit_decision) <= 2 * sizeof(std::chrono::milliseconds));
-
 enum class route_rate_limit_presence : std::uint8_t {
     absent,
     present,
@@ -112,17 +73,16 @@ public:
         return default_rule_per_worker_.has_value();
     }
 
-    [[nodiscard]] rate_limit_decision allow_default(std::string_view remote_address) noexcept;
+    [[nodiscard]] std::optional<rate_limit_rejection> allow_default(std::string_view remote_address) noexcept;
 
     // `rule_declaration` identifies the rule's declaration (its worker-local
     // middleware instance), distinct for every declaration on the route.
-    [[nodiscard]] rate_limit_decision allow_route(std::uintptr_t route_scope, const void* rule_declaration,
-        std::string_view remote_address, const rate_limit_rule& rule) noexcept;
+    [[nodiscard]] std::optional<rate_limit_rejection> allow_route(std::uintptr_t route_scope,
+        const void* rule_declaration, std::string_view remote_address, const rate_limit_rule& rule) noexcept;
 
 private:
-    [[nodiscard]] rate_limit_decision allow(
+    [[nodiscard]] std::optional<rate_limit_rejection> allow(
         rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule) noexcept;
-
     std::optional<rate_limit_rule> default_rule_per_worker_;
     std::pmr::vector<rate_limit_slot> slots_;
 };

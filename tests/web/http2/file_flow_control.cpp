@@ -216,7 +216,7 @@ void check_file_end(ruvia::testing::test_context& ruvia_ctx, bool exhaust_connec
                         }
                         return true;
                     });
-                    if (!decoded.decoded()) {
+                    if (decoded.has_value()) {
                         throw std::runtime_error("invalid HTTP/2 file response headers");
                     }
                     RUVIA_CHECK((frame.header_.flags_ & 0x1) == 0);

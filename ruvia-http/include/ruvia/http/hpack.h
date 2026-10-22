@@ -7,13 +7,23 @@
 #include <functional>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/hpack_protocol_types.h"
 #include "ruvia/http/http_status.h"
 
 namespace ruvia {
+
+enum class hpack_decode_error : std::uint8_t {
+    need_more,
+    integer_overflow,
+    invalid_index,
+    invalid_string,
+    invalid_huffman,
+    dynamic_table_size,
+    callback_rejected,
+};
 
 struct hpack_decoder_options final {
     // Must outlive the decoder, including its implementation and dynamic table.
@@ -43,7 +53,7 @@ public:
     // Copy into owned storage when retaining a field beyond that invocation.
     template <typename callback>
         requires std::predicate<callback&, std::string_view, std::string_view>
-    [[nodiscard]] hpack_decode_result decode(std::string_view block, callback&& callback_value) {
+    [[nodiscard]] std::optional<hpack_decode_error> decode(std::string_view block, callback&& callback_value) {
         // Always pass an object through the erased callback boundary. Taking
         // addressof(callback) directly would produce a function pointer when a
         // free function is supplied, which cannot be represented by void*.
@@ -86,7 +96,7 @@ public:
 
 private:
     using header_callback_type = bool (*)(void*, std::string_view, std::string_view);
-    [[nodiscard]] hpack_decode_result decode_with_callback(
+    [[nodiscard]] std::optional<hpack_decode_error> decode_with_callback(
         std::string_view block, void* target, header_callback_type callback);
 
     class impl_type;

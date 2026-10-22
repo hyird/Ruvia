@@ -18,6 +18,7 @@
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
 
 #include "field/http_interim_response_validation.h"
 #include "http2/http2_header_rules.h"
@@ -162,15 +163,10 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
 }
 
 [[nodiscard]] inline bool append_http2_response_headers(http2_stream_state& stream,
-    const http_response& response, const http2_response_head_plan& plan,
-    const http2_final_response_control& control) {
-    // The unforgeable control alternative proves that the same submission path
-    // rejected all HTTP/2 connection-specific fields before this function can
-    // touch HPACK state. The encoder therefore has no silent filtering branch.
+    const http_response& response, const http2_response_head_plan& plan) {
     // The owning header block already enforces field syntax, sender metadata
     // grammar and singleton rules. Revisit only protocol-specific section limits,
     // not the same field bytes or metadata parsers.
-    (void)control;
     const auto known_bits = response_known_header_bits(response);
 
     const auto status_token = http_status_code_token(plan.body_plan().response_status());

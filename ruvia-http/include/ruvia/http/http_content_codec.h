@@ -63,18 +63,6 @@ private:
     state* state_{nullptr};
 };
 
-enum class http_content_decode_error : std::uint8_t {
-    unsupported_coding,
-    invalid_content,
-    decoded_size_exceeded,
-    decoder_failure
-};
-
-struct http_content_decode_options final {
-    std::size_t max_decoded_bytes_{};
-    std::pmr::memory_resource* resource_{nullptr};
-};
-
 // gzip members and zstd frames are consumed through the end of input; Brotli
 // trailing bytes are rejected. The exact decoded-size cap applies across the
 // complete representation. An empty representation decodes to empty content

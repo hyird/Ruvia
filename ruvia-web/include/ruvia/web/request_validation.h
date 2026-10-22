@@ -32,43 +32,43 @@ template <validation_target target>
     }
 }
 
-template <validation_target target, typename body_t_type>
-[[nodiscard]] body_t_type parse_validated_fields(context& c, const request_name_value_list& fields_value) {
-    static_assert(is_model<body_t_type>, "field validator body type must use RUVIA_MODEL");
-    auto parsed_value = detail::model_parse_access::parse_form_fields_partial<body_t_type>(fields_value, c.arena());
+template <validation_target target, typename body_type>
+[[nodiscard]] body_type parse_validated_fields(context& c, const request_name_value_list& fields_value) {
+    static_assert(is_model<body_type>, "field validator body type must use RUVIA_MODEL");
+    auto parsed_value = detail::model_parse_access::parse_form_fields_partial<body_type>(fields_value, c.arena());
     if (!parsed_value) {
         throw_invalid_validation_target<target>();
     }
     return std::move(*parsed_value);
 }
 
-template <validation_target target, typename body_t_type>
-[[nodiscard]] body_t_type parse_validated_fields(context& c) {
+template <validation_target target, typename body_type>
+[[nodiscard]] body_type parse_validated_fields(context& c) {
     if constexpr (target == validation_target::query) {
-        return parse_validated_fields<target, body_t_type>(c, c.req().query_fields());
+        return parse_validated_fields<target, body_type>(c, c.req().query_fields());
     } else if constexpr (target == validation_target::param) {
-        return parse_validated_fields<target, body_t_type>(c, c.req().param_fields());
+        return parse_validated_fields<target, body_type>(c, c.req().param_fields());
     } else if constexpr (target == validation_target::header) {
-        return parse_validated_fields<target, body_t_type>(c, c.req().header_fields());
+        return parse_validated_fields<target, body_type>(c, c.req().header_fields());
     } else if constexpr (target == validation_target::cookie) {
-        return parse_validated_fields<target, body_t_type>(c, c.req().cookie_fields());
+        return parse_validated_fields<target, body_type>(c, c.req().cookie_fields());
     } else {
-        static_assert(always_false<body_t_type>, "unsupported validator target");
+        static_assert(always_false<body_type>, "unsupported validator target");
     }
 }
 
 // One validating middleware per request source: parses the model from `target`,
 // runs its declared rules, binds it for the handler, then continues the chain.
-template <validation_target target, typename body_t_type>
+template <validation_target target, typename body_type>
 class model_validation_middleware final {
 public:
-    static_assert(is_model<body_t_type>, "request validation middleware requires a RUVIA_MODEL");
+    static_assert(is_model<body_type>, "request validation middleware requires a RUVIA_MODEL");
     static_assert(target != validation_target::header ||
-                      model::unique_model_wire_names_ignore_ascii_case(model::model_access::schema<body_t_type>()),
+                      model::unique_model_wire_names_ignore_ascii_case(model::model_access::schema<body_type>()),
         "header_model field names must be unique ignoring ASCII case");
-    using ruvia_validation_body_type = body_t_type;
+    using ruvia_validation_body_type = body_type;
 
-    void validate(const body_t_type& body, validator& validator_value) const {
+    void validate(const body_type& body, validator& validator_value) const {
         validate_model(body, validator_value);
     }
 
@@ -80,11 +80,11 @@ public:
             }
             const auto raw_json = co_await c.req().text();
             auto parsed_value =
-                detail::model_parse_access::parse_json_borrowed_partial<body_t_type>(raw_json, c.arena());
+                detail::model_parse_access::parse_json_borrowed_partial<body_type>(raw_json, c.arena());
             if (!parsed_value) {
                 detail::throw_invalid_json_body();
             }
-            body_t_type body = std::move(*parsed_value);
+            body_type body = std::move(*parsed_value);
             validator validator_value({.resource_ = c.arena()});
             validate(body, validator_value);
             validator_value.throw_if_invalid();
@@ -97,18 +97,18 @@ public:
             }
             const auto request_body = co_await c.req().text();
             auto parsed_value =
-                detail::model_parse_access::parse_form_borrowed_partial<body_t_type>(request_body, c.arena());
+                detail::model_parse_access::parse_form_borrowed_partial<body_type>(request_body, c.arena());
             if (!parsed_value) {
                 detail::throw_invalid_form_body();
             }
-            body_t_type body = std::move(*parsed_value);
+            body_type body = std::move(*parsed_value);
             validator validator_value({.resource_ = c.arena()});
             validate(body, validator_value);
             validator_value.throw_if_invalid();
             auto binding = bind_validated_model(c, body);
             co_await next_value();
         } else {
-            body_t_type body = parse_validated_fields<target, body_t_type>(c);
+            body_type body = parse_validated_fields<target, body_type>(c);
             validator validator_value({.resource_ = c.arena()});
             validate(body, validator_value);
             validator_value.throw_if_invalid();
@@ -120,22 +120,21 @@ public:
 
 }  // namespace detail
 
-template <typename body_t_type>
-using json_body = detail::model_validation_middleware<validation_target::json, body_t_type>;
+template <typename body_type>
+using json_body = detail::model_validation_middleware<validation_target::json, body_type>;
 
-template <typename body_t_type>
-using form_body = detail::model_validation_middleware<validation_target::form, body_t_type>;
+template <typename body_type>
+using form_body = detail::model_validation_middleware<validation_target::form, body_type>;
 
-template <typename body_t_type>
-using query_model = detail::model_validation_middleware<validation_target::query, body_t_type>;
+template <typename body_type>
+using query_model = detail::model_validation_middleware<validation_target::query, body_type>;
 
-template <typename body_t_type>
-using path_model = detail::model_validation_middleware<validation_target::param, body_t_type>;
+template <typename body_type>
+using path_model = detail::model_validation_middleware<validation_target::param, body_type>;
 
-template <typename body_t_type>
-using header_model = detail::model_validation_middleware<validation_target::header, body_t_type>;
+template <typename body_type>
+using header_model = detail::model_validation_middleware<validation_target::header, body_type>;
 
-template <typename body_t_type>
-using cookie_model = detail::model_validation_middleware<validation_target::cookie, body_t_type>;
-
+template <typename body_type>
+using cookie_model = detail::model_validation_middleware<validation_target::cookie, body_type>;
 }  // namespace ruvia

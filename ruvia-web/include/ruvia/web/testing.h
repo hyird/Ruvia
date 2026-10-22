@@ -21,21 +21,24 @@
 
 #include <cstddef>
 #include <memory>
+#include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/detail/integration/worker_state.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/error_handlers.h"
-#include "ruvia/web/rate_limit_rule.h"
+#include "ruvia/web/error.h"
+#include "ruvia/web/rate_limit.h"
 #include "ruvia/web/server_config.h"
-
 namespace ruvia {
 
 class test_app;
@@ -64,7 +67,7 @@ public:
         return test_request("PATCH", target);
     }
 
-    [[nodiscard]] static test_request del(std::string_view target) {
+    [[nodiscard]] static test_request delete_request(std::string_view target) {
         return test_request("DELETE", target);
     }
 
@@ -143,20 +146,20 @@ public:
     [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
     std::optional<std::string_view> header(std::string_view) const&& = delete;
 
-    [[nodiscard]] const std::vector<std::pair<std::string, std::string>>& headers()
-        const& noexcept {
+    [[nodiscard]] std::span<const http_header> headers() const& noexcept {
         return headers_;
     }
-    const std::vector<std::pair<std::string, std::string>>& headers() const&& = delete;
+    std::span<const http_header> headers() const&& = delete;
 
 private:
     friend class test_app;
 
     explicit test_response(http_status_code status) noexcept
-        : status_(status) {}
+        : status_(status),
+          headers_(process_resource()) {}
 
     http_status_code status_;
-    std::vector<std::pair<std::string, std::string>> headers_;
+    std::pmr::vector<http_header> headers_;
     std::string body_;
 };
 

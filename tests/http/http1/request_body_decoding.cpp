@@ -197,24 +197,20 @@ RUVIA_TEST(http_request_content_decoder_owns_protocol_failure_status) {
     constexpr std::array gzip{http_content_coding::gzip};
     constexpr std::array identity{http_content_coding::identity};
     constexpr std::array invalid_coding{static_cast<http_content_coding>(255)};
-    const auto invalid = decode_http_request_content(
-        gzip, "not-gzip", {.max_decoded_bytes_ = 1024, .resource_ = resource});
-    RUVIA_CHECK(invalid.protocol_failure() != nullptr);
-    RUVIA_CHECK(invalid.decoder_failure() == nullptr);
-    RUVIA_CHECK_EQ(
-        invalid.protocol_failure()->protocol_error().status(), ruvia::http_status::bad_request);
-
-    const auto oversized = decode_http_request_content(
-        identity, "too large", {.max_decoded_bytes_ = 4, .resource_ = resource});
-    RUVIA_CHECK(oversized.protocol_failure() != nullptr);
-    RUVIA_CHECK(oversized.decoder_failure() == nullptr);
-    RUVIA_CHECK_EQ(oversized.protocol_failure()->protocol_error().status(),
-        ruvia::http_status::content_too_large);
-
-    const auto unsupported = decode_http_request_content(
-        invalid_coding, {}, {.max_decoded_bytes_ = 1024, .resource_ = resource});
-    RUVIA_CHECK(unsupported.protocol_failure() != nullptr);
-    RUVIA_CHECK(unsupported.decoder_failure() == nullptr);
-    RUVIA_CHECK_EQ(unsupported.protocol_failure()->protocol_error().status(),
-        ruvia::http_status::unsupported_media_type);
+    const auto check_protocol_error = [&](std::span<const http_content_coding> codings,
+                                          std::string_view body, std::size_t max_bytes,
+                                          ruvia::http_status_code expected_status) {
+        bool caught = false;
+        try {
+            (void)decode_http_request_content(
+                codings, body, {.max_decoded_bytes_ = max_bytes, .resource_ = resource});
+        } catch (const ruvia::http_protocol_error& error) {
+            caught = true;
+            RUVIA_CHECK_EQ(error.status(), expected_status);
+        }
+        RUVIA_CHECK(caught);
+    };
+    check_protocol_error(gzip, "not-gzip", 1024, ruvia::http_status::bad_request);
+    check_protocol_error(identity, "too large", 4, ruvia::http_status::content_too_large);
+    check_protocol_error(invalid_coding, {}, 1024, ruvia::http_status::unsupported_media_type);
 }

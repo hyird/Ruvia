@@ -353,21 +353,6 @@ private:
 
 static_assert(std::is_nothrow_move_constructible_v<http1_parsed_client_response_head>);
 
-class http1_client_response_parse_failure final {
-public:
-    [[nodiscard]] constexpr http1_client_response_parse_error error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend struct detail::http1_client_response_parse_result_access;
-
-    explicit constexpr http1_client_response_parse_failure(http1_client_response_parse_error error) noexcept
-        : error_(error) {}
-
-    http1_client_response_parse_error error_;
-};
-
 // Parsing after the exchange already completed or failed is not a wire error;
 // it is a state-machine termination report. completed() names the outcome that
 // ended the exchange.
@@ -412,10 +397,10 @@ public:
     http1_parsed_client_response_head* parsed() && = delete;
     const http1_parsed_client_response_head* parsed() const&& = delete;
 
-    [[nodiscard]] const http1_client_response_parse_failure* failure() const& noexcept {
-        return std::get_if<http1_client_response_parse_failure>(&state_);
+    [[nodiscard]] const http1_client_response_parse_error* failure() const& noexcept {
+        return std::get_if<http1_client_response_parse_error>(&state_);
     }
-    const http1_client_response_parse_failure* failure() const&& = delete;
+    const http1_client_response_parse_error* failure() const&& = delete;
 
     // Non-null when the exchange already completed or failed and parsing
     // stopped; a driver must not feed more input to this parser.
@@ -433,14 +418,14 @@ private:
     explicit http1_client_response_parse_result(http1_parsed_client_response_head state_value) noexcept
         : state_(std::move(state_value)) {}
 
-    explicit http1_client_response_parse_result(http1_client_response_parse_failure state_value) noexcept
+    explicit http1_client_response_parse_result(http1_client_response_parse_error state_value) noexcept
         : state_(state_value) {}
 
     explicit http1_client_response_parse_result(http1_client_response_parse_terminal state_value) noexcept
         : state_(state_value) {}
 
     std::variant<http1_client_response_need_more, http1_parsed_client_response_head,
-        http1_client_response_parse_failure, http1_client_response_parse_terminal>
+        http1_client_response_parse_error, http1_client_response_parse_terminal>
         state_;
 };
 

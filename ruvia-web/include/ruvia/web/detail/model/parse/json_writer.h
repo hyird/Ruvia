@@ -18,16 +18,16 @@
 namespace ruvia::detail {
 
 struct model_json_access final {
-    template <typename model_t_type>
-    [[nodiscard]] static std::size_t size_hint(const model_t_type& model);
+    template <typename model_type>
+    [[nodiscard]] static std::size_t size_hint(const model_type& model);
 
-    template <typename model_t_type>
-    static void append(std::pmr::string& output, const model_t_type& model);
+    template <typename model_type>
+    static void append(std::pmr::string& output, const model_type& model);
 };
 
-template <typename value_t_type>
-[[nodiscard]] std::size_t json_size_hint_value(const value_t_type& value) {
-    using t_type = std::remove_cvref_t<value_t_type>;
+template <typename value_type>
+[[nodiscard]] std::size_t json_size_hint_value(const value_type& value) {
+    using t_type = std::remove_cvref_t<value_type>;
     if constexpr (is_ruvia_scalar<t_type>) {
         return json_size_hint_value(value.value_);
     } else if constexpr (std::is_same_v<t_type, bool>) {
@@ -59,11 +59,11 @@ template <typename value_t_type>
     }
 }
 
-template <typename value_t_type>
-void append_json_value(std::pmr::string& output, const value_t_type& value);
+template <typename value_type>
+void append_json_value(std::pmr::string& output, const value_type& value);
 
-template <typename sequence_t_type>
-void append_json_sequence(std::pmr::string& output, const sequence_t_type& value) {
+template <typename sequence_type>
+void append_json_sequence(std::pmr::string& output, const sequence_type& value) {
     output.push_back('[');
     bool first = true;
     for (const auto& item : value) {
@@ -76,9 +76,9 @@ void append_json_sequence(std::pmr::string& output, const sequence_t_type& value
     output.push_back(']');
 }
 
-template <typename value_t_type>
-void append_json_value(std::pmr::string& output, const value_t_type& value) {
-    using t_type = std::remove_cvref_t<value_t_type>;
+template <typename value_type>
+void append_json_value(std::pmr::string& output, const value_type& value) {
+    using t_type = std::remove_cvref_t<value_type>;
     if constexpr (is_ruvia_scalar<t_type>) {
         append_json_value(output, value.value_);
     } else if constexpr (std::is_same_v<t_type, bool>) {
@@ -142,8 +142,8 @@ void visit_serialized_fields(const model_type& value, visitor_type&& visitor) {
 
 }  // namespace model
 
-template <typename model_t_type>
-std::size_t model_json_access::size_hint(const model_t_type& value) {
+template <typename model_type>
+std::size_t model_json_access::size_hint(const model_type& value) {
     std::size_t size = 2;
     model::visit_serialized_fields(value, [&size](const auto& slot, auto kind, bool comma) {
         size += std::size_t{comma} + json_string_size_hint(slot.wire_name()) + 1;
@@ -154,8 +154,8 @@ std::size_t model_json_access::size_hint(const model_t_type& value) {
     return size;
 }
 
-template <typename model_t_type>
-void model_json_access::append(std::pmr::string& output, const model_t_type& value) {
+template <typename model_type>
+void model_json_access::append(std::pmr::string& output, const model_type& value) {
     output.push_back('{');
     model::visit_serialized_fields(value, [&output](const auto& slot, auto kind, bool comma) {
         if (comma) {

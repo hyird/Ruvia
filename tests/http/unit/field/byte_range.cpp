@@ -29,7 +29,7 @@ RUVIA_TEST(byte_range_set_discriminates_outcomes) {
     RUVIA_CHECK(!resolved.unsatisfiable());
     RUVIA_CHECK_EQ(resolved.size(), std::size_t{1});
     if (resolved.size() == 1) {
-        const auto range = resolved.resolved_range(0);
+        const auto range = resolved[0];
         RUVIA_CHECK_EQ(range.offset(), std::uint64_t{10});
         RUVIA_CHECK_EQ(range.length(), std::uint64_t{10});
     }
@@ -42,14 +42,13 @@ RUVIA_TEST(byte_range_set_discriminates_outcomes) {
     RUVIA_CHECK(!unsatisfiable.ignored());
     RUVIA_CHECK(unsatisfiable.unsatisfiable());
     RUVIA_CHECK_EQ(unsatisfiable.size(), std::size_t{0});
-    [[maybe_unused]] const auto outcome = unsatisfiable.unsatisfiable_outcome();
 }
 
 RUVIA_TEST(byte_range_set_bounded_and_open_ended) {
     const auto bounded = resolve_http_byte_range_set("bytes=100-199", 1000);
     RUVIA_CHECK_EQ(bounded.size(), std::size_t{1});
     if (bounded.size() == 1) {
-        const auto range = bounded.resolved_range(0);
+        const auto range = bounded[0];
         RUVIA_CHECK_EQ(range.offset(), std::uint64_t{100});
         RUVIA_CHECK_EQ(range.length(), std::uint64_t{100});
     }
@@ -57,7 +56,7 @@ RUVIA_TEST(byte_range_set_bounded_and_open_ended) {
     const auto open = resolve_http_byte_range_set("bytes=500-", 1000);
     RUVIA_CHECK_EQ(open.size(), std::size_t{1});
     if (open.size() == 1) {
-        const auto range = open.resolved_range(0);
+        const auto range = open[0];
         RUVIA_CHECK_EQ(range.offset(), std::uint64_t{500});
         RUVIA_CHECK_EQ(range.length(), std::uint64_t{500});
     }
@@ -65,15 +64,15 @@ RUVIA_TEST(byte_range_set_bounded_and_open_ended) {
     const auto last_byte = resolve_http_byte_range_set("bytes=999-999", 1000);
     RUVIA_CHECK_EQ(last_byte.size(), std::size_t{1});
     if (last_byte.size() == 1) {
-        RUVIA_CHECK_EQ(last_byte.resolved_range(0).offset(), std::uint64_t{999});
-        RUVIA_CHECK_EQ(last_byte.resolved_range(0).length(), std::uint64_t{1});
+        RUVIA_CHECK_EQ(last_byte[0].offset(), std::uint64_t{999});
+        RUVIA_CHECK_EQ(last_byte[0].length(), std::uint64_t{1});
     }
 
     const auto clamped_end = resolve_http_byte_range_set("bytes=0-2000", 1000);
     RUVIA_CHECK_EQ(clamped_end.size(), std::size_t{1});
     if (clamped_end.size() == 1) {
-        RUVIA_CHECK_EQ(clamped_end.resolved_range(0).offset(), std::uint64_t{0});
-        RUVIA_CHECK_EQ(clamped_end.resolved_range(0).length(), std::uint64_t{1000});
+        RUVIA_CHECK_EQ(clamped_end[0].offset(), std::uint64_t{0});
+        RUVIA_CHECK_EQ(clamped_end[0].length(), std::uint64_t{1000});
     }
 }
 
@@ -81,15 +80,15 @@ RUVIA_TEST(byte_range_set_suffix) {
     const auto suffix = resolve_http_byte_range_set("bytes=-100", 1000);
     RUVIA_CHECK_EQ(suffix.size(), std::size_t{1});
     if (suffix.size() == 1) {
-        RUVIA_CHECK_EQ(suffix.resolved_range(0).offset(), std::uint64_t{900});
-        RUVIA_CHECK_EQ(suffix.resolved_range(0).length(), std::uint64_t{100});
+        RUVIA_CHECK_EQ(suffix[0].offset(), std::uint64_t{900});
+        RUVIA_CHECK_EQ(suffix[0].length(), std::uint64_t{100});
     }
 
     const auto whole = resolve_http_byte_range_set("bytes=-2000", 1000);
     RUVIA_CHECK_EQ(whole.size(), std::size_t{1});
     if (whole.size() == 1) {
-        RUVIA_CHECK_EQ(whole.resolved_range(0).offset(), std::uint64_t{0});
-        RUVIA_CHECK_EQ(whole.resolved_range(0).length(), std::uint64_t{1000});
+        RUVIA_CHECK_EQ(whole[0].offset(), std::uint64_t{0});
+        RUVIA_CHECK_EQ(whole[0].length(), std::uint64_t{1000});
     }
 }
 
@@ -117,10 +116,10 @@ RUVIA_TEST(byte_range_set_supports_multiple_ranges) {
     RUVIA_CHECK(!ranges.unsatisfiable());
     RUVIA_CHECK_EQ(ranges.size(), std::size_t{2});
     if (ranges.size() == 2) {
-        RUVIA_CHECK_EQ(ranges.resolved_range(0).offset(), std::uint64_t{0});
-        RUVIA_CHECK_EQ(ranges.resolved_range(0).length(), std::uint64_t{100});
-        RUVIA_CHECK_EQ(ranges.resolved_range(1).offset(), std::uint64_t{200});
-        RUVIA_CHECK_EQ(ranges.resolved_range(1).length(), std::uint64_t{100});
+        RUVIA_CHECK_EQ(ranges[0].offset(), std::uint64_t{0});
+        RUVIA_CHECK_EQ(ranges[0].length(), std::uint64_t{100});
+        RUVIA_CHECK_EQ(ranges[1].offset(), std::uint64_t{200});
+        RUVIA_CHECK_EQ(ranges[1].length(), std::uint64_t{100});
     }
 }
 
@@ -130,12 +129,12 @@ RUVIA_TEST(byte_range_set_unit_is_case_insensitive) {
     RUVIA_CHECK_EQ(title_case.size(), std::size_t{1});
     RUVIA_CHECK_EQ(upper_case.size(), std::size_t{1});
     if (title_case.size() == 1) {
-        RUVIA_CHECK_EQ(title_case.resolved_range(0).offset(), std::uint64_t{0});
-        RUVIA_CHECK_EQ(title_case.resolved_range(0).length(), std::uint64_t{10});
+        RUVIA_CHECK_EQ(title_case[0].offset(), std::uint64_t{0});
+        RUVIA_CHECK_EQ(title_case[0].length(), std::uint64_t{10});
     }
     if (upper_case.size() == 1) {
-        RUVIA_CHECK_EQ(upper_case.resolved_range(0).offset(), std::uint64_t{90});
-        RUVIA_CHECK_EQ(upper_case.resolved_range(0).length(), std::uint64_t{10});
+        RUVIA_CHECK_EQ(upper_case[0].offset(), std::uint64_t{90});
+        RUVIA_CHECK_EQ(upper_case[0].length(), std::uint64_t{10});
     }
 }
 
@@ -143,8 +142,8 @@ RUVIA_TEST(byte_range_set_allows_ows_after_equals) {
     const auto spaced = resolve_http_byte_range_set("bytes= \t10-19", 100);
     RUVIA_CHECK_EQ(spaced.size(), std::size_t{1});
     if (spaced.size() == 1) {
-        RUVIA_CHECK_EQ(spaced.resolved_range(0).offset(), std::uint64_t{10});
-        RUVIA_CHECK_EQ(spaced.resolved_range(0).length(), std::uint64_t{10});
+        RUVIA_CHECK_EQ(spaced[0].offset(), std::uint64_t{10});
+        RUVIA_CHECK_EQ(spaced[0].length(), std::uint64_t{10});
     }
 }
 
@@ -154,12 +153,12 @@ RUVIA_TEST(byte_range_set_trims_field_value_ows) {
     RUVIA_CHECK_EQ(trailing.size(), std::size_t{1});
     RUVIA_CHECK_EQ(wrapped.size(), std::size_t{1});
     if (trailing.size() == 1) {
-        RUVIA_CHECK_EQ(trailing.resolved_range(0).offset(), std::uint64_t{10});
-        RUVIA_CHECK_EQ(trailing.resolved_range(0).length(), std::uint64_t{10});
+        RUVIA_CHECK_EQ(trailing[0].offset(), std::uint64_t{10});
+        RUVIA_CHECK_EQ(trailing[0].length(), std::uint64_t{10});
     }
     if (wrapped.size() == 1) {
-        RUVIA_CHECK_EQ(wrapped.resolved_range(0).offset(), std::uint64_t{20});
-        RUVIA_CHECK_EQ(wrapped.resolved_range(0).length(), std::uint64_t{10});
+        RUVIA_CHECK_EQ(wrapped[0].offset(), std::uint64_t{20});
+        RUVIA_CHECK_EQ(wrapped[0].length(), std::uint64_t{10});
     }
 }
 
@@ -170,15 +169,15 @@ RUVIA_TEST(byte_range_set_huge_decimal_numerals_preserve_semantics) {
     const auto huge_end = resolve_http_byte_range_set("bytes=0-184467440737095516160", 1000);
     RUVIA_CHECK_EQ(huge_end.size(), std::size_t{1});
     if (huge_end.size() == 1) {
-        RUVIA_CHECK_EQ(huge_end.resolved_range(0).offset(), std::uint64_t{0});
-        RUVIA_CHECK_EQ(huge_end.resolved_range(0).length(), std::uint64_t{1000});
+        RUVIA_CHECK_EQ(huge_end[0].offset(), std::uint64_t{0});
+        RUVIA_CHECK_EQ(huge_end[0].length(), std::uint64_t{1000});
     }
 
     const auto huge_suffix = resolve_http_byte_range_set("bytes=-184467440737095516160", 1000);
     RUVIA_CHECK_EQ(huge_suffix.size(), std::size_t{1});
     if (huge_suffix.size() == 1) {
-        RUVIA_CHECK_EQ(huge_suffix.resolved_range(0).offset(), std::uint64_t{0});
-        RUVIA_CHECK_EQ(huge_suffix.resolved_range(0).length(), std::uint64_t{1000});
+        RUVIA_CHECK_EQ(huge_suffix[0].offset(), std::uint64_t{0});
+        RUVIA_CHECK_EQ(huge_suffix[0].length(), std::uint64_t{1000});
     }
 
     RUVIA_CHECK(is_ignored_range("bytes=184467440737095516160x-", 1000));
@@ -308,8 +307,7 @@ RUVIA_TEST(byte_range_set_rejects_out_of_range_index) {
     };
     RUVIA_CHECK(!throws_out_of_range([&] { return resolved[0]; }));
     RUVIA_CHECK(throws_out_of_range([&] { return resolved[1]; }));
-    RUVIA_CHECK(throws_out_of_range([&] { return resolved.resolved_range(1); }));
-    RUVIA_CHECK(throws_out_of_range([&] { return resolved.resolved_range(http_byte_range_set::capacity); }));
+    RUVIA_CHECK(throws_out_of_range([&] { return resolved[http_byte_range_set::capacity]; }));
     const auto ignored = resolve_http_byte_range_set("items=0-9", 100);
-    RUVIA_CHECK(throws_out_of_range([&] { return ignored.resolved_range(0); }));
+    RUVIA_CHECK(throws_out_of_range([&] { return ignored[0]; }));
 }

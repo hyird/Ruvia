@@ -19,23 +19,6 @@ enum class http2_response_head_plan_error : std::uint8_t {
     response_representation_mismatch
 };
 
-class http2_response_head_plan_failure final {
-public:
-    [[nodiscard]] constexpr http2_response_head_plan_error error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend class http2_response_head_plan_result;
-
-    explicit constexpr http2_response_head_plan_failure(http2_response_head_plan_error error) noexcept
-        : error_(error) {}
-
-    http2_response_head_plan_error error_;
-};
-
-class http2_response_head_plan_result;
-
 class http2_response_head_plan final {
 public:
     [[nodiscard]] http_response_body_plan body_plan() const noexcept {
@@ -60,9 +43,31 @@ public:
                    : std::nullopt;
     }
 
-private:
-    friend class http2_response_head_plan_result;
+    [[nodiscard]] static http2_response_head_plan canonical(
+        http_response_body_plan body_plan, std::uint64_t value) noexcept {
+        return http2_response_head_plan(body_plan, content_length_mode_type::canonical, value);
+    }
 
+    [[nodiscard]] static std::variant<http2_response_head_plan, http2_response_head_plan_error>
+    preserve_explicit(http_response_body_plan body_plan, const http_response& response) noexcept {
+        if (!response_has_known_header(response, response_header_content_length)) {
+            return omit(body_plan);
+        }
+
+        const auto value = response.headers().header("content-length").value_or("");
+        http_content_length_state state;
+        if (state.parse_field(value) != http_content_length_parse_status::ok) {
+            return http2_response_head_plan_error::invalid_content_length;
+        }
+        return http2_response_head_plan(
+            body_plan, content_length_mode_type::explicit_value, *state.value());
+    }
+
+    [[nodiscard]] static http2_response_head_plan omit(http_response_body_plan body_plan) noexcept {
+        return http2_response_head_plan(body_plan, content_length_mode_type::omit);
+    }
+
+private:
     enum class content_length_mode_type : std::uint8_t {
         omit,
         canonical,
@@ -83,109 +88,48 @@ private:
 static_assert(std::is_trivially_copyable_v<http2_response_head_plan>);
 static_assert(sizeof(http2_response_head_plan) <= 24);
 
-class http2_response_head_plan_result final {
-public:
-    [[nodiscard]] const http2_response_head_plan* plan() const& noexcept {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    [[nodiscard]] const http2_response_head_plan* plan() const&& = delete;
+using http2_response_head_plan_result_type =
+    std::variant<http2_response_head_plan, http2_response_head_plan_error>;
 
-    [[nodiscard]] const http2_response_head_plan_failure* failure() const& noexcept {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    [[nodiscard]] const http2_response_head_plan_failure* failure() const&& = delete;
-
-private:
-    friend http2_response_head_plan_result http2_buffered_response_head_plan(
-        const http_buffered_response_write_plan&, const http_response&) noexcept;
-    friend http2_response_head_plan_result http2_streaming_response_head_plan(
-        const http_response_body_plan&, const http_response&) noexcept;
-    friend http2_response_head_plan_result http2_connect_response_head_plan(
-        const http_response_body_plan&) noexcept;
-
-    using value_type = std::variant<http2_response_head_plan, http2_response_head_plan_failure>;
-
-    explicit http2_response_head_plan_result(http2_response_head_plan plan) noexcept
-        : value_(plan) {}
-
-    explicit http2_response_head_plan_result(http2_response_head_plan_failure failure) noexcept
-        : value_(failure) {}
-
-    [[nodiscard]] static http2_response_head_plan_result canonical(
-        http_response_body_plan body_plan, std::uint64_t value) noexcept {
-        return http2_response_head_plan_result(http2_response_head_plan(
-            body_plan, http2_response_head_plan::content_length_mode_type::canonical, value));
-    }
-
-    [[nodiscard]] static http2_response_head_plan_result preserve_explicit(
-        http_response_body_plan body_plan, const http_response& response) noexcept {
-        if (!response_has_known_header(response, response_header_content_length)) {
-            return omit(body_plan);
-        }
-
-        const auto value = response.headers().header("content-length").value_or("");
-        http_content_length_state state;
-        if (state.parse_field(value) != http_content_length_parse_status::ok) {
-            return http2_response_head_plan_result(
-                http2_response_head_plan_failure(http2_response_head_plan_error::invalid_content_length));
-        }
-        return http2_response_head_plan_result(http2_response_head_plan(
-            body_plan, http2_response_head_plan::content_length_mode_type::explicit_value, *state.value()));
-    }
-
-    [[nodiscard]] static http2_response_head_plan_result omit(http_response_body_plan body_plan) noexcept {
-        return http2_response_head_plan_result(
-            http2_response_head_plan(body_plan, http2_response_head_plan::content_length_mode_type::omit));
-    }
-
-    [[nodiscard]] static http2_response_head_plan_result failure(
-        http2_response_head_plan_error error) noexcept {
-        return http2_response_head_plan_result(http2_response_head_plan_failure(error));
-    }
-
-    value_type value_;
-};
-
-[[nodiscard]] inline http2_response_head_plan_result http2_buffered_response_head_plan(
+[[nodiscard]] inline http2_response_head_plan_result_type http2_buffered_response_head_plan(
     const http_buffered_response_write_plan& write_plan, const http_response& response) noexcept {
     const auto body_plan = write_plan.body_plan();
     if (write_plan.response_status() != response.status()) {
-        return http2_response_head_plan_result::failure(
-            http2_response_head_plan_error::response_status_mismatch);
+        return http2_response_head_plan_error::response_status_mismatch;
     }
     if (!write_plan.matches_response(response)) {
-        return http2_response_head_plan_result::failure(
-            http2_response_head_plan_error::response_representation_mismatch);
+        return http2_response_head_plan_error::response_representation_mismatch;
     }
     if (body_plan.auto_content_length_allowed()) {
-        return http2_response_head_plan_result::canonical(
+        return http2_response_head_plan::canonical(
             body_plan, body_plan.status_allows_body() ? write_plan.content_length() : 0);
     }
-    return body_plan.explicit_content_length_allowed()
-               ? http2_response_head_plan_result::preserve_explicit(body_plan, response)
-               : http2_response_head_plan_result::omit(body_plan);
+    if (body_plan.explicit_content_length_allowed()) {
+        return http2_response_head_plan::preserve_explicit(body_plan, response);
+    }
+    return http2_response_head_plan::omit(body_plan);
 }
 
-[[nodiscard]] inline http2_response_head_plan_result http2_streaming_response_head_plan(
+[[nodiscard]] inline http2_response_head_plan_result_type http2_streaming_response_head_plan(
     const http_response_body_plan& body_plan, const http_response& response) noexcept {
     if (body_plan.response_status() != response.status()) {
-        return http2_response_head_plan_result::failure(
-            http2_response_head_plan_error::response_status_mismatch);
+        return http2_response_head_plan_error::response_status_mismatch;
     }
     if (body_plan.auto_content_length_allowed() && !body_plan.status_allows_body()) {
-        return http2_response_head_plan_result::canonical(body_plan, 0);
+        return http2_response_head_plan::canonical(body_plan, 0);
     }
-    return body_plan.explicit_content_length_allowed()
-               ? http2_response_head_plan_result::preserve_explicit(body_plan, response)
-               : http2_response_head_plan_result::omit(body_plan);
+    if (body_plan.explicit_content_length_allowed()) {
+        return http2_response_head_plan::preserve_explicit(body_plan, response);
+    }
+    return http2_response_head_plan::omit(body_plan);
 }
 
-[[nodiscard]] inline http2_response_head_plan_result http2_connect_response_head_plan(
+[[nodiscard]] inline http2_response_head_plan_result_type http2_connect_response_head_plan(
     const http_response_body_plan& body_plan) noexcept {
-    return body_plan.content_semantics() == ::ruvia::http_response_content_semantics::connect_tunnel
-               ? http2_response_head_plan_result::omit(body_plan)
-               : http2_response_head_plan_result::failure(
-                     http2_response_head_plan_error::connect_tunnel_required);
+    if (body_plan.content_semantics() == ::ruvia::http_response_content_semantics::connect_tunnel) {
+        return http2_response_head_plan::omit(body_plan);
+    }
+    return http2_response_head_plan_error::connect_tunnel_required;
 }
 
 }  // namespace ruvia::detail

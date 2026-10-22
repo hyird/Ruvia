@@ -18,10 +18,15 @@
 #include "ruvia/web/detail/model/rule/rules.h"
 #include "ruvia/web/detail/model/traits.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/validation_types.h"
 
 namespace ruvia {
 
+enum class validation_target : std::uint8_t { json,
+    form,
+    query,
+    param,
+    header,
+    cookie };
 namespace detail {
 
 [[nodiscard]] inline std::pmr::vector<validation_issue> clone_validation_issues(
@@ -195,8 +200,8 @@ public:
         return *this;
     }
 
-    template <typename optional_t_type>
-    validator& required(const optional_t_type& value, std::string_view field,
+    template <typename optional_type>
+    validator& required(const optional_type& value, std::string_view field,
         std::string_view message = "is required") & {
         if (!value) {
             add(field, "required", message);
@@ -204,8 +209,8 @@ public:
         return *this;
     }
 
-    template <typename optional_t_type>
-    validator& min_length(const optional_t_type& value, std::string_view field, std::size_t min_value,
+    template <typename optional_type>
+    validator& min_length(const optional_type& value, std::string_view field, std::size_t min_value,
         std::string_view message = "is too short") & {
         if (value && detail::validation_string_view(*value).size() < min_value) {
             add(field, "too_small", message);
@@ -213,8 +218,8 @@ public:
         return *this;
     }
 
-    template <typename optional_t_type>
-    validator& max_length(const optional_t_type& value, std::string_view field, std::size_t max_value,
+    template <typename optional_type>
+    validator& max_length(const optional_type& value, std::string_view field, std::size_t max_value,
         std::string_view message = "is too long") & {
         if (value && detail::validation_string_view(*value).size() > max_value) {
             add(field, "too_big", message);
@@ -222,8 +227,8 @@ public:
         return *this;
     }
 
-    template <typename optional_t_type, typename min_t_type, typename max_t_type>
-    validator& range(const optional_t_type& value, std::string_view field, min_t_type min_value, max_t_type max_value,
+    template <typename optional_type, typename min_type, typename max_type>
+    validator& range(const optional_type& value, std::string_view field, min_type min_value, max_type max_value,
         std::string_view message = "is out of range") & {
         if (value) {
             if (detail::validation_less(*value, min_value)) {
@@ -235,8 +240,8 @@ public:
         return *this;
     }
 
-    template <typename optional_t_type>
-    validator& one_of(const optional_t_type& value, std::string_view field,
+    template <typename optional_type>
+    validator& one_of(const optional_type& value, std::string_view field,
         std::initializer_list<std::string_view> allowed,
         std::string_view message = "is not allowed") & {
         if (!value) {

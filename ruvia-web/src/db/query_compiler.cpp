@@ -1481,7 +1481,7 @@ db_statement db_query::compile(db_driver driver, std::pmr::memory_resource* reso
     return db_statement(std::move(compiler.output_.sql_), std::move(compiler.output_.params_), returns_rows());
 }
 
-std::pmr::string db_query::render_expression(expr_type expression, db_driver driver,
+std::pmr::string db_query::render_expression(db_expression expression, db_driver driver,
     std::pmr::memory_resource* resource, db_parameter_mode mode) {
     if (mode != db_parameter_mode::literal) {
         throw std::invalid_argument("standalone expression rendering requires literal mode");

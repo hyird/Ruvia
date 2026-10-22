@@ -10,12 +10,12 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/attributes.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/detail/request/http_request_header_block.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
-#include "ruvia/http/http_parse_error.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_protocol_version.h"
 
 namespace ruvia {

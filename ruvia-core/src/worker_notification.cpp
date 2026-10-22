@@ -17,7 +17,7 @@
 #include <asio/buffer.hpp>
 #include <asio/error.hpp>
 
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_runtime_context.h"
 

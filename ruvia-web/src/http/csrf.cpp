@@ -8,6 +8,7 @@
 
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_hex.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/detail/util/registration_resource.h"
 
 #include "http/secure_token.h"
@@ -15,19 +16,18 @@
 
 namespace ruvia::detail {
 
-secure_token_result generate_secure_token(std::span<char> buffer) noexcept {
+std::optional<std::string_view> generate_secure_token(std::span<char> buffer) noexcept {
     constexpr std::size_t random_bytes = 24;  // 24 bytes -> 48 hex characters
     if (buffer.size() < random_bytes * 2) {
-        return secure_token_result::make_failure();
+        return std::nullopt;
     }
     unsigned char raw[random_bytes];
     if (RAND_bytes_ex(nullptr, raw, random_bytes, 0) != 1) {
-        return secure_token_result::make_failure();
+        return std::nullopt;
     }
     http_encode_lower_hex(buffer.data(), std::span<const unsigned char>(raw));
-    return secure_token_result::make_ready(std::string_view(buffer.data(), random_bytes * 2));
+    return std::string_view(buffer.data(), random_bytes * 2);
 }
-
 }  // namespace ruvia::detail
 
 namespace ruvia {
@@ -81,9 +81,8 @@ task<void> csrf_protection::handle(context& c, next& next_value) {
         // absent and empty identically here keeps the issue and validation sides
         // of the double-submit symmetric.
         std::array<char, 64> buffer;
-        const auto token_result = detail::generate_secure_token(buffer);
-        const auto* token = token_result.ready();
-        if (token == nullptr) {
+        const auto token = detail::generate_secure_token(buffer);
+        if (!token) {
             c.respond(c.error({.status_ = ruvia::http_status::internal_server_error,
                 .code_ = "secure_random_failed",
                 .message_ = "secure token generation failed"}));
@@ -99,7 +98,7 @@ task<void> csrf_protection::handle(context& c, next& next_value) {
             .secure_ = connection.scheme() == http_scheme::https ? cookie_attribute_policy::emit
                                                                  : cookie_attribute_policy::omit,
         };
-        c.set_cookie({.name_ = config_.cookie_name_, .value_ = token->value(), .attributes_ = options});
+        c.set_cookie({.name_ = config_.cookie_name_, .value_ = *token, .attributes_ = options});
     }
     co_await next_value();
 }

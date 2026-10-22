@@ -3,7 +3,7 @@
 #include <string_view>
 
 #include "ruvia/http/http_field_whitespace.h"
-#include "ruvia/http/http_origin.h"
+#include "ruvia/http/http_request_target.h"
 
 namespace ruvia::detail {
 

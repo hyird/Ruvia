@@ -14,7 +14,7 @@
 #include "ruvia/http/http_field_name_list.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/http/http_origin.h"
+#include "ruvia/http/http_request_target.h"
 
 namespace ruvia::detail {
 namespace {

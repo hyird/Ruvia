@@ -13,7 +13,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/web/detail/middleware/middleware_descriptor.h"
-#include "ruvia/web/error_handlers.h"
+#include "ruvia/web/error.h"
 
 #include "router/route_entry.h"
 

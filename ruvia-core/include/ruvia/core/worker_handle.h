@@ -3,15 +3,37 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <utility>
 
 #include "ruvia/core/detail/worker/worker_dispatcher.h"
-#include "ruvia/core/worker_post_types.h"
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/core/worker_wait_result.h"
 
 namespace ruvia {
 
 using worker_id_type = std::uint64_t;
+
+[[nodiscard]] constexpr std::uint64_t worker_selection_hash(std::string_view key) noexcept {
+    std::uint64_t hash = 14695981039346656037ull;
+    for (const unsigned char ch : key) {
+        hash ^= ch;
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+enum class post_status : std::uint8_t {
+    accepted,
+    queue_full,
+    worker_stopping,
+};
+
+template <typename signature_type = void()>
+using post_outcome =
+    worker_delivery_result<move_only_function<signature_type>, post_status, post_status::accepted>;
+using post_result_type = post_outcome<void()>;
 
 namespace detail {
 class worker_dispatcher;

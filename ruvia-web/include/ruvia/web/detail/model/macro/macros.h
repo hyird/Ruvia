@@ -4,7 +4,7 @@
 #include <memory_resource>
 #include <utility>
 
-#include "ruvia/http/attributes.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/model/macro/macro_field_ops.h"
 #include "ruvia/web/detail/model/model_storage.h"
 #include "ruvia/web/fixed_string.h"

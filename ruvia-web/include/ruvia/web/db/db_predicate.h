@@ -283,14 +283,14 @@ public:
     [[nodiscard]] db_selection select() const {
         return as(field_name.view());
     }
-    [[nodiscard]] db_selection as(std::string_view alias_name) const {
+    [[nodiscard]] db_selection as(borrowed_text alias_name) const {
         return to_expr().as(alias_name);
     }
     template <detail::db_parameter v_type>
-    [[nodiscard]] db_selection coalesce(v_type&& fallback, std::string_view alias_name = field_name.view()) const {
+    [[nodiscard]] db_selection coalesce(v_type&& fallback, borrowed_text alias_name = field_name.view()) const {
         return db_expr::coalesce({to_expr(), db_expr::value(std::forward<v_type>(fallback))}).as(alias_name);
     }
-    [[nodiscard]] db_selection coalesce_text(std::string_view fallback = {}, std::string_view alias_name = field_name.view()) const {
+    [[nodiscard]] db_selection coalesce_text(std::string_view fallback = {}, borrowed_text alias_name = field_name.view()) const {
         auto col_expr = to_expr();
         if constexpr (column_type::data_type != db_data_type::text &&
                       column_type::data_type != db_data_type::varchar &&
@@ -303,7 +303,7 @@ public:
     template <detail::db_parameter v_type>
         requires(is_writable && (!std::same_as<std::remove_cvref_t<v_type>, std::nullptr_t> || column_type::options.nullable_))
     [[nodiscard]] db_assignment set(v_type&& value) const {
-        return db_assignment{std::string(field_name.view()), db_expr::value(std::forward<v_type>(value))};
+        return db_assignment{field_name.view(), db_expr::value(std::forward<v_type>(value))};
     }
     template <detail::db_parameter v_type>
         requires(is_writable && (!std::same_as<std::remove_cvref_t<v_type>, std::nullptr_t> || column_type::options.nullable_))
@@ -316,7 +316,7 @@ public:
         if (value.empty()) {
             throw std::invalid_argument("cannot assign an empty database expression");
         }
-        return db_assignment{std::string(field_name.view()), value};
+        return db_assignment{field_name.view(), value};
     }
     [[nodiscard]] db_assignment operator=(const db_expr& value) const
         requires is_writable
@@ -326,14 +326,14 @@ public:
     [[nodiscard]] db_assignment set_null() const
         requires(is_writable && column_type::options.nullable_)
     {
-        return db_assignment{std::string(field_name.view()), db_expr::null()};
+        return db_assignment{field_name.view(), db_expr::null()};
     }
     [[nodiscard]] db_assignment set_null_if_empty(std::string_view value) const
         requires(is_writable && column_type::options.nullable_)
     {
         auto expr = db_expr::null_if(db_expr::value(value), db_expr::value(std::string_view{}));
         if constexpr (!column_type::options.enum_name_.view().empty()) {
-            expr = expr.cast({.custom_name_ = std::string(column_type::options.enum_name_.view())});
+            expr = expr.cast({.custom_name_ = column_type::options.enum_name_.view()});
         } else if constexpr (column_type::data_type != db_data_type::inferred &&
                              column_type::data_type != db_data_type::text &&
                              column_type::data_type != db_data_type::varchar &&
@@ -343,27 +343,27 @@ public:
                 .precision_ = column_type::options.precision_,
                 .scale_ = column_type::options.scale_});
         }
-        return db_assignment{std::string(field_name.view()), std::move(expr)};
+        return db_assignment{field_name.view(), std::move(expr)};
     }
     [[nodiscard]] db_assignment set_default() const
         requires is_writable
     {
-        return db_assignment{std::string(field_name.view()), db_expr::default_value()};
+        return db_assignment{field_name.view(), db_expr::default_value()};
     }
     [[nodiscard]] db_assignment set_now() const
         requires is_writable
     {
-        return db_assignment{std::string(field_name.view()), db_expr::now()};
+        return db_assignment{field_name.view(), db_expr::now()};
     }
     [[nodiscard]] db_assignment set_excluded() const
         requires is_writable
     {
-        return db_assignment{std::string(field_name.view()), excluded_expr()};
+        return db_assignment{field_name.view(), excluded_expr()};
     }
     template <typename number_type = std::int64_t>
         requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
     [[nodiscard]] db_assignment increment(number_type value = number_type{1}) const {
-        return db_assignment{std::string(field_name.view()), to_expr() + value};
+        return db_assignment{field_name.view(), to_expr() + value};
     }
     template <typename number_type>
         requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
@@ -373,7 +373,7 @@ public:
     template <typename number_type = std::int64_t>
         requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
     [[nodiscard]] db_assignment decrement(number_type value = number_type{1}) const {
-        return db_assignment{std::string(field_name.view()), to_expr() - value};
+        return db_assignment{field_name.view(), to_expr() - value};
     }
     template <typename number_type>
         requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)

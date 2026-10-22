@@ -18,15 +18,7 @@ namespace ruvia::detail {
 // Character types are text units, not numbers, so they are not Redis numbers.
 template <typename t_type>
 inline constexpr bool is_redis_entity_native_integer =
-    std::is_integral_v<std::remove_cvref_t<t_type>> &&
-    !std::is_same_v<std::remove_cvref_t<t_type>, bool> &&
-    !std::is_same_v<std::remove_cvref_t<t_type>, char> &&
-    !std::is_same_v<std::remove_cvref_t<t_type>, signed char> &&
-    !std::is_same_v<std::remove_cvref_t<t_type>, unsigned char> &&
-    !std::is_same_v<std::remove_cvref_t<t_type>, wchar_t> &&
-    !std::is_same_v<std::remove_cvref_t<t_type>, char8_t> &&
-    !std::is_same_v<std::remove_cvref_t<t_type>, char16_t> &&
-    !std::is_same_v<std::remove_cvref_t<t_type>, char32_t>;
+    is_model_integer<std::remove_cvref_t<t_type>>;
 
 template <typename t_type>
 inline constexpr bool is_redis_entity_native_float =
@@ -72,7 +64,7 @@ consteval redis_column_kind redis_column_value_kind() {
     } else if constexpr (std::is_same_v<value_type, bool_value> || std::is_same_v<value_type, bool>) {
         return redis_column_kind::bool_value;
     } else if constexpr (is_ruvia_scalar<value_type>) {
-        return redis_number_kind<model_scalar_value_t_type<value_type>>();
+        return redis_number_kind<model_scalar_value_type<value_type>>();
     } else if constexpr (is_redis_entity_native_number<value_type>) {
         return redis_number_kind<value_type>();
     } else {

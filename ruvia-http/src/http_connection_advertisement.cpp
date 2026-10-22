@@ -5,7 +5,7 @@
 
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_origin.h"
+#include "ruvia/http/http_request_target.h"
 
 namespace ruvia {
 namespace {

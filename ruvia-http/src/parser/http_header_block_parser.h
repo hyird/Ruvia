@@ -11,7 +11,7 @@
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_parse_error.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_protocol_version.h"
 
 #include "coding/http_content_length.h"

@@ -8,7 +8,7 @@
 #include <optional>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/web/rate_limit_rule.h"
+#include "ruvia/web/rate_limit.h"
 #include "ruvia/web/server_config.h"
 
 #include "http/cors_options.h"
@@ -161,6 +161,12 @@ struct http_server_options final {
     connection_failure_sink connection_failure_{};
     std::optional<rate_limit_rule> default_rate_limit_per_worker_{};
     std::size_t rate_limit_capacity_per_worker_{default_rate_limit_capacity_per_worker};
+
+    void set_server(const server_config& config);
+    void set_compression(compression_config config);
+    void set_cors(const cors_config& config);
+    void set_rate_limit(const rate_limit_config& config);
+    void set_trusted_proxies(const trusted_proxy_config& config);
 };
 
 }  // namespace ruvia::detail

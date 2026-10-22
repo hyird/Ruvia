@@ -116,10 +116,11 @@ http_representation_response_plan plan_http_representation_response(
         return make_full();
     }
     if (ranges.unsatisfiable()) {
-        return http_representation_response_plan(ranges.unsatisfiable_outcome());
+        return http_representation_response_plan(
+            http_representation_response_plan::range_unsatisfiable_type{});
     }
     if (ranges.size() == 1) {
-        return http_representation_response_plan(ranges.resolved_range(0));
+        return http_representation_response_plan(ranges[0]);
     }
     return http_representation_response_plan(ranges);
 }

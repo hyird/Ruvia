@@ -164,7 +164,7 @@ bool is_http_client_redirect_status(http_status_code status) noexcept {
            status == http_status::permanent_redirect;
 }
 
-http_client_response_header_lookup_result lookup_unique_http_client_response_header(
+http_client_response_header_lookup lookup_unique_http_client_response_header(
     const http_client_response_head& head, std::string_view name) noexcept {
     std::string_view found;
     bool seen = false;
@@ -173,13 +173,15 @@ http_client_response_header_lookup_result lookup_unique_http_client_response_hea
             continue;
         }
         if (seen) {
-            return http_client_response_header_lookup_result::make_repeated();
+            return {.status_ = http_unique_header_status::repeated};
         }
         seen = true;
         found = header.value();
     }
-    return seen ? http_client_response_header_lookup_result::make_found(found)
-                : http_client_response_header_lookup_result::make_absent();
+    if (!seen) {
+        return {.status_ = http_unique_header_status::absent};
+    }
+    return {.status_ = http_unique_header_status::found, .value_ = found};
 }
 
 http_client_redirect_request_plan::http_client_redirect_request_plan(std::string_view method,
@@ -219,20 +221,19 @@ http_origin_view http_client_resolved_redirect::origin() const& {
                                          : http_origin_view::http({.host_ = host(), .port_ = port_});
 }
 
-http_client_redirect_resolution_result resolve_http_client_redirect_target(
+std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error>
+resolve_http_client_redirect_target(
     const http_origin_view& origin, http_client_redirect_target_options options) {
     const auto current_target = options.current_target_;
     auto location = options.location_;
     if (!is_valid_http_origin_form_target(current_target)) {
-        return http_client_redirect_resolution_result::make_failure(
-            http_client_redirect_resolution_error::invalid_current_target);
+        return http_client_redirect_resolution_error::invalid_current_target;
     }
 
     location = http_trim_ows(location);
     if (const auto hash = location.find('#'); hash != std::string_view::npos) {
         if (!detail::is_valid_uri_component(location.substr(hash + 1), true, true)) {
-            return http_client_redirect_resolution_result::make_failure(
-                http_client_redirect_resolution_error::invalid_location);
+            return http_client_redirect_resolution_error::invalid_location;
         }
         location = location.substr(0, hash);
     }
@@ -246,19 +247,16 @@ http_client_redirect_resolution_result resolve_http_client_redirect_target(
         (first_path_or_query == std::string_view::npos || colon < first_path_or_query)) {
         const auto scheme = reference.substr(0, colon);
         if (!detail::is_valid_uri_scheme(scheme)) {
-            return http_client_redirect_resolution_result::make_failure(
-                http_client_redirect_resolution_error::invalid_location);
+            return http_client_redirect_resolution_error::invalid_location;
         }
         const bool is_https = http_ascii_equals_ignore_case(scheme, "https");
         if (!is_https && !http_ascii_equals_ignore_case(scheme, "http")) {
-            return http_client_redirect_resolution_result::make_failure(
-                http_client_redirect_resolution_error::unsupported_scheme);
+            return http_client_redirect_resolution_error::unsupported_scheme;
         }
         target_scheme = is_https ? http_scheme::https : http_scheme::http;
         reference.remove_prefix(colon + 1);
         if (!reference.starts_with("//")) {
-            return http_client_redirect_resolution_result::make_failure(
-                http_client_redirect_resolution_error::invalid_location);
+            return http_client_redirect_resolution_error::invalid_location;
         }
         reference.remove_prefix(2);
         has_authority = true;
@@ -277,8 +275,7 @@ http_client_redirect_resolution_result resolve_http_client_redirect_target(
             authority_end == std::string_view::npos ? reference : reference.substr(0, authority_end);
         const auto parsed_value = parse_http_client_redirect_authority(origin, target_scheme, authority);
         if (!parsed_value) {
-            return http_client_redirect_resolution_result::make_failure(
-                http_client_redirect_resolution_error::invalid_location);
+            return http_client_redirect_resolution_error::invalid_location;
         }
         host.assign(parsed_value->host_.data(), parsed_value->host_.size());
         port = parsed_value->port_;
@@ -292,11 +289,10 @@ http_client_redirect_resolution_result resolve_http_client_redirect_target(
     std::pmr::string resolved(target_resource);
     if (!resolve_http_client_redirect_path_and_query(
             has_authority, reference, current_target, target_resource, resolved)) {
-        return http_client_redirect_resolution_result::make_failure(
-            http_client_redirect_resolution_error::invalid_location);
+        return http_client_redirect_resolution_error::invalid_location;
     }
 
-    return http_client_redirect_resolution_result::make_resolved(
+    return http_client_resolved_redirect(
         target_scheme, std::move(host), port, std::move(resolved), cross_origin);
 }
 

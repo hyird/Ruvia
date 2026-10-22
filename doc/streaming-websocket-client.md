@@ -223,7 +223,7 @@ private:
 
 ## 4. HTTP `CONNECT` 与 `CONNECT-UDP` 隧道
 
-头文件：`"ruvia/web/http_tunnel.h"`、`"ruvia/web/http_tunnel_route_config.h"`、`"ruvia/web/http_capsule_stream.h"`、`"ruvia/web/http_datagram_stream.h"`。
+头文件：`"ruvia/web/http_tunnel.h"`、`"ruvia/web/http_capsule_stream.h"`、`"ruvia/web/http_datagram_stream.h"`。
 参考示例：[examples/web/tunnels.cpp](../examples/web/tunnels.cpp)。
 
 ### 4.1 服务端 `CONNECT` 字节流隧道

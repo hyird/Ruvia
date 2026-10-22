@@ -29,12 +29,44 @@ struct redis_predicate_access;
 class redis_predicate final {
 public:
     redis_predicate() noexcept = default;
-    redis_predicate(const redis_predicate&) = delete;
-    redis_predicate& operator=(const redis_predicate&) = delete;
+    redis_predicate(const redis_predicate& other) {
+        if (other.storage_) {
+            auto* resource = std::pmr::get_default_resource();
+            storage_ = make_pmr_object<detail::redis_predicate_storage>(resource, *other.storage_, resource);
+        }
+    }
+    redis_predicate& operator=(const redis_predicate& other) {
+        if (this != &other) {
+            *this = redis_predicate(other);
+        }
+        return *this;
+    }
     redis_predicate(redis_predicate&&) noexcept = default;
     redis_predicate& operator=(redis_predicate&&) noexcept = default;
     bool empty() const noexcept {
         return storage_ == nullptr;
+    }
+    redis_predicate& and_where(const redis_predicate& other) {
+        if (other.empty()) {
+            throw std::invalid_argument("cannot combine empty Redis predicates");
+        }
+        if (empty()) {
+            *this = other;
+        } else {
+            *this = combine(std::move(*this), detail::redis_binary_operator::logical_and, other);
+        }
+        return *this;
+    }
+    redis_predicate& or_where(const redis_predicate& other) {
+        if (other.empty()) {
+            throw std::invalid_argument("cannot combine empty Redis predicates");
+        }
+        if (empty()) {
+            *this = other;
+        } else {
+            *this = combine(std::move(*this), detail::redis_binary_operator::logical_or, other);
+        }
+        return *this;
     }
     friend redis_predicate operator&&(redis_predicate left, const redis_predicate& right) {
         return combine(std::move(left), detail::redis_binary_operator::logical_and, right);
@@ -47,10 +79,10 @@ private:
     template <typename, fixed_string>
     friend class redis_field_reference;
     friend struct detail::redis_predicate_access;
-    static redis_predicate create() {
+    static redis_predicate create(std::size_t initial_capacity = 0) {
         redis_predicate result;
         auto* resource = std::pmr::get_default_resource();
-        result.storage_ = make_pmr_object<detail::redis_predicate_storage>(resource, resource);
+        result.storage_ = make_pmr_object<detail::redis_predicate_storage>(resource, resource, initial_capacity);
         return result;
     }
     static redis_predicate combine(redis_predicate left, detail::redis_binary_operator operation, const redis_predicate& right) {
@@ -124,7 +156,7 @@ public:
     }
     template <detail::redis_predicate_argument lower_type, detail::redis_predicate_argument upper_type>
     redis_predicate between(lower_type&& lower, upper_type&& upper) const {
-        auto result_value = create_field();
+        auto result_value = create_field(4);
         auto& storage = *result_value.storage_;
         const auto lower_node = storage.add_value(std::forward<lower_type>(lower));
         const auto upper_node = storage.add_value(std::forward<upper_type>(upper));
@@ -154,8 +186,8 @@ public:
     }
 
 private:
-    static redis_predicate create_field() {
-        auto result_value = redis_predicate::create();
+    static redis_predicate create_field(std::size_t initial_capacity) {
+        auto result_value = redis_predicate::create(initial_capacity);
         auto& storage = *result_value.storage_;
         const auto index = storage.add(kind::field);
         storage.nodes_[index].field_ = name.view();
@@ -164,7 +196,7 @@ private:
     }
     template <detail::redis_predicate_argument value_type>
     static redis_predicate compare(operation op, value_type&& value) {
-        auto result_value = create_field();
+        auto result_value = create_field(3);
         auto& storage = *result_value.storage_;
         const auto literal = storage.add_value(std::forward<value_type>(value));
         storage.root_ = storage.add(kind::binary);
@@ -174,7 +206,7 @@ private:
     }
     template <typename value_type>
     static redis_predicate list(std::span<const value_type> values, operation op) {
-        auto result_value = create_field();
+        auto result_value = create_field(values.size() + 3);
         auto& storage = *result_value.storage_;
         std::pmr::vector<std::size_t> operands(storage.resource_);
         operands.reserve(values.size());

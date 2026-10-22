@@ -36,19 +36,19 @@ template <fixed_string name, typename t_type, redis_column_options options_type>
 struct is_redis_column<redis_column<name, t_type, options_type>> : std::true_type {};
 }  // namespace detail
 
-template <fixed_string key_prefix, typename... column_types_type>
+template <fixed_string key_prefix, typename... column_types>
 class redis_entity final {
-    static_assert((detail::is_redis_column<column_types_type>::value && ...),
+    static_assert((detail::is_redis_column<column_types>::value && ...),
         "Redis entities require RUVIA_REDIS_COLUMN descriptors");
-    static_assert((std::size_t{column_types_type::options.primary_key_} + ... + std::size_t{0}) == 1,
+    static_assert((std::size_t{column_types::options.primary_key_} + ... + std::size_t{0}) == 1,
         "Redis entities require exactly one primary key");
-    static_assert(detail::unique_entity_columns<column_types_type...>(), "duplicate Redis entity column name");
-    using column_storage = detail::entity_value_storage<column_types_type...>;
+    static_assert(detail::unique_entity_columns<column_types...>(), "duplicate Redis entity column name");
+    using column_storage = detail::entity_value_storage<column_types...>;
     column_storage values_;
 
 public:
     using redis_entity_type = redis_entity;
-    using columns_type = std::tuple<column_types_type...>;
+    using columns_type = std::tuple<column_types...>;
     static constexpr std::string_view prefix() noexcept {
         return key_prefix.view();
     }
@@ -63,6 +63,12 @@ public:
 
     explicit redis_entity(std::pmr::memory_resource* resource = nullptr)
         : values_(resource) {}
+    template <typename owner_type>
+        requires requires(owner_type& owner) {
+            { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
+        }
+    explicit redis_entity(owner_type& owner)
+        : values_(owner.resource()) {}
     redis_entity(const redis_entity&) = delete;
     redis_entity& operator=(const redis_entity&) = delete;
     redis_entity(redis_entity&&) noexcept = default;
@@ -71,7 +77,7 @@ public:
     RUVIA_DETAIL_ENTITY_VALUE_API(values_)
 };
 
-#define RUVIA_REDIS_COLUMN(name, type_type, ...) ::ruvia::redis_column<::ruvia::fixed_string{#name}, type_type __VA_OPT__(, ) __VA_ARGS__>
+#define RUVIA_REDIS_COLUMN(name, value_type, ...) ::ruvia::redis_column<::ruvia::fixed_string{#name}, value_type __VA_OPT__(, ) __VA_ARGS__>
 #define RUVIA_REDIS_ENTITY(name, key_prefix, ...)                                                   \
     struct name final {                                                                             \
     private:                                                                                        \
@@ -83,6 +89,12 @@ public:
         using columns_type = typename storage_type::columns_type;                                   \
         explicit name(std::pmr::memory_resource* resource = nullptr)                                \
             : entity_(resource) {}                                                                  \
+        template <typename owner_type>                                                              \
+            requires requires(owner_type& owner) {                                                  \
+                { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;            \
+            }                                                                                       \
+        explicit name(owner_type& owner)                                                            \
+            : entity_(owner.resource()) {}                                                          \
         static constexpr std::string_view prefix() noexcept {                                       \
             return storage_type::prefix();                                                          \
         }                                                                                           \

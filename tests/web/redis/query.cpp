@@ -4,7 +4,7 @@
 #include <utility>
 
 #include "ruvia/web/redis/redis_entity.h"
-#include "ruvia/web/redis/redis_find_options.h"
+#include "ruvia/web/redis/redis_repository.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -34,6 +34,29 @@ RUVIA_TEST(redis_predicate_composition_moves_source_and_preserves_range) {
         RUVIA_CHECK(!options.where_.empty());
         RUVIA_CHECK(!range.empty());
         RUVIA_CHECK(resource.live_allocations() > 0);
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
+}
+
+RUVIA_TEST(redis_predicate_supports_copy_and_where_or_where_combination) {
+    ruvia::test::counting_memory_resource resource;
+    struct default_resource_guard {
+        std::pmr::memory_resource* previous_;
+        ~default_resource_guard() {
+            std::pmr::set_default_resource(previous_);
+        }
+    } guard_value{std::pmr::set_default_resource(&resource)};
+    {
+        auto base = redis_query_user::column<"email">() == "alice@example.com";
+        auto copied = base;
+        RUVIA_CHECK(!base.empty());
+        RUVIA_CHECK(!copied.empty());
+
+        ruvia::redis_predicate combined;
+        combined.and_where(copied);
+        combined.or_where(redis_query_user::column<"age">() >= 21);
+        RUVIA_CHECK(!combined.empty());
     }
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());

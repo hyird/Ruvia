@@ -325,4 +325,10 @@ private:
 [[nodiscard]] http_request_admission admit_http_request(const http_request_admission_input& input,
     const http_request_admission_policy& policy, const context_services& services);
 
+// Admits a buffered in-memory request and dispatches it through the route
+// table or the rejection handler.
+[[nodiscard]] task<http_request_admission> admit_and_dispatch_buffered_request(const route_table& routes,
+    const http_request_admission_input& input, const http_request_admission_policy& policy,
+    const context_services& services, request_memory& memory, http_response& response);
+
 }  // namespace ruvia::detail

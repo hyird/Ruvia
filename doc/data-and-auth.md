@@ -147,7 +147,7 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 
 ## 3. 强类型关系型 ORM（`db_entity` 与 `db_repository`）
 
-头文件：`"ruvia/web/db/db_entity.h"`、`"ruvia/web/db/db_projection.h"`、`"ruvia/web/db/db_predicate.h"`、`"ruvia/web/db/db_find_options.h"`、`"ruvia/web/db/db_repository.h"`。
+头文件：`"ruvia/web/db/db_entity.h"`、`"ruvia/web/db/db_projection.h"`、`"ruvia/web/db/db_predicate.h"`、`"ruvia/web/db/db_repository.h"`。
 参考示例：[examples/web/orm.cpp](../examples/web/orm.cpp)、[examples/web/orm_columns.cpp](../examples/web/orm_columns.cpp)、[examples/web/orm_relations.cpp](../examples/web/orm_relations.cpp)。
 
 ### 3.1 实体、生成列、关系与投影声明

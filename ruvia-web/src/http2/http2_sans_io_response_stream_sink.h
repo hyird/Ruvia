@@ -226,7 +226,7 @@ public:
         if (result_value == http2_finish_response_status::queued) {
             const auto wait_result =
                 co_await await_http2_send_window(connection_, stream_id_, &stream_signal_);
-            if (wait_result.aborted() != nullptr) {
+            if (wait_result == http2_send_window_wait_status::aborted) {
                 state_.mark_aborted();
                 throw inbound_transport_error(stream_signal_.terminated() ? stream_signal_.terminal_error() : std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream aborted");
             }

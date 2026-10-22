@@ -47,7 +47,6 @@
 #include "ruvia/web/http_capsule_stream.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_response.h"
-#include "ruvia/web/http_client_tunnel.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/http_datagram_stream.h"
 #include "ruvia/web/model.h"

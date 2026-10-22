@@ -4,7 +4,6 @@
 #include <string_view>
 
 #include "ruvia/web/model.h"
-#include "ruvia/web/model_json.h"
 
 #include "test_harness.h"
 

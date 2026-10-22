@@ -13,7 +13,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/detail/io/asio_await.h"
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/root_task.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"

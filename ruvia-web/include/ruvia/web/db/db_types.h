@@ -17,9 +17,9 @@
 #include <vector>
 
 #include "ruvia/core/operation_options.h"
-#include "ruvia/http/attributes.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/client_tls_config.h"
+#include "ruvia/web/model_types.h"
 
 namespace ruvia {
 
@@ -75,6 +75,45 @@ struct db_config final {
     std::optional<std::chrono::milliseconds> acquire_timeout_{std::chrono::seconds(5)};
 };
 
+#ifdef RUVIA_ENABLE_REDIS
+// Query-result caching stores rows in Redis, so it exists only in builds with
+// Redis support.
+struct db_cache_config final {
+    std::chrono::milliseconds duration_{1000};
+    bool always_enabled_{false};
+    bool ignore_errors_{false};
+    // Use a distinct namespace for databases sharing one Redis database.
+    std::string name_space_{"ruvia:query-result-cache"};
+};
+
+// application startup resolves this alias to its existing worker-local Redis capability.
+struct db_query_cache_registration final {
+    std::string redis_alias_{"default"};
+    db_cache_config policy_{};
+};
+#endif
+
+struct db_cache_options final {
+    borrowed_text id_{};
+    std::optional<std::chrono::milliseconds> milliseconds_{};
+};
+
+using db_cache_setting_type = std::variant<std::monostate, bool, std::chrono::milliseconds, db_cache_options>;
+
+namespace detail {
+
+// The result shapes a repository builder derives from one query. An id-keyed
+// cache entry ignores the SQL, so its key holds the caller's cache id and the
+// shape as separate parts, and removing that id removes every shape.
+enum class db_cache_shape : std::uint8_t {
+    rows,
+    one,
+    exists,
+    count,
+};
+
+}  // namespace detail
+
 class db_error final : public std::runtime_error {
 public:
     enum class code_type : std::uint8_t {
@@ -89,15 +128,15 @@ public:
         closing,
     };
 
-    db_error(code_type code, std::optional<db_driver> driver, const std::string& message,
-        std::optional<std::int64_t> native_code = std::nullopt, std::string sql_state = {},
-        std::string constraint_name = {})
-        : std::runtime_error(message),
+    db_error(code_type code, std::optional<db_driver> driver, std::string_view message,
+        std::optional<std::int64_t> native_code = std::nullopt, std::string_view sql_state = {},
+        std::string_view constraint_name = {})
+        : std::runtime_error(std::string(message)),
           code_(code),
           driver_(driver),
           native_code_(native_code),
-          sql_state_(std::move(sql_state)),
-          constraint_name_(std::move(constraint_name)) {}
+          sql_state_(sql_state),
+          constraint_name_(constraint_name) {}
 
     [[nodiscard]] code_type code() const noexcept {
         return code_;
@@ -163,8 +202,8 @@ public:
         unexpected_row_count,
     };
 
-    db_conversion_error(code_type code, const std::string& message)
-        : std::runtime_error(message),
+    db_conversion_error(code_type code, std::string_view message)
+        : std::runtime_error(std::string(message)),
           code_(code) {}
 
     [[nodiscard]] code_type code() const noexcept {
@@ -202,8 +241,7 @@ public:
     db_value& operator=(db_value&&) = delete;
 
     template <typename t_type>
-        requires(std::is_integral_v<std::remove_cvref_t<t_type>> &&
-                 !std::is_same_v<std::remove_cvref_t<t_type>, bool>)
+        requires detail::is_model_integer<std::remove_cvref_t<t_type>>
     db_value(t_type value)
         : storage_(make_integer_storage(value)) {}
 
@@ -252,14 +290,14 @@ public:
     db_field(const db_field&) = delete;
     db_field& operator=(const db_field&) = delete;
 
-    [[nodiscard]] std::optional<std::string_view> value() const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> value() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> value() const&& = delete;
 
     template <typename t_type>
         requires(std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
-                 (std::is_same_v<t_type, bool> || (std::is_integral_v<t_type> && !std::is_same_v<t_type, char>) ||
-                     std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::string> ||
-                     std::is_same_v<t_type, std::string_view>))
+                 (std::is_same_v<t_type, bool> || detail::is_model_integer<t_type> ||
+                     std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::pmr::string> ||
+                     std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>))
     [[nodiscard]] std::optional<t_type> as() const& {
         const auto source_value = value();
         if (!source_value) {
@@ -267,8 +305,10 @@ public:
         }
         if constexpr (std::is_same_v<t_type, std::string_view>) {
             return *source_value;
-        } else if constexpr (std::is_same_v<t_type, std::string>) {
-            return std::string(*source_value);
+        } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
+            return std::pmr::string(*source_value, resource_);
+        } else if constexpr (std::is_same_v<t_type, string>) {
+            return string(*source_value, model_options{.resource_ = resource_});
         } else if constexpr (std::is_same_v<t_type, bool>) {
             if (*source_value == "1" || *source_value == "t" || *source_value == "true" || *source_value == "TRUE") {
                 return true;
@@ -295,10 +335,9 @@ public:
 
     template <typename t_type>
         requires(std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
-                    (std::is_same_v<t_type, bool> ||
-                        (std::is_integral_v<t_type> && !std::is_same_v<t_type, char>) ||
-                        std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::string> ||
-                        std::is_same_v<t_type, std::string_view>))
+                    (std::is_same_v<t_type, bool> || detail::is_model_integer<t_type> ||
+                        std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::pmr::string> ||
+                        std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>))
     [[nodiscard]] std::optional<t_type> as() const&& = delete;
 
 private:

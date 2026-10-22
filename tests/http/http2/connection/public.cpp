@@ -1366,7 +1366,7 @@ RUVIA_TEST(http2_public_queued_trailers_keep_data_and_hpack_state_across_window_
                 RUVIA_CHECK_EQ(field_value, expected);
                 return true;
             });
-            RUVIA_CHECK(decoded.decoded());
+            RUVIA_CHECK(!decoded.has_value());
             RUVIA_CHECK_EQ(field_count, 1u);
             const auto drained = server.take_drained_data_streams();
             RUVIA_CHECK_EQ(drained.size(), std::size_t{1});

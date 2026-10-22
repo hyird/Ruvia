@@ -17,7 +17,7 @@
 #include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/detail/router/route_modes.h"
 #include "ruvia/web/detail/util/registration_resource.h"
-#include "ruvia/web/http_tunnel_route_config.h"
+#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
 namespace ruvia::detail {

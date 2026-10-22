@@ -4,7 +4,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/web/http_client_tunnel.h"
+#include "ruvia/web/http_client_handle.h"
 #include "ruvia/web/http_tunnel.h"
 
 #include "http/http_capsule_stream_state.h"

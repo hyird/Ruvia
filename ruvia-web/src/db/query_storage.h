@@ -219,6 +219,12 @@ struct db_stored_cte final {
             columns_.emplace_back(column);
         }
     }
+    db_stored_cte(std::string_view name, std::size_t query, db_materialization materialization,
+        std::span<const std::pmr::string> columns, std::pmr::memory_resource* resource)
+        : name_(name, resource),
+          query_(query),
+          materialization_(materialization),
+          columns_(columns.begin(), columns.end(), resource) {}
     db_stored_cte(const db_stored_cte& source_value, std::pmr::memory_resource* resource)
         : name_(source_value.name_, resource),
           query_(source_value.query_),

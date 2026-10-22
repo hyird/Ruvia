@@ -5,7 +5,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_content_codec.h"

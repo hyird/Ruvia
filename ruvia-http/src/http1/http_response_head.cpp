@@ -320,13 +320,13 @@ const char* http1_final_response_commit_error::what() const noexcept {
     return "unknown HTTP final response commit failure";
 }
 
-http1_final_response_commit_result http1_commit_final_response(
+http1_request_connection_plan http1_commit_final_response(
     http_response& response, http1_request_connection_plan plan) {
     const auto control_result = detail::http1_final_response_control_plan(response);
-    if (const auto* failure = control_result.failure()) {
-        return http1_final_response_commit_result::failure(failure->error());
+    if (const auto* error = std::get_if<detail::http1_final_response_control_plan_error>(&control_result)) {
+        throw http1_final_response_commit_error(*error);
     }
-    const auto& http1_control = *control_result.control();
+    const auto& http1_control = std::get<detail::http1_final_response_control>(control_result);
     const auto response_options = http1_control.connection_options();
     const auto upgrade_protocols = http1_control.upgrade_protocols();
     const bool preserve_upgrade = upgrade_protocols.has_field();
@@ -357,7 +357,7 @@ http1_final_response_commit_result http1_commit_final_response(
             response.header_stable_view("Connection", "keep-alive");
         }
     }
-    return http1_final_response_commit_result::committed(plan);
+    return plan;
 }
 
 prepared_http1_response_stream prepare_http1_response_stream_head(
@@ -377,11 +377,7 @@ prepared_http1_response_stream prepare_http1_response_stream_head(
                     body_plan.body_suppressed())
             ? plan.request_connection_plan()
             : plan.request_connection_plan().require_close();
-    const auto commit_result = http1_commit_final_response(response, planned_connection);
-    if (const auto* failure = commit_result.failure()) {
-        throw failure->exception();
-    }
-    const auto connection_plan = *commit_result.committed();
+    const auto connection_plan = http1_commit_final_response(response, planned_connection);
     auto head = prepare_http_response_stream_head(std::move(response), std::move(commit_plan));
     const auto response_head_plan =
         plan.framing() == http_response_stream_framing::http1_chunked

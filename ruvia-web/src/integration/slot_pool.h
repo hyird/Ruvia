@@ -9,7 +9,6 @@
 #include <optional>
 
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"

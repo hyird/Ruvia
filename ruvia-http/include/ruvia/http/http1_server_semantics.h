@@ -103,8 +103,6 @@ namespace detail {
 enum class http1_final_response_control_plan_error : std::uint8_t;
 }  // namespace detail
 
-class http1_final_response_commit_result;
-class http1_final_response_commit_failure;
 class prepared_http1_response_stream;
 
 class http1_final_response_commit_error final : public std::exception {
@@ -112,9 +110,8 @@ public:
     [[nodiscard]] const char* what() const noexcept override;
 
 private:
-    friend class http1_final_response_commit_failure;
-    friend prepared_http1_response_stream prepare_http1_response_stream_head(
-        http_response, const http1_response_stream_plan&, http_response_trailer_intent);
+    friend http1_request_connection_plan http1_commit_final_response(
+        http_response&, http1_request_connection_plan);
 
     explicit http1_final_response_commit_error(detail::http1_final_response_control_plan_error error) noexcept
         : error_(error) {}
@@ -122,69 +119,12 @@ private:
     detail::http1_final_response_control_plan_error error_;
 };
 
-class http1_final_response_commit_failure final {
-public:
-    [[nodiscard]] http1_final_response_commit_error exception() const noexcept {
-        return http1_final_response_commit_error(error_);
-    }
-
-private:
-    friend class http1_final_response_commit_result;
-
-    explicit http1_final_response_commit_failure(
-        detail::http1_final_response_control_plan_error error) noexcept
-        : error_(error) {}
-
-    detail::http1_final_response_control_plan_error error_;
-};
-
-// A final response commit directly owns the authoritative connection contract
-// or one typed message failure. Validation completes before Connection is
-// mutated, so callers cannot observe a half-committed response after a protocol
-// failure or unwrap a second success container.
-class http1_final_response_commit_result final {
-public:
-    [[nodiscard]] const http1_request_connection_plan* committed() const& noexcept {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    [[nodiscard]] const http1_request_connection_plan* committed() const&& = delete;
-
-    [[nodiscard]] const http1_final_response_commit_failure* failure() const& noexcept {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    [[nodiscard]] const http1_final_response_commit_failure* failure() const&& = delete;
-
-private:
-    friend http1_final_response_commit_result http1_commit_final_response(
-        http_response&, http1_request_connection_plan);
-
-    using value_type = std::variant<http1_request_connection_plan, http1_final_response_commit_failure>;
-
-    explicit http1_final_response_commit_result(http1_request_connection_plan connection_plan) noexcept
-        : value_(connection_plan) {}
-
-    explicit http1_final_response_commit_result(http1_final_response_commit_failure failure) noexcept
-        : value_(failure) {}
-
-    [[nodiscard]] static http1_final_response_commit_result committed(
-        http1_request_connection_plan connection_plan) noexcept {
-        return http1_final_response_commit_result(connection_plan);
-    }
-
-    [[nodiscard]] static http1_final_response_commit_result failure(
-        detail::http1_final_response_control_plan_error error) noexcept {
-        return http1_final_response_commit_result(http1_final_response_commit_failure(error));
-    }
-
-    value_type value_;
-};
-
 // Commit response-side HTTP/1 persistence after the runtime has folded in
 // request-body completion and server policy. This is the sole protocol mutation:
 // it honors an application-provided Connection: close and emits the version-
 // appropriate Connection field. Success retains the exact request version for
 // head serialization; wire-message failures remain typed.
-[[nodiscard]] http1_final_response_commit_result http1_commit_final_response(
+[[nodiscard]] http1_request_connection_plan http1_commit_final_response(
     http_response& response, http1_request_connection_plan plan);
 
 // Commit-time result. This object combines request/version/runtime constraints with

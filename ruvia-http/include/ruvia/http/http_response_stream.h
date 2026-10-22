@@ -6,7 +6,7 @@
 
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_trailer_section.h"
+#include "ruvia/http/http_response_server.h"
 
 namespace ruvia {
 

@@ -339,7 +339,7 @@ RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
     const auto failure = failure_parser.parse("HTTP/2 200 OK\r\n\r\n");
     RUVIA_CHECK(failure.failure() != nullptr);
     RUVIA_CHECK(
-        failure.failure()->error() == http1_client_response_parse_error::unsupported_http_version);
+        *failure.failure() == http1_client_response_parse_error::unsupported_http_version);
     RUVIA_CHECK_EQ(counting.allocation_count(), std::size_t{0});
 }
 
@@ -347,7 +347,7 @@ RUVIA_TEST(http_client_response_parser_enforces_the_complete_head_limit) {
     std::string oversized(ruvia::max_http_header_bytes, 'x');
     const auto result_value = parse_wire("GET", oversized);
     RUVIA_CHECK(result_value.failure() != nullptr);
-    RUVIA_CHECK(result_value.failure()->error() == http1_client_response_parse_error::header_too_large);
+    RUVIA_CHECK(*result_value.failure() == http1_client_response_parse_error::header_too_large);
 }
 
 RUVIA_TEST(http_client_response_parser_accepts_incremental_prefixes_and_resets_after_interim) {

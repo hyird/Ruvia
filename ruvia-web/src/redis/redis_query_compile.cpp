@@ -12,6 +12,7 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/redis/redis_entity_key.h"
 #include "ruvia/web/redis/redis_predicate.h"
+#include "ruvia/web/redis/redis_repository.h"
 
 #include "redis/redis_utils.h"
 
@@ -537,11 +538,8 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
         throw std::invalid_argument("Redis Search LIMIT exceeds signed 64-bit range");
     }
     std::optional<std::pmr::string> sort_field_name;
-    if (!options.order_.empty()) {
-        if (options.order_.size() != 1U) {
-            throw std::invalid_argument("Redis Search supports one SORTBY column per query");
-        }
-        const auto& order = options.order_.front();
+    if (options.order_.has_value()) {
+        const auto& order = *options.order_;
         sort_field_name = compiler.sort_field(order.field_);
         switch (order.direction_) {
             case redis_order_direction::asc:
@@ -569,7 +567,7 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
         emplace_redis_string(args, "SORTBY");
         args.push_back(std::move(*sort_field_name));
         emplace_redis_string(
-            args, options.order_.front().direction_ == redis_order_direction::asc ? "ASC" : "DESC");
+            args, options.order_->direction_ == redis_order_direction::asc ? "ASC" : "DESC");
     }
     emplace_redis_string(args, "DIALECT");
     emplace_redis_string(args, "2");

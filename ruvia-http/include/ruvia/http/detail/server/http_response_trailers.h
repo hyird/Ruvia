@@ -20,7 +20,6 @@
 #include "ruvia/http/http_field_whitespace.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_response_trailer_section.h"
 
 namespace ruvia::detail {
 

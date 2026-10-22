@@ -184,15 +184,13 @@ task<void> session_middleware::commit(context& c) const {
     }
 
     std::array<char, 64> id_buffer;
-    const auto token_result = detail::generate_secure_token(id_buffer);
-    const auto* token = token_result.ready();
-    if (token == nullptr) {
+    const auto token = detail::generate_secure_token(id_buffer);
+    if (!token) {
         throw http_error({.status_ = ruvia::http_status::internal_server_error,
             .code_ = "secure_random_failed",
             .message_ = "secure token generation failed"});
     }
-    const auto new_id = token->value();
-
+    const auto new_id = *token;
     detail::append_session_cookie_header(staged, c.pool(), config_.cookie_name_, new_id, secure);
     if (staged_overlay) {
         detail::append_session_cookie_header(*staged_overlay, c.pool(), config_.cookie_name_, new_id, secure);

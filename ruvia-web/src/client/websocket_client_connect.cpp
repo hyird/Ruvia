@@ -103,7 +103,7 @@ task<void> websocket_client_state::perform_handshake() {
     if (prepared == nullptr) {
         const auto message = prepared_result.failure()
                                  ? std::string(http1_client_request_prepare_error_message(
-                                       prepared_result.failure()->error()))
+                                       *prepared_result.failure()))
                                  : "WebSocket handshake request head is too large";
         throw websocket_client_error(websocket_client_error::code_type::invalid_config, message);
     }
@@ -115,7 +115,7 @@ task<void> websocket_client_state::perform_handshake() {
         auto result_value = parser.parse(input_.view());
         if (const auto* failure = result_value.failure()) {
             throw websocket_client_error(websocket_client_error::code_type::protocol_error,
-                std::string(http1_client_response_parse_error_message(failure->error())));
+                std::string(http1_client_response_parse_error_message(*failure)));
         }
         if (result_value.need_more()) {
             if (input_.size() >= max_http_header_bytes) {

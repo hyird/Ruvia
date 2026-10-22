@@ -425,6 +425,12 @@ public:
     explicit db_entity(std::pmr::memory_resource* resource = nullptr)
         : columns_(resource),
           relation_slots_(make_relation_slots(columns_.resource(), std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{})) {}
+    template <typename owner_type>
+        requires requires(owner_type& owner) {
+            { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
+        }
+    explicit db_entity(owner_type& owner)
+        : db_entity(owner.resource()) {}
     db_entity(const db_entity&) = delete;
     db_entity& operator=(const db_entity&) = delete;
     db_entity(db_entity&&) noexcept = default;
@@ -522,7 +528,27 @@ concept sql_projection = requires(const projection& value) {
     { value.resource() } -> std::same_as<std::pmr::memory_resource*>;
 };
 
-#define RUVIA_DB_COLUMN(name, type_type, ...) ::ruvia::db_column<::ruvia::fixed_string{#name}, type_type __VA_OPT__(, ) __VA_ARGS__>
+// Result schema without SQL table or relation metadata.
+template <typename... column_types>
+class db_projection final {
+    static_assert((is_db_column<column_types>::value && ...));
+    detail::entity_value_storage<column_types...> values_;
+
+public:
+    using db_projection_type = db_projection;
+    using columns_type = std::tuple<column_types...>;
+    explicit db_projection(std::pmr::memory_resource* resource = nullptr)
+        : values_(resource) {}
+    template <typename owner_type>
+        requires requires(owner_type& owner) {
+            { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
+        }
+    explicit db_projection(owner_type& owner)
+        : values_(owner.resource()) {}
+    RUVIA_DETAIL_ENTITY_VALUE_API(values_)
+};
+
+#define RUVIA_DB_COLUMN(name, value_type, ...) ::ruvia::db_column<::ruvia::fixed_string{#name}, value_type __VA_OPT__(, ) __VA_ARGS__>
 #define RUVIA_DB_JOIN_COLUMN(local, referenced) ::ruvia::db_join_column<::ruvia::fixed_string{#local}, ::ruvia::fixed_string{#referenced}>
 #define RUVIA_DB_JOIN_COLUMNS(...) ::ruvia::db_join_columns<__VA_ARGS__>
 #define RUVIA_DB_INVERSE(name) ::ruvia::db_inverse<::ruvia::fixed_string{#name}>
@@ -548,6 +574,12 @@ concept sql_projection = requires(const projection& value) {
         using relations_type = typename storage_type::relations_type;                                                 \
         explicit name(std::pmr::memory_resource* resource = nullptr)                                                  \
             : entity_(resource) {}                                                                                    \
+        template <typename owner_type>                                                                                \
+            requires requires(owner_type& owner) {                                                                    \
+                { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;                              \
+            }                                                                                                         \
+        explicit name(owner_type& owner)                                                                              \
+            : entity_(owner.resource()) {}                                                                            \
         static constexpr std::string_view table_name() noexcept {                                                     \
             return storage_type::table_name();                                                                        \
         }                                                                                                             \
@@ -564,6 +596,25 @@ concept sql_projection = requires(const projection& value) {
             return ::ruvia::db_field_reference<name, field_name>(alias);                                              \
         }                                                                                                             \
         RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                                        \
+    };
+#define RUVIA_DB_PROJECTION(name, ...)                                                   \
+    struct name final {                                                                  \
+    private:                                                                             \
+        using storage_type = ::ruvia::db_projection<__VA_ARGS__>;                        \
+        storage_type values_;                                                            \
+                                                                                         \
+    public:                                                                              \
+        using db_projection_type = name;                                                 \
+        using columns_type = typename storage_type::columns_type;                        \
+        explicit name(std::pmr::memory_resource* resource = nullptr)                     \
+            : values_(resource) {}                                                       \
+        template <typename owner_type>                                                   \
+            requires requires(owner_type& owner) {                                       \
+                { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>; \
+            }                                                                            \
+        explicit name(owner_type& owner)                                                 \
+            : values_(owner.resource()) {}                                               \
+        RUVIA_DETAIL_ENTITY_VALUE_API(values_)                                           \
     };
 
 }  // namespace ruvia

@@ -55,7 +55,7 @@ void db_schema::require_postgresql() const {
         throw std::invalid_argument("schema operation requires PostgreSQL");
     }
 }
-void db_schema::append_expression(std::pmr::string& s, db_query::expr_type e) const {
+void db_schema::append_expression(std::pmr::string& s, db_expression e) const {
     if (e.empty()) {
         throw std::invalid_argument("schema expression is required");
     }
@@ -347,7 +347,7 @@ void db_schema::rename_column(std::string_view t, std::string_view c, std::strin
     append_db_identifier(s, n, driver_);
     append(std::move(s));
 }
-void db_schema::alter_column_type(std::string_view t, std::string_view c, const db_type_definition& ty, db_query::expr_type u) {
+void db_schema::alter_column_type(std::string_view t, std::string_view c, const db_type_definition& ty, db_expression u) {
     require_postgresql();
     std::pmr::string s("ALTER TABLE ", resource_);
     append_db_qualified_identifier(s, t, driver_);
@@ -370,7 +370,7 @@ void db_schema::set_column_nullable(std::string_view t, std::string_view c, bool
     s += n ? " DROP NOT NULL" : " SET NOT NULL";
     append(std::move(s));
 }
-void db_schema::set_column_default(std::string_view t, std::string_view c, db_query::expr_type e) {
+void db_schema::set_column_default(std::string_view t, std::string_view c, db_expression e) {
     std::pmr::string s("ALTER TABLE ", resource_);
     append_db_qualified_identifier(s, t, driver_);
     s += " ALTER COLUMN ";
@@ -602,7 +602,7 @@ void db_schema::execute(const db_query& q) {
     auto st = q.compile(driver_, resource_, db_parameter_mode::literal);
     append(std::pmr::string(st.sql(), resource_));
 }
-void db_schema::perform(db_query::expr_type e) {
+void db_schema::perform(db_expression e) {
     require_postgresql();
     std::pmr::string s("PERFORM ", resource_);
     append_expression(s, e);
@@ -641,7 +641,7 @@ void db_schema::drop_trigger_function(std::string_view name, db_drop_behavior be
 void db_schema::create_function(const db_function_definition& function) {
     require_postgresql();
     if (function.name_.empty() || function.body_.empty() ||
-        function.body_.find('\0') != std::string_view::npos) {
+        function.body_.view().find('\0') != std::string_view::npos) {
         throw std::invalid_argument("function name and non-NUL body are required");
     }
     std::pmr::string sql(function.replace_ ? "CREATE OR REPLACE FUNCTION " : "CREATE FUNCTION ", resource_);
@@ -687,16 +687,17 @@ void db_schema::create_function(const db_function_definition& function) {
     append(std::move(sql));
 }
 void db_schema::create_function(const db_function_definition& function, const db_procedure& body) {
+    const auto proc_body = body.body(resource_);
     auto copy = function;
     copy.language_ = db_function_language::plpgsql;
-    copy.body_ = std::string(body.body(resource_));
+    copy.body_ = proc_body;
     create_function(copy);
 }
 void db_schema::create_function(const db_function_definition& function, const db_query& sql_body) {
+    const auto compiled = sql_body.compile(driver_, resource_, db_parameter_mode::literal);
     auto copy = function;
     copy.language_ = db_function_language::sql;
-    const auto compiled = sql_body.compile(driver_, resource_, db_parameter_mode::literal);
-    copy.body_ = std::string(compiled.sql());
+    copy.body_ = compiled.sql();
     create_function(copy);
 }
 void db_schema::drop_function(std::string_view name, std::span<const db_type_definition> parameter_types,

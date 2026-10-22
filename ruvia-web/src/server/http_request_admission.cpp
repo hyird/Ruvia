@@ -115,8 +115,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         }
     }
     if (policy.apply_rate_limit_) {
-        const auto decision = decide_request_rate_limit(admission.services_.rate_limiter(), client_address);
-        if (const auto* rejection = decision.rejection()) {
+        if (const auto rejection = decide_request_rate_limit(admission.services_.rate_limiter(), client_address)) {
             return reject(http_request_endpoint::rejection, http_request_rejection::rate_limited(*rejection));
         }
     }
@@ -163,4 +162,19 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     return admission;
 }
 
+task<http_request_admission> admit_and_dispatch_buffered_request(const route_table& routes,
+    const http_request_admission_input& input, const http_request_admission_policy& policy,
+    const context_services& services, request_memory& memory, http_response& response) {
+    auto admission = admit_http_request(input, policy, services);
+    if (const auto* rejection = admission.rejection()) {
+        // As in the server: a rejection does not inherit the coding promise.
+        admission.tail().disable_response_coding();
+        response = co_await respond_http_request_rejection(
+            routes, input.request_, memory, *rejection, admission.services());
+    } else {
+        co_await routes.dispatch_buffered_response(input.request_, input.resolution_, memory,
+            document_root_binding::none(), admission.services(), admission.static_file_mode(), response);
+    }
+    co_return admission;
+}
 }  // namespace ruvia::detail

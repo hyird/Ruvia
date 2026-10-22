@@ -13,7 +13,6 @@
 
 namespace security_header_test {
 
-using ruvia::apply_security_headers;
 using ruvia::default_security_header_policy;
 using ruvia::security_header_conflict_policy;
 using ruvia::security_headers_config;
@@ -21,17 +20,17 @@ using ruvia::xss_protection_header_policy;
 
 [[nodiscard]] ruvia::test_response security_response(
     const security_headers_config& options = {}, std::string_view existing_frame_options = {}) {
-    static_cast<void>(ruvia::security_headers_middleware(options));
-    return context_request_test::with_context(
-        ruvia::test_request::get("/"),
-        [&](ruvia::context& ctx) -> ruvia::task<void> {
-            if (!existing_frame_options.empty()) {
-                ctx.header("X-Frame-Options", existing_frame_options);
-            }
-            apply_security_headers(ctx, options);
-            ctx.respond(ctx.text("ok"));
-            co_return;
-        });
+    auto callback = [&](ruvia::context& ctx) -> ruvia::task<void> {
+        if (!existing_frame_options.empty()) {
+            ctx.header("X-Frame-Options", existing_frame_options);
+        }
+        ctx.respond(ctx.text("ok"));
+        co_return;
+    };
+    ruvia::test_app app;
+    app.use<ruvia::security_headers_middleware>(options);
+    app.use<context_request_test::context_callback<decltype(callback)>>(&callback);
+    return app.request(ruvia::test_request::get("/"));
 }
 
 }  // namespace security_header_test

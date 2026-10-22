@@ -131,16 +131,16 @@ private:
 class http1_rejected_final_response final {
 public:
     [[nodiscard]] http1_final_response_commit_error exception() const noexcept {
-        return failure_.exception();
+        return error_;
     }
 
 private:
     friend class http1_session_request_completion;
 
-    explicit http1_rejected_final_response(::ruvia::http1_final_response_commit_failure failure) noexcept
-        : failure_(failure) {}
+    explicit http1_rejected_final_response(::ruvia::http1_final_response_commit_error error) noexcept
+        : error_(error) {}
 
-    ::ruvia::http1_final_response_commit_failure failure_;
+    ::ruvia::http1_final_response_commit_error error_;
 };
 
 // One terminal result for a dispatched HTTP/1 request. Wire ownership,
@@ -195,8 +195,8 @@ public:
     }
 
     [[nodiscard]] static http1_session_request_completion make_rejected_final_response(
-        http1_request_connection_plan connection_plan, ::ruvia::http1_final_response_commit_failure failure) noexcept {
-        return http1_session_request_completion(http1_rejected_final_response(failure),
+        http1_request_connection_plan connection_plan, ::ruvia::http1_final_response_commit_error error) noexcept {
+        return http1_session_request_completion(http1_rejected_final_response(error),
             connection_plan.require_close(), http1_request_buffer_completion(http1_request_buffer_discarded{}));
     }
 

@@ -218,7 +218,7 @@ std::string read_first_status(asio::ip::tcp::socket& client, ruvia::hpack_decode
             }
             return true;
         });
-        if (!decoded.decoded()) {
+        if (decoded.has_value()) {
             throw std::logic_error("invalid HPACK block");
         }
         return status;
@@ -330,7 +330,7 @@ RUVIA_TEST(http2_quiet_sse_peer_reset_cancels_wait_and_preserves_connection) {
         RUVIA_CHECK(frame.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));
         if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
             const auto decoded = decoder.decode(frame.payload_, [](std::string_view, std::string_view) { return true; });
-            RUVIA_CHECK(decoded.decoded());
+            RUVIA_CHECK(!decoded.has_value());
         }
         if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) &&
             frame.header_.stream_id_ == 1) {
@@ -383,7 +383,7 @@ RUVIA_TEST(http2_quiet_sse_peer_reset_cancels_wait_and_preserves_connection) {
                 }
                 return true;
             });
-            RUVIA_CHECK(decoded.decoded());
+            RUVIA_CHECK(!decoded.has_value());
         }
         if (frame.header_.stream_id_ == 3) {
             if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {

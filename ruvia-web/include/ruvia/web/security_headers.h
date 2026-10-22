@@ -10,12 +10,12 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/web/context.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 #include "ruvia/web/next.h"
 
 namespace ruvia {
 
+class context;
 struct security_header final {
     std::string name_{};
     std::string value_{};
@@ -56,8 +56,6 @@ struct security_headers_config final {
     std::vector<security_header> custom_headers_{};
     security_header_conflict_policy existing_headers_ = security_header_conflict_policy::preserve_existing;
 };
-
-void apply_security_headers(context& context_value, const security_headers_config& config = {});
 
 // Registered app-wide with the defaults as `app().use<security_headers_middleware>()`,
 // or with an owning policy as `app().use<security_headers_middleware>(config)`.

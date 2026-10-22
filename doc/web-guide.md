@@ -140,7 +140,7 @@ ruvia::app().listen({
 
 ---
 
-### 1.4 错误处理与异常（`"ruvia/web/error.h"`, `"ruvia/web/error_handlers.h"`）
+### 1.4 错误处理与异常（`"ruvia/web/error.h"`, `"ruvia/web/app.h"`）
 
 - **抛出或构造业务错误**：
   - 在路由或中间件中可抛出 `ruvia::http_error({.status_ = ruvia::http_status::bad_request, .code_ = "bad_input", .message_ = "..."})`，或直接 `co_return c.error({...});`。
@@ -226,7 +226,7 @@ for (const auto& worker : ruvia::app().workers()) {
 
 ## 3. 请求上下文 `context` 与 `context_request`
 
-头文件：`"ruvia/web/context.h"`、`"ruvia/web/context_request.h"`、`"ruvia/web/conn_info.h"`。
+头文件：`"ruvia/web/context.h"`、`"ruvia/web/conn_info.h"`。
 
 ### 3.1 读取请求信息（`c.req()` 与 `c.conn()`）
 
@@ -369,7 +369,7 @@ const auto& user = c.request_state<current_user>();
 
 | 组件 / 头文件 | 用法与说明 |
 | --- | --- |
-| `ruvia::body_limit<MaxBytes>` (`"ruvia/web/body_limit.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
+| `ruvia::body_limit<MaxBytes>` (`"ruvia/web/controller.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
 | `ruvia::rate_limit<MaxReqs, WindowMs>` (`"ruvia/web/rate_limit.h"`) | 控制器或路由级固定窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数）；全局限流使用 `app().rate_limit({...})` |
 | `ruvia::security_headers_middleware` (`"ruvia/web/security_headers.h"`) | 自动注入 `X-Content-Type-Options`、`X-Frame-Options`、`Strict-Transport-Security`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头（对 404 响应同样生效） |
 | `ruvia::csrf_protection` (`"ruvia/web/csrf.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件 |
@@ -380,7 +380,7 @@ const auto& user = c.request_state<current_user>();
 
 ## 5. 声明式模型 `RUVIA_MODEL`、序列化与参数校验
 
-头文件：`"ruvia/web/model.h"`、`"ruvia/web/model_types.h"`、`"ruvia/web/model_json.h"`、`"ruvia/web/model_form.h"`、`"ruvia/web/model_object.h"`、`"ruvia/web/request_validation.h"`、`"ruvia/web/validation.h"`。
+头文件：`"ruvia/web/model.h"`、`"ruvia/web/model_types.h"`、`"ruvia/web/model_object.h"`、`"ruvia/web/request_validation.h"`、`"ruvia/web/validation.h"`。
 
 ### 5.1 模型定义与字段类型
 

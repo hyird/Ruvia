@@ -39,20 +39,20 @@ struct tuple_rules<std::tuple<ts_type...>> {
     using type = rules<ts_type...>;
 };
 
-template <fixed_string field_source_name, fixed_string field_wire_name, typename value_t_type, bool is_required,
-    typename... arg_ts_type>
+template <fixed_string field_source_name, fixed_string field_wire_name, typename field_value_type, bool is_required,
+    typename... arg_types>
 struct model_field_descriptor final {
-    static_assert(((is_model_option<arg_ts_type>() || is_validation_rule<arg_ts_type>()) && ... && true),
+    static_assert(((is_model_option<arg_types>() || is_validation_rule<arg_types>()) && ... && true),
         "RUVIA_REQUIRED_FIELD/RUVIA_OPTIONAL_FIELD accept model options (RUVIA_DEFAULT, "
         "RUVIA_INITIAL, RUVIA_NULLABLE, RUVIA_OMIT_EMPTY, RUVIA_EMIT_NULL) and validation rules "
         "(RUVIA_MIN, RUVIA_EMAIL, ...)");
 
-    using value_type = value_t_type;
+    using value_type = field_value_type;
     using options_type = typename tuple_model_options<decltype(std::tuple_cat(std::tuple<>{},
-        std::declval<field_option_tuple_type<arg_ts_type>>()...))>::type;
+        std::declval<field_option_tuple_type<arg_types>>()...))>::type;
     using rules_type = typename tuple_rules<decltype(std::tuple_cat(std::tuple<>{},
-        std::declval<field_rule_tuple_type<arg_ts_type>>()...))>::type;
-    using field_type = model_field<value_t_type, is_required, options_type, field_wire_name>;
+        std::declval<field_rule_tuple_type<arg_types>>()...))>::type;
+    using field_type = model_field<field_value_type, is_required, options_type, field_wire_name>;
 
     static constexpr auto source_name = field_source_name;
     static constexpr auto wire_name = field_wire_name;
@@ -62,11 +62,11 @@ struct model_field_descriptor final {
     static constexpr bool has_field_rules = !std::is_same_v<rules_type, rules<>>;
 
     static_assert(!has_field_rules ||
-                      !(detail::is_ruvia_json_value<value_t_type> || detail::is_ruvia_json_object<value_t_type>),
+                      !(detail::is_ruvia_json_value<field_value_type> || detail::is_ruvia_json_object<field_value_type>),
         "json_value/json_object are dynamic content, not typed field validation schemas");
 };
 
-template <typename... descriptor_ts_type>
+template <typename... descriptor_types>
 struct model_schema final {};
 
 struct empty_model_tag final {};
@@ -94,13 +94,13 @@ consteval void validate_model_schema(model_schema<descriptor_types...>) {
         "model fields must use Ruvia values or nested models");
 }
 
-template <fixed_string field, typename... descriptor_ts_type>
+template <fixed_string field, typename... descriptor_types>
 [[nodiscard]] consteval std::size_t model_field_index() {
-    constexpr std::size_t matches = (std::size_t{field == descriptor_ts_type::source_name} + ... + 0);
+    constexpr std::size_t matches = (std::size_t{field == descriptor_types::source_name} + ... + 0);
     static_assert(matches == 1, "unknown or duplicate Ruvia model field");
 
-    constexpr std::array<bool, sizeof...(descriptor_ts_type)> fields_value{
-        field == descriptor_ts_type::source_name...};
+    constexpr std::array<bool, sizeof...(descriptor_types)> fields_value{
+        field == descriptor_types::source_name...};
     for (std::size_t index = 0; index < fields_value.size(); ++index) {
         if (fields_value[index]) {
             return index;
@@ -109,10 +109,10 @@ template <fixed_string field, typename... descriptor_ts_type>
     return 0;
 }
 
-template <typename... descriptor_ts_type>
+template <typename... descriptor_types>
 [[nodiscard]] consteval bool unique_model_field_names() {
-    constexpr std::array<std::string_view, sizeof...(descriptor_ts_type)> names{
-        descriptor_ts_type::source_name.view()...};
+    constexpr std::array<std::string_view, sizeof...(descriptor_types)> names{
+        descriptor_types::source_name.view()...};
     for (std::size_t left = 0; left < names.size(); ++left) {
         for (std::size_t right = left + 1; right < names.size(); ++right) {
             if (names[left] == names[right]) {
@@ -123,10 +123,10 @@ template <typename... descriptor_ts_type>
     return true;
 }
 
-template <typename... descriptor_ts_type>
+template <typename... descriptor_types>
 [[nodiscard]] consteval bool unique_model_wire_names() {
-    constexpr std::array<std::string_view, sizeof...(descriptor_ts_type)> names{
-        descriptor_ts_type::wire_name.view()...};
+    constexpr std::array<std::string_view, sizeof...(descriptor_types)> names{
+        descriptor_types::wire_name.view()...};
     for (std::size_t left = 0; left < names.size(); ++left) {
         for (std::size_t right = left + 1; right < names.size(); ++right) {
             if (names[left] == names[right]) {
@@ -136,7 +136,6 @@ template <typename... descriptor_ts_type>
     }
     return true;
 }
-
 [[nodiscard]] constexpr bool model_wire_names_equal_ignore_ascii_case(
     std::string_view left, std::string_view right) noexcept {
     if (left.size() != right.size()) {
@@ -155,10 +154,10 @@ template <typename... descriptor_ts_type>
 
 // Case-insensitive sources (HTTP headers) bind at most one field per name, so
 // their schemas must not declare ASCII-case-equivalent wire names.
-template <typename... descriptor_ts_type>
-[[nodiscard]] consteval bool unique_model_wire_names_ignore_ascii_case(model_schema<descriptor_ts_type...>) {
-    constexpr std::array<std::string_view, sizeof...(descriptor_ts_type)> names{
-        descriptor_ts_type::wire_name.view()...};
+template <typename... descriptor_types>
+[[nodiscard]] consteval bool unique_model_wire_names_ignore_ascii_case(model_schema<descriptor_types...>) {
+    constexpr std::array<std::string_view, sizeof...(descriptor_types)> names{
+        descriptor_types::wire_name.view()...};
     for (std::size_t left = 0; left < names.size(); ++left) {
         for (std::size_t right = left + 1; right < names.size(); ++right) {
             if (model_wire_names_equal_ignore_ascii_case(names[left], names[right])) {
@@ -169,44 +168,44 @@ template <typename... descriptor_ts_type>
     return true;
 }
 
-template <typename model_t_type, typename... descriptor_ts_type, typename visitor_t_type, std::size_t... indices>
-constexpr void visit_model_fields_impl(model_t_type& model, model_schema<descriptor_ts_type...>, visitor_t_type&& visitor,
+template <typename model_type, typename... descriptor_types, typename visitor_type, std::size_t... indices>
+constexpr void visit_model_fields_impl(model_type& model, model_schema<descriptor_types...>, visitor_type&& visitor,
     std::index_sequence<indices...>) {
     auto& visitor_ref = visitor;
-    (visitor_ref(descriptor_ts_type{}, model_access::slot<indices>(model)), ...);
+    (visitor_ref(descriptor_types{}, model_access::slot<indices>(model)), ...);
 }
 
-template <typename model_t_type, typename... descriptor_ts_type, typename visitor_t_type>
+template <typename model_type, typename... descriptor_types, typename visitor_type>
 constexpr void visit_model_fields(
-    model_t_type& model, model_schema<descriptor_ts_type...> schema, visitor_t_type&& visitor) {
+    model_type& model, model_schema<descriptor_types...> schema, visitor_type&& visitor) {
     visit_model_fields_impl(
-        model, schema, std::forward<visitor_t_type>(visitor), std::index_sequence_for<descriptor_ts_type...>{});
+        model, schema, std::forward<visitor_type>(visitor), std::index_sequence_for<descriptor_types...>{});
 }
 
-template <std::size_t index, typename descriptor_t_type, typename... remaining_ts_type, typename model_t_type,
-    typename visitor_t_type>
-[[nodiscard]] bool visit_model_field_by_wire_name_impl(model_t_type& model, std::uint64_t wire_hash,
-    std::string_view wire_name, bool& visit_result, visitor_t_type& visitor) {
-    if (wire_hash == descriptor_t_type::wire_hash && wire_name == descriptor_t_type::wire_name.view()) {
+template <std::size_t index, typename descriptor_type, typename... remaining_types, typename model_type,
+    typename visitor_type>
+[[nodiscard]] bool visit_model_field_by_wire_name_impl(model_type& model, std::uint64_t wire_hash,
+    std::string_view wire_name, bool& visit_result, visitor_type& visitor) {
+    if (wire_hash == descriptor_type::wire_hash && wire_name == descriptor_type::wire_name.view()) {
         visit_result = visitor(model_access::slot<index>(model));
         return true;
     }
-    if constexpr (sizeof...(remaining_ts_type) > 0) {
-        return visit_model_field_by_wire_name_impl<index + 1, remaining_ts_type...>(
+    if constexpr (sizeof...(remaining_types) > 0) {
+        return visit_model_field_by_wire_name_impl<index + 1, remaining_types...>(
             model, wire_hash, wire_name, visit_result, visitor);
     } else {
         return false;
     }
 }
 
-template <typename model_t_type, typename... descriptor_ts_type, typename visitor_t_type>
-[[nodiscard]] bool visit_model_field_by_wire_name(model_t_type& model, model_schema<descriptor_ts_type...>,
-    std::uint64_t wire_hash, std::string_view wire_name, bool& visit_result, visitor_t_type&& visitor) {
-    if constexpr (sizeof...(descriptor_ts_type) == 0) {
+template <typename model_type, typename... descriptor_types, typename visitor_type>
+[[nodiscard]] bool visit_model_field_by_wire_name(model_type& model, model_schema<descriptor_types...>,
+    std::uint64_t wire_hash, std::string_view wire_name, bool& visit_result, visitor_type&& visitor) {
+    if constexpr (sizeof...(descriptor_types) == 0) {
         return false;
     } else {
         auto& visitor_ref = visitor;
-        return visit_model_field_by_wire_name_impl<0, descriptor_ts_type...>(
+        return visit_model_field_by_wire_name_impl<0, descriptor_types...>(
             model, wire_hash, wire_name, visit_result, visitor_ref);
     }
 }

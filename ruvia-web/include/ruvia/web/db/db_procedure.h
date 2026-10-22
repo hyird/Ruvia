@@ -24,7 +24,7 @@ enum class db_table_lock_mode : std::uint8_t {
 };
 
 struct db_variable_definition final {
-    std::string name_{};
+    borrowed_text name_{};
     db_type_definition type_{};
     db_expression default_value_{};
 };

@@ -21,9 +21,9 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/memory_pool_config.h"
+#include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
@@ -414,5 +414,16 @@ using connection_failure_callback_ref_type = callback_ref_type<void(const connec
 // left to go, so the requirement is enforced at compile time rather than
 // swallowed at runtime.
 using connection_failure_callback_type = detail::callback<void(const connection_failure_record&) noexcept>;
+
+// A self-contained startup/shutdown callback, invoked on the application::run() caller.
+// on_start runs after worker initialization, before TCP admission. on_stop
+// runs after admission closes, before runtime join (including start-hook failure
+// or cancellation). A self-contained callable is owned by the hook value;
+// references captured by that callable must still
+// outlive the registered hook. Invoking an empty hook is a programming error
+// and throws std::logic_error.
+using app_hook_type = detail::callback<void()>;
+
+static_assert(sizeof(app_hook_type) == 5 * sizeof(void*));
 
 }  // namespace ruvia

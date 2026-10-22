@@ -135,7 +135,7 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
         const auto result_value = http1_interim_response_writer().prepare(
             http_interim_response_head(ruvia::http_status::early_hints, fields_value), buffer);
         const auto* const failure = result_value.failure();
-        return failure != nullptr && failure->error() == expected && unchanged(buffer, '@');
+        return failure != nullptr && *failure == expected && unchanged(buffer, '@');
     };
 
     const http_header_view malformed_name[] = {{"Bad Name", "value"}};
@@ -194,7 +194,7 @@ RUVIA_TEST(http1_interim_response_writer_enforces_field_and_size_limits) {
     RUVIA_CHECK(too_many_result.failure() != nullptr);
     if (too_many_result.failure() != nullptr) {
         RUVIA_CHECK_EQ(
-            too_many_result.failure()->error(), http1_interim_response_prepare_error::too_many_headers);
+            *too_many_result.failure(), http1_interim_response_prepare_error::too_many_headers);
     }
     RUVIA_CHECK(unchanged(buffer, '!'));
 
@@ -205,7 +205,7 @@ RUVIA_TEST(http1_interim_response_writer_enforces_field_and_size_limits) {
     RUVIA_CHECK(oversized_result.failure() != nullptr);
     if (oversized_result.failure() != nullptr) {
         RUVIA_CHECK_EQ(
-            oversized_result.failure()->error(), http1_interim_response_prepare_error::header_too_large);
+            *oversized_result.failure(), http1_interim_response_prepare_error::header_too_large);
     }
     RUVIA_CHECK(unchanged(buffer, '!'));
 }

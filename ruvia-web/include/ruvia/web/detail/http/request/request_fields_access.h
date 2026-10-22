@@ -12,9 +12,9 @@
 namespace ruvia::detail {
 
 struct request_name_value_view_access final {
-    [[nodiscard]] static constexpr request_name_value_view_type make(
+    [[nodiscard]] static constexpr http_header_view make(
         borrowed_text name, borrowed_text value) noexcept {
-        return request_name_value_view_type{name.view(), value.view()};
+        return http_header_view{name.view(), value.view()};
     }
 };
 
@@ -41,7 +41,7 @@ struct request_name_value_list_access final {
         list.reserve(count);
     }
 
-    static void push_back(request_name_value_list& list, request_name_value_view_type value) {
+    static void push_back(request_name_value_list& list, http_header_view value) {
         list.push_back(value);
     }
 };

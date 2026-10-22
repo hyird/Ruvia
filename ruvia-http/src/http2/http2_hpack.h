@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/http/hpack_protocol_types.h"
+#include "ruvia/http/hpack.h"
 
 namespace ruvia::detail {
 
@@ -85,9 +85,9 @@ public:
 
     void set_max_dynamic_table_size(std::size_t bytes);
     [[nodiscard]] decode_transaction_type begin_transaction() noexcept;
-    [[nodiscard]] hpack_decode_result decode(
+    [[nodiscard]] std::optional<hpack_decode_error> decode(
         std::string_view block, void* target, header_callback_type callback);
-    [[nodiscard]] hpack_decode_result decode(std::string_view block, void* target,
+    [[nodiscard]] std::optional<hpack_decode_error> decode(std::string_view block, void* target,
         header_callback_type callback, decode_transaction_type& transaction);
 
 private:
@@ -135,7 +135,7 @@ private:
         std::string_view value_;
     };
 
-    [[nodiscard]] hpack_decode_result decode_block(
+    [[nodiscard]] std::optional<hpack_decode_error> decode_block(
         std::string_view block, void* target, header_callback_type callback);
     [[nodiscard]] step_result_type decode_integer(const unsigned char*& cursor, const unsigned char* end,
         std::uint8_t prefix_bits, std::uint32_t& value) const noexcept;

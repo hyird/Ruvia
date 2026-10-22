@@ -68,25 +68,25 @@ void install(rate_limit_slot& slot, rate_limit_scope scope, std::string_view key
     std::ranges::copy(key, slot.key_.begin());
 }
 
-[[nodiscard]] rate_limit_decision consume(rate_limit_slot& slot, const rate_limit_rule& rule,
+[[nodiscard]] std::optional<rate_limit_rejection> consume(rate_limit_slot& slot, const rate_limit_rule& rule,
     std::int64_t now_ms, std::uint64_t reset_at_ms) noexcept {
     const auto now = safe_now_ms(now_ms);
     if (slot.reset_at_ms_ <= now) {
         slot.reset_at_ms_ = reset_at_ms;
         slot.count_ = 1;
-        return rate_limit_decision::allow();
+        return std::nullopt;
     }
     if (slot.count_ >= rule.max_requests_) {
-        return rate_limit_decision::reject(std::chrono::milliseconds(reset_after_ms(now_ms, slot.reset_at_ms_)));
+        return rate_limit_rejection(std::chrono::milliseconds(reset_after_ms(now_ms, slot.reset_at_ms_)));
     }
     ++slot.count_;
-    return rate_limit_decision::allow();
+    return std::nullopt;
 }
 
-[[nodiscard]] rate_limit_decision overflow_decision(const rate_limit_rule& rule) noexcept {
+[[nodiscard]] std::optional<rate_limit_rejection> overflow_decision(const rate_limit_rule& rule) noexcept {
     return rule.overflow_policy_ == rate_limit_overflow_policy::allow
-               ? rate_limit_decision::allow()
-               : rate_limit_decision::reject(std::chrono::milliseconds(1));
+               ? std::nullopt
+               : std::optional(rate_limit_rejection(std::chrono::milliseconds(1)));
 }
 
 }  // namespace
@@ -106,19 +106,19 @@ rate_limiter::rate_limiter(std::optional<rate_limit_rule> default_rule_per_worke
     }
 }
 
-rate_limit_decision rate_limiter::allow_default(std::string_view remote_address) noexcept {
+std::optional<rate_limit_rejection> rate_limiter::allow_default(std::string_view remote_address) noexcept {
     return default_rule_per_worker_.has_value() ? allow(default_scope, remote_address, *default_rule_per_worker_)
-                                                : rate_limit_decision::allow();
+                                                : std::nullopt;
 }
 
-rate_limit_decision rate_limiter::allow_route(std::uintptr_t route_scope, const void* rule_declaration,
-    std::string_view remote_address, const rate_limit_rule& rule) noexcept {
+std::optional<rate_limit_rejection> rate_limiter::allow_route(std::uintptr_t route_scope,
+    const void* rule_declaration, std::string_view remote_address, const rate_limit_rule& rule) noexcept {
     return allow({.route_ = route_scope == 0 ? fallback_route_scope : route_scope,
                      .rule_ = reinterpret_cast<std::uintptr_t>(rule_declaration)},
         remote_address, rule);
 }
 
-rate_limit_decision rate_limiter::allow(
+std::optional<rate_limit_rejection> rate_limiter::allow(
     rate_limit_scope scope, std::string_view key, const rate_limit_rule& rule) noexcept {
     if (slots_.empty() || key.size() > rate_limit_max_key_bytes) {
         return overflow_decision(rule);
@@ -137,7 +137,7 @@ rate_limit_decision rate_limiter::allow(
         if (slot.key_hash_ == empty_hash) {
             auto& target = reclaimable == nullptr ? slot : *reclaimable;
             install(target, scope, key, hash, reset_at_ms);
-            return rate_limit_decision::allow();
+            return std::nullopt;
         }
         if (key_equals(slot, scope, key, hash)) {
             return consume(slot, rule, now_ms, reset_at_ms);
@@ -149,7 +149,7 @@ rate_limit_decision rate_limiter::allow(
 
     if (reclaimable != nullptr) {
         install(*reclaimable, scope, key, hash, reset_at_ms);
-        return rate_limit_decision::allow();
+        return std::nullopt;
     }
     return overflow_decision(rule);
 }

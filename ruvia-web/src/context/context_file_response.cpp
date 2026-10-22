@@ -401,12 +401,11 @@ void validate_indexed_file_for_bodyless_response(
     file_response_source& source_value, const file_validators& validators,
     const http_byte_range_set& ranges) {
     std::array<char, 48> boundary_token{};
-    const auto token_result = detail::generate_secure_token(boundary_token);
-    const auto* token = token_result.ready();
-    if (token == nullptr) {
+    const auto token = detail::generate_secure_token(boundary_token);
+    if (!token) {
         throw std::runtime_error("secure multipart boundary generation failed");
     }
-    std::pmr::string boundary(token->value(), context_value.arena());
+    std::pmr::string boundary(*token, context_value.arena());
     http_response response({.resource_ = context_value.arena()});
     add_file_headers(response, source_value, validators);
     apply_file_response_state(context_value, source_value, response, http_status::partial_content);

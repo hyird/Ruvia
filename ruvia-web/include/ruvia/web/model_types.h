@@ -19,7 +19,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/http/attributes.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/model/model_text_storage.h"
 #include "ruvia/web/fixed_string.h"
 
@@ -63,11 +63,11 @@ enum class model_string_storage : std::uint8_t {
 struct model_value_rebind_access final {
     template <typename t_type>
     [[nodiscard]] static consteval bool has_rebind_for_model() {
-        using value_t_type = std::remove_cvref_t<t_type>;
-        if constexpr (requires { typename value_t_type::ruvia_model_schema_type; }) {
+        using value_type = std::remove_cvref_t<t_type>;
+        if constexpr (requires { typename value_type::ruvia_model_schema_type; }) {
             return true;
         } else {
-            return requires(const value_t_type& source_value, std::pmr::memory_resource* target) {
+            return requires(const value_type& source_value, std::pmr::memory_resource* target) {
                 source_value.rebind_for_model(target);
             };
         }
@@ -76,10 +76,10 @@ struct model_value_rebind_access final {
     template <typename t_type>
     [[nodiscard]] static std::remove_cvref_t<t_type> own(
         t_type&& value, std::pmr::memory_resource* resource) {
-        using value_t_type = std::remove_cvref_t<t_type>;
-        if constexpr (requires { typename value_t_type::ruvia_model_schema_type; }) {
-            return value_t_type(std::forward<t_type>(value).fields_.rebind(resource));
-        } else if constexpr (requires(value_t_type& source_value, std::pmr::memory_resource* target) {
+        using value_type = std::remove_cvref_t<t_type>;
+        if constexpr (requires { typename value_type::ruvia_model_schema_type; }) {
+            return value_type(std::forward<t_type>(value).fields_.rebind(resource));
+        } else if constexpr (requires(value_type& source_value, std::pmr::memory_resource* target) {
                                  source_value.rebind_for_model(target);
                              }) {
             if constexpr (std::is_lvalue_reference_v<t_type&&>) {
@@ -94,11 +94,11 @@ struct model_value_rebind_access final {
 
     template <typename t_type>
     [[nodiscard]] static consteval bool can_own() {
-        using value_t_type = std::remove_cvref_t<t_type>;
-        if constexpr (requires { typename value_t_type::ruvia_model_schema_type; }) {
+        using value_type = std::remove_cvref_t<t_type>;
+        if constexpr (requires { typename value_type::ruvia_model_schema_type; }) {
             return true;
         } else {
-            return requires(const value_t_type& source_value, const void* address) {
+            return requires(const value_type& source_value, const void* address) {
                 source_value.owns_for_model(address);
             };
         }
@@ -895,13 +895,13 @@ struct model_value_factory final {
         return string(resolved_pmr_resource_tag{}, value, resource);
     }
 
-    template <typename list_t_type>
-    [[nodiscard]] static list_t_type make_boxed_array(std::pmr::memory_resource* resource) {
-        return list_t_type(resolved_pmr_resource_tag{}, resource);
+    template <typename list_type>
+    [[nodiscard]] static list_type make_boxed_array(std::pmr::memory_resource* resource) {
+        return list_type(resolved_pmr_resource_tag{}, resource);
     }
 
-    template <typename target_t_type>
-    static void emplace_parsed(target_t_type& target, typename target_t_type::value_type&& value) {
+    template <typename target_type>
+    static void emplace_parsed(target_type& target, typename target_type::value_type&& value) {
         target.emplace_parsed(std::move(value));
     }
 };

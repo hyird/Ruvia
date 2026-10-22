@@ -11,18 +11,16 @@
 #include <vector>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/web/app_hook.h"
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/dotenv.h"
-#include "ruvia/web/error_handlers.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"
-#include "ruvia/web/rate_limit_rule.h"
+#include "ruvia/web/rate_limit.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/web_worker.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_cache.h"
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS

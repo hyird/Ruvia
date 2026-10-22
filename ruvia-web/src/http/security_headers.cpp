@@ -5,6 +5,7 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/conn_info.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/detail/util/registration_resource.h"
 
 #include "context/context_access.h"
@@ -100,10 +101,6 @@ struct security_headers_policy final {
     };
 }
 
-[[nodiscard]] http_header_view custom_header_view(const security_header& header) noexcept {
-    return {header.name_, header.value_};
-}
-
 [[nodiscard]] http_header_view custom_header_view(const http_header& header) noexcept {
     return {header.name(), header.value()};
 }
@@ -190,19 +187,6 @@ security_headers_middleware::config_storage_type::config_storage_type(
     for (const auto& header : validated.source_->custom_headers_) {
         custom_headers_.push_back(http_header::copy_of(header.name_, header.value_, resource));
     }
-}
-
-void apply_security_headers(context& context_value, const security_headers_config& options) {
-    const auto flags = validate_security_headers_config(options);
-    const auto connection = context_value.conn();
-    apply_security_headers_to(context_value,
-        security_headers_policy{
-            .flags_ = flags,
-            .content_security_policy_ = options.content_security_policy_,
-            .referrer_policy_ = options.referrer_policy_,
-            .permissions_policy_ = options.permissions_policy_,
-        },
-        options.custom_headers_, connection.scheme() == http_scheme::https);
 }
 
 security_headers_middleware::security_headers_middleware()

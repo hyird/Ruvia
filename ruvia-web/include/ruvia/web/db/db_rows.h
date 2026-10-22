@@ -13,13 +13,37 @@
 #include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
-#include "ruvia/http/attributes.h"
-#include "ruvia/web/db/db_exec_result.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/db/db_types.h"
 #include "ruvia/web/detail/db/db_backend.h"
 #include "ruvia/web/detail/db/db_operation_state.h"
 
 namespace ruvia {
+
+// Result of a statement whose contract is side effects rather than a row set.
+// PostgreSQL does not expose a portable connection-level insert id, so that
+// value is present only when the selected backend supplied one.
+class db_exec_result final {
+public:
+    [[nodiscard]] constexpr std::uint64_t affected_rows() const noexcept {
+        return affected_rows_;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::uint64_t> last_insert_id() const noexcept {
+        return last_insert_id_;
+    }
+
+private:
+    friend struct detail::db_result_access;
+
+    constexpr db_exec_result(
+        std::uint64_t affected_rows, std::optional<std::uint64_t> last_insert_id) noexcept
+        : affected_rows_(affected_rows),
+          last_insert_id_(last_insert_id) {}
+
+    std::uint64_t affected_rows_{0};
+    std::optional<std::uint64_t> last_insert_id_;
+};
 
 class db_rows final {
 public:

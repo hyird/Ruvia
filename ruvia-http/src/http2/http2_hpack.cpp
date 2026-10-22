@@ -160,7 +160,7 @@ void hpack_decoder::release_scratch() {
     http_clear_pmr_string_retaining_small(value_scratch_);
 }
 
-hpack_decode_result hpack_decoder::decode(
+std::optional<hpack_decode_error> hpack_decoder::decode(
     std::string_view block, void* target, header_callback_type callback_value) {
     auto transaction = begin_transaction();
     auto result_value = decode(block, target, callback_value, transaction);
@@ -170,18 +170,17 @@ hpack_decode_result hpack_decoder::decode(
     return result_value;
 }
 
-hpack_decode_result hpack_decoder::decode(
+std::optional<hpack_decode_error> hpack_decoder::decode(
     std::string_view block, void* target, header_callback_type callback_value, decode_transaction_type& transaction) {
     if (transaction.decoder_ != this || !transaction.active_) {
         std::terminate();
     }
     try {
-        auto result_value = decode_block(block, target, callback_value);
-        if (const auto error = result_value.error();
-            error.has_value() && *error != hpack_decode_error::callback_rejected) {
+        auto error = decode_block(block, target, callback_value);
+        if (error.has_value() && *error != hpack_decode_error::callback_rejected) {
             transaction.rollback();
         }
-        return result_value;
+        return error;
     } catch (...) {
         // A field block is the HPACK transaction boundary. In particular, a
         // later allocation failure must not leave earlier incremental-indexing
@@ -191,7 +190,7 @@ hpack_decode_result hpack_decoder::decode(
     }
 }
 
-hpack_decode_result hpack_decoder::decode_block(
+std::optional<hpack_decode_error> hpack_decoder::decode_block(
     std::string_view block, void* target, header_callback_type callback_value) {
     struct scratch_release_guard final {
         hpack_decoder& decoder_;
@@ -217,11 +216,11 @@ hpack_decode_result hpack_decoder::decode_block(
         if ((first & 0x80U) != 0) {
             std::uint32_t index = 0;
             if (const auto error = decode_integer(cursor_value, end, 7, index); (error.has_value())) {
-                return hpack_decode_result(*error);
+                return *error;
             }
             header_view_type header;
             if (const auto error = indexed_header(index, header); (error.has_value())) {
-                return hpack_decode_result(*error);
+                return *error;
             }
             if (!rejected && callback_value != nullptr && !callback_value(target, header.name_, header.value_)) {
                 rejected = true;
@@ -234,7 +233,7 @@ hpack_decode_result hpack_decoder::decode_block(
             if (const auto error =
                     decode_literal_header(cursor_value, end, 6, true, target, callback_value, rejected);
                 (error.has_value())) {
-                return hpack_decode_result(*error);
+                return *error;
             }
             saw_header = true;
             continue;
@@ -242,16 +241,16 @@ hpack_decode_result hpack_decoder::decode_block(
 
         if ((first & 0xe0U) == 0x20U) {
             if (saw_header) {
-                return hpack_decode_result(hpack_decode_error::dynamic_table_size);
+                return hpack_decode_error::dynamic_table_size;
             }
             std::uint32_t size = 0;
             if (const auto error = decode_integer(cursor_value, end, 5, size); (error.has_value())) {
-                return hpack_decode_result(*error);
+                return *error;
             }
             // RFC 7541 section 6.3 bounds each update by the decoder's allowance.
             // Section 4.2's encoder coalescing policy is not a receiver count/order cap.
             if (size > allowed_dynamic_size_) {
-                return hpack_decode_result(hpack_decode_error::dynamic_table_size);
+                return hpack_decode_error::dynamic_table_size;
             }
             max_dynamic_size_ = size;
             evict_dynamic_to_fit(0);
@@ -262,18 +261,19 @@ hpack_decode_result hpack_decoder::decode_block(
             if (const auto error =
                     decode_literal_header(cursor_value, end, 4, false, target, callback_value, rejected);
                 (error.has_value())) {
-                return hpack_decode_result(*error);
+                return *error;
             }
             saw_header = true;
             continue;
         }
 
-        return hpack_decode_result(hpack_decode_error::invalid_index);
+        return hpack_decode_error::invalid_index;
     }
 
     // The whole block decoded and the dynamic table is consistent; surface a late
     // callback rejection now so the owner RST_STREAMs without desyncing the connection.
-    return rejected ? hpack_decode_result(hpack_decode_error::callback_rejected) : hpack_decode_result();
+    return rejected ? std::optional<hpack_decode_error>(hpack_decode_error::callback_rejected)
+                    : std::nullopt;
 }
 
 }  // namespace ruvia::detail

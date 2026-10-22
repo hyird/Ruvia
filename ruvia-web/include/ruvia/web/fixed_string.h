@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/attributes.h"
+#include "ruvia/http/borrowed_text.h"
 
 namespace ruvia {
 

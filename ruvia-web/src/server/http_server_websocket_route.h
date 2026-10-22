@@ -101,9 +101,9 @@ task<std::optional<http1_session_request_completion>> dispatch_http_websocket_ro
         .pending_frames_ = pending_frames,
         .websocket_connection_ = websocket_connection,
     };
-    auto outcome = co_await run_http_upgrade_route(d.routes_, d.parsed_.request_,
+    auto buffered = co_await run_http_upgrade_route(d.routes_, d.parsed_.request_,
         resolved, d.request_memory_, d.base_route_services_, websocket_connection, upgrade, upgrade);
-    if (auto* buffered = outcome.response()) {
+    if (buffered) {
         d.response_ = std::move(*buffered);
         co_return finalize_closing_route_response(d.response_, d.parsed_.connection_plan_);
     }

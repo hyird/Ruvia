@@ -20,7 +20,7 @@ struct http1_interim_response_prepare_result_access final {
 
     [[nodiscard]] static constexpr http1_interim_response_prepare_result failure(
         http1_interim_response_prepare_error error) noexcept {
-        return http1_interim_response_prepare_result(http1_interim_response_prepare_failure(error));
+        return http1_interim_response_prepare_result(error);
     }
 
     [[nodiscard]] static constexpr http1_interim_response_prepare_result prepared(

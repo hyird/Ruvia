@@ -1,8 +1,7 @@
-#include "ruvia/web/http_client_tunnel.h"
-
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/web/http_client_handle.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "client/http_client_output_operation.h"

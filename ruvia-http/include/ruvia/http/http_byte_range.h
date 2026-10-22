@@ -16,16 +16,11 @@
 
 namespace ruvia {
 
-class http_byte_range_unsatisfiable final {
-private:
-    friend class http_byte_range_set;
-
-    constexpr http_byte_range_unsatisfiable() noexcept = default;
-};
-
 // A byte range already resolved against the selected representation.
-class http_resolved_byte_range final {
-public:
+struct http_byte_range final {
+    std::uint64_t offset_{};
+    std::uint64_t length_{};
+
     [[nodiscard]] constexpr std::uint64_t offset() const noexcept {
         return offset_;
     }
@@ -33,20 +28,6 @@ public:
     [[nodiscard]] constexpr std::uint64_t length() const noexcept {
         return length_;
     }
-
-private:
-    friend class http_byte_range_set;
-
-    constexpr http_resolved_byte_range(std::uint64_t offset, std::uint64_t length) noexcept
-        : offset_(offset),
-          length_(length) {
-        if (length_ == 0 || offset_ > (std::numeric_limits<std::uint64_t>::max)() - length_) {
-            std::terminate();
-        }
-    }
-
-    std::uint64_t offset_;
-    std::uint64_t length_;
 };
 
 // Bounded, allocation-free result for a byte-range set. The limit protects
@@ -55,11 +36,7 @@ class http_byte_range_set final {
 public:
     static constexpr std::size_t capacity = 16;
 
-    struct range final {
-        std::uint64_t offset_{};
-        std::uint64_t length_{};
-    };
-
+    using range = http_byte_range;
     [[nodiscard]] constexpr bool ignored() const noexcept {
         return ignored_;
     }
@@ -75,13 +52,6 @@ public:
             throw std::out_of_range("HTTP byte range index out of range");
         }
         return ranges_[index];
-    }
-    [[nodiscard]] constexpr http_resolved_byte_range resolved_range(std::size_t index) const {
-        const auto& selected = (*this)[index];
-        return http_resolved_byte_range(selected.offset_, selected.length_);
-    }
-    [[nodiscard]] constexpr http_byte_range_unsatisfiable unsatisfiable_outcome() const noexcept {
-        return http_byte_range_unsatisfiable{};
     }
 
 private:

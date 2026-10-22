@@ -14,8 +14,13 @@
 #include "ruvia/web/detail/entity/value_storage.h"
 #include "ruvia/web/detail/redis/redis_entity_traits.h"
 #include "ruvia/web/detail/redis/redis_repository_commands.h"
-#include "ruvia/web/redis/redis_find_options.h"
-#include "ruvia/web/redis/redis_repository_types.h"
+
+namespace ruvia {
+enum class redis_index_kind : std::uint8_t;
+class redis_predicate;
+struct redis_find_options;
+struct redis_repository_config;
+}  // namespace ruvia
 
 namespace ruvia::detail {
 
@@ -39,7 +44,7 @@ inline constexpr auto redis_query_columns = [] {
 
 struct redis_index_definition final {
     std::pmr::string field_;
-    redis_index_kind kind_{redis_index_kind::none};
+    redis_index_kind kind_{};
     bool sortable_{false};
 };
 
@@ -61,7 +66,7 @@ struct redis_mapping final {
                 return index.kind_;
             }
         }
-        return redis_index_kind::none;
+        return redis_index_kind{};
     }
     [[nodiscard]] bool sortable(std::string_view column) const noexcept {
         for (const auto& index : indexes_) {

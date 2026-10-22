@@ -14,7 +14,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/attributes.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/detail/response/http_response_body.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_known_method.h"

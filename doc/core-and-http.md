@@ -25,8 +25,7 @@
 | --- | --- | --- |
 | `"ruvia/core/stop_token.h"` | `class stop_source final`、`class stop_token final`、`class stop_registration final`、`combine_stop_tokens(first, second)` | 零堆分配侵入式回调注册的协作式取消原语。单个 `stop_token` 最多合并观察 `max_stop_token_sources`（4）个源；`stop_registration` 析构时自动注销并同步等待正在执行的回调返回 |
 | `"ruvia/core/operation_options.h"` | `struct operation_options final`、`validate_operation_options`、`merge_operation_options` | 通用操作选项：`timeout_`（`std::optional<std::chrono::milliseconds>`，设置时须 `> 0`）与 `stop_token_` |
-| `"ruvia/core/operation_timeout.h"` | `class operation_timeout final` | 跨异步阶段共享的 `steady_clock` 截止时间计算器，提供 `deadline()`、`remaining()`、`expired()`、`constrained_by(...)` |
-| `"ruvia/core/operation_deadline.h"` | `template <typename Kind = std::monostate> class operation_deadline final` | 零分配三态（inactive / active / expired）截止期状态机，提供 `arm(...)`、`reset()`、`expired()`、`kind()`、`expire(now)`、`clear()` |
+| `"ruvia/core/operation_timeout.h"` | `class operation_timeout final`、`template <typename Kind = std::monostate> class operation_deadline final` | 跨异步阶段共享的 `steady_clock` 截止时间计算器与零分配三态（inactive / active / expired）截止期状态机 |
 | `"ruvia/core/worker_timer.h"` | `class worker_timer_registration final`、`class worker_timer_cancellation final`、`enum class worker_timer_outcome { expired, cancelled }` | 单 Worker 侵入式定时器注册句柄，配合 `worker_handle::schedule_timer` 使用；提供 `cancel()`（静默取消）与 `cancel_and_notify()` |
 | `"ruvia/core/timer.h"` | `enum class timer_sleep_result { elapsed, stop_requested }`、`sleep_for(const worker_handle&, duration, [stop_token])` | 在绑定 Worker 上挂起当前协程指定时长；若传入的 `stop_token` 触发或 Worker 停止定时器，返回 `stop_requested` 而不抛异常 |
 
@@ -56,9 +55,8 @@ pool.join();
 | `"ruvia/core/event_loop.h"` | `class event_loop final`、`class event_loop_stop_registration final` | 指向单个 Worker 运行时及其 `asio::io_context` 的轻量句柄。提供 `start(task<T>)`（返回 `root_task<T>`）、`post(fn)`、`defer_cleanup(fn)`、`on_stop(fn)`、`handle()`、`io_context()`、`executor()`、`is_current()` |
 | `"ruvia/core/event_loop_pool.h"` | `class event_loop_pool final`、`struct event_loop_pool_options` | 管理固定数量独立事件循环线程的池。提供 `start()`、`stop()`、`join()`、`loop_count()`、`loop(index)`、`next_loop()`、`loop_for(key)` |
 | `"ruvia/core/event_loop_attachment.h"` | `class event_loop_attachment final`、`attach_event_loop(asio::io_context&, options = {})` | 将 Ruvia Worker 挂载到外部自管的 `asio::io_context` 上（供单线程自定义主循环集成 `http_client` / `db_client` / `redis_client`） |
-| `"ruvia/core/worker_handle.h"` | `class worker_handle`、`using worker_id_type = std::uint64_t` | 跨线程安全的稳定派发端点。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`post(fn)`、`post_factory(factory)`、`schedule_timer(...)` |
-| `"ruvia/core/worker_post_types.h"` | `enum class post_status { accepted, queue_full, worker_stopping }`、`template <typename Sig> class post_outcome final` | 有界队列投递结果；被拒绝时可通过 `take_rejected()` 取回原闭包 |
-| `"ruvia/core/worker_runtime.h"` | `class worker_runtime final`、`struct worker_runtime_options`、`struct worker_runtime_hooks` | 底层单 Worker 线程与两阶段启停状态机（`startup -> ready -> serve -> stop_admission -> finalize -> drain -> shutdown -> join`） |
+| `"ruvia/core/worker_handle.h"` | `class worker_handle`、`using worker_id_type = std::uint64_t`、`enum class post_status`、`template <typename Sig> class post_outcome final` | 跨线程安全的稳定派发端点与有界队列投递结果。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`post(fn)`、`post_factory(factory)`、`schedule_timer(...)` |
+| `"ruvia/core/worker_runtime.h"` | `class worker_runtime final`、`struct worker_runtime_options`、`struct worker_runtime_hooks`、`enum class runtime_lifecycle_phase` | 底层单 Worker 线程与两阶段启停状态机（`startup -> ready -> serve -> stop_admission -> finalize -> drain -> shutdown -> join`） |
 | `"ruvia/core/worker_group.h"` | `class worker_group final` | 协调多个 `worker_runtime` 同步完成两阶段启动屏障（`start()` / `serve()`）与停机回收（`request_stop()` / `join()`） |
 | `"ruvia/core/blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(pool, worker_handle, [timeout], [stop_token], fn)` | 固定大小阻塞卸载线程池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至池线程并在完成后回到原 Worker 恢复协程 |
 
@@ -75,7 +73,7 @@ pool.join();
 | `"ruvia/core/worker_notification.h"` | `class worker_notification final` | 跨线程闩锁合并通知原语（任意线程无锁 `notify()`，所属 Worker 上 `co_await notification.wait()`） |
 | `"ruvia/core/pool_lease_scheduler.h"` | `class pool_lease_scheduler final`、`class pool_lease_acquire final` | 单 Worker 连接/槽位池租约调度器（空闲时同步返回槽位下标，满载时挂起排队并支持超时与取消） |
 | `"ruvia/core/memory/memory_pool.h"` | `class worker_memory final`、`class request_memory final`、`struct memory_pool_config` | Worker 级可回收内存池与单次请求单调 Arena（支持 `allocator<T>()`、`resource()`、`fork()`、`trim(owner)`） |
-| `"ruvia/core/memory/process_resource.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)` | 进程级线程安全 PMR 内存资源 |
+| `"ruvia/core/memory/pmr_resource.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)` | 进程级线程安全 PMR 内存资源与回退辅助 |
 | `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器 |
 | `"ruvia/core/local_ring_queue.h"` / `"ruvia/core/mpsc_ring_queue.h"` | `class local_ring_queue<T>`、`class mpsc_ring_queue<T>` | 预分配容量的单线程零分配环形队列与多生产者单消费者有界环形队列 |
 | `"ruvia/core/bytes.h"` / `"ruvia/core/error_text.h"` / `"ruvia/core/ip_address.h"` | `as_bytes`、`as_chars`、`error_code_text`、`system_error_text`、`parse_ip_address` | 字节/字符视图转换、跨平台 UTF-8 系统错误文本转换、严格 IPv4/IPv6 字面量解析 |
@@ -94,8 +92,8 @@ pool.join();
 | `"ruvia/http/http_io_buffer.h"` | `class http_io_buffer final` | PMR 流式读写缓冲区：`prepare(n)`、`commit(n)`、`append(bytes)`、`view()`、`consume(n)`、`clear_retaining_small()` |
 | `"ruvia/http/http_protocol_version.h"` / `"ruvia/http/http_scheme.h"` / `"ruvia/http/http_known_method.h"` | `http_protocol_version`（`http10`, `http11`, `http2`）、`http_scheme`（`http`, `https`）、`http_known_method`、`classify_http_method`、`is_valid_http_method_token` | 协议版本、Scheme 与 HTTP 方法分类及幂等/安全性判断 |
 | `"ruvia/http/http_status.h"` | `class http_status_code final`、`namespace ruvia::http_status`、`http_reason_phrase` | 强类型 HTTP 状态码（`100..599`）与标准状态码常量（`http_status::ok`、`not_found` 等） |
-| `"ruvia/http/http_protocol_error.h"` / `"ruvia/http/http_parse_error.h"` | `class http_protocol_error final : public std::exception`、`enum class http_parse_error` | 零动态分配的协议错误异常（携带对应 `http_status_code`）与解析错误枚举 |
-| `"ruvia/http/http_request_target.h"` / `"ruvia/http/http_origin.h"` | `http_authority_view`、`parse_http_authority`、`is_valid_http_origin_form_target`、`is_valid_http_connect_authority`、`is_valid_http_serialized_origin` | RFC 9110 / RFC 3986 请求目标、Authority 与 Origin 语法校验和解析 |
+| `"ruvia/http/http_protocol_error.h"` | `class http_protocol_error final : public std::exception`、`enum class http_parse_error` | 零动态分配的协议错误异常（携带对应 `http_status_code`）与解析错误枚举 |
+| `"ruvia/http/http_request_target.h"` | `http_authority_view`、`http_origin_view`、`parse_http_authority`、`is_valid_http_origin_form_target`、`is_valid_http_connect_authority`、`is_valid_http_serialized_origin` | RFC 9110 / RFC 3986 请求目标、Authority 与 Origin 语法校验和解析 |
 | `"ruvia/http/url_encoding.h"` / `"ruvia/http/http_hex.h"` / `"ruvia/http/http_base64.h"` | `decode_url_component`、`validate_url_encoding`、`visit_url_encoded_pairs`、`http_encode_lower_hex`、`http_base64_encode`、`http_base64_decode` | URL 百分号/表单编解码、十六进制转换、标准与 URL-safe Base64 编解码 |
 
 ---

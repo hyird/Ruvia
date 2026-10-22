@@ -10,9 +10,12 @@
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
-#include "ruvia/web/redis/redis_repository_types.h"
 #include "ruvia/web/redis/redis_types.h"
-#include "ruvia/web/redis/redis_write_result.h"
+
+namespace ruvia {
+struct redis_write_options;
+class redis_write_result;
+}  // namespace ruvia
 
 namespace ruvia::detail {
 

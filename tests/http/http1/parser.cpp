@@ -9,12 +9,12 @@
 
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_server_request_parser.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_parse_error.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_request_content_decoding.h"
 
 #include "failing_memory_resource.h"
 #include "http1_request_message_fixture.h"
@@ -1094,8 +1094,7 @@ RUVIA_TEST(http1_parse_coding_metadata_preserves_body_and_rejects_decoder_fallba
             }
             RUVIA_CHECK_EQ(parsed.body_, "abc");
             RUVIA_CHECK_EQ(std::string_view(wire).substr(*parsed.message_bytes_), "NEXT");
-            const auto coding = ruvia::request_content_coding(
-                parsed.state_.request_, std::pmr::get_default_resource());
+            const auto coding = ruvia::request_content_coding(parsed.state_.request_);
             const bool unsupported = value == "future-coding";
             RUVIA_CHECK((coding.unsupported() != nullptr) == unsupported);
             RUVIA_CHECK((coding.invalid() != nullptr) == !unsupported);

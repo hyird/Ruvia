@@ -9,7 +9,7 @@
 #include <variant>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/web/http_client_tunnel.h"
+#include "ruvia/web/http_client_handle.h"
 #include "ruvia/web/http_tunnel.h"
 
 #include "client/http_client_response_memory.h"
@@ -152,7 +152,7 @@ scoped_operation<void> http_capsule_stream::write_frame(std::string_view prefix,
         }
         detail::running_capsule_operation running(state_value, true);
         try {
-            co_await state_value.send_bytes(input.bytes_);
+            co_await state_value.send_bytes(std::move(input.bytes_));
         } catch (...) {
             state_value.abort();
             throw;

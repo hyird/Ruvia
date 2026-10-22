@@ -12,14 +12,14 @@
 namespace ruvia::detail {
 
 struct model_validation_access final {
-    template <typename model_t_type>
-    [[nodiscard]] static bool structure_valid(const model_t_type& model) {
+    template <typename model_type>
+    [[nodiscard]] static bool structure_valid(const model_type& model) {
         bool valid = true;
-        model::visit_model_fields(model, model::model_access::schema<model_t_type>(), [&](const auto&, const auto& slot) {
-            using slot_t_type = std::remove_cvref_t<decltype(slot)>;
+        model::visit_model_fields(model, model::model_access::schema<model_type>(), [&](const auto&, const auto& slot) {
+            using slot_type = std::remove_cvref_t<decltype(slot)>;
             const auto state_value = slot.state();
             if (state_value == model_field_state::duplicate || state_value == model_field_state::invalid_type ||
-                (slot_t_type::required && state_value == model_field_state::missing)) {
+                (slot_type::required && state_value == model_field_state::missing)) {
                 valid = false;
                 return;
             }
@@ -30,22 +30,22 @@ struct model_validation_access final {
         return valid;
     }
 
-    template <typename model_t_type, typename validator_t_type>
-    static void validate_model(const model_t_type& model_value, validator_t_type& validator_value) {
+    template <typename model_type, typename validator_type>
+    static void validate_model(const model_type& model_value, validator_type& validator_value) {
         model::model_issue_sink sink(validator_value);
         const model::model_path root;
         validate_structure(model_value, root, sink);
         validate_field_rules(model_value, root, sink);
     }
 
-    template <typename value_t_type>
-    [[nodiscard]] static bool value_structure_valid(const value_t_type& value) {
-        using t_type = std::remove_cvref_t<value_t_type>;
+    template <typename value_type>
+    [[nodiscard]] static bool value_structure_valid(const value_type& value) {
+        using t_type = std::remove_cvref_t<value_type>;
         if constexpr (is_model<t_type>) {
             return structure_valid(value);
         } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
-            using element_t_type = typename t_type::value_type;
-            if constexpr (is_model<element_t_type> || is_ruvia_array<element_t_type> || is_ruvia_boxed_array<element_t_type>) {
+            using element_type = typename t_type::value_type;
+            if constexpr (is_model<element_type> || is_ruvia_array<element_type> || is_ruvia_boxed_array<element_type>) {
                 for (const auto& element : value) {
                     if (!value_structure_valid(element)) {
                         return false;
@@ -59,15 +59,15 @@ struct model_validation_access final {
     }
 
 private:
-    template <typename model_t_type, typename sink_t_type>
+    template <typename model_type, typename sink_type>
     static void validate_structure(
-        const model_t_type& model_value, const model::model_path& prefix, sink_t_type& sink) {
+        const model_type& model_value, const model::model_path& prefix, sink_type& sink) {
         model::visit_model_fields(
-            model_value, model::model_access::schema<model_t_type>(), [&](const auto&, const auto& slot) {
+            model_value, model::model_access::schema<model_type>(), [&](const auto&, const auto& slot) {
                 if (sink.full()) {
                     return;
                 }
-                using slot_t_type = std::remove_cvref_t<decltype(slot)>;
+                using slot_type = std::remove_cvref_t<decltype(slot)>;
                 const model::model_path path(prefix, slot.wire_name());
 
                 switch (slot.state()) {
@@ -75,10 +75,10 @@ private:
                         sink.add(path, "duplicate", "is duplicated");
                         return;
                     case model_field_state::invalid_type:
-                        sink.add(path, "invalid_type", model::expected_type_name<typename slot_t_type::value_type>());
+                        sink.add(path, "invalid_type", model::expected_type_name<typename slot_type::value_type>());
                         return;
                     case model_field_state::missing:
-                        if constexpr (slot_t_type::required) {
+                        if constexpr (slot_type::required) {
                             sink.add(path, "required", "is required");
                         }
                         return;
@@ -92,17 +92,17 @@ private:
             });
     }
 
-    template <typename model_t_type, typename sink_t_type>
+    template <typename model_type, typename sink_type>
     static void validate_field_rules(
-        const model_t_type& model_value, const model::model_path& prefix, sink_t_type& sink) {
+        const model_type& model_value, const model::model_path& prefix, sink_type& sink) {
         model::visit_model_fields(
-            model_value, model::model_access::schema<model_t_type>(), [&](const auto& descriptor, const auto& slot) {
+            model_value, model::model_access::schema<model_type>(), [&](const auto& descriptor, const auto& slot) {
                 if (sink.full()) {
                     return;
                 }
-                using descriptor_t_type = std::remove_cvref_t<decltype(descriptor)>;
+                using descriptor_type = std::remove_cvref_t<decltype(descriptor)>;
                 const model::model_path path(prefix, slot.wire_name());
-                typename descriptor_t_type::rules_type{}.validate(slot.state(), slot.value(), path, sink);
+                typename descriptor_type::rules_type{}.validate(slot.state(), slot.value(), path, sink);
 
                 if (slot.state() != model_field_state::parsed || !slot.value()) {
                     return;
@@ -111,15 +111,15 @@ private:
             });
     }
 
-    template <typename value_t_type, typename sink_t_type>
+    template <typename value_type, typename sink_type>
     static void validate_value_structure(
-        const value_t_type& value, const model::model_path& path, sink_t_type& sink) {
-        using t_type = std::remove_cvref_t<value_t_type>;
+        const value_type& value, const model::model_path& path, sink_type& sink) {
+        using t_type = std::remove_cvref_t<value_type>;
         if constexpr (is_model<t_type>) {
             validate_structure(value, path, sink);
         } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
-            using element_t_type = typename t_type::value_type;
-            if constexpr (is_model<element_t_type> || is_ruvia_array<element_t_type> || is_ruvia_boxed_array<element_t_type>) {
+            using element_type = typename t_type::value_type;
+            if constexpr (is_model<element_type> || is_ruvia_array<element_type> || is_ruvia_boxed_array<element_type>) {
                 std::size_t index = 0;
                 for (const auto& element : value) {
                     if (sink.full()) {
@@ -132,15 +132,15 @@ private:
         }
     }
 
-    template <typename value_t_type, typename sink_t_type>
+    template <typename value_type, typename sink_type>
     static void validate_nested_field_rules(
-        const value_t_type& value, const model::model_path& path, sink_t_type& sink) {
-        using t_type = std::remove_cvref_t<value_t_type>;
+        const value_type& value, const model::model_path& path, sink_type& sink) {
+        using t_type = std::remove_cvref_t<value_type>;
         if constexpr (is_model<t_type>) {
             validate_field_rules(value, path, sink);
         } else if constexpr (is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type>) {
-            using element_t_type = typename t_type::value_type;
-            if constexpr (is_model<element_t_type> || is_ruvia_array<element_t_type> || is_ruvia_boxed_array<element_t_type>) {
+            using element_type = typename t_type::value_type;
+            if constexpr (is_model<element_type> || is_ruvia_array<element_type> || is_ruvia_boxed_array<element_type>) {
                 std::size_t index = 0;
                 for (const auto& element : value) {
                     if (sink.full()) {

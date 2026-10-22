@@ -42,7 +42,7 @@ struct channel_options final {
 
 template <typename t_type>
 using channel_send_result =
-    detail::worker_delivery_result<t_type, channel_send_status, channel_send_status::sent>;
+    worker_delivery_result<t_type, channel_send_status, channel_send_status::sent>;
 
 namespace detail {
 

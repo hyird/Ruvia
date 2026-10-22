@@ -2,9 +2,9 @@
 
 #include <memory_resource>
 
-#include "ruvia/core/memory/process_resource.h"
-
 namespace ruvia {
+
+[[nodiscard]] std::pmr::memory_resource* process_resource() noexcept;
 
 struct resolved_pmr_resource_tag final {};
 

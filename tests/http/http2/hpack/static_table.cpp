@@ -22,7 +22,7 @@ RUVIA_TEST(hpack_encoder_uses_canonical_wire_indices_for_every_static_entry) {
             });
         RUVIA_CHECK_EQ(encoded.size(), std::size_t{1});
         RUVIA_CHECK_EQ(encoded, std::string_view(&indexed_field, 1));
-        RUVIA_CHECK(decoded.decoded());
+        RUVIA_CHECK(!decoded.has_value());
         RUVIA_CHECK_EQ(fields_value, std::size_t{1});
     }
 }

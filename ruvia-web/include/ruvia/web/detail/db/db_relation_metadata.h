@@ -25,14 +25,14 @@ template <typename entity_type, fixed_string name>
 struct db_relation_named final {
     static constexpr auto index = db_relation_index<entity_type, name>();
     static_assert(index < std::tuple_size_v<typename entity_type::relations_type>, "unknown inverse database relation");
-    using type_type = std::tuple_element_t<index, typename entity_type::relations_type>;
+    using type = std::tuple_element_t<index, typename entity_type::relations_type>;
 };
 
 template <typename tuple_type>
 struct reverse_db_join_columns;
 template <typename... columns_type>
 struct reverse_db_join_columns<std::tuple<columns_type...>> final {
-    using type_type = std::tuple<db_join_column<columns_type::referenced, columns_type::local>...>;
+    using type = std::tuple<db_join_column<columns_type::referenced, columns_type::local>...>;
 };
 
 // An owning one-to-one relation stores its join columns exactly like an owning
@@ -59,24 +59,24 @@ struct db_relation_mapping<source, relation_type, db_relation_kind::many_to_one,
 
 template <typename source, typename relation_type>
 struct db_relation_mapping<source, relation_type, db_relation_kind::one_to_many, false> {
-    using inverse_type = typename db_relation_named<typename relation_type::target_entity_type, relation_type::inverse_name>::type_type;
+    using inverse_type = typename db_relation_named<typename relation_type::target_entity_type, relation_type::inverse_name>::type;
     static_assert(inverse_type::kind == db_relation_kind::many_to_one && inverse_type::is_owning,
         "one-to-many must refer to an owning many-to-one relation");
     static_assert(std::is_same_v<typename inverse_type::target_entity_type, source>,
         "inverse database relation must target its source entity");
     static constexpr bool through_join_table = false;
-    using join_columns_type = typename reverse_db_join_columns<typename inverse_type::join_columns_type>::type_type;
+    using join_columns_type = typename reverse_db_join_columns<typename inverse_type::join_columns_type>::type;
 };
 
 template <typename source, typename relation_type>
 struct db_relation_mapping<source, relation_type, db_relation_kind::one_to_one, false> {
-    using inverse_type = typename db_relation_named<typename relation_type::target_entity_type, relation_type::inverse_name>::type_type;
+    using inverse_type = typename db_relation_named<typename relation_type::target_entity_type, relation_type::inverse_name>::type;
     static_assert(inverse_type::kind == db_relation_kind::one_to_one && inverse_type::is_owning,
         "inverse one-to-one must refer to an owning one-to-one relation");
     static_assert(std::is_same_v<typename inverse_type::target_entity_type, source>,
         "inverse database relation must target its source entity");
     static constexpr bool through_join_table = false;
-    using join_columns_type = typename reverse_db_join_columns<typename inverse_type::join_columns_type>::type_type;
+    using join_columns_type = typename reverse_db_join_columns<typename inverse_type::join_columns_type>::type;
 };
 
 template <typename source, typename relation_type>
@@ -92,7 +92,7 @@ struct db_relation_mapping<source, relation_type, db_relation_kind::many_to_many
 
 template <typename source, typename relation_type>
 struct db_relation_mapping<source, relation_type, db_relation_kind::many_to_many, false> {
-    using inverse_type = typename db_relation_named<typename relation_type::target_entity_type, relation_type::inverse_name>::type_type;
+    using inverse_type = typename db_relation_named<typename relation_type::target_entity_type, relation_type::inverse_name>::type;
     static_assert(inverse_type::kind == db_relation_kind::many_to_many && inverse_type::is_owning,
         "inverse many-to-many must refer to an owning many-to-many relation");
     static_assert(std::is_same_v<typename inverse_type::target_entity_type, source>,

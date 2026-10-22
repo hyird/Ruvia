@@ -15,11 +15,11 @@ namespace ruvia::detail {
 
 namespace {
 
-[[nodiscard]] rate_limit_decision decide_route_rate_limit(
+[[nodiscard]] std::optional<rate_limit_rejection> decide_route_rate_limit(
     context& context_value, const void* declaration, const route_rate_limit_options& options) noexcept {
     auto* limiter = context_access::rate_limiter(context_value);
     if (limiter == nullptr) {
-        return rate_limit_decision::allow();
+        return std::nullopt;
     }
 
     char key_buffer[rate_limit_key_buffer_bytes];
@@ -64,9 +64,8 @@ void apply_route_rate_limit_rejection_headers(
 
 bool apply_route_rate_limit(
     context& context_value, const void* declaration, const route_rate_limit_options& options) {
-    const auto decision = decide_route_rate_limit(context_value, declaration, options);
-    const auto* rejection = decision.rejection();
-    if (rejection == nullptr) {
+    const auto rejection = decide_route_rate_limit(context_value, declaration, options);
+    if (!rejection) {
         return true;
     }
 

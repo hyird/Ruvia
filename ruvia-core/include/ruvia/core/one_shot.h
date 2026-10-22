@@ -40,7 +40,7 @@ struct one_shot_options final {
 
 template <typename t_type>
 using one_shot_complete_result =
-    detail::worker_delivery_result<t_type, one_shot_complete_status, one_shot_complete_status::completed>;
+    worker_delivery_result<t_type, one_shot_complete_status, one_shot_complete_status::completed>;
 
 namespace detail {
 

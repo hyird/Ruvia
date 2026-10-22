@@ -4,7 +4,7 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/web/error_handlers.h"
+#include "ruvia/web/error.h"
 
 namespace ruvia::detail {
 

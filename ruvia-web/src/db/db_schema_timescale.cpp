@@ -82,19 +82,20 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
     if (!options.enabled_ && (!options.segment_by_.empty() || !options.order_by_.empty())) {
         throw std::invalid_argument("disabled compression cannot specify segment or order columns");
     }
-    std::vector<db_table_option> values{{"timescaledb.compress", options.enabled_}};
+    std::pmr::vector<db_table_option> values(resource_);
+    values.push_back({"timescaledb.compress", options.enabled_});
+    std::pmr::string segments(resource_);
     if (!options.segment_by_.empty()) {
-        std::pmr::string segments(resource_);
         for (const auto& column : options.segment_by_) {
             if (!segments.empty()) {
                 segments += ", ";
             }
             detail::append_db_identifier(segments, column, driver_);
         }
-        values.push_back({"timescaledb.compress_segmentby", std::string(segments)});
+        values.push_back({"timescaledb.compress_segmentby", segments});
     }
+    std::pmr::string order(resource_);
     if (!options.order_by_.empty()) {
-        std::pmr::string order(resource_);
         for (const auto& column : options.order_by_) {
             if (!order.empty()) {
                 order += ", ";
@@ -108,7 +109,7 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
                 order += " NULLS LAST";
             }
         }
-        values.push_back({"timescaledb.compress_orderby", std::string(order)});
+        values.push_back({"timescaledb.compress_orderby", order});
     }
     set_table_options(table_value, values);
 }

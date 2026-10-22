@@ -74,10 +74,7 @@ application& application::listen(listen_config config) {
 application& application::server(server_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change server config while app is running",
-        [&config](detail::app_state& state_value) {
-            detail::validate_server_limits(config);
-            state_value.options_.server_ = config;
-        });
+        [&config](detail::app_state& state_value) { state_value.options_.set_server(config); });
 }
 
 application& application::on_start(app_hook_type hook) {
@@ -95,15 +92,7 @@ application& application::on_stop(app_hook_type hook) {
 application& application::rate_limit(rate_limit_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the default rate limit per worker while app is running",
-        [config](detail::app_state& state_value) mutable {
-            detail::validate_rate_limit_rule(config.rule_);
-            if (!std::has_single_bit(config.capacity_per_worker_)) {
-                throw std::invalid_argument(
-                    "rate-limit capacity per worker must be a power of two");
-            }
-            state_value.options_.default_rate_limit_per_worker_ = config.rule_;
-            state_value.options_.rate_limit_capacity_per_worker_ = config.capacity_per_worker_;
-        });
+        [config](detail::app_state& state_value) { state_value.options_.set_rate_limit(config); });
 }
 
 application& application::rate_limit(std::nullptr_t) {
@@ -116,19 +105,7 @@ application& application::trusted_proxies(trusted_proxy_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change trusted proxies while app is running",
         [config = std::move(config)](detail::app_state& state_value) {
-            detail::trusted_proxy_set parsed(process_resource());
-            parsed.trust_x_forwarded_proto(config.trust_x_forwarded_proto_);
-            for (const auto& cidr : config.cidrs_) {
-                const auto block = detail::parse_trusted_proxy_block(cidr);
-                if ((block.index() != 0)) {
-                    // A typo here would silently trust nothing and leave every
-                    // client identified as the proxy, so it fails startup instead.
-                    throw std::invalid_argument(
-                        "trusted proxy must be an IP address or CIDR block");
-                }
-                parsed.add(std::get<0>(block));
-            }
-            state_value.options_.trusted_proxies_ = std::move(parsed);
+            state_value.options_.set_trusted_proxies(config);
         });
 }
 

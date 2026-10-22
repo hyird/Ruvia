@@ -17,8 +17,10 @@ using ruvia::http_client_origin_authority_status;
 using ruvia::http_client_redirect_content_disposition;
 using ruvia::http_client_redirect_resolution_error;
 using ruvia::http_client_request_view;
+using ruvia::http_client_resolved_redirect;
 using ruvia::http_origin_view;
 using ruvia::http_scheme;
+using ruvia::http_unique_header_status;
 using ruvia::is_http_client_redirect_status;
 using ruvia::lookup_unique_http_client_response_header;
 using ruvia::plan_http_client_redirect_request;
@@ -39,9 +41,9 @@ void check_resolved_target(ruvia::testing::test_context& ruvia_ctx, const http_o
         resolve_http_client_redirect_target(origin, {.current_target_ = current_target,
                                                         .location_ = location,
                                                         .resource_ = std::pmr::get_default_resource()});
-    RUVIA_CHECK(result_value.failure() == nullptr);
-    RUVIA_CHECK(result_value.resolved() != nullptr);
-    if (const auto* resolved = result_value.resolved()) {
+    const auto* resolved = std::get_if<http_client_resolved_redirect>(&result_value);
+    RUVIA_CHECK(resolved != nullptr);
+    if (resolved != nullptr) {
         RUVIA_CHECK(!resolved->cross_origin());
         RUVIA_CHECK_EQ(resolved->target(), expected);
     }
@@ -53,9 +55,9 @@ void check_cross_origin_redirect(ruvia::testing::test_context& ruvia_ctx, const 
         resolve_http_client_redirect_target(origin, {.current_target_ = current_target,
                                                         .location_ = location,
                                                         .resource_ = std::pmr::get_default_resource()});
-    RUVIA_CHECK(result_value.failure() == nullptr);
-    RUVIA_CHECK(result_value.resolved() != nullptr);
-    if (const auto* resolved = result_value.resolved()) {
+    const auto* resolved = std::get_if<http_client_resolved_redirect>(&result_value);
+    RUVIA_CHECK(resolved != nullptr);
+    if (resolved != nullptr) {
         RUVIA_CHECK(resolved->cross_origin());
     }
 }
@@ -67,10 +69,10 @@ void check_redirect_target_failure(ruvia::testing::test_context& ruvia_ctx,
         resolve_http_client_redirect_target(origin, {.current_target_ = current_target,
                                                         .location_ = location,
                                                         .resource_ = std::pmr::get_default_resource()});
-    RUVIA_CHECK(result_value.resolved() == nullptr);
-    RUVIA_CHECK(result_value.failure() != nullptr);
-    if (const auto* failure = result_value.failure()) {
-        RUVIA_CHECK(failure->error() == expected);
+    const auto* failure = std::get_if<http_client_redirect_resolution_error>(&result_value);
+    RUVIA_CHECK(failure != nullptr);
+    if (failure != nullptr) {
+        RUVIA_CHECK(*failure == expected);
     }
 }
 
@@ -176,23 +178,16 @@ RUVIA_TEST(http_client_response_header_lookup_distinguishes_empty_and_repeated) 
     const auto& head = parsed.head_;
 
     const auto empty = lookup_unique_http_client_response_header(head, "location");
-    RUVIA_CHECK(empty.absent() == nullptr);
-    RUVIA_CHECK(empty.found() != nullptr);
-    RUVIA_CHECK(empty.repeated() == nullptr);
-    if (const auto* found = empty.found()) {
-        RUVIA_CHECK(found->value().empty());
-    }
+    RUVIA_CHECK(empty.status_ == http_unique_header_status::found);
+    RUVIA_CHECK(empty.value_.empty());
+
     const auto missing = lookup_unique_http_client_response_header(head, "missing");
-    RUVIA_CHECK(missing.absent() != nullptr);
-    RUVIA_CHECK(missing.found() == nullptr);
-    RUVIA_CHECK(missing.repeated() == nullptr);
+    RUVIA_CHECK(missing.status_ == http_unique_header_status::absent);
 
     auto repeated_parsed = http_client_response_test::parse_response(
         "GET", "HTTP/1.1 302 Found\r\nLocation:\r\nLOCATION: /second\r\nContent-Length: 0");
     const auto repeated = lookup_unique_http_client_response_header(repeated_parsed.head_, "Location");
-    RUVIA_CHECK(repeated.absent() == nullptr);
-    RUVIA_CHECK(repeated.found() == nullptr);
-    RUVIA_CHECK(repeated.repeated() != nullptr);
+    RUVIA_CHECK(repeated.status_ == http_unique_header_status::repeated);
 }
 
 RUVIA_TEST(http_client_authority_matches_typed_origin) {
@@ -404,9 +399,9 @@ void check_resolved_redirect(ruvia::testing::test_context& ruvia_ctx, const http
         resolve_http_client_redirect_target(origin, {.current_target_ = current_target,
                                                         .location_ = location,
                                                         .resource_ = std::pmr::get_default_resource()});
-    RUVIA_CHECK(result_value.failure() == nullptr);
-    RUVIA_CHECK(result_value.resolved() != nullptr);
-    if (const auto* resolved = result_value.resolved()) {
+    const auto* resolved = std::get_if<http_client_resolved_redirect>(&result_value);
+    RUVIA_CHECK(resolved != nullptr);
+    if (resolved != nullptr) {
         RUVIA_CHECK(resolved->scheme() == expected.scheme_);
         RUVIA_CHECK_EQ(resolved->host(), expected.host_);
         RUVIA_CHECK_EQ(resolved->port(), expected.port_);
@@ -422,10 +417,10 @@ void check_redirect_resolution_failure(ruvia::testing::test_context& ruvia_ctx,
         resolve_http_client_redirect_target(origin, {.current_target_ = current_target,
                                                         .location_ = location,
                                                         .resource_ = std::pmr::get_default_resource()});
-    RUVIA_CHECK(result_value.resolved() == nullptr);
-    RUVIA_CHECK(result_value.failure() != nullptr);
-    if (const auto* failure = result_value.failure()) {
-        RUVIA_CHECK(failure->error() == expected);
+    const auto* failure = std::get_if<http_client_redirect_resolution_error>(&result_value);
+    RUVIA_CHECK(failure != nullptr);
+    if (failure != nullptr) {
+        RUVIA_CHECK(*failure == expected);
     }
 }
 
@@ -470,8 +465,9 @@ RUVIA_TEST(http_client_redirect_resolution_builds_borrowing_origin) {
         resolve_http_client_redirect_target(origin, {.current_target_ = "/a/b",
                                                         .location_ = "https://other.example:8443/x",
                                                         .resource_ = std::pmr::get_default_resource()});
-    RUVIA_CHECK(result_value.resolved() != nullptr);
-    if (const auto* resolved = result_value.resolved()) {
+    const auto* resolved = std::get_if<http_client_resolved_redirect>(&result_value);
+    RUVIA_CHECK(resolved != nullptr);
+    if (resolved != nullptr) {
         const auto next_origin = resolved->origin();
         RUVIA_CHECK(next_origin.scheme() == http_scheme::https);
         RUVIA_CHECK_EQ(next_origin.host(), std::string_view("other.example"));

@@ -23,15 +23,14 @@ class model_storage;
     return detail::fnv1a_accumulate(detail::fnv1a_offset_basis, name);
 }
 
-template <typename value_t_type, bool is_required, typename options_t_type, fixed_string field_wire_name>
+template <typename field_value_type, bool is_required, typename options_type, fixed_string field_wire_name>
 class model_field final {
-    static_assert(std::is_empty_v<options_t_type>, "model field options must be stateless metadata");
+    static_assert(std::is_empty_v<options_type>, "model field options must be stateless metadata");
 
 public:
-    using value_type = value_t_type;
+    using value_type = field_value_type;
     static constexpr bool required = is_required;
-    static constexpr bool nullable = options_t_type::nullable;
-
+    static constexpr bool nullable = options_type::nullable;
     constexpr model_field() noexcept = default;
 
     [[nodiscard]] constexpr std::string_view wire_name() const noexcept {
@@ -51,13 +50,13 @@ public:
         return state_ == detail::model_field_state::null;
     }
 
-    [[nodiscard]] const std::optional<value_t_type>& value() const& noexcept {
+    [[nodiscard]] const std::optional<field_value_type>& value() const& noexcept {
         return value_;
     }
 
-    [[nodiscard]] const std::optional<value_t_type>& value() const&& = delete;
+    [[nodiscard]] const std::optional<field_value_type>& value() const&& = delete;
 
-    [[nodiscard]] const value_t_type& required_value() const&
+    [[nodiscard]] const field_value_type& required_value() const&
         requires required
     {
         if (!value_) {
@@ -66,33 +65,33 @@ public:
         return *value_;
     }
 
-    [[nodiscard]] const value_t_type& required_value() const&&
+    [[nodiscard]] const field_value_type& required_value() const&&
         requires required
     = delete;
 
     // Materializes an empty value when none is held. The empty json_value is
     // the token null, which a non-nullable field cannot hold (matching assign),
     // so ensure on such a field without a value throws and leaves it unchanged.
-    [[nodiscard]] value_t_type& ensure(std::pmr::memory_resource* resource) {
+    [[nodiscard]] field_value_type& ensure(std::pmr::memory_resource* resource) {
         if (!value_) {
-            if constexpr (detail::is_ruvia_json_value<value_t_type> && !nullable) {
+            if constexpr (detail::is_ruvia_json_value<field_value_type> && !nullable) {
                 throw std::invalid_argument("ensuring an absent JSON value requires RUVIA_NULLABLE");
             } else {
                 value_.emplace(
-                    detail::make_request_value<value_t_type>(resolved_pmr_resource_tag{}, resource));
+                    detail::make_request_value<field_value_type>(resolved_pmr_resource_tag{}, resource));
             }
         }
         state_ = detail::model_field_state::parsed;
         return *value_;
     }
 
-    template <typename input_t_type>
-    void assign(input_t_type&& input, std::pmr::memory_resource* resource) {
-        if constexpr (std::is_null_pointer_v<std::remove_cvref_t<input_t_type>>) {
+    template <typename input_type>
+    void assign(input_type&& input, std::pmr::memory_resource* resource) {
+        if constexpr (std::is_null_pointer_v<std::remove_cvref_t<input_type>>) {
             static_assert(nullable, "setting null requires RUVIA_NULLABLE");
             assign_null();
         } else {
-            if constexpr (detail::is_ruvia_json_value<input_t_type>) {
+            if constexpr (detail::is_ruvia_json_value<input_type>) {
                 if (input.is_null()) {
                     if constexpr (nullable) {
                         assign_null();
@@ -102,7 +101,7 @@ public:
                     }
                 }
             }
-            assign_field_value(value_, std::forward<input_t_type>(input), resource);
+            assign_field_value(value_, std::forward<input_type>(input), resource);
             state_ = detail::model_field_state::parsed;
         }
     }
@@ -113,8 +112,8 @@ public:
     }
 
     void apply_initial(std::pmr::memory_resource* resource) {
-        options_t_type::apply_initial([this, resource]<typename input_t_type>(input_t_type&& value) {
-            this->assign(std::forward<input_t_type>(value), resource);
+        options_type::apply_initial([this, resource]<typename input_type>(input_type&& value) {
+            this->assign(std::forward<input_type>(value), resource);
         });
     }
 
@@ -124,18 +123,18 @@ public:
             if (state_ != detail::model_field_state::missing) {
                 return;
             }
-            options_t_type::apply_default([this, resource]<typename input_t_type>(input_t_type&& value) {
-                this->assign(std::forward<input_t_type>(value), resource);
+            options_type::apply_default([this, resource]<typename input_type>(input_type&& value) {
+                this->assign(std::forward<input_type>(value), resource);
             });
         }
     }
 
     [[nodiscard]] constexpr bool emit_null() const noexcept {
-        return options_t_type::emit_null();
+        return options_type::emit_null();
     }
 
     [[nodiscard]] constexpr bool omit_empty() const noexcept {
-        return options_t_type::omit_empty();
+        return options_type::omit_empty();
     }
 
     friend bool operator==(const model_field& left, const model_field& right) {
@@ -173,7 +172,7 @@ private:
         state_ = detail::model_field_state::null;
     }
 
-    void emplace_parsed(value_t_type&& value) {
+    void emplace_parsed(field_value_type&& value) {
         value_.emplace(std::move(value));
         present_ = true;
         state_ = detail::model_field_state::parsed;
@@ -201,7 +200,7 @@ private:
 
     detail::model_field_state state_{detail::model_field_state::missing};
     bool present_{false};
-    std::optional<value_t_type> value_;
+    std::optional<field_value_type> value_;
 };
 
 }  // namespace ruvia::detail::model

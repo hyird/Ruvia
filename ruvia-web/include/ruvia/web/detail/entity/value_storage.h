@@ -72,21 +72,21 @@ struct entity_value_slot {
     t_type value_;
 };
 
-template <fixed_string name, typename... column_types_type>
+template <fixed_string name, typename... column_types>
 consteval std::size_t entity_column_index() {
-    constexpr bool matches[] = {column_types_type::name == name...};
-    for (std::size_t i = 0; i < sizeof...(column_types_type); ++i) {
+    constexpr bool matches[] = {column_types::name == name...};
+    for (std::size_t i = 0; i < sizeof...(column_types); ++i) {
         if (matches[i]) {
             return i;
         }
     }
-    return sizeof...(column_types_type);
+    return sizeof...(column_types);
 }
-template <typename... column_types_type>
+template <typename... column_types>
 consteval bool unique_entity_columns() {
-    constexpr std::string_view names[] = {column_types_type::name.view()...};
-    for (std::size_t i = 0; i < sizeof...(column_types_type); ++i) {
-        for (std::size_t j = i + 1; j < sizeof...(column_types_type); ++j) {
+    constexpr std::string_view names[] = {column_types::name.view()...};
+    for (std::size_t i = 0; i < sizeof...(column_types); ++i) {
+        for (std::size_t j = i + 1; j < sizeof...(column_types); ++j) {
             if (names[i] == names[j]) {
                 return false;
             }

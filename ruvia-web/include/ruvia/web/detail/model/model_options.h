@@ -7,17 +7,17 @@
 namespace ruvia::detail::model {
 
 // Field options are type-level metadata, not per-model runtime objects.
-template <typename... option_ts_type>
+template <typename... option_types>
 class model_options final {
-    static_assert((is_model_option<option_ts_type>() && ... && true),
+    static_assert((is_model_option<option_types>() && ... && true),
         "model field options must be RUVIA_DEFAULT, RUVIA_INITIAL, RUVIA_NULLABLE, RUVIA_OMIT_EMPTY, or RUVIA_EMIT_NULL");
-    static_assert(((is_default_rule<option_ts_type>() ? 1 : 0) + ... + 0) <= 1,
+    static_assert(((is_default_rule<option_types>() ? 1 : 0) + ... + 0) <= 1,
         "a model field may have at most one RUVIA_DEFAULT");
-    static_assert(((is_initial_rule<option_ts_type>() ? 1 : 0) + ... + 0) <= 1,
+    static_assert(((is_initial_rule<option_types>() ? 1 : 0) + ... + 0) <= 1,
         "a model field may have at most one RUVIA_INITIAL");
 
 public:
-    static constexpr bool nullable = (std::is_same_v<option_ts_type, ::ruvia::detail::model::nullable> || ... || false);
+    static constexpr bool nullable = (std::is_same_v<option_types, ::ruvia::detail::model::nullable> || ... || false);
 
     [[nodiscard]] static constexpr bool emit_null() noexcept {
         return contains_option<::ruvia::detail::model::emit_null>();
@@ -27,46 +27,46 @@ public:
         return contains_option<::ruvia::detail::model::omit_empty>();
     }
 
-    static constexpr bool has_initial = (is_initial_rule<option_ts_type>() || ... || false);
+    static constexpr bool has_initial = (is_initial_rule<option_types>() || ... || false);
 
     // The field owns assignment, nullability and allocator normalization.
-    template <typename consumer_t_type>
-    static void apply_default(consumer_t_type&& consume) {
-        if constexpr (sizeof...(option_ts_type) != 0) {
-            (apply_default_option<option_ts_type>(consume), ...);
+    template <typename consumer_type>
+    static void apply_default(consumer_type&& consume) {
+        if constexpr (sizeof...(option_types) != 0) {
+            (apply_default_option<option_types>(consume), ...);
         } else {
             (void)consume;
         }
     }
 
-    template <typename consumer_t_type>
-    static void apply_initial(consumer_t_type&& consume) {
-        if constexpr (sizeof...(option_ts_type) != 0) {
-            (apply_initial_option<option_ts_type>(consume), ...);
+    template <typename consumer_type>
+    static void apply_initial(consumer_type&& consume) {
+        if constexpr (sizeof...(option_types) != 0) {
+            (apply_initial_option<option_types>(consume), ...);
         } else {
             (void)consume;
         }
     }
 
 private:
-    template <typename option_t_type>
+    template <typename option_type>
     [[nodiscard]] static constexpr bool contains_option() noexcept {
-        return (std::is_same_v<std::remove_cvref_t<option_ts_type>, option_t_type> || ... || false);
+        return (std::is_same_v<std::remove_cvref_t<option_types>, option_type> || ... || false);
     }
 
-    template <typename option_t_type, typename consumer_t_type>
-    static void apply_initial_option(consumer_t_type& consume) {
-        if constexpr (is_initial_rule<option_t_type>()) {
-            consume(option_t_type::value());
+    template <typename option_type, typename consumer_type>
+    static void apply_initial_option(consumer_type& consume) {
+        if constexpr (is_initial_rule<option_type>()) {
+            consume(option_type::value());
         } else {
             (void)consume;
         }
     }
 
-    template <typename option_t_type, typename consumer_t_type>
-    static void apply_default_option(consumer_t_type& consume) {
-        if constexpr (is_default_rule<option_t_type>()) {
-            consume(option_t_type::value());
+    template <typename option_type, typename consumer_type>
+    static void apply_default_option(consumer_type& consume) {
+        if constexpr (is_default_rule<option_type>()) {
+            consume(option_type::value());
         } else {
             (void)consume;
         }

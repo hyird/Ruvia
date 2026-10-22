@@ -78,7 +78,7 @@ private:
 };
 
 struct db_migrator_options final {
-    std::string table_{"ruvia_schema_migrations"};
+    borrowed_text table_{"ruvia_schema_migrations"};
     std::chrono::seconds lock_timeout_{30};
     std::pmr::memory_resource* resource_{nullptr};
 };

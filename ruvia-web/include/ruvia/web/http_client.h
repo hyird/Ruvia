@@ -4,9 +4,8 @@
 #include <optional>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_client_tunnel_request_view.h"
+#include "ruvia/http/http_client.h"
 #include "ruvia/web/http_client_handle.h"
-#include "ruvia/web/http_client_tunnel.h"
 
 namespace ruvia {
 

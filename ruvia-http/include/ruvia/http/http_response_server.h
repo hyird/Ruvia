@@ -5,14 +5,43 @@
 #include <memory_resource>
 #include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 
+#include "ruvia/http/detail/field/http_trailer_fields.h"
+#include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http1_response_head_plan.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_head_buffer.h"
-#include "ruvia/http/http_response_trailer_section.h"
 namespace ruvia {
+
+class http_response_trailer_section;
+[[nodiscard]] http_response_trailer_section validate_http_response_trailers(
+    std::span<const http_header_view> trailers);
+
+// Borrowed proof that the complete terminal section passed the shared response-
+// trailer rules. The source span must outlive its synchronous consumption.
+class http_response_trailer_section final {
+public:
+    [[nodiscard]] std::span<const http_header_view> fields() const noexcept {
+        return fields_;
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return fields_.empty();
+    }
+
+private:
+    friend http_response_trailer_section validate_http_response_trailers(
+        std::span<const http_header_view>);
+    explicit http_response_trailer_section(std::span<const http_header_view> fields_value) noexcept
+        : fields_(fields_value) {}
+
+    std::span<const http_header_view> fields_;
+};
 
 // Serialize a finalized HTTP/1 response head into caller-owned reusable scratch.
 // The plan must describe the same response representation.
@@ -35,4 +64,17 @@ void append_http1_response_trailers(
 
 template <detail::http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
+
+// Visit normalized response trailer fields from an HTTP/1 trailer block: the
+// bytes between the terminal zero-size chunk and the empty line that ends the
+// trailer section (a final CRLF after the last field is accepted). Values are
+// exposed with optional whitespace stripped and borrow `block`. Returns false
+// for a malformed, forbidden or oversized section, or when the visitor returns
+// false.
+template <typename visitor_type>
+[[nodiscard]] inline bool visit_http_response_trailers(std::string_view block, visitor_type&& visitor) {
+    auto budget = http_trailer_section_budget();
+    return detail::visit_http1_trailer_block(block, detail::is_forbidden_response_trailer_name, budget, 0,
+               std::forward<visitor_type>(visitor)) == detail::http_trailer_block_status::ok;
+}
 }  // namespace ruvia

@@ -210,6 +210,7 @@ void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory
     if (!field.value()) {
         if constexpr (c_type::options.nullable_) {
             entity.template set_null<c_type::name>();
+            return;
         } else {
             throw db_conversion_error(
                 db_conversion_error::code_type::unexpected_null, "NULL in non-nullable database entity column");
@@ -318,16 +319,14 @@ void append_entity_array_value(std::pmr::string& output, const t_type& value) {
 }
 
 template <typename t_type>
-db_value entity_db_value(const t_type& value, std::pmr::memory_resource* resource) {
+db_value entity_db_value(const t_type& value, [[maybe_unused]] std::pmr::memory_resource* resource) {
     if constexpr (is_optional<t_type>::value) {
         if (!value) {
             return db_value(nullptr);
         }
         return entity_db_value(*value, resource);
-    } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
-        return db_value_access::owned_string(std::pmr::string(value, resource));
-    } else if constexpr (std::is_same_v<t_type, string>) {
-        return db_value_access::owned_string(std::pmr::string(std::string_view(value), resource));
+    } else if constexpr (std::is_same_v<t_type, std::pmr::string> || std::is_same_v<t_type, string>) {
+        return db_value(std::string_view(value));
     } else if constexpr (std::is_same_v<t_type, bool> || std::is_arithmetic_v<t_type>) {
         return db_value(value);
     } else if constexpr (is_pmr_vector<t_type>::value) {

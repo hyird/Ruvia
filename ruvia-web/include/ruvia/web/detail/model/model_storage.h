@@ -8,7 +8,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/attributes.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/model/model_schema.h"
 
 namespace ruvia::detail::model {

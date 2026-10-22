@@ -15,7 +15,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/error_handlers.h"
 #include "ruvia/web/next.h"
 
 #include "context/context_services.h"

@@ -12,7 +12,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/task.h"
-#include "ruvia/http/http2_cleartext_preface.h"
+#include "ruvia/http/http2_framing.h"
 
 #include "http2/http2_sans_io_session.h"
 #include "http2/http2_server_session_setup.h"

@@ -28,11 +28,8 @@
 #include "ruvia/core/task.h"
 #include "ruvia/web/redis/redis_client.h"
 #include "ruvia/web/redis/redis_entity.h"
-#include "ruvia/web/redis/redis_find_options.h"
 #include "ruvia/web/redis/redis_handle.h"
 #include "ruvia/web/redis/redis_repository.h"
-#include "ruvia/web/redis/redis_repository_types.h"
-#include "ruvia/web/redis/redis_write_result.h"
 
 #include "backend_client_fixture.h"
 #include "memory_resource_fixture.h"
@@ -682,7 +679,7 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
             (void)repository.count({.skip_ = std::numeric_limits<std::uint64_t>::max()});
         }));
         RUVIA_CHECK(throws_invalid_argument([&] {
-            (void)repository.exists({.order_ = {{.field_ = "missing_field"}}});
+            (void)repository.exists({.order_ = ruvia::redis_find_order{.field_ = "missing_field"}});
         }));
         co_return;
     });

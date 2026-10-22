@@ -21,17 +21,17 @@ namespace {
 
 }  // namespace
 
-task<http2_send_window_wait_result> await_http2_send_window(
+task<http2_send_window_wait_status> await_http2_send_window(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
     http2_sans_io_stream_signal* signal, const bool* aborted) {
     for (;;) {
         if ((aborted != nullptr && *aborted) ||
             connection.stream_receive_status(stream_id) == ruvia::http2_stream_receive_status::closed ||
             signal == nullptr || signal->terminated()) {
-            co_return http2_send_window_wait_result::make_aborted();
+            co_return http2_send_window_wait_status::aborted;
         }
         if (!connection.has_queued_data(stream_id)) {
-            co_return http2_send_window_wait_result::make_ready();
+            co_return http2_send_window_wait_status::ready;
         }
         co_await signal->wait();
     }
@@ -59,8 +59,8 @@ task<http2_stream_data_write_status> write_http2_stream_data_chunk(
         // 6.9.1), but must not overtake older core-owned DATA.
         if (chunk.empty() && end_stream == http2_end_stream::end_stream &&
             connection.has_queued_data(stream_id)) {
-            const auto wait_result = co_await await_http2_send_window(connection, stream_id, signal, aborted);
-            if (wait_result.aborted() != nullptr) {
+            if (co_await await_http2_send_window(connection, stream_id, signal, aborted) ==
+                http2_send_window_wait_status::aborted) {
                 co_return classify_aborted_write(signal, aborted);
             }
             continue;
@@ -133,8 +133,8 @@ task<http2_stream_data_write_status> write_http2_stream_data_chunk(
         if (result_value == http2_data_submit_status::closed) {
             co_return http2_stream_data_write_status::peer_closed;
         }
-        const auto wait_result = co_await await_http2_send_window(connection, stream_id, signal, aborted);
-        if (wait_result.aborted() != nullptr) {
+        if (co_await await_http2_send_window(connection, stream_id, signal, aborted) ==
+            http2_send_window_wait_status::aborted) {
             co_return classify_aborted_write(signal, aborted);
         }
         if (result_value == http2_data_submit_status::queued) {

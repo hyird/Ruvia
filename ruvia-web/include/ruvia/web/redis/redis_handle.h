@@ -18,7 +18,6 @@
 #include "ruvia/web/detail/redis/redis_argument_pack.h"
 #include "ruvia/web/detail/redis/redis_mapped_command.h"
 #include "ruvia/web/redis/redis_pipeline.h"
-#include "ruvia/web/redis/redis_repository_types.h"
 #include "ruvia/web/redis/redis_subscription.h"
 #include "ruvia/web/redis/redis_transaction.h"
 
@@ -31,6 +30,7 @@ class redis_pool;
 struct redis_orm_script;
 }  // namespace detail
 
+struct redis_repository_config;
 template <typename entity_type>
 class redis_repository;
 
@@ -268,8 +268,10 @@ public:
     // identifier-named entity column whose type fits the index kind.
     // Violations throw std::invalid_argument.
     template <typename entity_type>
+    [[nodiscard]] redis_repository<entity_type> get_repository() const;
+    template <typename entity_type>
     [[nodiscard]] redis_repository<entity_type> get_repository(
-        const redis_repository_config& config = {}) const;
+        const redis_repository_config& config) const;
 
 private:
     // Reassembles a flat alternating argument list into the pair sequence the

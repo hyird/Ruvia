@@ -14,11 +14,7 @@ namespace ruvia::detail {
 // output). Failing to commit it leaves no response to fall back to.
 [[nodiscard]] inline http1_request_connection_plan require_http1_final_response_commit(
     http_response& response, http1_request_connection_plan connection_plan) {
-    const auto result_value = http1_commit_final_response(response, connection_plan);
-    if (const auto* failure = result_value.failure()) {
-        throw failure->exception();
-    }
-    return *result_value.committed();
+    return http1_commit_final_response(response, connection_plan);
 }
 
 // Commits a framework response that ends the connection: a rejection, a
@@ -35,11 +31,11 @@ namespace ruvia::detail {
 template <typename make_completion_type>
 [[nodiscard]] inline http1_session_request_completion commit_http1_route_response(http_response& response,
     http1_request_connection_plan connection_plan, make_completion_type make_completion) {
-    const auto result_value = http1_commit_final_response(response, connection_plan);
-    if (const auto* failure = result_value.failure()) {
-        return http1_session_request_completion::make_rejected_final_response(connection_plan, *failure);
+    try {
+        return make_completion(http1_commit_final_response(response, connection_plan));
+    } catch (const http1_final_response_commit_error& error) {
+        return http1_session_request_completion::make_rejected_final_response(connection_plan, error);
     }
-    return make_completion(*result_value.committed());
 }
 
 [[nodiscard]] inline http1_session_request_completion finalize_buffered_route_response(http_response& response,

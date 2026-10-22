@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/attributes.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_version.h"

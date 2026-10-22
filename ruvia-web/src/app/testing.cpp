@@ -14,7 +14,7 @@
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_parse_error.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/web/detail/controller/controller_runtime.h"
 #include "ruvia/web/dotenv.h"
 
@@ -149,12 +149,15 @@ struct test_app::impl_type final {
         // A malformed request is rejected before admission, with no coding
         // promise, exactly as a server answers a malformed head.
         std::optional<detail::http_request_admission> admission;
-        std::optional<detail::http_request_rejection> rejection;
+        http_response response({.resource_ = request_memory_value.resource()});
         if (parse_error != nullptr) {
-            rejection = detail::http_request_rejection::error(detail::copy_http_protocol_error_info(
-                request_memory_value.resource(), http_parse_protocol_error(*parse_error)));
+            response = co_await detail::respond_http_request_rejection(routes_value, parsed_value,
+                request_memory_value,
+                detail::http_request_rejection::error(detail::copy_http_protocol_error_info(
+                    request_memory_value.resource(), http_parse_protocol_error(*parse_error))),
+                services);
         } else {
-            admission.emplace(detail::admit_http_request(
+            admission.emplace(co_await detail::admit_and_dispatch_buffered_request(routes_value,
                 {
                     .request_ = parsed_value,
                     .resolution_ = resolution,
@@ -162,25 +165,10 @@ struct test_app::impl_type final {
                     .resource_ = request_memory_value.resource(),
                     .start_ = request_start,
                 },
-                detail::http_request_admission_policy::server(options_), services));
-            if (const auto* admitted_rejection = admission->rejection()) {
-                // As in the server: a rejection does not inherit the coding promise.
-                rejection = *admitted_rejection;
-                admission->tail().disable_response_coding();
-            }
+                detail::http_request_admission_policy::server(options_), services,
+                request_memory_value, response));
         }
         const auto& request_services = admission ? admission->services() : services;
-
-        http_response response({.resource_ = request_memory_value.resource()});
-        if (rejection) {
-            response = co_await detail::respond_http_request_rejection(
-                routes_value, parsed_value, request_memory_value, *rejection, request_services);
-        } else {
-            co_await routes_value.dispatch_buffered_response(parsed_value, resolution,
-                request_memory_value, detail::document_root_binding::none(), request_services,
-                admission->static_file_mode(), response);
-        }
-
         const auto tail = admission ? admission->tail()
                                     : detail::http_response_tail(parsed_value,
                                           detail::http_response_coding_policy::disabled(), {}, request_start);
@@ -195,9 +183,8 @@ struct test_app::impl_type final {
         test_response result_value(response.status());
         result_value.headers_.reserve(response.headers().size());
         for (const auto& header : response.headers()) {
-            result_value.headers_.emplace_back(std::string(header.name()), std::string(header.value()));
+            result_value.headers_.emplace_back(header.name(), header.value(), process_resource());
         }
-        // Mirror wire semantics: the response writers suppress the body for HEAD
         // and content-forbidden statuses, so the facade must not surface one
         // either. Writer-synthesized fields (Content-Length, Date, Connection)
         // are framing concerns and stay absent here.
@@ -216,24 +203,13 @@ test_app::~test_app() = default;
 
 test_app& test_app::server(server_config config) {
     impl_->require_configurable();
-    detail::validate_server_limits(config);
-    impl_->options_.server_ = config;
+    impl_->options_.set_server(config);
     return *this;
 }
 
 test_app& test_app::compression(compression_config config) {
     impl_->require_configurable();
-    detail::ensure_positive_size(
-        config.min_bytes_, "compression minimum size must be greater than zero");
-    if (config.sync_bytes_ < config.min_bytes_) {
-        throw std::invalid_argument(
-            "compression synchronous size must not be smaller than the minimum size");
-    }
-    if (config.max_bytes_ < config.sync_bytes_) {
-        throw std::invalid_argument(
-            "compression maximum size must not be smaller than the synchronous size");
-    }
-    impl_->options_.compression_ = std::move(config);
+    impl_->options_.set_compression(std::move(config));
     return *this;
 }
 
@@ -245,7 +221,7 @@ test_app& test_app::compression(std::nullptr_t) {
 
 test_app& test_app::cors(cors_config config) {
     impl_->require_configurable();
-    impl_->options_.cors_ = detail::make_cors_options(config, process_resource());
+    impl_->options_.set_cors(config);
     return *this;
 }
 
@@ -257,13 +233,7 @@ test_app& test_app::cors(std::nullptr_t) {
 
 test_app& test_app::rate_limit(rate_limit_config config) {
     impl_->require_configurable();
-    detail::validate_rate_limit_rule(config.rule_);
-    if (!std::has_single_bit(config.capacity_per_worker_)) {
-        throw std::invalid_argument(
-            "rate-limit capacity per worker must be a power of two");
-    }
-    impl_->options_.default_rate_limit_per_worker_ = config.rule_;
-    impl_->options_.rate_limit_capacity_per_worker_ = config.capacity_per_worker_;
+    impl_->options_.set_rate_limit(config);
     return *this;
 }
 
@@ -275,17 +245,7 @@ test_app& test_app::rate_limit(std::nullptr_t) {
 
 test_app& test_app::trusted_proxies(trusted_proxy_config config) {
     impl_->require_configurable();
-    detail::trusted_proxy_set parsed(process_resource());
-    parsed.trust_x_forwarded_proto(config.trust_x_forwarded_proto_);
-    for (const auto& cidr : config.cidrs_) {
-        const auto block = detail::parse_trusted_proxy_block(cidr);
-        if (block.index() != 0) {
-            throw std::invalid_argument(
-                "trusted proxy must be an IP address or CIDR block");
-        }
-        parsed.add(std::get<0>(block));
-    }
-    impl_->options_.trusted_proxies_ = std::move(parsed);
+    impl_->options_.set_trusted_proxies(config);
     return *this;
 }
 
@@ -338,12 +298,11 @@ test_response test_app::request(const test_request& request) {
 }
 
 std::optional<std::string_view> test_response::header(std::string_view name) const& noexcept {
-    for (const auto& [header_name, value] : headers_) {
-        if (http_ascii_equals_ignore_case(header_name, name)) {
-            return std::string_view(value);
+    for (const auto& header_field : headers_) {
+        if (http_ascii_equals_ignore_case(header_field.name(), name)) {
+            return header_field.value();
         }
     }
     return std::nullopt;
 }
-
 }  // namespace ruvia

@@ -127,9 +127,9 @@ db_error mysql_error(
         error.append(": ");
         error.append(message);
     }
-    return db_error(error_code, db_driver::mariadb, std::move(error),
+    return db_error(error_code, db_driver::mariadb, error,
         code == 0 ? std::nullopt : std::optional<std::int64_t>(code),
-        state_value == nullptr ? std::string{} : std::string(state_value));
+        state_value == nullptr ? std::string_view{} : std::string_view(state_value));
 }
 
 void free_stored_result(void* result_value) noexcept {

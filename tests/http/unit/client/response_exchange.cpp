@@ -322,7 +322,7 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     RUVIA_CHECK(rejected.failure() != nullptr);
     if (rejected.failure() != nullptr) {
         RUVIA_CHECK(
-            rejected.failure()->error() == http1_client_response_parse_error::invalid_protocol_switch);
+            *rejected.failure() == http1_client_response_parse_error::invalid_protocol_switch);
     }
     const auto after_failure = rejected_parser.parse(switching);
     RUVIA_CHECK(after_failure.terminal() != nullptr);
@@ -351,7 +351,7 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     const auto completed_without_continue = completed_without_continue_parser.parse(switching);
     RUVIA_CHECK(completed_without_continue.failure() != nullptr);
     if (completed_without_continue.failure() != nullptr) {
-        RUVIA_CHECK(completed_without_continue.failure()->error() ==
+        RUVIA_CHECK(*completed_without_continue.failure() ==
                     http1_client_response_parse_error::invalid_protocol_switch);
     }
 
@@ -394,7 +394,7 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     const auto pending_upgrade = pending_parser.parse(switching);
     RUVIA_CHECK(pending_upgrade.failure() != nullptr);
     if (pending_upgrade.failure() != nullptr) {
-        RUVIA_CHECK(pending_upgrade.failure()->error() ==
+        RUVIA_CHECK(*pending_upgrade.failure() ==
                     http1_client_response_parse_error::invalid_protocol_switch);
     }
 
@@ -448,7 +448,7 @@ RUVIA_TEST(http_client_upgrade_requires_complete_request_content) {
     RUVIA_CHECK(incomplete.failure() != nullptr);
     if (incomplete.failure() != nullptr) {
         RUVIA_CHECK(
-            incomplete.failure()->error() == http1_client_response_parse_error::invalid_protocol_switch);
+            *incomplete.failure() == http1_client_response_parse_error::invalid_protocol_switch);
     }
 
     std::array<char, 512> complete_head;

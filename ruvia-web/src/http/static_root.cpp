@@ -17,7 +17,7 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_date.h"

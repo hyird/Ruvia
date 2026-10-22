@@ -25,8 +25,8 @@ class json_object;
 
 namespace ruvia::detail {
 
-template <typename view_t_type>
-[[nodiscard]] std::optional<view_t_type> parse_json_view_value(std::string_view& input,
+template <typename view_type>
+[[nodiscard]] std::optional<view_type> parse_json_view_value(std::string_view& input,
     std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
     bool require_object, json_parse_budget& budget);
 
@@ -177,8 +177,8 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
     friend class json_object;
-    template <typename view_t_type>
-    friend std::optional<view_t_type> detail::parse_json_view_value(std::string_view&,
+    template <typename view_type>
+    friend std::optional<view_type> detail::parse_json_view_value(std::string_view&,
         std::pmr::memory_resource*, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
 
     json_value(resolved_pmr_resource_tag, std::string_view body,
@@ -306,8 +306,8 @@ private:
     friend class json_value;
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
-    template <typename view_t_type>
-    friend std::optional<view_t_type> detail::parse_json_view_value(std::string_view&,
+    template <typename view_type>
+    friend std::optional<view_type> detail::parse_json_view_value(std::string_view&,
         std::pmr::memory_resource*, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
 
     json_object(resolved_pmr_resource_tag, std::string_view body,
@@ -390,8 +390,8 @@ template <typename visitor_type>
 
 namespace ruvia::detail {
 
-template <typename view_t_type>
-[[nodiscard]] std::optional<view_t_type> parse_json_view_value(std::string_view& input,
+template <typename view_type>
+[[nodiscard]] std::optional<view_type> parse_json_view_value(std::string_view& input,
     std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
     bool require_object, json_parse_budget& budget) {
     auto remaining = input;
@@ -404,7 +404,7 @@ template <typename view_t_type>
         return std::nullopt;
     }
     const auto token = start.substr(0, start.size() - remaining.size());
-    view_t_type value(model_options{.resource_ = resource});
+    view_type value(model_options{.resource_ = resource});
     if (string_storage == model_string_storage::owned) {
         if (!budget.consume_bytes(token.size()) ||
             !budget.consume_bytes(token.size() + sizeof(std::pmr::string))) {

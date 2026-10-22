@@ -52,7 +52,7 @@ public:
     redis_literal(value_type value, std::pmr::memory_resource*)
         : storage_(value) {}
     template <typename value_type>
-        requires(std::is_integral_v<value_type> && !std::is_same_v<value_type, bool>)
+        requires is_model_integer<value_type>
     redis_literal(value_type value, std::pmr::memory_resource*) {
         if constexpr (std::is_signed_v<value_type>) {
             storage_.emplace<std::int64_t>(value);
@@ -67,7 +67,7 @@ public:
     template <typename value_type>
         requires(is_ruvia_scalar<std::remove_cvref_t<value_type>>)
     redis_literal(const value_type& value, std::pmr::memory_resource* resource)
-        : redis_literal(static_cast<model_scalar_value_t_type<std::remove_cvref_t<value_type>>>(value), resource) {}
+        : redis_literal(static_cast<model_scalar_value_type<std::remove_cvref_t<value_type>>>(value), resource) {}
     redis_literal(const string& value, std::pmr::memory_resource* resource)
         : redis_literal(value.view(), resource) {}
     redis_literal(redis_literal&&) noexcept = default;
@@ -126,19 +126,19 @@ struct redis_predicate_node final {
 
     explicit redis_predicate_node(kind_type kind, std::pmr::memory_resource* resource)
         : kind_(kind),
-          field_(resource),
-          entity_prefix_(resource),
           literal_(resource),
           operands_(resource) {}
-    redis_predicate_node(const redis_predicate_node& other, std::pmr::memory_resource* resource, std::size_t offset)
+    redis_predicate_node(const redis_predicate_node& other, std::pmr::memory_resource* resource, std::size_t offset = 0)
         : kind_(other.kind_),
           binary_(other.binary_),
-          field_(other.field_, resource),
-          entity_prefix_(other.entity_prefix_, resource),
+          field_(other.field_),
+          entity_prefix_(other.entity_prefix_),
           literal_(other.literal_, resource),
           operands_(other.operands_, resource) {
-        for (auto& operand : operands_) {
-            operand += offset;
+        if (offset != 0) {
+            for (auto& operand : operands_) {
+                operand += offset;
+            }
         }
     }
     redis_predicate_node(redis_predicate_node&&) noexcept = default;
@@ -147,16 +147,29 @@ struct redis_predicate_node final {
     redis_predicate_node& operator=(const redis_predicate_node&) = delete;
     kind_type kind_;
     redis_binary_operator binary_{redis_binary_operator::equal};
-    std::pmr::string field_;
-    std::pmr::string entity_prefix_;
+    std::string_view field_{};
+    std::string_view entity_prefix_{};
     redis_literal literal_;
     std::pmr::vector<std::size_t> operands_;
 };
 
 struct redis_predicate_storage final {
-    explicit redis_predicate_storage(std::pmr::memory_resource* resource)
+    explicit redis_predicate_storage(std::pmr::memory_resource* resource, std::size_t initial_capacity = 0)
         : resource_(resource),
-          nodes_(resource) {}
+          nodes_(resource) {
+        if (initial_capacity != 0) {
+            nodes_.reserve(initial_capacity);
+        }
+    }
+    redis_predicate_storage(const redis_predicate_storage& other, std::pmr::memory_resource* resource)
+        : resource_(resource),
+          nodes_(resource),
+          root_(other.root_) {
+        nodes_.reserve(other.nodes_.size());
+        for (const auto& node : other.nodes_) {
+            nodes_.emplace_back(node, resource);
+        }
+    }
     std::pmr::memory_resource* resource_;
     std::pmr::vector<redis_predicate_node> nodes_;
     std::size_t root_{};

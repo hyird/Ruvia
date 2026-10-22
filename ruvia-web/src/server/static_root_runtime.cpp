@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/memory/process_resource.h"
+#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/timer.h"
 
 #include "server/http_server_options.h"

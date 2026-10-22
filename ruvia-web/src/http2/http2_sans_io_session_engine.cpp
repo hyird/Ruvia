@@ -495,10 +495,9 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
                 .base_services_ = base_services,
                 .tunnel_session_ = tunnel_session,
             };
-            auto outcome = co_await run_http_upgrade_route(
+            auto buffered = co_await run_http_upgrade_route(
                 routes_, request, *resolved, request_memory_value, dispatch_services, tunnel_session, upgrade, upgrade);
-            auto* buffered = outcome.response();
-            if (buffered == nullptr) {
+            if (!buffered) {
                 co_return;
             }
             response = std::move(*buffered);
@@ -537,10 +536,9 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
                 .base_services_ = base_services,
                 .websocket_session_ = websocket_session,
             };
-            auto outcome = co_await run_http_upgrade_route(routes_, request, *resolved,
+            auto buffered = co_await run_http_upgrade_route(routes_, request, *resolved,
                 request_memory_value, dispatch_services, websocket_session, upgrade, upgrade);
-            auto* buffered = outcome.response();
-            if (buffered == nullptr) {
+            if (!buffered) {
                 co_return;
             }
             response = std::move(*buffered);
@@ -591,7 +589,7 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
         co_return;
     }
     const auto result_value = co_await buffered_response_writer_.write(stream_id, response, preparation.write_plan_);
-    if (const auto committed_status = result_value.committed_status()) {
+    if (const auto committed_status = result_value.committed_status_) {
         admission.tail().record_access(options.access_log_, *committed_status);
     }
 }

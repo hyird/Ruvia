@@ -136,8 +136,9 @@ RUVIA_TEST(db_migrator_copies_public_configuration) {
         config.username_ = std::string(80, 'u');
         config.password_ = std::string(80, 'p');
         config.database_ = std::string(80, 'd');
+        const std::string table_name(60, 't');
         ruvia::db_migrator_options options{
-            .table_ = std::string(60, 't'),
+            .table_ = table_name,
             .lock_timeout_ = std::chrono::seconds(30),
             .resource_ = &target_resource,
         };
@@ -156,8 +157,9 @@ RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         config.connect_timeout_ = std::chrono::milliseconds::zero();
         tracking_resource resource;
+        const std::string table_name(60, 't');
         const ruvia::db_migrator_options options{
-            .table_ = std::string(60, 't'),
+            .table_ = table_name,
             .resource_ = &resource,
         };
 
@@ -198,8 +200,9 @@ RUVIA_TEST(db_migrator_validates_migration_list_before_allocating_runtime) {
     config.host_ = std::string(80, 'h');
     config.tls_.mode_ = ruvia::client_tls_mode::disabled;
     tracking_resource resource;
+    const std::string table_name(60, 't');
     const ruvia::db_migrator_options options{
-        .table_ = std::string(60, 't'),
+        .table_ = table_name,
         .resource_ = &resource,
     };
 

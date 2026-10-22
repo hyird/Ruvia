@@ -8,7 +8,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/attributes.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
@@ -21,6 +21,26 @@ inline constexpr std::size_t max_http_header_fields = 64;
 // represents initial fields and trailers for requests and responses.
 class http_header final {
 public:
+    http_header(std::string_view name, std::string_view value,
+        std::pmr::memory_resource* resource = nullptr)
+        : resource_(resource != nullptr ? resource : std::pmr::get_default_resource()),
+          name_size_(name.size()),
+          value_size_(value.size()) {
+        if (value.size() > (std::numeric_limits<std::size_t>::max)() - name.size()) {
+            throw std::length_error("HTTP header storage size overflows size_t");
+        }
+        const auto size = name.size() + value.size();
+        if (size != 0) {
+            bytes_ = static_cast<char*>(resource_->allocate(size, alignof(char)));
+            if (!name.empty()) {
+                std::memcpy(bytes_, name.data(), name.size());
+            }
+            if (!value.empty()) {
+                std::memcpy(bytes_ + name.size(), value.data(), value.size());
+            }
+        }
+    }
+
     // A copy shares the source's owning resource, mirroring the move
     // constructor; use copy_of() to place the copy in another resource.
     http_header(const http_header& other)
@@ -61,9 +81,8 @@ public:
     }
 
     [[nodiscard]] static http_header copy_of(std::string_view name, std::string_view value,
-        std::pmr::memory_resource* resource) {
-        return http_header(name, value,
-            resource != nullptr ? resource : std::pmr::get_default_resource());
+        std::pmr::memory_resource* resource = nullptr) {
+        return http_header(name, value, resource);
     }
 
     // Owning boundaries that normalize field names lower-case them while
@@ -88,26 +107,6 @@ public:
     std::string_view value() const&& = delete;
 
 private:
-    http_header(std::string_view name, std::string_view value,
-        std::pmr::memory_resource* resource)
-        : resource_(resource),
-          name_size_(name.size()),
-          value_size_(value.size()) {
-        if (value.size() > (std::numeric_limits<std::size_t>::max)() - name.size()) {
-            throw std::length_error("HTTP header storage size overflows size_t");
-        }
-        const auto size = name.size() + value.size();
-        if (size != 0) {
-            bytes_ = static_cast<char*>(resource_->allocate(size, alignof(char)));
-            if (!name.empty()) {
-                std::memcpy(bytes_, name.data(), name.size());
-            }
-            if (!value.empty()) {
-                std::memcpy(bytes_ + name.size(), value.data(), value.size());
-            }
-        }
-    }
-
     void release() noexcept {
         if (bytes_ != nullptr) {
             resource_->deallocate(bytes_, name_size_ + value_size_, alignof(char));

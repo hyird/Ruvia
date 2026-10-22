@@ -82,7 +82,7 @@ template <typename t_type>
     } else if constexpr (std::is_same_v<scalar_type, bool_value>) {
         return std::pmr::string(static_cast<bool>(value) ? "1" : "0", memory_resource);
     } else if constexpr (is_ruvia_scalar<scalar_type>) {
-        using raw_type = model_scalar_value_t_type<scalar_type>;
+        using raw_type = model_scalar_value_type<scalar_type>;
         return encode_redis_number(static_cast<raw_type>(value), memory_resource);
     } else if constexpr (is_redis_entity_native_number<scalar_type>) {
         return encode_redis_number(value, memory_resource);
@@ -119,7 +119,7 @@ template <typename t_type>
         }
         throw_invalid_redis_scalar("malformed Redis boolean scalar");
     } else if constexpr (is_ruvia_scalar<scalar_type>) {
-        using raw_type = model_scalar_value_t_type<scalar_type>;
+        using raw_type = model_scalar_value_type<scalar_type>;
         return scalar_type(decode_redis_number<raw_type>(value));
     } else if constexpr (is_redis_entity_native_number<scalar_type>) {
         return decode_redis_number<scalar_type>(value);

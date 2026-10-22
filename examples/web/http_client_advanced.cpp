@@ -45,7 +45,7 @@ ruvia::task<void> follow_redirect(ruvia::http_client& client, const ruvia::http_
         }
         auto destination = ruvia::resolve_http_client_redirect_target(origin,
             {.current_target_ = target, .location_ = *location, .resource_ = &memory});
-        const auto* resolved = destination.resolved();
+        const auto* resolved = std::get_if<ruvia::http_client_resolved_redirect>(&destination);
         if (!resolved || resolved->cross_origin()) {
             // Origins are fixed at startup. Following another origin requires
             // a preconfigured client and stripping origin-specific credentials.

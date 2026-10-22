@@ -80,22 +80,6 @@ private:
     http1_interim_connection_disposition connection_disposition_;
 };
 
-class http1_interim_response_prepare_failure final {
-public:
-    [[nodiscard]] constexpr http1_interim_response_prepare_error error() const noexcept {
-        return error_;
-    }
-
-private:
-    friend struct detail::http1_interim_response_prepare_result_access;
-
-    explicit constexpr http1_interim_response_prepare_failure(
-        http1_interim_response_prepare_error error) noexcept
-        : error_(error) {}
-
-    http1_interim_response_prepare_error error_;
-};
-
 class http1_interim_response_prepare_result final {
 public:
     [[nodiscard]] constexpr const http1_interim_response_buffer_too_small* buffer_too_small()
@@ -109,10 +93,10 @@ public:
     }
     const prepared_http1_interim_response* prepared() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_interim_response_prepare_failure* failure() const& noexcept {
-        return std::get_if<http1_interim_response_prepare_failure>(&state_);
+    [[nodiscard]] constexpr const http1_interim_response_prepare_error* failure() const& noexcept {
+        return std::get_if<http1_interim_response_prepare_error>(&state_);
     }
-    const http1_interim_response_prepare_failure* failure() const&& = delete;
+    const http1_interim_response_prepare_error* failure() const&& = delete;
 
 private:
     friend struct detail::http1_interim_response_prepare_result_access;
@@ -126,11 +110,11 @@ private:
         : state_(state_value) {}
 
     explicit constexpr http1_interim_response_prepare_result(
-        http1_interim_response_prepare_failure state_value) noexcept
+        http1_interim_response_prepare_error state_value) noexcept
         : state_(state_value) {}
 
     std::variant<http1_interim_response_buffer_too_small, prepared_http1_interim_response,
-        http1_interim_response_prepare_failure>
+        http1_interim_response_prepare_error>
         state_;
 };
 

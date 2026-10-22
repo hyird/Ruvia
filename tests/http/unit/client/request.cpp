@@ -80,7 +80,7 @@ struct prepared_fixture final {
     if (failure == nullptr) {
         throw std::runtime_error("test expected request preparation to fail");
     }
-    return failure->error();
+    return *failure;
 }
 
 }  // namespace
@@ -218,7 +218,7 @@ RUVIA_TEST(http1_client_connect_entry_generates_authority_form_atomically) {
         http_origin_view::https({.host_ = "example.test", .port_ = 0}), {}, invalid_buffer);
     RUVIA_CHECK(invalid.failure() != nullptr);
     RUVIA_CHECK(
-        invalid.failure()->error() == http1_client_request_prepare_error::invalid_connect_origin);
+        *invalid.failure() == http1_client_request_prepare_error::invalid_connect_origin);
 }
 
 RUVIA_TEST(http1_client_request_writer_is_the_only_host_and_framing_owner) {
@@ -367,7 +367,7 @@ RUVIA_TEST(http1_client_request_writer_validates_te_capabilities_and_weights) {
         const auto result_value = http1_client_request_writer().prepare(
             http_origin_view::https({.host_ = "example.test"}), request, buffer);
         if (const auto* failure = result_value.failure()) {
-            return failure->error();
+            return *failure;
         }
         RUVIA_CHECK(result_value.prepared() != nullptr);
         return std::nullopt;
@@ -401,7 +401,7 @@ RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
             .expectation_ = ruvia::http_client_request_expectation::continue_value});
     RUVIA_CHECK(absent_fixture.result_.failure() != nullptr);
     if (absent_fixture.result_.failure() != nullptr) {
-        RUVIA_CHECK(absent_fixture.result_.failure()->error() ==
+        RUVIA_CHECK(*absent_fixture.result_.failure() ==
                     http1_client_request_prepare_error::expectation_without_content);
     }
 
@@ -412,7 +412,7 @@ RUVIA_TEST(http1_client_request_writer_enforces_expect_content_semantics) {
             .expectation_ = ruvia::http_client_request_expectation::continue_value});
     RUVIA_CHECK(empty_fixture.result_.failure() != nullptr);
     if (empty_fixture.result_.failure() != nullptr) {
-        RUVIA_CHECK(empty_fixture.result_.failure()->error() ==
+        RUVIA_CHECK(*empty_fixture.result_.failure() ==
                     http1_client_request_prepare_error::expectation_without_content);
     }
 
@@ -454,7 +454,7 @@ RUVIA_TEST(http1_client_request_writer_rejects_invalid_wire_policy) {
     RUVIA_CHECK(connect.failure() != nullptr);
     if (connect.failure() != nullptr) {
         RUVIA_CHECK(
-            connect.failure()->error() == http1_client_request_prepare_error::invalid_close_policy);
+            *connect.failure() == http1_client_request_prepare_error::invalid_close_policy);
     }
 
     const auto invalid_connect_expectation =
@@ -462,7 +462,7 @@ RUVIA_TEST(http1_client_request_writer_rejects_invalid_wire_policy) {
             std::span<const ruvia::http_header_view>{}, buffer, invalid_expectation);
     RUVIA_CHECK(invalid_connect_expectation.failure() != nullptr);
     if (invalid_connect_expectation.failure() != nullptr) {
-        RUVIA_CHECK(invalid_connect_expectation.failure()->error() ==
+        RUVIA_CHECK(*invalid_connect_expectation.failure() ==
                     http1_client_request_prepare_error::invalid_expectation);
     }
 }
@@ -703,7 +703,7 @@ RUVIA_TEST(http1_client_request_writer_preserves_borrowed_fields_at_head_size_li
                 const auto invalid = prepare(buffer);
                 RUVIA_CHECK(invalid.failure() != nullptr);
                 if (invalid.failure() != nullptr) {
-                    RUVIA_CHECK(invalid.failure()->error() == http1_client_request_prepare_error::header_too_large);
+                    RUVIA_CHECK(*invalid.failure() == http1_client_request_prepare_error::header_too_large);
                 }
                 RUVIA_CHECK(buffer == original);
                 continue;
@@ -876,7 +876,7 @@ RUVIA_TEST(http1_client_request_writer_enforces_header_count_and_size_transactio
     const auto invalid = http1_client_request_writer().prepare(
         http_origin_view::https({.host_ = "example.test"}), invalid_method, untouched);
     RUVIA_CHECK(invalid.failure() != nullptr);
-    RUVIA_CHECK(invalid.failure()->error() == http1_client_request_prepare_error::invalid_method);
+    RUVIA_CHECK(*invalid.failure() == http1_client_request_prepare_error::invalid_method);
     RUVIA_CHECK(std::ranges::all_of(untouched, [](char value) { return value == 'q'; }));
     RUVIA_CHECK(!ruvia::http1_client_request_prepare_error_message(
         http1_client_request_prepare_error::invalid_method)

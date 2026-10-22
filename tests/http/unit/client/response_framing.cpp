@@ -384,7 +384,7 @@ RUVIA_TEST(http_client_rejects_invalid_or_unsupported_transfer_coding) {
         "Transfer-Encoding: deflate, chunked, gzip");
     RUVIA_CHECK(malformed_after_unknown.failure() != nullptr);
     if (const auto* failure = malformed_after_unknown.failure()) {
-        RUVIA_CHECK(failure->error() == http1_client_response_parse_error::invalid_transfer_encoding);
+        RUVIA_CHECK(*failure == http1_client_response_parse_error::invalid_transfer_encoding);
     }
     const auto stacked = parse_head(
         "GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, deflate, chunked");

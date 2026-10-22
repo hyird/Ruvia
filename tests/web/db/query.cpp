@@ -91,7 +91,7 @@ RUVIA_TEST(db_query_postgresql_casts_bound_values_only_where_nothing_types_them)
     db_query query;
     const auto name = query.column("name");
     const auto payload = query.column("payload");
-    const std::array<db_query::expr_type, 20> projections{
+    const std::array<db_expression, 20> projections{
         // "any" arguments give an untyped parameter nothing to resolve against.
         query.call("json_build_object", {query.value("k"), query.value(5), query.value("on"), query.value(true)}),
         query.call("concat", {name, query.value("-"), query.value(1.5)}),
@@ -378,7 +378,7 @@ RUVIA_TEST(db_query_expression_helpers_render_postgresql_and_reject_empty_inputs
         ordered_by);
     const auto branches = std::array{
         db_case_branch{query.binary(left, op_type::greater, query.value(0)), query.value("positive")}};
-    const std::array<db_query::expr_type, 12> projections{
+    const std::array<db_expression, 12> projections{
         query.coalesce({query.null_value(), left}),
         query.null_if(left, right),
         query.greatest({left, right}),
@@ -1012,7 +1012,7 @@ RUVIA_TEST(db_query_dml_and_conflict_overloads_cover_postgresql_and_mariadb) {
     const std::array<std::string_view, 2> columns{"id", "name"};
     insert.insert_into("cq_devices", std::span<const std::string_view>(columns), "d");
     const std::array row{insert.value(1), insert.value("first")};
-    insert.values(std::span<const db_query::expr_type>(row));
+    insert.values(std::span<const db_expression>(row));
     const auto inserted = insert.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK(inserted.sql().find("INSERT INTO \"cq_devices\" AS \"d\"") != std::string_view::npos);
     RUVIA_CHECK(!inserted.returns_rows());
@@ -1360,20 +1360,20 @@ RUVIA_TEST(db_query_span_overloads_cover_expression_and_statement_builders) {
     db_query query;
     const auto left = query.column("left");
     const auto right = query.column("right");
-    const std::array<db_query::expr_type, 2> expressions{left, right};
-    const auto call = query.call("coalesce", std::span<const db_query::expr_type>(expressions));
-    const auto aggregate = query.aggregate("count", std::span<const db_query::expr_type>(expressions));
-    const auto coalesced = query.coalesce(std::span<const db_query::expr_type>(expressions));
-    const auto greatest = query.greatest(std::span<const db_query::expr_type>(expressions));
-    const auto least = query.least(std::span<const db_query::expr_type>(expressions));
-    const auto tuple = query.tuple(std::span<const db_query::expr_type>(expressions));
-    const auto list = query.list(std::span<const db_query::expr_type>(expressions));
-    const auto array_value = query.array(std::span<const db_query::expr_type>(expressions));
+    const std::array<db_expression, 2> expressions{left, right};
+    const auto call = query.call("coalesce", std::span<const db_expression>(expressions));
+    const auto aggregate = query.aggregate("count", std::span<const db_expression>(expressions));
+    const auto coalesced = query.coalesce(std::span<const db_expression>(expressions));
+    const auto greatest = query.greatest(std::span<const db_expression>(expressions));
+    const auto least = query.least(std::span<const db_expression>(expressions));
+    const auto tuple = query.tuple(std::span<const db_expression>(expressions));
+    const auto list = query.list(std::span<const db_expression>(expressions));
+    const auto array_value = query.array(std::span<const db_expression>(expressions));
     const std::array<db_case_branch, 1> branches{{{query.binary(left, db_binary_operator::equal, query.value(1)), right}}};
     const auto case_expression = query.case_when(std::span<const db_case_branch>(branches), query.value(0));
     const std::array<db_order_term, 1> order{{{left, db_order_direction::asc, db_nulls_order::default_value}}};
     const auto within = query.within_group(aggregate, std::span<const db_order_term>(order));
-    query.select(std::span<const db_query::expr_type>(expressions)).add_select(call).from("cq_span").group_by(std::span<const db_query::expr_type>(&left, 1)).add_group_by(right).having(query.unary(db_unary_operator::is_not_null, coalesced)).and_having(query.binary(greatest, db_binary_operator::greater, least)).order_by(left).add_order_by(right);
+    query.select(std::span<const db_expression>(expressions)).add_select(call).from("cq_span").group_by(std::span<const db_expression>(&left, 1)).add_group_by(right).having(query.unary(db_unary_operator::is_not_null, coalesced)).and_having(query.binary(greatest, db_binary_operator::greater, least)).order_by(left).add_order_by(right);
     const auto statement = query.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK(statement.sql().find("GROUP BY") != std::string_view::npos);
     RUVIA_CHECK(statement.sql().find("HAVING") != std::string_view::npos);
@@ -1381,16 +1381,16 @@ RUVIA_TEST(db_query_span_overloads_cover_expression_and_statement_builders) {
     db_query distinct;
     const auto distinct_left = distinct.column("left");
     distinct.select(distinct_left);
-    const std::array<db_query::expr_type, 1> distinct_expressions{distinct.column("left")};
-    distinct.distinct_on(std::span<const db_query::expr_type>(distinct_expressions)).from("cq_span");
+    const std::array<db_expression, 1> distinct_expressions{distinct.column("left")};
+    distinct.distinct_on(std::span<const db_expression>(distinct_expressions)).from("cq_span");
     RUVIA_CHECK(compile_sql([&] { return distinct.compile(db_driver::postgresql, nullptr); }).find("DISTINCT ON") != std::string_view::npos);
 
     db_query dml;
     const std::array<std::string_view, 1> columns{"value"};
-    const std::array<db_query::expr_type, 1> row{dml.value(1)};
-    dml.insert_into("cq_span", std::span<const std::string_view>(columns)).values(std::span<const db_query::expr_type>(row));
-    const std::array<db_query::expr_type, 1> returned{dml.column("value")};
-    dml.returning(std::span<const db_query::expr_type>(returned));
+    const std::array<db_expression, 1> row{dml.value(1)};
+    dml.insert_into("cq_span", std::span<const std::string_view>(columns)).values(std::span<const db_expression>(row));
+    const std::array<db_expression, 1> returned{dml.column("value")};
+    dml.returning(std::span<const db_expression>(returned));
     RUVIA_CHECK(dml.compile(db_driver::postgresql, nullptr).returns_rows());
 
     (void)tuple;
