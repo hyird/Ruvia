@@ -4,6 +4,10 @@
 #include <string_view>
 
 namespace ruvia {
+enum class http_scheme : std::uint8_t {
+    http,
+    https,
+};
 
 enum class http_known_method : std::uint8_t {
     get,

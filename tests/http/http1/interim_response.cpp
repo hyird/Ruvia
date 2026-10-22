@@ -7,7 +7,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http1_interim_response_writer.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_limits.h"
@@ -17,10 +16,12 @@
 namespace {
 
 using ruvia::http1_interim_connection_disposition;
+using ruvia::http1_interim_response_buffer_too_small;
 using ruvia::http1_interim_response_prepare_error;
-using ruvia::http1_interim_response_writer;
 using ruvia::http_header_view;
 using ruvia::http_interim_response_head;
+using ruvia::prepare_http1_interim_response_head;
+using ruvia::prepared_http1_interim_response;
 
 [[nodiscard]] bool unchanged(const std::array<char, 64>& buffer, char sentinel) {
     return std::ranges::all_of(buffer, [sentinel](char value) { return value == sentinel; });
@@ -30,9 +31,9 @@ using ruvia::http_interim_response_head;
 
 RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
     std::array<char, 64> buffer{};
-    const auto result_value = http1_interim_response_writer().prepare(
+    const auto result_value = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::continue_value), buffer);
-    const auto* const prepared = result_value.prepared();
+    const auto* const prepared = std::get_if<prepared_http1_interim_response>(&result_value);
     RUVIA_CHECK(prepared != nullptr);
     if (prepared != nullptr) {
         RUVIA_CHECK_EQ(prepared->head(), std::string_view("HTTP/1.1 100 Continue\r\n\r\n"));
@@ -46,9 +47,9 @@ RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
         {"X-Hint", "warm"},
     };
     std::array<char, 256> hints_buffer{};
-    const auto hints_result = http1_interim_response_writer().prepare(
+    const auto hints_result = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::early_hints, hints), hints_buffer);
-    const auto* const prepared_hints = hints_result.prepared();
+    const auto* const prepared_hints = std::get_if<prepared_http1_interim_response>(&hints_result);
     RUVIA_CHECK(prepared_hints != nullptr);
     if (prepared_hints != nullptr) {
         RUVIA_CHECK_EQ(
@@ -63,9 +64,9 @@ RUVIA_TEST(http1_interim_response_writer_emits_exact_typed_head) {
 
 RUVIA_TEST(http1_interim_response_writer_preserves_required_status_line_space) {
     std::array<char, 32> buffer{};
-    const auto result_value = http1_interim_response_writer().prepare(
+    const auto result_value = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status_code::from_value(199)), buffer);
-    const auto* const prepared = result_value.prepared();
+    const auto* const prepared = std::get_if<prepared_http1_interim_response>(&result_value);
     RUVIA_CHECK(prepared != nullptr);
     if (prepared != nullptr) {
         // RFC 9112 section 4 requires the SP after status-code even when the
@@ -80,9 +81,9 @@ RUVIA_TEST(http1_interim_response_writer_closes_after_containing_response) {
         {"Upgrade", "example/1"},
     };
     std::array<char, 128> buffer{};
-    const auto result_value = http1_interim_response_writer().prepare(
+    const auto result_value = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::early_hints, fields_value), buffer);
-    const auto* const prepared = result_value.prepared();
+    const auto* const prepared = std::get_if<prepared_http1_interim_response>(&result_value);
     RUVIA_CHECK(prepared != nullptr);
     if (prepared != nullptr) {
         RUVIA_CHECK_EQ(prepared->connection_disposition(),
@@ -94,9 +95,9 @@ RUVIA_TEST(http1_interim_response_writer_closes_after_containing_response) {
 RUVIA_TEST(http1_interim_response_writer_buffer_too_small_is_transactional) {
     std::array<char, 8> buffer;
     buffer.fill('#');
-    const auto result_value = http1_interim_response_writer().prepare(
+    const auto result_value = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::continue_value), buffer);
-    const auto* const too_small = result_value.buffer_too_small();
+    const auto* const too_small = std::get_if<http1_interim_response_buffer_too_small>(&result_value);
     RUVIA_CHECK(too_small != nullptr);
     if (too_small != nullptr) {
         RUVIA_CHECK_EQ(too_small->required_head_bytes(), std::size_t{25});
@@ -116,10 +117,11 @@ RUVIA_TEST(http1_interim_response_writer_preserves_fields_borrowed_from_output) 
             http_header_view(input.substr(0, 6), input.substr(6, 4)),
             http_header_view(input.substr(10, 6), input.substr(16, 5)),
         };
-        const auto result_value = http1_interim_response_writer().prepare(
+        const auto result_value = prepare_http1_interim_response_head(
             http_interim_response_head(ruvia::http_status::early_hints, fields_value), buffer);
-        RUVIA_CHECK(result_value.prepared() != nullptr);
-        if (const auto* prepared = result_value.prepared()) {
+        const auto* const prepared = std::get_if<prepared_http1_interim_response>(&result_value);
+        RUVIA_CHECK(prepared != nullptr);
+        if (prepared != nullptr) {
             RUVIA_CHECK_EQ(prepared->head(), expected);
             RUVIA_CHECK_EQ(prepared->head().data(), buffer.data());
             RUVIA_CHECK_EQ(buffer[expected.size()], '#');
@@ -132,9 +134,9 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
                              http1_interim_response_prepare_error expected) {
         std::array<char, 64> buffer;
         buffer.fill('@');
-        const auto result_value = http1_interim_response_writer().prepare(
+        const auto result_value = prepare_http1_interim_response_head(
             http_interim_response_head(ruvia::http_status::early_hints, fields_value), buffer);
-        const auto* const failure = result_value.failure();
+        const auto* const failure = std::get_if<http1_interim_response_prepare_error>(&result_value);
         return failure != nullptr && *failure == expected && unchanged(buffer, '@');
     };
 
@@ -187,25 +189,27 @@ RUVIA_TEST(http1_interim_response_writer_enforces_field_and_size_limits) {
         ruvia::max_http_header_fields + 1, http_header_view("X-Hint", "value"));
     std::array<char, 64> buffer;
     buffer.fill('!');
-    const auto too_many_result = http1_interim_response_writer().prepare(
+    const auto too_many_result = prepare_http1_interim_response_head(
         http_interim_response_head(
             ruvia::http_status::early_hints, std::span<const http_header_view>(too_many)),
         buffer);
-    RUVIA_CHECK(too_many_result.failure() != nullptr);
-    if (too_many_result.failure() != nullptr) {
+    const auto* const too_many_failure = std::get_if<http1_interim_response_prepare_error>(&too_many_result);
+    RUVIA_CHECK(too_many_failure != nullptr);
+    if (too_many_failure != nullptr) {
         RUVIA_CHECK_EQ(
-            *too_many_result.failure(), http1_interim_response_prepare_error::too_many_headers);
+            *too_many_failure, http1_interim_response_prepare_error::too_many_headers);
     }
     RUVIA_CHECK(unchanged(buffer, '!'));
 
     const std::string oversized_value(ruvia::max_http_header_bytes, 'x');
     const http_header_view oversized[] = {{"X-Hint", oversized_value}};
-    const auto oversized_result = http1_interim_response_writer().prepare(
+    const auto oversized_result = prepare_http1_interim_response_head(
         http_interim_response_head(ruvia::http_status::early_hints, oversized), buffer);
-    RUVIA_CHECK(oversized_result.failure() != nullptr);
-    if (oversized_result.failure() != nullptr) {
+    const auto* const oversized_failure = std::get_if<http1_interim_response_prepare_error>(&oversized_result);
+    RUVIA_CHECK(oversized_failure != nullptr);
+    if (oversized_failure != nullptr) {
         RUVIA_CHECK_EQ(
-            *oversized_result.failure(), http1_interim_response_prepare_error::header_too_large);
+            *oversized_failure, http1_interim_response_prepare_error::header_too_large);
     }
     RUVIA_CHECK(unchanged(buffer, '!'));
 }

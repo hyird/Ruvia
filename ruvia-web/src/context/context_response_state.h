@@ -12,7 +12,7 @@ namespace ruvia::detail {
 class context_pending_response final {
 public:
     explicit context_pending_response(std::pmr::memory_resource* resource)
-        : response_({.resource_ = resource}) {}
+        : response_(resource) {}
 
     [[nodiscard]] http_response& response() noexcept {
         return response_;
@@ -48,7 +48,7 @@ class context_final_response final {
 public:
     context_final_response(http_response&& response, std::pmr::memory_resource* resource)
         : response_(std::move(response)),
-          metadata_({.resource_ = resource}) {}
+          metadata_(resource) {}
 
     [[nodiscard]] http_response& response() noexcept {
         return response_;

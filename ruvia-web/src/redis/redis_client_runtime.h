@@ -6,12 +6,13 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "redis/redis_config_storage.h"
+#include "redis/redis_registry.h"
 #include "redis/redis_subscription_connection.h"
 
 namespace asio {
@@ -19,8 +20,6 @@ class io_context;
 }
 
 namespace ruvia::detail {
-
-class redis_pool;
 
 // The single backend owner used by standalone clients and application registrations.
 // Both pools and the Pub/Sub connections borrow this stable owner's normalized
@@ -47,11 +46,11 @@ public:
     [[nodiscard]] const redis_config_storage& config() const noexcept {
         return config_;
     }
-    [[nodiscard]] redis_pool& general() const noexcept {
-        return *general_;
+    [[nodiscard]] redis_pool& general() noexcept {
+        return general_;
     }
-    [[nodiscard]] redis_pool& blocking() const noexcept {
-        return *blocking_;
+    [[nodiscard]] redis_pool& blocking() noexcept {
+        return blocking_;
     }
     [[nodiscard]] redis_subscription_set& subscriptions() noexcept {
         return subscriptions_;
@@ -64,8 +63,8 @@ private:
     // One client TLS context per alias, borrowed by every connection of both
     // pools and every subscription; configured only when TLS is enabled.
     asio::ssl::context tls_context_;
-    std::unique_ptr<redis_pool, pmr_object_deleter<redis_pool>> general_;
-    std::unique_ptr<redis_pool, pmr_object_deleter<redis_pool>> blocking_;
+    redis_pool general_;
+    redis_pool blocking_;
     redis_subscription_set subscriptions_;
 };
 

@@ -67,15 +67,15 @@ task<http2_buffered_response_writer::data_write_result_type> http2_buffered_resp
     co_return data_write_result_type::failed;
 }
 
-task<http2_buffered_response_write_result> http2_buffered_response_writer::write(
+task<std::optional<http_status_code>> http2_buffered_response_writer::write(
     std::uint32_t stream_id, const http_response& response, http_buffered_response_write_plan write_plan) {
     if (connection_.stream_aborted(stream_id)) {
-        co_return http2_buffered_response_write_result{};
+        co_return std::nullopt;
     }
     auto* runtime = stream_runtimes_.find(stream_id);
     auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
     if (signal != nullptr && signal->terminated()) {
-        co_return http2_buffered_response_write_result{};
+        co_return std::nullopt;
     }
 
     const auto head_result =
@@ -83,24 +83,24 @@ task<http2_buffered_response_write_result> http2_buffered_response_writer::write
     const auto* submitted_head = std::get_if<http_buffered_response_write_plan>(&head_result);
     if (submitted_head == nullptr) {
         if (std::get<http2_response_head_submit_error>(head_result) == http2_response_head_submit_error::closed) {
-            co_return http2_buffered_response_write_result{};
+            co_return std::nullopt;
         }
         // Invalid final metadata cannot leave an open peer stream waiting for a
         // response that the transactional head submission rejected.
         submit_reset_no_throw(connection_, stream_id, http2_error_code::internal_error);
         wake_writer();
-        co_return http2_buffered_response_write_result{};
+        co_return std::nullopt;
     }
 
     wake_writer();
     const auto committed_status = submitted_head->response_status();
-    const auto fail_after_commit = [this, stream_id, committed_status]() noexcept {
+    const auto fail_after_commit = [this, stream_id, committed_status]() noexcept -> std::optional<http_status_code> {
         submit_reset_no_throw(connection_, stream_id, http2_error_code::internal_error);
         wake_writer();
-        return http2_buffered_response_write_result{committed_status};
+        return committed_status;
     };
     if (!submitted_head->send_body()) {
-        co_return http2_buffered_response_write_result{committed_status};
+        co_return committed_status;
     }
 
     // Bound the core-owned window-blocked remainder to one frame-sized slice.
@@ -114,7 +114,7 @@ task<http2_buffered_response_write_result> http2_buffered_response_writer::write
                 if (ended != data_write_result_type::completed) {
                     co_return fail_after_commit();
                 }
-                co_return http2_buffered_response_write_result{committed_status};
+                co_return committed_status;
             }
             if (chunk.kind() == response_body_chunk::kind_type::failed) {
                 // The committed Content-Length can no longer be honoured.
@@ -123,13 +123,13 @@ task<http2_buffered_response_write_result> http2_buffered_response_writer::write
             const auto bytes = chunk.bytes();
             for (std::size_t offset = 0; offset < bytes.size();) {
                 if (connection_.stream_aborted(stream_id)) {
-                    co_return http2_buffered_response_write_result{committed_status};
+                    co_return committed_status;
                 }
                 const auto size = std::min<std::size_t>(slice_bytes, bytes.size() - offset);
                 const auto result_value = co_await write_data(stream_id, bytes.substr(offset, size),
                     http2_end_stream::keep_open);
                 if (result_value == data_write_result_type::peer_aborted) {
-                    co_return http2_buffered_response_write_result{committed_status};
+                    co_return committed_status;
                 }
                 if (result_value == data_write_result_type::failed) {
                     co_return fail_after_commit();
@@ -146,7 +146,7 @@ task<http2_buffered_response_write_result> http2_buffered_response_writer::write
         const auto result_value = co_await write_data(stream_id, body.substr(offset, size),
             offset + size == body.size() ? http2_end_stream::end_stream : http2_end_stream::keep_open);
         if (result_value == data_write_result_type::peer_aborted) {
-            co_return http2_buffered_response_write_result{committed_status};
+            co_return committed_status;
         }
         if (result_value == data_write_result_type::failed) {
             co_return fail_after_commit();
@@ -155,7 +155,7 @@ task<http2_buffered_response_write_result> http2_buffered_response_writer::write
     }
 
     // An empty write plan committed END_STREAM with the response head above.
-    co_return http2_buffered_response_write_result{committed_status};
+    co_return committed_status;
 }
 
 }  // namespace ruvia::detail

@@ -31,7 +31,7 @@ std::optional<std::string_view> negotiate_encoding(
     auto request = make_request("/", headers);
     std::optional<std::string_view> chosen;
     (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-        chosen = context_value.req().negotiate(ruvia::context_request::negotiable_type::encoding, supported);
+        chosen = context_value.req().negotiate(ruvia::context_request::negotiable_field::encoding, supported);
         co_return;
     });
     return chosen;
@@ -369,7 +369,7 @@ RUVIA_TEST(context_request_negotiate_picks_the_client_preferred_media_type) {
         // Server order lists html first, but the client prefers json.
         const std::string_view supported[] = {"text/html", "application/json"};
         const auto chosen =
-            context_value.req().negotiate(ruvia::context_request::negotiable_type::media_type, supported);
+            context_value.req().negotiate(ruvia::context_request::negotiable_field::media_type, supported);
         RUVIA_CHECK(chosen.has_value());
         RUVIA_CHECK_EQ(*chosen, std::string_view("application/json"));
 
@@ -387,7 +387,7 @@ RUVIA_TEST(context_request_negotiate_reports_no_acceptable_representation) {
         const std::string_view supported[] = {"text/html", "application/json"};
         // nullopt is the 406 signal, which is why this cannot fall back to front().
         RUVIA_CHECK(!context_value.req()
-                .negotiate(ruvia::context_request::negotiable_type::media_type, supported)
+                .negotiate(ruvia::context_request::negotiable_field::media_type, supported)
                 .has_value());
         co_return;
     });
@@ -399,7 +399,7 @@ RUVIA_TEST(context_request_negotiate_without_the_field_takes_server_preference) 
     (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"application/json", "text/html"};
         const auto chosen =
-            context_value.req().negotiate(ruvia::context_request::negotiable_type::media_type, supported);
+            context_value.req().negotiate(ruvia::context_request::negotiable_field::media_type, supported);
         RUVIA_CHECK(chosen.has_value());
         RUVIA_CHECK_EQ(*chosen, std::string_view("application/json"));
         co_return;
@@ -413,7 +413,7 @@ RUVIA_TEST(context_request_negotiate_language_uses_basic_prefix_filtering) {
         // RFC 4647 basic filtering: the range "en" matches the tag "en-US".
         const std::string_view supported[] = {"fr-CA", "en-US"};
         const auto chosen =
-            context_value.req().negotiate(ruvia::context_request::negotiable_type::language, supported);
+            context_value.req().negotiate(ruvia::context_request::negotiable_field::language, supported);
         RUVIA_CHECK(chosen.has_value());
         RUVIA_CHECK_EQ(*chosen, std::string_view("en-US"));
         co_return;
@@ -427,7 +427,7 @@ RUVIA_TEST(context_request_negotiate_honours_explicit_zero_quality_exclusion) {
     (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"gzip", "br"};
         const auto chosen =
-            context_value.req().negotiate(ruvia::context_request::negotiable_type::encoding, supported);
+            context_value.req().negotiate(ruvia::context_request::negotiable_field::encoding, supported);
         RUVIA_CHECK(chosen.has_value());
         RUVIA_CHECK_EQ(*chosen, std::string_view("br"));
         co_return;
@@ -441,7 +441,7 @@ RUVIA_TEST(context_request_negotiate_folds_repeated_field_lines) {
     (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
         const std::string_view supported[] = {"de", "ja"};
         const auto chosen =
-            context_value.req().negotiate(ruvia::context_request::negotiable_type::language, supported);
+            context_value.req().negotiate(ruvia::context_request::negotiable_field::language, supported);
         RUVIA_CHECK(chosen.has_value());
         RUVIA_CHECK_EQ(*chosen, std::string_view("ja"));
         co_return;

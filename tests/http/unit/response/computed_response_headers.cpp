@@ -23,7 +23,7 @@ constexpr std::uint32_t method_bit(http_known_method method) {
 }
 
 http_response make_response() {
-    return http_response({.resource_ = std::pmr::new_delete_resource()});
+    return http_response(std::pmr::new_delete_resource());
 }
 
 }  // namespace
@@ -106,7 +106,7 @@ RUVIA_TEST(allow_header_accepts_extension_tokens_and_empty_method_set) {
 RUVIA_TEST(allow_header_preserves_borrowed_methods_when_replacement_allocation_fails) {
     failing_memory_resource resource;
     {
-        http_response response({.resource_ = &resource});
+        http_response response(&resource);
         response.header("Allow", "FOO, BAR");
         const auto current = response.header("Allow").value();
         const std::array extension_methods{current.substr(5), current.substr(0, 3)};

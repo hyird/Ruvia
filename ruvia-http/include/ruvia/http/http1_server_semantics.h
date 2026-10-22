@@ -6,7 +6,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/http1_close_policy.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http1_server_request_parser.h"
@@ -174,5 +173,10 @@ private:
 [[nodiscard]] prepared_http1_response_stream prepare_http1_response_stream_head(
     http_response response, const http1_response_stream_plan& plan,
     http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
+
+// The successful head ends HTTP framing and transfers the connection to a
+// duplex byte stream. Payload belongs to that stream, not to an HTTP response.
+[[nodiscard]] std::variant<http1_response_head_plan, http_protocol_error> prepare_http1_connect_response_head(
+    const http_response& response, http_protocol_version version) noexcept;
 
 }  // namespace ruvia

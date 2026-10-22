@@ -12,14 +12,14 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/web/http_client_handle.h"
+#include "ruvia/web/http_client.h"
 
 #include "client/client_request_policy.h"
 #include "client/client_tcp_transport.h"

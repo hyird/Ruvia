@@ -21,125 +21,8 @@
 namespace ruvia::detail {
 
 template <typename t_type>
-class task_completion_result;
-
-template <typename t_type>
-class task_completion_success final {
-public:
-    [[nodiscard]] t_type take_value() && {
-        return std::move(value_);
-    }
-
-private:
-    friend class task_completion_result<t_type>;
-
-    explicit task_completion_success(t_type value)
-        : value_(std::move(value)) {}
-
-    t_type value_;
-};
-
-template <>
-class task_completion_success<void> final {
-private:
-    friend class task_completion_result<void>;
-
-    constexpr task_completion_success() noexcept = default;
-};
-
-class task_completion_failure final {
-public:
-    [[nodiscard]] const std::exception_ptr& exception() const& noexcept {
-        return exception_;
-    }
-    const std::exception_ptr& exception() const&& = delete;
-
-private:
-    template <typename>
-    friend class task_completion_result;
-
-    explicit task_completion_failure(std::exception_ptr exception) noexcept
-        : exception_(std::move(exception)) {}
-
-    std::exception_ptr exception_;
-};
-
-// Adapting task completion into an Asio completion token preserves exactly one
-// terminal: success owns the value (or a void marker), while failure owns the
-// exception. Callers cannot observe or construct an empty or contradictory
-// value/exception tuple.
-template <typename t_type>
-class task_completion_result final {
-public:
-    [[nodiscard]] task_completion_success<t_type>* success() & noexcept {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    task_completion_success<t_type>* success() && = delete;
-
-    [[nodiscard]] const task_completion_failure* failure() const& noexcept {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    const task_completion_failure* failure() const&& = delete;
-
-private:
-    template <typename, typename>
-    friend class task_completion_state;
-
-    using value_type = std::variant<task_completion_success<t_type>, task_completion_failure>;
-
-    explicit task_completion_result(task_completion_success<t_type> success)
-        : value_(std::move(success)) {}
-
-    explicit task_completion_result(task_completion_failure failure) noexcept
-        : value_(std::move(failure)) {}
-
-    [[nodiscard]] static task_completion_result make_success(t_type value) {
-        return task_completion_result(task_completion_success<t_type>(std::move(value)));
-    }
-
-    [[nodiscard]] static task_completion_result make_failure(std::exception_ptr exception) noexcept {
-        return task_completion_result(task_completion_failure(std::move(exception)));
-    }
-
-    value_type value_;
-};
-
-template <>
-class task_completion_result<void> final {
-public:
-    [[nodiscard]] const task_completion_success<void>* success() const& noexcept {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    const task_completion_success<void>* success() const&& = delete;
-
-    [[nodiscard]] const task_completion_failure* failure() const& noexcept {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    const task_completion_failure* failure() const&& = delete;
-
-private:
-    template <typename, typename>
-    friend class task_completion_state;
-
-    using value_type = std::variant<task_completion_success<void>, task_completion_failure>;
-
-    explicit task_completion_result(task_completion_success<void> success) noexcept
-        : value_(std::move(success)) {}
-
-    explicit task_completion_result(task_completion_failure failure) noexcept
-        : value_(std::move(failure)) {}
-
-    [[nodiscard]] static task_completion_result make_success() noexcept {
-        return task_completion_result(task_completion_success<void>());
-    }
-
-    [[nodiscard]] static task_completion_result make_failure(std::exception_ptr exception) noexcept {
-        return task_completion_result(task_completion_failure(std::move(exception)));
-    }
-
-    value_type value_;
-};
-
+using task_completion_result =
+    std::variant<std::conditional_t<std::is_void_v<t_type>, std::monostate, t_type>, std::exception_ptr>;
 template <typename t_type, typename handler_type>
 class task_completion_state final {
 public:
@@ -201,21 +84,17 @@ private:
         // An owning completion handler can publish external readiness in its
         // destructor only after moved-from result storage has been reclaimed.
         auto handler = std::move(owner_value->handler_);
-        auto result_value = [&owner_value]() {
-            if constexpr (std::is_void_v<t_type>) {
-                try {
+        auto result_value = [&owner_value]() -> task_completion_result<t_type> {
+            try {
+                if constexpr (std::is_void_v<t_type>) {
                     owner_value->task_.handle_.promise().result();
-                    return task_completion_result<void>::make_success();
-                } catch (...) {
-                    return task_completion_result<void>::make_failure(std::current_exception());
+                    return task_completion_result<t_type>(std::in_place_index<0>, std::monostate{});
+                } else {
+                    return task_completion_result<t_type>(
+                        std::in_place_index<0>, owner_value->task_.handle_.promise().result());
                 }
-            } else {
-                try {
-                    return task_completion_result<t_type>::make_success(
-                        owner_value->task_.handle_.promise().result());
-                } catch (...) {
-                    return task_completion_result<t_type>::make_failure(std::current_exception());
-                }
+            } catch (...) {
+                return task_completion_result<t_type>(std::in_place_index<1>, std::current_exception());
             }
         }();
         owner_value.reset();

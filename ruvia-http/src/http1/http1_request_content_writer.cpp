@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <stdexcept>
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http1_chunked_framing.h"
@@ -36,7 +37,7 @@ void http1_request_content_writer::abort() noexcept {
     writing_ = false;
     finishing_ = false;
 }
-std::variant<http1_request_content_writer::chunk_type, error_type> http1_request_content_writer::plan_chunk(std::span<const char> payload_value) noexcept {
+std::variant<http1_request_content_writer::chunk, error_type> http1_request_content_writer::plan_chunk(std::span<const char> payload_value) noexcept {
     if (stopped_ || finished_) {
         return error_type::stopped;
     }
@@ -52,32 +53,25 @@ std::variant<http1_request_content_writer::chunk_type, error_type> http1_request
     if (length_ && payload_value.size() > *length_ - committed_) {
         return error_type::length_mismatch;
     }
-    chunk_type chunk{.payload_ = payload_value};
+    chunk result{.payload_ = payload_value};
     if (!length_ && !payload_value.empty()) {
         http1_chunk_header header_value(payload_value.size());
         auto prefix = header_value.view();
-        std::copy(prefix.begin(), prefix.end(), chunk.prefix_.begin());
-        chunk.prefix_size_ = prefix.size();
-        chunk.suffix_ = http1_chunk_data_terminator;
+        std::copy(prefix.begin(), prefix.end(), result.prefix_.begin());
+        result.prefix_size_ = prefix.size();
+        result.suffix_ = http1_chunk_data_terminator;
     }
     writing_ = true;
     pending_ = payload_value.size();
-    return chunk;
+    return result;
 }
-std::variant<std::monostate, error_type> http1_request_content_writer::commit_chunk(std::size_t payload_bytes) noexcept {
-    if (stopped_ || finished_) {
-        return error_type::stopped;
-    }
-    if (!writing_) {
-        return error_type::no_write_pending;
-    }
-    if (payload_bytes != pending_) {
-        return error_type::commit_mismatch;
+void http1_request_content_writer::commit_chunk() {
+    if (stopped_ || finished_ || !writing_) {
+        throw std::logic_error("HTTP/1 request content chunk commit requires a pending chunk write");
     }
     committed_ += pending_;
     pending_ = 0;
     writing_ = false;
-    return {};
 }
 std::variant<std::string_view, error_type> http1_request_content_writer::plan_finish(std::span<char> buffer, std::span<const http_header_view> trailers) noexcept {
     if (stopped_ || finished_) {
@@ -123,15 +117,11 @@ std::variant<std::string_view, error_type> http1_request_content_writer::plan_fi
     finishing_ = true;
     return required ? std::string_view(buffer.data(), required) : std::string_view{};
 }
-std::variant<std::monostate, error_type> http1_request_content_writer::commit_finish() noexcept {
-    if (stopped_ || finished_) {
-        return error_type::stopped;
-    }
-    if (!finishing_) {
-        return error_type::no_write_pending;
+void http1_request_content_writer::commit_finish() {
+    if (stopped_ || finished_ || !finishing_) {
+        throw std::logic_error("HTTP/1 request content finish commit requires a pending finish write");
     }
     finishing_ = false;
     finished_ = true;
-    return {};
 }
 }  // namespace ruvia

@@ -37,7 +37,7 @@ struct http_response_file_write_result final {
 // first TransmitFile; Linux corks it with MSG_MORE so it shares the first
 // segment with the file bytes. Touches `progress` after every transfer.
 task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::socket& socket,
-    std::string_view head, http_response_file_view file, connection_scanner::entry_type& progress);
+    std::string_view head, http_response_file_view file, connection_scanner::entry& progress);
 #else
 inline constexpr bool native_response_file_write_available = false;
 #endif

@@ -20,12 +20,12 @@ class route_table;
 // rest of the chain is turned into the context's response at a frame's next().
 // The caller owns this object for the whole run; next_state points at it.
 struct middleware_chain final {
-    using terminal_type = callback_ref_type<task<void>(context&)>;
+    using terminal_type = callback_ref<task<void>(context&)>;
     // May rethrow control signals that must unwind every frame.
     using failure_type = task<void> (*)(const route_table&, context&, std::exception_ptr);
 
     const route_table* table_{nullptr};
-    std::span<const route_middleware_type> frames_;
+    std::span<const route_middleware> frames_;
     std::span<const std::string_view> scopes_;
     terminal_type terminal_;
     failure_type failure_{nullptr};

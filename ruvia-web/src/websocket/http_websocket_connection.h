@@ -26,7 +26,6 @@
 #include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/websocket.h"
 
-#include "http/http_stream_read_result.h"
 #include "server/connection_scanner.h"
 #include "tls/tls_stream_end.h"
 #include "websocket/http_websocket_liveness.h"
@@ -43,7 +42,7 @@ public:
     using stream_argument_type = std::conditional_t<native_stream, stream_type&, stream_type>;
 
     server_websocket_connection(stream_argument_type stream, const worker_handle& worker_value,
-        connection_scanner::entry_type& scanner_entry, websocket_lifecycle_options lifecycle_options,
+        connection_scanner::entry& scanner_entry, websocket_lifecycle_options lifecycle_options,
         protocol_byte_limit message_limit, std::pmr::memory_resource* resource, std::string_view initial_bytes,
         websocket_connection_options protocol_options)
         : stream_(std::forward<stream_argument_type>(stream)),
@@ -62,7 +61,7 @@ public:
             &server_websocket_connection::drain_thunk);
     }
 
-    server_websocket_connection(stream_argument_type, worker_handle&&, connection_scanner::entry_type&, websocket_lifecycle_options,
+    server_websocket_connection(stream_argument_type, worker_handle&&, connection_scanner::entry&, websocket_lifecycle_options,
         protocol_byte_limit, std::pmr::memory_resource*, std::string_view, websocket_connection_options) = delete;
 
     ~server_websocket_connection() = default;
@@ -286,7 +285,7 @@ private:
     task<void> flush_protocol_output_now();
     // Reads more transport bytes into buffer_. Between frames the read is
     // sized by recent traffic, so an idle connection holds little read storage.
-    task<http_stream_read_result> read_more();
+    task<bool> read_more();
     task<std::error_code> write_adapted(const websocket_output_plan& plan);
     [[nodiscard]] auto executor() const {
         if constexpr (native_stream) {
@@ -307,7 +306,7 @@ private:
 
     stream_argument_type stream_;
     const worker_handle* worker_;
-    connection_scanner::entry_type& scanner_entry_;
+    connection_scanner::entry& scanner_entry_;
     websocket_lifecycle_options lifecycle_options_{};
     http_io_buffer buffer_;
     websocket_connection protocol_;
@@ -326,7 +325,7 @@ private:
     bool small_frames_{true};
     // Declared last so destruction unregisters before any callback target state
     // starts to disappear.
-    connection_scanner::periodic_check_registration_type periodic_check_;
+    connection_scanner::periodic_check_registration periodic_check_;
 };
 
 }  // namespace ruvia::detail

@@ -60,7 +60,7 @@ void sort_dynamic_node(node_type& node_value) {
 
 }  // namespace
 
-void detail::router_impl::build_dynamic_routes() {
+void detail::router::build_dynamic_routes() {
     auto& plan = *plan_;
     plan.connect_protocols_.reserve(plan.connect_route_indices_.size());
 
@@ -104,7 +104,7 @@ void detail::router_impl::build_dynamic_routes() {
     }
 }
 
-void detail::router_impl::bind_dynamic_param_names(route_entry& route) {
+void detail::router::bind_dynamic_param_names(route_entry& route) {
     auto path = route.path();
     while (true) {
         std::string_view segment;
@@ -132,7 +132,7 @@ void detail::router_impl::bind_dynamic_param_names(route_entry& route) {
     }
 }
 
-bool detail::router_impl::is_dynamic_path(std::string_view path) noexcept {
+bool detail::router::is_dynamic_path(std::string_view path) noexcept {
     while (!path.empty()) {
         std::string_view segment;
         std::string_view rest;
@@ -148,7 +148,7 @@ bool detail::router_impl::is_dynamic_path(std::string_view path) noexcept {
     return false;
 }
 
-void detail::router_impl::append_dynamic_param_name(route_entry& route, std::string_view name) {
+void detail::router::append_dynamic_param_name(route_entry& route, std::string_view name) {
     auto& names_storage = plan_->param_names_;
     const auto names = route.param_names();
     if (names.size() >= max_route_params) {
@@ -161,7 +161,7 @@ void detail::router_impl::append_dynamic_param_name(route_entry& route, std::str
     route.param_names_ = std::span<const std::string_view>(names_storage.data() + offset, names.size() + 1);
 }
 
-void detail::router_impl::insert_dynamic(compiled_route_plan::dynamic_node_type& root, const route_entry& route) {
+void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root, const route_entry& route) {
     auto path = route.path();
     auto* node_value = &root;
     auto& plan = *plan_;
@@ -221,7 +221,7 @@ void detail::router_impl::insert_dynamic(compiled_route_plan::dynamic_node_type&
 // are parameters (whatever their names), or both are the wildcard, and both end at the same depth.
 // Any other pair overlaps at most with a deterministic winner ("/a/*" vs "/:x/:y", "/a/*" vs
 // "/a/:x"), which is legal routing, not a conflict.
-bool detail::router_impl::same_dynamic_shape(std::string_view left, std::string_view right) noexcept {
+bool detail::router::same_dynamic_shape(std::string_view left, std::string_view right) noexcept {
     const auto is_param = [](std::string_view segment) noexcept {
         return !segment.empty() && segment.front() == ':';
     };

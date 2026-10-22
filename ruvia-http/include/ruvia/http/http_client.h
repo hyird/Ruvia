@@ -20,7 +20,7 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_scheme.h"
+#include "ruvia/http/http_known_method.h"
 
 namespace ruvia {
 

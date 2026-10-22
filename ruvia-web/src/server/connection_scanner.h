@@ -51,7 +51,7 @@ public:
     using periodic_check_type = void (*)(void*, std::int64_t) noexcept;
     using drain_check_type = void (*)(void*) noexcept;
 
-    enum class phase_type : std::uint8_t {
+    enum class phase : std::uint8_t {
         idle,
         reading_initial,
         reading_payload,
@@ -59,26 +59,26 @@ public:
         writing,
     };
 
-    class entry_type;
+    class entry;
 
     // Per-connection node; callback registration is allocation-free.
     // The entry detaches any remaining nodes when it is destroyed.
-    class periodic_check_registration_type final {
+    class periodic_check_registration final {
     public:
-        periodic_check_registration_type() noexcept = default;
-        ~periodic_check_registration_type() noexcept;
-        periodic_check_registration_type(const periodic_check_registration_type&) = delete;
-        periodic_check_registration_type& operator=(const periodic_check_registration_type&) = delete;
-        periodic_check_registration_type(periodic_check_registration_type&&) = delete;
-        periodic_check_registration_type& operator=(periodic_check_registration_type&&) = delete;
+        periodic_check_registration() noexcept = default;
+        ~periodic_check_registration() noexcept;
+        periodic_check_registration(const periodic_check_registration&) = delete;
+        periodic_check_registration& operator=(const periodic_check_registration&) = delete;
+        periodic_check_registration(periodic_check_registration&&) = delete;
+        periodic_check_registration& operator=(periodic_check_registration&&) = delete;
         void reset() noexcept;
 
     private:
         friend class connection_scanner;
-        friend class entry_type;
-        entry_type* entry_{nullptr};
-        periodic_check_registration_type* prev_{nullptr};
-        periodic_check_registration_type* next_{nullptr};
+        friend class entry;
+        entry* entry_{nullptr};
+        periodic_check_registration* prev_{nullptr};
+        periodic_check_registration* next_{nullptr};
         void* target_{nullptr};
         periodic_check_type tick_{nullptr};
         drain_check_type drain_{nullptr};
@@ -90,47 +90,47 @@ public:
     // Destruction detaches the entry and its checks, including during a periodic
     // callback. Destroying the scanner detaches its entries before releasing
     // its timestamp storage.
-    class entry_type final {
+    class entry final {
     public:
-        entry_type() noexcept = default;
-        ~entry_type() noexcept;
-        entry_type(const entry_type&) = delete;
-        entry_type& operator=(const entry_type&) = delete;
-        entry_type(entry_type&&) = delete;
-        entry_type& operator=(entry_type&&) = delete;
+        entry() noexcept = default;
+        ~entry() noexcept;
+        entry(const entry&) = delete;
+        entry& operator=(const entry&) = delete;
+        entry(entry&&) = delete;
+        entry& operator=(entry&&) = delete;
         void touch() noexcept;
         // Not for long_lived: an upgrade enters that phase via enter_long_lived().
         // Ends a request-head read started by read_request_head().
-        void set_phase(phase_type next_phase) noexcept;
+        void set_phase(phase next_phase) noexcept;
         // Reads the head of the connection's next request, timed by
         // `timeout_phase`. No request is admitted until a later set_phase(), so
         // draining closes the connection meanwhile; touch() keeps the read open.
-        void read_request_head(phase_type timeout_phase) noexcept;
+        void read_request_head(phase timeout_phase) noexcept;
 
         // Hands the entry back, when it ends, to the phase it had when it
         // began: same phase, same phase start and request-head state, with
         // the time of the end as activity. A write nested in another phase
         // (held output flushed in the middle of a handler) thus leaves that
         // phase's deadlines, and drain's view of the request, as they were.
-        class phase_scope_type final {
+        class phase_scope final {
         public:
-            explicit phase_scope_type(entry_type& entry) noexcept
-                : entry_(entry),
-                  phase_started_ms_(entry.phase_started_ms_),
-                  phase_(entry.phase_),
-                  reading_request_head_(entry.reading_request_head_) {}
-            phase_scope_type(entry_type& entry, phase_type next_phase) noexcept
-                : phase_scope_type(entry) {
+            explicit phase_scope(entry& entry_value) noexcept
+                : entry_(entry_value),
+                  phase_started_ms_(entry_value.phase_started_ms_),
+                  phase_(entry_value.phase_),
+                  reading_request_head_(entry_value.reading_request_head_) {}
+            phase_scope(entry& entry_value, phase next_phase) noexcept
+                : phase_scope(entry_value) {
                 entry_.set_phase(next_phase);
             }
-            ~phase_scope_type();
-            phase_scope_type(const phase_scope_type&) = delete;
-            phase_scope_type& operator=(const phase_scope_type&) = delete;
+            ~phase_scope();
+            phase_scope(const phase_scope&) = delete;
+            phase_scope& operator=(const phase_scope&) = delete;
 
         private:
-            entry_type& entry_;
+            entry& entry_;
             std::int64_t phase_started_ms_;
-            phase_type phase_;
+            phase phase_;
             bool reading_request_head_;
         };
 
@@ -142,46 +142,45 @@ public:
         [[nodiscard]] std::int64_t last_active_ms() const noexcept;
         // `drain` is optional: a long-lived connection uses it to end itself
         // gracefully once draining starts.
-        void register_periodic_check(periodic_check_registration_type& registration, void* target,
+        void register_periodic_check(periodic_check_registration& registration, void* target,
             periodic_check_type tick, drain_check_type drain = nullptr) noexcept;
 
     private:
         friend class connection_scanner;
-        friend class periodic_check_registration_type;
+        friend class periodic_check_registration;
         friend struct impl_type;
         [[nodiscard]] bool linked() const noexcept;
         [[nodiscard]] bool has_drain_check() const noexcept;
         void notify_drain() noexcept;
-        void remove_periodic_check(periodic_check_registration_type& registration) noexcept;
+        void remove_periodic_check(periodic_check_registration& registration) noexcept;
         void detach_periodic_checks() noexcept;
         asio::ip::tcp::socket* socket_{nullptr};
         connection_scanner* scanner_{nullptr};
-        entry_type* prev_{nullptr};
-        entry_type* next_{nullptr};
+        entry* prev_{nullptr};
+        entry* next_{nullptr};
         const std::int64_t* now_ms_{nullptr};
         std::int64_t last_active_ms_{0};
         std::int64_t phase_started_ms_{0};
-        phase_type phase_{phase_type::idle};
+        phase phase_{phase::idle};
         bool reading_request_head_{false};
-        periodic_check_registration_type* periodic_checks_{nullptr};
-        periodic_check_registration_type* periodic_scan_next_{nullptr};
+        periodic_check_registration* periodic_checks_{nullptr};
+        periodic_check_registration* periodic_scan_next_{nullptr};
     };
 
     // Binds a TCP socket to an entry for the guard lifetime; its destructor
     // safely detaches even if the scanner was destroyed first. An entry has one
     // registration owner: binding an already-bound entry throws
     // std::logic_error without changing its existing binding or checks.
-    class guard_type final {
+    class guard final {
     public:
-        guard_type(connection_scanner& scanner, entry_type& entry_value, asio::ip::tcp::socket& socket);
-        ~guard_type();
-        guard_type(const guard_type&) = delete;
-        guard_type& operator=(const guard_type&) = delete;
+        guard(connection_scanner& scanner, entry& entry_value, asio::ip::tcp::socket& socket);
+        ~guard();
+        guard(const guard&) = delete;
+        guard& operator=(const guard&) = delete;
 
     private:
-        entry_type& entry_;
+        entry& entry_;
     };
-
     connection_scanner(worker_handle worker_value, connection_scanner_options options);
     // Detaches every entry and check. A periodic check may destroy its scanner
     // (or stop and restart it): the running scan visits no further node and
@@ -202,10 +201,10 @@ public:
     void drain() noexcept;
 
 private:
-    friend class entry_type;
-    friend class guard_type;
+    friend class entry;
+    friend class guard;
     friend struct impl_type;
-    static void detach_entry(entry_type& entry) noexcept;
+    static void detach_entry(entry& entry) noexcept;
     std::unique_ptr<impl_type> impl_;
 };
 
@@ -219,17 +218,16 @@ struct connection_scanner::impl_type final {
 
     void start();
     void stop() noexcept;
-    void register_entry(entry_type& entry, asio::ip::tcp::socket& socket);
-    void unregister_entry(entry_type& entry) noexcept;
+    void register_entry(entry& entry, asio::ip::tcp::socket& socket);
+    void unregister_entry(entry& entry) noexcept;
     void close_all() noexcept;
     void drain() noexcept;
     void schedule();
     // Visits every entry; returns whether none was in a request exchange or
     // active since `interval_start`.
     [[nodiscard]] bool scan(std::int64_t interval_start) noexcept;
-    [[nodiscard]] bool is_timed_out(const entry_type& entry, std::int64_t now) const noexcept;
-    [[nodiscard]] static bool active_since(const entry_type& entry, std::int64_t interval_start) noexcept;
-
+    [[nodiscard]] bool is_timed_out(const entry& entry, std::int64_t now) const noexcept;
+    [[nodiscard]] static bool active_since(const entry& entry, std::int64_t interval_start) noexcept;
     struct timer_state_type final {
         explicit timer_state_type(impl_type* owner_value) noexcept
             : owner_(owner_value) {}
@@ -245,9 +243,9 @@ struct connection_scanner::impl_type final {
     std::int64_t cached_now_ms_{0};
     // Latest activity of an entry that has since been unregistered.
     std::int64_t retired_activity_ms_{(std::numeric_limits<std::int64_t>::min)()};
-    entry_type sentinel_{};
-    entry_type* scan_current_{nullptr};
-    entry_type* scan_next_{nullptr};
+    entry sentinel_{};
+    entry* scan_current_{nullptr};
+    entry* scan_next_{nullptr};
     std::atomic_bool running_{false};
     // Worker-local: set only by the timer callback while scan() runs callbacks.
     bool scanning_{false};

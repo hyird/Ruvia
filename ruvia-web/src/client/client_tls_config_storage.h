@@ -7,8 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/web/client_tcp_config.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/client_tls_config.h"
 
 #include "client/client_host.h"

@@ -63,7 +63,7 @@ RUVIA_TEST(http2_push_promise_fragmentation_response_and_detached_metadata) {
     RUVIA_CHECK(promise && promise->push_promise());
     RUVIA_CHECK(promise->push_promise()->request_.path_ == "/asset");
     RUVIA_CHECK(promise->push_promise()->request_.headers_[0].value() == value);
-    ruvia::http_response response({.resource_ = &resource});
+    ruvia::http_response response(&resource);
     response.status(ruvia::http_status::ok);
     response.body("asset");
     submit_buffered_response(ruvia_ctx, server, 2, response);
@@ -374,7 +374,7 @@ RUVIA_TEST(http2_push_response_events_survive_a_reset_in_the_same_input_batch) {
         if (promise && promise->push_promise()) {
             RUVIA_CHECK_EQ(promise->push_promise()->request_.path_, "/reset");
         }
-        ruvia::http_response response({.resource_ = &resource});
+        ruvia::http_response response(&resource);
         response.body("parent");
         submit_buffered_response(ruvia_ctx, server, 1, response);
         transfer(server, client);
@@ -579,7 +579,7 @@ RUVIA_TEST(http2_push_repeated_response_and_cancellation_preserve_promises) {
                     auto canceled = server.next_event();
                     RUVIA_CHECK(canceled && canceled->stream_closed());
                 } else {
-                    ruvia::http_response response({.resource_ = &resource});
+                    ruvia::http_response response(&resource);
                     response.body("asset");
                     submit_buffered_response(ruvia_ctx, server, std::get<0>(push).stream_id(), response);
                     transfer(server, client);

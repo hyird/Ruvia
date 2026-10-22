@@ -13,9 +13,9 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/fixed_string.h"
-#include "ruvia/web/model_types.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia::detail {
 
@@ -266,22 +266,30 @@ struct entity_storage_from_tuple<std::tuple<columns...>> {
     template <::ruvia::fixed_string name>                           \
     const auto& get() const&& = delete;                             \
     template <::ruvia::fixed_string name, typename value_type>      \
-    auto& set(value_type&& value) {                                 \
+    auto& set(value_type&& value) & {                               \
         member.template set<name>(std::forward<value_type>(value)); \
         return *this;                                               \
     }                                                               \
+    template <::ruvia::fixed_string name, typename value_type>      \
+    auto& set(value_type&&) && = delete;                            \
     template <::ruvia::fixed_string name>                           \
-    auto& set_null()                                                \
+    auto& set_null() &                                              \
         requires requires { member.template set_null<name>(); }     \
     {                                                               \
         member.template set_null<name>();                           \
         return *this;                                               \
     }                                                               \
     template <::ruvia::fixed_string name>                           \
-    auto& reset() {                                                 \
+    auto& set_null() &&                                             \
+        requires requires { member.template set_null<name>(); }     \
+    = delete;                                                       \
+    template <::ruvia::fixed_string name>                           \
+    auto& reset() & {                                               \
         member.template reset<name>();                              \
         return *this;                                               \
     }                                                               \
+    template <::ruvia::fixed_string name>                           \
+    auto& reset() && = delete;                                      \
     template <::ruvia::fixed_string name>                           \
     bool is_set() const {                                           \
         return member.template is_set<name>();                      \

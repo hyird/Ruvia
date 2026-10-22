@@ -2,7 +2,7 @@
 #include <memory>
 #include <utility>
 
-#include "ruvia/web/http_client_response.h"
+#include "ruvia/web/http_client.h"
 
 #include "client/http_client_result_budget.h"
 

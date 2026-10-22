@@ -4,7 +4,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "router/router_impl.h"
 
@@ -66,24 +66,24 @@ void app_configuration::add_worker_state(worker_state_definition definition) {
     append_worker_state_definition(worker_states_, std::move(definition));
 }
 
-void app_configuration::on_error(http_error_handler_type handler) {
+void app_configuration::on_error(http_error_handler handler) {
     error_handler_ = std::move(handler);
 }
 
 void app_configuration::on_error(scoped_error_handler_options options) {
-    append_prefix_handler(prefix_error_handlers_, options.prefix_, std::move(options.handler_));
+    append_prefix_handler(prefix_error_handlers_, options.prefix_.view(), std::move(options.handler_));
 }
 
-void app_configuration::on_not_found(http_not_found_handler_type handler) {
+void app_configuration::on_not_found(http_not_found_handler handler) {
     not_found_handler_ = std::move(handler);
 }
 
 void app_configuration::on_not_found(scoped_not_found_handler_options options) {
-    append_prefix_handler(prefix_not_found_handlers_, options.prefix_, std::move(options.handler_));
+    append_prefix_handler(prefix_not_found_handlers_, options.prefix_.view(), std::move(options.handler_));
 }
 
 void app_configuration::apply(
-    router_impl& routes_value, std::pmr::memory_resource* temporary_resource) const {
+    router& routes_value, std::pmr::memory_resource* temporary_resource) const {
     auto* resource = pmr_resource_or_default(temporary_resource);
     routes_value.set_error_handler(callback_access::ref(error_handler_));
     routes_value.set_not_found_handler(callback_access::ref(not_found_handler_));

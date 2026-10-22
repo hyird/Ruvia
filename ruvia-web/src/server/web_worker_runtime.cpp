@@ -113,7 +113,7 @@ web_worker_handle web_worker_runtime::web_worker() const {
 }
 #if defined(_WIN32)
 void web_worker_runtime::attach_windows_accept(windows_accept_domain& domain, std::size_t origin) {
-    connections_.attach_windows_accept(domain, origin, detail::worker_runtime_access::context(runtime_));
+    connections_.attach_windows_accept(domain, origin);
     windows_accept_ = &domain;
     windows_origin_ = origin;
 }

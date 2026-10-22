@@ -28,7 +28,7 @@ enum class http1_server_request_parse_failure_source : std::uint8_t { request_li
 
 class http1_server_need_request_head final {
 private:
-    friend class http1_server_request_parser;
+    friend class http1_server_request_parse_state;
 
     // Resumable scan progress: leading empty-line bytes already skipped and,
     // once accepted, the end of the request-line. Each input byte is thereby
@@ -44,7 +44,7 @@ public:
     }
 
 private:
-    friend class http1_server_request_parser;
+    friend class http1_server_request_parse_state;
 
     explicit constexpr http1_server_request_head_ready(std::size_t header_bytes) noexcept
         : header_bytes_(header_bytes) {
@@ -70,7 +70,7 @@ public:
     }
 
 private:
-    friend class http1_server_request_parser;
+    friend class http1_server_request_parse_state;
 
     explicit constexpr http1_server_request_parse_failure(http_parse_error error) noexcept
         : error_(error) {}
@@ -82,6 +82,11 @@ class http1_server_request_parse_state final {
 public:
     http1_server_request_parse_state() noexcept;
 
+    void parse_head(std::string_view buffer, std::size_t header_search_offset = 0,
+        std::pmr::memory_resource* resource = nullptr);
+
+    template <detail::http_temporary_owning_char_string buffer_type>
+    void parse_head(buffer_type&&, std::size_t = 0, std::pmr::memory_resource* = nullptr) = delete;
     [[nodiscard]] const http1_server_need_request_head* need_request_head() const& noexcept {
         return std::get_if<http1_server_need_request_head>(&progress_);
     }
@@ -108,8 +113,6 @@ public:
     }
 
 private:
-    friend class http1_server_request_parser;
-
     // The compact request owns its descriptor block across parse attempts.
     // Only this small progress value changes, so scan/head/error metadata
     // exists solely in the alternative where it is meaningful.
@@ -118,40 +121,6 @@ private:
 
     progress progress_{http1_server_need_request_head{}};
     http_response_coding_qualities response_coding_qualities_;
-};
-
-class http1_server_request_parser final {
-public:
-    // Allocate the exact header descriptor block only after accepting the head.
-    // Only state.request_ draws from resource, which must outlive it until the
-    // request is reset or reparsed; field text still borrows buffer. Empty
-    // lines before the request-line are ignored (RFC 9112 section 2.2) within
-    // max_http_header_bytes and are counted in header_bytes(). Bytes before
-    // header_search_offset were examined by an earlier call on the same state
-    // and buffer prefix. An incomplete head already fails with a request_line
-    // source once its request-line is CRLF-terminated or cannot start a method.
-    // Expect extensions follow RFC 9110 sections 10.1.1 and 5.6.6: OWS
-    // around ';' is allowed, but whitespace around '=' is invalid.
-    // Auxiliary Upgrade and Trailer fields do not establish message framing.
-    // Initial Trailer values retain OWS-normalized opaque declaration metadata,
-    // subject to ordinary field-byte and size limits, not trailer-name/list
-    // validation. A declaration neither promises nor authorizes actual trailers;
-    // actual trailer fields remain subject to their independent restrictions.
-    // OPTIONS Content-Type presence is a sender obligation (RFC 9110 9.3.7),
-    // not a recipient rejection rule. Content-Type retains its normalized field
-    // value without interpreting media-type syntax; applications own that decision.
-    // Origin and CORS preflight values likewise remain application metadata.
-    // TRACE and CONNECT accept Content-Length: 0, but reject nonzero or
-    // unknown-length content. Framing still follows RFC 9112 section 6.3.
-    // Recipient Transfer-Encoding lists ignore empty members but still require
-    // terminal chunked framing. Repeated date conditions are accepted and
-    // ignored during conditional evaluation, not treated as framing errors.
-    void parse_head(std::string_view buffer, http1_server_request_parse_state& state,
-        std::size_t header_search_offset = 0, std::pmr::memory_resource* resource = nullptr) const;
-
-    template <detail::http_temporary_owning_char_string buffer_type>
-    void parse_head(buffer_type&&, http1_server_request_parse_state&, std::size_t = 0,
-        std::pmr::memory_resource* = nullptr) const = delete;
 };
 
 }  // namespace ruvia

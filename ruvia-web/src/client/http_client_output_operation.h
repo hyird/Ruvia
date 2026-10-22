@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "ruvia/core/task.h"
-#include "ruvia/web/http_client_response.h"
+#include "ruvia/web/http_client.h"
 
 #include "client/http_client_response_state.h"
 #include "util/operation_lane_lease.h"

@@ -3,7 +3,7 @@
 #include <exception>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_cancellation.h"
 
 #include "client/client_tls.h"

@@ -15,7 +15,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/next.h"
+#include "ruvia/web/middleware.h"
 
 #include "context/context_services.h"
 #include "http/static_file_variant.h"
@@ -36,7 +36,7 @@ struct route_request_view final {
 };
 
 class controller_store;
-class router_impl;
+class router;
 
 // One path-prefix-scoped fallback registration (Hono sub-app scoping analog).
 // The prefix is a borrowed view during registration; the compiled plan copies
@@ -44,12 +44,12 @@ class router_impl;
 // segments (path_is_under_prefix).
 struct http_prefix_error_handler final {
     std::string_view prefix_;
-    http_error_handler_ref_type handler_{nullptr};
+    http_error_handler_ref handler_{nullptr};
 };
 
 struct http_prefix_not_found_handler final {
     std::string_view prefix_;
-    http_not_found_handler_ref_type handler_{nullptr};
+    http_not_found_handler_ref handler_{nullptr};
 };
 
 // One worker's binding of the process route plan: the worker's controller
@@ -127,14 +127,14 @@ public:
     // A CONNECT tunnel or WebSocket upgrade: `handler` is the terminal that
     // commits the upgrade. Absence means the terminal took the request.
     task<std::optional<http_response>> dispatch_upgrade(const http_request& request,
-        const resolved_route& route, request_memory& memory, const route_stream_handler_type& handler,
+        const resolved_route& route, request_memory& memory, const route_stream_handler& handler,
         context_services services) const;
     // The not-found handler that applies to `path`: the tightest prefix scope
     // covering it, else the plan-wide one; null when neither is configured.
-    [[nodiscard]] http_not_found_handler_ref_type not_found_handler_for(std::string_view path) const noexcept;
+    [[nodiscard]] http_not_found_handler_ref not_found_handler_for(std::string_view path) const noexcept;
 
 private:
-    friend class router_impl;
+    friend class router;
 
     [[nodiscard]] route_resolution resolve(
         http_known_method method, std::string_view path) const noexcept;
@@ -174,7 +174,7 @@ private:
     // The handler is copied into the coroutine frame: callers may pass one
     // bound from the resolved route as a temporary.
     [[nodiscard]] task<std::optional<http_response>> dispatch_stream_route(const http_request& request,
-        const resolved_route& route, request_memory& memory, route_stream_handler_type handler,
+        const resolved_route& route, request_memory& memory, route_stream_handler handler,
         context_services services) const;
 
     // A route's own frames and, only when some are conditional, their scopes.
@@ -183,28 +183,28 @@ private:
     // completion check shared by matched buffered routes and the unmatched
     // chain.
     [[nodiscard]] task<http_response> respond_through_chain(
-        middleware_chain chain, context& context, route_handler_type terminal) const;
+        middleware_chain chain, context& context, route_handler terminal) const;
     // Runs the unmatched-request middleware chain around `terminal`, which
     // produces the 404/405/501 response. Falls straight through to the terminal
     // when nothing declared itself for unmatched requests.
-    [[nodiscard]] task<http_response> run_unmatched_chain(context& context, route_handler_type terminal) const;
+    [[nodiscard]] task<http_response> run_unmatched_chain(context& context, route_handler terminal) const;
     [[nodiscard]] static task<void> contain_failure(
         const route_table& table, context& context, std::exception_ptr exception);
     [[nodiscard]] static task<void> contain_stream_failure(
         const route_table& table, context& context, std::exception_ptr exception);
     [[nodiscard]] task<http_response> handle_error(
-        context& context, http_error_info error, http_error_handler_ref_type error_handler) const;
+        context& context, http_error_info error, http_error_handler_ref error_handler) const;
     [[nodiscard]] task<http_response> handle_not_found(
         const http_request& request, request_memory& memory, context_services services) const;
     [[nodiscard]] task<http_response> handle_exception(
         context& context, std::exception_ptr exception) const;
     [[nodiscard]] task<http_response> handle_exception(context& context, std::exception_ptr exception,
-        http_error_handler_ref_type error_handler) const;
+        http_error_handler_ref error_handler) const;
     [[nodiscard]] task<http_response> handle_exception(const http_request& request, request_memory& memory,
         std::exception_ptr exception, context_services services,
-        http_error_handler_ref_type error_handler) const;
+        http_error_handler_ref error_handler) const;
 
-    [[nodiscard]] http_error_handler_ref_type error_handler_for(std::string_view path) const noexcept;
+    [[nodiscard]] http_error_handler_ref error_handler_for(std::string_view path) const noexcept;
 
     std::pmr::memory_resource* resource_;
     const compiled_route_plan* plan_;
@@ -213,7 +213,7 @@ private:
     // its instance.
     std::pmr::vector<void*> handler_targets_;
     std::pmr::vector<void*> middleware_instances_;
-    std::pmr::vector<route_middleware_type> middleware_frames_;
+    std::pmr::vector<route_middleware> middleware_frames_;
 };
 
 }  // namespace ruvia::detail

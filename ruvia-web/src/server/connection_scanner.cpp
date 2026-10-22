@@ -33,24 +33,24 @@ void validate_scanner_timeout(const std::optional<std::chrono::milliseconds>& ti
 
 }  // namespace
 
-connection_scanner::periodic_check_registration_type::~periodic_check_registration_type() noexcept {
+connection_scanner::periodic_check_registration::~periodic_check_registration() noexcept {
     reset();
 }
-void connection_scanner::periodic_check_registration_type::reset() noexcept {
+void connection_scanner::periodic_check_registration::reset() noexcept {
     if (entry_ != nullptr) {
         entry_->remove_periodic_check(*this);
     }
 }
-connection_scanner::entry_type::~entry_type() noexcept {
+connection_scanner::entry::~entry() noexcept {
     connection_scanner::detach_entry(*this);
     detach_periodic_checks();
 }
-void connection_scanner::entry_type::touch() noexcept {
+void connection_scanner::entry::touch() noexcept {
     if (now_ms_ != nullptr) {
         last_active_ms_ = *now_ms_;
     }
 }
-void connection_scanner::entry_type::set_phase(phase_type next_phase) noexcept {
+void connection_scanner::entry::set_phase(phase next_phase) noexcept {
     if (now_ms_ == nullptr) {
         return;
     }
@@ -61,11 +61,11 @@ void connection_scanner::entry_type::set_phase(phase_type next_phase) noexcept {
     phase_ = next_phase;
     reading_request_head_ = false;
 }
-void connection_scanner::entry_type::read_request_head(phase_type timeout_phase) noexcept {
+void connection_scanner::entry::read_request_head(phase timeout_phase) noexcept {
     set_phase(timeout_phase);
     reading_request_head_ = now_ms_ != nullptr;
 }
-connection_scanner::entry_type::phase_scope_type::~phase_scope_type() {
+connection_scanner::entry::phase_scope::~phase_scope() {
     if (entry_.now_ms_ == nullptr) {
         return;
     }
@@ -74,23 +74,23 @@ connection_scanner::entry_type::phase_scope_type::~phase_scope_type() {
     entry_.phase_ = phase_;
     entry_.reading_request_head_ = reading_request_head_;
 }
-bool connection_scanner::entry_type::enter_long_lived() noexcept {
+bool connection_scanner::entry::enter_long_lived() noexcept {
     const bool draining = scanner_ != nullptr && scanner_->impl_->draining_;
     if (draining && !has_drain_check()) {
         close_socket(*socket_);
         return false;
     }
-    set_phase(phase_type::long_lived);
+    set_phase(phase::long_lived);
     if (draining) {
         notify_drain();
         return false;
     }
     return true;
 }
-std::int64_t connection_scanner::entry_type::last_active_ms() const noexcept {
+std::int64_t connection_scanner::entry::last_active_ms() const noexcept {
     return last_active_ms_;
 }
-void connection_scanner::entry_type::register_periodic_check(periodic_check_registration_type& registration,
+void connection_scanner::entry::register_periodic_check(periodic_check_registration& registration,
     void* target, periodic_check_type tick, drain_check_type drain) noexcept {
     registration.reset();
     registration.entry_ = this;
@@ -103,8 +103,8 @@ void connection_scanner::entry_type::register_periodic_check(periodic_check_regi
     }
     periodic_checks_ = &registration;
 }
-void connection_scanner::entry_type::remove_periodic_check(
-    periodic_check_registration_type& registration) noexcept {
+void connection_scanner::entry::remove_periodic_check(
+    periodic_check_registration& registration) noexcept {
     if (registration.entry_ != this) {
         return;
     }
@@ -125,16 +125,16 @@ void connection_scanner::entry_type::remove_periodic_check(
     registration.tick_ = nullptr;
     registration.drain_ = nullptr;
 }
-void connection_scanner::entry_type::detach_periodic_checks() noexcept {
+void connection_scanner::entry::detach_periodic_checks() noexcept {
     periodic_scan_next_ = nullptr;
     while (periodic_checks_ != nullptr) {
         periodic_checks_->reset();
     }
 }
-bool connection_scanner::entry_type::linked() const noexcept {
+bool connection_scanner::entry::linked() const noexcept {
     return prev_ != nullptr && next_ != nullptr;
 }
-bool connection_scanner::entry_type::has_drain_check() const noexcept {
+bool connection_scanner::entry::has_drain_check() const noexcept {
     for (const auto* registration = periodic_checks_; registration != nullptr; registration = registration->next_) {
         if (registration->drain_ != nullptr) {
             return true;
@@ -142,7 +142,7 @@ bool connection_scanner::entry_type::has_drain_check() const noexcept {
     }
     return false;
 }
-void connection_scanner::entry_type::notify_drain() noexcept {
+void connection_scanner::entry::notify_drain() noexcept {
     // A callback may detach its own registration; read the successor first.
     for (auto* registration = periodic_checks_; registration != nullptr;) {
         auto* const next = registration->next_;
@@ -152,15 +152,14 @@ void connection_scanner::entry_type::notify_drain() noexcept {
         registration = next;
     }
 }
-connection_scanner::guard_type::guard_type(
-    connection_scanner& scanner, entry_type& entry_value, asio::ip::tcp::socket& socket)
+connection_scanner::guard::guard(
+    connection_scanner& scanner, entry& entry_value, asio::ip::tcp::socket& socket)
     : entry_(entry_value) {
     scanner.impl_->register_entry(entry_, socket);
 }
-connection_scanner::guard_type::~guard_type() {
+connection_scanner::guard::~guard() {
     connection_scanner::detach_entry(entry_);
 }
-
 connection_scanner::impl_type::impl_type(
     connection_scanner* owner_value, worker_handle worker_value, connection_scanner_options options)
     : owner_(owner_value),
@@ -221,7 +220,7 @@ void connection_scanner::close_all() noexcept {
 void connection_scanner::drain() noexcept {
     impl_->drain();
 }
-void connection_scanner::detach_entry(entry_type& entry_value) noexcept {
+void connection_scanner::detach_entry(entry& entry_value) noexcept {
     if (entry_value.scanner_ != nullptr) {
         entry_value.scanner_->impl_->unregister_entry(entry_value);
     }
@@ -244,7 +243,7 @@ void connection_scanner::impl_type::stop() noexcept {
     running_ = false;
     timer_.cancel();
 }
-void connection_scanner::impl_type::register_entry(entry_type& entry_value, asio::ip::tcp::socket& socket) {
+void connection_scanner::impl_type::register_entry(entry& entry_value, asio::ip::tcp::socket& socket) {
     if (entry_value.scanner_ != nullptr) {
         throw std::logic_error("connection scanner entry is already registered");
     }
@@ -253,13 +252,13 @@ void connection_scanner::impl_type::register_entry(entry_type& entry_value, asio
     entry_value.now_ms_ = &cached_now_ms_;
     entry_value.touch();
     entry_value.phase_started_ms_ = cached_now_ms_;
-    entry_value.phase_ = phase_type::idle;
+    entry_value.phase_ = phase::idle;
     entry_value.next_ = sentinel_.next_;
     entry_value.prev_ = &sentinel_;
     sentinel_.next_->prev_ = &entry_value;
     sentinel_.next_ = &entry_value;
 }
-void connection_scanner::impl_type::unregister_entry(entry_type& entry_value) noexcept {
+void connection_scanner::impl_type::unregister_entry(entry& entry_value) noexcept {
     if (entry_value.scanner_ != owner_ || !entry_value.linked()) {
         return;
     }
@@ -365,14 +364,14 @@ bool connection_scanner::impl_type::scan(std::int64_t interval_start) noexcept {
     scan_next_ = nullptr;
     return idle;
 }
-bool connection_scanner::impl_type::active_since(const entry_type& entry_value, std::int64_t interval_start) noexcept {
+bool connection_scanner::impl_type::active_since(const entry& entry_value, std::int64_t interval_start) noexcept {
     // A connection waiting for, or still reading, a request head has no
     // exchange; neither has an upgraded one between messages. Anything else
     // (a handshake, an admitted request, a response) is an exchange.
     return entry_value.last_active_ms_ >= interval_start ||
-           (!entry_value.reading_request_head_ && entry_value.phase_ != phase_type::long_lived);
+           (!entry_value.reading_request_head_ && entry_value.phase_ != phase::long_lived);
 }
-bool connection_scanner::impl_type::is_timed_out(const entry_type& entry_value, std::int64_t now) const noexcept {
+bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::int64_t now) const noexcept {
     // Stamps come from the coarse clock, which lags the activity it records by
     // up to one scan interval. Discounting that lag keeps every timeout from
     // firing before the configured time has really elapsed.
@@ -380,17 +379,17 @@ bool connection_scanner::impl_type::is_timed_out(const entry_type& entry_value, 
     const auto inactive_ms = now - entry_value.last_active_ms_ - resolution_ms;
     const auto phase_elapsed_ms = now - entry_value.phase_started_ms_ - resolution_ms;
     switch (entry_value.phase_) {
-        case phase_type::reading_initial:
+        case phase::reading_initial:
             return timeout_expired(options_.initial_read_timeout_, inactive_ms) ||
                    timeout_expired(options_.initial_read_completion_timeout_, phase_elapsed_ms);
-        case phase_type::reading_payload:
+        case phase::reading_payload:
             return timeout_expired(options_.payload_read_timeout_, inactive_ms) ||
                    timeout_expired(options_.payload_read_completion_timeout_, phase_elapsed_ms);
-        case phase_type::writing:
+        case phase::writing:
             return timeout_expired(options_.write_timeout_, inactive_ms);
-        case phase_type::long_lived:
+        case phase::long_lived:
             return false;
-        case phase_type::idle:
+        case phase::idle:
         default:
             return timeout_expired(options_.idle_timeout_, inactive_ms);
     }

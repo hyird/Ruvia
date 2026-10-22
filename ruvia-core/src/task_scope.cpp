@@ -6,7 +6,7 @@
 #include <variant>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia {
 
@@ -33,8 +33,8 @@ task_scope::~task_scope() {
     }
     // Every child finished but no join observed the outcome: the failure has
     // no other owner.
-    if (std::holds_alternative<task_scope_open_type>(lifecycle_) && outcome_.index() != 0) {
-        report_unhandled_failure("task scope child", std::get<1>(outcome_).exception());
+    if (std::holds_alternative<task_scope_open_type>(lifecycle_) && failure_ != nullptr) {
+        report_unhandled_failure("task scope child", failure_);
     }
 }
 
@@ -144,8 +144,8 @@ void task_scope::finish(node_type* node_value) noexcept {
     try {
         node_value->task_.handle_.promise().result();
     } catch (...) {
-        if (outcome_.index() == 0) {
-            outcome_ = task_scope_failure_type(std::current_exception());
+        if (failure_ == nullptr) {
+            failure_ = std::current_exception();
             stop_requested_ = true;
             notify_stop = true;
         }
@@ -173,8 +173,8 @@ void task_scope::finish(node_type* node_value) noexcept {
 }
 
 void task_scope::rethrow_failure() {
-    if (outcome_.index() != 0) {
-        std::rethrow_exception(std::get<1>(outcome_).exception());
+    if (failure_ != nullptr) {
+        std::rethrow_exception(failure_);
     }
 }
 

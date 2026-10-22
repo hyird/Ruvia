@@ -9,9 +9,10 @@
 #include <vector>
 
 #include "ruvia/core/task.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/next.h"
+#include "ruvia/web/middleware.h"
 
 namespace ruvia {
 
@@ -77,34 +78,18 @@ public:
     task<void> handle(context& context, next& next);
 
 private:
-    struct config_storage_type final {
-        config_storage_type(const security_headers_config& source_value, std::pmr::memory_resource* resource);
+    security_headers_middleware(
+        const security_headers_config& source_value, std::pmr::memory_resource* resource);
 
-        bool emit_content_type_options_;
-        bool emit_frame_options_;
-        bool emit_strict_transport_security_;
-        bool emit_disabled_xss_protection_;
-        bool replace_existing_;
-        std::pmr::string content_security_policy_;
-        std::pmr::string referrer_policy_;
-        std::pmr::string permissions_policy_;
-        std::pmr::vector<http_header> custom_headers_;
-
-    private:
-        struct validated_config_type final {
-            const security_headers_config* source_;
-            bool emit_content_type_options_;
-            bool emit_frame_options_;
-            bool emit_strict_transport_security_;
-            bool emit_disabled_xss_protection_;
-            bool replace_existing_;
-        };
-
-        [[nodiscard]] static validated_config_type validate(const security_headers_config& source);
-        config_storage_type(validated_config_type source_value, std::pmr::memory_resource* resource);
-    };
-
-    config_storage_type config_;
+    bool emit_content_type_options_{true};
+    bool emit_frame_options_{true};
+    bool emit_strict_transport_security_{true};
+    bool emit_disabled_xss_protection_{true};
+    bool replace_existing_{false};
+    std::pmr::string content_security_policy_;
+    std::pmr::string referrer_policy_;
+    std::pmr::string permissions_policy_;
+    std::pmr::vector<http_header> custom_headers_;
 };
 
 }  // namespace ruvia

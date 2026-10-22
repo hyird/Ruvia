@@ -4,7 +4,7 @@
 #include <memory>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "app/web_worker_dispatch.h"
 #include "integration/worker_capabilities.h"
@@ -43,11 +43,11 @@ db_handle web_worker_context::db(std::string_view alias) const {
 #endif
 
 http_client_handle web_worker_context::http_client() const {
-    return client_registries_.get_http_client(operation_scope_, capabilities_.stop_token());
+    return client_registries_.http_client(operation_scope_, capabilities_.stop_token());
 }
 
 http_client_handle web_worker_context::http_client(std::string_view alias) const {
-    return client_registries_.get_http_client(alias, operation_scope_, capabilities_.stop_token());
+    return client_registries_.http_client(alias, operation_scope_, capabilities_.stop_token());
 }
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -79,10 +79,10 @@ web_worker_stats web_worker_handle::stats() const noexcept {
     return dispatch_ ? dispatch_->stats() : web_worker_stats{};
 }
 
-web_worker_post_result_type web_worker_handle::post_task(
+web_worker_post_result web_worker_handle::post_task(
     move_only_function<task<void>(web_worker_context&)> task_value) const {
     return dispatch_ ? dispatch_->post(std::move(task_value))
-                     : web_worker_post_result_type::reject(post_status::worker_stopping, std::move(task_value));
+                     : web_worker_post_result::reject(post_status::worker_stopping, std::move(task_value));
 }
 
 }  // namespace ruvia
@@ -132,7 +132,7 @@ worker_id_type web_worker_dispatch::id() const noexcept {
     return worker_.id();
 }
 
-web_worker_post_result_type web_worker_dispatch::post(job_type job) {
+web_worker_post_result web_worker_dispatch::post(job_type job) {
     // Reserve before entering the core queue; core invokes the factory only
     // for an accepted post and destroys an unrun job on abandonment.
     outstanding_.fetch_add(1, std::memory_order_acq_rel);
@@ -144,9 +144,9 @@ web_worker_post_result_type web_worker_dispatch::post(job_type job) {
     });
     post_counters_.record(status);
     if (status == post_status::accepted) {
-        return web_worker_post_result_type::accept();
+        return web_worker_post_result::accept();
     }
-    return web_worker_post_result_type::reject(status, std::move(job));
+    return web_worker_post_result::reject(status, std::move(job));
 }
 
 web_worker_stats web_worker_dispatch::stats() const noexcept {

@@ -149,41 +149,6 @@ private:
     http_transfer_codings transfer_codings_;
 };
 
-// A 205 response has an ordinary HTTP/1 message-body framing phase, unlike
-// HEAD/204/304, but RFC 9110 requires its decoded content to remain empty. The
-// nested framing alternative tells the runtime how to reach the message end;
-// the outer type prevents that framing from being mistaken for ordinary
-// content that an application may consume.
-class http1_client_response_with_zero_content final {
-public:
-    [[nodiscard]] constexpr const http1_client_known_length_response* known_length() const& noexcept {
-        return std::get_if<http1_client_known_length_response>(&framing_);
-    }
-    const http1_client_known_length_response* known_length() const&& = delete;
-
-    [[nodiscard]] constexpr const http1_client_chunked_response* chunked() const& noexcept {
-        return std::get_if<http1_client_chunked_response>(&framing_);
-    }
-    const http1_client_chunked_response* chunked() const&& = delete;
-
-    [[nodiscard]] constexpr const http1_client_close_delimited_response* close_delimited()
-        const& noexcept {
-        return std::get_if<http1_client_close_delimited_response>(&framing_);
-    }
-    const http1_client_close_delimited_response* close_delimited() const&& = delete;
-
-private:
-    friend struct detail::http1_client_response_plan_access;
-
-    using framing_type = std::variant<http1_client_known_length_response, http1_client_chunked_response,
-        http1_client_close_delimited_response>;
-
-    explicit http1_client_response_with_zero_content(framing_type framing)
-        : framing_(std::move(framing)) {}
-
-    framing_type framing_;
-};
-
 class http1_client_connect_tunnel final {
 private:
     friend struct detail::http1_client_response_plan_access;
@@ -216,12 +181,9 @@ public:
     }
     const http1_client_response_without_content* without_content() const&& = delete;
 
-    [[nodiscard]] constexpr const http1_client_response_with_zero_content* zero_content()
-        const& noexcept {
-        return std::get_if<http1_client_response_with_zero_content>(&state_);
+    [[nodiscard]] constexpr bool requires_zero_content() const noexcept {
+        return requires_zero_content_;
     }
-    const http1_client_response_with_zero_content* zero_content() const&& = delete;
-
     [[nodiscard]] constexpr const http1_client_known_length_response* known_length() const& noexcept {
         return std::get_if<http1_client_known_length_response>(&state_);
     }
@@ -261,17 +223,20 @@ private:
     friend struct detail::http1_client_response_plan_access;
 
     using state_type = std::variant<http1_client_informational_response, http1_client_response_without_content,
-        http1_client_response_with_zero_content, http1_client_known_length_response,
-        http1_client_chunked_response, http1_client_close_delimited_response, http1_client_connect_tunnel,
+        http1_client_known_length_response, http1_client_chunked_response,
+        http1_client_close_delimited_response, http1_client_connect_tunnel,
         http1_client_protocol_upgrade>;
 
-    http1_client_response_plan(
-        state_type state_value, std::optional<http_client_request_content_signal> request_content_signal)
+    http1_client_response_plan(state_type state_value,
+        std::optional<http_client_request_content_signal> request_content_signal,
+        bool requires_zero_content = false)
         : state_(std::move(state_value)),
-          request_content_signal_(request_content_signal) {}
+          request_content_signal_(request_content_signal),
+          requires_zero_content_(requires_zero_content) {}
 
     state_type state_;
     std::optional<http_client_request_content_signal> request_content_signal_;
+    bool requires_zero_content_{false};
 };
 
 static_assert(std::is_nothrow_move_constructible_v<http1_client_response_plan>);
@@ -279,7 +244,7 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_plan>);
 // Protocol failures are typed and allocation-free. Resource exhaustion can
 // still throw while materializing a successful owning response. Exchange
 // termination is NOT a parse error: parsing after the exchange completed or
-// failed is reported through http1_client_response_parse_terminal instead.
+// failed throws std::logic_error.
 enum class http1_client_response_parse_error : std::uint8_t {
     header_too_large,
     invalid_status_line,
@@ -353,28 +318,6 @@ private:
 
 static_assert(std::is_nothrow_move_constructible_v<http1_parsed_client_response_head>);
 
-// Parsing after the exchange already completed or failed is not a wire error;
-// it is a state-machine termination report. completed() names the outcome that
-// ended the exchange.
-class http1_client_response_parse_terminal final {
-public:
-    [[nodiscard]] constexpr bool completed() const noexcept {
-        return completed_;
-    }
-
-    [[nodiscard]] constexpr bool failed() const noexcept {
-        return !completed_;
-    }
-
-private:
-    friend struct detail::http1_client_response_parse_result_access;
-
-    explicit constexpr http1_client_response_parse_terminal(bool completed) noexcept
-        : completed_(completed) {}
-
-    bool completed_;
-};
-
 class http1_client_response_parse_result final {
 public:
     http1_client_response_parse_result(const http1_client_response_parse_result&) = delete;
@@ -402,13 +345,6 @@ public:
     }
     const http1_client_response_parse_error* failure() const&& = delete;
 
-    // Non-null when the exchange already completed or failed and parsing
-    // stopped; a driver must not feed more input to this parser.
-    [[nodiscard]] const http1_client_response_parse_terminal* terminal() const& noexcept {
-        return std::get_if<http1_client_response_parse_terminal>(&state_);
-    }
-    const http1_client_response_parse_terminal* terminal() const&& = delete;
-
 private:
     friend struct detail::http1_client_response_parse_result_access;
 
@@ -421,11 +357,8 @@ private:
     explicit http1_client_response_parse_result(http1_client_response_parse_error state_value) noexcept
         : state_(state_value) {}
 
-    explicit http1_client_response_parse_result(http1_client_response_parse_terminal state_value) noexcept
-        : state_(state_value) {}
-
     std::variant<http1_client_response_need_more, http1_parsed_client_response_head,
-        http1_client_response_parse_error, http1_client_response_parse_terminal>
+        http1_client_response_parse_error>
         state_;
 };
 
@@ -456,13 +389,8 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_r
 // remains subject to the header limits and the supplied memory resource.
 class http1_client_response_parser final {
 public:
-    struct options_type final {
-        std::pmr::memory_resource* resource_{nullptr};
-    };
-
-    explicit http1_client_response_parser(http1_client_exchange_state exchange_state) noexcept;
     explicit http1_client_response_parser(
-        http1_client_exchange_state exchange_state, options_type options) noexcept;
+        http1_client_exchange_state exchange_state, std::pmr::memory_resource* resource = nullptr) noexcept;
 
     http1_client_response_parser(const http1_client_response_parser&) = delete;
     http1_client_response_parser& operator=(const http1_client_response_parser&) = delete;
@@ -512,13 +440,9 @@ private:
 };
 
 inline http1_client_response_parser::http1_client_response_parser(
-    http1_client_exchange_state exchange_state) noexcept
-    : http1_client_response_parser(std::move(exchange_state), options_type{}) {}
-
-inline http1_client_response_parser::http1_client_response_parser(
-    http1_client_exchange_state exchange_state, options_type options) noexcept
+    http1_client_exchange_state exchange_state, std::pmr::memory_resource* resource) noexcept
     : exchange_state_(std::move(exchange_state)),
-      resource_(options.resource_),
+      resource_(resource),
       request_content_phase_(initial_request_content_phase(exchange_state_)) {}
 
 }  // namespace ruvia

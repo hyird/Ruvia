@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/json/json_byte_scan.h"
 #include "ruvia/web/detail/json/json_lex.h"

@@ -131,13 +131,10 @@ struct jwt_token_parts final {
 
 // Throws std::length_error when the encoded capacity cannot be represented by
 // std::size_t before allocating the result.
-[[nodiscard]] std::pmr::string jwt_base64_url_encode(std::string_view input, std::pmr::memory_resource* resource) {
-    std::pmr::string out(resource);
-    out.resize(http_base64_encoded_size(input.size(), http_base64_padding::forbidden));
-    http_base64_encode(out.data(),
+void jwt_base64_url_encode_into(char* out, std::string_view input) noexcept {
+    http_base64_encode(out,
         std::span(reinterpret_cast<const std::uint8_t*>(input.data()), input.size()),
         http_base64_charset::url_safe, http_base64_padding::forbidden);
-    return out;
 }
 
 [[nodiscard]] std::pmr::string jwt_base64_url_decode(std::string_view input, std::pmr::memory_resource* resource) {
@@ -177,11 +174,11 @@ struct jwt_token_parts final {
     return {};
 }
 
-// Returns the base64url signature. Throws std::invalid_argument for a key
-// shorter than the selected digest and std::length_error when the secret or
-// signing input exceeds OpenSSL's HMAC length parameters.
-[[nodiscard]] std::pmr::string jwt_hmac_sign(jwt_algorithm algorithm, std::string_view secret,
-    std::string_view data, std::pmr::memory_resource* resource) {
+// Encodes the base64url signature into `out`. Throws std::invalid_argument for
+// a key shorter than the selected digest and std::length_error when the secret
+// or signing input exceeds OpenSSL's HMAC length parameters.
+[[nodiscard]] std::string_view jwt_hmac_sign(jwt_algorithm algorithm, std::string_view secret,
+    std::string_view data, std::array<char, 88>& out) {
     const auto digest = jwt_hmac_digest(algorithm);
     const auto digest_size = hmac_digest_size(digest);
     if (secret.size() > hmac_max_input_size) {
@@ -198,7 +195,10 @@ struct jwt_token_parts final {
     if (!compute_hmac(digest, secret, data, mac)) {
         throw std::runtime_error("JWT HMAC signing failed");
     }
-    return jwt_base64_url_encode(std::string_view(reinterpret_cast<const char*>(mac.data()), digest_size), resource);
+    const auto encoded_size = http_base64_encoded_size(digest_size, http_base64_padding::forbidden);
+    jwt_base64_url_encode_into(
+        out.data(), std::string_view(reinterpret_cast<const char*>(mac.data()), digest_size));
+    return std::string_view(out.data(), encoded_size);
 }
 
 }  // namespace
@@ -250,8 +250,8 @@ void validate_jwt_custom_claims(std::span<const jwt_claim_view> claims) {
 
 }  // namespace
 
-jwt_payload::jwt_payload(jwt_payload_options options)
-    : issuer_(pmr_resource_or_default(options.resource_)),
+jwt_payload::jwt_payload(std::pmr::memory_resource* resource)
+    : issuer_(pmr_resource_or_default(resource)),
       subject_(issuer_.get_allocator().resource()),
       audiences_(issuer_.get_allocator().resource()),
       id_(issuer_.get_allocator().resource()),
@@ -343,16 +343,31 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
     }
     payload.push_back('}');
 
-    auto encoded_header = detail::jwt_base64_url_encode(header, resolved);
-    auto encoded_payload = detail::jwt_base64_url_encode(payload, resolved);
-    std::pmr::string signing_input(resolved);
-    signing_input.append(encoded_header);
-    signing_input.push_back('.');
-    signing_input.append(encoded_payload);
-    auto signature = detail::jwt_hmac_sign(options.algorithm_, options.secret_, signing_input, resolved);
-    signing_input.push_back('.');
-    signing_input.append(signature);
-    return signing_input;
+    const auto encoded_header_size =
+        http_base64_encoded_size(header.size(), http_base64_padding::forbidden);
+    const auto encoded_payload_size =
+        http_base64_encoded_size(payload.size(), http_base64_padding::forbidden);
+    const auto signature_size = http_base64_encoded_size(
+        detail::hmac_digest_size(detail::jwt_hmac_digest(options.algorithm_)),
+        http_base64_padding::forbidden);
+    if (encoded_header_size > std::numeric_limits<std::size_t>::max() - 1 ||
+        encoded_payload_size > std::numeric_limits<std::size_t>::max() - 1 - (encoded_header_size + 1) ||
+        signature_size > std::numeric_limits<std::size_t>::max() -
+                             (encoded_header_size + 1 + encoded_payload_size + 1)) {
+        throw std::length_error("JWT token is too large");
+    }
+    const auto signing_input_size = encoded_header_size + 1 + encoded_payload_size;
+    std::pmr::string token(resolved);
+    token.resize(signing_input_size + 1 + signature_size);
+    detail::jwt_base64_url_encode_into(token.data(), header);
+    token[encoded_header_size] = '.';
+    detail::jwt_base64_url_encode_into(token.data() + encoded_header_size + 1, payload);
+    std::array<char, 88> signature_buf{};
+    const auto signature = detail::jwt_hmac_sign(
+        options.algorithm_, options.secret_, std::string_view(token.data(), signing_input_size), signature_buf);
+    token[signing_input_size] = '.';
+    signature.copy(token.data() + signing_input_size + 1, signature.size());
+    return token;
 }
 
 jwt_payload jwt_verify(const jwt_verify_options& options) {
@@ -366,8 +381,9 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
     auto* resolved = pmr_resource_or_default(options.resource_);
     const auto token = options.token_.view();
     const auto parts = detail::jwt_split_token(token);
+    std::array<char, 88> expected_buf{};
     const auto expected =
-        detail::jwt_hmac_sign(options.algorithm_, options.secret_, parts.signing_input_, resolved);
+        detail::jwt_hmac_sign(options.algorithm_, options.secret_, parts.signing_input_, expected_buf);
     if (!detail::constant_time_bytes_equal(expected, parts.signature_)) {
         throw jwt_error(jwt_error::code_type::signature_mismatch, "JWT signature verification failed");
     }

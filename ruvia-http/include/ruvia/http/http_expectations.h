@@ -29,79 +29,15 @@ enum class http_request_content_indication : std::uint8_t { no_content,
 enum class http_unsupported_expectation_policy : std::uint8_t { ignore,
     reject };
 
-class http_server_expectation_plan;
-
-class http_no_server_expectation_action final {
-private:
-    friend class http_server_expectation_plan;
-    constexpr http_no_server_expectation_action() noexcept = default;
+enum class http_server_expectation_plan : std::uint8_t {
+    no_action,
+    send_continue,
+    reject_unsupported,
 };
 
-class http_send_continue final {
-private:
-    friend class http_server_expectation_plan;
-    constexpr http_send_continue() noexcept = default;
-};
-
-class http_unsupported_expectation_rejection final {
-public:
-    [[nodiscard]] http_protocol_error protocol_error() const noexcept {
-        return http_protocol_error(http_status::expectation_failed, "unsupported Expect header");
-    }
-
-private:
-    friend class http_server_expectation_plan;
-    constexpr http_unsupported_expectation_rejection() noexcept = default;
-};
-
-// No action, an interim response, and a final rejection are mutually exclusive
-// protocol outcomes. Keep them typed so runtimes cannot compare a semantic enum
-// and then reconstruct the required status themselves.
-class http_server_expectation_plan final {
-public:
-    [[nodiscard]] constexpr const http_no_server_expectation_action* no_action() const& noexcept {
-        return state_ == state_type::no_action ? &no_action_value : nullptr;
-    }
-    const http_no_server_expectation_action* no_action() const&& = delete;
-
-    [[nodiscard]] constexpr const http_send_continue* send_continue() const& noexcept {
-        return state_ == state_type::send_continue ? &send_continue_value : nullptr;
-    }
-    const http_send_continue* send_continue() const&& = delete;
-
-    [[nodiscard]] constexpr const http_unsupported_expectation_rejection* rejection() const& noexcept {
-        return state_ == state_type::rejection ? &rejection_value : nullptr;
-    }
-    const http_unsupported_expectation_rejection* rejection() const&& = delete;
-
-private:
-    friend class http_request_expectations;
-
-    enum class state_type : std::uint8_t { no_action,
-        send_continue,
-        rejection };
-
-    explicit constexpr http_server_expectation_plan(state_type state_value) noexcept
-        : state_(state_value) {}
-
-    [[nodiscard]] static constexpr http_server_expectation_plan no_action_plan() noexcept {
-        return http_server_expectation_plan(state_type::no_action);
-    }
-
-    [[nodiscard]] static constexpr http_server_expectation_plan continue_plan() noexcept {
-        return http_server_expectation_plan(state_type::send_continue);
-    }
-
-    [[nodiscard]] static constexpr http_server_expectation_plan rejection_plan() noexcept {
-        return http_server_expectation_plan(state_type::rejection);
-    }
-
-    static inline constexpr http_no_server_expectation_action no_action_value{};
-    static inline constexpr http_send_continue send_continue_value{};
-    static inline constexpr http_unsupported_expectation_rejection rejection_value{};
-
-    state_type state_;
-};
+[[nodiscard]] inline http_protocol_error http_unsupported_expectation_error() noexcept {
+    return http_protocol_error(http_status::expectation_failed, "unsupported Expect header");
+}
 
 // Incremental recipient-side state for the RFC 9110 Expect #list. Repeated field
 // lines extend the same logical list, empty members are ignored, and all state is
@@ -129,12 +65,12 @@ public:
     [[nodiscard]] http_server_expectation_plan server_plan(http_request_content_indication content,
         http_unsupported_expectation_policy unsupported_policy) const noexcept {
         if (has_unsupported() && unsupported_policy == http_unsupported_expectation_policy::reject) {
-            return http_server_expectation_plan::rejection_plan();
+            return http_server_expectation_plan::reject_unsupported;
         }
         if (has_continue() && content == http_request_content_indication::will_follow) {
-            return http_server_expectation_plan::continue_plan();
+            return http_server_expectation_plan::send_continue;
         }
-        return http_server_expectation_plan::no_action_plan();
+        return http_server_expectation_plan::no_action;
     }
 
 private:

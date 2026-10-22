@@ -9,15 +9,15 @@
 namespace ruvia::detail {
 
 template <typename t_type>
-struct request_binding_type_key final {
+struct type_key_tag final {
     inline static constexpr std::byte value{};
 };
 
 // One stable address per type, used as the binding's identity. Cheaper and more
 // robust than typeid: no RTTI requirement and no cross-boundary name equality.
 template <typename t_type>
-[[nodiscard]] const void* request_binding_key() noexcept {
-    return &request_binding_type_key<std::remove_cvref_t<t_type>>::value;
+[[nodiscard]] const void* type_key() noexcept {
+    return &type_key_tag<std::remove_cvref_t<t_type>>::value;
 }
 
 // Two kinds share one intrusive list but never answer each other's lookups.
@@ -127,7 +127,7 @@ private:
 
     template <typename t_type>
     [[nodiscard]] const request_binding_node* find_node(request_binding_kind kind) const noexcept {
-        const auto* key = request_binding_key<std::remove_cvref_t<t_type>>();
+        const auto* key = type_key<std::remove_cvref_t<t_type>>();
         for (auto* node_value = head_; node_value != nullptr; node_value = node_value->previous_) {
             if (node_value->type_key_ == key && node_value->kind_ == kind) {
                 return node_value;
@@ -153,7 +153,7 @@ template <typename t_type>
 request_binding_handle<t_type>::request_binding_handle(
     request_bindings& bindings, const t_type& value, request_binding_kind kind) noexcept
     : bindings_(&bindings),
-      node_{request_binding_key<t_type>(), &value, nullptr, kind} {
+      node_{type_key<t_type>(), &value, nullptr, kind} {
     bindings_->push(node_);
 }
 

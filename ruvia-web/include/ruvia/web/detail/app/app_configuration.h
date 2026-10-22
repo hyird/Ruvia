@@ -17,7 +17,7 @@
 
 namespace ruvia::detail {
 
-class router_impl;
+class router;
 
 template <middleware middleware_type, typename... args_types>
 [[nodiscard]] owned_middleware_descriptor make_scoped_app_middleware(
@@ -25,7 +25,7 @@ template <middleware middleware_type, typename... args_types>
     static_assert(!middleware_runs_on_unmatched_requests<middleware_type>(),
         "a middleware declaring ruvia_runs_on_unmatched_requests cannot be path-scoped with "
         "use_at(); register it app-wide with use<T>()");
-    const auto normalized = normalize_fallback_prefix(options.prefix_);
+    const auto normalized = normalize_fallback_prefix(options.prefix_.view());
     return make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...)
         .scoped_to(normalized);
 }
@@ -53,22 +53,22 @@ public:
 
     void add_middleware(owned_middleware_descriptor descriptor);
     void add_worker_state(worker_state_definition definition);
-    void on_error(http_error_handler_type handler);
+    void on_error(http_error_handler handler);
     void on_error(scoped_error_handler_options options);
-    void on_not_found(http_not_found_handler_type handler);
+    void on_not_found(http_not_found_handler handler);
     void on_not_found(scoped_not_found_handler_options options);
 
     [[nodiscard]] std::span<const worker_state_definition> worker_states() const noexcept {
         return worker_states_;
     }
 
-    void apply(router_impl& routes, std::pmr::memory_resource* temporary_resource) const;
+    void apply(router& routes, std::pmr::memory_resource* temporary_resource) const;
 
 private:
-    http_error_handler_type error_handler_{nullptr};
-    http_not_found_handler_type not_found_handler_{nullptr};
-    std::pmr::vector<std::pair<std::pmr::string, http_error_handler_type>> prefix_error_handlers_;
-    std::pmr::vector<std::pair<std::pmr::string, http_not_found_handler_type>> prefix_not_found_handlers_;
+    http_error_handler error_handler_{nullptr};
+    http_not_found_handler not_found_handler_{nullptr};
+    std::pmr::vector<std::pair<std::pmr::string, http_error_handler>> prefix_error_handlers_;
+    std::pmr::vector<std::pair<std::pmr::string, http_not_found_handler>> prefix_not_found_handlers_;
     std::pmr::vector<owned_middleware_descriptor> middlewares_;
     std::pmr::vector<worker_state_definition> worker_states_;
 };

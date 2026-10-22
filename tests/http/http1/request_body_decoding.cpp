@@ -14,7 +14,7 @@ RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
         ruvia::http_request_body_size_failure(5, protocol_byte_limit::limited(4));
     RUVIA_CHECK(too_large.has_value());
     if (too_large) {
-        const auto error = too_large->protocol_error();
+        const auto error = ruvia::http_request_body_protocol_error(*too_large);
         RUVIA_CHECK_EQ(error.status(), ruvia::http_status::content_too_large);
         RUVIA_CHECK_EQ(
             std::string_view(error.what()), std::string_view("request body is too large"));
@@ -24,7 +24,7 @@ RUVIA_TEST(request_body_failures_own_cross_runtime_http_errors) {
     RUVIA_CHECK(ruvia::http_request_body_addition_failure(2, 3, protocol_byte_limit::limited(4))
             .has_value());
 
-    const auto incomplete = ruvia::http_request_body_failure::incomplete().protocol_error();
+    const auto incomplete = ruvia::http_request_body_protocol_error(ruvia::http_request_body_failure::incomplete);
     RUVIA_CHECK_EQ(incomplete.status(), ruvia::http_status::bad_request);
     RUVIA_CHECK_EQ(
         std::string_view(incomplete.what()), std::string_view("incomplete request body"));
@@ -77,7 +77,7 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
     RUVIA_CHECK(empty_length.expectations().has_continue());
     const auto empty_expectation_plan =
         empty_length.expectation_plan(http_unsupported_expectation_policy::reject);
-    RUVIA_CHECK(empty_expectation_plan.no_action() != nullptr);
+    RUVIA_CHECK(empty_expectation_plan == ruvia::http_server_expectation_plan::no_action);
 
     const auto compressed_chunked_message = parse_http1_request_message(
         "POST / HTTP/1.1\r\nHost: x\r\n"
@@ -91,7 +91,7 @@ RUVIA_TEST(http1_request_body_plan_has_one_framing_truth) {
     RUVIA_CHECK(compressed_chunked.requires_consumption());
     const auto compressed_expectation_plan =
         compressed_chunked.expectation_plan(http_unsupported_expectation_policy::reject);
-    RUVIA_CHECK(compressed_expectation_plan.send_continue() != nullptr);
+    RUVIA_CHECK(compressed_expectation_plan == ruvia::http_server_expectation_plan::send_continue);
     if (chunked_body != nullptr) {
         RUVIA_CHECK_EQ(chunked_body->transfer_codings().size(), std::size_t{1});
     }

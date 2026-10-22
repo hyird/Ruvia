@@ -7,7 +7,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_encoder.h"
 #include "ruvia/http/http_response_stream.h"

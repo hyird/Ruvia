@@ -58,9 +58,9 @@ public:
         const stop_token& stop_token) const;
 #endif
 
-    [[nodiscard]] http_client_handle get_http_client(
+    [[nodiscard]] http_client_handle http_client(
         ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
-    [[nodiscard]] http_client_handle get_http_client(std::string_view alias,
+    [[nodiscard]] http_client_handle http_client(std::string_view alias,
         ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
 
 private:

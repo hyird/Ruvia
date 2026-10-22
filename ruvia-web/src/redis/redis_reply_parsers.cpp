@@ -40,10 +40,10 @@ double parse_redis_double(std::string_view value, std::string_view context_value
         return std::numeric_limits<double>::quiet_NaN();
     }
     const auto output = detail::parse_decimal_number(value);
-    if ((output.index() != 0) || !std::isfinite(std::get<0>(output))) {
+    if (!output || !std::isfinite(*output)) {
         throw redis_error(redis_error::code_type::protocol_error, context_value);
     }
-    return std::get<0>(output);
+    return *output;
 }
 
 std::pmr::vector<redis_key_value> parse_redis_key_value_array(

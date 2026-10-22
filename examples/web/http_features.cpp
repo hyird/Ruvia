@@ -48,12 +48,12 @@ private:
             if (connection.tls()) {
                 // Advertisements never change the client's trusted origin.
                 const std::array<std::string_view, 1> origins{"https://localhost:8444"};
-                co_await c.advertise_origins(origins);
-                co_await c.advertise_alternative_service("h2=\":8444\"; ma=60");
+                c.advertise_origins(origins);
+                c.advertise_alternative_service("h2=\":8444\"; ma=60");
             }
             // Peer settings or capacity can decline push; the asset remains
             // available through an ordinary request.
-            const bool pushed = co_await c.push({
+            const bool pushed = c.push({
                 .scheme_ = connection.tls() ? "https" : "http",
                 .authority_ = c.req().header("host").value_or(connection.tls() ? "localhost:8444" : "localhost:8093"),
                 .path_ = "/features/asset",

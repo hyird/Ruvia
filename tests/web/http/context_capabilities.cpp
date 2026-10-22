@@ -1,6 +1,6 @@
 #include <stdexcept>
 
-#include "ruvia/web/http_client_handle.h"
+#include "ruvia/web/http_client.h"
 #include "ruvia/web/session.h"
 
 #include "context_request_fixture.h"

@@ -13,7 +13,6 @@
 #include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/websocket.h"
 
-#include "http/http_stream_read_result.h"
 #include "server/inbound_buffer_resource.h"
 #include "server/inbound_transport_error.h"
 #include "tls/tls_stream_end.h"
@@ -44,22 +43,13 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                 }
                 const auto event = protocol_.next_event();
                 if (!event.has_value()) {
-                    const auto read_result_value = co_await read_more();
-                    if (const auto* failure = read_result_value.failure()) {
-                        close_stream();
-                        (void)protocol_.abort();
-                        throw inbound_transport_error(failure->error_code(), "failed to read websocket bytes");
-                    }
-                    if (read_result_value.end() != nullptr) {
+                    if (!(co_await read_more())) {
                         // EOF is an abnormal websocket close when no peer Close was
                         // received. The core discards unsent WS output and plans the
                         // transport end.
                         protocol_.notify_transport_eof();
                         co_await flush_protocol_output_exclusive();
                         co_return std::nullopt;
-                    }
-                    if (read_result_value.data() == nullptr) {
-                        throw std::logic_error("unexpected WebSocket transport read result");
                     }
                     scanner_entry_.touch();
                     continue;
@@ -96,9 +86,15 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
 }
 
 template <typename stream_type>
-task<http_stream_read_result> server_websocket_connection<stream_type>::read_more() {
+task<bool> server_websocket_connection<stream_type>::read_more() {
     if constexpr (!native_stream) {
-        co_return co_await stream_.read_more(buffer_);
+        try {
+            co_return co_await stream_.read_more(buffer_);
+        } catch (const inbound_transport_error&) {
+            close_stream();
+            (void)protocol_.abort();
+            throw;
+        }
     } else {
         constexpr std::size_t min_read_bytes = 4096;
         constexpr std::size_t max_read_bytes = 64 * 1024;
@@ -122,16 +118,18 @@ task<http_stream_read_result> server_websocket_connection<stream_type>::read_mor
         const auto bytes_read = read_completion.result();
         // The protocol maps EOF without a Close frame to abnormal closure.
         if (is_stream_read_end(ec) || (!ec && bytes_read == 0)) {
-            co_return http_stream_read_result::make_end();
+            co_return false;
         }
         if (ec) {
-            co_return http_stream_read_result::make_failure(ec);
+            close_stream();
+            (void)protocol_.abort();
+            throw inbound_transport_error(ec, "failed to read websocket bytes");
         }
         buffer_.commit(bytes_read);
         if (between_frames) {
             small_frames_ = bytes_read < websocket_idle_read_bytes;
         }
-        co_return http_stream_read_result::make_data();
+        co_return true;
     }
 }
 

@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/web/detail/callback_ref.h"
 
 namespace ruvia::detail {
@@ -91,7 +90,7 @@ public:
 
 private:
     friend struct callback_access;
-    using view_type = callback_ref<result_type, is_noexcept, args_types...>;
+    using view_type = detail::callback_ref_view<result_type, is_noexcept, args_types...>;
     using destroy_type = void (*)(void*, std::pmr::memory_resource*) noexcept;
     using clone_type = void* (*)(const void*, std::pmr::memory_resource*);
 

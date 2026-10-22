@@ -1,8 +1,8 @@
-#include "ruvia/web/redis/redis_subscription.h"
-
 #include <exception>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/web/redis/redis_handle.h"
 
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_subscription_connection.h"

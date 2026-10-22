@@ -7,7 +7,7 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/next.h"
+#include "ruvia/web/middleware.h"
 
 namespace ruvia {
 
@@ -48,22 +48,10 @@ inline constexpr void validate_rate_limit_rule(const rate_limit_rule& rule) {
     }
 }
 
-struct route_rate_limit_options final {
-    rate_limit_rule rule_{};
-};
-
 // `declaration` identifies the rule's declaration: stacked rules on one route
 // each count in their own window.
 [[nodiscard]] bool apply_route_rate_limit(
-    context& context_value, const void* declaration, const route_rate_limit_options& options);
-
-[[nodiscard]] constexpr route_rate_limit_options get_route_rate_limit_options(
-    std::size_t max_requests, std::int64_t window_ms) {
-    return route_rate_limit_options{.rule_ = {
-                                        .max_requests_ = max_requests,
-                                        .window_ = std::chrono::milliseconds(window_ms),
-                                    }};
-}
+    context& context_value, const void* declaration, const rate_limit_rule& rule);
 
 }  // namespace detail
 
@@ -95,7 +83,7 @@ public:
     static constexpr bool ruvia_uses_route_rate_limit = true;
 
     task<void> handle(context& context_value, next& next_value) {
-        if (!detail::apply_route_rate_limit(context_value, this, options())) {
+        if (!detail::apply_route_rate_limit(context_value, this, rule_)) {
             co_return;
         }
 
@@ -103,10 +91,10 @@ public:
     }
 
 private:
-    [[nodiscard]] static const detail::route_rate_limit_options& options() noexcept {
-        static constexpr auto value = detail::get_route_rate_limit_options(max_requests, window_ms);
-        return value;
-    }
+    static constexpr rate_limit_rule rule_{
+        .max_requests_ = max_requests,
+        .window_ = std::chrono::milliseconds(window_ms),
+    };
 };
 
 }  // namespace ruvia

@@ -144,55 +144,30 @@ struct http1_client_response_plan_access final {
             request_content_signal);
     }
 
-    [[nodiscard]] static http1_client_response_plan zero_content_known_length(
-        http1_close_policy persistence, request_content_signal_type request_content_signal) noexcept {
-        return http1_client_response_plan(
-            http1_client_response_plan::state_type(
-                http1_client_response_with_zero_content(http1_client_response_with_zero_content::framing_type(
-                    http1_client_known_length_response(0, persistence)))),
-            request_content_signal);
-    }
-
-    [[nodiscard]] static http1_client_response_plan zero_content_chunked(
-        http_transfer_codings transfer_codings, http1_close_policy persistence,
-        request_content_signal_type request_content_signal) {
-        return http1_client_response_plan(
-            http1_client_response_plan::state_type(
-                http1_client_response_with_zero_content(http1_client_response_with_zero_content::framing_type(
-                    http1_client_chunked_response(std::move(transfer_codings), persistence)))),
-            request_content_signal);
-    }
-
-    [[nodiscard]] static http1_client_response_plan zero_content_close_delimited(
-        http_transfer_codings transfer_codings, request_content_signal_type request_content_signal) {
-        return http1_client_response_plan(
-            http1_client_response_plan::state_type(
-                http1_client_response_with_zero_content(http1_client_response_with_zero_content::framing_type(
-                    http1_client_close_delimited_response(std::move(transfer_codings))))),
-            request_content_signal);
-    }
-
     [[nodiscard]] static http1_client_response_plan known_length(std::size_t content_length,
-        http1_close_policy persistence, request_content_signal_type request_content_signal) noexcept {
+        http1_close_policy persistence, request_content_signal_type request_content_signal,
+        bool requires_zero_content) noexcept {
         return http1_client_response_plan(
             http1_client_response_plan::state_type(
                 http1_client_known_length_response(content_length, persistence)),
-            request_content_signal);
+            request_content_signal, requires_zero_content);
     }
 
     [[nodiscard]] static http1_client_response_plan chunked(http_transfer_codings transfer_codings,
-        http1_close_policy persistence, request_content_signal_type request_content_signal) {
+        http1_close_policy persistence, request_content_signal_type request_content_signal,
+        bool requires_zero_content) {
         return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_chunked_response(
                                               std::move(transfer_codings), persistence)),
-            request_content_signal);
+            request_content_signal, requires_zero_content);
     }
 
     [[nodiscard]] static http1_client_response_plan close_delimited(
-        http_transfer_codings transfer_codings, request_content_signal_type request_content_signal) {
+        http_transfer_codings transfer_codings, request_content_signal_type request_content_signal,
+        bool requires_zero_content) {
         return http1_client_response_plan(
             http1_client_response_plan::state_type(http1_client_close_delimited_response(
                 std::move(transfer_codings))),
-            request_content_signal);
+            request_content_signal, requires_zero_content);
     }
 
     [[nodiscard]] static http1_client_response_plan connect_tunnel() noexcept {
@@ -253,45 +228,31 @@ http1_client_response_planning_result_type plan_http1_client_response(
             return http1_client_response_parse_error::invalid_transfer_encoding;
         }
         if (const auto* final_chunked = transfer_encoding->final_chunked()) {
-            if (reset_content_requires_empty) {
-                return http1_client_response_plan_access::zero_content_chunked(
-                    final_chunked->transfer_codings(), persistence, persistent_content_signal);
-            }
             return http1_client_response_plan_access::chunked(
-                final_chunked->transfer_codings(), persistence, persistent_content_signal);
-        }
-        if (reset_content_requires_empty) {
-            return http1_client_response_plan_access::zero_content_close_delimited(
-                transfer_encoding->non_chunked()->transfer_codings(),
-                request_content_signal(request_content_phase, response.status_code_, true));
+                final_chunked->transfer_codings(), persistence, persistent_content_signal,
+                reset_content_requires_empty);
         }
         return http1_client_response_plan_access::close_delimited(
             transfer_encoding->non_chunked()->transfer_codings(),
-            request_content_signal(request_content_phase, response.status_code_, true));
+            request_content_signal(request_content_phase, response.status_code_, true),
+            reset_content_requires_empty);
     }
 
     if (content_length.has_value()) {
         if (*content_length > (std::numeric_limits<std::size_t>::max)()) {
             return http1_client_response_parse_error::invalid_content_length;
         }
-        if (reset_content_requires_empty) {
-            return http1_client_response_plan_access::zero_content_known_length(
-                persistence, persistent_content_signal);
-        }
         return http1_client_response_plan_access::known_length(
-            static_cast<std::size_t>(*content_length), persistence, persistent_content_signal);
+            static_cast<std::size_t>(*content_length), persistence, persistent_content_signal,
+            reset_content_requires_empty);
     }
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
     // length is delimited by server close and cannot return to a pool.
-    if (reset_content_requires_empty) {
-        return http1_client_response_plan_access::zero_content_close_delimited(
-            http_transfer_codings{},
-            request_content_signal(request_content_phase, response.status_code_, true));
-    }
     return http1_client_response_plan_access::close_delimited(
         http_transfer_codings{},
-        request_content_signal(request_content_phase, response.status_code_, true));
+        request_content_signal(request_content_phase, response.status_code_, true),
+        reset_content_requires_empty);
 }
 
 }  // namespace ruvia::detail

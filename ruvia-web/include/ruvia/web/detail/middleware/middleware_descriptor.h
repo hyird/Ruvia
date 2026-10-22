@@ -26,7 +26,7 @@ template <middleware middleware_type, typename args_type>
 
 class controller_middleware_descriptor final {
 public:
-    using invoke_type = route_middleware_type::invoke_type;
+    using invoke_type = route_middleware::invoke_type;
     // `args` points at the argument tuple captured by use<T>(args...), or is
     // null when the middleware is default constructed. The tuple belongs to the
     // owned_middleware_descriptor the app configuration keeps, which outlives

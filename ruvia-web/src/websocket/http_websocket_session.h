@@ -48,7 +48,7 @@ template <typename connection_type>
 // and must be able to turn its own failure into the session's 1011 outcome.
 template <typename stream_type>
 task<void> invoke_websocket_handler(server_websocket_connection<stream_type>& connection,
-    connection_scanner::entry_type& scanner_entry, const route_stream_handler_type& handler,
+    connection_scanner::entry& scanner_entry, const route_stream_handler& handler,
     context& context_value) {
     auto websocket_value = make_websocket_facade(connection, *context_value.pool());
     context_websocket_binding websocket_binding(context_value, websocket_value);

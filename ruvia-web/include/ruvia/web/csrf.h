@@ -4,8 +4,9 @@
 #include <string>
 
 #include "ruvia/core/task.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/next.h"
+#include "ruvia/web/middleware.h"
 
 namespace ruvia {
 
@@ -36,22 +37,11 @@ public:
     task<void> handle(context& c, next& next);
 
 private:
-    struct config_storage_type final {
-        config_storage_type(const csrf_protection_config& source_value, std::pmr::memory_resource* resource);
+    [[nodiscard]] static const csrf_protection_config& validate(const csrf_protection_config& source);
+    csrf_protection(const csrf_protection_config& validated, std::pmr::memory_resource* resource);
 
-        std::pmr::string cookie_name_;
-        std::pmr::string header_name_;
-
-    private:
-        struct validated_config_type final {
-            const csrf_protection_config* source_;
-        };
-
-        [[nodiscard]] static validated_config_type validate(const csrf_protection_config& source);
-        config_storage_type(validated_config_type validated, std::pmr::memory_resource* resource);
-    };
-
-    config_storage_type config_;
+    std::pmr::string cookie_name_;
+    std::pmr::string header_name_;
 };
 
 }  // namespace ruvia

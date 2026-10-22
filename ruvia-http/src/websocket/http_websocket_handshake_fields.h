@@ -6,7 +6,6 @@
 #include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/http/websocket_subprotocol_set.h"
 
 namespace ruvia {
 

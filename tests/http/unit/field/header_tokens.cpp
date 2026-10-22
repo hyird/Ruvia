@@ -1,6 +1,6 @@
 #include <string_view>
 
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 
 #include "test_harness.h"
 

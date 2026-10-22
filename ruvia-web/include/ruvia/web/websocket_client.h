@@ -13,13 +13,13 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/scoped_operation.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 #include "ruvia/http/websocket_protocol.h"
-#include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/client_tls_config.h"
 #include "ruvia/web/websocket.h"
 
@@ -37,10 +37,10 @@ struct websocket_client_config final {
     websocket_scheme scheme_{websocket_scheme::wss};
     websocket_client_protocol protocol_{websocket_client_protocol::http1};
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
-    std::string host_{};
+    borrowed_text host_{};
     std::optional<std::uint16_t> port_{};
-    std::string target_{"/"};
-    std::vector<std::pair<std::string, std::string>> headers_{};
+    borrowed_text target_{"/"};
+    std::vector<http_header_view> headers_{};
     std::vector<std::string> subprotocols_{};
     websocket_client_deflate_offer deflate_{};
     int compression_level_{6};
@@ -60,7 +60,7 @@ struct websocket_client_config final {
     // Used for wss; client_tls_mode::disabled is rejected (select ws instead).
     client_tls_config tls_{};
     client_tcp_config tcp_{};
-    std::string user_agent_{"Ruvia"};
+    borrowed_text user_agent_{"Ruvia"};
 };
 
 class websocket_client_error final : public std::runtime_error {

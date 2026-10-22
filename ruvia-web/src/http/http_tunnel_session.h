@@ -13,10 +13,10 @@
 #include "ruvia/web/http_tunnel.h"
 
 #include "context/context_access.h"
-#include "http/http_stream_read_result.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
 #include "server/inbound_transport_error.h"
+#include "tls/tls_stream_end.h"
 #include "util/steady_clock.h"
 namespace ruvia::detail {
 // A tunnel over an HTTP/1 socket transport or one HTTP/2 stream. Received
@@ -53,11 +53,7 @@ public:
     }
     [[nodiscard]] task<void> drain() {
         while (!receive_ended_) {
-            const auto read = co_await read_some();
-            if (const auto* failed = read.failure()) {
-                throw inbound_transport_error(failed->error_code(), "HTTP tunnel drain");
-            }
-            receive_ended_ = read.end() != nullptr;
+            receive_ended_ = !(co_await read_some());
         }
     }
     // The transport must be stopped before joining if an operation remains
@@ -72,7 +68,7 @@ public:
 private:
     // Reads into the reused window, whose capacity is allocated by the first
     // read only; the next read overwrites it.
-    [[nodiscard]] task<http_stream_read_result> read_some() {
+    [[nodiscard]] task<bool> read_some() {
         read_buffer_.clear();
         return transport_.read_more(read_buffer_);
     }
@@ -81,11 +77,7 @@ private:
         if (!owner_value.pending_.empty()) {
             co_return std::exchange(owner_value.pending_, std::pmr::string(&owner_value.inbound_));
         }
-        const auto result_value = co_await owner_value.read_some();
-        if (const auto* failed = result_value.failure()) {
-            throw inbound_transport_error(failed->error_code(), "HTTP tunnel read");
-        }
-        if (result_value.end() != nullptr) {
+        if (!(co_await owner_value.read_some())) {
             owner_value.receive_ended_ = true;
             co_return std::nullopt;
         }
@@ -119,7 +111,7 @@ private:
 
 template <typename transport_type>
 [[nodiscard]] task<void> invoke_tunnel_handler(http_tunnel_session<transport_type>& session_value,
-    connection_scanner::entry_type& entry_value, const route_stream_handler_type& handler, context& context_value) {
+    connection_scanner::entry& entry_value, const route_stream_handler& handler, context& context_value) {
     context_tunnel_binding binding(context_value, session_value.tunnel());
     // A draining worker closed the socket instead of admitting the tunnel.
     if (!entry_value.enter_long_lived()) {
@@ -131,7 +123,7 @@ template <typename transport_type>
 template <typename transport_type>
 [[nodiscard]] task<void> finish_tunnel_session(http_tunnel_session<transport_type>& session_value,
     std::exception_ptr failure, const connection_failure_sink& sink_value, std::string_view remote,
-    connection_scanner::entry_type& scanner, std::chrono::milliseconds timeout) {
+    connection_scanner::entry& scanner, std::chrono::milliseconds timeout) {
     if (failure != nullptr) {
         session_value.abort();
     }
@@ -140,7 +132,7 @@ template <typename transport_type>
         struct drain_deadline final {
             http_tunnel_session<transport_type>& session_;
             std::int64_t deadline_;
-            connection_scanner::periodic_check_registration_type registration_;
+            connection_scanner::periodic_check_registration registration_;
             static void tick(void* raw, std::int64_t now) noexcept {
                 auto& owner_value = *static_cast<drain_deadline*>(raw);
                 if (now >= owner_value.deadline_) {

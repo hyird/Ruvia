@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/redis/redis_entity.h"
+#include "ruvia/web/redis/redis_repository.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"

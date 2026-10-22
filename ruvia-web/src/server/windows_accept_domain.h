@@ -13,7 +13,7 @@
 #include "ruvia/core/task.h"
 
 namespace ruvia {
-class worker_runtime_context;
+class worker_runtime;
 }
 
 namespace ruvia::detail {
@@ -37,7 +37,7 @@ public:
 
     // Cold setup. detach follows the worker's join and precedes destruction of
     // its core runtime (the notification borrows that runtime's context).
-    void attach(std::size_t origin, worker_runtime_context& runtime, callbacks completion);
+    void attach(std::size_t origin, worker_runtime& runtime, callbacks completion);
     void detach(std::size_t origin) noexcept;
     // Owner prepare; publish is called once, after every worker is ready.
     void stage_listener(std::size_t owner, std::size_t logical_listener, asio::ip::tcp::acceptor& listener);

@@ -9,9 +9,9 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/web/db/db_client.h"
+#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_types.h"
 
@@ -75,7 +75,7 @@ RUVIA_TEST(db_transaction_options_support_cold_cancellation_and_reject_invalid_v
 #ifdef RUVIA_ENABLE_POSTGRESQL
 namespace db_transaction_operation_test {
 
-using text_entity = ruvia::db_entity<"records", ruvia::db_column<"v", std::pmr::string>>;
+RUVIA_DB_ENTITY(text_entity, "records", ruvia::db_column<"v", std::pmr::string>)
 
 struct queued_transaction_operations final {
     explicit queued_transaction_operations(ruvia::db_transaction& transaction)
@@ -83,13 +83,13 @@ struct queued_transaction_operations final {
           rollback_(transaction.rollback()),
           query_(transaction.query("SELECT v FROM records")),
           execute_(transaction.execute("UPDATE records SET v = 'raw'")),
-          compiled_query_(transaction.get_repository<text_entity>().create_query_builder().get_raw_many()),
-          compiled_execute_(transaction.get_repository<text_entity>()
-                  .create_delete_builder()
+          compiled_query_(transaction.repository<text_entity>().query_builder().get_raw_many()),
+          compiled_execute_(transaction.repository<text_entity>()
+                  .delete_builder()
                   .where(text_entity::column<"v">().is_not_null())
                   .execute()),
-          mapped_(transaction.get_repository<text_entity>().find()),
-          page_(transaction.get_repository<text_entity>().find_and_count()) {}
+          mapped_(transaction.repository<text_entity>().find()),
+          page_(transaction.repository<text_entity>().find_and_count()) {}
 
     ruvia::scoped_operation<void> commit_;
     ruvia::scoped_operation<void> rollback_;
@@ -285,7 +285,7 @@ RUVIA_TEST(db_transaction_savepoint_commands_quote_identifiers_and_keep_transact
     }
 }
 
-RUVIA_TEST(db_transaction_advisory_locks_notify_cursors_and_large_objects_execute_in_order) {
+RUVIA_TEST(db_transaction_advisory_locks_notify_and_cursors_execute_in_order) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
@@ -298,10 +298,6 @@ RUVIA_TEST(db_transaction_advisory_locks_notify_cursors_and_large_objects_execut
             {.column_ = "", .command_ = "DECLARE CURSOR", .status_ = 'T'},
             {.column_ = "v", .rows_ = {"chunk-1", "chunk-2"}, .status_ = 'T'},
             {.column_ = "", .command_ = "CLOSE CURSOR", .status_ = 'T'},
-            {.rows_ = {"12345"}, .status_ = 'T'},
-            {.rows_ = {""}, .status_ = 'T'},
-            {.rows_ = {"sealed-payload"}, .status_ = 'T'},
-            {.rows_ = {"t"}, .status_ = 'T'},
             {.column_ = "", .command_ = "COMMIT"}});
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
@@ -318,18 +314,11 @@ RUVIA_TEST(db_transaction_advisory_locks_notify_cursors_and_large_objects_execut
         const auto fetched = co_await transaction.fetch_cursor("chunk_cursor", 8);
         RUVIA_CHECK_EQ(fetched.size(), std::size_t{2});
         co_await transaction.close_cursor("chunk_cursor");
-
-        const auto oid = co_await transaction.lo_create();
-        RUVIA_CHECK_EQ(oid, std::uint32_t{12345});
-        co_await transaction.lo_put(oid, 0, "sealed-payload");
-        const auto content = co_await transaction.lo_get_text(oid);
-        RUVIA_CHECK_EQ(content, "sealed-payload");
-        RUVIA_CHECK(co_await transaction.lo_unlink(oid));
         co_await transaction.commit();
     });
     const auto statements = peer.postgres_parses();
-    RUVIA_CHECK_EQ(statements.size(), std::size_t{14});
-    if (statements.size() == 14) {
+    RUVIA_CHECK_EQ(statements.size(), std::size_t{10});
+    if (statements.size() == 10) {
         RUVIA_CHECK_EQ(statements[1].sql_, "SELECT \"pg_advisory_xact_lock\"($1::bigint)");
         RUVIA_CHECK_EQ(statements[2].sql_, "SELECT \"pg_advisory_xact_lock\"($1::integer, $2::integer)");
         RUVIA_CHECK_EQ(statements[3].sql_, "SELECT \"pg_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))");
@@ -338,10 +327,6 @@ RUVIA_TEST(db_transaction_advisory_locks_notify_cursors_and_large_objects_execut
         RUVIA_CHECK_EQ(statements[6].sql_, "DECLARE \"chunk_cursor\" NO SCROLL CURSOR FOR SELECT \"v\" FROM \"records\"");
         RUVIA_CHECK_EQ(statements[7].sql_, "FETCH FORWARD 8 FROM \"chunk_cursor\"");
         RUVIA_CHECK_EQ(statements[8].sql_, "CLOSE \"chunk_cursor\"");
-        RUVIA_CHECK_EQ(statements[9].sql_, "SELECT \"lo_create\"($1::oid)::bigint");
-        RUVIA_CHECK_EQ(statements[10].sql_, "SELECT \"lo_put\"($1::oid, $2::bigint, \"convert_to\"($3::text, 'UTF8'))");
-        RUVIA_CHECK_EQ(statements[11].sql_, "SELECT \"convert_from\"(\"lo_get\"($1::oid), $2::text)");
-        RUVIA_CHECK_EQ(statements[12].sql_, "SELECT (\"lo_unlink\"($1::oid) = 1)");
     }
 }
 

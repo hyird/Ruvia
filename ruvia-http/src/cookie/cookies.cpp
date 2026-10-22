@@ -8,7 +8,6 @@
 #include <variant>
 
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/http/http_set_cookie_plan.h"
 
 #include "cookie/cookie_validation.h"
 #include "field/http_imf_fixdate.h"

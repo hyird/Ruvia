@@ -8,7 +8,7 @@ namespace ruvia {
 http_request_trailers::http_request_trailers(std::pmr::memory_resource* resource)
     : fields_(resource != nullptr ? resource : std::pmr::get_default_resource()) {}
 
-std::variant<std::monostate, http_request_trailer_error> http_request_trailers::append(std::string_view name, std::string_view value) {
+std::optional<http_request_trailer_error> http_request_trailers::append(std::string_view name, std::string_view value) {
     if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
         return http_request_trailer_error::invalid_field;
     }
@@ -22,10 +22,10 @@ std::variant<std::monostate, http_request_trailer_error> http_request_trailers::
     fields_.push_back(
         http_header::copy_with_lowercase_name(name, value, fields_.get_allocator().resource()));
     budget_ = budget;
-    return {};
+    return std::nullopt;
 }
 
-std::variant<std::monostate, http_request_trailer_error> http_request_trailers::append_http1(std::string_view block) {
+std::optional<http_request_trailer_error> http_request_trailers::append_http1(std::string_view block) {
     if (block.ends_with("\r\n\r\n")) {
         block.remove_suffix(4);
     } else if (block.ends_with("\r\n")) {
@@ -48,7 +48,7 @@ std::variant<std::monostate, http_request_trailer_error> http_request_trailers::
         switch (status) {
             case detail::http_trailer_block_status::ok:
                 budget_ = budget;
-                return {};
+                return std::nullopt;
             case detail::http_trailer_block_status::forbidden_field:
                 roll_back();
                 return http_request_trailer_error::forbidden_field;

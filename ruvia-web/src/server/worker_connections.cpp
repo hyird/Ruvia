@@ -1,14 +1,18 @@
 #include "server/worker_connections.h"
 
+#include <array>
 #include <cassert>
 #include <cerrno>
+#include <charconv>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <memory_resource>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
-
 #if !defined(_WIN32)
 #include <sys/socket.h>
 #endif
@@ -28,16 +32,48 @@
 #include "context/context_services.h"
 #include "http2/cleartext_upgrade.h"
 #include "integration/worker_capabilities.h"
-#include "server/accepted_socket.h"
 #include "server/http_connection_close.h"
-#include "server/http_server_alpn.h"
 #include "server/http_server_connection_guards.h"
 #include "server/http_server_stream_session.h"
 #include "server/http_server_tls_handshake.h"
 #include "server/http_server_tls_identity.h"
+#include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
 namespace {
+
+void configure_accepted_socket(asio::ip::tcp::socket& socket) noexcept {
+    apply_tcp_socket_policies(socket, tcp_no_delay_policy::enable, tcp_keep_alive_policy::system_default);
+}
+
+void assign_remote_address(std::pmr::string& output, const asio::ip::address& address) {
+    if (!address.is_v4()) {
+        output = address.to_string();
+        return;
+    }
+    const auto bytes_value = address.to_v4().to_bytes();
+    std::array<char, 15> buffer;
+    char* cursor_value = buffer.data();
+    for (std::size_t i = 0; i < bytes_value.size(); ++i) {
+        if (i != 0) {
+            *cursor_value++ = '.';
+        }
+        const auto [ptr, ec] = std::to_chars(cursor_value, buffer.data() + buffer.size(), bytes_value[i]);
+        if (ec != std::errc{}) {
+            output = address.to_string();
+            return;
+        }
+        cursor_value = ptr;
+    }
+    output.assign(buffer.data(), static_cast<std::size_t>(cursor_value - buffer.data()));
+}
+
+bool is_http2_alpn_selected(server_tls_stream& tls_stream) noexcept {
+    const unsigned char* selected = nullptr;
+    unsigned int selected_length = 0;
+    SSL_get0_alpn_selected(tls_stream.native_handle(), &selected, &selected_length);
+    return selected_length == 2 && selected != nullptr && std::memcmp(selected, "h2", 2) == 0;
+}
 
 #if !defined(_WIN32)
 enum class accept_error_action { retry,
@@ -139,7 +175,7 @@ void resolve_remote_endpoint(tcp_socket_type& socket, std::pmr::string& address,
     std::error_code remote_ec;
     const auto remote_endpoint = socket.remote_endpoint(remote_ec);
     if (!remote_ec) {
-        ruvia::assign_remote_address(address, remote_endpoint.address());
+        assign_remote_address(address, remote_endpoint.address());
         port = remote_endpoint.port();
     }
 }
@@ -170,13 +206,12 @@ worker_connections::worker_connections(asio::io_context& io, const worker_handle
     options_.connection_failure_.counter_ = &failures_;
 }
 #if defined(_WIN32)
-void worker_connections::attach_windows_accept(windows_accept_domain& domain, std::size_t origin,
-    worker_runtime_context& context) {
-    domain.attach(origin, context, {
-                                       .target_ = this,
-                                       .accepted_ = [](void* target, std::size_t index, tcp_socket_type socket) { static_cast<worker_connections*>(target)->accept_socket(index, std::move(socket)); },
-                                       .failure_ = [](void* target, std::exception_ptr failure, bool fatal) noexcept { static_cast<worker_connections*>(target)->report_accept_failure(std::move(failure), fatal); },
-                                   });
+void worker_connections::attach_windows_accept(windows_accept_domain& domain, std::size_t origin) {
+    domain.attach(origin, runtime_, {
+                                        .target_ = this,
+                                        .accepted_ = [](void* target, std::size_t index, tcp_socket_type socket) { static_cast<worker_connections*>(target)->accept_socket(index, std::move(socket)); },
+                                        .failure_ = [](void* target, std::exception_ptr failure, bool fatal) noexcept { static_cast<worker_connections*>(target)->report_accept_failure(std::move(failure), fatal); },
+                                    });
     windows_accept_ = &domain;
     windows_origin_ = origin;
 }
@@ -417,9 +452,9 @@ task<void> worker_connections::run_tls_session(
             // connection's socket one request_header_timeout after the handshake
             // regardless of session activity -- severing long-lived TLS
             // sessions (websocket, keep-alive, slow uploads, streaming).
-            connection_scanner::entry_type handshake_entry;
-            connection_scanner::guard_type handshake_guard(scanner_, handshake_entry, socket);
-            handshake_entry.read_request_head(connection_scanner::phase_type::reading_initial);
+            connection_scanner::entry handshake_entry;
+            connection_scanner::guard handshake_guard(scanner_, handshake_entry, socket);
+            handshake_entry.read_request_head(connection_scanner::phase::reading_initial);
             const auto handshake_completion =
                 co_await ruvia::async_asio(tls_server_handshake_initiator{&tls_stream});
             if (handshake_completion.error_code()) {
@@ -448,8 +483,8 @@ task<void> worker_connections::run_tls_session(
 template <typename stream_type>
 task<http_connection_close> worker_connections::run_http2(stream_type& stream, tcp_socket_type& socket,
     context_services services) {
-    connection_scanner::entry_type scanner_entry;
-    connection_scanner::guard_type scanner_guard(scanner_, scanner_entry, socket);
+    connection_scanner::entry scanner_entry;
+    connection_scanner::guard scanner_guard(scanner_, scanner_entry, socket);
     co_return co_await run_http2_server_session(http2_server_session_setup<stream_type>{
         .stream_ = stream, .socket_ = socket, .memory_ = memory_, .routes_ = routes_, .options_ = options_, .scanner_entry_ = scanner_entry, .services_ = services, .worker_state_ = state_});
 }
@@ -481,7 +516,7 @@ void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_ty
     }
 
     try {
-        ruvia::configure_accepted_socket(socket);
+        configure_accepted_socket(socket);
         accepted_connection_lease connection(std::move(socket), drain_);
         auto& listener_value = listeners_[listener_index]->session_;
         tasks_.spawn(listener_value.tls() != nullptr ? run_tls_session(listener_value, std::move(connection))

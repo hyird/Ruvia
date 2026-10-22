@@ -10,14 +10,12 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/http/websocket_subprotocol_set.h"
 #include "ruvia/web/detail/router/route_handlers.h"
-#include "ruvia/web/detail/router/route_modes.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
@@ -35,7 +33,7 @@ class route_endpoint;
 
 class buffered_route_endpoint final {
 public:
-    [[nodiscard]] route_handler_type::invoke_type invoke() const noexcept {
+    [[nodiscard]] route_handler::invoke_type invoke() const noexcept {
         return invoke_;
     }
 
@@ -46,18 +44,18 @@ public:
 private:
     friend class route_endpoint;
 
-    buffered_route_endpoint(route_handler_type::invoke_type invoke,
+    buffered_route_endpoint(route_handler::invoke_type invoke,
         detail::request_body_mode request_body_mode_value) noexcept
         : invoke_(invoke),
           request_body_mode_(request_body_mode_value) {}
 
-    route_handler_type::invoke_type invoke_;
+    route_handler::invoke_type invoke_;
     detail::request_body_mode request_body_mode_;
 };
 
 class response_stream_route_endpoint final {
 public:
-    [[nodiscard]] route_stream_handler_type::invoke_type invoke() const noexcept {
+    [[nodiscard]] route_stream_handler::invoke_type invoke() const noexcept {
         return invoke_;
     }
 
@@ -68,18 +66,18 @@ public:
 private:
     friend class route_endpoint;
 
-    explicit response_stream_route_endpoint(route_stream_handler_type::invoke_type invoke,
+    explicit response_stream_route_endpoint(route_stream_handler::invoke_type invoke,
         detail::request_body_mode request_body_mode_value = detail::request_body_mode::buffered) noexcept
         : invoke_(invoke),
           request_body_mode_(request_body_mode_value) {}
 
-    route_stream_handler_type::invoke_type invoke_;
+    route_stream_handler::invoke_type invoke_;
     detail::request_body_mode request_body_mode_;
 };
 
 class tunnel_route_endpoint final {
 public:
-    [[nodiscard]] route_stream_handler_type::invoke_type invoke() const noexcept {
+    [[nodiscard]] route_stream_handler::invoke_type invoke() const noexcept {
         return invoke_;
     }
     [[nodiscard]] std::string_view protocol() const noexcept {
@@ -91,19 +89,19 @@ public:
 
 private:
     friend class route_endpoint;
-    tunnel_route_endpoint(std::pmr::memory_resource* resource, route_stream_handler_type::invoke_type invoke,
+    tunnel_route_endpoint(std::pmr::memory_resource* resource, route_stream_handler::invoke_type invoke,
         std::string_view protocol, http_tunnel_route_config config)
         : invoke_(invoke),
           protocol_(protocol, resource),
           config_(config) {}
-    route_stream_handler_type::invoke_type invoke_;
+    route_stream_handler::invoke_type invoke_;
     std::pmr::string protocol_;
     http_tunnel_route_config config_;
 };
 
 class websocket_route_endpoint final {
 public:
-    [[nodiscard]] route_stream_handler_type::invoke_type invoke() const noexcept {
+    [[nodiscard]] route_stream_handler::invoke_type invoke() const noexcept {
         return invoke_;
     }
 
@@ -126,7 +124,7 @@ public:
 private:
     friend class route_endpoint;
 
-    websocket_route_endpoint(std::pmr::memory_resource* resource, route_stream_handler_type::invoke_type invoke,
+    websocket_route_endpoint(std::pmr::memory_resource* resource, route_stream_handler::invoke_type invoke,
         const websocket_route_config& options)
         : invoke_(invoke),
           subprotocol_storage_(resource),
@@ -144,7 +142,7 @@ private:
         }
     }
 
-    route_stream_handler_type::invoke_type invoke_;
+    route_stream_handler::invoke_type invoke_;
     std::pmr::vector<std::pmr::string> subprotocol_storage_;
     std::pmr::vector<std::string_view> subprotocols_;
     bool require_subprotocol_;
@@ -165,19 +163,19 @@ public:
     // Handlers come from the controller macros' bind()/bind_stream(), which
     // always supply an invoker; body modes and stream kinds are the builder's
     // own enumerators.
-    [[nodiscard]] static route_endpoint buffered(route_handler_type::invoke_type invoke,
+    [[nodiscard]] static route_endpoint buffered(route_handler::invoke_type invoke,
         request_body_mode request_body_mode_value) {
         return route_endpoint(buffered_route_endpoint(invoke, request_body_mode_value));
     }
 
     [[nodiscard]] static route_endpoint response_stream(
-        route_stream_handler_type::invoke_type invoke,
+        route_stream_handler::invoke_type invoke,
         request_body_mode request_body_mode_value = request_body_mode::buffered) {
         return route_endpoint(response_stream_route_endpoint(invoke, request_body_mode_value));
     }
 
     [[nodiscard]] static route_endpoint websocket(std::pmr::memory_resource* resource,
-        route_stream_handler_type::invoke_type invoke, websocket_route_config options) {
+        route_stream_handler::invoke_type invoke, websocket_route_config options) {
         if (options.lifecycle_.close_handshake_timeout_.has_value() &&
             options.lifecycle_.close_handshake_timeout_->count() <= 0) {
             throw std::invalid_argument(
@@ -206,7 +204,7 @@ public:
     }
 
     [[nodiscard]] static route_endpoint tunnel(std::pmr::memory_resource* resource,
-        route_stream_handler_type::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) {
+        route_stream_handler::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) {
         // Extended CONNECT protocols use HTTP/2; connect-udp also admits
         // the HTTP/1.1 Upgrade form.
         if (!protocol.empty() && !is_valid_http_header_name(protocol)) {
@@ -256,7 +254,7 @@ public:
     }
 
     // The streaming handler thunk, or null for a buffered-response endpoint.
-    [[nodiscard]] route_stream_handler_type::invoke_type stream_invoke() const noexcept {
+    [[nodiscard]] route_stream_handler::invoke_type stream_invoke() const noexcept {
         if (const auto* endpoint = response_stream()) {
             return endpoint->invoke();
         }

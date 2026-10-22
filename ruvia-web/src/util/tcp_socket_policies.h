@@ -5,7 +5,7 @@
 
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/web/client_tcp_config.h"
+#include "ruvia/web/client_tls_config.h"
 
 namespace ruvia {
 

@@ -21,6 +21,9 @@
 namespace ruvia::detail {
 
 struct http1_client_request_prepare_result_access final {
+    using result_type = std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+        http1_client_request_prepare_error>;
+
     [[nodiscard]] static http1_client_exchange_state exchange_state(http_known_method method,
         http_connection_options connection_options, http1_close_policy close_policy,
         http1_client_initial_content_state content_state,
@@ -29,42 +32,42 @@ struct http1_client_request_prepare_result_access final {
             std::move(offered_upgrade_protocols));
     }
 
-    [[nodiscard]] static constexpr http1_client_request_prepare_result buffer_too_small(
+    [[nodiscard]] static constexpr result_type buffer_too_small(
         std::size_t required_head_bytes) noexcept {
-        return http1_client_request_prepare_result(http1_client_request_buffer_too_small(required_head_bytes));
+        return result_type(http1_client_request_buffer_too_small(required_head_bytes));
     }
 
-    [[nodiscard]] static constexpr http1_client_request_prepare_result failure(
+    [[nodiscard]] static constexpr result_type failure(
         http1_client_request_prepare_error error) noexcept {
-        return http1_client_request_prepare_result(error);
+        return result_type(error);
     }
 
-    [[nodiscard]] static http1_client_request_prepare_result prepared_streaming_content(
+    [[nodiscard]] static result_type prepared_streaming_content(
         std::string_view head, std::optional<std::uint64_t> length, bool gated,
         http1_client_exchange_state state_value) noexcept {
-        return http1_client_request_prepare_result(prepared_http1_client_request(head,
+        return result_type(prepared_http1_client_request(head,
             http1_client_request_content_plan(http1_client_streaming_request_content(length, gated)), std::move(state_value)));
     }
 
-    [[nodiscard]] static http1_client_request_prepare_result prepared_without_content(
+    [[nodiscard]] static result_type prepared_without_content(
         std::string_view head, http1_client_exchange_state exchange_state) noexcept {
-        return http1_client_request_prepare_result(prepared_http1_client_request(head,
+        return result_type(prepared_http1_client_request(head,
             http1_client_request_content_plan(http1_client_request_without_content()),
             std::move(exchange_state)));
     }
 
-    [[nodiscard]] static http1_client_request_prepare_result prepared_immediate_content(
+    [[nodiscard]] static result_type prepared_immediate_content(
         std::string_view head, std::string_view content_bytes,
         http1_client_exchange_state exchange_state) noexcept {
-        return http1_client_request_prepare_result(prepared_http1_client_request(head,
+        return result_type(prepared_http1_client_request(head,
             http1_client_request_content_plan(http1_client_immediate_request_content(content_bytes)),
             std::move(exchange_state)));
     }
 
-    [[nodiscard]] static http1_client_request_prepare_result prepared_continue_gated_content(
+    [[nodiscard]] static result_type prepared_continue_gated_content(
         std::string_view head, std::string_view content_bytes,
         http1_client_exchange_state exchange_state) noexcept {
-        return http1_client_request_prepare_result(prepared_http1_client_request(head,
+        return result_type(prepared_http1_client_request(head,
             http1_client_request_content_plan(http1_client_continue_gated_request_content(content_bytes)),
             std::move(exchange_state)));
     }
@@ -194,7 +197,7 @@ struct request_head_write_plan final {
     return std::nullopt;
 }
 
-[[nodiscard]] http1_client_request_prepare_result prepare_request(const http_origin_view& origin,
+[[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_request(const http_origin_view& origin,
     std::string_view method, http_known_method known_method, std::string_view target,
     std::span<const http_header_view> headers, http_client_request_content_view content,
     std::span<char> head_buffer, http1_client_request_wire_policy policy,
@@ -372,13 +375,12 @@ std::string_view http1_client_request_prepare_error_message(
     return "invalid HTTP/1 client request";
 }
 
-http1_client_request_writer::http1_client_request_writer() noexcept
-    : http1_client_request_writer(options_type{}) {}
+http1_client_request_writer::http1_client_request_writer(std::pmr::memory_resource* resource) noexcept
+    : resource_(detail::http_pmr_resource_or_default(resource)) {}
 
-http1_client_request_writer::http1_client_request_writer(options_type options) noexcept
-    : resource_(detail::http_pmr_resource_or_default(options.resource_)) {}
-
-http1_client_request_prepare_result http1_client_request_writer::prepare(const http_origin_view& origin,
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
+http1_client_request_writer::prepare(const http_origin_view& origin,
     const http_client_request_view& request, std::span<char> head_buffer,
     http1_client_request_wire_policy policy) const {
     http_known_method known_method = http_known_method::unknown;
@@ -391,7 +393,9 @@ http1_client_request_prepare_result http1_client_request_writer::prepare(const h
         policy, resource_);
 }
 
-http1_client_request_prepare_result http1_client_request_writer::prepare_streaming(const http_origin_view& origin,
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
+http1_client_request_writer::prepare_streaming(const http_origin_view& origin,
     const http1_client_request_head_view& request, std::span<char> head_buffer,
     http1_client_request_wire_policy policy) const {
     http_known_method known_method = http_known_method::unknown;
@@ -403,7 +407,9 @@ http1_client_request_prepare_result http1_client_request_writer::prepare_streami
         http_client_request_content_view::none(), head_buffer, policy, resource_, &request);
 }
 
-http1_client_request_prepare_result http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
+http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
     borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer) const {
     std::pmr::vector<http_header_view> fields(resource_);
     fields.reserve(headers.size() + 3);
@@ -416,14 +422,16 @@ http1_client_request_prepare_result http1_client_request_writer::prepare_connect
     fields.emplace_back("Connection", "Upgrade");
     fields.emplace_back("Upgrade", "connect-udp");
     fields.emplace_back("Host", origin.host());
-    if ((validate_http_connect_udp_request({.version_ = http_protocol_version::http11, .method_ = "GET", .authority_ = origin.host(), .path_ = target.view(), .headers_ = fields}).index() != 0)) {
+    if (validate_http_connect_udp_request({.version_ = http_protocol_version::http11, .method_ = "GET", .authority_ = origin.host(), .path_ = target.view(), .headers_ = fields}).has_value()) {
         return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_header);
     }
     fields.pop_back();
     return prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = fields}, head_buffer);
 }
 
-http1_client_request_prepare_result http1_client_request_writer::prepare_connect(
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
+http1_client_request_writer::prepare_connect(
     const http_origin_view& tunnel_origin, std::span<const http_header_view> headers,
     std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     if (!is_valid_http1_close_policy(policy.close_policy_)) {
@@ -442,7 +450,9 @@ http1_client_request_prepare_result http1_client_request_writer::prepare_connect
         http_client_request_content_view::none(), head_buffer, policy, resource_);
 }
 
-http1_client_request_prepare_result http1_client_request_writer::prepare_connect(borrowed_text authority,
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
+http1_client_request_writer::prepare_connect(borrowed_text authority,
     std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     const auto parsed_value = parse_http_authority(authority.view());
     if (!parsed_value || !parsed_value->port() || *parsed_value->port() == 0) {

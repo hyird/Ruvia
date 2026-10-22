@@ -51,26 +51,26 @@ std::variant<std::size_t, http_capsule_codec_error> encode_capsule_var_int(std::
     return size;
 }
 }  // namespace
-std::variant<bool, http_capsule_codec_error> parse_http_capsule_protocol(std::string_view value) noexcept {
+std::optional<bool> parse_http_capsule_protocol(std::string_view value) noexcept {
     detail::http_structured_parser parser{detail::http_structured_text_input{value}};
     parser.spaces();
     detail::http_structured_item item;
     if (!parser.item(item) || !parser.parameters()) {
-        return http_capsule_codec_error::value_out_of_range;
+        return std::nullopt;
     }
     // RFC 8941 4.2: only SP surrounds a top-level Item; OWS (with HTAB)
     // belongs between List and Dictionary members.
     parser.spaces();
     if (!parser.empty() || item.kind_ != detail::http_structured_item::kind_type::boolean) {
-        return http_capsule_codec_error::value_out_of_range;
+        return std::nullopt;
     }
     return item.boolean_;
 }
 
-std::variant<http_udp_datagram_view, http_capsule_codec_error> decode_http_udp_datagram(std::span<const char> input) noexcept {
+std::optional<http_udp_datagram_view> decode_http_udp_datagram(std::span<const char> input) noexcept {
     auto id = decode_capsule_var_int(input);
-    if ((id.index() != 0)) {
-        return std::get<1>(id);
+    if (id.index() != 0) {
+        return std::nullopt;
     }
     return http_udp_datagram_view{std::get<0>(id).value_, input.subspan(std::get<0>(id).encoded_bytes_)};
 }
@@ -194,14 +194,14 @@ std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_sessio
     plan.prefix_size_ = std::get<0>(prefix);
     return plan;
 }
-std::variant<std::optional<std::span<const char>>, http_datagram_error> http_datagram_session::receive_datagram(
+std::optional<std::span<const char>> http_datagram_session::receive_datagram(
     std::span<const char> input) const noexcept {
     if (!receive_open_) {
         return std::nullopt;
     }
     return input;
 }
-std::variant<http_udp_datagram_write_plan, http_datagram_error> http_datagram_session::prepare_udp_datagram(
+std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_session::prepare_udp_datagram(
     std::span<const char> payload_value) const noexcept {
     if (!send_open_) {
         return http_datagram_error::send_closed;
@@ -209,7 +209,7 @@ std::variant<http_udp_datagram_write_plan, http_datagram_error> http_datagram_se
     if (payload_value.size() > 65527) {
         return http_datagram_error::payload_too_large;
     }
-    http_udp_datagram_write_plan plan{.payload_ = payload_value};
+    http_datagram_write_plan plan{.payload_ = payload_value};
     const auto prefix = encode_http_capsule_header(plan.prefix_, http_datagram_capsule_type, payload_value.size() + 1);
     plan.prefix_size_ = std::get<0>(prefix);
     plan.prefix_[plan.prefix_size_++] = 0;
@@ -221,15 +221,15 @@ std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> http_da
         return std::nullopt;
     }
     const auto udp = decode_http_udp_datagram(input);
-    if (udp.index() != 0) {
+    if (!udp.has_value()) {
         return http_datagram_error::malformed;
     }
-    if (std::get<0>(udp).context_id_ != 0) {
+    if (udp->context_id_ != 0) {
         return std::nullopt;
     }
-    if (std::get<0>(udp).payload_.size() > 65527) {
+    if (udp->payload_.size() > 65527) {
         return http_datagram_error::payload_too_large;
     }
-    return std::get<0>(udp);
+    return *udp;
 }
 }  // namespace ruvia

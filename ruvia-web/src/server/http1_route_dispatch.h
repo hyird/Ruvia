@@ -29,7 +29,7 @@ template <typename stream_type>
 struct http1_route_dispatch final {
     stream_type& stream_;
     worker_memory& memory_;
-    connection_scanner::entry_type& scanner_entry_;
+    connection_scanner::entry& scanner_entry_;
     const http1_server_request_parse_state& parsed_;
     http_response_coding_selection response_coding_;
     http_response_coding_availability response_coding_availability_;

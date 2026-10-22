@@ -10,10 +10,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_base64.h"
 #include "ruvia/web/detail/json/json_string.h"
-#include "ruvia/web/model_types.h"
 
 namespace ruvia::detail {
 

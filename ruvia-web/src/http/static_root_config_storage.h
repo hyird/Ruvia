@@ -2,7 +2,7 @@
 
 #include <memory_resource>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/static_files.h"
 
 namespace ruvia::detail {
@@ -37,7 +37,7 @@ struct static_root_config_storage final {
     std::pmr::string index_file_;
     std::pmr::string default_content_type_;
     std::pmr::vector<static_root_mime_type_storage> mime_types_;
-    static_file_type_policy::kind_type file_type_kind_{static_file_type_policy::kind_type::defaults};
+    static_file_type_policy::kind file_type_kind_{static_file_type_policy::kind::defaults};
     std::pmr::vector<std::pmr::string> file_type_extensions_;
     static_range_request_policy range_requests_{static_range_request_policy::honor};
     static_response_validator_policy response_validators_{static_response_validator_policy::emit};

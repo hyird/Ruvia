@@ -11,7 +11,7 @@
 #include <string_view>
 
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_field_name_list.h"
+#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_target.h"
@@ -118,16 +118,17 @@ void append_cors_header_names(std::pmr::string& output, const std::vector<std::s
 }
 
 void validate_cors_config(const cors_config& config) {
+    const auto origin_value = config.origin_.value_.view();
     switch (config.origin_.mode_) {
         case cors_origin_mode::any:
-            if (!config.origin_.value_.empty()) {
+            if (!origin_value.empty()) {
                 throw std::invalid_argument("CORS wildcard origin must not include a value");
             }
             break;
         case cors_origin_mode::exact:
         case cors_origin_mode::credentialed_exact:
-            if (config.origin_.value_ != "null" &&
-                !::ruvia::is_valid_http_serialized_origin(config.origin_.value_)) {
+            if (origin_value != "null" &&
+                !::ruvia::is_valid_http_serialized_origin(origin_value)) {
                 throw std::invalid_argument("CORS origin must be a WHATWG serialized origin");
             }
             break;
@@ -163,7 +164,7 @@ cors_options make_cors_options(const cors_config& config, std::pmr::memory_resou
     cors_options stored(resource);
     stored.origin_mode_ = config.origin_.mode_;
     if (config.origin_.mode_ != cors_origin_mode::any) {
-        stored.origin_ = config.origin_.value_;
+        stored.origin_ = config.origin_.value_.view();
     }
 
     stored.request_headers_mode_ = config.request_headers_.mode_;

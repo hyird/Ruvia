@@ -10,14 +10,13 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_datagram_stream.h"
 #include "ruvia/web/http_tunnel.h"
 
 #include "http_server_fixture.h"

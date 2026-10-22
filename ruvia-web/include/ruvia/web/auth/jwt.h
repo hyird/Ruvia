@@ -15,7 +15,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
 
 namespace ruvia {
@@ -128,10 +128,6 @@ struct jwt_decode_unverified_options final {
     std::pmr::memory_resource* resource_{nullptr};
 };
 
-struct jwt_payload_options final {
-    std::pmr::memory_resource* resource_{nullptr};
-};
-
 class jwt_payload final {
 public:
     jwt_payload(const jwt_payload&) = delete;
@@ -163,7 +159,7 @@ private:
     friend struct detail::jwt_payload_access;
     friend jwt_payload jwt_verify(const jwt_verify_options&);
 
-    explicit jwt_payload(jwt_payload_options options);
+    explicit jwt_payload(std::pmr::memory_resource* resource);
 
     std::pmr::string issuer_;
     std::pmr::string subject_;

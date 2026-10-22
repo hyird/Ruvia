@@ -10,7 +10,7 @@
 #include <variant>
 
 #include "ruvia/http/http1_client_exchange_state.h"
-#include "ruvia/http/http1_close_policy.h"
+#include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
@@ -230,47 +230,6 @@ private:
     http1_client_exchange_state exchange_state_;
 };
 
-class http1_client_request_prepare_result final {
-public:
-    [[nodiscard]] constexpr const http1_client_request_buffer_too_small* buffer_too_small()
-        const& noexcept {
-        return std::get_if<http1_client_request_buffer_too_small>(&state_);
-    }
-    const http1_client_request_buffer_too_small* buffer_too_small() const&& = delete;
-
-    [[nodiscard]] constexpr prepared_http1_client_request* prepared() & noexcept {
-        return std::get_if<prepared_http1_client_request>(&state_);
-    }
-
-    [[nodiscard]] constexpr const prepared_http1_client_request* prepared() const& noexcept {
-        return std::get_if<prepared_http1_client_request>(&state_);
-    }
-    const prepared_http1_client_request* prepared() const&& = delete;
-
-    [[nodiscard]] constexpr const http1_client_request_prepare_error* failure() const& noexcept {
-        return std::get_if<http1_client_request_prepare_error>(&state_);
-    }
-    const http1_client_request_prepare_error* failure() const&& = delete;
-
-private:
-    friend struct detail::http1_client_request_prepare_result_access;
-
-    explicit constexpr http1_client_request_prepare_result(
-        http1_client_request_buffer_too_small state_value) noexcept
-        : state_(state_value) {}
-
-    explicit http1_client_request_prepare_result(prepared_http1_client_request state_value) noexcept
-        : state_(std::move(state_value)) {}
-
-    explicit constexpr http1_client_request_prepare_result(
-        http1_client_request_prepare_error state_value) noexcept
-        : state_(state_value) {}
-
-    std::variant<http1_client_request_buffer_too_small, prepared_http1_client_request,
-        http1_client_request_prepare_error>
-        state_;
-};
-
 // HTTP/1.1 direct-origin request writer. Ordinary requests are allocation-free;
 // an Upgrade request owns only its offered protocol value for later 101
 // validation. It validates the complete request before touching the caller's
@@ -287,14 +246,11 @@ private:
 // content prohibition or OPTIONS' Content-Type requirement.
 class http1_client_request_writer final {
 public:
-    struct options_type final {
-        std::pmr::memory_resource* resource_{nullptr};
-    };
+    explicit http1_client_request_writer(std::pmr::memory_resource* resource = nullptr) noexcept;
 
-    http1_client_request_writer() noexcept;
-    explicit http1_client_request_writer(options_type options) noexcept;
-
-    [[nodiscard]] http1_client_request_prepare_result prepare(const http_origin_view& origin,
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+        http1_client_request_prepare_error>
+    prepare(const http_origin_view& origin,
         const http_client_request_view& request, std::span<char> head_buffer,
         http1_client_request_wire_policy policy = {}) const;
 
@@ -302,21 +258,29 @@ public:
     // Connection are driver-owned, and Host remains owned by the writer.
     // RFC 9931 section 6.3 forbids sending UDP payload before the server's
     // successful protocol-upgrade response in HTTP/1.x.
-    [[nodiscard]] http1_client_request_prepare_result prepare_connect_udp(const http_origin_view& origin,
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+        http1_client_request_prepare_error>
+    prepare_connect_udp(const http_origin_view& origin,
         borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer) const;
 
-    [[nodiscard]] http1_client_request_prepare_result prepare_streaming(const http_origin_view& origin,
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+        http1_client_request_prepare_error>
+    prepare_streaming(const http_origin_view& origin,
         const http1_client_request_head_view& request, std::span<char> head_buffer,
         http1_client_request_wire_policy policy = {}) const;
 
     // When forwarding untrusted TCP payload, RFC 9931 section 8 requires the
     // driver to wait for the successful tunnel plan before sending that payload,
     // unless close_after_response makes the request emit Connection: close.
-    [[nodiscard]] http1_client_request_prepare_result prepare_connect(const http_origin_view& tunnel_origin,
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+        http1_client_request_prepare_error>
+    prepare_connect(const http_origin_view& tunnel_origin,
         std::span<const http_header_view> headers, std::span<char> head_buffer,
         http1_client_request_wire_policy policy = {}) const;
 
-    [[nodiscard]] http1_client_request_prepare_result prepare_connect(borrowed_text authority,
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+        http1_client_request_prepare_error>
+    prepare_connect(borrowed_text authority,
         std::span<const http_header_view> headers, std::span<char> head_buffer,
         http1_client_request_wire_policy policy = {}) const;
 

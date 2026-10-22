@@ -10,9 +10,10 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_client.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/client_tls_config.h"
 namespace ruvia {
 
@@ -74,7 +75,7 @@ struct http_client_result_budget_config final {
 struct http_client_config final {
     http_scheme scheme_{http_scheme::https};
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
-    std::string host_{};
+    borrowed_text host_{};
     std::optional<std::uint16_t> port_{};
     std::size_t connection_count_{1};
     std::size_t max_concurrent_http2_streams_per_connection_{100};
@@ -102,10 +103,10 @@ struct http_client_config final {
     client_tls_config tls_{};
     client_tcp_config tcp_{};
     http_client_received_cookie_policy received_cookies_{http_client_received_cookie_policy::ignore};
-    std::string user_agent_{"Ruvia"};
+    borrowed_text user_agent_{"Ruvia"};
     // Client-stored like retained cookies: never sent with TRACE (RFC 9110 §9.3.8).
     // Explicit caller Cookie fields are combined independently of the stored jar.
-    std::vector<std::pair<std::string, std::string>> cookies_{};
+    std::vector<http_header_view> cookies_{};
 };
 
 class http_client_error final : public std::runtime_error {

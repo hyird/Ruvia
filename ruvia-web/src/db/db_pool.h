@@ -18,12 +18,11 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_options.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_rows.h"
-#include "ruvia/web/db/db_transaction.h"
 #include "ruvia/web/db/db_types.h"
 #include "ruvia/web/detail/db/db_backend.h"
 
@@ -199,9 +198,11 @@ public:
 
     // The only execution path for raw SQL, compiled queries and transactions.
     task<db_rows> query(std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options);
+        std::pmr::memory_resource* resource, operation_options options,
+        operation_scope* scope = nullptr);
     task<db_exec_result> execute(std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options);
+        std::pmr::memory_resource* resource, operation_options options,
+        operation_scope* scope = nullptr);
     task<db_stream_result> stream(std::pmr::string sql, std::pmr::vector<db_value> params,
         std::pmr::memory_resource* resource, operation_options options);
     task<std::optional<db_row>> read_stream_row(std::size_t slot, void* result,
@@ -296,7 +297,8 @@ private:
     task<void> connect_slot(std::size_t index, const operation_timeout& timeout);
     template <typename result_type>
     task<result_type> run_leased(std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options, statement_hook_type<result_type> statement);
+        std::pmr::memory_resource* resource, operation_options options, statement_hook_type<result_type> statement,
+        operation_scope* scope = nullptr);
     template <typename result_type>
     task<result_type> run_on_transaction_slot(std::size_t index, std::pmr::string sql,
         std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, const operation_options& options,

@@ -25,7 +25,7 @@ namespace {
 
 http_response make_allow_no_content_response(request_memory& memory, std::uint32_t method_mask,
     std::span<const std::string_view> extension_methods) {
-    http_response response({.resource_ = memory.resource()});
+    http_response response(memory.resource());
     response.status(ruvia::http_status::no_content);
     response.allow_methods(method_mask, extension_methods);
     return response;
@@ -116,7 +116,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_response_stream
 }
 
 task<std::optional<http_response>> detail::route_table::dispatch_upgrade(const http_request& request,
-    const resolved_route& resolved, request_memory& memory, const route_stream_handler_type& handler,
+    const resolved_route& resolved, request_memory& memory, const route_stream_handler& handler,
     context_services services) const {
     const auto& endpoint = resolved.route().endpoint();
     if (endpoint.tunnel() == nullptr && endpoint.websocket() == nullptr) {
@@ -167,7 +167,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 // RFC 9110 9.3.7: OPTIONS * asks about the server in general.
                 // Methods differ per resource, so a server-wide Allow would
                 // advertise methods most resources reject; answer without one.
-                unmatched_response.emplace(http_response({.resource_ = memory.resource()}));
+                unmatched_response.emplace(http_response(memory.resource()));
                 unmatched_response->status(ruvia::http_status::no_content);
             } else if (resolution.method_not_allowed() != nullptr || fallback.resource_exists_) {
                 // The method is known here (registered as an extension token

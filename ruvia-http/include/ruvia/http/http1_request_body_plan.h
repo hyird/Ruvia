@@ -12,7 +12,6 @@
 namespace ruvia {
 
 class http1_server_request_parse_state;
-class http1_server_request_parser;
 
 // Whether the runtime consumed the complete request message before attempting
 // to reuse its transport. This is a protocol lifecycle fact, not a product
@@ -100,7 +99,6 @@ public:
 
 private:
     friend class http1_server_request_parse_state;
-    friend class http1_server_request_parser;
 
     using framing_type =
         std::variant<http1_request_without_body, http1_known_length_request_body, http1_chunked_request_body>;

@@ -30,7 +30,7 @@
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_request.h"

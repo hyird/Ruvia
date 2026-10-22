@@ -1,4 +1,5 @@
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <variant>
 
@@ -22,10 +23,6 @@ struct http1_client_response_parse_result_access final {
     [[nodiscard]] static http1_client_response_parse_result failure(
         http1_client_response_parse_error error) noexcept {
         return http1_client_response_parse_result(error);
-    }
-
-    [[nodiscard]] static http1_client_response_parse_result terminal(bool completed) noexcept {
-        return http1_client_response_parse_result(http1_client_response_parse_terminal(completed));
     }
 
     [[nodiscard]] static http1_client_response_parse_result parsed(http_client_response_head head,
@@ -100,11 +97,8 @@ std::string_view http1_client_response_parse_error_message(
 }
 
 http1_client_response_parse_result http1_client_response_parser::parse(std::string_view buffer) {
-    if (phase_ == phase_type::complete) {
-        return detail::http1_client_response_parse_result_access::terminal(true);
-    }
-    if (phase_ == phase_type::failed) {
-        return detail::http1_client_response_parse_result_access::terminal(false);
+    if (phase_ != phase_type::await_response) {
+        throw std::logic_error("HTTP/1 client response parser is already terminal");
     }
     const auto fail = [this](http1_client_response_parse_error error) noexcept {
         phase_ = phase_type::failed;

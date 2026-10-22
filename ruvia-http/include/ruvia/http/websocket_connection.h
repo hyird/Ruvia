@@ -12,7 +12,7 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_deflate_codecs.h"
-#include "ruvia/http/websocket_protocol_types.h"
+#include "ruvia/http/websocket_protocol.h"
 
 namespace ruvia {
 

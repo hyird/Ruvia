@@ -1,4 +1,4 @@
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "server/http_server_options_validation.h"
 #include "util/config_validation.h"
@@ -15,7 +15,7 @@ validated_http_server_configuration::validated_http_server_configuration(
         // One ticket key set per TLS listener for this configuration, so TLS
         // resumption does not depend on which worker accepts the connection.
         // Credentials were loaded once by listen(); every worker installs them.
-        if (auto* tls = std::get_if<http_server_listener_definition::tls_type>(&validated.transport_)) {
+        if (auto* tls = std::get_if<http_server_listener_definition::tls>(&validated.transport_)) {
             tls->session_ticket_keys_ = tls_session_ticket_keys::generate();
         }
     }
@@ -103,7 +103,7 @@ void validate_http_server_options(const http_server_options& options) {
 
 void validate_http_server_listener(const http_server_listener_definition& listener_value) {
     if (const auto* redirect =
-            std::get_if<http_server_listener_definition::redirect_http_to_https_type>(&listener_value.transport_)) {
+            std::get_if<http_server_listener_definition::redirect_http_to_https>(&listener_value.transport_)) {
         detail::ensure_non_zero_port(
             redirect->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
     }

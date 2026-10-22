@@ -56,12 +56,12 @@ void check_response_body_moves(ruvia::testing::test_context& ruvia_ctx,
         failing_memory_resource source_resource;
         failing_memory_resource target_resource;
         {
-            http_response source({.resource_ = &source_resource});
+            http_response source(&source_resource);
             prepare(source);
             source.header("X-Source", "retained");
             std::optional<http_response> target;
             if (assign) {
-                target.emplace(http_response::options_type{.resource_ = &target_resource});
+                target.emplace(&target_resource);
                 target->body(std::string(256, 't'));
             }
             source_resource.fail_after(0);
@@ -101,7 +101,7 @@ void check_response_body_moves(ruvia::testing::test_context& ruvia_ctx,
 }  // namespace
 
 RUVIA_TEST(response_public_body_owns_its_source) {
-    http_response response({.resource_ = std::pmr::new_delete_resource()});
+    http_response response(std::pmr::new_delete_resource());
     std::string source_value = "owned copy";
 
     response.body(source_value);
@@ -124,7 +124,7 @@ RUVIA_TEST(public_response_file_view_exposes_read_only_descriptor) {
 }
 
 RUVIA_TEST(response_file_setter_keeps_typed_identity_and_validates_before_replacement) {
-    http_response response({.resource_ = std::pmr::new_delete_resource()});
+    http_response response(std::pmr::new_delete_resource());
     const auto path = std::filesystem::path("public-response.bin");
     const auto unchecked = ruvia::http_response_file_identity::unchecked();
 
@@ -184,7 +184,7 @@ RUVIA_TEST(response_file_body_owns_its_opened_handle_until_replacement) {
     const auto path = std::filesystem::path("opened-response.bin");
     const auto identity = ruvia::http_response_file_identity::checked({1, 2, 3, 4});
     {
-        http_response response({.resource_ = std::pmr::new_delete_resource()});
+        http_response response(std::pmr::new_delete_resource());
         response.file_body(path.native(), 16, 0, 16, identity,
             ruvia::http_response_file_handle(7, &release_counted_response_file_handle));
         const auto file = response.file_body();
@@ -197,7 +197,7 @@ RUVIA_TEST(response_file_body_owns_its_opened_handle_until_replacement) {
         }
 
         // Moving the response moves the handle; nothing is released.
-        http_response target({.resource_ = std::pmr::new_delete_resource()});
+        http_response target(std::pmr::new_delete_resource());
         target = std::move(response);
         RUVIA_CHECK_EQ(released_response_file_handles, std::size_t{0});
         RUVIA_CHECK(!response.file_body().has_value());
@@ -229,7 +229,7 @@ RUVIA_TEST(response_file_body_owns_its_opened_handle_until_replacement) {
 }
 
 RUVIA_TEST(response_file_body_move_preserves_owned_path_and_identity) {
-    http_response source_value({.resource_ = std::pmr::new_delete_resource()});
+    http_response source_value(std::pmr::new_delete_resource());
     const auto path = std::filesystem::path("moved-response.bin");
     const auto identity = ruvia::http_response_file_identity::checked({9, 8, 7, 6});
     source_value.file_body(path.native(), 23, 4, 9, identity);
@@ -249,7 +249,7 @@ RUVIA_TEST(response_file_body_move_preserves_owned_path_and_identity) {
 
 RUVIA_TEST(multipart_body_allocation_failure_preserves_previous_body) {
     switchable_failing_resource response_resource;
-    http_response response({.resource_ = &response_resource});
+    http_response response(&response_resource);
     response.body("preserved");
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
     auto plan = ruvia::make_http_multipart_byte_range_plan(
@@ -271,8 +271,8 @@ RUVIA_TEST(multipart_body_allocation_failure_preserves_previous_body) {
 RUVIA_TEST(response_body_move_preserves_content) {
     std::pmr::monotonic_buffer_resource source_resource;
     std::pmr::monotonic_buffer_resource target_resource;
-    http_response source_value({.resource_ = &source_resource});
-    http_response target({.resource_ = &target_resource});
+    http_response source_value(&source_resource);
+    http_response target(&target_resource);
     source_value.body("move-owned");
     target.body("replaced");
 

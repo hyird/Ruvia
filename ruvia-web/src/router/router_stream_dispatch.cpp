@@ -41,7 +41,7 @@ private:
 
 task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
     const http_request& request, const resolved_route& resolved, request_memory& memory,
-    route_stream_handler_type handler, context_services services) const {
+    route_stream_handler handler, context_services services) const {
     const auto& route = resolved.route();
     auto context_value = make_route_context(memory, request, resolved, services.with_routes(*this));
     const auto* response_stream_output = services.response_output().response_stream();

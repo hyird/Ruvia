@@ -60,7 +60,6 @@ public:
 #include "ruvia/core/operation_timeout.h"
 
 #include "integration/slot_pool.h"
-#include "redis/redis_client_runtime.h"
 #include "redis/redis_connection.h"
 
 namespace ruvia::detail {
@@ -149,6 +148,12 @@ struct redis_command_executor final {
         std::pmr::memory_resource* resource,
         std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt);
 };
+
+}  // namespace ruvia::detail
+
+#include "redis/redis_client_runtime.h"
+
+namespace ruvia::detail {
 
 class redis_registry final {
 public:

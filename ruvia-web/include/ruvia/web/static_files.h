@@ -8,23 +8,25 @@
 #include <string>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
+
 namespace ruvia {
 
 class static_root;
 
 struct static_mime_type final {
-    std::string extension_{};
-    std::string content_type_{};
+    borrowed_text extension_{};
+    borrowed_text content_type_{};
 };
 
 struct static_file_type_policy final {
-    enum class kind_type : std::uint8_t {
+    enum class kind : std::uint8_t {
         defaults,
         all,
         only,
     };
 
-    kind_type kind_{kind_type::defaults};
+    kind kind_{kind::defaults};
     std::vector<std::string> extensions_{};
 };
 
@@ -44,9 +46,9 @@ enum class static_dotfile_policy : std::uint8_t {
 };
 
 struct static_root_options final {
-    std::string cache_control_{};
-    std::string index_file_{"index.html"};
-    std::string default_content_type_{"application/octet-stream"};
+    borrowed_text cache_control_{};
+    borrowed_text index_file_{"index.html"};
+    borrowed_text default_content_type_{"application/octet-stream"};
     std::vector<static_mime_type> mime_types_{};
     static_file_type_policy file_types_{};
     static_range_request_policy range_requests_{static_range_request_policy::honor};
@@ -116,21 +118,12 @@ public:
 
     [[nodiscard]] std::filesystem::path path() const;
 
-private:
-    struct prepared_construction_type;
-
-    explicit static_root(prepared_construction_type prepared);
-    [[nodiscard]] static prepared_construction_type prepare_construction(
-        const std::filesystem::path& root, static_root_options options);
-    [[nodiscard]] static prepared_construction_type prepare_construction(
-        const std::filesystem::path& root, const detail::static_root_config_storage& config);
-    [[nodiscard]] static prepared_construction_type prepare_construction(
-        const std::filesystem::path& root, detail::static_root_config_storage&& config);
-
     struct state_deleter_type {
         void operator()(detail::static_root_state* state) const noexcept;
     };
 
+private:
+    explicit static_root(std::unique_ptr<detail::static_root_state, state_deleter_type> state) noexcept;
     friend class detail::static_root_access;
 
     std::unique_ptr<detail::static_root_state, state_deleter_type> state_;

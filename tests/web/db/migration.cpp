@@ -5,7 +5,7 @@
 #include <span>
 #include <string_view>
 
-#include "ruvia/web/db/db_migration.h"
+#include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"

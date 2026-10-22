@@ -6,7 +6,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/redis/redis_subscription.h"
+#include "ruvia/web/redis/redis_handle.h"
 #include "ruvia/web/redis/redis_types.h"
 
 namespace ruvia::detail {

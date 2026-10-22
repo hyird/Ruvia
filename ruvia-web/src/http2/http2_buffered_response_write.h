@@ -20,12 +20,6 @@ class http_buffered_response_write_plan;
 namespace ruvia::detail {
 class http2_sans_io_stream_runtime_table;
 
-// The writer completes transport recovery (including RESET_STREAM) before
-// returning. committed_status_ is present whenever the response head was
-// committed to the connection.
-struct http2_buffered_response_write_result final {
-    std::optional<http_status_code> committed_status_{};
-};
 // Non-transport HTTP/2 buffered/file response driver. The session template owns
 // socket reads/writes and event dispatch; this object owns the single response
 // commit, DATA backpressure, the file body (through response_file_source), and
@@ -42,7 +36,7 @@ public:
     http2_buffered_response_writer(http2_buffered_response_writer&&) = delete;
     http2_buffered_response_writer& operator=(http2_buffered_response_writer&&) = delete;
 
-    [[nodiscard]] task<http2_buffered_response_write_result> write(std::uint32_t stream_id,
+    [[nodiscard]] task<std::optional<http_status_code>> write(std::uint32_t stream_id,
         const http_response& response, http_buffered_response_write_plan write_plan);
 
 private:

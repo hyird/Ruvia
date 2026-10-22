@@ -16,7 +16,7 @@ namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] std::optional<rate_limit_rejection> decide_route_rate_limit(
-    context& context_value, const void* declaration, const route_rate_limit_options& options) noexcept {
+    context& context_value, const void* declaration, const rate_limit_rule& rule) noexcept {
     auto* limiter = context_access::rate_limiter(context_value);
     if (limiter == nullptr) {
         return std::nullopt;
@@ -26,7 +26,7 @@ namespace {
     // The client, not the hop -- same as the app-wide limiter. Behind a trusted
     // proxy, remote() is the proxy and every caller would share one key.
     return limiter->allow_route(context_access::route_rate_limit_scope(context_value), declaration,
-        rate_limit_key_for(context_value.conn().client().address(), key_buffer), options.rule_);
+        rate_limit_key_for(context_value.conn().client().address(), key_buffer), rule);
 }
 
 void set_unsigned_header(http_response& response, std::string_view name, std::uint64_t value) {
@@ -63,8 +63,8 @@ void apply_route_rate_limit_rejection_headers(
 }
 
 bool apply_route_rate_limit(
-    context& context_value, const void* declaration, const route_rate_limit_options& options) {
-    const auto rejection = decide_route_rate_limit(context_value, declaration, options);
+    context& context_value, const void* declaration, const rate_limit_rule& rule) {
+    const auto rejection = decide_route_rate_limit(context_value, declaration, rule);
     if (!rejection) {
         return true;
     }
@@ -76,7 +76,7 @@ bool apply_route_rate_limit(
         .message_ = error.message(),
         .status_text_ = error.status_text(),
     });
-    apply_route_rate_limit_rejection_headers(response, *rejection, options.rule_.max_requests_);
+    apply_route_rate_limit_rejection_headers(response, *rejection, rule.max_requests_);
     context_value.respond(std::move(response));
     return false;
 }

@@ -5,11 +5,11 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_content_codec.h"
-#include "ruvia/http/http_media_type.h"
 
 namespace ruvia::detail {
 namespace {

@@ -137,15 +137,15 @@ task<void> run_chain_hop(detail::next_state state_value) {
 
 }  // namespace
 
-next::awaitable_type next::operator()() & {
+next::awaitable next::operator()() & {
     auto state_value = state_;
     auto* control = state_value.control_;
     state_value.invocation_ =
         control == nullptr ? detail::next_state::invocation_type::expired : control->begin_invocation();
     if (state_value.invocation_ == detail::next_state::invocation_type::expired) {
-        return awaitable_type(state_value, &ignore_expired_next);
+        return awaitable(state_value, &ignore_expired_next);
     }
-    return awaitable_type(state_value, invoke_);
+    return awaitable(state_value, invoke_);
 }
 
 task<void> detail::run_chain(const middleware_chain& chain, context& context_value) {
@@ -156,7 +156,7 @@ detail::middleware_chain detail::route_table::route_chain(const route_entry& rou
     const auto offset = route.middleware_offset();
     const auto count = route.middleware_count();
     return middleware_chain{.table_ = this,
-        .frames_ = std::span<const route_middleware_type>(middleware_frames_).subspan(offset, count),
+        .frames_ = std::span<const route_middleware>(middleware_frames_).subspan(offset, count),
         .scopes_ = route.has_conditional_middleware()
                        ? std::span<const std::string_view>(plan_->middleware_scopes_).subspan(offset, count)
                        : std::span<const std::string_view>{},
@@ -179,7 +179,7 @@ task<http_response> detail::route_table::invoke_route(const resolved_route& reso
 }
 
 task<http_response> detail::route_table::respond_through_chain(
-    middleware_chain chain, context& context_value, route_handler_type terminal) const {
+    middleware_chain chain, context& context_value, route_handler terminal) const {
     auto respond = [terminal](context& terminal_context) -> task<void> {
         detail::context_access::set_response(terminal_context, co_await terminal(terminal_context));
     };
@@ -195,13 +195,13 @@ task<http_response> detail::route_table::respond_through_chain(
 }
 
 task<http_response> detail::route_table::run_unmatched_chain(
-    context& context_value, route_handler_type terminal) const {
+    context& context_value, route_handler terminal) const {
     if (plan_->unmatched_middleware_count_ == 0) {
         return terminal(context_value);
     }
     return respond_through_chain(
         middleware_chain{.table_ = this,
-            .frames_ = std::span<const route_middleware_type>(middleware_frames_)
+            .frames_ = std::span<const route_middleware>(middleware_frames_)
                 .subspan(plan_->unmatched_middleware_offset_, plan_->unmatched_middleware_count_),
             .scopes_ = {},
             .terminal_ = {},

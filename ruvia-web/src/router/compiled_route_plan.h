@@ -20,7 +20,7 @@
 namespace ruvia::detail {
 
 class route_table;
-class router_impl;
+class router;
 
 // The one immutable route plan of a process run, compiled once at startup and
 // shared by every worker: every route with its endpoint metadata, limits and
@@ -55,7 +55,7 @@ public:
 
 private:
     friend class route_table;
-    friend class router_impl;
+    friend class router;
 
     static constexpr std::size_t routable_method_count = 7;
     static constexpr std::size_t no_route_index = std::numeric_limits<std::size_t>::max();
@@ -128,10 +128,10 @@ private:
     // Distinct registered route patterns, sorted, so url_for finds its pattern
     // by binary search.
     std::pmr::vector<std::string_view> url_patterns_;
-    http_error_handler_ref_type error_handler_{nullptr};
-    http_not_found_handler_ref_type not_found_handler_{nullptr};
-    std::pmr::vector<prefix_handler_type<http_error_handler_ref_type>> prefix_error_handlers_;
-    std::pmr::vector<prefix_handler_type<http_not_found_handler_ref_type>> prefix_not_found_handlers_;
+    http_error_handler_ref error_handler_{nullptr};
+    http_not_found_handler_ref not_found_handler_{nullptr};
+    std::pmr::vector<prefix_handler_type<http_error_handler_ref>> prefix_error_handlers_;
+    std::pmr::vector<prefix_handler_type<http_not_found_handler_ref>> prefix_not_found_handlers_;
     std::uint32_t static_method_mask_{0};
     std::uint32_t dynamic_method_mask_{0};
     std::size_t static_slot_mask_{};

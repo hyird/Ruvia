@@ -11,8 +11,8 @@
 
 #include <openssl/ssl.h>
 
-#include "ruvia/core/error_text.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/failure_report.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {
 namespace {
@@ -97,12 +97,6 @@ public:
     }
 };
 
-[[noreturn]] void throw_client_tls_credential_error(std::string_view message, const tls_credential_error& error) {
-    std::string text(message);
-    text.append(" (").append(error.operation_).append("): ").append(error_code_text(error.error_));
-    throw std::runtime_error(text);
-}
-
 }  // namespace
 
 client_tls_config_storage::client_tls_config_storage(
@@ -118,20 +112,13 @@ client_tls_config_storage::client_tls_config_storage(
     if (files != client_tls_files::parse || mode_ == client_tls_mode::disabled) {
         return;
     }
-    tls_credential_error error;
     if (mode_ == client_tls_mode::verify_identity) {
-        trust_store_ = ca_file_.empty() ? tls_trust_store::load_default(error)
-                                        : tls_trust_store::load_file(ca_file_.c_str(), error);
-        if (!trust_store_) {
-            throw_client_tls_credential_error("failed to load client TLS trust store", error);
-        }
+        trust_store_ = ca_file_.empty() ? tls_trust_store::load_default()
+                                        : tls_trust_store::load_file(ca_file_.c_str());
     }
     if (!certificate_chain_file_.empty()) {
         certificate_ = tls_certificate::load(
-            certificate_chain_file_.c_str(), private_key_file_.c_str(), private_key_password_, error);
-        if (!certificate_) {
-            throw_client_tls_credential_error("failed to load client TLS certificate", error);
-        }
+            certificate_chain_file_.c_str(), private_key_file_.c_str(), private_key_password_);
     }
 }
 
@@ -177,9 +164,7 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
     if (!config.certificate_.has_value()) {
         throw std::logic_error("client TLS certificate was not parsed");
     }
-    if (tls_credential_error error; !config.certificate_->install(context_value, error)) {
-        throw_client_tls_credential_error("failed to install client TLS certificate", error);
-    }
+    config.certificate_->install(context_value);
 }
 
 client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp::socket>& stream,

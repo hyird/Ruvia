@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -53,14 +54,14 @@ struct http_connect_udp_request_view final {
     std::string_view path_{};
     std::span<const http_header_view> headers_{};
 };
-[[nodiscard]] std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_request(http_connect_udp_request_view request) noexcept;
-[[nodiscard]] std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_response(
+[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_connect_udp_request_view request) noexcept;
+[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(
     http_protocol_version version, std::uint16_t status, std::span<const http_header_view> headers) noexcept;
-[[nodiscard]] std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_response(
+[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(
     http_protocol_version version, std::uint16_t status, std::span<const http_header> headers) noexcept;
 // Classifies the HTTP/1 Upgrade token; full validation remains mandatory.
 [[nodiscard]] bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept;
-[[nodiscard]] std::variant<std::monostate, http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept;
+[[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept;
 // Takes application response metadata, validates it, and supplies the required
 // Capsule-Protocol and version-specific status/Upgrade fields. HTTP/1 status 101
 // can only be produced by this dedicated driver boundary.

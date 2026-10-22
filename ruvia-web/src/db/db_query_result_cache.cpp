@@ -15,49 +15,23 @@
 namespace ruvia::detail {
 namespace {
 
-template <typename operation_type>
-struct scoped_operation_value;
+bool is_fatal_redis_cache_error(const redis_error& error) noexcept {
+    return error.code() == redis_error::code_type::cancelled ||
+           error.code() == redis_error::code_type::closing;
+}
 
-template <typename value_type>
-struct scoped_operation_value<scoped_operation<value_type>> {
-    using type = value_type;
-};
-
-template <typename value_type>
-using redis_cache_outcome = std::variant<value_type, std::exception_ptr>;
-
-// The one Redis failure rule for cache operations: cancellation and shutdown
-// propagate unchanged, any failure once the cache deadline has passed is the
-// cache timeout, and other failures are handed back for the caller's policy.
-// `command` builds the Redis operation inside this frame, so the handle it is
-// issued through lives until the operation completes.
-template <typename command_type,
-    typename value_type = typename scoped_operation_value<std::invoke_result_t<command_type&>>::type>
-task<redis_cache_outcome<value_type>> run_redis_cache_command(command_type command, const operation_timeout& deadline) {
-    std::exception_ptr failure;
-    try {
-        co_return redis_cache_outcome<value_type>(std::in_place_index<0>, co_await command());
-    } catch (const redis_error& error) {
-        if (error.code() == redis_error::code_type::cancelled || error.code() == redis_error::code_type::closing) {
-            throw;
-        }
-        failure = std::current_exception();
+void rethrow_or_timeout_redis_cache_error(
+    const redis_error& error, const operation_timeout& deadline, bool ignore_errors) {
+    if (is_fatal_redis_cache_error(error)) {
+        throw;
     }
     if (deadline.expired()) {
         throw_db_query_timeout();
     }
-    co_return redis_cache_outcome<value_type>(std::in_place_index<1>, std::move(failure));
-}
-
-// Maintenance commands never tolerate a store failure.
-template <typename value_type>
-value_type require_redis_cache_value(redis_cache_outcome<value_type> outcome) {
-    if (auto* failure = std::get_if<std::exception_ptr>(&outcome)) {
-        std::rethrow_exception(*failure);
+    if (!ignore_errors) {
+        throw;
     }
-    return std::get<0>(std::move(outcome));
 }
-
 task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr::string> keys,
     std::pmr::memory_resource* resource, const operation_options& options, const operation_timeout& deadline_value) {
     if (keys.empty()) {
@@ -68,9 +42,11 @@ task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr:
     for (const auto& key : keys) {
         views.emplace_back(key);
     }
-    (void)require_redis_cache_value(co_await run_redis_cache_command(
-        [&] { return redis.with_options(db_required_options(options, deadline_value)).del(views); },
-        deadline_value));
+    try {
+        (void)co_await redis.with_options(db_required_options(options, deadline_value)).del(views);
+    } catch (const redis_error& error) {
+        rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
+    }
     if (deadline_value.expired()) {
         throw_db_query_timeout();
     }
@@ -90,17 +66,18 @@ task<void> clear_keys(
     auto* const resource = pattern.get_allocator().resource();
     std::optional<redis_scan_cursor> cursor;
     do {
-        auto result = require_redis_cache_value(co_await run_redis_cache_command(
-            [&] {
-                return redis.with_options(db_required_options(options, deadline_value))
-                    .scan({.cursor_ = cursor, .match_ = std::string_view(pattern), .count_ = 256});
-            },
-            deadline_value));
+        std::optional<redis_scan_result> result;
+        try {
+            result.emplace(co_await redis.with_options(db_required_options(options, deadline_value))
+                    .scan({.cursor_ = cursor, .match_ = std::string_view(pattern), .count_ = 256}));
+        } catch (const redis_error& error) {
+            rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
+        }
         if (deadline_value.expired()) {
             throw_db_query_timeout();
         }
-        co_await delete_key_batch(redis, result.values(), resource, options, deadline_value);
-        cursor = result.next_cursor();
+        co_await delete_key_batch(redis, result->values(), resource, options, deadline_value);
+        cursor = result->next_cursor();
     } while (cursor);
 }
 
@@ -148,13 +125,13 @@ task<db_rows> db_query_cache_state::wrap(std::optional<std::chrono::milliseconds
 task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::milliseconds duration,
     db_cache_query database, operation_options options, operation_timeout deadline) {
     const auto started = std::chrono::steady_clock::now();
-    auto cached = co_await run_redis_cache_command(
-        [&] { return redis_.with_options(db_required_options(options, deadline)).get(key); }, deadline);
-    if (auto* failure = std::get_if<std::exception_ptr>(&cached)) {
-        if (!ignore_errors_) {
-            std::rethrow_exception(*failure);
-        }
-    } else if (const auto& bytes_value = std::get<0>(cached); bytes_value.has_value()) {
+    std::optional<std::pmr::string> bytes_value;
+    try {
+        bytes_value = co_await redis_.with_options(db_required_options(options, deadline)).get(key);
+    } catch (const redis_error& error) {
+        rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
+    }
+    if (bytes_value.has_value()) {
         std::optional<db_rows> rows;
         try {
             rows.emplace(decode_db_cache_rows(*bytes_value, resource_));
@@ -183,15 +160,12 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
     const auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
     if (elapsed < duration) {
-        const auto bytes_value = encode_db_cache_rows(rows, resource_);
-        const auto stored = co_await run_redis_cache_command(
-            [&] {
-                return redis_.with_options(db_required_options(options, deadline))
-                    .set(key, bytes_value, {.expiration_ = redis_set_expiration::expires_after(duration - elapsed)});
-            },
-            deadline);
-        if (const auto* failure = std::get_if<std::exception_ptr>(&stored); failure != nullptr && !ignore_errors_) {
-            std::rethrow_exception(*failure);
+        const auto encoded_bytes = encode_db_cache_rows(rows, resource_);
+        try {
+            (void)co_await redis_.with_options(db_required_options(options, deadline))
+                .set(key, encoded_bytes, {.expiration_ = redis_set_expiration::expires_after(duration - elapsed)});
+        } catch (const redis_error& error) {
+            rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
         }
         if (deadline.expired()) {
             throw_db_query_timeout();

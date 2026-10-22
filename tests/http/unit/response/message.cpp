@@ -22,7 +22,7 @@ using ruvia::http_response;
 using ruvia::http_response_header_options;
 
 http_response make_response() {
-    return http_response({.resource_ = std::pmr::new_delete_resource()});
+    return http_response(std::pmr::new_delete_resource());
 }
 
 template <typename fn_type>
@@ -81,8 +81,8 @@ RUVIA_TEST(response_header_distinguishes_missing_from_present_empty) {
 RUVIA_TEST(response_move_assignment_transfers_body) {
     std::pmr::monotonic_buffer_resource source_resource;
     std::pmr::monotonic_buffer_resource target_resource;
-    http_response source_value({.resource_ = &source_resource});
-    http_response target({.resource_ = &target_resource});
+    http_response source_value(&source_resource);
+    http_response target(&target_resource);
 
     source_value.body(std::string(4096, 's'));
     target.body(std::string(64, 't'));
@@ -262,7 +262,7 @@ RUVIA_TEST(response_plain_set_collapses_prior_appended_fields) {
 
 RUVIA_TEST(response_header_append_failure_preserves_existing_header_for_retry) {
     failing_memory_resource resource;
-    http_response response({.resource_ = &resource});
+    http_response response(&resource);
     response.header("Link", "</a>; rel=preload");
 
     resource.fail_after(0);

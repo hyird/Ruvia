@@ -12,7 +12,7 @@
 #include <system_error>
 
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 
 namespace ruvia {
 

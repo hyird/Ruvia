@@ -8,8 +8,9 @@
 #include <utility>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/error_text.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/http/http_number_format.h"
+#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "db/db_transaction_start.h"
 
@@ -368,7 +369,9 @@ db_socket_wait_result db_pool<driver_type>::slot_wait::await_resume() {
 template <typename driver_type>
 template <typename result_type>
 task<result_type> db_pool<driver_type>::run_leased(std::pmr::string sql, std::pmr::vector<db_value> params,
-    std::pmr::memory_resource* resource, operation_options options, statement_hook_type<result_type> statement) {
+    std::pmr::memory_resource* resource, operation_options options, statement_hook_type<result_type> statement,
+    operation_scope* scope) {
+    scoped_request_io_timer timer(scope, request_io_kind::db);
     if (sql.empty()) {
         throw std::invalid_argument("SQL must not be empty");
     }
@@ -443,15 +446,15 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
 
 template <typename driver_type>
 task<db_rows> db_pool<driver_type>::query(std::pmr::string sql, std::pmr::vector<db_value> params,
-    std::pmr::memory_resource* resource, operation_options options) {
-    return run_leased<db_rows>(std::move(sql), std::move(params), resource, std::move(options), &driver_type::query);
+    std::pmr::memory_resource* resource, operation_options options, operation_scope* scope) {
+    return run_leased<db_rows>(std::move(sql), std::move(params), resource, std::move(options), &driver_type::query, scope);
 }
 
 template <typename driver_type>
 task<db_exec_result> db_pool<driver_type>::execute(std::pmr::string sql, std::pmr::vector<db_value> params,
-    std::pmr::memory_resource* resource, operation_options options) {
+    std::pmr::memory_resource* resource, operation_options options, operation_scope* scope) {
     return run_leased<db_exec_result>(
-        std::move(sql), std::move(params), resource, std::move(options), &driver_type::execute);
+        std::move(sql), std::move(params), resource, std::move(options), &driver_type::execute, scope);
 }
 
 template <typename driver_type>

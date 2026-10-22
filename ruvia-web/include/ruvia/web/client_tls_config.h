@@ -6,6 +6,22 @@
 
 namespace ruvia {
 
+enum class tcp_no_delay_policy : std::uint8_t {
+    system_default,
+    enable,
+};
+
+enum class tcp_keep_alive_policy : std::uint8_t {
+    system_default,
+    enable,
+};
+
+// Socket policies applied to every outbound TCP connection of one client.
+struct client_tcp_config final {
+    tcp_no_delay_policy no_delay_{tcp_no_delay_policy::enable};
+    tcp_keep_alive_policy keep_alive_{tcp_keep_alive_policy::enable};
+};
+
 enum class client_tls_mode : std::uint8_t {
     verify_identity,
     // Encrypts without authenticating the peer. Only for trusted test or

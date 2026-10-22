@@ -10,12 +10,11 @@
 #include <variant>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_pmr_string.h"
-#include "ruvia/http/http_request_body_failure.h"
 #include "ruvia/http/protocol_byte_limit.h"
-#include "ruvia/web/detail/router/route_modes.h"
+#include "ruvia/web/detail/router/route_handlers.h"
 
 #include "http2/http2_sans_io_stream_signal.h"
 #include "server/inbound_buffer_resource.h"
@@ -135,113 +134,24 @@ private:
     bool ended_{false};
 };
 
-class http2_buffered_request_body;
-class http2_streaming_request_body;
-
-class http2_request_body_stored final {
-private:
-    friend class http2_request_body_store_result;
-    constexpr http2_request_body_stored() noexcept = default;
-};
-
-class http2_request_body_backlog_overflow final {
-private:
-    friend class http2_request_body_store_result;
-    constexpr http2_request_body_backlog_overflow() noexcept = default;
-};
-
-// A product-owned body store distinguishes an HTTP content failure from local
-// streaming backlog exhaustion. They require different runtime policy and must
-// never collapse into a generic non-accepted enum value.
-class http2_request_body_store_result final {
-public:
-    [[nodiscard]] constexpr const http2_request_body_stored* stored() const& noexcept {
-        return state_ == state_type::stored ? &value_.stored_ : nullptr;
-    }
-    const http2_request_body_stored* stored() const&& = delete;
-
-    [[nodiscard]] constexpr const http_request_body_failure* protocol_failure() const& noexcept {
-        return state_ == state_type::protocol_failure ? &value_.protocol_failure_ : nullptr;
-    }
-    const http_request_body_failure* protocol_failure() const&& = delete;
-
-    [[nodiscard]] constexpr const http2_request_body_backlog_overflow* backlog_overflow()
-        const& noexcept {
-        return state_ == state_type::backlog_overflow ? &value_.backlog_overflow_ : nullptr;
-    }
-    const http2_request_body_backlog_overflow* backlog_overflow() const&& = delete;
-
-private:
-    friend class http2_buffered_request_body;
-    friend class http2_streaming_request_body;
-
-    enum class state_type : std::uint8_t { stored,
-        protocol_failure,
-        backlog_overflow };
-
-    union value {
-        constexpr explicit value(http2_request_body_stored value) noexcept
-            : stored_(value) {}
-        constexpr explicit value(http_request_body_failure value) noexcept
-            : protocol_failure_(value) {}
-        constexpr explicit value(http2_request_body_backlog_overflow value) noexcept
-            : backlog_overflow_(value) {}
-
-        http2_request_body_stored stored_;
-        http_request_body_failure protocol_failure_;
-        http2_request_body_backlog_overflow backlog_overflow_;
-    };
-
-    explicit constexpr http2_request_body_store_result(http2_request_body_stored value) noexcept
-        : value_(value),
-          state_(state_type::stored) {}
-    explicit constexpr http2_request_body_store_result(http_request_body_failure value) noexcept
-        : value_(value),
-          state_(state_type::protocol_failure) {}
-    explicit constexpr http2_request_body_store_result(http2_request_body_backlog_overflow value) noexcept
-        : value_(value),
-          state_(state_type::backlog_overflow) {}
-
-    [[nodiscard]] static constexpr http2_request_body_store_result make_stored() noexcept {
-        return http2_request_body_store_result(http2_request_body_stored());
-    }
-
-    [[nodiscard]] static constexpr http2_request_body_store_result make_protocol_failure(
-        http_request_body_failure failure) noexcept {
-        return http2_request_body_store_result(failure);
-    }
-
-    [[nodiscard]] static constexpr http2_request_body_store_result make_backlog_overflow() noexcept {
-        return http2_request_body_store_result(http2_request_body_backlog_overflow());
-    }
-
-    value value_;
-    state_type state_;
-};
-
-static_assert(std::is_trivially_copyable_v<http2_request_body_store_result>);
-static_assert(sizeof(http2_request_body_store_result) <= 2);
-
 class http2_buffered_request_body final {
 public:
     explicit http2_buffered_request_body(std::pmr::memory_resource* resource) noexcept
         : bytes_(pmr_resource_or_default(resource)) {}
 
-    [[nodiscard]] http2_request_body_store_result store(
-        std::string_view data, protocol_byte_limit total_limit) {
-        if (const auto failure =
-                http_request_body_addition_failure(received_bytes_, data.size(), total_limit)) {
-            return http2_request_body_store_result::make_protocol_failure(*failure);
+    [[nodiscard]] bool store(std::string_view data, protocol_byte_limit total_limit) {
+        if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
+            return false;
         }
         try {
             if (!data.empty()) {
                 bytes_.append(data.data(), data.size());
             }
         } catch (const inbound_buffer_limit_error&) {
-            return http2_request_body_store_result::make_backlog_overflow();
+            return false;
         }
         received_bytes_ += data.size();
-        return http2_request_body_store_result::make_stored();
+        return true;
     }
 
     [[nodiscard]] std::size_t received_bytes() const noexcept {
@@ -263,15 +173,16 @@ public:
     explicit http2_streaming_request_body(std::pmr::memory_resource* resource) noexcept
         : queue_(pmr_resource_or_default(resource)) {}
 
-    [[nodiscard]] http2_request_body_store_result store(
-        std::string_view data, protocol_byte_limit total_limit, std::size_t backlog_limit) {
-        return store_impl(data, total_limit, backlog_limit, nullptr);
-    }
-
-    [[nodiscard]] http2_request_body_store_result store(std::string_view data,
-        protocol_byte_limit total_limit, std::size_t backlog_limit,
-        http2_received_data_credit&& credit) {
-        return store_impl(data, total_limit, backlog_limit, &credit);
+    [[nodiscard]] bool store(std::string_view data, protocol_byte_limit total_limit,
+        std::size_t backlog_limit, http2_received_data_credit&& credit) {
+        if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
+            return false;
+        }
+        if (!queue_.enqueue_bounded(data, std::move(credit), backlog_limit)) {
+            return false;
+        }
+        received_bytes_ += data.size();
+        return true;
     }
 
     [[nodiscard]] std::size_t received_bytes() const noexcept {
@@ -289,30 +200,6 @@ public:
     const http2_sans_io_body_queue& queue() const&& = delete;
 
 private:
-    [[nodiscard]] http2_request_body_store_result store_impl(std::string_view data,
-        protocol_byte_limit total_limit, std::size_t backlog_limit,
-        http2_received_data_credit* credit) {
-        if (const auto failure =
-                http_request_body_addition_failure(received_bytes_, data.size(), total_limit)) {
-            return http2_request_body_store_result::make_protocol_failure(*failure);
-        }
-        if (queue_.queued_bytes() > backlog_limit ||
-            data.size() > backlog_limit - queue_.queued_bytes()) {
-            return http2_request_body_store_result::make_backlog_overflow();
-        }
-        try {
-            if (credit != nullptr) {
-                queue_.enqueue(data, std::move(*credit));
-            } else {
-                queue_.enqueue(data);
-            }
-        } catch (const inbound_buffer_limit_error&) {
-            return http2_request_body_store_result::make_backlog_overflow();
-        }
-        received_bytes_ += data.size();
-        return http2_request_body_store_result::make_stored();
-    }
-
     std::size_t received_bytes_{0};
     http2_sans_io_body_queue queue_;
 };
@@ -348,16 +235,15 @@ public:
     }
     const http2_streaming_request_body* streaming() const&& = delete;
 
-    [[nodiscard]] http2_request_body_store_result store(
-        std::string_view data, protocol_byte_limit total_limit, std::size_t streaming_backlog_limit) {
+    [[nodiscard]] bool store(
+        std::string_view data, protocol_byte_limit total_limit) {
         if (auto* value = buffered()) {
             return value->store(data, total_limit);
         }
-        return std::get<http2_streaming_request_body>(storage_).store(
-            data, total_limit, streaming_backlog_limit);
+        return false;
     }
 
-    [[nodiscard]] http2_request_body_store_result store(std::string_view data,
+    [[nodiscard]] bool store(std::string_view data,
         protocol_byte_limit total_limit, std::size_t streaming_backlog_limit,
         http2_received_data_credit&& credit) {
         if (auto* value = buffered()) {

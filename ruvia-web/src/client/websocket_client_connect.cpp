@@ -11,13 +11,12 @@
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http1_close_policy.h"
-#include "ruvia/http/http1_websocket_client_handshake.h"
+#include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/websocket_client_negotiation.h"
 
 #include "client/http1_request_head.h"
-#include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
 
 namespace ruvia::detail {
@@ -99,16 +98,16 @@ task<void> websocket_client_state::perform_handshake() {
     http_io_buffer request_buffer(memory_.resource());
     auto prepared_result = prepare_http1_request_head(request_buffer, max_request_head_bytes,
         [&](std::span<char> buffer) { return handshake.prepare_request(config_.origin_, config_.target_, buffer); });
-    auto* prepared = prepared_result.prepared();
+    auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
     if (prepared == nullptr) {
-        const auto message = prepared_result.failure()
-                                 ? std::string(http1_client_request_prepare_error_message(
-                                       *prepared_result.failure()))
+        const auto* failure = std::get_if<http1_client_request_prepare_error>(&prepared_result);
+        const auto message = failure != nullptr
+                                 ? std::string(http1_client_request_prepare_error_message(*failure))
                                  : "WebSocket handshake request head is too large";
         throw websocket_client_error(websocket_client_error::code_type::invalid_config, message);
     }
     const auto head_view = prepared->head();
-    http1_client_response_parser parser(std::move(*prepared).take_exchange_state(), {.resource_ = memory_.resource()});
+    http1_client_response_parser parser(std::move(*prepared).take_exchange_state(), memory_.resource());
     co_await write_transport(head_view);
 
     for (;;) {

@@ -1,6 +1,5 @@
-#include "ruvia/http/http1_connect.h"
-
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/http1_server_semantics.h"
 
 namespace ruvia {
 std::variant<http1_response_head_plan, http_protocol_error> prepare_http1_connect_response_head(

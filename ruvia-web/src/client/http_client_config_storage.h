@@ -6,7 +6,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/web/http_client_types.h"
 
@@ -67,6 +67,19 @@ private:
         return source_value;
     }
 
+    [[nodiscard]] static std::string_view host_view(const http_client_config& source_value) noexcept {
+        return source_value.host_.view();
+    }
+    [[nodiscard]] static std::string_view host_view(const http_client_config_storage& source_value) noexcept {
+        return source_value.host_;
+    }
+    [[nodiscard]] static std::string_view user_agent_view(const http_client_config& source_value) noexcept {
+        return source_value.user_agent_.view();
+    }
+    [[nodiscard]] static std::string_view user_agent_view(const http_client_config_storage& source_value) noexcept {
+        return source_value.user_agent_;
+    }
+
     template <typename source_type>
     [[nodiscard]] static std::uint16_t resolved_port(const source_type& source_value) noexcept {
         if constexpr (std::same_as<source_type, http_client_config>) {
@@ -90,19 +103,6 @@ private:
         }
     }
 
-    [[nodiscard]] static std::string_view cookie_name(const std::pair<std::string, std::string>& cookie) noexcept {
-        return cookie.first;
-    }
-    [[nodiscard]] static std::string_view cookie_name(const http_header& cookie) noexcept {
-        return cookie.name();
-    }
-    [[nodiscard]] static std::string_view cookie_value(const std::pair<std::string, std::string>& cookie) noexcept {
-        return cookie.second;
-    }
-    [[nodiscard]] static std::string_view cookie_value(const http_header& cookie) noexcept {
-        return cookie.value();
-    }
-
     // Resolve representation differences at the boundary, then own every field
     // and cookie through one allocator-bound construction path.
     template <typename source_type>
@@ -110,8 +110,8 @@ private:
                     std::same_as<source_type, http_client_config_storage>)
     http_client_config_storage(
         validated_config_tag_type, const source_type& source_value, std::pmr::memory_resource* resource)
-        : host_(source_value.host_, resource),
-          uri_host_(client_uri_host(source_value.host_, resource)),
+        : host_(host_view(source_value), resource),
+          uri_host_(client_uri_host(host_view(source_value), resource)),
           scheme_(source_value.scheme_),
           port_(resolved_port(source_value)),
           authority_(make_http_origin_authority(origin(), resource)),
@@ -131,11 +131,11 @@ private:
           tls_(tls_storage(source_value, resource)),
           tcp_(source_value.tcp_),
           received_cookies_(source_value.received_cookies_),
-          user_agent_(source_value.user_agent_, resource),
+          user_agent_(user_agent_view(source_value), resource),
           cookies_(resource) {
         cookies_.reserve(source_value.cookies_.size());
         for (const auto& cookie : source_value.cookies_) {
-            cookies_.push_back(http_header::copy_of(cookie_name(cookie), cookie_value(cookie), resource));
+            cookies_.push_back(http_header::copy_of(cookie.name(), cookie.value(), resource));
         }
     }
 };

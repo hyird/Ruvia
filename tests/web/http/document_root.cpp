@@ -87,7 +87,7 @@ RUVIA_TEST(document_root_never_serves_targets_rejected_by_routing) {
     ruvia::document_root_config config;
     config.root_ = dir;
     config.static_options_.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind_type::all};
+        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     ruvia::app().document_root(std::move(config));
 
     auto& io = ruvia::test::new_test_io_context();

@@ -1,11 +1,11 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_field_syntax.h"
-#include "ruvia/http/http_field_whitespace.h"
 
 namespace ruvia {
 
@@ -171,5 +171,26 @@ private:
 [[nodiscard]] constexpr bool http_is_quoted_string(std::string_view value) noexcept {
     return !value.empty() && http_quoted_string_size(value) == value.size();
 }
+
+// Iterates a comma-delimited HTTP field-name list without allocating. Empty
+// members are ignored, including an entirely empty list. Each returned view
+// borrows the input. Drain next() until it returns nullopt, then check valid()
+// to distinguish end from malformed input.
+class http_field_name_list final {
+public:
+    explicit http_field_name_list(borrowed_text field) noexcept
+        : remaining_(field.view()) {}
+
+    [[nodiscard]] std::optional<std::string_view> next() noexcept;
+
+    [[nodiscard]] bool valid() const noexcept {
+        return finished_ && valid_;
+    }
+
+private:
+    std::string_view remaining_;
+    bool finished_{false};
+    bool valid_{false};
+};
 
 }  // namespace ruvia

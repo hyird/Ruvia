@@ -4,7 +4,7 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/http_media_type.h"
+#include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/multipart_parser.h"
 

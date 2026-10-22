@@ -20,8 +20,7 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop_attachment.h"
-#include "ruvia/web/redis/redis_client.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "backend_client_fixture.h"

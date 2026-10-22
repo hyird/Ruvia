@@ -12,7 +12,7 @@
 #include <string_view>
 #include <type_traits>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_response.h"
@@ -220,8 +220,8 @@ private:
 [[nodiscard]] std::string exception_text(const std::exception_ptr& exception);
 
 namespace detail {
-using http_error_handler_ref_type = callback_ref_type<task<http_response>(context&, http_error_info)>;
-using http_not_found_handler_ref_type = callback_ref_type<task<http_response>(context&)>;
+using http_error_handler_ref = callback_ref<task<http_response>(context&, http_error_info)>;
+using http_not_found_handler_ref = callback_ref<task<http_response>(context&)>;
 }  // namespace detail
 
 // Answers a request that failed. Accepts a plain function -- on_error(&handler)
@@ -229,22 +229,21 @@ using http_not_found_handler_ref_type = callback_ref_type<task<http_response>(co
 // the logger, config, or metrics sink the handler needs. A self-contained
 // callable is owned by the handler value; references captured by that callable
 // must still outlive the registered handler.
-using http_error_handler_type = detail::callback<task<http_response>(context&, http_error_info)>;
+using http_error_handler = detail::callback<task<http_response>(context&, http_error_info)>;
 
 // Answers a request that matched no route.
-using http_not_found_handler_type = detail::callback<task<http_response>(context&)>;
+using http_not_found_handler = detail::callback<task<http_response>(context&)>;
 
 struct scoped_error_handler_options final {
-    std::string prefix_{};
-    http_error_handler_type handler_{nullptr};
+    borrowed_text prefix_{};
+    http_error_handler handler_{nullptr};
 };
 
 struct scoped_not_found_handler_options final {
-    std::string prefix_{};
-    http_not_found_handler_type handler_{nullptr};
+    borrowed_text prefix_{};
+    http_not_found_handler handler_{nullptr};
 };
 
-static_assert(sizeof(http_error_handler_type) == 5 * sizeof(void*));
-static_assert(sizeof(http_not_found_handler_type) == 5 * sizeof(void*));
-
+static_assert(sizeof(http_error_handler) == 5 * sizeof(void*));
+static_assert(sizeof(http_not_found_handler) == 5 * sizeof(void*));
 }  // namespace ruvia

@@ -344,56 +344,6 @@ task<bool> db_transaction::query_bool_task(
     }
 }
 
-task<std::uint32_t> db_transaction::query_oid_task(
-    std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type pending) {
-    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
-    operation_guard_type operation(std::move(pending));
-    operation.start();
-    auto& lease_value = operation.lease();
-    const auto rows = co_await query_transaction_pool(
-        lease_value.client_, lease_value.slot_, std::move(sql), std::move(params), lease_value.resource_, lease_value.options_);
-    try {
-        if (rows.size() != 1) {
-            throw std::runtime_error("database OID query did not return one row");
-        }
-        const auto val = rows.front()[std::size_t{0}].as<std::uint64_t>().value();
-        if (val > (std::numeric_limits<std::uint32_t>::max)()) {
-            throw std::out_of_range("PostgreSQL OID exceeds 32-bit range");
-        }
-        operation.finish_active();
-        co_return static_cast<std::uint32_t>(val);
-    } catch (...) {
-        abort_pool_transaction(lease_value.client_, lease_value.slot_);
-        throw;
-    }
-}
-
-task<std::pmr::string> db_transaction::query_text_task(
-    std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type pending) {
-    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
-    operation_guard_type operation(std::move(pending));
-    operation.start();
-    auto& lease_value = operation.lease();
-    auto* resource = sql.get_allocator().resource();
-    const auto rows = co_await query_transaction_pool(
-        lease_value.client_, lease_value.slot_, std::move(sql), std::move(params), lease_value.resource_, lease_value.options_);
-    try {
-        if (rows.size() != 1) {
-            throw std::runtime_error("database text query did not return one row");
-        }
-        const auto view = rows.front()[std::size_t{0}].as<std::string_view>();
-        if (!view) {
-            throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database large object text is NULL");
-        }
-        std::pmr::string result(*view, resource);
-        operation.finish_active();
-        co_return result;
-    } catch (...) {
-        abort_pool_transaction(lease_value.client_, lease_value.slot_);
-        throw;
-    }
-}
-
 scoped_operation<void> db_transaction::notify(std::string_view channel, std::string_view payload) & {
     require_postgresql_transaction("database notify");
     if (channel.empty()) {
@@ -476,46 +426,6 @@ scoped_operation<db_rows> db_transaction::fetch_cursor(std::string_view name, st
 scoped_operation<void> db_transaction::close_cursor(std::string_view name) & {
     require_postgresql_transaction("close_cursor");
     return run_savepoint_command("CLOSE ", name);
-}
-
-scoped_operation<std::uint32_t> db_transaction::lo_create(std::uint32_t oid) & {
-    require_postgresql_transaction("lo_create");
-    const std::array<db_value, 1> params{db_value(static_cast<std::uint64_t>(oid))};
-    auto statement = prepare_db_statement("SELECT \"lo_create\"($1::oid)::bigint", params,
-        state_->operation_.preparation_payload().resource_);
-    operation_guard_type operation(state_->operation_);
-    auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope,
-        query_oid_task(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
-}
-
-scoped_operation<void> db_transaction::lo_put(std::uint32_t oid, std::int64_t offset, std::string_view utf8_bytes) & {
-    require_postgresql_transaction("lo_put");
-    if (offset < 0) {
-        throw std::invalid_argument("large object offset must be non-negative");
-    }
-    const std::array<db_value, 3> params{db_value(static_cast<std::uint64_t>(oid)), db_value(offset), db_value(utf8_bytes)};
-    return query_void_prepared("SELECT \"lo_put\"($1::oid, $2::bigint, \"convert_to\"($3::text, 'UTF8'))", params);
-}
-
-scoped_operation<std::pmr::string> db_transaction::lo_get_text(std::uint32_t oid, std::string_view encoding) & {
-    require_postgresql_transaction("lo_get_text");
-    if (encoding.empty()) {
-        throw std::invalid_argument("large object encoding must not be empty");
-    }
-    const std::array<db_value, 2> params{db_value(static_cast<std::uint64_t>(oid)), db_value(encoding)};
-    auto statement = prepare_db_statement("SELECT \"convert_from\"(\"lo_get\"($1::oid), $2::text)", params,
-        state_->operation_.preparation_payload().resource_);
-    operation_guard_type operation(state_->operation_);
-    auto& scope = registration_.scope();
-    return ::ruvia::make_scoped_operation(scope,
-        query_text_task(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
-}
-
-scoped_operation<bool> db_transaction::lo_unlink(std::uint32_t oid) & {
-    require_postgresql_transaction("lo_unlink");
-    const std::array<db_value, 1> params{db_value(static_cast<std::uint64_t>(oid))};
-    return query_bool_prepared("SELECT (\"lo_unlink\"($1::oid) = 1)", params);
 }
 
 void db_transaction::reset() noexcept {

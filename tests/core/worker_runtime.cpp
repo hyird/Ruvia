@@ -24,7 +24,7 @@
 
 namespace worker_runtime_test {
 
-using state = ruvia::runtime_lifecycle::state_type;
+using state = ruvia::worker_runtime_state;
 
 RUVIA_TEST(worker_runtime_drains_accepted_work_before_start) {
     ruvia::worker_runtime runtime;

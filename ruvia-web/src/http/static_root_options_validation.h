@@ -4,8 +4,8 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_media_type.h"
 #include "ruvia/web/static_files.h"
 
 #include "http/static_file_types.h"
@@ -66,33 +66,33 @@ inline void validate_static_root_options(const static_root_options& options) {
         default:
             throw std::invalid_argument("invalid static response validator policy");
     }
-    if (!ruvia::is_valid_http_header_value(options.cache_control_) ||
-        (!options.default_content_type_.empty() &&
-            !ruvia::is_valid_http_content_type_field_value(options.default_content_type_))) {
+    if (!ruvia::is_valid_http_header_value(options.cache_control_.view()) ||
+        (!options.default_content_type_.view().empty() &&
+            !ruvia::is_valid_http_content_type_field_value(options.default_content_type_.view()))) {
         throw std::invalid_argument("invalid static file header value");
     }
     for (std::size_t i = 0; i < options.mime_types_.size(); ++i) {
         const auto& mime = options.mime_types_[i];
-        if (!ruvia::detail::is_valid_static_file_extension(mime.extension_) ||
-            mime.content_type_.empty() ||
-            !ruvia::is_valid_http_content_type_field_value(mime.content_type_)) {
+        if (!ruvia::detail::is_valid_static_file_extension(mime.extension_.view()) ||
+            mime.content_type_.view().empty() ||
+            !ruvia::is_valid_http_content_type_field_value(mime.content_type_.view())) {
             throw std::invalid_argument("invalid static file mime type");
         }
         for (std::size_t previous = 0; previous < i; ++previous) {
             if (static_file_extensions_equivalent(
-                    options.mime_types_[previous].extension_, mime.extension_)) {
+                    options.mime_types_[previous].extension_.view(), mime.extension_.view())) {
                 throw std::invalid_argument("duplicate static file mime extension");
             }
         }
     }
     switch (options.file_types_.kind_) {
-        case static_file_type_policy::kind_type::defaults:
-        case static_file_type_policy::kind_type::all:
+        case static_file_type_policy::kind::defaults:
+        case static_file_type_policy::kind::all:
             if (!options.file_types_.extensions_.empty()) {
                 throw std::invalid_argument("static file type extensions require only mode");
             }
             break;
-        case static_file_type_policy::kind_type::only:
+        case static_file_type_policy::kind::only:
             if (options.file_types_.extensions_.empty()) {
                 throw std::invalid_argument("static file type allow-list must not be empty");
             }
@@ -105,8 +105,9 @@ inline void validate_static_root_options(const static_root_options& options) {
         default:
             throw std::invalid_argument("invalid static file type mode");
     }
-    if ((options.index_file_.find('/') != std::string_view::npos) || (options.index_file_.find('\\') != std::string_view::npos) || options.index_file_ == "." ||
-        options.index_file_ == "..") {
+    const auto index_file = options.index_file_.view();
+    if ((index_file.find('/') != std::string_view::npos) || (index_file.find('\\') != std::string_view::npos) || index_file == "." ||
+        index_file == "..") {
         throw std::invalid_argument("invalid static file index name");
     }
 }

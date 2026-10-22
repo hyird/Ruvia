@@ -69,7 +69,7 @@ void release_middleware_args(const void* args) noexcept {
 template <typename middleware_type>
 [[nodiscard]] const void* middleware_validated_model_type_key() noexcept {
     if constexpr (requires { typename middleware_type::ruvia_validation_body_type; }) {
-        return request_binding_key<typename middleware_type::ruvia_validation_body_type>();
+        return type_key<typename middleware_type::ruvia_validation_body_type>();
     } else {
         return nullptr;
     }

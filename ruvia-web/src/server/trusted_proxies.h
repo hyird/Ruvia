@@ -3,11 +3,11 @@
 #include <array>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <string_view>
-#include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 // Deciding who the client is when the server sits behind a reverse proxy.
 //
@@ -33,13 +33,10 @@ struct trusted_proxy_block final {
     std::uint8_t prefix_bits_{0};
 };
 
-enum class trusted_proxy_parse_error : std::uint8_t { invalid_address,
-    invalid_prefix };
-
 // Parses "10.0.0.0/8", "2001:db8::/32" or a bare address (an implicit full-width
-// prefix). Returns an error for anything malformed, so a typo in deployment config
+// prefix). Returns nullopt for anything malformed, so a typo in deployment config
 // fails startup instead of silently trusting nothing.
-[[nodiscard]] std::variant<trusted_proxy_block, trusted_proxy_parse_error> parse_trusted_proxy_block(std::string_view cidr) noexcept;
+[[nodiscard]] std::optional<trusted_proxy_block> parse_trusted_proxy_block(std::string_view cidr) noexcept;
 
 // The startup-owned trusted set. Empty means "trust nothing", the default.
 class trusted_proxy_set final {

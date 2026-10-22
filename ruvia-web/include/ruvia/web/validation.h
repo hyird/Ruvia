@@ -13,11 +13,13 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/model/rule/numeric_comparison.h"
 #include "ruvia/web/detail/model/rule/rules.h"
 #include "ruvia/web/detail/model/traits.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/middleware.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia {
 
@@ -288,6 +290,40 @@ void validate_model(const model_type& model, validator& out) {
     detail::model_validation_access::validate_model(model, out);
 }
 
+template <typename t_type>
+    requires detail::is_model<t_type>
+[[nodiscard]] t_type from_form(std::string_view body, model_parse_options options = {}) {
+    auto* const resource = pmr_resource_or_default(options.resource_);
+    auto parsed_value = detail::model_parse_access::parse_form_owned<t_type>(body, resource);
+    if (!parsed_value) {
+        throw std::invalid_argument("invalid form value");
+    }
+    validator validator_value({.resource_ = resource});
+    validate_model(*parsed_value, validator_value);
+    validator_value.throw_if_invalid();
+    return std::move(*parsed_value);
+}
+
+// Owns parsed data in options.resource. Supports models, Ruvia scalar values,
+// strings, bytes and arrays of these types. Model types also evaluate their
+// declared field validation rules.
+template <typename t_type>
+    requires detail::is_model_json_value<t_type>
+[[nodiscard]] t_type from_json(std::string_view body, model_parse_options options = {}) {
+    auto* const resource = pmr_resource_or_default(options.resource_);
+    auto parsed_value = detail::parse_json_document<t_type>(
+        body, resource, detail::model_string_storage::owned, options);
+    if (!parsed_value) {
+        throw std::invalid_argument("invalid JSON value");
+    }
+    if constexpr (detail::is_model<t_type>) {
+        validator validator_value({.resource_ = resource});
+        validate_model(*parsed_value, validator_value);
+        validator_value.throw_if_invalid();
+    }
+    return std::move(*parsed_value);
+}
+
 }  // namespace ruvia
 
 // RUVIA_MIN / RUVIA_MAX constrain a field's magnitude. For a number field this
@@ -301,16 +337,58 @@ void validate_model(const model_type& model, validator& out) {
 #define RUVIA_ONE_OF(message, ...) \
     ::ruvia::detail::model::one_of<::ruvia::fixed_string{message}, __VA_ARGS__>
 #define RUVIA_EMAIL(message) ::ruvia::detail::model::email<::ruvia::fixed_string{message}>
-// Both pattern rules use anchored (^...$) byte patterns: literals, '.', positive
+// Pattern rules use anchored (^...$) byte patterns: literals, '.', positive
 // or negative character classes, literal ranges, \d/\w/\s, and '*', '+', '?'.
 // Escaped literals may be range endpoints; descending ranges and range endpoints
 // such as \d are rejected at compile time. A trailing class '-' is a literal.
-// Patterns are limited to 256 bytes and bounded matching work; RUVIA_REGEX also
-// limits input to 4096 bytes. Exceeding a match limit fails validation. Use
-// RUVIA_CUSTOM for matching syntax outside this dialect.
+// Patterns are limited to 256 bytes and bounded matching work. Exceeding a
+// match limit fails validation. Use RUVIA_CUSTOM for matching syntax outside
+// this dialect.
 #define RUVIA_PATTERN(message, pattern) \
     ::ruvia::detail::model::pattern_rule<pattern, ::ruvia::fixed_string{message}>
-#define RUVIA_REGEX(message, pattern) \
-    ::ruvia::detail::model::regex_rule<pattern, ::ruvia::fixed_string{message}>
 #define RUVIA_CUSTOM(message, predicate) \
     ::ruvia::detail::model::custom<predicate, ::ruvia::fixed_string{message}>
+
+namespace ruvia {
+class context;
+
+namespace detail {
+
+// One validating middleware per request source: parses the model from `target`,
+// runs its declared rules, binds it for the handler, then continues the chain.
+template <validation_target target, typename body_type>
+class model_validation_middleware final {
+public:
+    static_assert(is_model<body_type>, "request validation middleware requires a RUVIA_MODEL");
+    static_assert(target != validation_target::header ||
+                      model::unique_model_wire_names_ignore_ascii_case(model::model_access::schema<body_type>()),
+        "header_model field names must be unique ignoring ASCII case");
+    using ruvia_validation_body_type = body_type;
+
+    void validate(const body_type& body, validator& validator_value) const {
+        validate_model(body, validator_value);
+    }
+
+    [[nodiscard]] task<void> handle(context& c, next& next_value);
+};
+
+}  // namespace detail
+
+template <typename body_type>
+using json_body = detail::model_validation_middleware<validation_target::json, body_type>;
+
+template <typename body_type>
+using form_body = detail::model_validation_middleware<validation_target::form, body_type>;
+
+template <typename body_type>
+using query_model = detail::model_validation_middleware<validation_target::query, body_type>;
+
+template <typename body_type>
+using path_model = detail::model_validation_middleware<validation_target::param, body_type>;
+
+template <typename body_type>
+using header_model = detail::model_validation_middleware<validation_target::header, body_type>;
+
+template <typename body_type>
+using cookie_model = detail::model_validation_middleware<validation_target::cookie, body_type>;
+}  // namespace ruvia

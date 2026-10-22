@@ -16,7 +16,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/web/client_tcp_config.h"
 
 #include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"

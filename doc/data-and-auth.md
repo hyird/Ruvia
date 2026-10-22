@@ -11,7 +11,7 @@
 
 ## 1. SQL 数据库连接池、直接查询与事务
 
-聚合头文件：`"ruvia/web/db/db.h"`（或按需包含 `"ruvia/web/db/db_types.h"`、`"ruvia/web/db/db_handle.h"`、`"ruvia/web/db/db_client.h"`、`"ruvia/web/db/db_transaction.h"`、`"ruvia/web/db/db_migration.h"`）。
+聚合头文件：`"ruvia/web/db/db.h"`（或按需包含 `"ruvia/web/db/db_types.h"`、`"ruvia/web/db/db_handle.h"`、`"ruvia/web/db/db_rows.h"`、`"ruvia/web/db/db_schema.h"`）。
 参考示例：[examples/web/database.cpp](../examples/web/database.cpp)、[examples/web/event_loop_data.cpp](../examples/web/event_loop_data.cpp)。
 
 ### 1.1 连接配置 `ruvia::db_config` 与注册
@@ -39,9 +39,10 @@ ruvia::app().database({
     .config_ = config,
 });
 
-// 2. 或在独立 event_loop 上使用 db_client：
+// 2. 或在独立 event_loop 上使用 db_client（通过 client.handle(options) 获取句柄）：
 // ruvia::db_client client(loop, config);
 // co_await client.connect();
+// auto db = client.handle({.timeout_ = std::chrono::seconds(5)});
 // ...
 // co_await client.shutdown();
 ```
@@ -59,7 +60,7 @@ ruvia::app().database({
 | `scoped_operation<db_exec_result> execute(...) const` | 执行 `INSERT` / `UPDATE` / `DELETE` / DDL，返回 `db_exec_result`（提供 `.affected_rows()` 与 `.last_insert_id()`） |
 | `scoped_operation<db_transaction> begin_transaction(db_transaction_options options = {}) const` | 开启事务（可指定隔离级别 `.isolation_` 与读写模式 `.access_mode_`） |
 | `scoped_operation<void> notify(std::string_view channel, std::string_view payload = {}) const` | （PostgreSQL）发送 `NOTIFY` 通知 |
-| `template <typename E> db_repository<E, db_handle> get_repository() const` | 获取实体 `E` 的强类型 ORM Repository |
+| `template <typename E> db_repository<E, db_handle> repository() const` | 获取实体 `E` 的强类型 ORM Repository |
 | `db_query_result_cache query_result_cache() const` | （需 `RUVIA_ENABLE_REDIS`）获取查询结果缓存控制器 |
 
 ```cpp
@@ -81,7 +82,7 @@ while (auto row = co_await stream.read()) {
 co_await stream.close();
 ```
 
-### 1.3 事务与保存点（`"ruvia/web/db/db_transaction.h"`）
+### 1.3 事务与保存点（`"ruvia/web/db/db_handle.h"`）
 
 `db_transaction` 独占一条数据库连接；若在析构或作用域退出前未调用 `co_await tx.commit()`，底层会自动回滚并回收连接：
 
@@ -101,9 +102,8 @@ co_await tx.commit();
 PostgreSQL 事务还额外支持：
 - **咨询锁（Advisory Locks）**：`co_await tx.advisory_lock(key)` / `try_advisory_lock(key)`
 - **服务端游标**：`declare_cursor(name, sql, params, scroll)`、`fetch_cursor(name, count)`、`close_cursor(name)`
-- **大对象（Large Objects）**：`lo_create`、`lo_put`、`lo_get_text`、`lo_unlink`
 
-### 1.4 启动期数据库迁移（`"ruvia/web/db/db_migration.h"`）
+### 1.4 启动期数据库迁移（`"ruvia/web/db/db_schema.h"`）
 
 `ruvia::db_migrator::migrate` 使用独立连接同步执行有序迁移列表，并在迁移表（默认 `ruvia_schema_migrations`）中记录与核对每个版本 `id_` 的 SQL 校验摘要：
 
@@ -122,7 +122,7 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 
 ## 2. SQL 构建器、Schema DDL 与存储过程
 
-头文件：`"ruvia/web/db/db_query.h"`、`"ruvia/web/db/db_schema.h"`、`"ruvia/web/db/db_procedure.h"`。
+头文件：`"ruvia/web/db/db_query.h"`、`"ruvia/web/db/db_schema.h"`。
 参考示例：[examples/web/sql_queries.cpp](../examples/web/sql_queries.cpp)。
 
 ### 2.1 `ruvia::db_query`（跨方言 SQL AST 构建器）
@@ -145,9 +145,9 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 
 ---
 
-## 3. 强类型关系型 ORM（`db_entity` 与 `db_repository`）
+## 3. 强类型关系型 ORM（`RUVIA_DB_ENTITY` 与 `db_repository`）
 
-头文件：`"ruvia/web/db/db_entity.h"`、`"ruvia/web/db/db_projection.h"`、`"ruvia/web/db/db_predicate.h"`、`"ruvia/web/db/db_repository.h"`。
+头文件：`"ruvia/web/db/db_entity.h"`、`"ruvia/web/db/db_query.h"`、`"ruvia/web/db/db_repository.h"`。
 参考示例：[examples/web/orm.cpp](../examples/web/orm.cpp)、[examples/web/orm_columns.cpp](../examples/web/orm_columns.cpp)、[examples/web/orm_relations.cpp](../examples/web/orm_relations.cpp)。
 
 ### 3.1 实体、生成列、关系与投影声明
@@ -191,7 +191,7 @@ RUVIA_DB_PROJECTION(device_summary,
 
 ### 3.3 `ruvia::db_repository<Entity, Executor>` 核心操作
 
-通过 `c.db().get_repository<device>()` 或 `tx.get_repository<device>()` 获取：
+通过 `c.db().repository<device>()` 或 `tx.repository<device>()` 获取：
 
 | 分类 | 方法 | 说明 |
 | --- | --- | --- |
@@ -202,7 +202,7 @@ RUVIA_DB_PROJECTION(device_summary,
 | 写入与变更 | `save` / `insert` / `upsert(entity, db_upsert_options)` | 保存、插入或冲突更新 Upsert（支持单条与批量 `std::span`） |
 | 更新与删除 | `update(where, changes)` / `increment` / `decrement` | 按条件更新指定字段或原子自增/自减 |
 | 删除与软删 | `delete_by(where)` / `remove(entity)` / `soft_delete(where)` / `restore(where)` / `clear()` | 硬删除、按软删列（`.delete_date_ = true`）软删除与恢复、清空表 |
-| 构建器与 `RETURNING` | `create_query_builder(alias)` / `create_update_builder` / `create_delete_builder` / `create_insert_builder` | 链式构建复杂 JOIN（`left_join_and_select`）、`offset`/`limit`、CTE、窗口函数与子查询；写构建器通过 `.returning(...)` + `.get_many()` / `.get_one()` / `.get_scalar<T>()` 映射 `RETURNING` 结果 |
+| 构建器与 `RETURNING` | `query_builder(alias)` / `update_builder` / `delete_builder` / `insert_builder` | 链式构建复杂 JOIN（`left_join_and_select`）、`offset`/`limit`、CTE、窗口函数、`on_conflict(db_upsert_options)` 与子查询；写构建器通过 `.returning(...)` + `.get_many()` / `.get_one()` / `.get_scalar<T>()` 映射 `RETURNING` 结果 |
 
 ---
 
@@ -228,7 +228,7 @@ ruvia::app()
 ```
 
 - 每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
-- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`。
+- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.handle(options = {})` 获取 `redis_handle`。
 
 ### 4.2 `ruvia::redis_handle` 命令分类总览
 
@@ -245,7 +245,7 @@ ruvia::app()
 | 批处理与事务 | `pipeline()`（返回 `redis_pipeline`，链式追加命令后 `co_await std::move(pipe).exec()`）、`transaction()`（返回 `redis_transaction`，封装 `MULTI`/`EXEC`） |
 | Streams | `xread_group(group, consumer, streams, redis_x_read_group_options)` |
 | Pub/Sub | `publish(channel, payload)`、`subscription()` |
-| RediSearch ORM | `get_repository<Entity>(redis_repository_config)` |
+| RediSearch ORM | `repository<Entity>(redis_repository_config)` |
 
 ### 4.3 Pub/Sub 独占订阅连接（`redis_subscription`）
 
@@ -281,7 +281,7 @@ const ruvia::redis_repository_config user_repo_config{
     },
 };
 
-auto repo = c.redis().get_repository<cached_user>(user_repo_config);
+auto repo = c.redis().repository<cached_user>(user_repo_config);
 // 建索引（通常在启动时执行一次）：co_await repo.create_index();
 // 带 TTL 插入：co_await repo.insert(entity, {.ttl_ = std::chrono::minutes(10)});
 // 条件查询：

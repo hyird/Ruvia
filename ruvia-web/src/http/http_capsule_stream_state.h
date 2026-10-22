@@ -17,7 +17,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_datagram.h"
-#include "ruvia/web/http_client_handle.h"
+#include "ruvia/web/http_client.h"
 #include "ruvia/web/http_tunnel.h"
 
 #include "client/http_client_response_memory.h"

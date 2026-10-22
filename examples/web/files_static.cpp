@@ -64,7 +64,7 @@ int main() {
                 .cache_control_ = "public, max-age=3600",
                 .index_file_ = "index.html",
                 .mime_types_ = {{"txt", "text/plain; charset=utf-8"}},
-                .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::only,
+                .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::only,
                     .extensions_ = {"html", "txt"}},
                 .range_requests_ = ruvia::static_range_request_policy::honor,
                 .response_validators_ = ruvia::static_response_validator_policy::emit,

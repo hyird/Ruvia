@@ -7,7 +7,7 @@
 #include <memory_resource>
 #include <optional>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/redis/redis_types.h"
 
 #include "client/client_tls_config_storage.h"

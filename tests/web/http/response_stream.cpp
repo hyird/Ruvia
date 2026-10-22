@@ -17,7 +17,7 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_stream.h"
@@ -126,7 +126,7 @@ using response_stream_test::stream_lane_observed;
 
 // Public stream response planning rejects a head that disagrees with its status.
 RUVIA_TEST(response_stream_head_rejects_a_mismatched_status_plan) {
-    ruvia::http_response response({.resource_ = std::pmr::get_default_resource()});
+    ruvia::http_response response(std::pmr::get_default_resource());
     response.status(ruvia::http_status::created);
     auto plan = ruvia::plan_http_response_stream_commit(
         ruvia::http_response_stream_framing::http1_chunked, ruvia::http_known_method::get,

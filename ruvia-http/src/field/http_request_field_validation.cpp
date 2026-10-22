@@ -2,7 +2,7 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 
 #include "coding/http_content_coding.h"
 #include "field/http_cors_fields.h"

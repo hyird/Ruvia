@@ -10,11 +10,11 @@
 #include <vector>
 
 #include "ruvia/core/bytes.h"
+#include "ruvia/http/cookies.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_cookie_fields.h"
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
@@ -188,15 +188,15 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     cache.emplace(std::move(storage), std::move(params));
 }
 
-[[nodiscard]] std::string_view negotiation_header_name(context_request::negotiable_type field) noexcept {
+[[nodiscard]] std::string_view negotiation_header_name(context_request::negotiable_field field) noexcept {
     switch (field) {
-        case context_request::negotiable_type::language:
+        case context_request::negotiable_field::language:
             return "Accept-Language";
-        case context_request::negotiable_type::encoding:
+        case context_request::negotiable_field::encoding:
             return "Accept-Encoding";
-        case context_request::negotiable_type::charset:
+        case context_request::negotiable_field::charset:
             return "Accept-Charset";
-        case context_request::negotiable_type::media_type:
+        case context_request::negotiable_field::media_type:
             break;
     }
     return "Accept";
@@ -384,7 +384,7 @@ bool context_request::accepts(std::string_view media_type) const noexcept {
 }
 
 std::optional<std::string_view> context_request::negotiate(
-    negotiable_type field, std::span<const std::string_view> supported) const noexcept {
+    negotiable_field field, std::span<const std::string_view> supported) const noexcept {
     if (supported.empty()) {
         return std::nullopt;
     }
@@ -393,10 +393,10 @@ std::optional<std::string_view> context_request::negotiate(
     if (!context_->request_.header(header_name).has_value()) {
         return supported.front();
     }
-    const bool media_type = field == negotiable_type::media_type;
-    const bool encoding = field == negotiable_type::encoding;
+    const bool media_type = field == negotiable_field::media_type;
+    const bool encoding = field == negotiable_field::encoding;
     // Only Accept-Language needs prefix matching in the generic token parser.
-    const auto token_mode = field == negotiable_type::language
+    const auto token_mode = field == negotiable_field::language
                                 ? http_accept_token_match_mode::language_prefix
                                 : http_accept_token_match_mode::exact;
 

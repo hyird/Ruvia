@@ -13,7 +13,6 @@
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_request_body_failure.h"
 #include "ruvia/http/protocol_byte_limit.h"
 
 #include "test_harness.h"

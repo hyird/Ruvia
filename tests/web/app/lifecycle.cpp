@@ -23,7 +23,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_tunnel.h"
-#include "ruvia/web/next.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/websocket.h"
 
 #include "test_harness.h"

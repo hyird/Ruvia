@@ -2,8 +2,8 @@
 
 #include <optional>
 
-#include "ruvia/core/operation_options.h"
-#include "ruvia/web/http_client_handle.h"
+#include "ruvia/core/operation_timeout.h"
+#include "ruvia/web/http_client.h"
 
 #include "client/http_client_registry.h"
 
@@ -67,7 +67,7 @@ redis_handle worker_client_registry_view::redis(std::string_view alias,
 }
 #endif
 
-http_client_handle worker_client_registry_view::get_http_client(
+http_client_handle worker_client_registry_view::http_client(
     ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
     if (!attached()) {
         throw http_client_error(
@@ -77,7 +77,7 @@ http_client_handle worker_client_registry_view::get_http_client(
         .with_options(context_operation_options(stop_token_value));
 }
 
-http_client_handle worker_client_registry_view::get_http_client(std::string_view alias,
+http_client_handle worker_client_registry_view::http_client(std::string_view alias,
     ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
     if (!attached()) {
         throw http_client_error(

@@ -27,7 +27,7 @@ template <typename stream_type>
 stream_body_reader<stream_type>::stream_body_reader(stream_type& stream,
     std::pmr::polymorphic_allocator<char> allocator, std::string_view initial_body_and_pipeline,
     http1_request_body_plan body_plan, protocol_byte_limit body_limit_value,
-    connection_scanner::entry_type& scanner_entry, http_interim_response_output& interim_output)
+    connection_scanner::entry& scanner_entry, http_interim_response_output& interim_output)
     : stream_(stream),
       buffer_(allocator),
       transfer_output_(allocator),
@@ -43,7 +43,7 @@ stream_body_reader<stream_type>::stream_body_reader(stream_type& stream,
       finished_(!body_plan_.requires_consumption()) {
     const auto expectation_plan =
         body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
-    continue_pending_ = expectation_plan.send_continue() != nullptr;
+    continue_pending_ = expectation_plan == http_server_expectation_plan::send_continue;
     const auto* chunked = body_plan_.chunked();
     if (chunked != nullptr && !chunked->transfer_codings().empty()) {
         const auto& codings = chunked->transfer_codings();
@@ -208,7 +208,7 @@ task<void> stream_body_reader<stream_type>::read_more() {
     }
     const auto read_space = buffer_.prepare(writable);
 
-    scanner_entry_.set_phase(connection_scanner::phase_type::reading_payload);
+    scanner_entry_.set_phase(connection_scanner::phase::reading_payload);
     auto read_completion =
         co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
             stream_.async_read_some(asio::buffer(read_space.data(), read_space.size()), std::move(handler));
@@ -230,7 +230,7 @@ bool stream_body_reader<stream_type>::exceeds_limit(std::size_t bytes_value) con
 template <typename stream_type>
 void stream_body_reader<stream_type>::mark_finished() noexcept {
     finished_ = true;
-    scanner_entry_.set_phase(connection_scanner::phase_type::idle);
+    scanner_entry_.set_phase(connection_scanner::phase::idle);
 }
 
 }  // namespace ruvia::detail

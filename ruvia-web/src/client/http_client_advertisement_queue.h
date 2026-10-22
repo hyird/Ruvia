@@ -6,7 +6,7 @@
 #include <optional>
 
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/web/http_client_handle.h"
+#include "ruvia/web/http_client.h"
 
 namespace ruvia::detail {
 class http_client_advertisement_memory;

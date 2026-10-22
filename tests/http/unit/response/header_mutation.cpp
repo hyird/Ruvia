@@ -38,7 +38,7 @@ RUVIA_TEST(response_header_replacement_accepts_borrowed_names_and_values) {
         for (std::size_t source_value = 0; source_value < 3; ++source_value) {
             failing_memory_resource resource;
             {
-                ruvia::http_response response({.resource_ = &resource});
+                ruvia::http_response response(&resource);
                 populate_headers(response, name);
                 const auto live = resource.live_allocations();
                 const auto& field = response.headers().begin()[source_value * 2 + 1];
@@ -65,7 +65,7 @@ RUVIA_TEST(response_header_removal_accepts_borrowed_names_without_allocating) {
         for (std::size_t source_value = 0; source_value < 3; ++source_value) {
             failing_memory_resource resource;
             {
-                ruvia::http_response response({.resource_ = &resource});
+                ruvia::http_response response(&resource);
                 populate_headers(response, name);
                 const auto live = resource.live_allocations();
                 const auto borrowed_name = response.headers().begin()[source_value * 2 + 1].name();
@@ -85,7 +85,7 @@ RUVIA_TEST(response_header_removal_accepts_borrowed_names_without_allocating) {
 
         failing_memory_resource resource;
         {
-            ruvia::http_response response({.resource_ = &resource});
+            ruvia::http_response response(&resource);
             const auto owner_allocations = resource.live_allocations();
             response.header(name.primary_, "only");
             const auto borrowed_name = response.headers().begin()->name();
@@ -103,7 +103,7 @@ RUVIA_TEST(response_header_replacement_failure_preserves_borrowed_inputs_for_ret
     for (const auto& name : names) {
         failing_memory_resource resource;
         {
-            ruvia::http_response response({.resource_ = &resource});
+            ruvia::http_response response(&resource);
             populate_headers(response, name);
             const auto live = resource.live_allocations();
             const auto borrowed_name = response.headers().begin()[1].name();
@@ -164,7 +164,7 @@ RUVIA_TEST(response_content_type_constants_are_valid_fields_set_without_allocati
 
         failing_memory_resource resource;
         {
-            ruvia::http_response response({.resource_ = &resource});
+            ruvia::http_response response(&resource);
             response.header("X-Before", "before");
             response.header("content-type", "text/csv");
             const auto live = resource.live_allocations();
@@ -175,7 +175,7 @@ RUVIA_TEST(response_content_type_constants_are_valid_fields_set_without_allocati
             RUVIA_CHECK_EQ(resource.live_allocations(), live - 1);
 
             resource.fail_after(0);
-            ruvia::http_response fresh({.resource_ = &resource});
+            ruvia::http_response fresh(&resource);
             fresh.content_type(constant.type_);
             resource.allow_allocations();
             RUVIA_CHECK_EQ(fresh.header("Content-Type").value_or(""), constant.value_);
@@ -217,7 +217,7 @@ RUVIA_TEST(response_header_transfer_appends_disjoint_fields_with_their_rules) {
     const ruvia::http_response_header_options append{.mode_ = ruvia::http_response_header_mode::append};
     for (const auto mode : {ruvia::http_response_header_transfer::merge, ruvia::http_response_header_transfer::assign,
              ruvia::http_response_header_transfer::apply}) {
-        ruvia::http_response source_value({.resource_ = resource});
+        ruvia::http_response source_value(resource);
         source_value.header("X-Source", "one");
         source_value.header("Vary", "Origin", append);
         source_value.header("Vary", "Accept", append);
@@ -225,7 +225,7 @@ RUVIA_TEST(response_header_transfer_appends_disjoint_fields_with_their_rules) {
         source_value.header("Set-Cookie", "b=2", append);
         source_value.header("Content-Type", "text/csv");
 
-        ruvia::http_response destination({.resource_ = resource});
+        ruvia::http_response destination(resource);
         destination.header("X-Existing", "kept");
         destination.transfer_headers_from(source_value, mode);
 
@@ -252,15 +252,15 @@ RUVIA_TEST(response_header_transfer_appends_disjoint_fields_with_their_rules) {
     }
 
     // A field the destination already holds resolves by mode.
-    ruvia::http_response source_value({.resource_ = resource});
+    ruvia::http_response source_value(resource);
     source_value.header("Content-Type", "text/csv");
     source_value.header("X-Added", "yes");
-    ruvia::http_response merged({.resource_ = resource});
+    ruvia::http_response merged(resource);
     merged.content_type(ruvia::http_content_type::application_json);
     merged.transfer_headers_from(source_value, ruvia::http_response_header_transfer::merge);
     RUVIA_CHECK_EQ(merged.header("Content-Type").value_or(""), "application/json");
     RUVIA_CHECK_EQ(merged.header("X-Added").value_or(""), "yes");
-    ruvia::http_response applied({.resource_ = resource});
+    ruvia::http_response applied(resource);
     applied.content_type(ruvia::http_content_type::application_json);
     applied.transfer_headers_from(source_value, ruvia::http_response_header_transfer::apply);
     RUVIA_CHECK_EQ(applied.header("Content-Type").value_or(""), "text/csv");
@@ -270,11 +270,11 @@ RUVIA_TEST(response_header_transfer_appends_disjoint_fields_with_their_rules) {
 RUVIA_TEST(response_header_transfer_failure_leaves_destination_unchanged) {
     failing_memory_resource resource;
     {
-        ruvia::http_response source_value({.resource_ = std::pmr::new_delete_resource()});
+        ruvia::http_response source_value(std::pmr::new_delete_resource());
         source_value.header("X-First", "1");
         source_value.header("X-Second", "2");
 
-        ruvia::http_response destination({.resource_ = &resource});
+        ruvia::http_response destination(&resource);
         destination.header("X-Existing", "kept");
         const auto live = resource.live_allocations();
         resource.fail_after(1);
@@ -299,7 +299,7 @@ RUVIA_TEST(response_header_transfer_failure_leaves_destination_unchanged) {
 }
 
 RUVIA_TEST(response_header_block_iterates_without_const_qualification) {
-    ruvia::http_response response({.resource_ = std::pmr::new_delete_resource()});
+    ruvia::http_response response(std::pmr::new_delete_resource());
     response.header("X-First", "1");
     response.header("X-Second", "2");
     auto staged = response.headers().clone();

@@ -6,7 +6,7 @@
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/websocket_subprotocol_set.h"
+#include "ruvia/http/websocket_handshake.h"
 
 #include "websocket/http_websocket_permessage_deflate.h"
 

@@ -1,11 +1,11 @@
-#include "ruvia/core/error_text.h"
-
 #include <cstddef>
 #include <string>
 #include <string_view>
 #include <system_error>
 
 #include <asio/error.hpp>
+
+#include "ruvia/core/failure_report.h"
 
 #include "test_harness.h"
 

@@ -381,7 +381,7 @@ void validate_indexed_file_for_bodyless_response(
     const file_response_source& source_value, const file_validators& validators,
     bool& indexed_file_validated, http_status_code status_code) {
     validate_indexed_file_for_bodyless_response(source_value, indexed_file_validated);
-    http_response response({.resource_ = context_value.arena()});
+    http_response response(context_value.arena());
     add_file_headers(response, source_value, validators, true);
     apply_file_response_state(context_value, source_value, response, status_code);
     return response;
@@ -390,7 +390,7 @@ void validate_indexed_file_for_bodyless_response(
 [[nodiscard]] http_response make_full_file_response(const context& context_value,
     file_response_source& source_value, const file_validators& validators,
     std::optional<http_status_code> status_code) {
-    http_response response({.resource_ = context_value.arena()});
+    http_response response(context_value.arena());
     add_file_headers(response, source_value, validators);
     set_full_file_body(context_value, source_value, response);
     apply_file_response_state(context_value, source_value, response, status_code);
@@ -406,7 +406,7 @@ void validate_indexed_file_for_bodyless_response(
         throw std::runtime_error("secure multipart boundary generation failed");
     }
     std::pmr::string boundary(*token, context_value.arena());
-    http_response response({.resource_ = context_value.arena()});
+    http_response response(context_value.arena());
     add_file_headers(response, source_value, validators);
     apply_file_response_state(context_value, source_value, response, http_status::partial_content);
     const auto media_type = response.header("Content-Type");
@@ -468,7 +468,7 @@ void validate_indexed_file_for_bodyless_response(
     }
     if (plan.range_unsatisfiable()) {
         validate_indexed_file_for_bodyless_response(source_value, indexed_file_validated);
-        http_response response({.resource_ = context_value.arena()});
+        http_response response(context_value.arena());
         response.content_range_unsatisfied(source_value.size_);
         add_file_headers(response, source_value, validators);
         apply_file_response_state(context_value, source_value, response, plan.status());
@@ -478,7 +478,7 @@ void validate_indexed_file_for_bodyless_response(
         return make_multipart_response(context_value, source_value, validators, *ranges);
     }
     if (const auto* range = plan.partial()) {
-        http_response response({.resource_ = context_value.arena()});
+        http_response response(context_value.arena());
         add_file_headers(response, source_value, validators);
         response.content_range(range->offset(), range->length(), source_value.size_);
         set_file_body(context_value, source_value, response, range->offset(), range->length());

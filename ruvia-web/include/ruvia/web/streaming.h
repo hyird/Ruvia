@@ -43,7 +43,7 @@ private:
     friend class multipart_reader;
 
     struct token_type final {};
-    using read_type = detail::callback_ref_type<task<std::optional<std::span<const std::byte>>>()>;
+    using read_type = detail::callback_ref<task<std::optional<std::span<const std::byte>>>()>;
 
 public:
     body_reader(token_type, void* target, read_type::invoke_type read) noexcept
@@ -93,23 +93,16 @@ public:
     scoped_operation<void> write(std::string_view chunk) &;
     scoped_operation<void> write(std::string_view) && = delete;
 
-    template <typename text_type>
-        requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type&&>)
-    scoped_operation<void> write(text_type&& chunk) & {
-        return write(std::string_view(std::forward<text_type>(chunk)));
-    }
-    template <typename text_type>
-        requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type&&>)
-    scoped_operation<void> write(text_type&&) && = delete;
-
     /// Takes ownership of an already-allocated chunk and transfers it into the
     /// output lane, rebinding it to owner storage when needed before returning.
     /// Compatible allocators transfer the
     /// existing allocation; incompatible allocators copy it before returning.
-    scoped_operation<void> write(std::pmr::string&& chunk) &;
-    scoped_operation<void> write(std::pmr::string&&) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    scoped_operation<void> write(string_type&& chunk) & {
+        return write_owned(std::move(chunk));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    scoped_operation<void> write(string_type&&) && = delete;
 
     scoped_operation<void> writeln(std::string_view chunk) &;
     scoped_operation<void> writeln(std::string_view) && = delete;
@@ -192,6 +185,8 @@ private:
             throw std::logic_error("response stream lifetime has expired");
         }
     }
+
+    scoped_operation<void> write_owned(std::pmr::string&& chunk);
 
     [[nodiscard]] bool committed() const noexcept {
         return committed_(target_);

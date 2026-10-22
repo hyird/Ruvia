@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
@@ -59,7 +59,7 @@ public:
         const auto path = context_value.req().path() == "/large" ? "/large-asset" : "/asset";
         const std::array<ruvia::http_header_view, 1> headers{{{"x-promise", "owned-request"}}};
         for (unsigned i = 0; i != count; ++i) {
-            if (co_await context_value.push({.scheme_ = "http", .authority_ = context_value.req().authority(), .path_ = path, .headers_ = headers})) {
+            if (context_value.push({.scheme_ = "http", .authority_ = context_value.req().authority(), .path_ = path, .headers_ = headers})) {
                 ++owner_value.promised_;
             } else {
                 ++owner_value.refused_;

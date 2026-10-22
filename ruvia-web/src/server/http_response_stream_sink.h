@@ -54,7 +54,7 @@ public:
     // which commit checks so a route that read its body before streaming keeps
     // the connection reusable.
     response_stream_sink(stream_type& stream, worker_memory& memory, worker_codecs& codecs,
-        http_response_head_buffer& head, connection_scanner::entry_type& scanner_entry,
+        http_response_head_buffer& head, connection_scanner::entry& scanner_entry,
         const worker_handle& worker_value, const http_request& request, const cors_options* cors,
         http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
         const lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
@@ -75,7 +75,7 @@ public:
           inbound_resource_(inbound_resource != nullptr ? inbound_resource : memory.resource()) {}
 
     response_stream_sink(stream_type&, worker_memory&, worker_codecs&, http_response_head_buffer&,
-        connection_scanner::entry_type&, worker_handle&&, const http_request&, const cors_options*,
+        connection_scanner::entry&, worker_handle&&, const http_request&, const cors_options*,
         http1_response_stream_plan, http1_response_stream_plan,
         const lazy_buffered_body<stream_type>&, http_response_coding_selection,
         http_response_coding_availability, std::pmr::memory_resource* = nullptr) = delete;
@@ -234,8 +234,8 @@ private:
         }
         std::error_code ec;
         {
-            const connection_scanner::entry_type::phase_scope_type write_phase(
-                scanner_entry_, connection_scanner::phase_type::writing);
+            const connection_scanner::entry::phase_scope write_phase(
+                scanner_entry_, connection_scanner::phase::writing);
             const auto completion = co_await write_to_stream(asio::buffer(head_.view()));
             ec = completion.error_code();
         }
@@ -298,8 +298,8 @@ private:
             // (forced once the stream ends) is what delimits the message.
             std::error_code raw_ec;
             {
-                const connection_scanner::entry_type::phase_scope_type write_phase(
-                    scanner_entry_, connection_scanner::phase_type::writing);
+                const connection_scanner::entry::phase_scope write_phase(
+                    scanner_entry_, connection_scanner::phase::writing);
                 const auto completion = co_await write_to_stream(asio::buffer(chunk));
                 raw_ec = completion.error_code();
             }
@@ -315,8 +315,8 @@ private:
             asio::buffer(chunk), asio::buffer(http1_chunk_data_terminator)};
         std::error_code write_ec;
         {
-            const connection_scanner::entry_type::phase_scope_type write_phase(
-                scanner_entry_, connection_scanner::phase_type::writing);
+            const connection_scanner::entry::phase_scope write_phase(
+                scanner_entry_, connection_scanner::phase::writing);
             const auto completion = co_await write_to_stream(buffers);
             write_ec = completion.error_code();
         }
@@ -371,8 +371,8 @@ private:
             asio::buffer(trailers_), asio::buffer(http1_trailer_section_terminator)};
         std::error_code ec;
         {
-            const connection_scanner::entry_type::phase_scope_type write_phase(
-                scanner_entry_, connection_scanner::phase_type::writing);
+            const connection_scanner::entry::phase_scope write_phase(
+                scanner_entry_, connection_scanner::phase::writing);
             const auto completion = co_await write_to_stream(buffers);
             ec = completion.error_code();
         }
@@ -386,7 +386,7 @@ private:
     stream_type& stream_;
     http_response_head_buffer& head_;
     std::pmr::string trailers_;
-    connection_scanner::entry_type& scanner_entry_;
+    connection_scanner::entry& scanner_entry_;
     // The connection/server owns an address-stable handle for the complete
     // route dispatch. Streaming must not acquire shared ownership per request.
     const worker_handle& worker_;

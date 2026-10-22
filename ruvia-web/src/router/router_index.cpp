@@ -10,12 +10,12 @@
 
 namespace ruvia {
 
-detail::route_handler_type detail::resolved_route::handler() const noexcept {
+detail::route_handler detail::resolved_route::handler() const noexcept {
     return callback_access::make<task<http_response>(context&)>(
         handler_target_, route_->endpoint().buffered()->invoke());
 }
 
-detail::route_stream_handler_type detail::resolved_route::stream_handler() const noexcept {
+detail::route_stream_handler detail::resolved_route::stream_handler() const noexcept {
     return callback_access::make<task<void>(context&)>(handler_target_, route_->endpoint().stream_invoke());
 }
 

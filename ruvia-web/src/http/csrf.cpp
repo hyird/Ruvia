@@ -32,39 +32,34 @@ std::optional<std::string_view> generate_secure_token(std::span<char> buffer) no
 
 namespace ruvia {
 
-csrf_protection::config_storage_type::validated_config_type csrf_protection::config_storage_type::validate(
-    const csrf_protection_config& source_value) {
+const csrf_protection_config& csrf_protection::validate(const csrf_protection_config& source_value) {
     if (!is_valid_http_header_name(source_value.cookie_name_)) {
         throw std::invalid_argument("CSRF cookie name must be a valid HTTP token");
     }
     if (!is_valid_http_header_name(source_value.header_name_)) {
         throw std::invalid_argument("CSRF header name must be a valid HTTP field name");
     }
-    return validated_config_type{.source_ = &source_value};
+    return source_value;
 }
 
-csrf_protection::config_storage_type::config_storage_type(
-    const csrf_protection_config& source_value, std::pmr::memory_resource* resource)
-    : config_storage_type(validate(source_value), resource) {}
-
-csrf_protection::config_storage_type::config_storage_type(
-    validated_config_type validated, std::pmr::memory_resource* resource)
-    : cookie_name_(validated.source_->cookie_name_, resource),
-      header_name_(validated.source_->header_name_, resource) {}
+csrf_protection::csrf_protection(
+    const csrf_protection_config& validated, std::pmr::memory_resource* resource)
+    : cookie_name_(validated.cookie_name_, resource),
+      header_name_(validated.header_name_, resource) {}
 
 csrf_protection::csrf_protection()
     : csrf_protection(csrf_protection_config{}) {}
 
 csrf_protection::csrf_protection(const csrf_protection_config& config)
-    : config_(config, detail::registration_resource()) {}
+    : csrf_protection(validate(config), detail::registration_resource()) {}
 
 task<void> csrf_protection::handle(context& c, next& next_value) {
     const auto method = c.req().known_method();
     const bool safe = method == http_known_method::get || method == http_known_method::head ||
                       method == http_known_method::options;
-    const auto cookie = c.req().cookie(config_.cookie_name_);
+    const auto cookie = c.req().cookie(cookie_name_);
     if (!safe) {
-        const auto header_value = c.req().header(config_.header_name_);
+        const auto header_value = c.req().header(header_name_);
         if (!cookie || cookie->empty() || !header_value || header_value->empty() ||
             !detail::constant_time_bytes_equal(*cookie, *header_value)) {
             c.respond(c.error({.status_ = ruvia::http_status::forbidden,
@@ -98,7 +93,7 @@ task<void> csrf_protection::handle(context& c, next& next_value) {
             .secure_ = connection.scheme() == http_scheme::https ? cookie_attribute_policy::emit
                                                                  : cookie_attribute_policy::omit,
         };
-        c.set_cookie({.name_ = config_.cookie_name_, .value_ = *token, .attributes_ = options});
+        c.set_cookie({.name_ = cookie_name_, .value_ = *token, .attributes_ = options});
     }
     co_await next_value();
 }

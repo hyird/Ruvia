@@ -36,8 +36,7 @@ struct http1_request_message final {
 [[nodiscard]] inline http1_request_message parse_http1_request_message(
     std::string_view buffer, std::pmr::memory_resource* resource = nullptr) {
     http1_request_message message;
-    const http1_server_request_parser parser;
-    parser.parse_head(buffer, message.state_, 0, resource);
+    message.state_.parse_head(buffer, 0, resource);
     const auto* head = message.state_.head_ready();
     if (head == nullptr) {
         return message;

@@ -4,7 +4,7 @@
 #include <ranges>
 #include <utility>
 
-#include "ruvia/web/model_types.h"
+#include "ruvia/web/model.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"

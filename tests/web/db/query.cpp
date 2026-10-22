@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/db/db_predicate.h"
+#include "ruvia/web/db/db_query.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
@@ -18,7 +18,7 @@
 namespace {
 using namespace ruvia;
 using op_type = db_binary_operator;
-using entity_type = db_entity<"device", db_column<"id", std::int64_t>, db_column<"name", std::pmr::string>>;
+RUVIA_DB_ENTITY(entity_type, "device", db_column<"id", std::int64_t>, db_column<"name", std::pmr::string>)
 
 RUVIA_TEST(db_query_sql_expression_import_preserves_syntax_and_parameter_binding) {
     test::counting_memory_resource source_resource, target_resource;
@@ -612,9 +612,14 @@ RUVIA_TEST(db_predicate_composes_typed_fields_and_literal_parameters) {
     RUVIA_CHECK_EQ(statement.sql(), "SELECT * FROM \"device\" WHERE ((\"device\".\"id\" >= $1) AND (\"device\".\"name\" = $2))");
 }
 
+RUVIA_DB_ENTITY(tagged_type, "tagged", db_column<"id", std::int64_t>,
+    db_column<"tags", std::pmr::vector<std::pmr::string>>)
+RUVIA_DB_ENTITY(uuids_type, "uuid_tags",
+    db_column<"tags", std::pmr::vector<std::pmr::string>, db_column_options{.data_type_ = db_data_type::uuid}>)
+RUVIA_DB_ENTITY(codes_type, "codes",
+    db_column<"values", std::pmr::vector<std::pmr::string>, db_column_options{.data_type_ = db_data_type::varchar, .length_ = 32}>)
+
 RUVIA_TEST(db_predicate_between_and_array_operators_bind_owned_typed_values) {
-    using tagged_type = db_entity<"tagged", db_column<"id", std::int64_t>,
-        db_column<"tags", std::pmr::vector<std::pmr::string>>>;
     std::array<std::string, 2> input{std::string(200, 'a'), "zone-b"};
     auto condition = tagged_type::column<"id">().between(3, 8) && tagged_type::column<"tags">().array_contains(std::span<const std::string>(input));
     input[0].assign(200, 'z');
@@ -631,13 +636,11 @@ RUVIA_TEST(db_predicate_between_and_array_operators_bind_owned_typed_values) {
     RUVIA_CHECK_EQ(empty.sql(), "SELECT * FROM \"tagged\" WHERE (\"tagged\".\"tags\" <@ CAST(ARRAY[] AS TEXT[]))");
     RUVIA_CHECK(empty.params().empty());
 
-    using uuids_type = db_entity<"uuid_tags", db_column<"tags", std::pmr::vector<std::pmr::string>, db_column_options{.data_type_ = db_data_type::uuid}>>;
     db_query overlap;
     auto any = uuids_type::column<"tags">().array_overlap({"12345678-1234-1234-1234-123456789abc"});
     overlap.from("uuid_tags").where(any.expression(overlap));
     const auto typed = overlap.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK_EQ(typed.sql(), "SELECT * FROM \"uuid_tags\" WHERE (\"uuid_tags\".\"tags\" && CAST(ARRAY[$1] AS UUID[]))");
-    using codes_type = db_entity<"codes", db_column<"values", std::pmr::vector<std::pmr::string>, db_column_options{.data_type_ = db_data_type::varchar, .length_ = 32}>>;
     db_query codes;
     auto code = codes_type::column<"values">().array_contains({"zone-a"});
     codes.from("codes").where(code.expression(codes));
@@ -800,9 +803,11 @@ RUVIA_TEST(db_query_unary_minus_and_bit_not_keep_negative_literals_out_of_commen
     }
 }
 
+RUVIA_DB_ENTITY(cq_device_type, "cq_device", db_column<"id", std::int64_t>, db_column<"name", std::pmr::string>,
+    db_column<"tags", std::pmr::vector<std::pmr::string>>)
+
 RUVIA_TEST(db_predicate_public_overloads_cover_comparisons_membership_nulls_and_aliases) {
-    using tagged_type = db_entity<"cq_device", db_column<"id", std::int64_t>, db_column<"name", std::pmr::string>,
-        db_column<"tags", std::pmr::vector<std::pmr::string>>>;
+    using tagged_type = cq_device_type;
     RUVIA_CHECK_EQ(tagged_type::column<"id">().name(), std::string_view("id"));
 
     const auto compile = [](db_predicate predicate, db_driver driver) {
@@ -1327,6 +1332,9 @@ RUVIA_TEST(db_query_expression_ownership_import_subquery_cast_and_cache_methods_
     RUVIA_CHECK(dml_insert.returns_rows());
 }
 
+RUVIA_DB_ENTITY(char_codes_type, "char_codes",
+    db_column<"values", std::pmr::vector<std::pmr::string>, db_column_options{.data_type_ = db_data_type::char_value, .length_ = 8}>)
+
 RUVIA_TEST(db_query_char_cast_and_array_predicate_render_for_supported_dialects) {
     db_query casts;
     casts.select(casts.cast(casts.value("x"), db_type_definition{.data_type_ = db_data_type::char_value, .length_ = 64})).from("char_records");
@@ -1346,8 +1354,6 @@ RUVIA_TEST(db_query_char_cast_and_array_predicate_render_for_supported_dialects)
         (void)invalid.compile(db_driver::postgresql, nullptr);
     }));
 
-    using char_codes_type = db_entity<"char_codes",
-        db_column<"values", std::pmr::vector<std::pmr::string>, db_column_options{.data_type_ = db_data_type::char_value, .length_ = 8}>>;
     db_query array;
     auto contains = char_codes_type::column<"values">().array_contains({"zone-a"});
     array.from("char_codes").where(contains.expression(array));
@@ -1627,19 +1633,19 @@ RUVIA_TEST(db_query_at_time_zone_and_using_join_render_and_validate) {
     RUVIA_CHECK(testing::throws_on([&] { (void)query.compile(db_driver::mariadb, nullptr); }));
 }
 
-RUVIA_TEST(db_field_reference_and_predicate_cover_aliases_columns_json_and_owned_assignments) {
-    using user_entity = db_entity<"users",
-        db_column<"id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
-        db_column<"department_id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .nullable_ = true}>,
-        db_column<"nickname", std::pmr::string, db_column_options{.nullable_ = true}>,
-        db_column<"active", bool>,
-        db_column<"revision", std::int64_t>,
-        db_column<"config", std::pmr::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
-        db_column<"updated_at", std::pmr::string, db_column_options{.data_type_ = db_data_type::timestamp_tz}>>;
-    using dept_entity = db_entity<"departments",
-        db_column<"id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
-        db_column<"name", std::pmr::string>>;
+RUVIA_DB_ENTITY(user_entity, "users",
+    db_column<"id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
+    db_column<"department_id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .nullable_ = true}>,
+    db_column<"nickname", std::pmr::string, db_column_options{.nullable_ = true}>,
+    db_column<"active", bool>,
+    db_column<"revision", std::int64_t>,
+    db_column<"config", std::pmr::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
+    db_column<"updated_at", std::pmr::string, db_column_options{.data_type_ = db_data_type::timestamp_tz}>)
+RUVIA_DB_ENTITY(dept_entity, "departments",
+    db_column<"id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
+    db_column<"name", std::pmr::string>)
 
+RUVIA_TEST(db_field_reference_and_predicate_cover_aliases_columns_json_and_owned_assignments) {
     static_assert(user_entity::column_name<"department_id">() == "department_id");
     RUVIA_CHECK_EQ(user_entity::column<"id">("u").alias(), std::string_view("u"));
     RUVIA_CHECK_EQ(user_entity::column<"id">().with_alias("u").alias(), std::string_view("u"));
@@ -1709,15 +1715,15 @@ RUVIA_TEST(db_field_reference_and_predicate_cover_aliases_columns_json_and_owned
         "\"revision\" = (\"users\".\"revision\" + $4), \"updated_at\" = \"now\"() WHERE \"users\".\"id\"");
 }
 
-RUVIA_TEST(db_expr_and_db_tuple_compose_without_external_query) {
-    using alert_entity = db_entity<"alert_state",
-        db_column<"device_id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
-        db_column<"observed_at_ms", std::int64_t>,
-        db_column<"message_id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid}>,
-        db_column<"data", std::pmr::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
-        db_column<"previous_data", std::pmr::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
-        db_column<"tags", std::pmr::vector<std::pmr::string>>>;
+RUVIA_DB_ENTITY(alert_entity, "alert_state",
+    db_column<"device_id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid, .primary_key_ = true}>,
+    db_column<"observed_at_ms", std::int64_t>,
+    db_column<"message_id", std::pmr::string, db_column_options{.data_type_ = db_data_type::uuid}>,
+    db_column<"data", std::pmr::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
+    db_column<"previous_data", std::pmr::string, db_column_options{.data_type_ = db_data_type::jsonb}>,
+    db_column<"tags", std::pmr::vector<std::pmr::string>>)
 
+RUVIA_TEST(db_expr_and_db_tuple_compose_without_external_query) {
     const auto newer_tuple =
         db_tuple{alert_entity::column<"observed_at_ms">().excluded_expr(), alert_entity::column<"message_id">().excluded_expr()} >
         db_tuple{alert_entity::column<"observed_at_ms">(), alert_entity::column<"message_id">()};

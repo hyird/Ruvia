@@ -90,20 +90,13 @@ public:
     scoped_operation<void> text(std::string_view payload, websocket_send_options options = {}) &;
     scoped_operation<void> text(std::string_view, websocket_send_options = {}) && = delete;
 
-    template <typename text_type>
-        requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type&&>)
-    scoped_operation<void> text(text_type&& payload_value, websocket_send_options options = {}) & {
-        return text(std::string_view(std::forward<text_type>(payload_value)), options);
-    }
-    template <typename text_type>
-        requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type&&>)
-    scoped_operation<void> text(text_type&&, websocket_send_options = {}) && = delete;
-
     /// Zero-copy text frame: takes ownership of an already-allocated payload.
-    scoped_operation<void> text(std::pmr::string&& payload, websocket_send_options options = {}) &;
-    scoped_operation<void> text(std::pmr::string&&, websocket_send_options = {}) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    scoped_operation<void> text(string_type&& payload, websocket_send_options options = {}) & {
+        return write(websocket_opcode::text, std::move(payload), options.compress_);
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    scoped_operation<void> text(string_type&&, websocket_send_options = {}) && = delete;
 
     scoped_operation<void> binary(std::string_view payload, websocket_send_options options = {}) &;
     scoped_operation<void> binary(std::string_view, websocket_send_options = {}) && = delete;
@@ -111,56 +104,35 @@ public:
     scoped_operation<void> binary(std::span<const std::byte> payload, websocket_send_options options = {}) &;
     scoped_operation<void> binary(std::span<const std::byte>, websocket_send_options = {}) && = delete;
 
-    template <typename text_type>
-        requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type&&>)
-    scoped_operation<void> binary(text_type&& payload_value, websocket_send_options options = {}) & {
-        return binary(std::string_view(std::forward<text_type>(payload_value)), options);
-    }
-    template <typename text_type>
-        requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type&&>)
-    scoped_operation<void> binary(text_type&&, websocket_send_options = {}) && = delete;
-
     /// Zero-copy binary frame.
-    scoped_operation<void> binary(std::pmr::string&& payload, websocket_send_options options = {}) &;
-    scoped_operation<void> binary(std::pmr::string&&, websocket_send_options = {}) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    scoped_operation<void> binary(string_type&& payload, websocket_send_options options = {}) & {
+        return write(websocket_opcode::binary, std::move(payload), options.compress_);
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    scoped_operation<void> binary(string_type&&, websocket_send_options = {}) && = delete;
 
     scoped_operation<void> pong(std::string_view payload) &;
     scoped_operation<void> pong(std::string_view) && = delete;
 
-    template <typename text_type>
-        requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type&&>)
-    scoped_operation<void> pong(text_type&& payload_value) & {
-        return pong(std::string_view(std::forward<text_type>(payload_value)));
-    }
-    template <typename text_type>
-        requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type&&>)
-    scoped_operation<void> pong(text_type&&) && = delete;
-
     /// Zero-copy pong frame.
-    scoped_operation<void> pong(std::pmr::string&& payload) &;
-    scoped_operation<void> pong(std::pmr::string&&) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    scoped_operation<void> pong(string_type&& payload) & {
+        return write(websocket_opcode::pong, std::move(payload));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    scoped_operation<void> pong(string_type&&) && = delete;
 
     scoped_operation<void> ping(std::string_view payload = {}) &;
     scoped_operation<void> ping(std::string_view = {}) && = delete;
 
-    template <typename text_type>
-        requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                 std::constructible_from<std::string_view, text_type&&>)
-    scoped_operation<void> ping(text_type&& payload_value) & {
-        return ping(std::string_view(std::forward<text_type>(payload_value)));
-    }
-    template <typename text_type>
-        requires(!std::same_as<std::remove_cvref_t<text_type>, std::pmr::string> &&
-                    std::constructible_from<std::string_view, text_type&&>)
-    scoped_operation<void> ping(text_type&&) && = delete;
-
     /// Zero-copy ping frame.
-    scoped_operation<void> ping(std::pmr::string&& payload) &;
-    scoped_operation<void> ping(std::pmr::string&&) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    scoped_operation<void> ping(string_type&& payload) & {
+        return write(websocket_opcode::ping, std::move(payload));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    scoped_operation<void> ping(string_type&&) && = delete;
 
     /// Zero-copy send of a message returned by this connection's read(), with
     /// the message's own opcode (for example an echo). The frame borrows the

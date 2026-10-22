@@ -22,12 +22,13 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_pmr_string.h"
-#include "ruvia/http/websocket_protocol_types.h"
+#include "ruvia/http/websocket_protocol.h"
 
-#include "http/http_stream_read_result.h"
 #include "http2/http2_data_output_budget.h"
 #include "http2/http2_sans_io_send_window.h"
 #include "http2/http2_sans_io_stream_runtime.h"
+#include "server/inbound_transport_error.h"
+#include "tls/tls_stream_end.h"
 
 namespace ruvia::detail {
 
@@ -51,17 +52,18 @@ public:
     }
 
     template <typename buffer_type>
-    [[nodiscard]] task<http_stream_read_result> read_more(buffer_type& buffer) {
+    [[nodiscard]] task<bool> read_more(buffer_type& buffer) {
         for (;;) {
             if (aborted_ || signal_.terminated()) {
-                co_return http_stream_read_result::make_failure(aborted_
-                                                                    ? std::make_error_code(std::errc::operation_canceled)
-                                                                    : signal_.terminal_error());
+                throw inbound_transport_error(
+                    aborted_ ? std::make_error_code(std::errc::operation_canceled)
+                             : signal_.terminal_error(),
+                    "HTTP/2 tunnel read");
             }
             const auto receive_status = connection_.stream_receive_status(stream_id_);
             if (receive_status == http2_stream_receive_status::closed) {
-                co_return http_stream_read_result::make_failure(
-                    std::make_error_code(std::errc::connection_reset));
+                throw inbound_transport_error(
+                    std::make_error_code(std::errc::connection_reset), "HTTP/2 tunnel read");
             }
             const auto chunk = body_queue_.pop();
             // pop() returns the previous chunk's receive-window credit; flush
@@ -71,18 +73,19 @@ public:
             }
             if (!chunk.empty()) {
                 buffer.append(std::string_view(chunk.data(), chunk.size()));
-                co_return http_stream_read_result::make_data();
+                co_return true;
             }
             if (!body_queue_.empty()) {
                 continue;
             }
             if (receive_status == http2_stream_receive_status::ended) {
-                co_return http_stream_read_result::make_end();
+                co_return false;
             }
             if (aborted_ || signal_.terminated()) {
-                co_return http_stream_read_result::make_failure(aborted_
-                                                                    ? std::make_error_code(std::errc::operation_canceled)
-                                                                    : signal_.terminal_error());
+                throw inbound_transport_error(
+                    aborted_ ? std::make_error_code(std::errc::operation_canceled)
+                             : signal_.terminal_error(),
+                    "HTTP/2 tunnel read");
             }
             co_await signal_.wait();
         }

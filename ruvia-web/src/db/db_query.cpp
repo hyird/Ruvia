@@ -6,7 +6,7 @@
 #include <memory>
 #include <stdexcept>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "db/db_sql_format.h"
 #include "query_storage.h"
@@ -1035,14 +1035,15 @@ db_owned_expression db_owned_expression::make_tuple(std::span<const db_expr> ele
     return from_tree(std::move(tree));
 }
 
-db_owned_expression db_owned_expression::make_in_list(
-    const db_owned_expression& lhs, db_binary_operator op, std::span<const db_value> values) {
+db_owned_expression db_owned_expression::make_in_list(const db_owned_expression& lhs,
+    db_binary_operator op, std::size_t count, const void* context,
+    db_value (*element_at)(const void* context, std::size_t index)) {
     auto tree = allocate_tree();
     const auto left_idx = lhs.append_to_tree(*tree);
     db_query_node list_node(db_node_kind::list, tree->resource_);
-    list_node.args_.reserve(values.size());
-    for (const auto& value : values) {
-        list_node.args_.push_back(push_tree_value(*tree, value));
+    list_node.args_.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        list_node.args_.push_back(push_tree_value(*tree, element_at(context, i)));
     }
     const auto list_idx = push_tree_node(*tree, std::move(list_node));
     db_query_node node_value(db_node_kind::binary, tree->resource_);
@@ -1101,13 +1102,15 @@ db_owned_expression db_owned_expression::make_exists(const db_query& subquery) {
 }
 
 db_owned_expression db_owned_expression::make_array_op(const db_owned_expression& lhs,
-    db_binary_operator op, std::span<const db_value> values, const db_type_definition& array_type) {
+    db_binary_operator op, std::size_t count, const void* context,
+    db_value (*element_at)(const void* context, std::size_t index),
+    const db_type_definition& array_type) {
     auto tree = allocate_tree();
     const auto left_idx = lhs.append_to_tree(*tree);
     db_query_node array_node(db_node_kind::array, tree->resource_);
-    array_node.args_.reserve(values.size());
-    for (const auto& value : values) {
-        array_node.args_.push_back(push_tree_value(*tree, value));
+    array_node.args_.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        array_node.args_.push_back(push_tree_value(*tree, element_at(context, i)));
     }
     const auto array_idx = push_tree_node(*tree, std::move(array_node));
     db_query_node cast_node(db_node_kind::cast, tree->resource_);
@@ -1829,52 +1832,38 @@ db_query& db_query::insert_from(const db_query& query) {
     s.insert_query_ = index;
     return *this;
 }
-void db_query::set_conflict(std::span<const borrowed_text> columns, std::string_view constraint,
-    db_expression target_where, std::span<const std::pair<std::string_view, db_expression>> updates,
-    db_expression update_where, bool do_nothing, bool any_unique_key) {
+db_query& db_query::on_conflict(const db_conflict_options& conflict) {
     auto& s = storage();
     if (s.kind_ != db_query_kind::insert) {
         throw std::invalid_argument("ON CONFLICT requires an INSERT");
     }
     detail::db_stored_conflict owned(s.resource_);
-    owned.columns_.reserve(columns.size());
-    for (const auto& name : columns) {
+    owned.columns_.reserve(conflict.columns_.size());
+    for (const auto& name : conflict.columns_) {
         detail::require_name(name);
         owned.columns_.emplace_back(name);
     }
-    if (!constraint.empty()) {
-        detail::require_name(constraint);
-        owned.constraint_ = constraint;
+    if (!conflict.constraint_.empty()) {
+        detail::require_name(conflict.constraint_);
+        owned.constraint_ = conflict.constraint_;
     }
-    owned.do_nothing_ = do_nothing;
-    owned.any_unique_key_ = any_unique_key;
-    if (!target_where.empty()) {
-        owned.target_where_ = require_expression(target_where);
+    owned.do_nothing_ = conflict.do_nothing_;
+    owned.any_unique_key_ = conflict.any_unique_key_;
+    if (!conflict.target_where_.empty()) {
+        owned.target_where_ = require_expression(conflict.target_where_);
     }
-    if (!update_where.empty()) {
-        owned.update_where_ = require_expression(update_where);
+    if (!conflict.update_where_.empty()) {
+        owned.update_where_ = require_expression(conflict.update_where_);
     }
-    owned.assignments_.reserve(updates.size());
-    for (const auto& [column, expression] : updates) {
-        detail::require_name(column);
-        if (std::ranges::any_of(owned.assignments_, [&](const auto& existing) { return std::string_view(existing.column_) == column; })) {
+    owned.assignments_.reserve(conflict.update_.size());
+    for (const auto& assignment : conflict.update_) {
+        detail::require_name(assignment.column_);
+        if (std::ranges::any_of(owned.assignments_, [&](const auto& existing) { return std::string_view(existing.column_) == assignment.column_; })) {
             throw std::invalid_argument("duplicate conflict update column");
         }
-        owned.assignments_.emplace_back(column, require_expression(expression), s.resource_);
+        owned.assignments_.emplace_back(assignment.column_, require_expression(assignment.expression(*this)), s.resource_);
     }
     s.conflict_ = std::move(owned);
-}
-db_query& db_query::on_conflict(const db_conflict_options& conflict) {
-    if (storage().kind_ != db_query_kind::insert) {
-        throw std::invalid_argument("ON CONFLICT requires an INSERT");
-    }
-    std::pmr::vector<std::pair<std::string_view, db_expression>> updates(resource());
-    updates.reserve(conflict.update_.size());
-    for (const auto& assignment : conflict.update_) {
-        updates.emplace_back(assignment.column_, assignment.expression(*this));
-    }
-    set_conflict(conflict.columns_, conflict.constraint_, conflict.target_where_, updates,
-        conflict.update_where_, conflict.do_nothing_, conflict.any_unique_key_);
     return *this;
 }
 db_query& db_query::update(std::string_view table_value, std::string_view alias) {

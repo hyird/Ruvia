@@ -237,7 +237,7 @@ http_response context::redirect(redirect_response_options options) const {
     if (redirect_location_contains_line_break(location)) {
         throw std::invalid_argument("redirect location must not contain CR or LF");
     }
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     apply_response_state(response, status_code);
     if (redirect_location_needs_encoding(location)) {
         auto encoded_location = encode_redirect_location(location, pool());

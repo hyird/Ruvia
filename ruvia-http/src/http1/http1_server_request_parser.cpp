@@ -46,35 +46,34 @@ using ruvia::detail::request_target_view;
 http1_server_request_parse_state::http1_server_request_parse_state() noexcept
     : request_(http_request_access::make()) {}
 
-void http1_server_request_parser::parse_head(std::string_view buffer,
-    http1_server_request_parse_state& state_value, std::size_t header_search_offset,
-    std::pmr::memory_resource* resource) const {
+void http1_server_request_parse_state::parse_head(std::string_view buffer,
+    std::size_t header_search_offset, std::pmr::memory_resource* resource) {
     // Bytes before header_search_offset were classified by an earlier call on
     // this state; an earlier search offset discards that progress.
-    auto scan = state_value.need_request_head() != nullptr ? *state_value.need_request_head()
-                                                           : http1_server_need_request_head{};
+    auto scan = need_request_head() != nullptr ? *need_request_head()
+                                               : http1_server_need_request_head{};
     scan.leading_bytes_ = std::min(scan.leading_bytes_, header_search_offset);
     scan.request_line_end_ = scan.request_line_end_ <= header_search_offset ? scan.request_line_end_ : 0;
 
     // Incomplete input allocates no descriptor storage. The scan state is
     // published first so an allocation failure while binding descriptors
     // below cannot leave an earlier head_ready result beside the new request.
-    state_value.body_plan_ = http1_request_body_plan(http_request_expectations{});
-    state_value.connection_plan_ = http1_request_connection_plan::http11_close();
-    state_value.response_coding_qualities_ = {};
-    state_value.progress_ = scan;
-    http_request_access::reset(state_value.request_);
+    body_plan_ = http1_request_body_plan(http_request_expectations{});
+    connection_plan_ = http1_request_connection_plan::http11_close();
+    response_coding_qualities_ = {};
+    progress_ = scan;
+    http_request_access::reset(request_);
 
-    const auto fail = [&state_value](http_parse_error error) noexcept {
+    const auto fail = [this](http_parse_error error) noexcept {
         // A rejected head leaves the message boundary unknown and its content
         // unconsumed, so the connection cannot be reused (RFC 9112 sections 6.1
         // and 6.3). The request version may already have been accepted when a
         // later target/framing semantic check fails; preserve it so an HTTP/1.0
         // error response is not silently upgraded to HTTP/1.1.
-        const auto connection_plan = state_value.connection_plan_.require_close();
-        http_request_access::reset(state_value.request_);
-        state_value.progress_ = http1_server_request_parse_failure(error);
-        state_value.connection_plan_ = connection_plan;
+        const auto connection_plan = connection_plan_.require_close();
+        http_request_access::reset(request_);
+        progress_ = http1_server_request_parse_failure(error);
+        connection_plan_ = connection_plan;
     };
 
     const auto header_bytes = find_http_request_head_end(buffer, scan.leading_bytes_, header_search_offset);
@@ -88,7 +87,7 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
         if (buffer.size() >= max_http_header_bytes) {
             return fail(classify_head_cap(buffer, scan.leading_bytes_, scan.request_line_end_));
         }
-        state_value.progress_ = scan;
+        progress_ = scan;
         return;
     }
 
@@ -101,24 +100,24 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
     // exact wire token: method registration is extensible, while http_known_method is
     // only the framework's routing/response-semantics classification.
     const auto method = block.method_.bind(buffer);
-    http_request_access::set_method(state_value.request_, method);
-    const auto known_method = state_value.request_.known_method();
+    http_request_access::set_method(request_, method);
+    const auto known_method = request_.known_method();
 
     const auto target = block.target_.bind(buffer);
-    http_request_access::set_target(state_value.request_, target);
+    http_request_access::set_target(request_, target);
 
     const auto protocol_version = block.protocol_version_;
-    http_request_access::set_protocol_version(state_value.request_, protocol_version);
+    http_request_access::set_protocol_version(request_, protocol_version);
     // Publish the version-specific request contract before any validation that
     // can fail after the version line itself has been accepted. The final
     // disposition is already derived from the parsed Connection fields and is
     // tightened to close by body/response policy later.
-    state_value.connection_plan_ = protocol_version == http_protocol_version::http11
-                                       ? plan_http11_request_connection(block.connection_options_.close())
-                                       : plan_http10_request_connection(block.connection_options_.close(),
-                                             block.connection_options_.keep_alive());
+    connection_plan_ = protocol_version == http_protocol_version::http11
+                           ? plan_http11_request_connection(block.connection_options_.close())
+                           : plan_http10_request_connection(block.connection_options_.close(),
+                                 block.connection_options_.keep_alive());
     if (known_method == http_known_method::connect) {
-        state_value.connection_plan_ = state_value.connection_plan_.with_tunnel_request();
+        connection_plan_ = connection_plan_.with_tunnel_request();
     }
     // RFC 9110 10.1.4 obliges the TE sender to list "TE" in Connection; it does
     // not oblige the recipient to reject. The server never acts on TE (it does
@@ -128,12 +127,11 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
     if (!parse_request_target(known_method, target, target_view)) {
         return fail(http_parse_error::invalid_request_target);
     }
-    http_request_access::set_path(state_value.request_, target_view.path_);
-    http_request_access::set_query_string(state_value.request_, target_view.query_);
-    http_request_access::set_scheme(state_value.request_, target_view.scheme_);
-    http_request_access::set_authority(state_value.request_, target_view.authority_);
-    http_request_access::set_target_form(state_value.request_, target_view.form_);
-
+    http_request_access::set_path(request_, target_view.path_);
+    http_request_access::set_query_string(request_, target_view.query_);
+    http_request_access::set_scheme(request_, target_view.scheme_);
+    http_request_access::set_authority(request_, target_view.authority_);
+    http_request_access::set_target_form(request_, target_view.form_);
     if (protocol_version == http_protocol_version::http11 && block.host_header_index_ < 0) {
         return fail(http_parse_error::missing_host);
     }
@@ -172,8 +170,8 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
         return fail(http_parse_error::unsupported_transfer_encoding);
     }
 
-    http_request_access::set_resource(state_value.request_, resource);
-    http_request_access::reserve_headers(state_value.request_, block.header_count_);
+    http_request_access::set_resource(request_, resource);
+    http_request_access::reserve_headers(request_, block.header_count_);
     for (std::size_t i = 0; i < block.header_count_; ++i) {
         const auto& header_value = block.headers_[i];
         auto value = header_value.value_.bind(buffer);
@@ -186,28 +184,28 @@ void http1_server_request_parser::parse_head(std::string_view buffer,
             host_header_index >= 0 && i == static_cast<std::size_t>(host_header_index)) {
             value = target_view.authority_;
         }
-        (void)http_request_access::add_header(state_value.request_,
+        (void)http_request_access::add_header(request_,
             http_header_view{header_value.name_.bind(buffer), value},
             request_header_kind_known_slot(header_value.kind_));
     }
 
-    state_value.response_coding_qualities_ = block.response_coding_qualities_;
+    response_coding_qualities_ = block.response_coding_qualities_;
     auto expectations = block.expectations_;
     if (protocol_version == http_protocol_version::http10) {
         expectations.ignore_continue();
     }
     if (final_chunked != nullptr) {
-        state_value.body_plan_ = http1_request_body_plan(final_chunked->transfer_codings(), expectations);
+        body_plan_ = http1_request_body_plan(final_chunked->transfer_codings(), expectations);
     } else if (content_length.has_value()) {
         if (*content_length > (std::numeric_limits<std::size_t>::max)()) {
             return fail(http_parse_error::invalid_content_length);
         }
-        state_value.body_plan_ =
+        body_plan_ =
             http1_request_body_plan(static_cast<std::size_t>(*content_length), expectations);
     } else {
-        state_value.body_plan_ = http1_request_body_plan(expectations);
+        body_plan_ = http1_request_body_plan(expectations);
     }
-    state_value.progress_ = http1_server_request_head_ready(header_bytes);
+    progress_ = http1_server_request_head_ready(header_bytes);
 }
 
 std::variant<http_request, http_parse_error> make_parsed_http_request(

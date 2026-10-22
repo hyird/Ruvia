@@ -21,7 +21,7 @@
 #include <asio/windows/overlapped_ptr.hpp>
 
 #include "ruvia/core/worker_notification.h"
-#include "ruvia/core/worker_runtime_context.h"
+#include "ruvia/core/worker_runtime.h"
 
 namespace ruvia::detail {
 namespace {
@@ -102,13 +102,13 @@ public:
         std::chrono::steady_clock::time_point retry_{};
     };
     struct origin final {
-        origin(impl& domain, worker_runtime_context& runtime, callbacks completion)
+        origin(impl& domain, worker_runtime& runtime, callbacks completion)
             : domain_(domain),
               runtime_(runtime),
               completion_(completion),
               wake_(runtime) {}
         impl& domain_;
-        worker_runtime_context& runtime_;
+        worker_runtime& runtime_;
         callbacks completion_;
         worker_notification wake_;
         std::optional<asio::steady_timer> retry_timer_;
@@ -437,7 +437,7 @@ windows_accept_domain::windows_accept_domain(std::size_t workers, std::size_t li
     : impl_(make_pmr_object<impl>(resource, workers, listeners, resource)) {}
 windows_accept_domain::~windows_accept_domain() = default;
 
-void windows_accept_domain::attach(std::size_t index, worker_runtime_context& runtime, callbacks completion) {
+void windows_accept_domain::attach(std::size_t index, worker_runtime& runtime, callbacks completion) {
     if (index >= impl_->worker_count_ || impl_->origins_[index] || !completion.accepted_ || !completion.failure_) {
         throw std::logic_error("invalid Windows accept origin attachment");
     }

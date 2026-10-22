@@ -1,6 +1,6 @@
 #include <string_view>
 
-#include "ruvia/http/http_media_type.h"
+#include "ruvia/http/http_accept_match.h"
 
 #include "test_harness.h"
 

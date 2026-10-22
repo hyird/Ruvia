@@ -2,17 +2,36 @@
 
 #include <utility>
 
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_connect_udp.h"
-#include "ruvia/http/http_request_body_failure.h"
 
 #include "http/http_protocol_error_info.h"
 #include "ratelimit/rate_limit_decision.h"
 #include "router/route_table.h"
 #include "server/http_connection_state.h"
-#include "server/request_body_limit.h"
 
 namespace ruvia::detail {
+namespace {
 
+[[nodiscard]] protocol_byte_limit request_body_byte_limit(request_body_mode body_mode,
+    const std::optional<std::size_t>& max_stream_body_bytes, std::size_t max_buffered_body_bytes,
+    std::size_t route_limit) {
+    if (body_mode != request_body_mode::stream) {
+        const auto limit = route_limit != 0 && route_limit < max_buffered_body_bytes
+                               ? route_limit
+                               : max_buffered_body_bytes;
+        return protocol_byte_limit::limited(limit);
+    }
+    if (!max_stream_body_bytes.has_value()) {
+        return route_limit != 0 ? protocol_byte_limit::limited(route_limit)
+                                : protocol_byte_limit::unlimited();
+    }
+    const auto limit =
+        route_limit != 0 && route_limit < *max_stream_body_bytes ? route_limit : *max_stream_body_bytes;
+    return protocol_byte_limit::limited(limit);
+}
+
+}  // namespace
 http_request_admission_policy http_request_admission_policy::server(const http_server_options& options) noexcept {
     return {
         .max_stream_body_bytes_ = options.server_.max_stream_body_bytes_,
@@ -108,11 +127,11 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // Expect extensions are valid HTTP syntax. The protocol reports the
     // semantic fact; this product implements only 100-continue and chooses the
     // RFC 9110-permitted 417 before reading request content.
-    if (input.expectation_ != nullptr) {
-        if (const auto* rejection = input.expectation_->rejection()) {
-            return reject(http_request_endpoint::rejection,
-                http_request_rejection::error(copy_http_protocol_error_info(input.resource_, rejection->protocol_error())));
-        }
+    if (input.expectation_ != nullptr &&
+        *input.expectation_ == http_server_expectation_plan::reject_unsupported) {
+        return reject(http_request_endpoint::rejection,
+            http_request_rejection::error(
+                copy_http_protocol_error_info(input.resource_, http_unsupported_expectation_error())));
     }
     if (policy.apply_rate_limit_) {
         if (const auto rejection = decide_request_rate_limit(admission.services_.rate_limiter(), client_address)) {
@@ -124,7 +143,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     if (admission.body_limit_.exceeds(request.body_bytes().size())) {
         return reject(http_request_endpoint::rejection,
             http_request_rejection::error(
-                copy_http_protocol_error_info(input.resource_, http_request_body_failure::too_large().protocol_error())));
+                copy_http_protocol_error_info(input.resource_, http_request_body_protocol_error(http_request_body_failure::too_large))));
     }
     if (endpoint == nullptr) {
         admission.endpoint_ = http_request_endpoint::buffered;
@@ -132,7 +151,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     }
     if (const auto* tunnel = endpoint->tunnel()) {
         admission.udp_tunnel_ = tunnel->protocol() == "connect-udp";
-        if (admission.udp_tunnel_ && validate_http_connect_udp_request(request).index() != 0) {
+        if (admission.udp_tunnel_ && validate_http_connect_udp_request(request).has_value()) {
             return reject(http_request_endpoint::rejection,
                 http_request_rejection::error(http_error_info(
                     {.status_ = http_status::bad_request, .message_ = "invalid CONNECT-UDP request head"})));

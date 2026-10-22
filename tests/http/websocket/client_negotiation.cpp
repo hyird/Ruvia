@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http1_websocket_client_handshake.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 
 #include "test_harness.h"
@@ -95,9 +94,10 @@ RUVIA_TEST(websocket_h1_client_handshake_negotiates_deflate) {
     ruvia::http1_websocket_client_handshake client({.nonce_ = nonce, .deflate_ = {.enabled_ = true}});
     std::array<char, 2048> buffer{};
     auto prepared = client.prepare_request(ruvia::http_origin_view::https({.host_ = "example.com"}), "/", buffer);
-    RUVIA_CHECK(prepared.prepared() != nullptr);
-    RUVIA_CHECK((prepared.prepared()->head().find("sec-websocket-extensions: permessage-deflate") != std::string_view::npos));
-    ruvia::http1_client_response_parser parser(prepared.prepared()->exchange_state());
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    RUVIA_CHECK((prepared_req->head().find("sec-websocket-extensions: permessage-deflate") != std::string_view::npos));
+    ruvia::http1_client_response_parser parser(prepared_req->exchange_state());
     auto response = parser.parse("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n\r\n");
     RUVIA_CHECK(response.parsed() != nullptr);
     auto accepted = client.validate_response(*response.parsed());

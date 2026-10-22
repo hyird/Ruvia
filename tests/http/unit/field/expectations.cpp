@@ -33,10 +33,10 @@ RUVIA_TEST(expectations_parse_one_logical_recipient_list) {
     RUVIA_CHECK(!expectations.has_unsupported());
     const auto no_content = expectations.server_plan(
         http_request_content_indication::no_content, http_unsupported_expectation_policy::reject);
-    RUVIA_CHECK(no_content.no_action() != nullptr);
+    RUVIA_CHECK(no_content == ruvia::http_server_expectation_plan::no_action);
     const auto with_content = expectations.server_plan(
         http_request_content_indication::will_follow, http_unsupported_expectation_policy::reject);
-    RUVIA_CHECK(with_content.send_continue() != nullptr);
+    RUVIA_CHECK(with_content == ruvia::http_server_expectation_plan::send_continue);
 }
 
 RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
@@ -48,13 +48,12 @@ RUVIA_TEST(expectations_preserve_unsupported_extensions_as_semantics) {
     RUVIA_CHECK(expectations.has_unsupported());
     const auto rejected = expectations.server_plan(
         http_request_content_indication::will_follow, http_unsupported_expectation_policy::reject);
-    RUVIA_CHECK(rejected.rejection() != nullptr);
-    if (const auto* rejection = rejected.rejection()) {
-        RUVIA_CHECK_EQ(rejection->protocol_error().status(), ruvia::http_status::expectation_failed);
-    }
+    RUVIA_CHECK(rejected == ruvia::http_server_expectation_plan::reject_unsupported);
+    RUVIA_CHECK_EQ(
+        ruvia::http_unsupported_expectation_error().status(), ruvia::http_status::expectation_failed);
     const auto ignored = expectations.server_plan(
         http_request_content_indication::will_follow, http_unsupported_expectation_policy::ignore);
-    RUVIA_CHECK(ignored.send_continue() != nullptr);
+    RUVIA_CHECK(ignored == ruvia::http_server_expectation_plan::send_continue);
 
     expectations.ignore_continue();
     RUVIA_CHECK(!expectations.has_continue());

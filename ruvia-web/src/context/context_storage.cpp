@@ -3,8 +3,17 @@
 
 #include "context/context_request_storage.h"
 #include "context/context_services.h"
+#include "http/streaming_access.h"
 #include "router/route_limits.h"
+#include "server/forwarded_headers.h"
 
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/db_handle.h"
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/redis_handle.h"
+#endif
 namespace ruvia {
 
 context::context(
@@ -113,6 +122,46 @@ bool context::has_response() const noexcept {
 
 void context::respond(http_response&& response) {
     store_assigned_response(std::move(response));
+}
+
+#ifdef RUVIA_ENABLE_DATABASE
+db_handle context::db() const {
+    return services().client_registries().db(operation_scope_, capabilities_.stop_token());
+}
+
+db_handle context::db(std::string_view alias) const {
+    return services().client_registries().db(alias, operation_scope_, capabilities_.stop_token());
+}
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+redis_handle context::redis() const {
+    return services().client_registries().redis(operation_scope_, capabilities_.stop_token());
+}
+
+redis_handle context::redis(std::string_view alias) const {
+    return services().client_registries().redis(alias, operation_scope_, capabilities_.stop_token());
+}
+#endif
+
+bool detail::context_response_output::committed() const noexcept {
+    if (buffered() != nullptr) {
+        return false;
+    }
+    if (const auto* stream = response_stream()) {
+        return detail::streaming_access::committed(stream->writer());
+    }
+    return true;
+}
+
+conn_info detail::context_services::resolve_conn_info(const http_request& request) const noexcept {
+    auto resolved = connection_services_.info_;
+    if (!connection_services_.peer_trusted_) {
+        return resolved;
+    }
+    const auto forwarded = detail::resolve_forwarded_client(request, *worker_services_.trusted_proxies_);
+    resolved.apply_forwarded(forwarded.address_, forwarded.scheme_);
+    return resolved;
 }
 
 }  // namespace ruvia

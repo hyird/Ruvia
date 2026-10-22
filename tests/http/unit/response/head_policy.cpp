@@ -10,7 +10,7 @@
 
 RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     std::pmr::monotonic_buffer_resource resource;
-    ruvia::http_response response({.resource_ = &resource});
+    ruvia::http_response response(&resource);
     response.status(ruvia::http_status::ok);
     response.body("hello");
 
@@ -117,7 +117,7 @@ RUVIA_TEST(response_stream_plan_restricts_trailers_by_status_and_method) {
 
 RUVIA_TEST(response_write_plan_rejects_mutated_response_snapshot) {
     std::pmr::monotonic_buffer_resource resource;
-    ruvia::http_response response({.resource_ = &resource});
+    ruvia::http_response response(&resource);
     response.status(ruvia::http_status::multi_status);
     response.body("old");
     const auto plan =
@@ -132,7 +132,7 @@ RUVIA_TEST(response_write_plan_rejects_mutated_response_snapshot) {
 }
 
 RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
-    ruvia::http_response response({.resource_ = std::pmr::get_default_resource()});
+    ruvia::http_response response(std::pmr::get_default_resource());
     response.body("hello");
     const auto body_plan =
         ruvia::plan_http_response_body(ruvia::http_known_method::get, ruvia::http_status::ok);

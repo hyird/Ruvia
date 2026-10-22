@@ -50,6 +50,7 @@ private:
 #ifdef RUVIA_ENABLE_REDIS
 
 #include "ruvia/core/task.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 
 namespace ruvia {
@@ -63,7 +64,6 @@ struct session_config final {
     std::string redis_alias_{"default"};
     std::string cookie_name_{"sid"};
     std::string key_prefix_{"sess:"};
-    // Must be positive and representable in milliseconds; session_middleware
     // throws std::invalid_argument otherwise.
     std::chrono::seconds ttl_{std::chrono::hours(24)};
 };
@@ -84,24 +84,13 @@ private:
     friend struct detail::session_access;
     task<void> commit(context& c) const;
 
-    struct config_storage_type final {
-        config_storage_type(const session_config& source_value, std::pmr::memory_resource* resource);
+    [[nodiscard]] static const session_config& validate(const session_config& source);
+    session_middleware(const session_config& validated, std::pmr::memory_resource* resource);
 
-        std::pmr::string redis_alias_;
-        std::pmr::string cookie_name_;
-        std::pmr::string key_prefix_;
-        std::chrono::seconds ttl_;
-
-    private:
-        struct validated_config_type final {
-            const session_config* source_;
-        };
-
-        [[nodiscard]] static validated_config_type validate(const session_config& source);
-        config_storage_type(validated_config_type validated, std::pmr::memory_resource* resource);
-    };
-
-    config_storage_type config_;
+    std::pmr::string redis_alias_;
+    std::pmr::string cookie_name_;
+    std::pmr::string key_prefix_;
+    std::chrono::seconds ttl_;
 };
 
 }  // namespace ruvia

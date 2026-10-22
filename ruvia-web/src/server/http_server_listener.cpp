@@ -6,9 +6,9 @@
 namespace ruvia::detail {
 namespace {
 
-http_server_listener_definition::tls_type clone_tls(
-    const http_server_listener_definition::tls_type& source_value, std::pmr::memory_resource* resource) {
-    http_server_listener_definition::tls_type result_value(source_value.certificate_, resource);
+http_server_listener_definition::tls clone_tls(
+    const http_server_listener_definition::tls& source_value, std::pmr::memory_resource* resource) {
+    http_server_listener_definition::tls result_value(source_value.certificate_, resource);
     result_value.client_certificates_ = source_value.client_certificates_;
     result_value.sni_identities_.reserve(source_value.sni_identities_.size());
     for (const auto& configured : source_value.sni_identities_) {
@@ -23,7 +23,7 @@ http_server_listener_definition::transport_type clone_transport(
     return std::visit(
         [resource]<typename transport_type>(
             const transport_type& transport) -> http_server_listener_definition::transport_type {
-            if constexpr (std::is_same_v<transport_type, http_server_listener_definition::tls_type>) {
+            if constexpr (std::is_same_v<transport_type, http_server_listener_definition::tls>) {
                 return clone_tls(transport, resource);
             } else {
                 return transport;

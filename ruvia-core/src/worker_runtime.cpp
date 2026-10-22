@@ -1,5 +1,6 @@
 #include "ruvia/core/worker_runtime.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -9,7 +10,6 @@
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/worker_group.h"
 
 #include "first_failure.h"
@@ -17,6 +17,42 @@
 
 namespace ruvia {
 
+namespace {
+
+class runtime_lifecycle final {
+public:
+    [[nodiscard]] bool start() noexcept {
+        auto expected = worker_runtime_state::ready;
+        return state_.compare_exchange_strong(
+            expected, worker_runtime_state::running, std::memory_order_acq_rel, std::memory_order_acquire);
+    }
+
+    [[nodiscard]] bool request_stop() noexcept {
+        auto observed_value = state_.load(std::memory_order_acquire);
+        while (observed_value == worker_runtime_state::ready || observed_value == worker_runtime_state::running) {
+            if (state_.compare_exchange_weak(observed_value, worker_runtime_state::stopping, std::memory_order_acq_rel,
+                    std::memory_order_acquire)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void complete_stop() noexcept {
+        auto expected = worker_runtime_state::stopping;
+        (void)state_.compare_exchange_strong(
+            expected, worker_runtime_state::stopped, std::memory_order_acq_rel, std::memory_order_acquire);
+    }
+
+    [[nodiscard]] worker_runtime_state state() const noexcept {
+        return state_.load(std::memory_order_acquire);
+    }
+
+private:
+    std::atomic<worker_runtime_state> state_{worker_runtime_state::ready};
+};
+
+}  // namespace
 class worker_runtime::impl_type final {
 public:
     enum class phase_type : std::uint8_t { pending,
@@ -48,7 +84,7 @@ public:
     void bind_group(worker_group& group, worker_runtime& member) {
         const std::lock_guard lock(mutex_);
         if (group_ != nullptr || group_notifications_ != 0 || failure_.failed() ||
-            lifecycle_.state() != runtime_lifecycle::state_type::ready) {
+            lifecycle_.state() != worker_runtime_state::ready) {
             throw std::logic_error("worker group member must be cold and belong to one group");
         }
         group_ = &group;
@@ -111,7 +147,7 @@ public:
 
     void configure(worker_runtime_hooks hooks) {
         const std::lock_guard lock(mutex_);
-        if (configured_ || lifecycle_.state() != runtime_lifecycle::state_type::ready) {
+        if (configured_ || lifecycle_.state() != worker_runtime_state::ready) {
             throw std::logic_error("worker runtime hooks must be configured once before launch");
         }
         stop_.configure({
@@ -147,7 +183,7 @@ public:
         {
             const std::lock_guard lock(mutex_);
             if (ready_ != phase_type::pending ||
-                lifecycle_.state() != runtime_lifecycle::state_type::running) {
+                lifecycle_.state() != worker_runtime_state::running) {
                 return;
             }
             ready_ = phase_type::reached;
@@ -157,7 +193,7 @@ public:
 
     [[nodiscard]] bool wait_for(const phase_type& phase) {
         std::unique_lock lock(mutex_);
-        if (lifecycle_.state() == runtime_lifecycle::state_type::ready) {
+        if (lifecycle_.state() == worker_runtime_state::ready) {
             throw std::logic_error("worker runtime has not been launched");
         }
         phase_changed_.wait(lock, [&] { return phase != phase_type::pending || failure_.failed(); });
@@ -183,7 +219,7 @@ public:
     }
 
     void apply_serve() noexcept {
-        if (lifecycle_.state() != runtime_lifecycle::state_type::running) {
+        if (lifecycle_.state() != worker_runtime_state::running) {
             return;
         }
         try {
@@ -197,7 +233,7 @@ public:
         {
             const std::lock_guard lock(mutex_);
             if (serving_ != phase_type::pending ||
-                lifecycle_.state() != runtime_lifecycle::state_type::running) {
+                lifecycle_.state() != worker_runtime_state::running) {
                 return;
             }
             serving_ = phase_type::reached;
@@ -250,7 +286,7 @@ public:
     }
 
     [[nodiscard]] bool post_control(move_only_function<void()> control) noexcept {
-        if (lifecycle_.state() != runtime_lifecycle::state_type::running) {
+        if (lifecycle_.state() != worker_runtime_state::running) {
             return false;
         }
         return stop_.post_control(std::move(control));
@@ -436,7 +472,7 @@ std::exception_ptr worker_runtime::failure() const noexcept {
     return impl_->failure_.observe();
 }
 
-runtime_lifecycle::state_type worker_runtime::state() const noexcept {
+worker_runtime_state worker_runtime::state() const noexcept {
     return impl_->lifecycle_.state();
 }
 

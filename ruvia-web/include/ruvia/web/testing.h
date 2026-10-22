@@ -30,9 +30,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/detail/integration/worker_state.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
@@ -130,38 +131,7 @@ private:
 
 // One dispatched response, copied out of the request arena: safe to hold and
 // inspect after further requests.
-class test_response final {
-public:
-    [[nodiscard]] http_status_code status() const noexcept {
-        return status_;
-    }
-
-    [[nodiscard]] std::string_view body() const& noexcept {
-        return body_;
-    }
-    std::string_view body() const&& = delete;
-
-    // First header with this name (ASCII case-insensitive). Repeatable fields
-    // such as Set-Cookie keep every occurrence in headers().
-    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
-    std::optional<std::string_view> header(std::string_view) const&& = delete;
-
-    [[nodiscard]] std::span<const http_header> headers() const& noexcept {
-        return headers_;
-    }
-    std::span<const http_header> headers() const&& = delete;
-
-private:
-    friend class test_app;
-
-    explicit test_response(http_status_code status) noexcept
-        : status_(status),
-          headers_(process_resource()) {}
-
-    http_status_code status_;
-    std::pmr::vector<http_header> headers_;
-    std::string body_;
-};
+using test_response = dispatch_response;
 
 // One in-memory application instance. Construction is cheap; controllers are
 // instantiated and the route table finalized on the first request(), so the
@@ -213,8 +183,8 @@ public:
     test_app& trusted_proxies(trusted_proxy_config config);
     test_app& trusted_proxies(std::nullptr_t);
 
-    test_app& on_error(http_error_handler_type handler);
-    test_app& on_not_found(http_not_found_handler_type handler);
+    test_app& on_error(http_error_handler handler);
+    test_app& on_not_found(http_not_found_handler handler);
     // Prefixes use the same segment and trailing-slash normalization as application;
     // duplicate normalized registrations throw std::invalid_argument rather
     // than allowing production and in-memory tests to choose different
@@ -233,7 +203,7 @@ private:
     test_app& use_worker_state_definition(detail::worker_state_definition definition);
 
     struct impl_type;
-    std::unique_ptr<impl_type> impl_;
+    std::unique_ptr<impl_type, pmr_object_deleter<impl_type>> impl_;
 };
 
 }  // namespace ruvia

@@ -3,7 +3,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "client/http_client_tunnel_state.h"
 #include "client/http_client_upload_state.h"

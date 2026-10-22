@@ -12,7 +12,7 @@
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_known_headers.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia::detail {

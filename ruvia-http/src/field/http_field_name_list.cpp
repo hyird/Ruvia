@@ -1,6 +1,4 @@
-#include "ruvia/http/http_field_name_list.h"
-
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia {

@@ -29,7 +29,7 @@ struct http_lazy_buffered_body_route_state final {
     void emplace(stream_type& stream, std::pmr::polymorphic_allocator<char> worker_allocator,
         std::pmr::memory_resource* request_resource, std::string_view body_and_pipeline,
         http1_request_body_plan body_plan, protocol_byte_limit body_limit_value,
-        connection_scanner::entry_type& scanner_entry, http_interim_response_output& interim_output) {
+        connection_scanner::entry& scanner_entry, http_interim_response_output& interim_output) {
         body_.emplace(stream, worker_allocator, request_resource, body_and_pipeline, body_plan, body_limit_value,
             scanner_entry, interim_output);
     }
@@ -85,7 +85,7 @@ template <typename stream_type>
 }
 
 inline task<http1_session_request_completion> complete_failed_http_route(
-    connection_scanner::entry_type& scanner_entry, std::exception_ptr exception,
+    connection_scanner::entry& scanner_entry, std::exception_ptr exception,
     const http1_server_request_parse_state& parsed_value, const route_table& routes_value,
     request_memory& request_memory_value, context_services exception_services, http_response& response) {
     response = co_await routes_value.handle_exception(
@@ -103,7 +103,7 @@ inline task<http1_session_request_completion> complete_failed_http_route(
 // borrow it.
 template <typename take_pipeline_type>
 [[nodiscard]] inline http1_session_request_completion complete_successful_http_body_route(
-    connection_scanner::entry_type& scanner_entry, http_response& response,
+    connection_scanner::entry& scanner_entry, http_response& response,
     http1_request_connection_plan connection_plan, http1_request_sequence& request_sequence,
     http1_request_body_consumption body_consumption, std::size_t request_bytes,
     std::pmr::string& pipeline_stash, take_pipeline_type take_pipeline) {
@@ -127,7 +127,7 @@ template <typename take_pipeline_type>
 
 template <typename body_owner_type>
 [[nodiscard]] inline http1_session_request_completion complete_successful_http_body_route(
-    connection_scanner::entry_type& scanner_entry, http_response& response,
+    connection_scanner::entry& scanner_entry, http_response& response,
     http1_request_connection_plan connection_plan, http1_request_sequence& request_sequence,
     std::size_t request_bytes, std::pmr::string& pipeline_stash, body_owner_type& body_owner) {
     return complete_successful_http_body_route(scanner_entry, response, connection_plan, request_sequence,

@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/error_text.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "client/client_tcp_transport.h"

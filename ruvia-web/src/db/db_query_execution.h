@@ -9,7 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/operation_options.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_rows.h"
@@ -35,6 +34,7 @@ struct db_query_backend final {
     db_pool_ref_type pool_;
     std::optional<std::size_t> slot_;
     std::pmr::memory_resource* resource_;
+    operation_scope* scope_{nullptr};
     // Set when the database statement itself failed: a transaction statement
     // failure has already retired the transaction's lease.
     bool* backend_failed_{nullptr};

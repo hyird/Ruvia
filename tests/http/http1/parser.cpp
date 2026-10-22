@@ -26,7 +26,6 @@ using ruvia::http1_chunk_decode_error;
 using ruvia::http1_close_policy;
 using ruvia::http1_server_request_parse_failure_source;
 using ruvia::http1_server_request_parse_state;
-using ruvia::http1_server_request_parser;
 using ruvia::http_known_method;
 using ruvia::http_parse_error;
 using ruvia::http_protocol_version;
@@ -380,7 +379,7 @@ RUVIA_TEST(http1_parse_message_preserves_expect_extensions_as_semantics) {
     if (result_value.complete()) {
         const auto plan =
             result_value.state_.body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
-        RUVIA_CHECK(plan.rejection() != nullptr);
+        RUVIA_CHECK(plan == ruvia::http_server_expectation_plan::reject_unsupported);
         RUVIA_CHECK(result_value.state_.body_plan_.expectations().has_continue());
         RUVIA_CHECK(result_value.state_.body_plan_.expectations().has_unsupported());
     }
@@ -807,12 +806,11 @@ RUVIA_TEST(http1_parse_transfer_encoding_ignores_empty_members_without_losing_fr
 RUVIA_TEST(http1_parse_transfer_codings_do_not_retain_request_resource) {
     // A connection keeps its parse state across requests while each request
     // head is parsed from storage that dies with that request.
-    http1_server_request_parser parser;
     http1_server_request_parse_state state;
     {
         failing_memory_resource request_resource;
-        parser.parse_head(
-            "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n", state, 0, &request_resource);
+        state.parse_head(
+            "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n", 0, &request_resource);
         RUVIA_CHECK(state.head_ready() != nullptr);
         const auto& chunked = require_chunked(state.body_plan_);
         RUVIA_CHECK_EQ(chunked.transfer_codings().size(), std::size_t{1});
@@ -820,7 +818,7 @@ RUVIA_TEST(http1_parse_transfer_codings_do_not_retain_request_resource) {
         RUVIA_CHECK_EQ(request_resource.live_allocations(), std::size_t{0});
     }
     failing_memory_resource next_resource;
-    parser.parse_head("GET / HTTP/1.1\r\nHost: x\r\n\r\n", state, 0, &next_resource);
+    state.parse_head("GET / HTTP/1.1\r\nHost: x\r\n\r\n", 0, &next_resource);
     RUVIA_CHECK(state.head_ready() != nullptr);
     RUVIA_CHECK(state.body_plan_.chunked() == nullptr);
     // The descriptor block borrows next_resource, which dies before state.
@@ -1293,12 +1291,11 @@ RUVIA_TEST(http1_parse_invalid_chunk_size_rejected) {
 }
 
 RUVIA_TEST(http1_server_head_ready_is_distinct_from_message_ready) {
-    http1_server_request_parser parser;
     http1_server_request_parse_state head;
     constexpr std::string_view request =
         "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello";
 
-    parser.parse_head(request, head);
+    head.parse_head(request);
     const auto* request_head = head.head_ready();
     RUVIA_CHECK(request_head != nullptr);
     if (request_head != nullptr) {
@@ -1330,7 +1327,6 @@ RUVIA_TEST(http1_server_head_ready_is_distinct_from_message_ready) {
 RUVIA_TEST(http1_parse_ignores_bounded_empty_lines_before_request_line) {
     // RFC 9112 section 2.2: a server SHOULD ignore at least one empty line
     // received before the request-line.
-    http1_server_request_parser parser;
     for (const std::string_view request : {
              std::string_view("\r\nGET /a HTTP/1.1\r\nHost: x\r\n\r\n"),
              std::string_view("\r\n\r\n\nGET /a HTTP/1.1\r\nHost: x\r\n\r\n"),
@@ -1347,7 +1343,7 @@ RUVIA_TEST(http1_parse_ignores_bounded_empty_lines_before_request_line) {
     for (const std::string_view partial : {std::string_view("\r\n"), std::string_view("\r\n\r"),
              std::string_view("\r\n\r\n"), std::string_view("\r\nGET / HTTP/1.1\r\n")}) {
         http1_server_request_parse_state head;
-        parser.parse_head(partial, head);
+        head.parse_head(partial);
         RUVIA_CHECK(head.need_request_head() != nullptr);
     }
 
@@ -1477,7 +1473,6 @@ RUVIA_TEST(http1_parse_cors_metadata_preserves_body_and_pipeline_boundary) {
 }
 
 RUVIA_TEST(http1_parse_head_resumes_leading_empty_lines_and_request_line_across_segments) {
-    http1_server_request_parser parser;
     constexpr std::string_view request = "\r\n\n\r\nGET /seg HTTP/1.1\r\nHost: x\r\n\r\n";
     for (const std::size_t segment : {std::size_t{1}, std::size_t{2}, std::size_t{5}}) {
         http1_server_request_parse_state state;
@@ -1485,7 +1480,7 @@ RUVIA_TEST(http1_parse_head_resumes_leading_empty_lines_and_request_line_across_
         std::size_t delivered = 0;
         while (delivered < request.size()) {
             delivered = std::min(request.size(), delivered + segment);
-            parser.parse_head(request.substr(0, delivered), state, search_offset);
+            state.parse_head(request.substr(0, delivered), search_offset);
             RUVIA_CHECK(state.failure() == nullptr);
             if (delivered < request.size()) {
                 RUVIA_CHECK(state.need_request_head() != nullptr);
@@ -1502,12 +1497,11 @@ RUVIA_TEST(http1_parse_head_resumes_leading_empty_lines_and_request_line_across_
 }
 
 RUVIA_TEST(http1_parse_head_classifies_request_line_before_the_head_completes) {
-    http1_server_request_parser parser;
     // TLS ClientHello prefix and other non-token first bytes fail at once.
     for (const std::string_view wire : {std::string_view("\x16\x03\x01\x00\xa5\x01", 6), std::string_view("\r\rGET"),
              std::string_view("\nGET / NOT-HTTP\r\nHost: x\r\n"), std::string_view("GET / HTTP/1.1 extra\r\n")}) {
         http1_server_request_parse_state state;
-        parser.parse_head(wire, state);
+        state.parse_head(wire);
         const auto* failure = state.failure();
         RUVIA_CHECK(failure != nullptr);
         if (failure != nullptr) {
@@ -1533,7 +1527,7 @@ RUVIA_TEST(http1_parse_head_classifies_request_line_before_the_head_completes) {
 
     {
         http1_server_request_parse_state state;
-        parser.parse_head("GET / HTTP/9.0\r\nHost: x\r\n", state);
+        state.parse_head("GET / HTTP/9.0\r\nHost: x\r\n");
         RUVIA_CHECK(is_failure(state, http_parse_error::unsupported_http_version));
     }
     // A valid request-line waits for the rest of the head; an incomplete line
@@ -1542,7 +1536,7 @@ RUVIA_TEST(http1_parse_head_classifies_request_line_before_the_head_completes) {
              std::string_view("GET / HTTP/1.1\r"), std::string_view("GET / HTTP/1.1\r\nHost: x\r\n"),
              std::string_view("\r\n\r")}) {
         http1_server_request_parse_state state;
-        parser.parse_head(partial, state);
+        state.parse_head(partial);
         RUVIA_CHECK(state.need_request_head() != nullptr);
     }
 }

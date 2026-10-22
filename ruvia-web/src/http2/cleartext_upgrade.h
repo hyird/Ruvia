@@ -14,14 +14,32 @@
 #include "ruvia/core/task.h"
 #include "ruvia/http/http2_framing.h"
 
+#include "context/context_services.h"
 #include "http2/http2_sans_io_session.h"
-#include "http2/http2_server_session_setup.h"
 #include "router/route_table.h"
+#include "server/connection_scanner.h"
 #include "server/http_connection_close.h"
 #include "server/http_connection_state.h"
 #include "server/http_server_options.h"
+#include "server/http_server_worker_state.h"
 
 namespace ruvia::detail {
+
+// What starting an HTTP/2 server session takes from the connection that hands
+// it over: the stream to speak on, the socket underneath it, the worker's
+// memory and scanner entry, and the routes, options, services and worker state
+// every request on the session will be served with.
+template <typename stream_type>
+struct http2_server_session_setup final {
+    stream_type& stream_;
+    asio::ip::tcp::socket& socket_;
+    worker_memory& memory_;
+    const route_table& routes_;
+    const http_server_options& options_;
+    connection_scanner::entry& scanner_entry_;
+    context_services services_;
+    const http_server_worker_state& worker_state_;
+};
 
 enum class cleartext_http2_dispatch_result : std::uint8_t {
     continue_http1,
@@ -67,7 +85,7 @@ task<cleartext_http2_dispatch_result> dispatch_cleartext_http2_preface(
             (void)co_await run_http2_server_session(setup, current);
             co_return cleartext_http2_dispatch_result::session_finished;
         case http2_cleartext_preface_probe::need_more_preface: {
-            setup.scanner_entry_.read_request_head(connection_scanner::phase_type::reading_initial);
+            setup.scanner_entry_.read_request_head(connection_scanner::phase::reading_initial);
             const auto space = read_buffer.prepare_read();
             auto read_completion = co_await ruvia::async_asio<std::size_t>(
                 [&setup, space](auto handler) mutable {

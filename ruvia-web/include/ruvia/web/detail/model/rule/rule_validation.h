@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "ruvia/web/detail/model/pattern/pattern_matcher.h"
-#include "ruvia/web/detail/model/pattern/regex_matcher.h"
 #include "ruvia/web/detail/model/rule/numeric_comparison.h"
 #include "ruvia/web/detail/model/rule/rule_support.h"
 
@@ -100,15 +99,6 @@ void validate_rule(const value_type& value, const model_path& path, validator_ty
     const auto actual = model_string(value);
     if (!match_pattern_plan<pattern>(actual)) {
         validator_value.add(path, "pattern", message.view());
-    }
-}
-
-template <typename value_type, typename validator_type, fixed_string pattern, fixed_string message>
-void validate_rule(const value_type& value, const model_path& path, validator_type& validator_value,
-    const regex_rule<pattern, message>&) {
-    const auto actual = model_string(value);
-    if (!match_regex_pattern<pattern>(actual)) {
-        validator_value.add(path, "regex", message.view());
     }
 }
 

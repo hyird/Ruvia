@@ -16,7 +16,6 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/redis/redis_entity.h"
 #include "ruvia/web/redis/redis_repository.h"
 
 #include "backend_tls.h"
@@ -69,7 +68,7 @@ private:
         user_value.set<"id">(request.get<"id">().view());
         user_value.set<"name">(request.get<"name">().view());
         user_value.set<"age">(static_cast<std::uint32_t>(request.get<"age">()));
-        auto users = c.redis().get_repository<cached_user>(user_redis_config);
+        auto users = c.redis().repository<cached_user>(user_redis_config);
         const auto result_value = co_await users.insert(user_value, {.ttl_ = std::chrono::hours(1)});
         if (result_value.affected_entities() == 0) {
             co_return c.error({.status_ = ruvia::http_status::conflict, .message_ = "user already exists"});
@@ -80,7 +79,7 @@ private:
         co_return c.json(response);
     }
     ruvia::task<ruvia::http_response> find(ruvia::context& c) {
-        auto user_value = co_await c.redis().get_repository<cached_user>(user_redis_config).find_one({.where_ = cached_user::column<"id">() == c.req().param("id").value_or("")});
+        auto user_value = co_await c.redis().repository<cached_user>(user_redis_config).find_one({.where_ = cached_user::column<"id">() == c.req().param("id").value_or("")});
         if (!user_value) {
             co_return c.error({.status_ = ruvia::http_status::not_found, .message_ = "user not found"});
         }
@@ -93,7 +92,7 @@ private:
             .where_ = cached_user::column<"age">() >= 18,
             .order_ = {{.field_ = "name", .direction_ = ruvia::redis_order_direction::asc}},
             .take_ = 20};
-        auto users = co_await c.redis().get_repository<cached_user>(user_redis_config).find(find_options);
+        auto users = co_await c.redis().repository<cached_user>(user_redis_config).find(find_options);
         cached_users_response response({.resource_ = c.arena()});
         auto& output = response.ensure<"users">();
         for (const auto& user : users) {
@@ -129,7 +128,7 @@ int main(int argc, char** argv) {
                 auto result_value = completion.get_future();
                 const auto posted = workers.front().post([completion = std::move(completion)](ruvia::web_worker_context& worker_value) mutable -> ruvia::task<void> {
                     try {
-                        co_await worker_value.redis().get_repository<cached_user>(user_redis_config).create_index();
+                        co_await worker_value.redis().repository<cached_user>(user_redis_config).create_index();
                         completion.set_value();
                     } catch (...) {
                         completion.set_exception(std::current_exception());

@@ -5,7 +5,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/memory_pool.h"
-#include "ruvia/web/redis/redis_client.h"
+#include "ruvia/web/redis/redis_handle.h"
 
 #include "client/client_lifecycle.h"
 #include "redis/redis_client_runtime.h"

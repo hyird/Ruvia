@@ -3,12 +3,12 @@
 #include <cstddef>
 #include <stdexcept>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/web/db/db_client.h"
-#include "ruvia/web/db/db_migration.h"
+#include "ruvia/web/db/db_handle.h"
+#include "ruvia/web/db/db_schema.h"
 
 #include "backend_client_fixture.h"
 #include "test_harness.h"

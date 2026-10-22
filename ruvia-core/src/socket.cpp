@@ -1,10 +1,12 @@
-#include "ruvia/core/ip_address.h"
+#include "ruvia/core/socket.h"
 
 #include <array>
 #include <cstring>
 #include <memory_resource>
 #include <optional>
 #include <string>
+
+#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia {
 
@@ -95,15 +97,15 @@ namespace {
 // Consumes the complete view, including checking for embedded NUL. Common
 // address text uses stack storage; unusually long scope names use temporary PMR
 // storage that is released before returning the independent address value.
-std::variant<asio::ip::address, std::error_code> parse_ip_address(std::string_view text) {
+std::optional<asio::ip::address> parse_ip_address(std::string_view text) {
     if (text.find('\0') != std::string_view::npos) {
-        return std::make_error_code(std::errc::invalid_argument);
+        return std::nullopt;
     }
     if (const auto v4 = parse_ipv4_literal(text)) {
         return asio::ip::address(asio::ip::address_v4(*v4));
     }
     if (!is_ipv6_literal_shape(text)) {
-        return std::make_error_code(std::errc::invalid_argument);
+        return std::nullopt;
     }
     std::error_code error;
     std::array<char, 64> terminated;
@@ -113,11 +115,11 @@ std::variant<asio::ip::address, std::error_code> parse_ip_address(std::string_vi
             terminated[text.size()] = '\0';
             return asio::ip::make_address_v6(terminated.data(), error);
         }
-        const std::pmr::string owned(text);
+        const std::pmr::string owned(text, process_resource());
         return asio::ip::make_address_v6(owned.c_str(), error);
     }();
     if (error) {
-        return error;
+        return std::nullopt;
     }
     return asio::ip::address(address);
 }

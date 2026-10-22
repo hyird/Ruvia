@@ -9,7 +9,7 @@
 #include <variant>
 
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http1_websocket_client_handshake.h"
+#include "ruvia/http/websocket_client_negotiation.h"
 
 #include "test_harness.h"
 
@@ -71,8 +71,9 @@ RUVIA_TEST(websocket_client_handshake_prepares_rfc_request) {
     std::array<char, 2048> buffer{};
     const auto prepared = handshake.prepare_request(
         ruvia::http_origin_view::https({.host_ = "example.com"}), "/chat", buffer);
-    RUVIA_CHECK(prepared.prepared() != nullptr);
-    const std::string wire(prepared.prepared()->head());
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    const std::string wire(prepared_req->head());
     RUVIA_CHECK(wire.find("GET /chat HTTP/1.1\r\n") == 0);
     RUVIA_CHECK(wire.find("Host: example.com\r\n") != std::string::npos);
     RUVIA_CHECK(wire.find("Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n") !=
@@ -88,7 +89,7 @@ RUVIA_TEST(websocket_client_handshake_matches_subprotocol_case_exactly) {
     std::array<char, 2048> buffer{};
     const auto prepared = handshake.prepare_request(
         ruvia::http_origin_view::https({.host_ = "example.com"}), "/", buffer);
-    auto response = parse_response(ruvia_ctx, prepared.prepared()->exchange_state(),
+    auto response = parse_response(ruvia_ctx, std::get<0>(prepared).exchange_state(),
         valid_response("Sec-WebSocket-Protocol: Chat\r\n"));
     const auto result_value = handshake.validate_response(response);
     RUVIA_CHECK((result_value.index() == 0));
@@ -108,7 +109,7 @@ RUVIA_TEST(websocket_client_handshake_rejects_unoffered_or_duplicate_protocol) {
                                       ? "Sec-WebSocket-Protocol: chat\r\n"
                                         "Sec-WebSocket-Protocol: chat\r\n"
                                       : "Sec-WebSocket-Protocol: Chat\r\n";
-        auto response = parse_response(ruvia_ctx, prepared.prepared()->exchange_state(),
+        auto response = parse_response(ruvia_ctx, std::get<0>(prepared).exchange_state(),
             valid_response(extra));
         const auto result_value = handshake.validate_response(response);
         RUVIA_CHECK(!(result_value.index() == 0));
@@ -124,7 +125,7 @@ RUVIA_TEST(websocket_client_handshake_rejects_bad_accept_and_extensions) {
     std::array<char, 2048> buffer{};
     const auto prepared = handshake.prepare_request(
         ruvia::http_origin_view::https({.host_ = "example.com"}), "/", buffer);
-    auto bad = parse_response(ruvia_ctx, prepared.prepared()->exchange_state(),
+    auto bad = parse_response(ruvia_ctx, std::get<0>(prepared).exchange_state(),
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
         "Sec-WebSocket-Accept: wrong\r\n\r\n");
     RUVIA_CHECK(bad.plan().protocol_upgrade() != nullptr);
@@ -134,7 +135,7 @@ RUVIA_TEST(websocket_client_handshake_rejects_bad_accept_and_extensions) {
         RUVIA_CHECK(std::get<1>(bad_result) == ruvia::http1_websocket_client_handshake_error::accept);
     }
 
-    auto duplicate = parse_response(ruvia_ctx, prepared.prepared()->exchange_state(),
+    auto duplicate = parse_response(ruvia_ctx, std::get<0>(prepared).exchange_state(),
         valid_response("Sec-WebSocket-Accept: " + std::string(accept) + "\r\n"));
     const auto duplicate_result = handshake.validate_response(duplicate);
     RUVIA_CHECK(!(duplicate_result.index() == 0));
@@ -147,7 +148,7 @@ RUVIA_TEST(websocket_client_handshake_rejects_bad_accept_and_extensions) {
     std::array<char, 2048> extension_buffer{};
     const auto extension_prepared = extension.prepare_request(
         ruvia::http_origin_view::https({.host_ = "example.com"}), "/", extension_buffer);
-    auto response = parse_response(ruvia_ctx, extension_prepared.prepared()->exchange_state(),
+    auto response = parse_response(ruvia_ctx, std::get<0>(extension_prepared).exchange_state(),
         valid_response("Sec-WebSocket-Extensions: permessage-deflate\r\n"));
     const auto extension_result = extension.validate_response(response);
     RUVIA_CHECK(!(extension_result.index() == 0));
@@ -162,7 +163,7 @@ RUVIA_TEST(websocket_client_handshake_parser_accepts_informational_before_upgrad
     std::array<char, 2048> buffer{};
     const auto prepared = handshake.prepare_request(
         ruvia::http_origin_view::https({.host_ = "example.com"}), "/", buffer);
-    ruvia::http1_client_response_parser parser(prepared.prepared()->exchange_state());
+    ruvia::http1_client_response_parser parser(std::get<0>(prepared).exchange_state());
     auto informational = parser.parse("HTTP/1.1 103 Early Hints\r\n\r\n");
     RUVIA_CHECK(informational.parsed() != nullptr);
     if (informational.parsed() != nullptr) {
@@ -222,8 +223,9 @@ RUVIA_TEST(websocket_client_handshake_prepares_ipv6_host_and_owns_configuration)
     std::array<char, 2048> buffer{};
     const auto prepared = handshake.prepare_request(
         ruvia::http_origin_view::https({.host_ = "[2001:db8::1]", .port_ = 8443}), "/before", buffer);
-    RUVIA_CHECK(prepared.prepared() != nullptr);
-    const std::string wire(prepared.prepared()->head());
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    const std::string wire(prepared_req->head());
     RUVIA_CHECK(wire.find("Host: [2001:db8::1]:8443\r\n") != std::string::npos);
     RUVIA_CHECK(wire.find("X-Trace: initial\r\n") != std::string::npos);
     RUVIA_CHECK(wire.find("sec-websocket-protocol: chat\r\n") != std::string::npos);
@@ -236,7 +238,7 @@ RUVIA_TEST(websocket_client_handshake_result_view_is_used_while_response_lives) 
     std::array<char, 2048> buffer{};
     const auto prepared = handshake.prepare_request(
         ruvia::http_origin_view::https({.host_ = "example.com"}), "/", buffer);
-    auto response = parse_response(ruvia_ctx, prepared.prepared()->exchange_state(),
+    auto response = parse_response(ruvia_ctx, std::get<0>(prepared).exchange_state(),
         valid_response("Sec-WebSocket-Protocol: chat\r\n"));
     const auto result_value = handshake.validate_response(response);
     RUVIA_CHECK((result_value.index() == 0));

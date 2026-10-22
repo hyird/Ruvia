@@ -232,11 +232,10 @@ private:
         http2_connection&, std::uint32_t, const http_request&,
         websocket_handshake_validation_options) noexcept;
     explicit http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push, bool receive_origin_advertisements);
-    class impl_type;
     struct impl_deleter_type final {
-        void operator()(impl_type* value) const noexcept;
+        void operator()(detail::http2_connection_owner_endpoint* value) const noexcept;
     };
-    std::unique_ptr<impl_type, impl_deleter_type> impl_;
+    std::unique_ptr<detail::http2_connection_owner_endpoint, impl_deleter_type> impl_;
 };
 // Validates an RFC 8441 extended-CONNECT handshake against the decoded stream
 // state and its semantic request. The request and connection must remain alive

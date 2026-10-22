@@ -43,25 +43,19 @@ http1_client_response_body_decoder::http1_client_response_body_decoder(
     };
     // A zero-content (205) plan carries the same framings as an ordinary one;
     // only emit() treats its content differently.
-    const auto* zero = plan.zero_content();
-    zero_content_ = zero != nullptr;
-    const auto* known = zero_content_ ? zero->known_length() : plan.known_length();
-    const auto* chunked = zero_content_ ? zero->chunked() : plan.chunked();
-    const auto* close = zero_content_ ? zero->close_delimited() : plan.close_delimited();
-    if (known != nullptr) {
+    zero_content_ = plan.requires_zero_content();
+    if (const auto* known = plan.known_length()) {
         framing_ = framing_type::fixed;
         remaining_ = known->content_length();
         persistence_ = known->persistence();
-    } else if (chunked != nullptr) {
+    } else if (const auto* chunked = plan.chunked()) {
         framing_ = framing_type::chunked;
         persistence_ = chunked->persistence();
         configure_coding(chunked->transfer_codings());
         chunked_.emplace(http1_chunked_body_decoder_config{.trailer_role_ = http1_chunk_trailer_role::response});
-    } else if (close != nullptr) {
+    } else if (const auto* close = plan.close_delimited()) {
         framing_ = framing_type::close_delimited;
         configure_coding(close->transfer_codings());
-    } else if (zero_content_) {
-        throw std::invalid_argument("invalid zero-content HTTP/1 response plan");
     } else {
         throw std::invalid_argument("unsupported HTTP/1 response plan");
     }

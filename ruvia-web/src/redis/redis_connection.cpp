@@ -11,7 +11,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/error_text.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/http/http_pmr_string.h"
 
 #include "redis/redis_protocol.h"

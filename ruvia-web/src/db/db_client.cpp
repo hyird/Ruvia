@@ -1,8 +1,8 @@
-#include "ruvia/web/db/db_client.h"
-
 #include <memory>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/web/db/db_handle.h"
 
 #include "db/db_client_state.h"
 
@@ -59,12 +59,8 @@ task<void> db_client::connect() & {
     return state_->connect();
 }
 
-db_handle db_client::with_options(operation_options options) const& {
+db_handle db_client::handle(operation_options options) const& {
     return state_->handle(std::move(options));
-}
-
-db_handle db_client::handle() const& {
-    return state_->handle({});
 }
 
 void db_client::close() noexcept {

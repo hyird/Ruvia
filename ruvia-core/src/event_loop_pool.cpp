@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_group.h"
 #include "ruvia/core/worker_handle.h"
 

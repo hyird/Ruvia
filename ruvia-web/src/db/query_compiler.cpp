@@ -5,7 +5,7 @@
 #include <stdexcept>
 #include <unordered_map>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "query_storage.h"
 

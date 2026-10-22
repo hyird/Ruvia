@@ -27,12 +27,12 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_client.h"
+#include "ruvia/web/db/db_handle.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_client.h"
+#include "ruvia/web/redis/redis_handle.h"
 #endif
 
 namespace ruvia::test {

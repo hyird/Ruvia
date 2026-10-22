@@ -12,6 +12,6 @@ namespace ruvia::detail {
     std::pmr::memory_resource* resource, http_error_info error);
 
 [[nodiscard]] task<http_response> invoke_error_handler(
-    context& context_value, http_error_info error, http_error_handler_ref_type handler);
+    context& context_value, http_error_info error, http_error_handler_ref handler);
 
 }  // namespace ruvia::detail

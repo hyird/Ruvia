@@ -19,8 +19,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/pmr_resource.h"
-#include "ruvia/web/detail/integration/worker_state_key.h"
+#include "ruvia/web/detail/http/context/request_bindings.h"
 
 namespace ruvia::detail {
 
@@ -55,7 +54,7 @@ public:
         static_assert(std::is_constructible_v<t_type, std::invoke_result_t<stored_type&>>,
             "worker state factory must return a value that constructs T");
         worker_state_definition definition;
-        definition.type_key_ = worker_state_type_key<t_type>();
+        definition.type_key_ = detail::type_key<t_type>();
         definition.factory_ =
             construct_pmr_object<stored_type>(process_resource(), std::forward<factory_type>(factory));
         // Named apart from the enclosing `factory` parameter: these lambdas are

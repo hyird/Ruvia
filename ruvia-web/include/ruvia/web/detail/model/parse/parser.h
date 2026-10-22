@@ -3,11 +3,10 @@
 #include <cstddef>
 #include <string_view>
 
+#include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_media_type.h"
 #include "ruvia/web/detail/model/parse/form_parser.h"
 #include "ruvia/web/detail/model/parse/json_parser.h"
-#include "ruvia/web/model_types.h"
 
 // Internal aggregate parser header. Users should include ruvia/web/model.h.
 

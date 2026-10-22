@@ -33,7 +33,7 @@ inline void append_https_port(std::pmr::string& location, std::uint16_t https_po
 
 inline http_response make_auto_https_redirect_response(
     const http_request& request, request_memory& memory, std::uint16_t https_port) {
-    http_response response({.resource_ = memory.resource()});
+    http_response response(memory.resource());
     response.status(ruvia::http_status::permanent_redirect);
 
     const auto host = parse_http_authority_host(auto_https_redirect_authority(request)).value_or(std::string_view{});

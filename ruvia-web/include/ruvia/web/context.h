@@ -15,6 +15,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/blocking_pool.h"
@@ -26,6 +27,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/cookies.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_known_method.h"
@@ -33,26 +35,26 @@
 #include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_push.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/web/conn_info.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
+#include "ruvia/web/detail/http/request/request_fields_access.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
-#include "ruvia/web/detail/model/traits.h"
-#include "ruvia/web/dispatch.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/model_types.h"
-#include "ruvia/web/request_fields.h"
+#include "ruvia/web/model.h"
 namespace ruvia {
 
 class context;
 class env;
 class static_root;
 // Capabilities a handler reaches through context; include the defining header
-// where they are used: http_client_handle.h, websocket.h, http_tunnel.h,
+// where they are used: http_client.h, websocket.h, http_tunnel.h,
 // session.h, streaming.h and multipart_reader.h.
 class http_client_handle;
 class websocket;
 class http_tunnel;
+class test_app;
 class session;
 class body_reader;
 class response_stream_writer;
@@ -92,10 +94,208 @@ enum class static_file_selection_mode : std::uint8_t;
 struct context_access;
 class context_services;
 struct session_access;
+struct request_name_value_view_access;
+struct request_name_value_list_access;
 }  // namespace detail
 
+class plain_connection_transport final {
+private:
+    friend class conn_info;
+    constexpr plain_connection_transport() noexcept = default;
+};
+
+class tls_connection_transport final {
+public:
+    // The verified peer certificate subject DN for mutual TLS, or empty when
+    // no client certificate was presented.
+    [[nodiscard]] constexpr std::string_view client_certificate_subject() const noexcept {
+        return client_certificate_subject_;
+    }
+
+private:
+    friend class conn_info;
+
+    explicit constexpr tls_connection_transport(std::string_view client_certificate_subject) noexcept
+        : client_certificate_subject_(client_certificate_subject) {}
+
+    std::string_view client_certificate_subject_;
+};
+
+// Runtime connection metadata associated with a Web request. This information
+// comes from the server adapter rather than from the HTTP message bytes, so it
+// intentionally lives outside http_request and context_request.
+class conn_info final {
+public:
+    class endpoint final {
+    public:
+        [[nodiscard]] constexpr std::string_view address() const noexcept {
+            return address_;
+        }
+
+        // Zero when the port is not known: a forwarded client address whose
+        // proxy did not record one, or a hand-built test connection.
+        [[nodiscard]] constexpr std::uint16_t port() const noexcept {
+            return port_;
+        }
+
+    private:
+        friend class conn_info;
+
+        explicit constexpr endpoint(std::string_view address, std::uint16_t port = 0) noexcept
+            : address_(address),
+              port_(port) {}
+
+        std::string_view address_;
+        std::uint16_t port_{0};
+    };
+
+    // The peer at the other end of this socket. Behind a reverse proxy that is
+    // the proxy, not the caller -- use client() for the caller.
+    [[nodiscard]] constexpr endpoint remote() const noexcept {
+        return remote_;
+    }
+
+    // Who the request is from. Equal to remote() unless the peer is a configured
+    // trusted proxy AND it sent a forwarding header, in which case it is what
+    // that header names. Never derived from an untrusted peer's headers: those
+    // are attacker-controlled, so with no trusted proxy configured this is
+    // always the direct peer.
+    //
+    // This, not remote(), is what rate limiting keys on and what an access log
+    // should record.
+    [[nodiscard]] constexpr endpoint client() const noexcept {
+        return client_;
+    }
+
+    // Whether client()/scheme() came from a forwarding header rather than from
+    // the transport. False for every request whose peer is not trusted.
+    [[nodiscard]] constexpr bool via_trusted_proxy() const noexcept {
+        return via_trusted_proxy_;
+    }
+
+    // https when the request reached the client over TLS -- including TLS the
+    // proxy terminated and reported with X-Forwarded-Proto -- and http
+    // otherwise. tls() describes only THIS hop, so a Secure cookie or an HSTS
+    // header must be decided from this instead: behind a TLS-terminating proxy
+    // the server's own transport is plaintext while the client's is not.
+    [[nodiscard]] constexpr http_scheme scheme() const noexcept {
+        return scheme_;
+    }
+
+    [[nodiscard]] constexpr const plain_connection_transport* plain() const& noexcept {
+        return std::get_if<plain_connection_transport>(&transport_);
+    }
+    const plain_connection_transport* plain() const&& = delete;
+
+    [[nodiscard]] constexpr const tls_connection_transport* tls() const& noexcept {
+        return std::get_if<tls_connection_transport>(&transport_);
+    }
+    const tls_connection_transport* tls() const&& = delete;
+
+private:
+    friend class detail::context_services;
+
+    constexpr conn_info(std::string_view remote_address, plain_connection_transport transport) noexcept
+        : remote_(remote_address),
+          client_(remote_address),
+          transport_(transport),
+          scheme_(http_scheme::http) {}
+
+    constexpr conn_info(std::string_view remote_address, tls_connection_transport transport) noexcept
+        : remote_(remote_address),
+          client_(remote_address),
+          transport_(transport),
+          scheme_(http_scheme::https) {}
+
+    [[nodiscard]] static constexpr conn_info plain(std::string_view remote_address) noexcept {
+        return conn_info(remote_address, plain_connection_transport{});
+    }
+
+    [[nodiscard]] static constexpr conn_info tls(
+        std::string_view remote_address, std::string_view client_certificate_subject) noexcept {
+        return conn_info(remote_address, tls_connection_transport(client_certificate_subject));
+    }
+
+    // Applied only after the peer has been matched against the configured
+    // trusted set. An empty argument leaves the transport-derived value, so a
+    // proxy that sends one field but not the other does not blank the rest.
+    constexpr void apply_forwarded(
+        std::string_view client_address, std::string_view forwarded_scheme) noexcept {
+        if (!client_address.empty()) {
+            client_ = endpoint(client_address);
+            via_trusted_proxy_ = true;
+        }
+        if (forwarded_scheme == "http") {
+            scheme_ = http_scheme::http;
+            via_trusted_proxy_ = true;
+        } else if (forwarded_scheme == "https") {
+            scheme_ = http_scheme::https;
+            via_trusted_proxy_ = true;
+        }
+    }
+
+    constexpr void set_remote_port(std::uint16_t port) noexcept {
+        remote_ = endpoint(remote_.address(), port);
+        if (!via_trusted_proxy_) {
+            client_ = remote_;
+        }
+    }
+
+    endpoint remote_;
+    endpoint client_;
+    std::variant<plain_connection_transport, tls_connection_transport> transport_;
+    http_scheme scheme_;
+    bool via_trusted_proxy_{false};
+};
+
+static_assert(std::is_nothrow_copy_constructible_v<conn_info>);
+static_assert(std::is_nothrow_move_constructible_v<conn_info>);
+static_assert(std::is_nothrow_copy_assignable_v<conn_info>);
+static_assert(std::is_nothrow_move_assignable_v<conn_info>);
+
+// Inputs are copied before dispatch() returns its lazy scoped operation.
+// Only origin-form targets and buffered request/response bodies are accepted.
+// Cancellation combines `stop_token_` with the calling context's stop token;
+// subrequest handlers have no total execution timeout.
+struct dispatch_options final {
+    std::string_view method_{};
+    std::string_view target_{};
+    std::span<const http_header_view> headers_{};
+    std::string_view body_{};
+    stop_token stop_token_{};
+};
+
+// Owns its bytes in the calling worker's reclaimable pool (or process resource
+// for test_app), independently of the child request arena.
+class dispatch_response final {
+public:
+    [[nodiscard]] http_status_code status() const noexcept {
+        return status_;
+    }
+    [[nodiscard]] std::string_view body() const& noexcept {
+        return body_;
+    }
+    std::string_view body() const&& = delete;
+    [[nodiscard]] std::span<const http_header> headers() const& noexcept {
+        return headers_;
+    }
+    std::span<const http_header> headers() const&& = delete;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
+    std::optional<std::string_view> header(std::string_view) const&& = delete;
+
+private:
+    friend class context;
+    friend class test_app;
+    explicit dispatch_response(std::pmr::memory_resource* resource = nullptr)
+        : headers_(pmr_resource_or_default(resource)),
+          body_(pmr_resource_or_default(resource)) {}
+    http_status_code status_{http_status::ok};
+    std::pmr::vector<http_header> headers_;
+    std::pmr::string body_;
+};
+
 template <typename t_type>
-using request_state_binding_type = detail::request_binding_handle<t_type>;
+using request_state_binding = detail::request_binding_handle<t_type>;
 
 // Explicit opt-in for zero-copy response bodies: the response borrows these
 // bytes instead of copying them. The consteval constructors accept only
@@ -145,7 +345,7 @@ public:
     // Accept uses media ranges; language uses RFC 4647 basic filtering;
     // charset matches tokens or '*'; encoding also handles coding aliases and
     // the default acceptability of identity.
-    enum class negotiable_type : std::uint8_t { media_type,
+    enum class negotiable_field : std::uint8_t { media_type,
         language,
         encoding,
         charset };
@@ -158,9 +358,9 @@ public:
     // Client weights select a caller-owned supported value; server order breaks
     // ties. An absent field selects the first offer, no acceptable offer is nullopt.
     [[nodiscard]] std::optional<std::string_view> negotiate(
-        negotiable_type field, std::span<const std::string_view> supported) const noexcept;
+        negotiable_field field, std::span<const std::string_view> supported) const noexcept;
     [[nodiscard]] std::optional<std::string_view> negotiate(
-        negotiable_type field, std::initializer_list<std::string_view> supported) const noexcept {
+        negotiable_field field, std::initializer_list<std::string_view> supported) const noexcept {
         return negotiate(field, std::span<const std::string_view>(supported.begin(), supported.size()));
     }
     [[nodiscard]] std::optional<std::string_view> query(std::string_view name) const;
@@ -310,10 +510,10 @@ public:
 
     // Queues a promised request on this HTTP/2 connection. False means the
     // peer disabled push or its stream capacity cannot admit the promise.
-    [[nodiscard]] scoped_operation<bool> push(http_push_request_view request);
+    [[nodiscard]] bool push(http_push_request_view request);
     // Connection-scoped HTTP/2 advertisements; ORIGIN requires TLS.
-    [[nodiscard]] scoped_operation<void> advertise_origins(std::span<const std::string_view> origins);
-    [[nodiscard]] scoped_operation<void> advertise_alternative_service(std::string_view value);
+    void advertise_origins(std::span<const std::string_view> origins);
+    void advertise_alternative_service(std::string_view value);
 
     ~context();
 
@@ -429,11 +629,11 @@ public:
     // produced and checked this", and hand-bound state must never be able to
     // impersonate it.
     template <typename t_type>
-    [[nodiscard]] request_state_binding_type<t_type> bind_request_state(const t_type& value);
+    [[nodiscard]] request_state_binding<t_type> bind_request_state(const t_type& value);
 
     template <typename t_type>
         requires(!std::is_lvalue_reference_v<t_type>)
-    [[nodiscard]] request_state_binding_type<std::remove_cvref_t<t_type>> bind_request_state(t_type&&) = delete;
+    [[nodiscard]] request_state_binding<std::remove_cvref_t<t_type>> bind_request_state(t_type&&) = delete;
 
     // Throws std::logic_error when nothing of this type is bound. Use
     // try_request_state<T>() where absence is a normal outcome -- an optional
@@ -636,6 +836,21 @@ private:
     // memory resource are still alive.
     mutable ::ruvia::operation_scope operation_scope_;
 };
+
+enum class readiness_state : std::uint8_t {
+    ready,
+    unavailable,
+};
+
+struct readiness_response_options final {
+    readiness_state state_{readiness_state::ready};
+    borrowed_text unavailable_reason_{"service is not ready"};
+};
+
+[[nodiscard]] http_response make_health_response(context& context_value);
+
+[[nodiscard]] http_response make_readiness_response(
+    context& context_value, readiness_response_options options = {});
 
 }  // namespace ruvia
 

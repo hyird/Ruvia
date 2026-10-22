@@ -18,7 +18,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/detail/controller/controller_runtime.h"
 
-#include "app/app_config_guards.h"
+#include "app/app_config_mutation.h"
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"
 #include "http/static_root_index.h"
@@ -208,7 +208,7 @@ private:
                 http_make_path_from_native_path(document_root.root_), document_root.static_options_,
                 document_root.refresh_interval_, precompression, document_root.resident_);
             prepared_options.document_root_ =
-                detail::http_server_options::document_root_type::refreshing(*runtime->document_root_);
+                detail::http_server_options::document_root_state::refreshing(*runtime->document_root_);
         }
         if (state_.blocking_pool_.has_value()) {
             runtime->blocking_pool_ =

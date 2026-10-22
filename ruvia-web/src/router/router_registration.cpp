@@ -45,7 +45,7 @@ detail::route_entry::route_entry(std::pmr::memory_resource* resource, init_type 
       dynamic_(init.dynamic_),
       max_request_body_bytes_(init.max_request_body_bytes_) {}
 
-void detail::router_impl::register_endpoint(http_known_method method, std::string_view method_token,
+void detail::router::register_endpoint(http_known_method method, std::string_view method_token,
     std::string_view path, route_endpoint endpoint, void* handler_target,
     std::span<const controller_middleware_descriptor> controller_middlewares,
     std::span<const controller_middleware_descriptor> route_middlewares) {

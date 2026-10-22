@@ -17,7 +17,7 @@ namespace ruvia::detail {
 class http2_sans_io_session_context final {
 public:
     http2_sans_io_session_context(context_services services, const http_server_options& options,
-        connection_scanner::entry_type& scanner_entry, const http_server_worker_state& worker_state)
+        connection_scanner::entry& scanner_entry, const http_server_worker_state& worker_state)
         : services_(std::move(services)),
           options_(options),
           scanner_entry_(scanner_entry),
@@ -27,7 +27,7 @@ public:
         return options_;
     }
 
-    [[nodiscard]] connection_scanner::entry_type& scanner_entry() const noexcept {
+    [[nodiscard]] connection_scanner::entry& scanner_entry() const noexcept {
         return scanner_entry_;
     }
 
@@ -42,24 +42,24 @@ public:
 private:
     context_services services_;
     const http_server_options& options_;
-    connection_scanner::entry_type& scanner_entry_;
+    connection_scanner::entry& scanner_entry_;
     const http_server_worker_state& worker_state_;
 };
 
-[[nodiscard]] inline connection_scanner::phase_type http2_sans_io_inactivity_phase(
+[[nodiscard]] inline connection_scanner::phase http2_sans_io_inactivity_phase(
     bool header_block_in_progress, std::size_t active_runtime_count,
     bool websocket_tunnel_active) noexcept {
     if (header_block_in_progress) {
-        return connection_scanner::phase_type::reading_initial;
+        return connection_scanner::phase::reading_initial;
     }
     if (websocket_tunnel_active) {
         // A successful RFC 8441 tunnel is long-lived, not a stalled request body.
         // Keep the header timeout above so another stream's incomplete header block
         // cannot hold the connection open indefinitely.
-        return connection_scanner::phase_type::long_lived;
+        return connection_scanner::phase::long_lived;
     }
-    return active_runtime_count == 0 ? connection_scanner::phase_type::idle
-                                     : connection_scanner::phase_type::reading_payload;
+    return active_runtime_count == 0 ? connection_scanner::phase::idle
+                                     : connection_scanner::phase::reading_payload;
 }
 
 }  // namespace ruvia::detail

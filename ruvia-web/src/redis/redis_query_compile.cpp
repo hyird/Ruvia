@@ -7,11 +7,10 @@
 #include <stdexcept>
 #include <system_error>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/redis/redis_entity_key.h"
-#include "ruvia/web/redis/redis_predicate.h"
 #include "ruvia/web/redis/redis_repository.h"
 
 #include "redis/redis_utils.h"

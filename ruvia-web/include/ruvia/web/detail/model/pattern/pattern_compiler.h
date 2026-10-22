@@ -5,7 +5,7 @@
 
 #include "ruvia/web/detail/model/pattern/pattern_class.h"
 #include "ruvia/web/detail/model/pattern/pattern_types.h"
-#include "ruvia/web/model_types.h"
+#include "ruvia/web/fixed_string.h"
 
 namespace ruvia::detail::model {
 
@@ -120,7 +120,7 @@ struct compiled_pattern_plan final {
     static_assert(value.valid_,
         "RUVIA_PATTERN supports only anchored patterns using literals, '.', character classes, \\d, \\w, \\s, and '*', '+', '?'. "
         "Escaped letters and digits other than \\d, \\w, \\s (such as \\n or \\D) are unsupported. "
-        "Ranges require ordered single-character endpoints. RUVIA_REGEX uses the same syntax; use RUVIA_CUSTOM for other matching logic.");
+        "Ranges require ordered single-character endpoints. Use RUVIA_CUSTOM for other matching logic.");
 };
 
 }  // namespace ruvia::detail::model

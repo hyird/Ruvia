@@ -2,13 +2,16 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/http_protocol_error.h"
+#include "ruvia/http/http_transfer_coding_decoder.h"
 #include "ruvia/http/protocol_byte_limit.h"
-
 namespace ruvia {
 
 enum class http1_chunk_decode_error : std::uint8_t {
@@ -190,5 +193,63 @@ private:
     std::size_t remaining_{0};
     std::size_t decoded_bytes_{0};
 };
+
+// A request-body failure detected by a server driver while enforcing the
+// HTTP-owned content contract. The driver supplies runtime byte limits and I/O
+// completion facts; HTTP owns their final response status and diagnostic.
+enum class http_request_body_failure : std::uint8_t {
+    too_large,
+    incomplete,
+};
+
+[[nodiscard]] inline http_protocol_error http_request_body_protocol_error(
+    http_request_body_failure failure) noexcept {
+    switch (failure) {
+        case http_request_body_failure::too_large:
+            return http_protocol_error(http_status::content_too_large, "request body is too large");
+        case http_request_body_failure::incomplete:
+            return http_protocol_error(http_status::bad_request, "incomplete request body");
+    }
+    return http_protocol_error(http_status::bad_request, "invalid request body");
+}
+
+[[nodiscard]] inline http_protocol_error http_request_chunk_decode_error(
+    http1_chunk_decode_error error) noexcept {
+    switch (error) {
+        case http1_chunk_decode_error::invalid_framing:
+            return http_protocol_error(http_status::bad_request, "invalid chunked request body");
+        case http1_chunk_decode_error::body_limit_exceeded:
+            return http_request_body_protocol_error(http_request_body_failure::too_large);
+        case http1_chunk_decode_error::framing_limit_exceeded:
+            return http_protocol_error(
+                http_status::content_too_large, "request body framing is too large");
+    }
+    return http_protocol_error(http_status::bad_request, "invalid chunked request body");
+}
+
+[[nodiscard]] inline http_protocol_error http_request_transfer_coding_error(
+    http_transfer_coding_decode_error error) noexcept {
+    switch (error) {
+        case http_transfer_coding_decode_error::invalid_content:
+            return http_protocol_error(http_status::bad_request, "invalid transfer-coding body");
+        case http_transfer_coding_decode_error::decoded_size_exceeded:
+            return http_request_body_protocol_error(http_request_body_failure::too_large);
+    }
+    return http_protocol_error(http_status::bad_request, "invalid transfer-coding body");
+}
+
+[[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_size_failure(
+    std::size_t size, protocol_byte_limit limit) noexcept {
+    return limit.exceeds(size)
+               ? std::optional<http_request_body_failure>(http_request_body_failure::too_large)
+               : std::nullopt;
+}
+
+[[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_addition_failure(
+    std::size_t current_size, std::size_t additional_size, protocol_byte_limit limit) noexcept {
+    return limit.addition_exceeds(current_size, additional_size)
+               ? std::optional<http_request_body_failure>(http_request_body_failure::too_large)
+               : std::nullopt;
+}
 
 }  // namespace ruvia

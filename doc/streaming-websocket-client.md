@@ -141,9 +141,9 @@ ruvia::task<void> stream_subscription(
 | --- | --- |
 | `co_await c.inform(const http_interim_response_head& response)` | 在最终响应头提交前发送 `1xx` 临时响应（如 `103 Early Hints`：`http_interim_response_head(http_status::early_hints, headers)`） |
 | `c.priority(http_priority_fields{.urgency_ = 2, .incremental_ = true})` | 设置 RFC 9218 `Priority` 响应优先级；通过 `c.req().priority()` 读取客户端请求优先级 |
-| `co_await c.push(http_push_request_view request)` | （HTTP/2）向开启了 Server Push 的客户端推送关联资源，返回 `bool` 表示是否被接纳 |
-| `co_await c.advertise_origins(std::span<const std::string_view> origins)` | （HTTP/2）在连接上发送 RFC 8336 `ORIGIN` 帧，通告当前连接可合并服务的权威源集合 |
-| `co_await c.advertise_alternative_service(std::string_view value)` | （HTTP/2）发送 RFC 7838 `ALTSVC` 帧通告替代服务 |
+| `bool c.push(http_push_request_view request)` | （HTTP/2）向开启了 Server Push 的客户端推送关联资源，同步返回 `bool` 表示是否被接纳 |
+| `void c.advertise_origins(std::span<const std::string_view> origins)` | （HTTP/2）在连接上排入 RFC 8336 `ORIGIN` 帧，通告当前连接可合并服务的权威源集合 |
+| `void c.advertise_alternative_service(std::string_view value)` | （HTTP/2）在连接上排入 RFC 7838 `ALTSVC` 帧通告替代服务 |
 | `c.req().trailers()` / `c.req().trailer(name)` | 在流式请求体读取到 EOF 后，读取客户端发送的请求 Trailer 首部 |
 | `co_await stream.end(trailers)` | 在流式响应结束时发送响应 Trailer 首部（需在写出首块前声明 `c.header("Trailer", "...")`） |
 
@@ -223,7 +223,7 @@ private:
 
 ## 4. HTTP `CONNECT` 与 `CONNECT-UDP` 隧道
 
-头文件：`"ruvia/web/http_tunnel.h"`、`"ruvia/web/http_capsule_stream.h"`、`"ruvia/web/http_datagram_stream.h"`。
+头文件：`"ruvia/web/http_tunnel.h"`。
 参考示例：[examples/web/tunnels.cpp](../examples/web/tunnels.cpp)。
 
 ### 4.1 服务端 `CONNECT` 字节流隧道
@@ -273,7 +273,7 @@ ruvia::task<void> handle_udp(ruvia::context& c) {
 
 ## 5. 出站 HTTP/1.1 & HTTP/2 客户端（`http_client`）
 
-头文件：`"ruvia/web/http_client.h"`、`"ruvia/web/http_client_handle.h"`、`"ruvia/web/http_client_types.h"`、`"ruvia/web/http_client_response.h"`、`"ruvia/web/http_client_tunnel.h"`。
+头文件：`"ruvia/web/http_client.h"`、`"ruvia/web/http_client_types.h"`。
 参考示例：[examples/web/http_client.cpp](../examples/web/http_client.cpp)、[examples/web/http_client_advanced.cpp](../examples/web/http_client_advanced.cpp)。
 
 ### 5.1 两种使用模式
@@ -288,7 +288,7 @@ ruvia::task<void> handle_udp(ruvia::context& c) {
 | 字段名 | 类型与默认值 | 说明 |
 | --- | --- | --- |
 | `scheme_` | `http_scheme`（默认 `https`） | `http_scheme::http` 或 `https` |
-| `host_` | `std::string` | 目标主机名或 IP（必填，outbound origin 在创建时固定） |
+| `host_` | `borrowed_text` | 目标主机名或 IP（必填，outbound origin 在创建时固定） |
 | `port_` | `std::optional<std::uint16_t>` | 目标端口（缺省按 scheme 使用 80 或 443） |
 | `protocol_` | `http_client_protocol`（默认 `negotiate`） | `negotiate`（TLS 下通过 ALPN 协商 H2/H1.1，明文使用 H1.1）、`http1_only`、`http2_only`（明文下使用 H2 prior knowledge） |
 | `connection_count_` | `std::size_t`（默认 `1`） | 每个客户端实例维护的最大连接数 |

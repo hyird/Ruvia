@@ -7,7 +7,6 @@
 
 #include "ruvia/core/operation_timeout.h"
 
-#include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
 #include "websocket/http_websocket_liveness.h"
 namespace ruvia::detail {

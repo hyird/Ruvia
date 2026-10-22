@@ -204,10 +204,9 @@ bool http2_connection::apply_settings_payload(std::string_view payload_value) {
     std::int64_t maximum_window_delta = 0;
     for (std::size_t offset = 0; offset < payload_value.size(); offset += 6) {
         const auto entry_value = http2_read_setting_entry(payload_value, offset);
-        const auto result_value = candidate_value.apply(entry_value.id_, entry_value.value_);
-        if (const auto* failure = result_value.failure()) {
-            append_goaway(http2_peer_setting_error_code(failure->error()),
-                http2_peer_setting_error_message(failure->error()));
+        if (const auto error = candidate_value.apply(entry_value.id_, entry_value.value_)) {
+            append_goaway(http2_peer_setting_error_code(*error),
+                http2_peer_setting_error_message(*error));
             return false;
         }
         if (entry_value.id_ == http2_setting_id::initial_window_size) {

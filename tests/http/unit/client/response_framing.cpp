@@ -128,12 +128,13 @@ RUVIA_TEST(http_client_response_unfolds_fields_before_framing_and_owns_values) {
     std::array<char, 512> request_head;
     const auto prepared = ruvia::http1_client_request_writer().prepare(
         ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head);
-    RUVIA_CHECK(prepared.prepared() != nullptr);
-    if (prepared.prepared() == nullptr) {
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    if (prepared_req == nullptr) {
         return;
     }
 
-    http1_client_response_parser parser(prepared.prepared()->exchange_state());
+    http1_client_response_parser parser(prepared_req->exchange_state());
     std::string wire =
         "HTTP/1.1 200 OK\r\n"
         "Content-Length: 0,\r\n \t0\r\n"
@@ -202,12 +203,12 @@ RUVIA_TEST(http_client_folded_continue_allocation_failure_allows_retry) {
                 ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
                 http1_client_request_wire_policy{
                     .expectation_ = ruvia::http_client_request_expectation::continue_value});
-            RUVIA_CHECK(prepared.prepared() != nullptr);
-            if (prepared.prepared() == nullptr) {
+            const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+            RUVIA_CHECK(prepared_req != nullptr);
+            if (prepared_req == nullptr) {
                 return;
             }
-            http1_client_response_parser parser(
-                prepared.prepared()->exchange_state(), {.resource_ = &resource});
+            http1_client_response_parser parser(prepared_req->exchange_state(), &resource);
             resource.fail_after(fail_after);
             for (const auto size : {wire.find("\r\n continuation") + 1, wire.size() - 1}) {
                 const auto partial = parser.parse(wire.substr(0, size));
@@ -482,8 +483,9 @@ RUVIA_TEST(http_client_bodyless_trailer_declarations_preserve_message_boundaries
         std::array<char, 512> request_head;
         const auto prepared = ruvia::http1_client_request_writer().prepare(
             ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head);
-        RUVIA_CHECK(prepared.prepared() != nullptr);
-        if (prepared.prepared() == nullptr) {
+        const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+        RUVIA_CHECK(prepared_req != nullptr);
+        if (prepared_req == nullptr) {
             continue;
         }
         for (const bool transfer_encoding : {false, true}) {
@@ -497,7 +499,7 @@ RUVIA_TEST(http_client_bodyless_trailer_declarations_preserve_message_boundaries
             // these responses at the empty line regardless of their fields.
             head.append("Trailer: Content-Length, Bad Field, \"x-name\"\r\n\r\n");
             const std::string wire = head + "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
-            http1_client_response_parser parser(prepared.prepared()->exchange_state());
+            http1_client_response_parser parser(prepared_req->exchange_state());
             for (std::size_t size = 1; size < head.size(); ++size) {
                 const auto partial = parser.parse(std::string_view(wire).substr(0, size));
                 RUVIA_CHECK(partial.need_more() != nullptr);
@@ -593,8 +595,9 @@ RUVIA_TEST(http_client_informational_auxiliary_fields_preserve_the_final_respons
         std::array<char, 512> request_head;
         const auto prepared = ruvia::http1_client_request_writer().prepare(
             ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head);
-        RUVIA_CHECK(prepared.prepared() != nullptr);
-        if (prepared.prepared() == nullptr) {
+        const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+        RUVIA_CHECK(prepared_req != nullptr);
+        if (prepared_req == nullptr) {
             continue;
         }
         std::string head(status_line);
@@ -604,7 +607,7 @@ RUVIA_TEST(http_client_informational_auxiliary_fields_preserve_the_final_respons
             "Content-Type: text/plain\r\nContent-Type: application/json\r\n"
             "Server: first\r\nServer: second\r\n\r\n");
         const std::string wire = head + "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
-        http1_client_response_parser parser(prepared.prepared()->exchange_state());
+        http1_client_response_parser parser(prepared_req->exchange_state());
         for (std::size_t size = 1; size < head.size(); ++size) {
             const auto partial = parser.parse(std::string_view(wire).substr(0, size));
             RUVIA_CHECK(partial.need_more() != nullptr);
@@ -687,11 +690,12 @@ RUVIA_TEST(http_client_bodyless_framing_fields_do_not_desynchronize_the_connecti
     std::array<char, 512> request_head;
     const auto prepared = ruvia::http1_client_request_writer().prepare(
         ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head);
-    RUVIA_CHECK(prepared.prepared() != nullptr);
-    if (prepared.prepared() == nullptr) {
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    if (prepared_req == nullptr) {
         return;
     }
-    http1_client_response_parser parser(prepared.prepared()->exchange_state());
+    http1_client_response_parser parser(prepared_req->exchange_state());
     constexpr std::string_view interim_head = "HTTP/1.1 103 Early Hints\r\nContent-Length: 5\r\n\r\n";
     std::string interim_wire(interim_head);
     interim_wire.append("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
@@ -712,7 +716,8 @@ RUVIA_TEST(http_client_bodyless_framing_fields_do_not_desynchronize_the_connecti
 
 RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     const auto zero_length = parse_head("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 0");
-    const auto* zero_length_body = require_zero_content(zero_length.plan()).known_length();
+    RUVIA_CHECK(zero_length.plan().requires_zero_content());
+    const auto* zero_length_body = zero_length.plan().known_length();
     RUVIA_CHECK(zero_length_body != nullptr);
     if (zero_length_body == nullptr) {
         return;
@@ -726,7 +731,8 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     const auto chunked = parse_head("GET",
         "HTTP/1.1 205 Reset Content\r\n"
         "Transfer-Encoding: gzip, chunked");
-    const auto& chunked_zero = require_zero_content(chunked.plan());
+    const auto& chunked_zero = chunked.plan();
+    RUVIA_CHECK(chunked_zero.requires_zero_content());
     RUVIA_CHECK(chunked_zero.chunked() != nullptr);
     RUVIA_CHECK(chunked_zero.close_delimited() == nullptr);
     if (chunked_zero.chunked() != nullptr) {
@@ -738,7 +744,8 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
 
     const auto transfer_coded =
         parse_head("GET", "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: gzip");
-    const auto& transfer_coded_zero = require_zero_content(transfer_coded.plan());
+    const auto& transfer_coded_zero = transfer_coded.plan();
+    RUVIA_CHECK(transfer_coded_zero.requires_zero_content());
     RUVIA_CHECK(transfer_coded_zero.close_delimited() != nullptr);
     if (transfer_coded_zero.close_delimited() != nullptr) {
         RUVIA_CHECK_EQ(transfer_coded_zero.close_delimited()->transfer_codings().size(), std::size_t{1});
@@ -747,7 +754,8 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     }
 
     const auto unframed = parse_head("GET", "HTTP/1.1 205 Reset Content");
-    const auto& close_zero = require_zero_content(unframed.plan());
+    const auto& close_zero = unframed.plan();
+    RUVIA_CHECK(close_zero.requires_zero_content());
     RUVIA_CHECK(close_zero.close_delimited() != nullptr);
     RUVIA_CHECK(close_zero.chunked() == nullptr);
     RUVIA_CHECK_EQ(active_plan_alternative_count(unframed.plan()), std::size_t{1});
@@ -755,7 +763,7 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     const auto connect =
         parse_head("CONNECT", "HTTP/1.1 205 Reset Content\r\nContent-Length: invalid");
     RUVIA_CHECK(connect.plan().connect_tunnel() != nullptr);
-    RUVIA_CHECK(connect.plan().zero_content() == nullptr);
+    RUVIA_CHECK(!connect.plan().requires_zero_content());
 }
 
 RUVIA_TEST(http_client_final_after_continue_does_not_cancel_released_content) {
@@ -767,12 +775,13 @@ RUVIA_TEST(http_client_final_after_continue_does_not_cancel_released_content) {
         ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
         http1_client_request_wire_policy{
             .expectation_ = ruvia::http_client_request_expectation::continue_value});
-    RUVIA_CHECK(prepared.prepared() != nullptr);
-    if (prepared.prepared() == nullptr) {
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    if (prepared_req == nullptr) {
         return;
     }
 
-    http1_client_response_parser parser(prepared.prepared()->exchange_state());
+    http1_client_response_parser parser(prepared_req->exchange_state());
     const auto continue_response = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     RUVIA_CHECK(continue_response.parsed() != nullptr);
     if (continue_response.parsed() != nullptr) {
@@ -798,12 +807,13 @@ RUVIA_TEST(http_client_closing_final_stops_unfinished_request_content) {
         ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
         http1_client_request_wire_policy{
             .expectation_ = ruvia::http_client_request_expectation::continue_value});
-    RUVIA_CHECK(prepared.prepared() != nullptr);
-    if (prepared.prepared() == nullptr) {
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    if (prepared_req == nullptr) {
         return;
     }
 
-    http1_client_response_parser parser(prepared.prepared()->exchange_state());
+    http1_client_response_parser parser(prepared_req->exchange_state());
     const auto continue_response = parser.parse("HTTP/1.1 100 Continue\r\n\r\n");
     RUVIA_CHECK(continue_response.parsed() != nullptr);
 

@@ -5,7 +5,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/memory_pool.h"
-#include "ruvia/web/db/db_client.h"
+#include "ruvia/web/db/db_handle.h"
 
 #include "client/client_lifecycle.h"
 #include "db/db_registry.h"

@@ -6,7 +6,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
@@ -125,7 +125,7 @@ detail::route_table::~route_table() {
     }
 }
 
-void detail::router_impl::validate_no_dynamic_route_conflict() const {
+void detail::router::validate_no_dynamic_route_conflict() const {
     const auto& routes = plan_->routes_;
     for (std::size_t i = 0; i < routes.size(); ++i) {
         const auto& left = routes[i];
@@ -155,7 +155,7 @@ void detail::router_impl::validate_no_dynamic_route_conflict() const {
     }
 }
 
-void detail::router_impl::build_middleware_frames() {
+void detail::router::build_middleware_frames() {
     auto& plan = *plan_;
     // Instances: the app-wide middlewares first (one each, shared by every
     // route of a worker), then every route's own middlewares in registration
@@ -216,7 +216,7 @@ void detail::router_impl::build_middleware_frames() {
     plan.unmatched_middleware_count_ = plan.middleware_frame_instances_.size() - plan.unmatched_middleware_offset_;
 }
 
-void detail::router_impl::build_url_patterns() {
+void detail::router::build_url_patterns() {
     auto& patterns = plan_->url_patterns_;
     patterns.reserve(plan_->routes_.size());
     for (const auto& route : plan_->routes_) {

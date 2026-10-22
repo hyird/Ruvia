@@ -23,7 +23,7 @@ public:
     tls_close_bounds(asio::ip::tcp::socket& socket, connection_scanner& scanner,
         const worker_handle& worker_value)
         : guard_(scanner, entry_, socket) {
-        entry_.set_phase(connection_scanner::phase_type::writing);
+        entry_.set_phase(connection_scanner::phase::writing);
         armed_ = worker_value.schedule_timer(timer_, worker_timer_deadline_after(tls_close_time),
                      [target = &socket](worker_timer_outcome outcome) {
                          if (outcome == worker_timer_outcome::expired) {
@@ -42,8 +42,8 @@ public:
     }
 
 private:
-    connection_scanner::entry_type entry_;
-    connection_scanner::guard_type guard_;
+    connection_scanner::entry entry_;
+    connection_scanner::guard guard_;
     worker_timer_registration timer_;
     bool armed_{false};
 };

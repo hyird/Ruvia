@@ -15,7 +15,7 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/websocket_connection.h"

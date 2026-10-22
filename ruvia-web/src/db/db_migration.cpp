@@ -9,7 +9,7 @@
 #include <asio/io_context.hpp>
 #include <openssl/evp.h>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/db/db.h"

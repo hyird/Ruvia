@@ -39,16 +39,16 @@ RUVIA_TEST(request_trailers_own_fields_preserve_duplicates_and_bound_section_siz
     {
         ruvia::http_request_trailers trailers(&resource);
         std::string source_value(512, 'a');
-        RUVIA_CHECK((trailers.append("X-Checksum", source_value).index() == 0));
+        RUVIA_CHECK(!trailers.append("X-Checksum", source_value).has_value());
         source_value.assign("mutated");
         RUVIA_CHECK_EQ(trailers.field("x-checksum").value_or(""), std::string(512, 'a'));
-        RUVIA_CHECK((trailers.append_http1("x-checksum: final\r\nx-extra: yes\r\n\r\n").index() == 0));
+        RUVIA_CHECK(!trailers.append_http1("x-checksum: final\r\nx-extra: yes\r\n\r\n").has_value());
         RUVIA_CHECK_EQ(trailers.field("X-Checksum").value_or(""), "final");
         RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{3});
-        RUVIA_CHECK((trailers.append("Content-Length", "3").index() != 0));
-        RUVIA_CHECK((trailers.append("bad name", "x").index() != 0));
-        RUVIA_CHECK((trailers.append("x-ok", "bad\r\nvalue").index() != 0));
-        RUVIA_CHECK((trailers.append("x-large", std::string(65536, 'x')).index() != 0));
+        RUVIA_CHECK(trailers.append("Content-Length", "3").has_value());
+        RUVIA_CHECK(trailers.append("bad name", "x").has_value());
+        RUVIA_CHECK(trailers.append("x-ok", "bad\r\nvalue").has_value());
+        RUVIA_CHECK(trailers.append("x-large", std::string(65536, 'x')).has_value());
         RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{3});
     }
     RUVIA_CHECK_EQ(resource.allocations_, resource.deallocations_);
@@ -56,21 +56,15 @@ RUVIA_TEST(request_trailers_own_fields_preserve_duplicates_and_bound_section_siz
 
 RUVIA_TEST(request_trailers_append_http1_is_atomic_and_classifies_forbidden_fields) {
     ruvia::http_request_trailers trailers(std::pmr::new_delete_resource());
-    RUVIA_CHECK((trailers.append("X-First", "1").index() == 0));
+    RUVIA_CHECK(!trailers.append("X-First", "1").has_value());
 
     const auto forbidden = trailers.append_http1("X-Second: 2\r\nContent-Length: 3\r\n\r\n");
-    RUVIA_CHECK(forbidden.index() == 1);
-    if (forbidden.index() == 1) {
-        RUVIA_CHECK(std::get<1>(forbidden) == ruvia::http_request_trailer_error::forbidden_field);
-    }
+    RUVIA_CHECK(forbidden == ruvia::http_request_trailer_error::forbidden_field);
     RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{1});
     RUVIA_CHECK(!trailers.field("X-Second").has_value());
 
     const auto invalid = trailers.append_http1("X-Second: 2\r\nbad line\r\n\r\n");
-    RUVIA_CHECK(invalid.index() == 1);
-    if (invalid.index() == 1) {
-        RUVIA_CHECK(std::get<1>(invalid) == ruvia::http_request_trailer_error::invalid_field);
-    }
+    RUVIA_CHECK(invalid == ruvia::http_request_trailer_error::invalid_field);
     RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{1});
 
     // A block that would exceed the remaining field budget leaves no partial fields behind.
@@ -79,14 +73,11 @@ RUVIA_TEST(request_trailers_append_http1_is_atomic_and_classifies_forbidden_fiel
         block += "X-Fill: v\r\n";
     }
     const auto too_large = trailers.append_http1(block);
-    RUVIA_CHECK(too_large.index() == 1);
-    if (too_large.index() == 1) {
-        RUVIA_CHECK(std::get<1>(too_large) == ruvia::http_request_trailer_error::section_too_large);
-    }
+    RUVIA_CHECK(too_large == ruvia::http_request_trailer_error::section_too_large);
     RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{1});
     // X-First used 12 normalized bytes and the terminating empty line 2; the
     // remaining budget is intact only if the failed block rolled back.
-    RUVIA_CHECK((trailers.append("X-Last", std::string(ruvia::max_http_header_bytes - 24, 'z')).index() == 0));
+    RUVIA_CHECK(!trailers.append("X-Last", std::string(ruvia::max_http_header_bytes - 24, 'z')).has_value());
 }
 
 RUVIA_TEST(request_trailers_enforce_normalized_section_limit_during_chunk_decoding) {
@@ -108,7 +99,7 @@ RUVIA_TEST(request_trailers_enforce_normalized_section_limit_during_chunk_decodi
             if (excess == 0) {
                 RUVIA_CHECK(decoded.complete() != nullptr);
                 if (const auto* complete = decoded.complete()) {
-                    RUVIA_CHECK(trailers.append_http1(complete->trailers()).index() == 0);
+                    RUVIA_CHECK(!trailers.append_http1(complete->trailers()).has_value());
                     RUVIA_CHECK_EQ(trailers.fields().size(), field_count);
                     RUVIA_CHECK_EQ(trailers.field("X").value_or(""), std::string(value_size, 'z'));
                 }
@@ -118,10 +109,7 @@ RUVIA_TEST(request_trailers_enforce_normalized_section_limit_during_chunk_decodi
                     RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
                 }
                 const auto appended = trailers.append_http1(block);
-                RUVIA_CHECK(appended.index() == 1);
-                if (appended.index() == 1) {
-                    RUVIA_CHECK(std::get<1>(appended) == ruvia::http_request_trailer_error::section_too_large);
-                }
+                RUVIA_CHECK(appended == ruvia::http_request_trailer_error::section_too_large);
             }
         }
     }
@@ -135,7 +123,7 @@ RUVIA_TEST(request_and_response_trailer_sections_share_one_byte_rule) {
         const auto second_value =
             std::string(ruvia::max_http_header_bytes - 2 * (3 + 4) - 2 - first_value.size() + excess, 'b');
         ruvia::http_request_trailers received(std::pmr::new_delete_resource());
-        RUVIA_CHECK((received.append("X-A", first_value).index() == 0));
+        RUVIA_CHECK(!received.append("X-A", first_value).has_value());
         const auto appended = received.append("X-A", second_value);
         const std::array forwarded{ruvia::http_header_view{"X-A", first_value},
             ruvia::http_header_view{"X-A", second_value}};
@@ -147,12 +135,10 @@ RUVIA_TEST(request_and_response_trailer_sections_share_one_byte_rule) {
         }
         if (excess == 0) {
             // A received request section can always be forwarded as response trailers.
-            RUVIA_CHECK(appended.index() == 0);
+            RUVIA_CHECK(!appended.has_value());
             RUVIA_CHECK(!response_rejected);
         } else {
-            RUVIA_CHECK(std::get_if<ruvia::http_request_trailer_error>(&appended) != nullptr &&
-                        *std::get_if<ruvia::http_request_trailer_error>(&appended) ==
-                            ruvia::http_request_trailer_error::section_too_large);
+            RUVIA_CHECK(appended == ruvia::http_request_trailer_error::section_too_large);
             RUVIA_CHECK(response_rejected);
         }
     }

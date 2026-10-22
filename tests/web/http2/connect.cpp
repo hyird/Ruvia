@@ -16,7 +16,7 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http2_connection.h"
@@ -27,7 +27,6 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/next.h"
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"

@@ -43,19 +43,20 @@ static_root_config_storage::static_root_config_storage(
 static_root_config_storage store_validated_static_root_config(
     const static_root_options& source_value, std::pmr::memory_resource* resource) {
     static_root_config_storage result(resource);
-    result.cache_control_ = source_value.cache_control_;
-    result.index_file_ = source_value.index_file_;
-    result.default_content_type_ = source_value.default_content_type_;
+    result.cache_control_ = source_value.cache_control_.view();
+    result.index_file_ = source_value.index_file_.view();
+    result.default_content_type_ = source_value.default_content_type_.view();
     auto* const stored_resource = result.cache_control_.get_allocator().resource();
     result.mime_types_.reserve(source_value.mime_types_.size());
     for (const auto& mime : source_value.mime_types_) {
         auto& stored = result.mime_types_.emplace_back(stored_resource);
-        if (!mime.extension_.starts_with('.')) {
+        const auto ext = mime.extension_.view();
+        if (!ext.starts_with('.')) {
             stored.extension_.push_back('.');
         }
-        stored.extension_.append(mime.extension_);
+        stored.extension_.append(ext);
         lowercase_ascii(stored.extension_);
-        stored.content_type_ = mime.content_type_;
+        stored.content_type_ = mime.content_type_.view();
     }
     std::ranges::sort(result.mime_types_,
         [](const static_root_mime_type_storage& left, const static_root_mime_type_storage& right) {
@@ -63,7 +64,7 @@ static_root_config_storage store_validated_static_root_config(
         });
 
     result.file_type_kind_ = source_value.file_types_.kind_;
-    if (result.file_type_kind_ == static_file_type_policy::kind_type::only) {
+    if (result.file_type_kind_ == static_file_type_policy::kind::only) {
         result.file_type_extensions_.reserve(source_value.file_types_.extensions_.size());
         for (std::string_view extension : source_value.file_types_.extensions_) {
             if (extension.starts_with('.')) {

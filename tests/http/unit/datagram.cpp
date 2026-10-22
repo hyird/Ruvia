@@ -25,24 +25,24 @@ RUVIA_TEST(http_capsule_protocol_byte_parameters_accept_optional_padding_and_val
     for (const auto value : {"?1;bytes=:YQ=:", "?1;bytes=:YQ==:", "?1;bytes=:YQ:", "?1;bytes=:YWJj:",
              "?1;bytes=:YWJ:", "?1;bytes=:YWJ=:", "?1;bytes=:YR==:", "?1;bytes=::"}) {
         const auto parsed_value = ruvia::parse_http_capsule_protocol(value);
-        RUVIA_CHECK((parsed_value.index() == 0));
-        if ((parsed_value.index() == 0)) {
-            RUVIA_CHECK(std::get<0>(parsed_value));
+        RUVIA_CHECK(parsed_value.has_value());
+        if (parsed_value.has_value()) {
+            RUVIA_CHECK(*parsed_value);
         }
     }
     const auto disabled = ruvia::parse_http_capsule_protocol("?0;bytes=:YQ=:");
-    RUVIA_CHECK((disabled.index() == 0));
-    if ((disabled.index() == 0)) {
-        RUVIA_CHECK(!std::get<0>(disabled));
+    RUVIA_CHECK(disabled.has_value());
+    if (disabled.has_value()) {
+        RUVIA_CHECK(!*disabled);
     }
     // RFC 8941 4.2 discards only SP around a top-level Item.
     for (const auto value : {"?1;bytes=:Y:", "?1;bytes=:Y=:", "?1;bytes=:YWJj=:", "?1;bytes=:YWJ==:",
              "?1;bytes=:YQ===:", "?1;bytes=:Y=Q:", "?1;bytes=:YQ$:", "?1;bytes=:YQ\n:", "?1;bytes=:YQ", "?1\t",
              "?1 \t", "\t?1"}) {
-        RUVIA_CHECK((ruvia::parse_http_capsule_protocol(value).index() != 0));
+        RUVIA_CHECK(!ruvia::parse_http_capsule_protocol(value).has_value());
     }
     const auto padded = ruvia::parse_http_capsule_protocol(" ?1  ");
-    RUVIA_CHECK((padded.index() == 0 && std::get<0>(padded)));
+    RUVIA_CHECK(padded.has_value() && *padded);
 }
 
 RUVIA_TEST(http_udp_datagram_context_prefix_roundtrips) {
@@ -51,11 +51,11 @@ RUVIA_TEST(http_udp_datagram_context_prefix_roundtrips) {
         const auto encoded = ruvia::encode_http_udp_datagram_prefix(prefix, id);
         RUVIA_CHECK(encoded.index() == 0);
         const auto decoded = ruvia::decode_http_udp_datagram(std::span<const char>(prefix).first(std::get<0>(encoded)));
-        RUVIA_CHECK(decoded.index() == 0);
-        RUVIA_CHECK_EQ(std::get<0>(decoded).context_id_, id);
-        RUVIA_CHECK(std::get<0>(decoded).payload_.empty());
+        RUVIA_CHECK(decoded.has_value());
+        RUVIA_CHECK_EQ(decoded->context_id_, id);
+        RUVIA_CHECK(decoded->payload_.empty());
     }
-    RUVIA_CHECK(ruvia::decode_http_udp_datagram({}).index() != 0);
+    RUVIA_CHECK(!ruvia::decode_http_udp_datagram({}).has_value());
     RUVIA_CHECK(ruvia::encode_http_udp_datagram_prefix(prefix, std::uint64_t{1} << 62).index() != 0);
 }
 RUVIA_TEST(http_capsule_incremental_unknown_empty_and_datagram) {
@@ -130,12 +130,12 @@ RUVIA_TEST(http_datagram_capsule_channel_frames_opaque_payloads_and_obeys_half_c
     RUVIA_CHECK(std::get<0>(plan).prefix_[0] == 0 && std::get<0>(plan).prefix_[1] == 3);
     RUVIA_CHECK(std::get<0>(plan).payload_.data() == opaque.data());
     const auto received = session.receive_datagram(std::get<0>(plan).payload_);
-    RUVIA_CHECK(received.index() == 0 && std::get<0>(received));
-    RUVIA_CHECK(std::string_view(std::get<0>(received)->data(), std::get<0>(received)->size()) == opaque);
+    RUVIA_CHECK(received.has_value());
+    RUVIA_CHECK(std::string_view(received->data(), received->size()) == opaque);
     const auto empty = session.prepare_datagram({});
     RUVIA_CHECK(empty.index() == 0 && std::get<0>(empty).prefix_size_ == 2);
     session.close_receive();
-    RUVIA_CHECK(!std::get<0>(session.receive_datagram(opaque)));
+    RUVIA_CHECK(!session.receive_datagram(opaque).has_value());
     session.close_send();
     RUVIA_CHECK(session.prepare_datagram({}).index() != 0);
 }

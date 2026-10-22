@@ -16,7 +16,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
-#include "ruvia/web/http_client_handle.h"
+#include "ruvia/web/http_client.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_handle.h"
@@ -110,7 +110,7 @@ private:
     mutable ::ruvia::operation_scope operation_scope_;
 };
 
-using web_worker_post_result_type = post_outcome<task<void>(web_worker_context&)>;
+using web_worker_post_result = post_outcome<task<void>(web_worker_context&)>;
 
 struct web_worker_stats final {
     std::uint64_t accepted_{0};
@@ -134,7 +134,7 @@ public:
         requires std::invocable<std::decay_t<fn_type>&, web_worker_context&> &&
                  std::same_as<std::invoke_result_t<std::decay_t<fn_type>&, web_worker_context&>,
                      task<void>>
-    [[nodiscard]] web_worker_post_result_type post(fn_type&& fn) const {
+    [[nodiscard]] web_worker_post_result post(fn_type&& fn) const {
         return post_task(move_only_function<task<void>(web_worker_context&)>(std::forward<fn_type>(fn)));
     }
 
@@ -143,7 +143,7 @@ private:
 
     web_worker_handle(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept;
 
-    [[nodiscard]] web_worker_post_result_type post_task(
+    [[nodiscard]] web_worker_post_result post_task(
         move_only_function<task<void>(web_worker_context&)> task) const;
 
     // The handle owns a stable terminal endpoint. Server shutdown closes it;

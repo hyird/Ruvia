@@ -8,7 +8,7 @@
 #include "ruvia/web/http_client.h"
 
 #include "client/client_lifecycle.h"
-#include "client/http_client_registry.h"
+#include "client/http_client_pool.h"
 
 namespace ruvia::detail {
 
@@ -40,14 +40,14 @@ private:
     friend class client_lifecycle<http_client_state>;
     static constexpr std::string_view client_name{"HTTP"};
     [[noreturn]] static void throw_not_ready();
-    [[nodiscard]] http_client_registry& backend() noexcept {
-        return clients_;
+    [[nodiscard]] http_client_pool& backend() noexcept {
+        return pool_;
     }
 
     event_loop loop_;
     worker_handle worker_;
     worker_memory memory_;
-    http_client_registry clients_;
+    http_client_pool pool_;
     // Retires scopes before backend storage and its allocator are destroyed.
     client_lifecycle<http_client_state> lifecycle_;
 };

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -11,50 +10,17 @@
 
 namespace ruvia {
 
-class runtime_lifecycle final {
-public:
-    enum class state_type : std::uint8_t {
-        ready,
-        running,
-        stopping,
-        stopped,
-    };
-
-    [[nodiscard]] bool start() noexcept {
-        auto expected = state_type::ready;
-        return state_.compare_exchange_strong(
-            expected, state_type::running, std::memory_order_acq_rel, std::memory_order_acquire);
-    }
-
-    [[nodiscard]] bool request_stop() noexcept {
-        auto observed_value = state_.load(std::memory_order_acquire);
-        while (observed_value == state_type::ready || observed_value == state_type::running) {
-            if (state_.compare_exchange_weak(observed_value, state_type::stopping, std::memory_order_acq_rel,
-                    std::memory_order_acquire)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void complete_stop() noexcept {
-        auto expected = state_type::stopping;
-        (void)state_.compare_exchange_strong(
-            expected, state_type::stopped, std::memory_order_acq_rel, std::memory_order_acquire);
-    }
-
-    [[nodiscard]] state_type state() const noexcept {
-        return state_.load(std::memory_order_acquire);
-    }
-
-private:
-    std::atomic<state_type> state_{state_type::ready};
+enum class worker_runtime_state : std::uint8_t {
+    ready,
+    running,
+    stopping,
+    stopped,
 };
 
 class worker_group;
 
 namespace detail {
-struct worker_runtime_access;
+struct event_loop_state;
 }
 
 enum class worker_io_policy : std::uint8_t { synchronized,
@@ -136,13 +102,13 @@ public:
     // throws logic_error instead of waiting on itself.
     void join();
     [[nodiscard]] std::exception_ptr failure() const noexcept;
-    [[nodiscard]] runtime_lifecycle::state_type state() const noexcept;
+    [[nodiscard]] worker_runtime_state state() const noexcept;
     [[nodiscard]] asio::io_context& io_context() noexcept;
     [[nodiscard]] const worker_handle& handle() const noexcept;
 
 private:
     friend class worker_group;
-    friend struct detail::worker_runtime_access;
+    friend struct detail::event_loop_state;
     [[nodiscard]] worker_runtime_context& context() & noexcept;
     void bind_group(worker_group& group);
     void unbind_group(worker_group& group) noexcept;
@@ -153,15 +119,5 @@ private:
     };
     std::unique_ptr<impl_type, impl_deleter> impl_;
 };
-
-namespace detail {
-
-struct worker_runtime_access final {
-    [[nodiscard]] static worker_runtime_context& context(worker_runtime& runtime) noexcept {
-        return runtime.context();
-    }
-};
-
-}  // namespace detail
 
 }  // namespace ruvia

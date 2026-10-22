@@ -10,7 +10,7 @@
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia::detail {

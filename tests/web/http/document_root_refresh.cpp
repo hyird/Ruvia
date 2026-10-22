@@ -119,7 +119,7 @@ template <typename fn_type>
         ruvia::document_root_config config;
         config.root_ = configured_root();
         config.static_options_ =
-            {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::all}};
+            {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}};
         config.refresh_interval_ = refresh_interval;
         ruvia::app().document_root(std::move(config));
         return steady_clock::now();

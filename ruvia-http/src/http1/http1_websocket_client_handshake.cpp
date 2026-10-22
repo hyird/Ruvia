@@ -1,5 +1,3 @@
-#include "ruvia/http/http1_websocket_client_handshake.h"
-
 #include <array>
 #include <stdexcept>
 #include <variant>
@@ -8,6 +6,7 @@
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_base64.h"
+#include "ruvia/http/websocket_client_negotiation.h"
 
 #include "client/http1_client_request_headers.h"
 #include "websocket/http_websocket_accept_key.h"
@@ -69,22 +68,20 @@ void http1_websocket_client_handshake::validate_configuration(
 http1_websocket_client_handshake::http1_websocket_client_handshake(
     http1_websocket_client_handshake_config_view options, std::pmr::memory_resource* resource)
     : resource_(resource != nullptr ? resource : std::pmr::get_default_resource()),
-      key_(resource_),
       negotiation_({.subprotocols_ = options.subprotocols_, .deflate_ = options.deflate_}, resource_),
-
       headers_(resource_),
       user_agent_(options.user_agent_, resource_) {
     validate_configuration(options.headers_, options.subprotocols_, options.user_agent_);
-    std::array<char, 24> encoded{};
-    http_base64_encode(encoded.data(), options.nonce_);
-    key_.assign(encoded.data(), 24);
+    http_base64_encode(key_.data(), options.nonce_);
     headers_.reserve(options.headers_.size());
     for (auto header : options.headers_) {
         headers_.push_back(http_header::copy_of(header.name(), header.value(), resource_));
     }
 }
 
-http1_client_request_prepare_result http1_websocket_client_handshake::prepare_request(
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
+http1_websocket_client_handshake::prepare_request(
     const http_origin_view& origin, std::string_view target, std::span<char> head_buffer) const {
     std::pmr::vector<http_header_view> headers(resource_);
     headers.reserve(headers_.size() + 6);
@@ -93,28 +90,27 @@ http1_client_request_prepare_result http1_websocket_client_handshake::prepare_re
     }
     headers.emplace_back("Upgrade", "websocket");
     headers.emplace_back("Connection", "Upgrade");
-    headers.emplace_back("Sec-WebSocket-Key", key_);
+    headers.emplace_back("Sec-WebSocket-Key", std::string_view(key_.data(), key_.size()));
     for (const auto& field : negotiation_.request_fields()) {
         headers.emplace_back(field.name(), field.value());
     }
     if (!user_agent_.empty()) {
         headers.emplace_back("User-Agent", user_agent_);
     }
-    return http1_client_request_writer({.resource_ = resource_})
+    return http1_client_request_writer(resource_)
         .prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = headers}, head_buffer);
 }
 
-std::variant<http1_websocket_client_handshake_result_view, http1_websocket_client_handshake_error>
+std::variant<websocket_client_negotiation_result_view, http1_websocket_client_handshake_error>
 http1_websocket_client_handshake::validate_response(const http1_parsed_client_response_head& response) const {
     if (response.plan().protocol_upgrade() == nullptr ||
         response.head().status() != http_status::switching_protocols) {
         return http1_websocket_client_handshake_error::response_status;
     }
     detail::websocket_accept_key_type expected{};
-    detail::encode_websocket_accept(expected, key_);
+    detail::encode_websocket_accept(expected, std::string_view(key_.data(), key_.size()));
     std::size_t accepts = 0;
     bool accept_matches = false, has_upgrade = false, has_connection = false;
-
     for (const auto& header : response.head().headers()) {
         if (http_ascii_equals_ignore_case(header.name(), "Sec-WebSocket-Accept")) {
             ++accepts;
@@ -140,6 +136,6 @@ http1_websocket_client_handshake::validate_response(const http1_parsed_client_re
     if ((negotiation.index() != 0)) {
         return std::get<1>(negotiation) == websocket_client_negotiation_error::subprotocol ? http1_websocket_client_handshake_error::subprotocol : http1_websocket_client_handshake_error::extensions;
     }
-    return http1_websocket_client_handshake_result_view{std::get<0>(negotiation).selected_subprotocol_, std::get<0>(negotiation).compression_};
+    return std::get<0>(negotiation);
 }
 }  // namespace ruvia

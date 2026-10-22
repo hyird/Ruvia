@@ -10,7 +10,7 @@
 #include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_field_section.h"
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"

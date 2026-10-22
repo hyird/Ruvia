@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/redis/redis_types.h"

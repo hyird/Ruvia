@@ -11,7 +11,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/detail/model/traits.h"
 #include "ruvia/web/detail/util/decimal_number.h"
@@ -42,10 +42,10 @@ template <typename number_type>
     number_type parsed_value{};
     if constexpr (std::is_floating_point_v<number_type>) {
         const auto value = detail::parse_decimal_number<number_type>(decoded);
-        if ((value.index() != 0)) {
+        if (!value) {
             return std::nullopt;
         }
-        parsed_value = std::get<0>(value);
+        parsed_value = *value;
         // Floating parsers accept "inf"/"nan", but the rest of the pipeline
         // cannot round-trip them: the JSON number grammar rejects them on input,
         // the model JSON writer replaces them with null, and the finite number

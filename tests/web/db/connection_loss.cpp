@@ -3,8 +3,8 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/event_loop_attachment.h"
-#include "ruvia/web/db/db_client.h"
+#include "ruvia/core/event_loop.h"
+#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"

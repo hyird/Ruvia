@@ -80,11 +80,4 @@ struct pattern_rule final {
     static constexpr auto message = error_message;
 };
 
-template <fixed_string pattern, fixed_string error_message>
-struct regex_rule final {
-    using ruvia_validation_rule_marker_type = void;
-
-    static constexpr auto message = error_message;
-};
-
 }  // namespace ruvia::detail::model

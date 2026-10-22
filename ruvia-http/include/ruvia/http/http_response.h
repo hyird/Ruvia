@@ -385,12 +385,7 @@ private:
 // http_response_headers; this type only publishes body and headers together.
 class http_response final {
 public:
-    struct options_type final {
-        std::pmr::memory_resource* resource_{nullptr};
-    };
-
-    http_response();
-    explicit http_response(options_type options);
+    explicit http_response(std::pmr::memory_resource* resource = nullptr);
 
     http_response(const http_response&) = delete;
     http_response& operator=(const http_response&) = delete;

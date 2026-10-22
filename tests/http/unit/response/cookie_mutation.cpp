@@ -8,7 +8,6 @@
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_set_cookie.h"
-#include "ruvia/http/http_set_cookie_plan.h"
 
 #include "failing_memory_resource.h"
 #include "test_harness.h"
@@ -77,7 +76,7 @@ RUVIA_TEST(response_cookie_partitioned_and_unpartitioned_storage_keys_are_distin
 RUVIA_TEST(response_cookie_plan_append_can_retry_after_allocation_failure) {
     failing_memory_resource resource;
     {
-        ruvia::http_response response({.resource_ = &resource});
+        ruvia::http_response response(&resource);
         response.header("Set-Cookie", "first=one");
         const ruvia::cookie_options options;
         const ruvia::set_cookie_plan plan("second", "two", options);
@@ -125,7 +124,7 @@ RUVIA_TEST(response_appended_values_can_borrow_existing_header_storage) {
 RUVIA_TEST(response_cookie_append_preserves_empty_attribute_presence_with_borrowed_value) {
     failing_memory_resource resource;
     {
-        ruvia::http_response response({.resource_ = &resource});
+        ruvia::http_response response(&resource);
         response.header("Set-Cookie", "sid=first; Path=; Domain=");
         response.header("Set-Cookie", "sid = second; Path=",
             {.mode_ = ruvia::http_response_header_mode::append});
@@ -144,7 +143,7 @@ RUVIA_TEST(response_cookie_plan_alias_allocation_failure_preserves_each_input_fo
     for (std::size_t alias = 0; alias < 4; ++alias) {
         failing_memory_resource resource;
         {
-            ruvia::http_response response({.resource_ = &resource});
+            ruvia::http_response response(&resource);
             response.header("Set-Cookie", "sid=old; Path=/; Domain=example.test");
             const auto parsed_value = ruvia::parse_set_cookie(response.header("Set-Cookie").value());
             RUVIA_CHECK(parsed_value.has_value());
@@ -184,7 +183,7 @@ RUVIA_TEST(response_cookie_plan_alias_allocation_failure_preserves_each_input_fo
 RUVIA_TEST(response_cookie_plan_keeps_prefixed_keys_with_large_values) {
     failing_memory_resource resource;
     {
-        ruvia::http_response response({.resource_ = &resource});
+        ruvia::http_response response(&resource);
         response.header("Set-Cookie", "__Host-sid=first; Path=/; Secure");
         const std::string value(4096 - 10, 'v');
         const ruvia::cookie_options options{

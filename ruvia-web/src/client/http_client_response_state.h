@@ -24,7 +24,7 @@
 #include "ruvia/http/http_push.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
-#include "ruvia/web/http_client_response.h"
+#include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "client/http_client_tunnel_state.h"

@@ -5,7 +5,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "server/http_server_options.h"
 #include "util/config_validation.h"
@@ -50,13 +50,13 @@ void http_server_options::set_trusted_proxies(const trusted_proxy_config& config
     parsed.trust_x_forwarded_proto(config.trust_x_forwarded_proto_);
     for (const auto& cidr : config.cidrs_) {
         const auto block = parse_trusted_proxy_block(cidr);
-        if (block.index() != 0) {
+        if (!block) {
             // A typo here would silently trust nothing and leave every
             // client identified as the proxy, so it fails startup instead.
             throw std::invalid_argument(
                 "trusted proxy must be an IP address or CIDR block");
         }
-        parsed.add(std::get<0>(block));
+        parsed.add(*block);
     }
     trusted_proxies_ = std::move(parsed);
 }

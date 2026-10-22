@@ -4,9 +4,9 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
-#include "ruvia/web/db/db_client.h"
+#include "ruvia/web/db/db_handle.h"
 
 #include "backend_client_fixture.h"
 #include "test_harness.h"

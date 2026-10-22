@@ -17,7 +17,7 @@ RUVIA_TEST(session_middleware_rejects_invalid_config_before_use) {
     };
 
     auto config = ruvia::session_config{};
-    config.redis_alias_.clear();
+    config.redis_alias_ = "";
     RUVIA_CHECK_EQ(rejection(config), std::string_view("session Redis alias must not be empty"));
 
     config = ruvia::session_config{};
@@ -26,7 +26,7 @@ RUVIA_TEST(session_middleware_rejects_invalid_config_before_use) {
         rejection(config), std::string_view("session cookie name must be a valid HTTP token"));
 
     config = ruvia::session_config{};
-    config.key_prefix_.clear();
+    config.key_prefix_ = "";
     RUVIA_CHECK_EQ(rejection(config), std::string_view("session key prefix must not be empty"));
 
     config = ruvia::session_config{};

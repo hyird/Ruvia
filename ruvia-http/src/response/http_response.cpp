@@ -11,7 +11,7 @@
 #include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_status.h"
 
@@ -20,7 +20,6 @@
 #include "response/http_response_descriptor_stage.h"
 #include "response/http_response_header_access.h"
 #include "response/response_header_utils.h"
-#include "server/http_response_head_policy.h"
 
 namespace ruvia {
 
@@ -85,13 +84,19 @@ http_buffered_response_write_plan plan_buffered_http_response_write(
 
 http_response_body_plan plan_http_response_body(
     http_known_method request_method, http_status_code response_status) noexcept {
-    const auto policy = detail::get_response_write_policy(response_status);
+    const bool body_allowed = !response_status.is_informational() &&
+                              response_status != http_status::no_content &&
+                              response_status != http_status::reset_content &&
+                              response_status != http_status::not_modified;
+    const bool auto_content_length_allowed = body_allowed || response_status == http_status::reset_content;
+    const bool explicit_content_length_allowed = body_allowed || response_status == http_status::not_modified;
     const auto semantics = detail::classify_http_response_content_semantics(request_method, response_status);
     const bool connect_tunnel = semantics == http_response_content_semantics::connect_tunnel;
-    return http_response_body_plan(request_method, response_status, semantics, policy.body_allowed(),
-        !policy.body_allowed() || semantics != http_response_content_semantics::with_content,
-        !connect_tunnel && policy.auto_content_length_allowed(), !connect_tunnel && policy.explicit_content_length_allowed(),
-        !connect_tunnel && policy.transfer_encoding_allowed());
+    return http_response_body_plan(request_method, response_status, semantics, body_allowed,
+        !body_allowed || semantics != http_response_content_semantics::with_content,
+        !connect_tunnel && auto_content_length_allowed,
+        !connect_tunnel && explicit_content_length_allowed,
+        !connect_tunnel && body_allowed);
 }
 
 namespace {
@@ -109,12 +114,9 @@ namespace {
 
 }  // namespace
 
-http_response::http_response()
-    : http_response(options_type{}) {}
-
-http_response::http_response(options_type options)
+http_response::http_response(std::pmr::memory_resource* resource)
     : http_response(detail::http_resolved_pmr_resource_tag{},
-          detail::http_pmr_resource_or_default(options.resource_)) {}
+          detail::http_pmr_resource_or_default(resource)) {}
 
 http_response::http_response(detail::http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
     : headers_(detail::http_resolved_pmr_resource_tag{}, resource) {}

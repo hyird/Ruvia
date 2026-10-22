@@ -1,5 +1,3 @@
-#include "ruvia/web/http_client_handle.h"
-
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
@@ -10,6 +8,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/context.h"
+#include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 
 #include "client/http_client_pool.h"
@@ -432,13 +431,13 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(cons
         (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority_host(borrowed_text(head.authority_)) || head.authority_.empty()))) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }
-    if (head.protocol_ == "connect-udp" && (validate_http_connect_udp_request({.version_ = http_protocol_version::http2,
-                                                                                  .method_ = "CONNECT",
-                                                                                  .scheme_ = scheme() == http_scheme::https ? "https" : "http",
-                                                                                  .authority_ = head.authority_,
-                                                                                  .path_ = head.target_,
-                                                                                  .headers_ = head.headers_})
-                                                   .index() != 0)) {
+    if (head.protocol_ == "connect-udp" && validate_http_connect_udp_request({.version_ = http_protocol_version::http2,
+                                                                                 .method_ = "CONNECT",
+                                                                                 .scheme_ = scheme() == http_scheme::https ? "https" : "http",
+                                                                                 .authority_ = head.authority_,
+                                                                                 .path_ = head.target_,
+                                                                                 .headers_ = head.headers_})
+                                               .has_value()) {
         throw std::invalid_argument("invalid CONNECT-UDP request head");
     }
     detail::http_client_request_storage request("CONNECT", head.target_, head.headers_, pmr_resource_or_default(resource_));
@@ -476,11 +475,11 @@ http_scheme http_client_handle::scheme() const {
 }
 
 http_client_handle context::http_client() const {
-    return services().client_registries().get_http_client(operation_scope_, capabilities_.stop_token());
+    return services().client_registries().http_client(operation_scope_, capabilities_.stop_token());
 }
 
 http_client_handle context::http_client(std::string_view alias) const {
-    return services().client_registries().get_http_client(alias, operation_scope_, capabilities_.stop_token());
+    return services().client_registries().http_client(alias, operation_scope_, capabilities_.stop_token());
 }
 
 }  // namespace ruvia

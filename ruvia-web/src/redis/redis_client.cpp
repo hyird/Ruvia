@@ -1,8 +1,8 @@
-#include "ruvia/web/redis/redis_client.h"
-
 #include <memory>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/web/redis/redis_handle.h"
 
 #include "redis/redis_client_state.h"
 
@@ -41,12 +41,8 @@ task<void> redis_client::connect() & {
     return state_->connect();
 }
 
-redis_handle redis_client::with_options(operation_options options) const& {
+redis_handle redis_client::handle(operation_options options) const& {
     return state_->handle(std::move(options));
-}
-
-redis_handle redis_client::handle() const& {
-    return state_->handle({});
 }
 
 void redis_client::close() noexcept {

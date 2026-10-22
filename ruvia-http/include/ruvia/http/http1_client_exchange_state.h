@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/http1_close_policy.h"
+#include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http_known_method.h"
 
 namespace ruvia {

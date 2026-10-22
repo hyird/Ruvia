@@ -125,7 +125,7 @@ struct test_app::impl_type final {
     [[nodiscard]] task<test_response> execute_request(const test_request& request) {
         const auto request_start = std::chrono::steady_clock::now();
         request_memory request_memory_value(memory_);
-        std::vector<http_header_view> headers;
+        std::pmr::vector<http_header_view> headers(request_memory_value.resource());
         headers.reserve(request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U));
         for (const auto& [name, value] : request.headers_) {
             headers.emplace_back(name, value);
@@ -149,7 +149,7 @@ struct test_app::impl_type final {
         // A malformed request is rejected before admission, with no coding
         // promise, exactly as a server answers a malformed head.
         std::optional<detail::http_request_admission> admission;
-        http_response response({.resource_ = request_memory_value.resource()});
+        http_response response(request_memory_value.resource());
         if (parse_error != nullptr) {
             response = co_await detail::respond_http_request_rejection(routes_value, parsed_value,
                 request_memory_value,
@@ -180,7 +180,8 @@ struct test_app::impl_type final {
                                         request_services);
 
         // Copy everything out while the request arena is still alive.
-        test_response result_value(response.status());
+        dispatch_response result_value(process_resource());
+        result_value.status_ = response.status();
         result_value.headers_.reserve(response.headers().size());
         for (const auto& header : response.headers()) {
             result_value.headers_.emplace_back(header.name(), header.value(), process_resource());
@@ -197,7 +198,7 @@ struct test_app::impl_type final {
 };
 
 test_app::test_app()
-    : impl_(std::make_unique<impl_type>()) {}
+    : impl_(make_pmr_object<impl_type>(process_resource())) {}
 
 test_app::~test_app() = default;
 
@@ -255,13 +256,13 @@ test_app& test_app::trusted_proxies(std::nullptr_t) {
     return *this;
 }
 
-test_app& test_app::on_error(http_error_handler_type handler) {
+test_app& test_app::on_error(http_error_handler handler) {
     impl_->require_configurable();
     impl_->configuration_.on_error(std::move(handler));
     return *this;
 }
 
-test_app& test_app::on_not_found(http_not_found_handler_type handler) {
+test_app& test_app::on_not_found(http_not_found_handler handler) {
     impl_->require_configurable();
     impl_->configuration_.on_not_found(std::move(handler));
     return *this;
@@ -297,12 +298,4 @@ test_response test_app::request(const test_request& request) {
     return impl_->event_loop_.start(impl_->execute_request(request)).get();
 }
 
-std::optional<std::string_view> test_response::header(std::string_view name) const& noexcept {
-    for (const auto& header_field : headers_) {
-        if (http_ascii_equals_ignore_case(header_field.name(), name)) {
-            return header_field.value();
-        }
-    }
-    return std::nullopt;
-}
 }  // namespace ruvia

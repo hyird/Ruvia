@@ -87,7 +87,7 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
         if (state_value.tunnel_->accepted_ && state_value.tunnel_->udp_) {
             if (validate_http_connect_udp_response(
                     state_value.protocol_version_, state_value.status_.value(), state_value.headers_)
-                    .index() != 0) {
+                    .has_value()) {
                 throw http_client_error(http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
             }
         }

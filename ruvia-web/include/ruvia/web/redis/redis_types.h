@@ -13,9 +13,8 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/client_tls_config.h"
 
 namespace ruvia {

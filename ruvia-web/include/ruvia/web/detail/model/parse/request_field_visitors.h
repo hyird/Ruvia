@@ -5,10 +5,9 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/json/json_object_fields.h"
 #include "ruvia/web/detail/model/parse/form_parser.h"
-#include "ruvia/web/request_fields.h"
 
 namespace ruvia::detail {
 
@@ -42,8 +41,8 @@ template <typename visitor_type>
     return completed && valid;
 }
 
-template <typename visitor_type>
-[[nodiscard]] bool visit_decoded_form_fields(const request_name_value_list& fields_value, visitor_type&& visitor) {
+template <typename fields_type, typename visitor_type>
+[[nodiscard]] bool visit_decoded_form_fields(const fields_type& fields_value, visitor_type&& visitor) {
     auto& visitor_ref = visitor;
     for (const auto& field : fields_value) {
         if (!dispatch_json_object_field_visitor(visitor_ref, field.name(), field.value())) {

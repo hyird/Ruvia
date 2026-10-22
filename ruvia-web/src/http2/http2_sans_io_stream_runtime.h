@@ -11,7 +11,6 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_request_trailers.h"

@@ -4,7 +4,6 @@
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/web/conn_info.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/util/registration_resource.h"
 
@@ -155,36 +154,23 @@ void apply_security_headers_to(target_type& target, const security_headers_polic
 
 }  // namespace
 
-security_headers_middleware::config_storage_type::validated_config_type
-security_headers_middleware::config_storage_type::validate(const security_headers_config& source_value) {
-    const auto flags = validate_security_headers_config(source_value);
-    return validated_config_type{
-        .source_ = &source_value,
-        .emit_content_type_options_ = flags.emit_content_type_options_,
-        .emit_frame_options_ = flags.emit_frame_options_,
-        .emit_strict_transport_security_ = flags.emit_strict_transport_security_,
-        .emit_disabled_xss_protection_ = flags.emit_disabled_xss_protection_,
-        .replace_existing_ = flags.replace_existing_,
-    };
-}
-
-security_headers_middleware::config_storage_type::config_storage_type(
+security_headers_middleware::security_headers_middleware(
     const security_headers_config& source_value, std::pmr::memory_resource* resource)
-    : config_storage_type(validate(source_value), resource) {}
-
-security_headers_middleware::config_storage_type::config_storage_type(
-    validated_config_type validated, std::pmr::memory_resource* resource)
-    : emit_content_type_options_(validated.emit_content_type_options_),
-      emit_frame_options_(validated.emit_frame_options_),
-      emit_strict_transport_security_(validated.emit_strict_transport_security_),
-      emit_disabled_xss_protection_(validated.emit_disabled_xss_protection_),
-      replace_existing_(validated.replace_existing_),
-      content_security_policy_(validated.source_->content_security_policy_, resource),
-      referrer_policy_(validated.source_->referrer_policy_, resource),
-      permissions_policy_(validated.source_->permissions_policy_, resource),
+    : content_security_policy_(resource),
+      referrer_policy_(resource),
+      permissions_policy_(resource),
       custom_headers_(resource) {
-    custom_headers_.reserve(validated.source_->custom_headers_.size());
-    for (const auto& header : validated.source_->custom_headers_) {
+    const auto flags = validate_security_headers_config(source_value);
+    emit_content_type_options_ = flags.emit_content_type_options_;
+    emit_frame_options_ = flags.emit_frame_options_;
+    emit_strict_transport_security_ = flags.emit_strict_transport_security_;
+    emit_disabled_xss_protection_ = flags.emit_disabled_xss_protection_;
+    replace_existing_ = flags.replace_existing_;
+    content_security_policy_.assign(source_value.content_security_policy_);
+    referrer_policy_.assign(source_value.referrer_policy_);
+    permissions_policy_.assign(source_value.permissions_policy_);
+    custom_headers_.reserve(source_value.custom_headers_.size());
+    for (const auto& header : source_value.custom_headers_) {
         custom_headers_.push_back(http_header::copy_of(header.name_, header.value_, resource));
     }
 }
@@ -193,7 +179,7 @@ security_headers_middleware::security_headers_middleware()
     : security_headers_middleware(security_headers_config{}) {}
 
 security_headers_middleware::security_headers_middleware(const security_headers_config& config)
-    : config_(config, detail::registration_resource()) {}
+    : security_headers_middleware(config, detail::registration_resource()) {}
 
 task<void> security_headers_middleware::handle(context& context_value, next& next_value) {
     const auto connection = context_value.conn();
@@ -201,20 +187,20 @@ task<void> security_headers_middleware::handle(context& context_value, next& nex
     const security_headers_policy policy{
         .flags_ =
             security_headers_flags{
-                .emit_content_type_options_ = config_.emit_content_type_options_,
-                .emit_frame_options_ = config_.emit_frame_options_,
-                .emit_strict_transport_security_ = config_.emit_strict_transport_security_,
-                .emit_disabled_xss_protection_ = config_.emit_disabled_xss_protection_,
-                .replace_existing_ = config_.replace_existing_,
+                .emit_content_type_options_ = emit_content_type_options_,
+                .emit_frame_options_ = emit_frame_options_,
+                .emit_strict_transport_security_ = emit_strict_transport_security_,
+                .emit_disabled_xss_protection_ = emit_disabled_xss_protection_,
+                .replace_existing_ = replace_existing_,
             },
-        .content_security_policy_ = config_.content_security_policy_,
-        .referrer_policy_ = config_.referrer_policy_,
-        .permissions_policy_ = config_.permissions_policy_,
+        .content_security_policy_ = content_security_policy_,
+        .referrer_policy_ = referrer_policy_,
+        .permissions_policy_ = permissions_policy_,
     };
-    apply_security_headers_to(context_value, policy, config_.custom_headers_, secure_transport);
+    apply_security_headers_to(context_value, policy, custom_headers_, secure_transport);
     co_await next_value();
     apply_security_headers_to(detail::context_access::response_storage(context_value), policy,
-        config_.custom_headers_, secure_transport);
+        custom_headers_, secure_transport);
 }
 
 }  // namespace ruvia

@@ -15,7 +15,7 @@
 
 #include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/detail/worker/worker_wait_awaiter.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/mpsc_ring_queue.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"

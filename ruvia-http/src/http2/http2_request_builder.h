@@ -3,8 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <stdexcept>
 #include <string_view>
-#include <variant>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_header.h"
@@ -19,86 +19,6 @@
 
 namespace ruvia::detail {
 
-class http2_request_builder;
-
-class http2_request_built final {
-private:
-    friend class http2_request_build_result;
-
-    constexpr http2_request_built() noexcept = default;
-};
-
-class http2_request_build_failure final {
-public:
-    [[nodiscard]] http_protocol_error protocol_error() const noexcept {
-        switch (kind_) {
-            case kind_type::missing_method:
-                return http_protocol_error(http_status::bad_request, "missing HTTP/2 :method");
-            case kind_type::missing_target:
-                return http_protocol_error(http_status::bad_request, "missing HTTP/2 request target");
-            case kind_type::too_many_headers:
-                return http_protocol_error(
-                    http_status::request_header_fields_too_large, "too many HTTP/2 request headers");
-        }
-        return http_protocol_error(http_status::bad_request, "invalid HTTP/2 request");
-    }
-
-private:
-    friend class http2_request_build_result;
-    friend class http2_request_builder;
-
-    enum class kind_type : std::uint8_t {
-        missing_method,
-        missing_target,
-        too_many_headers
-    };
-
-    explicit constexpr http2_request_build_failure(kind_type kind) noexcept
-        : kind_(kind) {}
-
-    kind_type kind_;
-};
-
-// Building the runtime-facing http_request either completes the whole borrowed
-// message view or returns one HTTP-owned protocol failure. The private failure
-// kind prevents runtimes from reconstructing status/message mappings.
-// Heads come from validated HTTP/2 admission or local push submission. Their
-// stored targets need splitting, not another URI syntax or method check.
-class http2_request_build_result final {
-public:
-    [[nodiscard]] constexpr const http2_request_built* built() const& noexcept {
-        return (value_.index() == 0) ? &std::get<0>(value_) : nullptr;
-    }
-    const http2_request_built* built() const&& = delete;
-
-    [[nodiscard]] constexpr const http2_request_build_failure* failure() const& noexcept {
-        return (value_.index() == 0) ? nullptr : &std::get<1>(value_);
-    }
-    const http2_request_build_failure* failure() const&& = delete;
-
-private:
-    friend class http2_request_builder;
-
-    using value_type = std::variant<http2_request_built, http2_request_build_failure>;
-
-    explicit constexpr http2_request_build_result(http2_request_built built) noexcept
-        : value_(built) {}
-
-    explicit constexpr http2_request_build_result(http2_request_build_failure failure) noexcept
-        : value_(failure) {}
-
-    [[nodiscard]] static constexpr http2_request_build_result make_built() noexcept {
-        return http2_request_build_result(http2_request_built());
-    }
-
-    [[nodiscard]] static constexpr http2_request_build_result make_failure(
-        http2_request_build_failure::kind_type kind) noexcept {
-        return http2_request_build_result(http2_request_build_failure(kind));
-    }
-
-    value_type value_;
-};
-
 class http2_request_builder final {
 public:
     [[nodiscard]] static std::string_view request_target(const http2_stream_state& stream) noexcept {
@@ -112,22 +32,20 @@ public:
         return split_request_target(request_target(stream)).path_;
     }
 
-    [[nodiscard]] static http2_request_build_result build(http2_stream_state& stream,
-        http_request& request, std::pmr::memory_resource* resource, std::string_view body) {
-        http_request_access::reset(request);
+    [[nodiscard]] static http_request build(http2_stream_state& stream,
+        std::pmr::memory_resource* resource, std::string_view body) {
+        auto request = http_request_access::make();
         http_request_access::set_resource(request, resource);
         const auto method = stream.request_method();
         if (method.empty()) {
-            return http2_request_build_result::make_failure(
-                http2_request_build_failure::kind_type::missing_method);
+            throw std::logic_error("validated HTTP/2 request cannot be materialized");
         }
         const auto* pending = stream.tunnel().pending();
         const bool standard_connect =
             pending != nullptr && pending->form() == http2_connect_form::standard;
         const auto target = request_target(stream);
         if (target.empty() && (standard_connect || !stream.has_path())) {
-            return http2_request_build_result::make_failure(
-                http2_request_build_failure::kind_type::missing_target);
+            throw std::logic_error("validated HTTP/2 request cannot be materialized");
         }
         const auto target_parts = split_request_target(target);
 
@@ -146,14 +64,13 @@ public:
         const auto header_count = stream.remote_header_count() + static_cast<std::size_t>(synthesize_host) +
                                   static_cast<std::size_t>(stream.has_cookie());
         if (header_count > max_http_header_fields) {
-            return http2_request_build_result::make_failure(http2_request_build_failure::kind_type::too_many_headers);
+            throw std::logic_error("validated HTTP/2 request cannot be materialized");
         }
         http_request_access::reserve_headers(request, header_count);
         for (std::size_t i = 0; i < stream.remote_header_count(); ++i) {
             const auto header_value = stream.remote_header_at(i);
             if (!add_header(request, header_value.name_, header_value.value_, header_value.kind_)) {
-                return http2_request_build_result::make_failure(
-                    http2_request_build_failure::kind_type::too_many_headers);
+                throw std::logic_error("validated HTTP/2 request cannot be materialized");
             }
         }
         // A non-HTTP target can carry RFC 3986 userinfo or another authority
@@ -161,17 +78,15 @@ public:
         // regular field from that distinct pseudo-header grammar.
         if (synthesize_host) {
             if (!add_header(request, "host", authority, request_header_kind::host)) {
-                return http2_request_build_result::make_failure(
-                    http2_request_build_failure::kind_type::too_many_headers);
+                throw std::logic_error("validated HTTP/2 request cannot be materialized");
             }
         }
         if (stream.has_cookie()) {
             if (!add_header(request, "cookie", stream.request_cookie(), request_header_kind::cookie)) {
-                return http2_request_build_result::make_failure(
-                    http2_request_build_failure::kind_type::too_many_headers);
+                throw std::logic_error("validated HTTP/2 request cannot be materialized");
             }
         }
-        return http2_request_build_result::make_built();
+        return request;
     }
 
 private:

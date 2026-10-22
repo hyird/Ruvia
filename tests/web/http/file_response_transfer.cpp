@@ -196,7 +196,7 @@ RUVIA_TEST(pipelined_file_responses_arrive_complete_and_in_order) {
     write_file(transfer_dir() / "large.bin", large_bytes);
     indexed_root = std::make_unique<ruvia::static_root>(transfer_dir(),
         ruvia::static_root_options{
-            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::all},
+            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
         });
 
     auto& io = ruvia::test::new_test_io_context();
@@ -258,7 +258,7 @@ RUVIA_TEST(changed_indexed_file_is_never_sent_under_a_stale_head) {
     write_file(transfer_dir() / "large.bin", file_bytes(large_size, 'c'));
     indexed_root = std::make_unique<ruvia::static_root>(transfer_dir(),
         ruvia::static_root_options{
-            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::all},
+            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
         });
     // The index framed both files at their old size and identity.
     write_file(transfer_dir() / "small.bin", file_bytes(small_size + 1, 'x'));

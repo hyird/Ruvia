@@ -53,12 +53,13 @@ RUVIA_TEST(http_client_fieldless_exchange_completes_with_no_response_storage) {
         ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
         http1_client_request_wire_policy{
             .expectation_ = ruvia::http_client_request_expectation::continue_value});
-    RUVIA_CHECK(prepared.prepared() != nullptr);
-    if (prepared.prepared() == nullptr) {
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    if (prepared_req == nullptr) {
         return;
     }
     http1_client_response_parser parser(
-        prepared.prepared()->exchange_state(), {.resource_ = std::pmr::null_memory_resource()});
+        prepared_req->exchange_state(), std::pmr::null_memory_resource());
     constexpr std::array<std::string_view, 3> heads{
         "HTTP/1.1 103 Early Hints\r\n\r\n",
         "HTTP/1.1 100 Continue\r\n\r\n",
@@ -84,11 +85,7 @@ RUVIA_TEST(http_client_fieldless_exchange_completes_with_no_response_storage) {
             RUVIA_CHECK(!parsed->plan().request_content_signal());
         }
     }
-    const auto terminal = parser.parse({});
-    RUVIA_CHECK(terminal.terminal() != nullptr);
-    if (terminal.terminal() != nullptr) {
-        RUVIA_CHECK(terminal.terminal()->completed());
-    }
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)parser.parse({}); }));
 }
 
 RUVIA_TEST(http_client_take_head_leaves_empty_parsed_fields_and_retains_owned_headers) {
@@ -193,8 +190,7 @@ RUVIA_TEST(http_client_response_parser_handles_deterministic_arbitrary_bytes) {
             input);
         const auto alternatives = static_cast<unsigned int>(result_value.need_more() != nullptr) +
                                   static_cast<unsigned int>(result_value.parsed() != nullptr) +
-                                  static_cast<unsigned int>(result_value.failure() != nullptr) +
-                                  static_cast<unsigned int>(result_value.terminal() != nullptr);
+                                  static_cast<unsigned int>(result_value.failure() != nullptr);
         RUVIA_CHECK_EQ(alternatives, 1U);
         if (const auto* parsed = result_value.parsed()) {
             RUVIA_CHECK(parsed->consumed_bytes() <= input.size());
@@ -204,7 +200,6 @@ RUVIA_TEST(http_client_response_parser_handles_deterministic_arbitrary_bytes) {
         if (result_value.need_more() != nullptr) {
             RUVIA_CHECK(input.size() < ruvia::max_http_header_bytes);
         }
-        RUVIA_CHECK(result_value.terminal() == nullptr);
     }
 }
 
@@ -328,14 +323,14 @@ RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
     std::array<char, 512> request_head;
     const auto prepared_result = ruvia::http1_client_request_writer().prepare(
         ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head);
-    const auto* prepared = prepared_result.prepared();
+    const auto* prepared = std::get_if<ruvia::prepared_http1_client_request>(&prepared_result);
     RUVIA_CHECK(prepared != nullptr);
     if (prepared == nullptr) {
         return;
     }
 
     auto failure_parser =
-        http1_client_response_parser(prepared->exchange_state(), {.resource_ = &counting});
+        http1_client_response_parser(prepared->exchange_state(), &counting);
     const auto failure = failure_parser.parse("HTTP/2 200 OK\r\n\r\n");
     RUVIA_CHECK(failure.failure() != nullptr);
     RUVIA_CHECK(
@@ -354,8 +349,9 @@ RUVIA_TEST(http_client_response_parser_accepts_incremental_prefixes_and_resets_a
     std::array<char, 2048> output{};
     auto prepared = ruvia::http1_client_request_writer().prepare(
         ruvia::http_origin_view::https({.host_ = "example.test"}), {}, output);
-    RUVIA_CHECK(prepared.prepared() != nullptr);
-    http1_client_response_parser parser(prepared.prepared()->exchange_state());
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    http1_client_response_parser parser(prepared_req->exchange_state());
     for (const std::string_view wire : {"HTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\n",
              "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"}) {
         for (std::size_t size = 0; size < wire.size(); ++size) {

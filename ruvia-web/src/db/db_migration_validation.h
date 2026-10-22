@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/web/db/db_migration.h"
+#include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/detail/db/db_sql_scan.h"
 
 namespace ruvia::detail {

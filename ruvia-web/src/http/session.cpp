@@ -3,7 +3,7 @@
 #include <stdexcept>
 
 #include "ruvia/web/context.h"
-#include "ruvia/web/next.h"
+#include "ruvia/web/middleware.h"
 
 #include "context/context_access.h"
 #include "http/session_access.h"
@@ -76,8 +76,7 @@ task<void> detail::session_access::commit(context& context_value) {
 
 namespace ruvia {
 
-session_middleware::config_storage_type::validated_config_type session_middleware::config_storage_type::validate(
-    const session_config& source_value) {
+const session_config& session_middleware::validate(const session_config& source_value) {
     if (source_value.redis_alias_.empty()) {
         throw std::invalid_argument("session Redis alias must not be empty");
     }
@@ -95,35 +94,31 @@ session_middleware::config_storage_type::validated_config_type session_middlewar
     if (source_value.ttl_ > std::chrono::duration_cast<std::chrono::seconds>(std::chrono::milliseconds::max())) {
         throw std::invalid_argument("session TTL must be representable in milliseconds");
     }
-    return validated_config_type{.source_ = &source_value};
+    return source_value;
 }
 
-session_middleware::config_storage_type::config_storage_type(
-    const session_config& source_value, std::pmr::memory_resource* resource)
-    : config_storage_type(validate(source_value), resource) {}
-
-session_middleware::config_storage_type::config_storage_type(
-    validated_config_type validated, std::pmr::memory_resource* resource)
-    : redis_alias_(validated.source_->redis_alias_, resource),
-      cookie_name_(validated.source_->cookie_name_, resource),
-      key_prefix_(validated.source_->key_prefix_, resource),
-      ttl_(validated.source_->ttl_) {}
+session_middleware::session_middleware(
+    const session_config& validated, std::pmr::memory_resource* resource)
+    : redis_alias_(validated.redis_alias_, resource),
+      cookie_name_(validated.cookie_name_, resource),
+      key_prefix_(validated.key_prefix_, resource),
+      ttl_(validated.ttl_) {}
 
 session_middleware::session_middleware()
     : session_middleware(session_config{}) {}
 
 session_middleware::session_middleware(const session_config& config)
-    : config_(config, detail::registration_resource()) {}
+    : session_middleware(validate(config), detail::registration_resource()) {}
 
 task<void> session_middleware::handle(context& c, next& next_value) {
     detail::session_access::bind(c, this);
-    const auto cookie = c.req().cookie(config_.cookie_name_);
+    const auto cookie = c.req().cookie(cookie_name_);
     if (cookie && detail::is_valid_session_id(*cookie)) {
         detail::session_access::observe_presented_id(c, *cookie);
         std::pmr::string key(c.pool());
-        key.append(config_.key_prefix_);
+        key.append(key_prefix_);
         key.append(cookie->data(), cookie->size());
-        if (auto stored = co_await c.redis(config_.redis_alias_).get(key)) {
+        if (auto stored = co_await c.redis(redis_alias_).get(key)) {
             detail::session_access::load(c, *stored);
         }
     }
@@ -160,15 +155,15 @@ task<void> session_middleware::commit(context& c) const {
         }
     };
     if (const auto* cleared = state_value.cleared()) {
-        detail::append_expired_session_cookie_header(staged, c.pool(), config_.cookie_name_, secure);
+        detail::append_expired_session_cookie_header(staged, c.pool(), cookie_name_, secure);
         if (staged_overlay) {
-            detail::append_expired_session_cookie_header(*staged_overlay, c.pool(), config_.cookie_name_, secure);
+            detail::append_expired_session_cookie_header(*staged_overlay, c.pool(), cookie_name_, secure);
         }
         if (cleared->old_id_.has_value()) {
             std::pmr::string key(c.pool());
-            key.append(config_.key_prefix_);
+            key.append(key_prefix_);
             key.append(cleared->old_id_->data(), cleared->old_id_->size());
-            (void)(co_await c.redis(config_.redis_alias_).del(key));
+            (void)(co_await c.redis(redis_alias_).del(key));
         }
         publish();
         co_return;
@@ -191,25 +186,25 @@ task<void> session_middleware::commit(context& c) const {
             .message_ = "secure token generation failed"});
     }
     const auto new_id = *token;
-    detail::append_session_cookie_header(staged, c.pool(), config_.cookie_name_, new_id, secure);
+    detail::append_session_cookie_header(staged, c.pool(), cookie_name_, new_id, secure);
     if (staged_overlay) {
-        detail::append_session_cookie_header(*staged_overlay, c.pool(), config_.cookie_name_, new_id, secure);
+        detail::append_session_cookie_header(*staged_overlay, c.pool(), cookie_name_, new_id, secure);
     }
 
     std::pmr::string key(c.pool());
-    key.append(config_.key_prefix_).append(new_id);
+    key.append(key_prefix_).append(new_id);
     bool applied = false;
     if (!old_id.empty()) {
         std::pmr::string old_key(c.pool());
-        old_key.append(config_.key_prefix_).append(old_id);
-        // config_storage_type::validate requires a positive TTL.
+        old_key.append(key_prefix_).append(old_id);
+        // session_middleware::validate requires a positive TTL.
         std::array<char, http_max_unsigned_decimal_size> ttl_buffer;
-        const auto ttl = http_format_unsigned(ttl_buffer, static_cast<std::uint64_t>(config_.ttl_.count()));
+        const auto ttl = http_format_unsigned(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));
         const std::array<std::string_view, 2> keys{old_key, key};
         const std::array<std::string_view, 2> args{data, ttl};
         // Redis executes the entire transition atomically. A stale request may
         // neither recreate a revoked identifier nor mint a successor from it.
-        const auto result_value = co_await c.redis(config_.redis_alias_).eval(detail::session_rotation_script, keys, args);
+        const auto result_value = co_await c.redis(redis_alias_).eval(detail::session_rotation_script, keys, args);
         if (result_value.kind() == redis_value::kind_type::error) {
             throw redis_error(redis_error::code_type::command_error, result_value.error());
         }
@@ -217,8 +212,8 @@ task<void> session_middleware::commit(context& c) const {
     } else {
         redis_set_options options;
         options.condition_ = redis_set_condition::if_absent;
-        options.expiration_ = redis_set_expiration::expires_after(config_.ttl_);
-        const auto result_value = co_await c.redis(config_.redis_alias_).set(key, data, std::move(options));
+        options.expiration_ = redis_set_expiration::expires_after(ttl_);
+        const auto result_value = co_await c.redis(redis_alias_).set(key, data, std::move(options));
         applied = result_value.applied();
     }
     if (!applied) {

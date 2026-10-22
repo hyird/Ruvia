@@ -23,7 +23,7 @@
 
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
@@ -162,7 +162,7 @@ struct tls_config final {
 struct listen_config final {
     // Numeric IPv4 or IPv6 bind address, normalized when application::listen consumes
     // this configuration.
-    std::string address_{"0.0.0.0"};
+    borrowed_text address_{"0.0.0.0"};
     std::optional<std::uint16_t> http_{};
     std::optional<std::uint16_t> https_{};
     tls_config tls_{};
@@ -198,7 +198,7 @@ struct cors_origin_config final {
     cors_origin_mode mode_{cors_origin_mode::any};
     // Required for exact modes. "null" represents the serialized opaque
     // origin; wildcard mode requires this field to remain empty.
-    std::string value_{};
+    borrowed_text value_{};
 };
 
 enum class cors_request_headers_mode : std::uint8_t {
@@ -333,12 +333,12 @@ private:
 };
 
 namespace detail {
-using access_log_callback_ref_type = callback_ref_type<void(const access_log_record&) noexcept>;
+using access_log_callback_ref = callback_ref<void(const access_log_record&) noexcept>;
 }  // namespace detail
 
 // application-owned access-log listener. Request dispatch receives only an internal,
-// allocation-free callback_ref_type and never participates in this owner's lifetime.
-using access_log_callback_type = detail::callback<void(const access_log_record&) noexcept>;
+// allocation-free callback_ref and never participates in this owner's lifetime.
+using access_log_callback = detail::callback<void(const access_log_record&) noexcept>;
 
 // One connection lost to an exception that escaped its session: a handler bug
 // past the response's point of no return, an error handler that itself failed,
@@ -406,14 +406,14 @@ struct http_server_stats final {
 };
 
 namespace detail {
-using connection_failure_callback_ref_type = callback_ref_type<void(const connection_failure_record&) noexcept>;
+using connection_failure_callback_ref = callback_ref<void(const connection_failure_record&) noexcept>;
 }  // namespace detail
 
 // application-owned connection-failure listener. The listener must not throw: it runs on the last
 // line of defense for a connection, where a second failure would have nowhere
 // left to go, so the requirement is enforced at compile time rather than
 // swallowed at runtime.
-using connection_failure_callback_type = detail::callback<void(const connection_failure_record&) noexcept>;
+using connection_failure_callback = detail::callback<void(const connection_failure_record&) noexcept>;
 
 // A self-contained startup/shutdown callback, invoked on the application::run() caller.
 // on_start runs after worker initialization, before TCP admission. on_stop
@@ -422,8 +422,8 @@ using connection_failure_callback_type = detail::callback<void(const connection_
 // references captured by that callable must still
 // outlive the registered hook. Invoking an empty hook is a programming error
 // and throws std::logic_error.
-using app_hook_type = detail::callback<void()>;
+using app_hook = detail::callback<void()>;
 
-static_assert(sizeof(app_hook_type) == 5 * sizeof(void*));
+static_assert(sizeof(app_hook) == 5 * sizeof(void*));
 
 }  // namespace ruvia

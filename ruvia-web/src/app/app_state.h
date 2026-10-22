@@ -8,7 +8,6 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/pmr_resource.h"
 #include "ruvia/http/http_native_path.h"
 #include "ruvia/web/app.h"
 
@@ -47,14 +46,14 @@ struct app_state final {
     ~app_state();
 
     std::pmr::vector<http_server_listener_definition> listeners_{process_resource()};
-    access_log_callback_type access_log_callback_;
-    connection_failure_callback_type connection_failure_callback_;
+    access_log_callback access_log_callback_;
+    connection_failure_callback connection_failure_callback_;
     http_server_options options_{};
     std::optional<app_document_root_config> document_root_config_;
     app_configuration configuration_{process_resource()};
     std::optional<blocking_pool_options> blocking_pool_{std::in_place};
-    std::pmr::vector<app_hook_type> on_start_hooks_{process_resource()};
-    std::pmr::vector<app_hook_type> on_stop_hooks_{process_resource()};
+    std::pmr::vector<app_hook> on_start_hooks_{process_resource()};
+    std::pmr::vector<app_hook> on_stop_hooks_{process_resource()};
 #ifdef RUVIA_ENABLE_DATABASE
     std::pmr::vector<db_definition> databases_{process_resource()};
 #endif

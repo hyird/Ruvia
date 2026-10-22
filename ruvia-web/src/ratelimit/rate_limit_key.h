@@ -10,7 +10,7 @@
 #include <asio/ip/address_v4.hpp>
 #include <asio/ip/address_v6.hpp>
 
-#include "ruvia/core/ip_address.h"
+#include "ruvia/core/socket.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
 
@@ -38,10 +38,10 @@ inline constexpr std::size_t rate_limit_key_buffer_bytes = 19;
         return remote_address;  // no ':' -> IPv4 or empty; already a per-host key
     }
     const auto parsed_value = ruvia::parse_ip_address(remote_address);
-    if ((parsed_value.index() != 0) || !std::get<0>(parsed_value).is_v6()) {
+    if (!parsed_value || !parsed_value->is_v6()) {
         return remote_address;
     }
-    const auto address = std::get<0>(parsed_value).to_v6();
+    const auto address = parsed_value->to_v6();
     if (address.scope_id() != 0) {
         return remote_address;  // unparseable or scoped -> a full host key
     }

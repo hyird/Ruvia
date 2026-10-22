@@ -67,7 +67,7 @@ task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
     // to its size, so each byte is initialized at most once before a read
     // overwrites it; `filled` marks the bytes the socket has written.
     if (delivered_bytes_ < content_length) {
-        scanner_entry_.set_phase(connection_scanner::phase_type::reading_payload);
+        scanner_entry_.set_phase(connection_scanner::phase::reading_payload);
     }
     auto filled = body.size();
     while (delivered_bytes_ < content_length) {

@@ -14,7 +14,7 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/web/detail/integration/request_io_metrics.h"
-#include "ruvia/web/detail/router/route_modes.h"
+#include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/error.h"
 
 #include "context/context_services.h"

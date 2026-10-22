@@ -17,8 +17,8 @@
 #include <tuple>
 #include <utility>
 
-#include "ruvia/core/event_loop_attachment.h"
-#include "ruvia/web/db/db_client.h"
+#include "ruvia/core/event_loop.h"
+#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/error.h"
@@ -89,7 +89,7 @@ auto migrations() {
 }
 
 task<void> query_example(db_client& db) {
-    auto employees = db.handle().get_repository<employee>();
+    auto employees = db.handle().repository<employee>();
     const db_find_options employee_options{
         .relations_ = {"department", "department.employees"},
         .order_ = {{"id", db_order_direction::asc}},
@@ -104,7 +104,7 @@ task<void> query_example(db_client& db) {
         }
     }
 
-    auto builder = employees.create_query_builder("employee");
+    auto builder = employees.query_builder("employee");
     builder.left_join_and_select("department", "department")
         .left_join_and_select("department.employees", "colleague")
         .limit(25);
@@ -123,12 +123,12 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
     std::exception_ptr failure;
     try {
         co_await db.connect();
-        auto departments = db.handle().get_repository<department>();
-        auto employees = db.handle().get_repository<employee>();
-        auto profiles = db.handle().get_repository<profile>();
-        auto users = db.handle().get_repository<user>();
-        auto courses = db.handle().get_repository<course>();
-        auto students = db.handle().get_repository<student>();
+        auto departments = db.handle().repository<department>();
+        auto employees = db.handle().repository<employee>();
+        auto profiles = db.handle().repository<profile>();
+        auto users = db.handle().repository<user>();
+        auto courses = db.handle().repository<course>();
+        auto students = db.handle().repository<student>();
         for (const auto [id, name] : {std::pair{1LL, "North"}, std::pair{2LL, "South"}}) {
             department row;
             row.set<"id">(id);
@@ -161,7 +161,7 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
             student.set<"name">("Learner");
             co_await students.upsert(student, {.conflict_paths_ = {"id"}});
         }
-        auto memberships = db.handle().get_repository<student_course>();
+        auto memberships = db.handle().repository<student_course>();
         for (const auto [student_id, course_id] : {std::pair{1LL, 1LL}, std::pair{1LL, 2LL}, std::pair{2LL, 2LL}}) {
             student_course membership;
             membership.set<"student_id">(student_id);
@@ -178,7 +178,7 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
         if (!department_value || department_value->get<"employees">().size() != 2) {
             throw std::runtime_error("findOne did not preserve the complete collection");
         }
-        auto next_page = departments.create_query_builder("d");
+        auto next_page = departments.query_builder("d");
         next_page.left_join_and_select("d.employees", "e").order_by("id").offset(1).limit(1);
         auto second = co_await next_page.get_one();
         if (!second || second->get<"id">() != 2 || second->get<"employees">().size() != 1) {

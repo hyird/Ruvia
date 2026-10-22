@@ -116,7 +116,7 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
         .max_buffered_body_bytes_ = services().max_decoded_body_bytes(),
         .apply_rate_limit_ = false,
     };
-    http_response response({.resource_ = memory.resource()});
+    http_response response(memory.resource());
     (void)co_await detail::admit_and_dispatch_buffered_request(routes,
         {
             .request_ = request,

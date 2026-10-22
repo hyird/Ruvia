@@ -13,15 +13,14 @@ class callback_owner;
 // Trivial request/runtime view. Never allocates or extends the callable's
 // lifetime. Signature policy changes invocation, not storage or binding logic.
 template <typename result_type, bool is_noexcept, typename... args_types>
-class callback_ref final {
+class callback_ref_view final {
 public:
-    constexpr callback_ref() noexcept = default;
-    constexpr callback_ref(std::nullptr_t) noexcept {}
+    constexpr callback_ref_view() noexcept = default;
+    constexpr callback_ref_view(std::nullptr_t) noexcept {}
     // Select concrete pointer types so MSVC resolves the exception specification.
     using invoke_type = std::conditional_t<is_noexcept,
         result_type (*)(void*, args_types...) noexcept,
         result_type (*)(void*, args_types...)>;
-
     [[nodiscard]] constexpr explicit operator bool() const noexcept {
         return invoke_ != nullptr;
     }
@@ -30,22 +29,22 @@ public:
         return invoke_target(std::forward<args_types>(args)...);
     }
 
-    [[nodiscard]] friend constexpr bool operator==(callback_ref, callback_ref) noexcept = default;
+    [[nodiscard]] friend constexpr bool operator==(callback_ref_view, callback_ref_view) noexcept = default;
 
 private:
     friend struct callback_access;
     template <typename, bool, typename...>
     friend class callback_owner;
 
-    constexpr callback_ref(void* target, invoke_type invoke) noexcept
+    constexpr callback_ref_view(void* target, invoke_type invoke) noexcept
         : target_(target),
           invoke_(invoke) {}
 
     template <typename callable_type>
         requires(std::is_invocable_r_v<result_type, callable_type&, args_types...> &&
                  (!is_noexcept || std::is_nothrow_invocable_r_v<result_type, callable_type&, args_types...>))
-    [[nodiscard]] static constexpr callback_ref bind(callable_type& callable) noexcept {
-        return callback_ref(std::addressof(callable), [](void* target, args_types... args) noexcept(is_noexcept) -> result_type {
+    [[nodiscard]] static constexpr callback_ref_view bind(callable_type& callable) noexcept {
+        return callback_ref_view(std::addressof(callable), [](void* target, args_types... args) noexcept(is_noexcept) -> result_type {
             return (*static_cast<callable_type*>(target))(std::forward<args_types>(args)...);
         });
     }
@@ -77,13 +76,13 @@ struct callback_signature<result_type(args_types...) noexcept> final {
 };
 
 template <typename signature_type>
-using callback_ref_type = typename callback_signature<signature_type>::template apply<callback_ref>;
+using callback_ref = typename callback_signature<signature_type>::template apply<callback_ref_view>;
 
 struct callback_access final {
     template <typename signature_type>
-    [[nodiscard]] static constexpr callback_ref_type<signature_type> make(
-        void* target, typename callback_ref_type<signature_type>::invoke_type invoke) noexcept {
-        return callback_ref_type<signature_type>(target, invoke);
+    [[nodiscard]] static constexpr callback_ref<signature_type> make(
+        void* target, typename callback_ref<signature_type>::invoke_type invoke) noexcept {
+        return callback_ref<signature_type>(target, invoke);
     }
 
     template <typename owner_type>
@@ -92,8 +91,8 @@ struct callback_access final {
     }
 
     template <typename signature_type, typename callable_type>
-    [[nodiscard]] static constexpr callback_ref_type<signature_type> bind(callable_type& callable) noexcept {
-        return callback_ref_type<signature_type>::bind(callable);
+    [[nodiscard]] static constexpr callback_ref<signature_type> bind(callable_type& callable) noexcept {
+        return callback_ref<signature_type>::bind(callable);
     }
 
     template <typename ref_type>
@@ -107,7 +106,6 @@ struct callback_access final {
     }
 };
 
-static_assert(sizeof(callback_ref_type<void()>) == 2 * sizeof(void*));
-static_assert(std::is_trivially_copyable_v<callback_ref_type<void()>>);
-
+static_assert(sizeof(callback_ref<void()>) == 2 * sizeof(void*));
+static_assert(std::is_trivially_copyable_v<callback_ref<void()>>);
 }  // namespace ruvia::detail

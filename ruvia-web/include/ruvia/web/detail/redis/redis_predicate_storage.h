@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "ruvia/web/detail/model/traits.h"
-#include "ruvia/web/model_types.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia::detail {
 

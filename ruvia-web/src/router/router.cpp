@@ -45,48 +45,40 @@ void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::span<co
 
 }  // namespace
 
-detail::router_impl::router_impl(router& router_value, std::pmr::memory_resource* plan_resource)
-    : owner_(router_value),
-      plan_(make_pmr_object<compiled_route_plan>(plan_resource, plan_resource)),
+detail::router::router(std::pmr::memory_resource* plan_resource)
+    : plan_(make_pmr_object<compiled_route_plan>(plan_resource, plan_resource)),
       route_indices_(registration_resource()),
       route_middleware_descriptors_(registration_resource()),
       route_middleware_ranges_(registration_resource()),
       global_middleware_descriptors_(registration_resource()) {}
 
-void router::impl_deleter_type::operator()(detail::router_impl* impl) const noexcept {
-    destroy_pmr_object(impl, registration_resource());
-}
+detail::router::~router() = default;
 
-router::router(std::pmr::memory_resource* plan_resource)
-    : impl_(construct_pmr_object<detail::router_impl>(registration_resource(), *this, plan_resource)) {}
-
-router::~router() = default;
-
-void detail::router_impl::set_error_handler(http_error_handler_ref_type handler) noexcept {
+void detail::router::set_error_handler(http_error_handler_ref handler) noexcept {
     plan_->error_handler_ = handler;
 }
 
-void detail::router_impl::set_not_found_handler(http_not_found_handler_ref_type handler) noexcept {
+void detail::router::set_not_found_handler(http_not_found_handler_ref handler) noexcept {
     plan_->not_found_handler_ = handler;
 }
 
-void detail::router_impl::set_prefix_error_handlers(std::span<const http_prefix_error_handler> handlers) {
+void detail::router::set_prefix_error_handlers(std::span<const http_prefix_error_handler> handlers) {
     replace_prefix_handlers(plan_->prefix_error_handlers_, handlers);
 }
 
-void detail::router_impl::set_prefix_not_found_handlers(
+void detail::router::set_prefix_not_found_handlers(
     std::span<const http_prefix_not_found_handler> handlers) {
     replace_prefix_handlers(plan_->prefix_not_found_handlers_, handlers);
 }
 
-void detail::router_impl::set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors) {
+void detail::router::set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors) {
     for (const auto& descriptor : descriptors) {
         plan_->has_route_rate_limit_ = plan_->has_route_rate_limit_ || descriptor.uses_route_rate_limit();
     }
     global_middleware_descriptors_.assign(descriptors.begin(), descriptors.end());
 }
 
-void detail::router_impl::append_route_middlewares(
+void detail::router::append_route_middlewares(
     std::span<const controller_middleware_descriptor> controller_middlewares,
     std::span<const controller_middleware_descriptor> route_middlewares) {
     const auto offset = route_middleware_descriptors_.size();
@@ -109,17 +101,17 @@ void detail::router_impl::append_route_middlewares(
     route_middleware_ranges_.push_back({offset, route_middleware_descriptors_.size() - offset});
 }
 
-void detail::router_impl::declare_controllers(
-    std::span<const controller_registrar_type> registrars, const controller_store& controllers) {
+void detail::router::declare_controllers(
+    std::span<const controller_registrar> registrars, const controller_store& controllers) {
     for (std::size_t slot = 0; slot < registrars.size(); ++slot) {
         controller_slot_ = slot;
         controller_target_ = controllers.instance(slot);
-        registrars[slot].register_routes_(controller_target_, owner_);
+        registrars[slot].register_routes_(controller_target_, *this);
     }
     controller_target_ = nullptr;
 }
 
-void detail::router_impl::validate_route_target(
+void detail::router::validate_route_target(
     http_known_method method, std::string_view method_token, std::string_view path, const route_endpoint& endpoint) const {
     if (const auto* tunnel = endpoint.tunnel()) {
         if (method != http_known_method::connect || !method_token.empty()) {
@@ -155,7 +147,7 @@ void detail::router_impl::validate_route_target(
     }
 }
 
-detail::compiled_route_plan_ptr_type detail::router_impl::compile() {
+detail::compiled_route_plan_ptr_type detail::router::compile() {
     validate_no_dynamic_route_conflict();
     build_middleware_frames();
     auto& plan = *plan_;
@@ -175,10 +167,9 @@ detail::compiled_route_plan_ptr_type detail::router_impl::compile() {
 }
 
 detail::compiled_route_plan_ptr_type detail::compile_route_plan(std::pmr::memory_resource* resource,
-    std::span<const controller_registrar_type> registrars, const controller_store& controllers,
+    std::span<const controller_registrar> registrars, const controller_store& controllers,
     const app_configuration& configuration) {
-    router router_value(resource);
-    auto& routes_value = router_impl::from(router_value);
+    router routes_value(resource);
     routes_value.declare_controllers(registrars, controllers);
     configuration.apply(routes_value, resource);
     return routes_value.compile();

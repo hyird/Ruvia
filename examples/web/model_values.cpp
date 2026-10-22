@@ -14,7 +14,6 @@
 
 #include "ruvia/web/error.h"
 #include "ruvia/web/model.h"
-#include "ruvia/web/model_object.h"
 #include "ruvia/web/validation.h"
 
 RUVIA_MODEL(import_record,

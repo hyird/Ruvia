@@ -10,10 +10,9 @@
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_section.h"
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/http/websocket_subprotocol_set.h"
 
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_accept_key.h"

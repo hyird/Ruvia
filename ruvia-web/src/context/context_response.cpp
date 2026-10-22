@@ -70,35 +70,35 @@ void context::store_assigned_response(http_response&& response) {
 }
 
 http_response context::body(std::string_view body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.body(body);
     apply_response_state(response, std::nullopt);
     return response;
 }
 
 http_response context::body_owned(std::pmr::string&& body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
     return response;
 }
 
 http_response context::body(std::span<const std::byte> body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.body(byte_body_view(body));
     apply_response_state(response, std::nullopt);
     return response;
 }
 
 http_response context::body(static_text body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
     return response;
 }
 
 http_response context::text(std::string_view body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.content_type(http_content_type::text_plain_utf8);
     response.body(body);
     apply_response_state(response, std::nullopt);
@@ -106,7 +106,7 @@ http_response context::text(std::string_view body) const {
 }
 
 http_response context::text_owned(std::pmr::string&& body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.content_type(http_content_type::text_plain_utf8);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
@@ -114,7 +114,7 @@ http_response context::text_owned(std::pmr::string&& body) const {
 }
 
 http_response context::text(static_text body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.content_type(http_content_type::text_plain_utf8);
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
@@ -122,7 +122,7 @@ http_response context::text(static_text body) const {
 }
 
 http_response context::json_serialized(std::pmr::string& body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.content_type(http_content_type::application_json);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
@@ -130,7 +130,7 @@ http_response context::json_serialized(std::pmr::string& body) const {
 }
 
 http_response context::html(std::string_view body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.content_type(http_content_type::text_html_utf8);
     response.body(body);
     apply_response_state(response, std::nullopt);
@@ -138,7 +138,7 @@ http_response context::html(std::string_view body) const {
 }
 
 http_response context::html_owned(std::pmr::string&& body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.content_type(http_content_type::text_html_utf8);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
@@ -146,7 +146,7 @@ http_response context::html_owned(std::pmr::string&& body) const {
 }
 
 http_response context::html(static_text body) const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     response.content_type(http_content_type::text_html_utf8);
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
@@ -167,7 +167,7 @@ task<http_response> context::not_found_task() {
     // Selected only here, on demand: every matched request carries the table,
     // and few of them ever ask for a not-found answer.
     const auto* routes = services().routes();
-    const auto handler = routes == nullptr ? detail::http_not_found_handler_ref_type{nullptr}
+    const auto handler = routes == nullptr ? detail::http_not_found_handler_ref{nullptr}
                                            : routes->not_found_handler_for(request_.path());
     if (handler != nullptr) {
         co_return co_await handler(*this);
@@ -180,7 +180,7 @@ task<http_response> context::not_found_task() {
 }
 
 http_response context::streaming_head() const {
-    http_response response({.resource_ = arena()});
+    http_response response(arena());
     apply_response_state(response, std::nullopt);
     return response;
 }

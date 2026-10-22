@@ -8,7 +8,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/detail/db/db_value_access.h"
 

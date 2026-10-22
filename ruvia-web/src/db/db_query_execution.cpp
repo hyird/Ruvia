@@ -47,7 +47,7 @@ task<db_rows> query_db_backend(const db_query_backend& backend, std::pmr::string
             return pool.query_on_transaction_slot(
                 *backend.slot_, std::move(sql), std::move(params), backend.resource_, options);
         }
-        return pool.query(std::move(sql), std::move(params), backend.resource_, std::move(options));
+        return pool.query(std::move(sql), std::move(params), backend.resource_, std::move(options), backend.scope_);
     });
 }
 

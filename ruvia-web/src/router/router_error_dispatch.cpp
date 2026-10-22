@@ -121,7 +121,7 @@ void assign_exception_error(owned_http_error_info& error_info, const std::except
 // An unexpected exception answered without an application error handler would
 // otherwise leave no server-side trace at all.
 void report_unexpected_failure(const owned_http_error_info& error_info, const std::exception_ptr& exception,
-    detail::http_error_handler_ref_type error_handler) noexcept {
+    detail::http_error_handler_ref error_handler) noexcept {
     if (error_info.unexpected_ && error_handler == nullptr) {
         ruvia::report_unhandled_failure("request handler", exception);
     }
@@ -200,7 +200,7 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
 
 task<http_response> detail::route_table::handle_exception(const http_request& request,
     request_memory& memory, std::exception_ptr exception, context_services services,
-    http_error_handler_ref_type error_handler) const {
+    http_error_handler_ref error_handler) const {
     rethrow_inbound_transport_error(exception);
     if (error_handler == nullptr) {
         owned_http_error_info error_info(memory.resource(), exception);
@@ -215,7 +215,7 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
 }
 
 task<http_response> detail::route_table::handle_error(
-    context& context_value, http_error_info error, http_error_handler_ref_type error_handler) const {
+    context& context_value, http_error_info error, http_error_handler_ref error_handler) const {
     auto response = co_await invoke_error_handler(context_value, error, error_handler);
     co_return response;
 }
@@ -259,7 +259,7 @@ task<http_response> detail::route_table::handle_exception(
 }
 
 task<http_response> detail::route_table::handle_exception(context& context_value,
-    std::exception_ptr exception, http_error_handler_ref_type error_handler) const {
+    std::exception_ptr exception, http_error_handler_ref error_handler) const {
     rethrow_inbound_transport_error(exception);
     detail::context_access::set_error(context_value, exception);
     owned_http_error_info error_info(context_value.arena(), exception);
@@ -292,13 +292,13 @@ template <typename stored_type>
 
 }  // namespace
 
-detail::http_error_handler_ref_type detail::route_table::error_handler_for(
+detail::http_error_handler_ref detail::route_table::error_handler_for(
     std::string_view path) const noexcept {
     const auto handler = select_prefix_handler(plan_->prefix_error_handlers_, path);
     return handler != nullptr ? handler : plan_->error_handler_;
 }
 
-detail::http_not_found_handler_ref_type detail::route_table::not_found_handler_for(
+detail::http_not_found_handler_ref detail::route_table::not_found_handler_for(
     std::string_view path) const noexcept {
     const auto handler = select_prefix_handler(plan_->prefix_not_found_handlers_, path);
     return handler != nullptr ? handler : plan_->not_found_handler_;

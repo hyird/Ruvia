@@ -4,19 +4,47 @@
 #include <exception>
 #include <system_error>
 
-#include "ruvia/core/error_text.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/validation.h"
 
-#include "http/http_error_normalize.h"
 #include "http/http_error_response.h"
 
 namespace ruvia {
 namespace {
+
+[[nodiscard]] http_error_info normalize_http_error_info(http_error_info error) noexcept {
+    auto status = error.status();
+    if (!status.is_error()) {
+        status = http_status::internal_server_error;
+    }
+    auto status_text = error.status_text();
+    if (status_text.empty() || !is_valid_http_header_value(status_text)) {
+        status_text = http_reason_phrase(status);
+        if (status_text.empty()) {
+            // Application error presentation remains a Web concern. Do not
+            // invent an HTTP/1 reason phrase for an extension status code.
+            status_text = "HTTP Error";
+        }
+    }
+    auto code = error.code();
+    if (code.empty()) {
+        code = default_error_code(status);
+    }
+    auto message = error.message();
+    if (message.empty()) {
+        message = status_text;
+    }
+    return http_error_info({.status_ = status,
+        .code_ = code,
+        .message_ = message,
+        .status_text_ = status_text,
+        .validation_issues_ = error.validation_issues()});
+}
 
 RUVIA_MODEL(http_validation_issue_response_model, RUVIA_REQUIRED_FIELD(field, ruvia::string),
     RUVIA_REQUIRED_FIELD(code, ruvia::string), RUVIA_REQUIRED_FIELD(message, ruvia::string));
@@ -158,7 +186,7 @@ http_response detail::make_default_error_response(
     std::pmr::memory_resource* resource, http_error_info error) {
     error = normalize_http_error_info(error);
 
-    http_response response({.resource_ = resource});
+    http_response response(resource);
     response.status(error.status());
     response.header("Content-Type", "application/problem+json");
 
@@ -172,7 +200,7 @@ http_response detail::make_default_error_response(
 // transport output stays deterministic and no exception detail reaches the
 // client.
 task<http_response> detail::invoke_error_handler(
-    context& context_value, http_error_info error, http_error_handler_ref_type handler) {
+    context& context_value, http_error_info error, http_error_handler_ref handler) {
     error = normalize_http_error_info(error);
 
     if (handler != nullptr) {

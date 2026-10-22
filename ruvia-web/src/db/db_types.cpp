@@ -3,8 +3,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/web/db/db_migration.h"
 #include "ruvia/web/db/db_rows.h"
+#include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
 namespace ruvia {

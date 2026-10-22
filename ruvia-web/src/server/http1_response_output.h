@@ -56,7 +56,7 @@ public:
 
     http1_response_output(stream_type& stream, http_response_head_buffer& output,
         http1_deferred_access_log& deferred_access, const access_log_sink& access_log,
-        connection_scanner::entry_type& progress) noexcept
+        connection_scanner::entry& progress) noexcept
         : stream_(&stream),
           output_(&output),
           deferred_access_(&deferred_access),
@@ -107,7 +107,7 @@ public:
     // inactivity rather than the time to drain the whole output.
     template <typename handler_type>
     void write_remaining(handler_type&& handler) {
-        progress_->set_phase(connection_scanner::phase_type::writing);
+        progress_->set_phase(connection_scanner::phase::writing);
         const auto output = output_->view();
         const auto written = written_.bytes_;
         if (written >= output.size()) {
@@ -154,7 +154,7 @@ public:
             co_return std::error_code{};
         }
         if (!start()) {
-            const connection_scanner::entry_type::phase_scope_type caller_phase(*progress_);
+            const connection_scanner::entry::phase_scope caller_phase(*progress_);
             const auto completion = co_await async_write_remaining();
             finish(completion.error_code(), completion.result());
         }
@@ -166,7 +166,7 @@ private:
     http_response_head_buffer* output_;
     http1_deferred_access_log* deferred_access_;
     const access_log_sink* access_log_;
-    connection_scanner::entry_type* progress_;
+    connection_scanner::entry* progress_;
     std::string_view body_;
     written_type written_;
 };

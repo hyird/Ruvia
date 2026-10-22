@@ -2,7 +2,7 @@
 
 #include <variant>
 
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 
 #include "field/http_date.h"
 #include "field/http_imf_fixdate.h"

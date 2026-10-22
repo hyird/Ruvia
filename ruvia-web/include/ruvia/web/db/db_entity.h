@@ -16,7 +16,7 @@
 
 #include "ruvia/web/detail/entity/value_storage.h"
 #include "ruvia/web/entity_rows.h"
-#include "ruvia/web/model_types.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia {
 
@@ -339,13 +339,15 @@ struct is_db_relation<db_one_to_many<name, target_type, inverse>> : std::true_ty
 template <fixed_string name, typename target_type, typename mapping_type>
 struct is_db_relation<db_many_to_many<name, target_type, mapping_type>> : std::true_type {};
 
+namespace detail {
+
 template <fixed_string table, typename... members_type>
-class db_entity final {
+class db_entity_storage final {
     static_assert(((is_db_column<members_type>::value || is_db_relation<members_type>::value) && ...),
         "SQL entities require RUVIA_DB_COLUMN or SQL relation descriptors");
-    using columns_tuple_type = detail::tuple_filter_t<is_db_column, members_type...>;
-    using relations_tuple_type = detail::tuple_filter_t<is_db_relation, members_type...>;
-    static_assert(detail::unique_entity_columns<members_type...>(), "duplicate database entity member name");
+    using columns_tuple_type = tuple_filter_t<is_db_column, members_type...>;
+    using relations_tuple_type = tuple_filter_t<is_db_relation, members_type...>;
+    static_assert(unique_entity_columns<members_type...>(), "duplicate database entity member name");
     static consteval std::size_t count_lifecycle_columns(auto predicate) noexcept {
         return [&]<typename... cols>(std::tuple<cols...>*) {
             return (std::size_t{predicate(cols::options)} + ... + std::size_t{0});
@@ -360,12 +362,12 @@ class db_entity final {
     static_assert(count_lifecycle_columns([](const auto& opts) { return opts.version_; }) <= 1,
         "database entity may declare at most one version_ column");
     template <typename r_type>
-    using relation_slot_type = detail::db_relation_slot<typename r_type::target_entity_type, r_type::is_collection>;
+    using relation_slot_type = db_relation_slot<typename r_type::target_entity_type, r_type::is_collection>;
     template <std::size_t... indexes>
     static auto make_relation_slots(std::pmr::memory_resource* resource, std::index_sequence<indexes...>) {
         return std::tuple<relation_slot_type<std::tuple_element_t<indexes, relations_tuple_type>>...>(relation_slot_type<std::tuple_element_t<indexes, relations_tuple_type>>(resource)...);
     }
-    using column_storage = typename detail::entity_storage_from_tuple<columns_tuple_type>::type;
+    using column_storage = typename entity_storage_from_tuple<columns_tuple_type>::type;
     using relation_slots_type = decltype(make_relation_slots(nullptr, std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{}));
     template <fixed_string name>
     static consteval std::size_t index() {
@@ -406,7 +408,6 @@ class db_entity final {
     }
 
 public:
-    using sql_entity_type = db_entity;
     using columns_type = columns_tuple_type;
     using relations_type = relations_tuple_type;
     static constexpr std::string_view table_name() noexcept {
@@ -420,20 +421,18 @@ public:
     static consteval std::string_view column_name() noexcept {
         return std::tuple_element_t<index<name>(), columns_type>::name.view();
     }
-    template <fixed_string name>
-    static constexpr db_field_reference<db_entity, name> column(std::string_view alias = {}) noexcept;
-    explicit db_entity(std::pmr::memory_resource* resource = nullptr)
+    explicit db_entity_storage(std::pmr::memory_resource* resource = nullptr)
         : columns_(resource),
           relation_slots_(make_relation_slots(columns_.resource(), std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{})) {}
     template <typename owner_type>
         requires requires(owner_type& owner) {
             { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
         }
-    explicit db_entity(owner_type& owner)
-        : db_entity(owner.resource()) {}
-    db_entity(const db_entity&) = delete;
-    db_entity& operator=(const db_entity&) = delete;
-    db_entity(db_entity&&) noexcept = default;
+    explicit db_entity_storage(owner_type& owner)
+        : db_entity_storage(owner.resource()) {}
+    db_entity_storage(const db_entity_storage&) = delete;
+    db_entity_storage& operator=(const db_entity_storage&) = delete;
+    db_entity_storage(db_entity_storage&&) noexcept = default;
     template <fixed_string name>
     auto& get() & {
         if constexpr (is_relation<name>()) {
@@ -448,7 +447,7 @@ public:
     }
     template <fixed_string name>
     const auto& get() const& {
-        return const_cast<db_entity*>(this)->get<name>();
+        return const_cast<db_entity_storage*>(this)->get<name>();
     }
     template <fixed_string name>
     const auto& get() const&& = delete;
@@ -493,19 +492,16 @@ public:
 
 private:
     template <typename>
-    friend struct detail::db_entity_access;
-    db_entity& sql_storage() noexcept {
-        return *this;
-    }
+    friend struct db_entity_access;
     column_storage columns_;
     relation_slots_type relation_slots_;
 };
 
-namespace detail {
 template <typename columns>
 inline constexpr bool sql_columns = []<std::size_t... indices>(std::index_sequence<indices...>) {
     return (is_db_column<std::tuple_element_t<indices, columns>>::value && ...);
 }(std::make_index_sequence<std::tuple_size_v<columns>>{});
+
 }  // namespace detail
 
 template <typename entity>
@@ -528,26 +524,6 @@ concept sql_projection = requires(const projection& value) {
     { value.resource() } -> std::same_as<std::pmr::memory_resource*>;
 };
 
-// Result schema without SQL table or relation metadata.
-template <typename... column_types>
-class db_projection final {
-    static_assert((is_db_column<column_types>::value && ...));
-    detail::entity_value_storage<column_types...> values_;
-
-public:
-    using db_projection_type = db_projection;
-    using columns_type = std::tuple<column_types...>;
-    explicit db_projection(std::pmr::memory_resource* resource = nullptr)
-        : values_(resource) {}
-    template <typename owner_type>
-        requires requires(owner_type& owner) {
-            { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
-        }
-    explicit db_projection(owner_type& owner)
-        : values_(owner.resource()) {}
-    RUVIA_DETAIL_ENTITY_VALUE_API(values_)
-};
-
 #define RUVIA_DB_COLUMN(name, value_type, ...) ::ruvia::db_column<::ruvia::fixed_string{#name}, value_type __VA_OPT__(, ) __VA_ARGS__>
 #define RUVIA_DB_JOIN_COLUMN(local, referenced) ::ruvia::db_join_column<::ruvia::fixed_string{#local}, ::ruvia::fixed_string{#referenced}>
 #define RUVIA_DB_JOIN_COLUMNS(...) ::ruvia::db_join_columns<__VA_ARGS__>
@@ -560,7 +536,7 @@ public:
 #define RUVIA_DB_ENTITY(name, table, ...)                                                                             \
     struct name final {                                                                                               \
     private:                                                                                                          \
-        using storage_type = ::ruvia::db_entity<::ruvia::fixed_string{table}, __VA_ARGS__>;                           \
+        using storage_type = ::ruvia::detail::db_entity_storage<::ruvia::fixed_string{table}, __VA_ARGS__>;           \
         storage_type entity_;                                                                                         \
         template <typename>                                                                                           \
         friend struct ::ruvia::detail::db_entity_access;                                                              \
@@ -597,24 +573,32 @@ public:
         }                                                                                                             \
         RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                                        \
     };
-#define RUVIA_DB_PROJECTION(name, ...)                                                   \
-    struct name final {                                                                  \
-    private:                                                                             \
-        using storage_type = ::ruvia::db_projection<__VA_ARGS__>;                        \
-        storage_type values_;                                                            \
-                                                                                         \
-    public:                                                                              \
-        using db_projection_type = name;                                                 \
-        using columns_type = typename storage_type::columns_type;                        \
-        explicit name(std::pmr::memory_resource* resource = nullptr)                     \
-            : values_(resource) {}                                                       \
-        template <typename owner_type>                                                   \
-            requires requires(owner_type& owner) {                                       \
-                { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>; \
-            }                                                                            \
-        explicit name(owner_type& owner)                                                 \
-            : values_(owner.resource()) {}                                               \
-        RUVIA_DETAIL_ENTITY_VALUE_API(values_)                                           \
+namespace detail {
+template <typename... columns>
+struct db_projection_storage final {
+    static_assert((::ruvia::is_db_column<columns>::value && ...));
+    using type = ::ruvia::detail::entity_value_storage<columns...>;
+};
+}  // namespace detail
+
+#define RUVIA_DB_PROJECTION(name, ...)                                                           \
+    struct name final {                                                                          \
+    private:                                                                                     \
+        using storage_type = typename ::ruvia::detail::db_projection_storage<__VA_ARGS__>::type; \
+        storage_type values_;                                                                    \
+                                                                                                 \
+    public:                                                                                      \
+        using db_projection_type = name;                                                         \
+        using columns_type = typename storage_type::columns_type;                                \
+        explicit name(std::pmr::memory_resource* resource = nullptr)                             \
+            : values_(resource) {}                                                               \
+        template <typename owner_type>                                                           \
+            requires requires(owner_type& owner) {                                               \
+                { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;         \
+            }                                                                                    \
+        explicit name(owner_type& owner)                                                         \
+            : values_(owner.resource()) {}                                                       \
+        RUVIA_DETAIL_ENTITY_VALUE_API(values_)                                                   \
     };
 
 }  // namespace ruvia

@@ -401,6 +401,7 @@ public:
 
 private:
     friend class http2_connection;
+    friend class detail::http2_connection_owner_endpoint;
     using value_type = std::variant<http2_informational_head_event, http2_request_head_event,
         http2_response_head_event, http2_message_body_chunk_event, http2_message_end_event,
         http2_tunnel_data_event, http2_tunnel_end_event, http2_stream_closed_event,

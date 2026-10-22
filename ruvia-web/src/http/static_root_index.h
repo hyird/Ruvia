@@ -329,10 +329,5 @@ public:
     // opens the indexed path itself and fails closed exactly as before.
     [[nodiscard]] static http_response_file_handle open_entry(
         const static_root& root, const static_root_entry_view& entry) noexcept;
-
-private:
-    [[nodiscard]] static std::unique_ptr<static_root, pmr_object_deleter<static_root>> construct(
-        std::pmr::memory_resource* object_resource, static_root::prepared_construction_type prepared);
 };
-
 }  // namespace ruvia::detail

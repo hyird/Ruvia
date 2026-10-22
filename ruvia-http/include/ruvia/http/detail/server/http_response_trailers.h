@@ -17,7 +17,7 @@
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_section.h"
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 

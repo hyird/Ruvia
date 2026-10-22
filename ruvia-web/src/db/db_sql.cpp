@@ -12,7 +12,7 @@
 #include <string>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/db/db_sql_scan.h"
 #include "ruvia/web/detail/db/db_utils.h"
 

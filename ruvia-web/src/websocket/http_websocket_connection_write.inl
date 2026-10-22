@@ -25,7 +25,7 @@
 namespace ruvia::detail {
 
 struct websocket_write_progress final {
-    connection_scanner::entry_type* entry_;
+    connection_scanner::entry* entry_;
 
     [[nodiscard]] std::size_t operator()(
         const std::error_code& ec, std::size_t bytes_transferred) const noexcept {

@@ -7,7 +7,7 @@
 
 #include <openssl/crypto.h>
 
-#include "ruvia/core/ip_address.h"
+#include "ruvia/core/socket.h"
 
 namespace ruvia::detail {
 
@@ -25,10 +25,10 @@ asio::ip::address normalize_listen_address(std::string_view address) {
         throw std::invalid_argument("listen address must not be empty");
     }
     const auto normalized = ruvia::parse_ip_address(address);
-    if ((normalized.index() != 0)) {
+    if (!normalized) {
         throw std::invalid_argument("listen address must be a numeric IP address");
     }
-    return std::get<0>(normalized);
+    return *normalized;
 }
 
 bool has_tls_configuration(const tls_config& config) noexcept {

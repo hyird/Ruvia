@@ -11,9 +11,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/web/db/db_client.h"
+#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_repository.h"
 
@@ -24,20 +24,20 @@
 
 namespace db_repository_test {
 using namespace ruvia;
-using entity_type = db_entity<"items", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::pmr::string>>;
-using nullable_entity_type = db_entity<"nullable_items",
+RUVIA_DB_ENTITY(entity_type, "items", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
+    db_column<"name", std::pmr::string>)
+RUVIA_DB_ENTITY(nullable_entity_type, "nullable_items",
     db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::pmr::string, db_column_options{.nullable_ = true}>>;
-using computed_entity_type = db_entity<"computed_items",
+    db_column<"name", std::pmr::string, db_column_options{.nullable_ = true}>)
+RUVIA_DB_ENTITY(computed_entity_type, "computed_items",
     db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
     db_column<"name", std::pmr::string>,
-    db_column<"name_length", std::int64_t, db_column_options{.generated_type_ = db_generated_type::stored}>>;
-using composite_entity_type = db_entity<"composite_items",
+    db_column<"name_length", std::int64_t, db_column_options{.generated_type_ = db_generated_type::stored}>)
+RUVIA_DB_ENTITY(composite_entity_type, "composite_items",
     db_column<"tenant_id", std::int64_t, db_column_options{.primary_key_ = true}>,
     db_column<"item_id", std::int64_t, db_column_options{.primary_key_ = true}>,
     db_column<"name", std::pmr::string>,
-    db_column<"revision", std::int64_t>>;
+    db_column<"revision", std::int64_t>)
 
 struct child;
 struct parent;
@@ -68,10 +68,10 @@ RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
     repository_runtime runtime;
     test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().get_repository<entity_type>();
+        auto repository = client.handle().repository<entity_type>();
         for (int i = 0; i < 8; ++i) {
             {
-                auto builder = repository.create_query_builder("i");
+                auto builder = repository.query_builder("i");
                 {
                     db_query expressions(&source);
                     auto label = expressions.call("concat", {expressions.column("name", "i"), expressions.value(std::string(200, 'x'))});
@@ -88,7 +88,7 @@ RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
                 RUVIA_CHECK(testing::throws_on([&] { (void)builder.get_many(); }));
             }
         }
-        auto partial = repository.create_query_builder();
+        auto partial = repository.query_builder();
         partial.select({{"name"}});
         auto result_value = partial.get_many();
         RUVIA_CHECK(testing::throws_on([&] { partial.select({{"missing"}}); }));
@@ -107,9 +107,9 @@ RUVIA_TEST(db_repository_consumes_selected_projection_rows_and_owns_selection) {
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().get_repository<entity_type>();
+        auto repository = connected.handle().repository<entity_type>();
         auto one_operation = [&] {
-            auto builder = repository.create_query_builder("i");
+            auto builder = repository.query_builder("i");
             db_query expressions;
             builder.select({{"label", expressions.column("name", "i")}});
             return builder.get_one<item_summary>();
@@ -122,7 +122,7 @@ RUVIA_TEST(db_repository_consumes_selected_projection_rows_and_owns_selection) {
             RUVIA_CHECK(!one->is_set<"rank">());
         }
         auto many_operation = [&] {
-            auto builder = repository.create_query_builder("i");
+            auto builder = repository.query_builder("i");
             db_query expressions;
             builder.select({{"label", expressions.column("name", "i")}});
             return builder.get_many<item_summary>();
@@ -137,7 +137,7 @@ RUVIA_TEST(db_repository_consumes_selected_projection_rows_and_owns_selection) {
                 RUVIA_CHECK(!row.is_set<"rank">());
             }
         }
-        auto builder = repository.create_query_builder("i");
+        auto builder = repository.query_builder("i");
         db_query expressions;
         builder.select({{"label", expressions.column("name", "i")}});
         const auto empty = co_await builder.get_one<item_summary>();
@@ -149,8 +149,8 @@ RUVIA_TEST(db_repository_update_builder_owns_complex_conditions_and_cross_table_
     repository_runtime runtime;
     test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().get_repository<entity_type>();
-        auto update = repository.create_update_builder("i");
+        auto repository = client.handle().repository<entity_type>();
+        auto update = repository.update_builder("i");
         {
             db_query x(&source);
             update.update_from<entity_type>("incoming")
@@ -169,31 +169,31 @@ RUVIA_TEST(db_repository_update_builder_owns_complex_conditions_and_cross_table_
         patch.set<"name">("next");
         const auto condition = x.binary(x.column("name"), db_binary_operator::is_distinct_from, x.value("next"));
         auto ordinary = repository.update(condition, patch);
-        auto returned = repository.create_update_builder().set(patch).where(condition).returning().get_many();
+        auto returned = repository.update_builder().set(patch).where(condition).returning().get_many();
         auto expression_update = repository.update(condition, {{"name", x.value("next")}});
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.update(db_expression{}, patch); }));
-        auto unbounded = repository.create_update_builder();
+        auto unbounded = repository.update_builder();
         unbounded.set(patch);
         RUVIA_CHECK(testing::throws_on([&] { (void)unbounded.get_query_and_parameters(); }));
-        auto predicate = repository.create_update_builder("target");
+        auto predicate = repository.update_builder("target");
         predicate.set(patch).where(entity_type::column<"id">() == 7);
         const auto predicate_statement = predicate.get_query_and_parameters();
         RUVIA_CHECK(predicate_statement.sql().find("\"target\".\"id\"") != std::string_view::npos);
-        auto derived = repository.create_update_builder("i");
+        auto derived = repository.update_builder("i");
         {
-            auto source_query = repository.create_query_builder("s");
+            auto source_query = repository.query_builder("s");
             source_query.where(entity_type::column<"id">() > 3);
             derived.update_from(source_query, "incoming").set("name", x.column("name", "incoming")).where(x.binary(x.column("id", "i"), db_binary_operator::equal, x.column("id", "incoming")));
         }
         const auto derived_statement = derived.get_query_and_parameters();
         RUVIA_CHECK(derived_statement.sql().find("FROM (SELECT \"s\".\"id\", \"s\".\"name\" FROM \"items\" AS \"s\" WHERE (\"s\".\"id\" > $1)) AS \"incoming\"") != std::string_view::npos);
-        auto inserted = repository.create_insert_builder(patch);
+        auto inserted = repository.insert_builder(patch);
         inserted.returning();
         const auto insert_statement = inserted.get_query_and_parameters();
         RUVIA_CHECK_EQ(insert_statement.sql(), "INSERT INTO \"items\" (\"name\") VALUES ($1) RETURNING \"items\".\"id\", \"items\".\"name\"");
-        auto removed = repository.create_delete_builder("old");
+        auto removed = repository.delete_builder("old");
         removed.where(entity_type::column<"id">() == 9).returning();
-        auto outer = repository.create_query_builder("removed");
+        auto outer = repository.query_builder("removed");
         outer.with("removed", removed).from_cte("removed");
         const auto deletion = outer.get_query_and_parameters();
         RUVIA_CHECK(deletion.sql().find("WITH \"removed\" AS (DELETE FROM \"items\" AS \"old\" WHERE (\"old\".\"id\" = $1) RETURNING") == 0);
@@ -201,35 +201,36 @@ RUVIA_TEST(db_repository_update_builder_owns_complex_conditions_and_cross_table_
     });
 }
 
+RUVIA_DB_ENTITY(archive_type, "archive", db_column<"id", std::int64_t>, db_column<"name", std::pmr::string>)
+
 RUVIA_TEST(db_repository_write_ctes_claim_and_persist_in_one_statement) {
-    using archive_type = db_entity<"archive", db_column<"id", std::int64_t>, db_column<"name", std::pmr::string>>;
     repository_runtime runtime;
     test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().get_repository<entity_type>();
-        auto archive = client.handle().get_repository<archive_type>();
+        auto repository = client.handle().repository<entity_type>();
+        auto archive = client.handle().repository<archive_type>();
         for (int i = 0; i < 8; ++i) {
             {
-                auto insert = archive.create_insert_builder();
+                auto insert = archive.insert_builder();
                 {
                     db_query x(&source);
-                    auto candidates = repository.create_query_builder("c");
+                    auto candidates = repository.query_builder("c");
                     candidates.where(entity_type::column<"name">() == "pending").order_by("id").limit(10).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
-                    auto claim = repository.create_update_builder("t");
+                    auto claim = repository.update_builder("t");
                     claim.update_from_cte("candidates", "c")
                         .set("name", x.value(std::string(300, 'x')))
                         .where(x.binary(x.column("id", "t"), db_binary_operator::equal, x.column("id", "c")))
                         .returning();
-                    auto claimed = repository.create_query_builder("claimed");
+                    auto claimed = repository.query_builder("claimed");
                     claimed.from_cte("claimed");
                     insert.with("candidates", candidates).with("claimed", claim).insert_from({"id", "name"}, claimed).returning();
-                    auto read = repository.create_query_builder("result");
+                    auto read = repository.query_builder("result");
                     read.with("candidates", candidates).with("claimed", claim).from_cte("claimed");
                     RUVIA_CHECK(testing::throws_on([&] { (void)read.get_many_and_count(); }));
                     RUVIA_CHECK(testing::throws_on([&] { (void)read.get_count(); }));
                     RUVIA_CHECK(testing::throws_on([&] { (void)read.subquery(x); }));
                     auto result_value = read.get_many();
-                    auto invalid = archive.create_insert_builder();
+                    auto invalid = archive.insert_builder();
                     RUVIA_CHECK(testing::throws_on([&] { invalid.insert_from({"id"}, claimed); }));
                     RUVIA_CHECK(testing::throws_on([&] { invalid.insert_from({"id", "unknown"}, claimed); }));
                 }
@@ -253,17 +254,17 @@ RUVIA_TEST(db_repository_write_builder_cancelled_operations_release_input_snapsh
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         stop_source stop;
         stop.request_stop();
-        auto repository = client.with_options({.stop_token_ = stop.token()}).get_repository<entity_type>();
+        auto repository = client.handle({.stop_token_ = stop.token()}).repository<entity_type>();
         for (int i = 0; i < 8; ++i) {
             bool cancelled = false;
             auto exercise = [&]() -> task<void> {
                 auto operation = [&] {
                     db_query x(&input);
-                    auto update = repository.create_update_builder();
+                    auto update = repository.update_builder();
                     update.set("name", x.value(std::string(400, 'v')))
                         .where(x.binary(x.column("id"), db_binary_operator::is_distinct_from, x.value(1)))
                         .returning();
-                    auto outer = repository.create_query_builder("updated");
+                    auto outer = repository.query_builder("updated");
                     outer.with("updated", update).from_cte("updated");
                     return outer.get_many();
                 }();
@@ -284,16 +285,16 @@ RUVIA_TEST(db_repository_write_builder_cancelled_operations_release_input_snapsh
 RUVIA_TEST(db_repository_composes_entity_joins_lateral_cte_and_grouped_queries) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().get_repository<entity_type>();
-        auto builder = repository.create_query_builder("i");
+        auto repository = client.handle().repository<entity_type>();
+        auto builder = repository.query_builder("i");
         {
             db_query x;
-            auto source_value = repository.create_query_builder("s");
+            auto source_value = repository.query_builder("s");
             source_value.where(entity_type::column<"id">() > 4);
             source_value.select({{"id"}});
             builder.with("recent", source_value, {.materialization_ = db_materialization::materialized});
             builder.join_cte(db_join_type::inner, "recent", "r", x.binary(x.column("id", "i"), db_binary_operator::equal, x.column("id", "r")));
-            auto correlated = repository.create_query_builder("c");
+            auto correlated = repository.query_builder("c");
             correlated.where(x.binary(x.column("id", "c"), db_binary_operator::equal, x.column("id", "i"))).limit(1);
             builder.join(db_join_type::left, correlated, "l", x.value(true), {.lateral_ = true});
             builder.join<entity_type>(db_join_type::cross, "other");
@@ -317,7 +318,7 @@ RUVIA_TEST(db_repository_composes_entity_joins_lateral_cte_and_grouped_queries) 
 RUVIA_TEST(db_repository_grouped_projection_reuses_imported_parameters) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto builder = client.handle().get_repository<entity_type>().create_query_builder("i");
+        auto builder = client.handle().repository<entity_type>().query_builder("i");
         {
             db_query x;
             const auto bucket = x.binary(x.column("id", "i"), db_binary_operator::add, x.value(3));
@@ -335,12 +336,12 @@ RUVIA_TEST(db_repository_expression_writes_own_sources_and_validate_returning) {
     repository_runtime runtime;
     test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().get_repository<entity_type>();
+        auto repository = client.handle().repository<entity_type>();
         entity_type entity;
         entity.set<"id">(8);
         entity.set<"name">("initial");
         RUVIA_CHECK(testing::throws_on([&] {
-            auto bad = repository.create_insert_builder(entity);
+            auto bad = repository.insert_builder(entity);
             bad.returning();
             (void)bad.get_many<item_summary>();
         }));
@@ -351,17 +352,17 @@ RUVIA_TEST(db_repository_expression_writes_own_sources_and_validate_returning) {
                     db_query x(&source);
                     const std::array changes{db_assignment{"name", x.call("concat", {x.column("name"), x.value(std::string(400, 'z'))})}};
                     const std::array fields_value{db_selection{"id"}, db_selection{"label", x.call("upper", {x.column("name")})}};
-                    auto builder = repository.create_update_builder();
+                    auto builder = repository.update_builder();
                     builder.set(changes).where(where).returning(fields_value);
                     return builder.get_many<item_summary>();
                 }();
                 RUVIA_CHECK_EQ(source.live_allocations(), std::size_t{0});
-                auto insert = repository.create_insert_builder(entity).returning().get_many();
-                auto erase = repository.create_delete_builder().where(where).returning().get_many();
-                auto plain_update = repository.create_update_builder().set(entity).where(where).returning().get_many();
+                auto insert = repository.insert_builder(entity).returning().get_many();
+                auto erase = repository.delete_builder().where(where).returning().get_many();
+                auto plain_update = repository.update_builder().set(entity).where(where).returning().get_many();
                 db_query x;
                 db_upsert_options options{.conflict_paths_ = {"id"}, .skip_update_if_no_values_changed_ = true, .update_expressions_ = {{"name", x.call("concat", {x.excluded("name"), x.value("suffix")})}}, .update_where_ = x.binary(x.column("id", "items"), db_binary_operator::greater, x.value(0))};
-                auto upsert = repository.create_insert_builder(entity).on_conflict(options).returning().get_many();
+                auto upsert = repository.insert_builder(entity).on_conflict(options).returning().get_many();
                 auto direct_result = repository.update(where, {{"name", x.value("replacement")}});
                 RUVIA_CHECK(testing::throws_on([&] { (void)repository.update(where, {{"missing", x.value(1)}}); }));
                 RUVIA_CHECK(testing::throws_on([&] { (void)repository.update(where, {{"id", x.value(1)}, {"id", x.value(2)}}); }));
@@ -378,8 +379,8 @@ RUVIA_TEST(db_repository_builder_binds_entity_predicates_to_join_alias) {
     repository_runtime runtime;
     const auto config = database_config();
     test::with_connected_db_client(runtime.attachment_, config, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().get_repository<entity_type>();
-        auto builder = repository.create_query_builder("i");
+        auto repository = client.handle().repository<entity_type>();
+        auto builder = repository.query_builder("i");
         builder.where(entity_type::column<"id">() >= 7).and_where(entity_type::column<"name">() == std::string("temporary"));
         builder.order_by("id").limit(3);
         const auto statement = builder.get_query_and_parameters();
@@ -396,7 +397,7 @@ RUVIA_TEST(db_repository_builder_binds_entity_predicates_to_join_alias) {
 RUVIA_TEST(db_repository_rejects_unbounded_writes_and_missing_primary_key) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().get_repository<entity_type>();
+        auto repository = client.handle().repository<entity_type>();
         entity_type changes;
         changes.set<"name">("new");
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.update({}, changes); }));
@@ -418,7 +419,7 @@ RUVIA_TEST(db_repository_rejects_unbounded_writes_and_missing_primary_key) {
 RUVIA_TEST(db_repository_rejects_writes_that_only_target_computed_columns) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().get_repository<computed_entity_type>();
+        auto repository = client.handle().repository<computed_entity_type>();
         computed_entity_type changes;
         changes.set<"name_length">(3);
         auto predicate = computed_entity_type::column<"id">() == 1;
@@ -437,6 +438,8 @@ RUVIA_TEST(db_repository_rejects_writes_that_only_target_computed_columns) {
     });
 }
 
+RUVIA_DB_ENTITY(key_only_type, "keys", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>)
+
 RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_storage) {
     const std::array drivers{
 #ifdef RUVIA_ENABLE_POSTGRESQL
@@ -450,7 +453,7 @@ RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_stora
         repository_runtime runtime;
         const db_config config{.driver_ = driver};
         test::with_connected_db_client(runtime.attachment_, config, [&](db_client& client) -> task<void> {
-            auto repository = client.handle().get_repository<entity_type>();
+            auto repository = client.handle().repository<entity_type>();
             entity_type input;
             input.set<"id">(1);
             input.set<"name">(std::string(400, 'n'));
@@ -466,8 +469,7 @@ RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_stora
                     RUVIA_CHECK(testing::throws_on([&] { (void)repository.upsert(input, {.any_unique_key_ = true, .index_predicate_ = entity_type::column<"name">().is_not_null()}); }));
                 }
             }
-            using key_only_type = db_entity<"keys", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>>;
-            auto keys = client.handle().get_repository<key_only_type>();
+            auto keys = client.handle().repository<key_only_type>();
             key_only_type key;
             key.set<"id">(1);
             {
@@ -492,8 +494,8 @@ RUVIA_TEST(db_repository_builder_orders_entity_fields_and_owns_predicates) {
     repository_runtime runtime;
     const auto config = database_config();
     test::with_connected_db_client(runtime.attachment_, config, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().get_repository<entity_type>();
-        auto builder = repository.create_query_builder("i");
+        auto repository = client.handle().repository<entity_type>();
+        auto builder = repository.query_builder("i");
         builder.where(entity_type::column<"id">() >= 1)
             .and_where(entity_type::column<"name">().is_not_null())
             .or_where(entity_type::column<"id">() == 2)
@@ -517,7 +519,7 @@ RUVIA_TEST(db_repository_builder_orders_entity_fields_and_owns_predicates) {
         const auto after_rejected_order = builder.get_query_and_parameters();
         RUVIA_CHECK_EQ(after_rejected_order.sql(), sql);
 
-        auto locked = repository.create_query_builder("i");
+        auto locked = repository.query_builder("i");
         locked.set_lock({.mode_ = db_row_lock::share, .nowait_ = true, .tables_ = {"i"}});
         const auto lock_statement = locked.get_query_and_parameters();
         if (config.driver_ == db_driver::postgresql) {
@@ -525,7 +527,7 @@ RUVIA_TEST(db_repository_builder_orders_entity_fields_and_owns_predicates) {
         } else {
             RUVIA_CHECK(lock_statement.sql().find("LOCK IN SHARE MODE") != std::string_view::npos);
         }
-        auto relation = client.handle().get_repository<parent>().create_query_builder("p");
+        auto relation = client.handle().repository<parent>().query_builder("p");
         relation.inner_join_and_select("children", "c");
         const auto relation_statement = relation.get_query_and_parameters();
         RUVIA_CHECK(relation_statement.sql().find("INNER JOIN") != std::string_view::npos);
@@ -546,7 +548,7 @@ RUVIA_TEST(db_repository_builder_orders_entity_fields_and_owns_predicates) {
 RUVIA_TEST(db_repository_write_inputs_cover_default_sparse_nullable_and_composite_keys) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().get_repository<entity_type>();
+        auto repository = client.handle().repository<entity_type>();
 
         // A single entity with no explicit values uses DEFAULT VALUES. Bulk
         // default-only input is rejected because there is no row width to encode.
@@ -563,7 +565,7 @@ RUVIA_TEST(db_repository_write_inputs_cover_default_sparse_nullable_and_composit
             (void)repository.insert(std::span<const entity_type>(defaults));
         }));
 
-        auto nullable_repository = client.handle().get_repository<nullable_entity_type>();
+        auto nullable_repository = client.handle().repository<nullable_entity_type>();
         nullable_entity_type nullable;
         nullable.set<"id">(7);
         nullable.set_null<"name">();
@@ -577,7 +579,7 @@ RUVIA_TEST(db_repository_write_inputs_cover_default_sparse_nullable_and_composit
         (void)decrement;
         (void)deleted;
 
-        auto composite = client.handle().get_repository<composite_entity_type>();
+        auto composite = client.handle().repository<composite_entity_type>();
         composite_entity_type key;
         key.set<"tenant_id">(10);
         key.set<"item_id">(20);
@@ -601,7 +603,7 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
     for (const auto driver : drivers) {
         repository_runtime runtime;
         test::with_connected_db_client(runtime.attachment_, db_config{.driver_ = driver}, [&](db_client& client) -> task<void> {
-            auto repository = client.handle().get_repository<entity_type>();
+            auto repository = client.handle().repository<entity_type>();
             entity_type input;
             input.set<"id">(1);
             input.set<"name">("Ada");
@@ -646,24 +648,24 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
 }
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
-RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete_using_and_read_only_columns) {
-    using role_entity = db_entity<"roles",
-        db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-        db_column<"name", std::pmr::string>>;
-    using user_role_entity = db_entity<"user_roles",
-        db_column<"user_id", std::int64_t, db_column_options{.primary_key_ = true}>,
-        db_column<"role_id", std::int64_t, db_column_options{.primary_key_ = true}>>;
-    using trigger_populated_entity = db_entity<"devices",
-        db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-        db_column<"name", std::pmr::string, db_column_options{.nullable_ = true}>,
-        db_column<"revision", std::int64_t>,
-        db_column<"protocol_address", std::pmr::string, db_column_options{.read_only_ = true}>,
-        db_column<"updated_at", std::pmr::string>>;
+RUVIA_DB_ENTITY(role_entity, "roles",
+    db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
+    db_column<"name", std::pmr::string>)
+RUVIA_DB_ENTITY(user_role_entity, "user_roles",
+    db_column<"user_id", std::int64_t, db_column_options{.primary_key_ = true}>,
+    db_column<"role_id", std::int64_t, db_column_options{.primary_key_ = true}>)
+RUVIA_DB_ENTITY(trigger_populated_entity, "devices",
+    db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
+    db_column<"name", std::pmr::string, db_column_options{.nullable_ = true}>,
+    db_column<"revision", std::int64_t>,
+    db_column<"protocol_address", std::pmr::string, db_column_options{.read_only_ = true}>,
+    db_column<"updated_at", std::pmr::string>)
 
+RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete_using_and_read_only_columns) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto roles = client.handle().get_repository<role_entity>();
-        auto query = roles.create_query_builder("r");
+        auto roles = client.handle().repository<role_entity>();
+        auto query = roles.query_builder("r");
         query.join<user_role_entity>(db_join_type::inner, "ur", user_role_entity::column<"role_id">() == role_entity::column<"id">())
             .where(user_role_entity::column<"user_id">("ur") == 42)
             .distinct_on({"id"})
@@ -675,7 +677,7 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
             "INNER JOIN \"user_roles\" AS \"ur\" ON (\"ur\".\"role_id\" = \"r\".\"id\") "
             "WHERE (\"ur\".\"user_id\" = $1) ORDER BY \"r\".\"id\" ASC, \"ur\".\"role_id\" DESC");
 
-        auto clean_grouped = roles.create_query_builder("r");
+        auto clean_grouped = roles.query_builder("r");
         clean_grouped.select({{"id"}, role_entity::column<"name">().coalesce("fallback", "label")})
             .group_by({"id"})
             .add_group_by(role_entity::column<"name">())
@@ -684,7 +686,7 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
         const auto grouped_sql = clean_grouped.get_query_and_parameters();
         RUVIA_CHECK(grouped_sql.sql().find("GROUP BY \"r\".\"id\", \"r\".\"name\" HAVING ((\"r\".\"id\" > $2) AND EXISTS (SELECT") != std::string_view::npos);
 
-        auto devices = client.handle().get_repository<trigger_populated_entity>();
+        auto devices = client.handle().repository<trigger_populated_entity>();
         trigger_populated_entity dev;
         dev.set<"id">(1);
         dev.set<"name">("sensor-1");
@@ -692,7 +694,7 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
         dev.set<"protocol_address">("ignored-by-orm-writes");
         dev.set<"updated_at">("2026-01-01T00:00:00Z");
 
-        auto insert_dev = devices.create_insert_builder(dev);
+        auto insert_dev = devices.insert_builder(dev);
         insert_dev.on_conflict({.conflict_paths_ = {"id"}, .skip_update_if_no_values_changed_ = true}).returning();
         const auto insert_dev_sql = insert_dev.get_query_and_parameters();
         RUVIA_CHECK(insert_dev_sql.sql().find("protocol_address\") VALUES") == std::string_view::npos);
@@ -702,13 +704,13 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
         (void)one_inserted;
 
         RUVIA_CHECK(testing::throws_on([&] {
-            auto bad = devices.create_update_builder();
+            auto bad = devices.update_builder();
             bad.set("protocol_address", "x");
         }));
 
         db_query incoming;
         incoming.values({incoming.value(10), incoming.value("edge-a"), incoming.value(1), incoming.value("now")});
-        auto from_cte = devices.create_query_builder("inc");
+        auto from_cte = devices.query_builder("inc");
         from_cte.from_cte("incoming")
             .select({
                 {"id", incoming.column("id", "inc")},
@@ -716,7 +718,7 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
                 {"revision", incoming.column("revision", "inc")},
                 {"updated_at", incoming.column("updated_at", "inc")},
             });
-        auto pipeline = devices.create_insert_builder();
+        auto pipeline = devices.insert_builder();
         pipeline.with("incoming", incoming, {.columns_ = {"id", "name", "revision", "updated_at"}})
             .insert_from({"id", "name", "revision", "updated_at"}, from_cte)
             .on_conflict({
@@ -731,7 +733,7 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
         RUVIA_CHECK(pipeline_sql.sql().find("ON CONFLICT (\"id\") DO UPDATE SET") != std::string_view::npos);
         RUVIA_CHECK(pipeline_sql.sql().find("\"revision\" = (\"devices\".\"revision\" + $5)") != std::string_view::npos);
 
-        auto update_builder = devices.create_update_builder("d");
+        auto update_builder = devices.update_builder("d");
         update_builder.set("name", "renamed")
             .set_null("name")
             .increment("revision", 2)
@@ -746,7 +748,7 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
             "FROM \"roles\" AS \"r\" INNER JOIN \"user_roles\" AS \"ur\" ON (\"ur\".\"role_id\" = \"r\".\"id\") "
             "WHERE (\"d\".\"id\" = \"ur\".\"user_id\") RETURNING \"d\".\"id\" AS \"id\"");
 
-        auto delete_builder = devices.create_delete_builder("d");
+        auto delete_builder = devices.delete_builder("d");
         delete_builder.delete_using<role_entity>("r")
             .join_cte(db_join_type::inner, "expired", "e", role_entity::column<"id">("r") == role_entity::column<"id">("e"))
             .where(trigger_populated_entity::column<"id">() == role_entity::column<"id">("r"))
@@ -756,7 +758,7 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
             "DELETE FROM \"devices\" AS \"d\" USING \"roles\" AS \"r\" INNER JOIN \"expired\" AS \"e\" ON (\"r\".\"id\" = \"e\".\"id\") "
             "WHERE (\"d\".\"id\" = \"r\".\"id\") RETURNING \"d\".\"id\" AS \"id\"");
 
-        auto ret_one_builder = devices.create_update_builder();
+        auto ret_one_builder = devices.update_builder();
         ret_one_builder.where(trigger_populated_entity::column<"id">() == 1)
             .set({
                 trigger_populated_entity::column<"name">() = "next",
@@ -770,20 +772,20 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
     });
 }
 
-RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_joins_and_raw_queries) {
-    using soft_entity = db_entity<"articles",
-        db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-        db_column<"title", std::pmr::string>,
-        db_column<"views", std::int64_t>,
-        db_column<"revision", std::int64_t, db_column_options{.version_ = true}>,
-        db_column<"updated_at", std::pmr::string, db_column_options{.update_date_ = true}>,
-        db_column<"deleted_at", std::pmr::string, db_column_options{.delete_date_ = true}>>;
+RUVIA_DB_ENTITY(soft_entity, "articles",
+    db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
+    db_column<"title", std::pmr::string>,
+    db_column<"views", std::int64_t>,
+    db_column<"revision", std::int64_t, db_column_options{.version_ = true}>,
+    db_column<"updated_at", std::pmr::string, db_column_options{.update_date_ = true}>,
+    db_column<"deleted_at", std::pmr::string, db_column_options{.delete_date_ = true}>)
 
+RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_joins_and_raw_queries) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repo = client.handle().get_repository<soft_entity>();
+        auto repo = client.handle().repository<soft_entity>();
 
-        auto active_qb = repo.create_query_builder("a");
+        auto active_qb = repo.query_builder("a");
         active_qb.select({"id", "title"})
             .add_select("views")
             .add_select(db_expr::count(), "total_count")
@@ -804,8 +806,8 @@ RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_jo
         const auto with_deleted_sql = active_qb.get_query_and_parameters();
         RUVIA_CHECK(with_deleted_sql.sql().find("deleted_at") == std::string_view::npos);
 
-        auto parents = client.handle().get_repository<parent>();
-        auto rel_join = parents.create_query_builder("p");
+        auto parents = client.handle().repository<parent>();
+        auto rel_join = parents.query_builder("p");
         rel_join.left_join("children", "c", child::column<"id">("c") > 0)
             .add_select(db_expr::count(child::column<"id">("c")), "child_count")
             .group_by({"id"});
@@ -817,7 +819,7 @@ RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_jo
 
         db_values_builder incoming({"id", "title", "views"});
         incoming.row({db_expr::value(1), db_expr::value("Hello"), db_expr::value(10)});
-        auto values_select = repo.create_query_builder("v");
+        auto values_select = repo.query_builder("v");
         values_select.with_deleted()
             .with("incoming", incoming, db_materialization::materialized)
             .from_cte("incoming")
@@ -829,14 +831,14 @@ RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_jo
         item.set<"id">(1);
         item.set<"title">("Ruvia ORM");
         item.set<"views">(100);
-        auto ins_ignore = repo.create_insert_builder();
-        ins_ignore.values(item).or_ignore().returning({"id"});
+        auto ins_ignore = repo.insert_builder();
+        ins_ignore.values(item).on_conflict({.do_nothing_ = true}).returning({"id"});
         const auto ins_ignore_sql = ins_ignore.get_query_and_parameters();
         RUVIA_CHECK_EQ(ins_ignore_sql.sql(),
             "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING \"articles\".\"id\" AS \"id\"");
 
-        auto ins_update = repo.create_insert_builder();
-        ins_update.values(item).or_update({"title", "views"}, {"id"}).returning({"id"});
+        auto ins_update = repo.insert_builder();
+        ins_update.values(item).on_conflict({.conflict_paths_ = {"id"}, .update_columns_ = {"title", "views"}}).returning({"id"});
         const auto ins_update_sql = ins_update.get_query_and_parameters();
         RUVIA_CHECK_EQ(ins_update_sql.sql(),
             "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT (\"id\") DO UPDATE SET \"title\" = excluded.\"title\", \"views\" = excluded.\"views\" RETURNING \"articles\".\"id\" AS \"id\"");
@@ -957,7 +959,7 @@ RUVIA_TEST(db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_val
 
 namespace db_repository_array_test {
 
-using array_entity = ruvia::db_entity<"array_records", ruvia::db_column<"values", std::pmr::vector<int>>>;
+RUVIA_DB_ENTITY(array_entity, "array_records", ruvia::db_column<"values", std::pmr::vector<int>>)
 
 struct array_case final {
     std::string_view text_;
@@ -1007,7 +1009,7 @@ RUVIA_TEST(db_repository_decodes_postgresql_array_bounds_in_element_order) {
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().get_repository<array_entity>();
+        auto repository = connected.handle().repository<array_entity>();
         for (const auto& value : valid) {
             bool decoded = false;
             try {

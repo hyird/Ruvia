@@ -186,7 +186,7 @@ RUVIA_TEST(http1_file_representations_are_not_runtime_compressed) {
     }
     resident_root = std::make_unique<ruvia::static_root>(file_dir(),
         ruvia::static_root_options{
-            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::all},
+            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
             .resident_max_bytes_ = 16 * 1024,
             .resident_budget_bytes_ = 16 * 1024,
         });

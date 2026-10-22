@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/redis/redis_entity_codec.h"
 

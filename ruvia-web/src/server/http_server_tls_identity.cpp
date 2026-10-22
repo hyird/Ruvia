@@ -8,14 +8,13 @@
 #include <utility>
 #include <vector>
 
-#include <asio/system_error.hpp>
+#include <asio/ssl/verify_mode.hpp>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 
-#include "server/http_server_tls_verify.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_file_paths.h"
 #include "tls/tls_host.h"
@@ -23,8 +22,13 @@
 namespace ruvia::detail {
 namespace {
 
-[[noreturn]] void throw_tls_identity_error(const tls_credential_error& error) {
-    throw asio::system_error(error.error_, error.operation_);
+[[nodiscard]] asio::ssl::verify_mode http_server_tls_verify_mode(
+    tls_client_certificate_requirement requirement) noexcept {
+    auto mode = asio::ssl::verify_peer;
+    if (requirement == tls_client_certificate_requirement::required) {
+        mode |= asio::ssl::verify_fail_if_no_peer_cert;
+    }
+    return mode;
 }
 
 // A TLS file name in UTF-8, the encoding OpenSSL's file BIOs decode (on
@@ -66,27 +70,17 @@ struct tls_identity_files final {
 }
 
 [[nodiscard]] tls_certificate load_tls_certificate(const tls_identity_files& files) {
-    tls_credential_error error;
-    auto certificate = tls_certificate::load(open_ssl_file_name(files.certificate_chain_file_),
-        open_ssl_file_name(files.private_key_file_), files.private_key_password_, error);
-    if (!certificate) {
-        throw_tls_identity_error(error);
-    }
-    return std::move(*certificate);
+    return tls_certificate::load(open_ssl_file_name(files.certificate_chain_file_),
+        open_ssl_file_name(files.private_key_file_), files.private_key_password_);
 }
 
 [[nodiscard]] tls_trust_store load_tls_client_ca(const tls_file_name& verify_file) {
-    tls_credential_error error;
-    auto store = tls_trust_store::load_file(open_ssl_file_name(verify_file), error);
-    if (!store) {
-        throw_tls_identity_error(error);
-    }
-    return std::move(*store);
+    return tls_trust_store::load_file(open_ssl_file_name(verify_file));
 }
 
 }  // namespace
 
-http_server_listener_definition::tls_type load_http_server_tls(
+http_server_listener_definition::tls load_http_server_tls(
     const tls_config& config, std::pmr::memory_resource* resource) {
     auto* const target_resource = pmr_resource_or_default(resource);
     // Every setting is validated before any file is read.
@@ -121,9 +115,9 @@ http_server_listener_definition::tls_type load_http_server_tls(
         }
     }
 
-    http_server_listener_definition::tls_type tls(load_tls_certificate(primary), target_resource);
+    http_server_listener_definition::tls tls(load_tls_certificate(primary), target_resource);
     if (verify_file.has_value()) {
-        tls.client_certificates_.emplace(http_server_listener_definition::tls_client_certificate_policy_type{
+        tls.client_certificates_.emplace(http_server_listener_definition::tls_client_certificate_policy{
             .requirement_ = client.requirement_,
             .client_ca_ = load_tls_client_ca(*verify_file),
         });
@@ -136,14 +130,12 @@ http_server_listener_definition::tls_type load_http_server_tls(
 }
 
 void configure_http_server_tls_identity(SSL_CTX* context_value, const tls_certificate& certificate,
-    const std::optional<http_server_listener_definition::tls_client_certificate_policy_type>&
+    const std::optional<http_server_listener_definition::tls_client_certificate_policy>&
         client_certificates) {
     if (context_value == nullptr) {
         throw std::invalid_argument("TLS context must not be null");
     }
-    if (tls_credential_error error; !certificate.install(*context_value, error)) {
-        throw_tls_identity_error(error);
-    }
+    certificate.install(*context_value);
 
     if (!client_certificates.has_value()) {
         return;
@@ -155,7 +147,7 @@ void configure_http_server_tls_identity(SSL_CTX* context_value, const tls_certif
     ::ERR_clear_error();
     if (::SSL_CTX_set_session_id_context(
             context_value, session_id_context, sizeof(session_id_context)) != 1) {
-        throw_tls_identity_error(take_tls_credential_error("set_session_id_context"));
+        throw_tls_credential_error("set_session_id_context");
     }
     SSL_CTX_set_verify(context_value,
         static_cast<int>(http_server_tls_verify_mode(client_certificates->requirement_)), nullptr);

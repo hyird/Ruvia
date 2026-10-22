@@ -5,8 +5,8 @@
 #include <string_view>
 #include <system_error>
 
-#include "ruvia/core/error_text.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/failure_report.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {
 namespace {

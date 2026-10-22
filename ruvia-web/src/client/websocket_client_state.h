@@ -30,7 +30,9 @@
 #include "websocket/http_websocket_liveness.h"
 
 namespace ruvia::detail {
-
+constexpr std::size_t websocket_client_handshake_nonce_bytes = 16;
+constexpr std::size_t websocket_client_handshake_request_buffer_extra_bytes = 1024;
+constexpr std::size_t websocket_client_transport_buffer_bytes = std::size_t{16} * 1024;
 // One WebSocket connection over HTTP/1.1 or HTTP/2, retired through the
 // shared client_lifecycle. The state is its own lifecycle backend: connect()
 // establishes the transport, performs the opening handshake and starts the

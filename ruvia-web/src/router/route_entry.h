@@ -104,7 +104,7 @@ public:
     }
 
 private:
-    friend class router_impl;
+    friend class router;
 
     std::size_t index_;
     std::size_t controller_;

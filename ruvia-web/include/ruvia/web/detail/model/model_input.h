@@ -4,9 +4,12 @@
 #include <memory_resource>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/model/traits.h"
-#include "ruvia/web/request_fields.h"
+
+namespace ruvia {
+class request_name_value_list;
+}  // namespace ruvia
 
 namespace ruvia::detail {
 

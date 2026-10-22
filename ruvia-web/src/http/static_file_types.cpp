@@ -68,7 +68,7 @@ bool is_valid_static_file_extension(std::string_view extension) noexcept {
 }
 
 bool file_type_allowed(std::string_view extension, const static_root_config_storage& config) {
-    if (config.file_type_kind_ == static_file_type_policy::kind_type::all) {
+    if (config.file_type_kind_ == static_file_type_policy::kind::all) {
         return true;
     }
 
@@ -76,7 +76,7 @@ bool file_type_allowed(std::string_view extension, const static_root_config_stor
         return false;
     }
     const auto value = extension.substr(1);
-    if (config.file_type_kind_ == static_file_type_policy::kind_type::defaults) {
+    if (config.file_type_kind_ == static_file_type_policy::kind::defaults) {
         return std::ranges::binary_search(default_static_file_types, value);
     }
     return std::ranges::binary_search(config.file_type_extensions_, value);

@@ -67,7 +67,10 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
     RUVIA_CHECK(throws_invalid([] { ruvia::app().listen({}); }));
     RUVIA_CHECK(throws_invalid([] { ruvia::app().listen({.address_ = {}, .http_ = 8080}); }));
     RUVIA_CHECK(throws_invalid([] { ruvia::app().listen({.address_ = "localhost", .http_ = 8080}); }));
-    RUVIA_CHECK(throws_invalid([] { ruvia::app().listen({.address_ = std::string("127.0.0.1\0bad", 13), .http_ = 8080}); }));
+    RUVIA_CHECK(throws_invalid([] {
+        const std::string bad_address("127.0.0.1\0bad", 13);
+        ruvia::app().listen({.address_ = bad_address, .http_ = 8080});
+    }));
     RUVIA_CHECK(throws_invalid([] { ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 0}); }));
     RUVIA_CHECK(throws_invalid(
         [] { ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 8080, .https_ = 8080}); }));
@@ -160,7 +163,7 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
     {
         auto state_value = std::make_shared<int>(1);
         access_state = state_value;
-        ruvia::access_log_callback_type callback_value(
+        ruvia::access_log_callback callback_value(
             [state_value](const ruvia::access_log_record&) noexcept { (void)state_value; });
         // Copy ownership is the behavior under test.
         const auto copy = callback_value;  // NOLINT(performance-unnecessary-copy-initialization)
@@ -174,7 +177,7 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
     {
         auto state_value = std::make_shared<int>(1);
         failure_state = state_value;
-        ruvia::connection_failure_callback_type callback_value(
+        ruvia::connection_failure_callback callback_value(
             [state_value](const ruvia::connection_failure_record&) noexcept { (void)state_value; });
         state_value.reset();
         RUVIA_CHECK(!failure_state.expired());
@@ -185,7 +188,7 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
     {
         auto state_value = std::make_shared<int>(1);
         error_state = state_value;
-        ruvia::http_error_handler_type callback_value(
+        ruvia::http_error_handler callback_value(
             [state_value](ruvia::context&, ruvia::http_error_info) -> ruvia::task<ruvia::http_response> {
                 (void)state_value;
                 co_return ruvia::http_response{};
@@ -199,7 +202,7 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
     {
         auto state_value = std::make_shared<int>(1);
         not_found_state = state_value;
-        ruvia::http_not_found_handler_type callback_value(
+        ruvia::http_not_found_handler callback_value(
             [state_value](ruvia::context&) -> ruvia::task<ruvia::http_response> {
                 (void)state_value;
                 co_return ruvia::http_response{};

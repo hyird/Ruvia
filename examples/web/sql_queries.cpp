@@ -10,7 +10,6 @@
 #include <iostream>
 #include <memory_resource>
 
-#include "ruvia/web/db/db_procedure.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/error.h"

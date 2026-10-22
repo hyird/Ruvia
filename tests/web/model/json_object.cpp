@@ -6,7 +6,6 @@
 #include <string_view>
 
 #include "ruvia/web/model.h"
-#include "ruvia/web/model_object.h"
 
 #include "memory_resource_fixture.h"
 #include "test_harness.h"

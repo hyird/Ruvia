@@ -79,11 +79,11 @@ template <typename visitor_type>
         fractional_text.remove_suffix(1);
     }
     const auto parsed_fractional = detail::parse_decimal_number(fractional_text);
-    if ((parsed_fractional.index() != 0) || !std::isfinite(std::get<0>(parsed_fractional))) {
+    if (!parsed_fractional || !std::isfinite(*parsed_fractional)) {
         return std::nullopt;
     }
 
-    const auto fractional = std::get<0>(parsed_fractional);
+    const auto fractional = *parsed_fractional;
 
     using clock_type = std::chrono::system_clock;
     const auto max_seconds = std::chrono::duration<long double>(clock_type::duration::max()).count();
@@ -278,7 +278,7 @@ bool detail::jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_v
 
 jwt_payload detail::jwt_payload_access::decode_payload_json(
     std::string_view json, std::pmr::memory_resource* resolved) {
-    jwt_payload payload_value({.resource_ = resolved});
+    jwt_payload payload_value(resolved);
     bool claim_invalid = false;
     const bool valid = detail::visit_unique_jwt_json_object_fields(
         json, resolved, [&](std::string_view key, std::string_view value) {

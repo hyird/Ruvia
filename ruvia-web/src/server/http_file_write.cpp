@@ -76,7 +76,7 @@ std::error_code append_response_file_bytes(http_response_head_buffer& head, http
 }
 
 task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::socket& socket,
-    std::string_view head, http_response_file_view file, connection_scanner::entry_type& progress) {
+    std::string_view head, http_response_file_view file, connection_scanner::entry& progress) {
     http_response_file_write_result result;
     native_file_handle owned;
     const auto input = acquire_response_file(file, owned, result.error_);

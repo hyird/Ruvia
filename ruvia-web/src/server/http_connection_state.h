@@ -147,7 +147,6 @@ struct connection_work_set final {
     // back for one write. Empty between writes.
     http_response_head_buffer response_head_;
     http1_deferred_access_log deferred_access_;
-    http1_server_request_parser parser_;
     http1_server_request_parse_state parsed_;
     route_resolution route_resolution_;
     // Initial block of the per-request arena (see above).

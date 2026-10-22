@@ -30,7 +30,7 @@ application& application::listen(listen_config config) {
     const detail::tls_password_cleanser password_cleanser(config.tls_);
     return detail::mutate_stopped_app(*this, *state_, "cannot change listeners while app is running",
         [&config](detail::app_state& state_value) {
-            const auto address = detail::normalize_listen_address(config.address_);
+            const auto address = detail::normalize_listen_address(config.address_.view());
             if (!config.http_.has_value() && !config.https_.has_value()) {
                 throw std::invalid_argument("listen config must enable HTTP, HTTPS, or both");
             }
@@ -56,7 +56,7 @@ application& application::listen(listen_config config) {
                 const auto endpoint = asio::ip::tcp::endpoint(address, *config.http_);
                 if (config.auto_https_redirect_) {
                     replacement.emplace_back(endpoint,
-                        detail::http_server_listener_definition::redirect_http_to_https_type{*config.https_});
+                        detail::http_server_listener_definition::redirect_http_to_https{*config.https_});
                 } else {
                     replacement.emplace_back(endpoint);
                 }
@@ -77,13 +77,13 @@ application& application::server(server_config config) {
         [&config](detail::app_state& state_value) { state_value.options_.set_server(config); });
 }
 
-application& application::on_start(app_hook_type hook) {
+application& application::on_start(app_hook hook) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_start hook while app is running",
         [&hook](detail::app_state& state_value) { state_value.on_start_hooks_.push_back(std::move(hook)); });
 }
 
-application& application::on_stop(app_hook_type hook) {
+application& application::on_stop(app_hook hook) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_stop hook while app is running",
         [&hook](detail::app_state& state_value) { state_value.on_stop_hooks_.push_back(std::move(hook)); });
@@ -116,7 +116,7 @@ application& application::trusted_proxies(std::nullptr_t) {
         });
 }
 
-application& application::on_access(access_log_callback_type callback_value) {
+application& application::on_access(access_log_callback callback_value) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register access-log hook while app is running",
         [callback_value = std::move(callback_value)](detail::app_state& state_value) mutable {
@@ -125,7 +125,7 @@ application& application::on_access(access_log_callback_type callback_value) {
         });
 }
 
-application& application::on_connection_failure(connection_failure_callback_type callback_value) {
+application& application::on_connection_failure(connection_failure_callback callback_value) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register connection-failure hook while app is running",
         [callback_value = std::move(callback_value)](detail::app_state& state_value) mutable {

@@ -4,10 +4,18 @@
 #include <memory_resource>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
-
 namespace ruvia {
 
+[[nodiscard]] std::pmr::memory_resource* process_resource() noexcept;
+
+struct resolved_pmr_resource_tag final {};
+
+// Resolve a caller-supplied resource once at the ownership boundary. Runtime
+// objects with no explicit resource use the process-wide pool.
+[[nodiscard]] inline std::pmr::memory_resource* pmr_resource_or_default(
+    std::pmr::memory_resource* resource) noexcept {
+    return resource == nullptr ? process_resource() : resource;
+}
 template <typename t_type, typename... args_type>
 [[nodiscard]] t_type* construct_pmr_object(
     resolved_pmr_resource_tag, std::pmr::memory_resource* resource, args_type&&... args) {

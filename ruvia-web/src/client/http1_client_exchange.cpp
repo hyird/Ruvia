@@ -14,7 +14,7 @@
 #include <asio/buffer.hpp>
 #include <asio/ssl/error.hpp>
 
-#include "ruvia/core/error_text.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
@@ -71,7 +71,7 @@ constexpr std::size_t response_read_chunk_bytes = 16384;
     if (head.plan().connect_tunnel() == nullptr && head.plan().protocol_upgrade() == nullptr) {
         return false;
     }
-    if (validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.value(), state_value.headers_).index() != 0) {
+    if (validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.value(), state_value.headers_).has_value()) {
         throw http_client_error(http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
     }
     return true;
@@ -177,7 +177,7 @@ task<void> http1_client_exchange::run(
     }
 
     auto* const upload = state_value.upload_ ? &*state_value.upload_ : nullptr;
-    http1_client_request_writer writer({.resource_ = response_resource});
+    http1_client_request_writer writer(response_resource);
     const auto prepare_head = [&](std::span<char> buffer) {
         if (connect_udp) {
             return writer.prepare_connect_udp(origin, source_value.target_, headers, buffer);
@@ -199,14 +199,15 @@ task<void> http1_client_exchange::run(
     auto& write_buffer = connection_.write_buffer_;
     write_buffer.clear();
     auto prepared_result = prepare_http1_request_head(write_buffer, max_client_request_head_bytes, prepare_head);
-    const auto* prepared = prepared_result.prepared();
+    const auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
     if (!prepared) {
+        const auto* failure = std::get_if<http1_client_request_prepare_error>(&prepared_result);
         throw http_client_error(http_client_error::code_type::invalid_request,
-            prepared_result.failure()
-                ? std::string(http1_client_request_prepare_error_message(*prepared_result.failure()))
+            failure != nullptr
+                ? std::string(http1_client_request_prepare_error_message(*failure))
                 : "HTTP request head is too large");
     }
-    http1_client_response_parser parser(prepared->exchange_state(), {.resource_ = response_resource});
+    http1_client_response_parser parser(prepared->exchange_state(), response_resource);
     if (const auto* content = prepared->content_plan().immediate(); content && !content->bytes().empty()) {
         // Keep the retained head alive through the composed scatter-gather write.
         const std::array<asio::const_buffer, 2> parts{
@@ -311,8 +312,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     // Empty framing still runs the decoder and boundary checks, but its
     // mandatory nonempty scratch can stay inline. Other responses borrow
     // uninitialized worker storage without inflating this coroutine frame.
-    const auto* zero_content = plan.zero_content();
-    const auto* known_length = zero_content ? zero_content->known_length() : plan.known_length();
+    const auto* known_length = plan.known_length();
     const bool empty_body = !content_semantics_present ||
                             (known_length != nullptr && !known_length->requires_body_consumption());
     std::array<char, 1> empty_output;
@@ -645,12 +645,10 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                 const auto& planned = std::get<0>(chunk);
                 // The write lane has its own deadline, so the concurrent
                 // response reader keeps its read deadline.
-                const std::array<asio::const_buffer, 3> parts{asio::buffer(planned.prefix_.data(), planned.prefix_size_),
+                const std::array<asio::const_buffer, 3> parts{asio::buffer(planned.prefix().data(), planned.prefix().size()),
                     asio::buffer(planned.payload_.data(), planned.payload_.size()), asio::buffer(planned.suffix_)};
                 co_await write(parts, timeout);
-                if (writer.commit_chunk(planned.payload_.size()).index() != 0) {
-                    std::terminate();
-                }
+                writer.commit_chunk();
                 upload.output_.acknowledge_chunk();
                 continue;
             }
@@ -684,9 +682,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
             if (const auto bytes = std::get<0>(ending); !bytes.empty()) {
                 co_await write(single_part(bytes), timeout);
             }
-            if (writer.commit_finish().index() != 0) {
-                std::terminate();
-            }
+            writer.commit_finish();
             const auto completed = parser.complete_request_content();
             if (completed == http1_client_request_content_completion_status::exchange_terminal && !state_value.head_ready_) {
                 // The receiver already failed this exchange after the parser

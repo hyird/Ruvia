@@ -8,7 +8,7 @@
 
 #include "ruvia/core/memory/memory_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/web/http_client_handle.h"
+#include "ruvia/web/http_client.h"
 
 #include "client/http_client_advertisement_queue.h"
 

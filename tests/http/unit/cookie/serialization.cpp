@@ -4,7 +4,6 @@
 
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_set_cookie.h"
-#include "ruvia/http/http_set_cookie_plan.h"
 
 #include "test_harness.h"
 

@@ -17,7 +17,7 @@ public:
     constexpr rules() noexcept {
         static_assert((is_validation_rule<rule_types>() && ... && true),
             "field rules must be RUVIA_MIN, RUVIA_MAX, RUVIA_ONE_OF, RUVIA_EMAIL, RUVIA_PATTERN, "
-            "RUVIA_REGEX, or RUVIA_CUSTOM");
+            "or RUVIA_CUSTOM");
     }
 
     template <typename value_type, typename validator_type>

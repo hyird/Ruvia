@@ -13,9 +13,8 @@
 #include "ruvia/web/detail/controller/controller_runtime.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/next.h"
-#include "ruvia/web/request_validation.h"
 #include "ruvia/web/streaming.h"
+#include "ruvia/web/validation.h"
 
 namespace ruvia {
 

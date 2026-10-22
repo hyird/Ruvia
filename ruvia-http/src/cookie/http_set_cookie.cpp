@@ -6,7 +6,7 @@
 #include <string_view>
 
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 
 #include "cookie/cookie_validation.h"
 #include "field/http_date.h"

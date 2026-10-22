@@ -33,13 +33,11 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
-#include "ruvia/web/db/db_client.h"
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_repository.h"
-#include "ruvia/web/redis/redis_client.h"
 #include "ruvia/web/redis/redis_handle.h"
 #include "ruvia/web/redis/redis_types.h"
 
@@ -53,7 +51,7 @@
 
 namespace {
 
-using record = ruvia::db_entity<"records", ruvia::db_column<"v", std::pmr::string>>;
+RUVIA_DB_ENTITY(record, "records", ruvia::db_column<"v", std::pmr::string>)
 
 constexpr std::string_view cache_id = "item";
 constexpr std::chrono::milliseconds cache_lifetime = std::chrono::minutes(1);
@@ -242,21 +240,21 @@ private:
 // Every read names the same cache id; each result shape stores its own entry.
 ruvia::task<std::string> read_one(const ruvia::db_handle& handle) {
     const auto row =
-        co_await handle.get_repository<record>().create_query_builder().cache(cache_id, cache_lifetime).get_one();
+        co_await handle.repository<record>().query_builder().cache(cache_id, cache_lifetime).get_one();
     co_return row ? std::string(std::string_view(row->get<"v">())) : std::string("missing");
 }
 
 ruvia::task<bool> read_exists(const ruvia::db_handle& handle) {
-    co_return co_await handle.get_repository<record>().create_query_builder().cache(cache_id, cache_lifetime).get_exists();
+    co_return co_await handle.repository<record>().query_builder().cache(cache_id, cache_lifetime).get_exists();
 }
 
 ruvia::task<std::uint64_t> read_count(const ruvia::db_handle& handle) {
-    co_return co_await handle.get_repository<record>().create_query_builder().cache(cache_id, cache_lifetime).get_count();
+    co_return co_await handle.repository<record>().query_builder().cache(cache_id, cache_lifetime).get_count();
 }
 
 ruvia::task<std::vector<std::string>> read_many(const ruvia::db_handle& handle, std::string_view id = cache_id) {
     const auto rows =
-        co_await handle.get_repository<record>().create_query_builder().cache(id, cache_lifetime).get_many();
+        co_await handle.repository<record>().query_builder().cache(id, cache_lifetime).get_many();
     std::vector<std::string> values;
     for (std::size_t index = 0; index < rows.size(); ++index) {
         values.emplace_back(std::string_view(rows[index].get<"v">()));

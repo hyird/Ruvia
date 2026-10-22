@@ -18,8 +18,9 @@ http_client_state::http_client_state(event_loop loop, const http_client_config& 
       worker_(loop_.handle()),
       memory_(),
       // Responses may outlive this client and its memory_; they own theirs.
-      clients_(loop_.io_context(), worker_, memory_.resource(), http_client_response_storage::response_owned, config,
-          std::make_shared<http_client_result_budget_domain>(result_budget)),
+      pool_(loop_.io_context(), worker_, http_client_config_storage(config, memory_.resource()),
+          std::make_shared<http_client_result_budget_domain>(result_budget), memory_.resource(),
+          http_client_response_storage::response_owned),
       lifecycle_(*this, loop_, worker_, client_phase::connected) {}
 
 void http_client_state::throw_not_ready() {
@@ -28,7 +29,9 @@ void http_client_state::throw_not_ready() {
 
 http_client_handle http_client_state::handle(operation_options options) {
     lifecycle_.require_ready();
-    return clients_.get(lifecycle_.operation_scope(), lifecycle_.options(std::move(options)));
+    validate_operation_options(options);
+    return http_client_handle(pool_, memory_.resource(), lifecycle_.operation_scope(),
+        lifecycle_.options(std::move(options)));
 }
 
 }  // namespace ruvia::detail

@@ -5,8 +5,8 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/http1_websocket_client_handshake.h"
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/http/websocket_client_negotiation.h"
 #include "ruvia/web/websocket_client.h"
 
 #include "client/client_tls.h"
@@ -23,11 +23,11 @@ inline void validate_websocket_client_config(const websocket_client_config& conf
         throw std::invalid_argument("WebSocket client HTTP protocol is invalid");
     }
     validate_client_origin_host(
-        config.host_, "WebSocket client host must not be empty", "WebSocket client host is invalid");
+        config.host_.view(), "WebSocket client host must not be empty", "WebSocket client host is invalid");
     if (config.port_.has_value() && config.port_.value() == 0) {
         throw std::invalid_argument("WebSocket client port must be greater than zero");
     }
-    if (!is_valid_http_origin_form_target(config.target_)) {
+    if (!is_valid_http_origin_form_target(config.target_.view())) {
         throw std::invalid_argument("WebSocket client target must use origin-form");
     }
     if (config.max_message_bytes_ == 0) {

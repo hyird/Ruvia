@@ -99,7 +99,7 @@ RUVIA_TEST(static_root_hides_dotfiles_even_under_all_policy) {
     ruvia::static_root_options options;
     // The hidden-path default-deny must still keep secrets out of responses.
     options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind_type::all};
+        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     ruvia::static_root root(dir, std::move(options));
 
     RUVIA_CHECK(served(root, "app.js"));
@@ -116,7 +116,7 @@ RUVIA_TEST(static_root_serves_dotfiles_when_opted_in) {
     const auto dir = make_dotfile_root();
     ruvia::static_root_options options;
     options.file_types_ =
-        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind_type::all};
+        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
     options.dotfiles_ = ruvia::static_dotfile_policy::serve;
     ruvia::static_root root(dir, std::move(options));
 
@@ -130,7 +130,7 @@ RUVIA_TEST(static_root_serves_dotfiles_when_opted_in) {
 
 RUVIA_TEST(static_root_without_resident_opt_in_stays_file_backed_and_fails_closed) {
     const auto dir = make_resident_root();
-    ruvia::static_root root(dir, {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::all}});
+    ruvia::static_root root(dir, {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}});
 
     const auto before = serve_body(root, "nested/page.txt");
     RUVIA_CHECK_EQ(before.status_, ruvia::http_status::ok);
@@ -159,7 +159,7 @@ RUVIA_TEST(static_root_without_resident_opt_in_stays_file_backed_and_fails_close
 RUVIA_TEST(static_root_resident_opt_in_serves_indexed_bytes_from_memory) {
     const auto dir = make_resident_root();
     ruvia::static_root root(dir,
-        {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::all},
+        {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
             .resident_max_bytes_ = 32,
             .resident_budget_bytes_ = 1024});
 
@@ -191,7 +191,7 @@ RUVIA_TEST(static_root_resident_budget_bounds_the_kept_bytes) {
     // Index order is large.txt, nested/page.txt, small.txt; only the first
     // eligible files that fit the budget stay resident.
     ruvia::static_root root(dir,
-        {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind_type::all},
+        {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
             .resident_max_bytes_ = 32,
             .resident_budget_bytes_ = 9});
     RUVIA_CHECK(!serve_body(root, "nested/page.txt").file_backed_);

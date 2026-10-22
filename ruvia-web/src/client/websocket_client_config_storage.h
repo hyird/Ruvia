@@ -10,7 +10,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 #include "ruvia/web/websocket_client.h"
@@ -80,10 +80,10 @@ private:
         const websocket_client_config& source_value, std::pmr::memory_resource* resource) {
         std::pmr::vector<http_header> result_value(resource);
         result_value.reserve(source_value.headers_.size());
-        for (const auto& [name, value] : source_value.headers_) {
+        for (const auto& header : source_value.headers_) {
             result_value.push_back(source_value.protocol_ == websocket_client_protocol::http2
-                                       ? http_header::copy_with_lowercase_name(name, value, resource)
-                                       : http_header::copy_of(name, value, resource));
+                                       ? http_header::copy_with_lowercase_name(header.name(), header.value(), resource)
+                                       : http_header::copy_of(header.name(), header.value(), resource));
         }
         return result_value;
     }
@@ -132,12 +132,12 @@ private:
         std::pmr::memory_resource* resource)
         : scheme_(source_value.scheme_),
           protocol_(source_value.protocol_),
-          host_(source_value.host_, resource),
+          host_(source_value.host_.view(), resource),
           port_(source_value.port_.value_or(source_value.scheme_ == websocket_scheme::wss ? 443 : 80)),
-          uri_host_(client_uri_host(source_value.host_, resource)),
+          uri_host_(client_uri_host(source_value.host_.view(), resource)),
           origin_(make_origin(scheme_, uri_host_, port_)),
           authority_(make_http_origin_authority(origin_, resource)),
-          target_(source_value.target_, resource),
+          target_(source_value.target_.view(), resource),
           headers_(copy_headers(source_value, resource)),
           subprotocols_(copy_subprotocols(source_value, resource)),
           header_views_(view_headers(headers_, resource)),
@@ -154,7 +154,7 @@ private:
               source_value.scheme_ == websocket_scheme::wss ? client_tls_files::parse : client_tls_files::keep_paths,
               resource),
           tcp_(source_value.tcp_),
-          user_agent_(source_value.user_agent_, resource),
+          user_agent_(source_value.user_agent_.view(), resource),
           negotiation_(make_negotiation(header_views_, subprotocol_views_, user_agent_, deflate_, resource)),
           extended_headers_(header_views_.begin(), header_views_.end(), resource) {
         if (!user_agent_.empty()) {

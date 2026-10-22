@@ -19,13 +19,13 @@ namespace ruvia::detail {
 // through the ANSI code page. Passwords are only borrowed while their key is
 // decrypted and are never copied; an empty password uses the noninteractive
 // default and terminal prompting is disabled.
-[[nodiscard]] http_server_listener_definition::tls_type load_http_server_tls(
+[[nodiscard]] http_server_listener_definition::tls load_http_server_tls(
     const tls_config& config, std::pmr::memory_resource* resource);
 
 // Installs a loaded certificate (and client-certificate verification) into a
 // worker's TLS context. Never touches the file system.
 void configure_http_server_tls_identity(SSL_CTX* context_value, const tls_certificate& certificate,
-    const std::optional<http_server_listener_definition::tls_client_certificate_policy_type>&
+    const std::optional<http_server_listener_definition::tls_client_certificate_policy>&
         client_certificates);
 
 }  // namespace ruvia::detail

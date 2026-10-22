@@ -76,7 +76,7 @@ public:
 private:
     ruvia::task<ruvia::http_response> owned(ruvia::context& c) {
         auto& state_value = c.worker_state<memory_state>();
-        ruvia::http_response response({.resource_ = &state_value.resource_});
+        ruvia::http_response response(&state_value.resource_);
         std::pmr::string body(&state_value.resource_);
         body.assign(256 * 1024, 'm');
         response.owned_body(std::move(body));
@@ -85,7 +85,7 @@ private:
 
     ruvia::task<ruvia::http_response> throwing(ruvia::context& c) {
         auto& state_value = c.worker_state<memory_state>();
-        ruvia::http_response response({.resource_ = &state_value.resource_});
+        ruvia::http_response response(&state_value.resource_);
         std::pmr::string body(&state_value.resource_);
         body.assign(256 * 1024, 'e');
         response.owned_body(std::move(body));
@@ -95,7 +95,7 @@ private:
 
     ruvia::task<ruvia::http_response> cancelled(ruvia::context& c) {
         auto& state_value = c.worker_state<memory_state>();
-        ruvia::http_response response({.resource_ = &state_value.resource_});
+        ruvia::http_response response(&state_value.resource_);
         std::pmr::string body(256 * 1024, 'c', &state_value.resource_);
         response.owned_body(std::move(body));
         // Exercise explicit downstream cancellation while the response still

@@ -116,14 +116,14 @@ application& application::use_worker_state_definition(detail::worker_state_defin
         });
 }
 
-application& application::on_error(http_error_handler_type handler) {
+application& application::on_error(http_error_handler handler) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change error handler while app is running",
         [handler = std::move(handler)](
             detail::app_state& state_value) mutable { state_value.configuration_.on_error(std::move(handler)); });
 }
 
-application& application::on_not_found(http_not_found_handler_type handler) {
+application& application::on_not_found(http_not_found_handler handler) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change not found handler while app is running",
         [handler = std::move(handler)](

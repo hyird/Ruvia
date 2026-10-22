@@ -41,9 +41,9 @@ RUVIA_TEST(app_http_client_rejects_invalid_hosts_with_distinct_messages) {
             ruvia::app().http_client({.alias_ = "config-validation", .config_ = std::move(config)});
         });
     };
-    const auto with_host = [](std::string host) {
+    const auto with_host = [](std::string_view host) {
         ruvia::http_client_config config;
-        config.host_ = std::move(host);
+        config.host_ = host;
         return config;
     };
 
@@ -53,7 +53,7 @@ RUVIA_TEST(app_http_client_rejects_invalid_hosts_with_distinct_messages) {
                                                                                      "b",
                                                                         3),
              std::string_view("[::1]"), std::string_view("host:80")}) {
-        RUVIA_CHECK_EQ(register_client(with_host(std::string(host))), std::string("http client host is invalid"));
+        RUVIA_CHECK_EQ(register_client(with_host(host)), std::string("http client host is invalid"));
     }
 
     auto tls_config = with_host("example.com");

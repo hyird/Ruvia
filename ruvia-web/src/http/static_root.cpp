@@ -17,11 +17,10 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_date.h"
-#include "ruvia/http/http_media_type.h"
 #include "ruvia/web/detail/util/fnv1a.h"
 
 #include "http/static_file_metadata.h"
@@ -473,81 +472,15 @@ bool detail::static_root_access::same_snapshot(
     return true;
 }
 
-struct static_root::prepared_construction_type final {
-    std::filesystem::path canonical_root_;
-    detail::static_root_config_storage config_;
-    detail::static_root_resident_options resident_{};
-};
+namespace {
 
-static_root::prepared_construction_type static_root::prepare_construction(
-    const std::filesystem::path& root, static_root_options options) {
-    detail::validate_static_root_options(options);
-    return prepared_construction_type{
-        .canonical_root_ = canonical_static_root_path(root),
-        .config_ = detail::store_validated_static_root_config(options, process_resource()),
-        .resident_ = {.max_file_bytes_ = options.resident_max_bytes_.value_or(0),
-            .budget_bytes_ = options.resident_budget_bytes_.value_or(0)},
-    };
-}
-
-static_root::prepared_construction_type static_root::prepare_construction(
-    const std::filesystem::path& root, const detail::static_root_config_storage& config) {
-    return prepared_construction_type{
-        .canonical_root_ = canonical_static_root_path(root),
-        .config_ = detail::static_root_config_storage(config, process_resource()),
-    };
-}
-
-static_root::prepared_construction_type static_root::prepare_construction(
-    const std::filesystem::path& root, detail::static_root_config_storage&& config) {
-    auto canonical_root = canonical_static_root_path(root);
-    if (config.cache_control_.get_allocator().resource() != process_resource()) {
-        return prepared_construction_type{
-            .canonical_root_ = std::move(canonical_root),
-            .config_ = detail::static_root_config_storage(config, process_resource()),
-        };
-    }
-    return prepared_construction_type{
-        .canonical_root_ = std::move(canonical_root),
-        .config_ = std::move(config),
-    };
-}
-
-std::unique_ptr<static_root, pmr_object_deleter<static_root>>
-detail::static_root_access::construct(
-    std::pmr::memory_resource* object_resource, static_root::prepared_construction_type prepared) {
-    auto* const resource = pmr_resource_or_default(object_resource);
-    auto* const storage = resource->allocate(sizeof(static_root), alignof(static_root));
-    try {
-        auto* const result_value = ::new (storage) static_root(std::move(prepared));
-        return std::unique_ptr<static_root, pmr_object_deleter<static_root>>(
-            result_value, pmr_object_deleter<static_root>{resource});
-    } catch (...) {
-        resource->deallocate(storage, sizeof(static_root), alignof(static_root));
-        throw;
-    }
-}
-
-std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::make(
-    std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
-    const static_root_config_storage& config) {
-    return construct(object_resource, static_root::prepare_construction(root, config));
-}
-
-std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::make(
-    std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
-    static_root_config_storage&& config) {
-    return construct(object_resource, static_root::prepare_construction(root, std::move(config)));
-}
-
-static_root::static_root(const std::filesystem::path& root, static_root_options options)
-    : static_root(prepare_construction(root, std::move(options))) {}
-
-static_root::static_root(prepared_construction_type prepared)
-    : state_(make_static_root_state(std::move(prepared.config_))) {
-    const auto& canonical_root = prepared.canonical_root_;
+[[nodiscard]] std::unique_ptr<detail::static_root_state, static_root::state_deleter_type>
+build_static_root_state(const std::filesystem::path& root, detail::static_root_config_storage config_storage) {
+    const auto canonical_root = canonical_static_root_path(root);
+    std::unique_ptr<detail::static_root_state, static_root::state_deleter_type> state(
+        make_static_root_state(std::move(config_storage)));
     std::error_code ec;
-    auto& state_value = *state_;
+    auto& state_value = *state;
     http_assign_native_path(state_value.root_, canonical_root);
 #if defined(__unix__)
     {
@@ -668,7 +601,58 @@ static_root::static_root(prepared_construction_type prepared)
     }
 #endif
     state_value.fingerprint_ = static_root_fingerprint(state_value);
-    detail::static_root_access::install_resident_bodies(*this, nullptr, prepared.resident_);
+    return state;
+}
+
+}  // namespace
+
+std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::make(
+    std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
+    const static_root_config_storage& config) {
+    auto state = build_static_root_state(root, detail::static_root_config_storage(config, process_resource()));
+    auto* const resource = pmr_resource_or_default(object_resource);
+    auto* const storage = resource->allocate(sizeof(static_root), alignof(static_root));
+    try {
+        auto* const result_value = ::new (storage) static_root(std::move(state));
+        return std::unique_ptr<static_root, pmr_object_deleter<static_root>>(
+            result_value, pmr_object_deleter<static_root>{resource});
+    } catch (...) {
+        resource->deallocate(storage, sizeof(static_root), alignof(static_root));
+        throw;
+    }
+}
+
+std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::make(
+    std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
+    static_root_config_storage&& config) {
+    auto stored = config.cache_control_.get_allocator().resource() == process_resource()
+                      ? std::move(config)
+                      : detail::static_root_config_storage(config, process_resource());
+    auto state = build_static_root_state(root, std::move(stored));
+    auto* const resource = pmr_resource_or_default(object_resource);
+    auto* const storage = resource->allocate(sizeof(static_root), alignof(static_root));
+    try {
+        auto* const result_value = ::new (storage) static_root(std::move(state));
+        return std::unique_ptr<static_root, pmr_object_deleter<static_root>>(
+            result_value, pmr_object_deleter<static_root>{resource});
+    } catch (...) {
+        resource->deallocate(storage, sizeof(static_root), alignof(static_root));
+        throw;
+    }
+}
+
+static_root::static_root(std::unique_ptr<detail::static_root_state, state_deleter_type> state) noexcept
+    : state_(std::move(state)) {}
+
+static_root::static_root(const std::filesystem::path& root, static_root_options options)
+    : state_([&] {
+          detail::validate_static_root_options(options);
+          return build_static_root_state(
+              root, detail::store_validated_static_root_config(options, process_resource()));
+      }()) {
+    detail::static_root_access::install_resident_bodies(*this, nullptr,
+        {.max_file_bytes_ = options.resident_max_bytes_.value_or(0),
+            .budget_bytes_ = options.resident_budget_bytes_.value_or(0)});
 }
 
 static_root::~static_root() = default;

@@ -13,9 +13,9 @@
 #include <string>
 
 #include "ruvia/web/app.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/csrf.h"
-#include "ruvia/web/dispatch.h"
 
 namespace {
 

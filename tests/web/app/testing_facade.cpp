@@ -779,7 +779,7 @@ RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
     const auto rejects_malformed_prefixed_scope = [](std::string_view prefix) {
         ruvia::test_app app;
         try {
-            app.on_not_found({.prefix_ = std::string(prefix), .handler_ = &api_scoped_miss});
+            app.on_not_found({.prefix_ = prefix, .handler_ = &api_scoped_miss});
         } catch (const std::invalid_argument& error) {
             return std::string_view(error.what()) ==
                    "fallback prefix must be an origin-form path without query";
@@ -1124,7 +1124,8 @@ RUVIA_TEST(testing_facade_security_headers_own_configured_policy) {
         config.frame_options_header_ = ruvia::default_security_header_policy::omit;
         config.xss_protection_header_ = ruvia::xss_protection_header_policy::omit;
         config.content_security_policy_ = "default-src 'none'";
-        config.custom_headers_ = {{"X-Custom-Security", std::string(80, 'v')}};
+        const std::string custom_value(80, 'v');
+        config.custom_headers_ = {{"X-Custom-Security", custom_value}};
         app.use<ruvia::security_headers_middleware>(config);
     }
 
@@ -1142,9 +1143,11 @@ RUVIA_TEST(testing_facade_session_middleware_owns_configured_cookie_policy) {
     ruvia::test_app app;
     {
         ruvia::session_config config;
-        config.redis_alias_ = std::string(80, 'r');
+        const std::string redis_alias(80, 'r');
+        const std::string key_prefix(80, 'k');
+        config.redis_alias_ = redis_alias;
         config.cookie_name_ = "ruvia_session";
-        config.key_prefix_ = std::string(80, 'k');
+        config.key_prefix_ = key_prefix;
         config.ttl_ = std::chrono::minutes(15);
         app.use<ruvia::session_middleware>(config);
     }

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "body/http_stream_body_reader.h"
 
@@ -12,7 +12,7 @@ public:
     lazy_buffered_body(stream_type& stream, std::pmr::polymorphic_allocator<char> worker_allocator,
         std::pmr::memory_resource* request_resource, std::string_view initial_body_and_pipeline,
         http1_request_body_plan body_plan, protocol_byte_limit body_limit_value,
-        connection_scanner::entry_type& scanner_entry, http_interim_response_output& interim_output)
+        connection_scanner::entry& scanner_entry, http_interim_response_output& interim_output)
         : reader_(stream, worker_allocator, initial_body_and_pipeline, body_plan, body_limit_value, scanner_entry,
               interim_output),
           body_(pmr_resource_or_default(request_resource)) {}

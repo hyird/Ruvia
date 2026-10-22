@@ -4,21 +4,18 @@
 #include <concepts>
 #include <cstddef>
 #include <limits>
+#include <optional>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
-#include <variant>
 
 namespace ruvia::detail {
-
-enum class decimal_parse_error { invalid_format,
-    out_of_range };
 
 // Explicit inf/nan tokens are values; overflow or underflow of a finite
 // decimal is an error. Callers decide whether non-finite values are allowed.
 template <std::floating_point t_type = double>
     requires std::same_as<t_type, std::remove_cv_t<t_type>>
-[[nodiscard]] std::variant<t_type, decimal_parse_error> parse_decimal_number(std::string_view text) noexcept {
+[[nodiscard]] std::optional<t_type> parse_decimal_number(std::string_view text) noexcept {
     if (text == "inf" || text == "infinity") {
         return std::numeric_limits<t_type>::infinity();
     }
@@ -48,11 +45,11 @@ template <std::floating_point t_type = double>
         ++index;
         fractional_digits = consume_digits();
         if (fractional_digits == 0) {
-            return decimal_parse_error::invalid_format;
+            return std::nullopt;
         }
     }
     if (integral_digits == 0 && fractional_digits == 0) {
-        return decimal_parse_error::invalid_format;
+        return std::nullopt;
     }
     if (index < text.size() && (text[index] == 'e' || text[index] == 'E')) {
         ++index;
@@ -64,11 +61,11 @@ template <std::floating_point t_type = double>
             ++index;
         }
         if (index == exponent_begin) {
-            return decimal_parse_error::invalid_format;
+            return std::nullopt;
         }
     }
     if (index != text.size()) {
-        return decimal_parse_error::invalid_format;
+        return std::nullopt;
     }
     if (!saw_non_zero) {
         return negative ? -t_type{0} : t_type{0};
@@ -77,11 +74,8 @@ template <std::floating_point t_type = double>
     t_type value = 0;
     const auto* end = text.data() + text.size();
     const auto converted = std::from_chars(text.data(), end, value, std::chars_format::general);
-    if (converted.ec == std::errc::result_out_of_range) {
-        return decimal_parse_error::out_of_range;
-    }
     if (converted.ec != std::errc{} || converted.ptr != end) {
-        return decimal_parse_error::invalid_format;
+        return std::nullopt;
     }
     return value;
 }

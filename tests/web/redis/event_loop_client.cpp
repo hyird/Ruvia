@@ -27,10 +27,10 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/timer.h"
-#include "ruvia/web/redis/redis_client.h"
+#include "ruvia/web/redis/redis_handle.h"
 #include "ruvia/web/redis/redis_repository.h"
 
 #include "poisoned_retirement_resource.h"
@@ -333,7 +333,7 @@ ruvia::task<void> check_commands(ruvia::redis_client& client, ruvia::testing::te
     co_await redis.ping();
     auto retained = co_await redis.get("retained");
     RUVIA_CHECK(retained.has_value());
-    auto users = redis.get_repository<client_user>();
+    auto users = redis.repository<client_user>();
     auto user_value = co_await users.find_one({.where_ = client_user::column<"id">() == "1"});
     RUVIA_CHECK(user_value.has_value());
     std::string mutable_ping(128, 'm');
@@ -566,7 +566,7 @@ ruvia::task<void> check_runtime_handle_timeout(ruvia::event_loop loop, ruvia::re
     auto worker_value = loop.handle();
     ruvia::redis_client client(loop, config);
     co_await client.connect();
-    auto handle = client.with_options({.timeout_ = std::chrono::seconds(5)});
+    auto handle = client.handle({.timeout_ = std::chrono::seconds(5)});
     auto copied = handle;
     auto inherited = copied.with_options({});
     auto shortened = inherited.with_options({.timeout_ = std::chrono::milliseconds(100)});
@@ -594,7 +594,7 @@ ruvia::task<void> check_runtime_handle_cancellation_bridge(ruvia::event_loop loo
     config.command_timeout_.reset();
     ruvia::redis_client client(loop, config);
     co_await client.connect();
-    auto configured = client.with_options({.stop_token_ = base_stop.token()});
+    auto configured = client.handle({.stop_token_ = base_stop.token()});
     auto copied = configured;
     auto derived = copied.with_options({.stop_token_ = override_stop.token()});
     bool cancelled = false;
@@ -849,7 +849,7 @@ ruvia::task<void> check_pipeline_abort_and_reconnect(ruvia::redis_client& client
     co_await client.connect();
     std::exception_ptr failure;
     try {
-        auto pipeline = client.with_options(std::move(options)).pipeline();
+        auto pipeline = client.handle(std::move(options)).pipeline();
         pipeline.command("STALL");
         bool rejected = false;
         try {
@@ -1091,7 +1091,8 @@ RUVIA_TEST(redis_tls_authenticates_identity_and_retains_public_results) {
     ruvia::test::tls_identity identity("redis.test");
     redis_peer peer(redis_peer::mode_type::normal, &identity.context_);
     auto config = peer.config();
-    config.tls_ = {.ca_file_ = identity.ca_file_.string(), .server_name_ = "redis.test"};
+    const auto ca_file = identity.ca_file_.string();
+    config.tls_ = {.ca_file_ = ca_file, .server_name_ = "redis.test"};
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     ruvia::redis_client client(pool.loop(0), config);
     pool.start();
@@ -1105,7 +1106,8 @@ RUVIA_TEST(redis_tls_rejects_untrusted_and_wrong_name_before_authentication) {
         redis_peer peer(redis_peer::mode_type::normal, &identity.context_);
         auto config = peer.config();
         config.password_ = "must-not-send";
-        config.tls_ = {.ca_file_ = trust_ca ? identity.ca_file_.string() : "", .server_name_ = trust_ca ? "wrong.test" : "redis.test"};
+        const auto ca_file = trust_ca ? identity.ca_file_.string() : std::string{};
+        config.tls_ = {.ca_file_ = ca_file, .server_name_ = trust_ca ? "wrong.test" : "redis.test"};
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         ruvia::redis_client client(pool.loop(0), config);
         pool.start();
@@ -1125,7 +1127,8 @@ RUVIA_TEST(redis_tls_shutdown_joins_pending_authenticated_transport_io) {
     ruvia::test::tls_identity identity("redis.test");
     redis_peer peer(redis_peer::mode_type::normal, &identity.context_);
     auto config = peer.config();
-    config.tls_ = {.ca_file_ = identity.ca_file_.string(), .server_name_ = "redis.test"};
+    const auto ca_file = identity.ca_file_.string();
+    config.tls_ = {.ca_file_ = ca_file, .server_name_ = "redis.test"};
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     ruvia::redis_client client(pool.loop(0), config);
     {

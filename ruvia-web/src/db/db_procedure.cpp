@@ -1,5 +1,3 @@
-#include "ruvia/web/db/db_procedure.h"
-
 #include <algorithm>
 
 #include "ruvia/web/db/db_schema.h"

@@ -91,8 +91,8 @@ public:
 
     // The resolving worker's handler. handler() requires a buffered-response
     // endpoint; stream_handler() a response-stream, websocket or tunnel one.
-    [[nodiscard]] route_handler_type handler() const noexcept;
-    [[nodiscard]] route_stream_handler_type stream_handler() const noexcept;
+    [[nodiscard]] route_handler handler() const noexcept;
+    [[nodiscard]] route_stream_handler stream_handler() const noexcept;
 
     // Static routes carry an empty match; dynamic routes carry their captured
     // values in the same value object. Callers never need a nullable match side

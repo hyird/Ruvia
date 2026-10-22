@@ -77,21 +77,6 @@ private:
     };
     struct task_scope_joined_type final {};
 
-    struct task_scope_success_type final {};
-    class task_scope_failure_type final {
-    public:
-        explicit task_scope_failure_type(std::exception_ptr exception) noexcept
-            : exception_(std::move(exception)) {}
-
-        [[nodiscard]] const std::exception_ptr& exception() const& noexcept {
-            return exception_;
-        }
-        const std::exception_ptr& exception() const&& = delete;
-
-    private:
-        std::exception_ptr exception_;
-    };
-
     struct join_awaiter_type {
         task_scope& scope_;
         [[nodiscard]] bool await_ready() const;
@@ -105,7 +90,6 @@ private:
     void rethrow_failure();
 
     using lifecycle_type = std::variant<task_scope_open_type, task_scope_joining_type, task_scope_joined_type>;
-    using outcome_type = std::variant<task_scope_success_type, task_scope_failure_type>;
 
     const worker_handle& worker_;
     std::pmr::memory_resource* resource_;
@@ -113,7 +97,7 @@ private:
     bool stop_requested_{false};
     std::size_t active_{0};
     lifecycle_type lifecycle_;
-    outcome_type outcome_;
+    std::exception_ptr failure_{};
 };
 
 }  // namespace ruvia

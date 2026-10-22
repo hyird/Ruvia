@@ -14,7 +14,6 @@
 
 #include "client/http_client_access.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_connection_owner_endpoint.h"
 #include "http2/http2_request_builder.h"
 #include "http2/http2_websocket_handshake.h"
 #include "request/http_request_access.h"
@@ -56,39 +55,53 @@ namespace {
 
 }  // namespace
 
-// The owner endpoint retains this storage after the facade is destroyed while
-// escaped events or credits can still refer to its streams.
-class http2_connection::impl_type final {
-public:
-    impl_type(std::pmr::memory_resource* resource, http2_role role, bool enable_push,
-        bool receive_origin_advertisements)
-        : resource_(resource),
-          connection_(resource, role, enable_push, receive_origin_advertisements),
-          endpoint_(detail::construct_http_pmr_object<detail::http2_connection_owner_endpoint>(
-              resource, &connection_, resource)) {}
-    impl_type(const impl_type&) = delete;
-    impl_type& operator=(const impl_type&) = delete;
+// Intrusively reference-counted so escaped events or credits can still inspect
+// or abandon stream state after the public http2_connection facade is destroyed.
+namespace detail {
 
-    static void destroy(void* raw) noexcept {
-        auto* value = static_cast<impl_type*>(raw);
-        detail::destroy_http_pmr_object(value, value->resource_);
+class http2_connection_owner_endpoint final {
+public:
+    http2_connection_owner_endpoint(std::pmr::memory_resource* resource, http2_role role,
+        bool enable_push, bool receive_origin_advertisements)
+        : resource_(resource),
+          connection_(resource, role, enable_push, receive_origin_advertisements) {}
+    http2_connection_owner_endpoint(const http2_connection_owner_endpoint&) = delete;
+    http2_connection_owner_endpoint& operator=(const http2_connection_owner_endpoint&) = delete;
+
+    void retain() noexcept {
+        ++references_;
     }
 
-    [[nodiscard]] http2_event materialize_message_head_event(detail::http2_connection& connection,
-        detail::http2_connection_owner_endpoint* endpoint, std::pmr::memory_resource* resource,
+    void release() noexcept {
+        if (references_ == 0) {
+            std::terminate();
+        }
+        if (--references_ == 0) {
+            destroy_http_pmr_object(this, resource_);
+        }
+    }
+
+    void abandon_request(std::uint32_t stream_id) noexcept {
+        connection_.abandon_stream_lease(stream_id);
+    }
+
+    void abandon_credit(std::uint32_t stream_id, std::uint32_t bytes_value) noexcept {
+        connection_.abandon_received_data(stream_id, bytes_value);
+    }
+    [[nodiscard]] ::ruvia::http2_event materialize_message_head_event(
         const detail::http2_message_head_record& value) {
-        auto* stream = connection.stream(value.stream_id_);
-        if (connection.role() == http2_role::client) {
+        auto* stream = connection_.stream(value.stream_id_);
+        if (connection_.role() == http2_role::client) {
             if (stream == nullptr) {
                 throw std::logic_error("HTTP/2 response event has no stream");
             }
-            return http2_event::response_head(
-                value.stream_id_, response_head_from_stream(*stream, resource), value.request_content_signal_);
+            return ::ruvia::http2_event::response_head(
+                value.stream_id_, response_head_from_stream(*stream, resource_), value.request_content_signal_);
         }
         if (stream == nullptr) {
             throw std::logic_error("HTTP/2 request event has no stream");
         }
-        connection.pin_stream(value.stream_id_);
+        connection_.pin_stream(value.stream_id_);
         const auto content = stream->request_content_indication();
         const auto& remote = stream->remote_receive();
         const bool connect_pending =
@@ -98,53 +111,53 @@ public:
             .body_open_ = value.body_open_,
             .connect_pending_ = connect_pending,
         };
-        return http2_event::request_head(
-            endpoint, value.stream_id_, stream->request_expectations(), content, snapshot);
+        return ::ruvia::http2_event::request_head(
+            this, value.stream_id_, stream->request_expectations(), content, snapshot);
     }
 
     template <typename event_record_type>
-    [[nodiscard]] http2_event materialize_public_http2_event(detail::http2_connection& connection,
-        detail::http2_connection_owner_endpoint* endpoint, std::pmr::memory_resource* resource,
-        event_record_type& value) {
+    [[nodiscard]] ::ruvia::http2_event materialize_public_http2_event(event_record_type& value) {
         using value_type = std::decay_t<event_record_type>;
-        const bool client = connection.role() == http2_role::client;
+        const bool client = connection_.role() == http2_role::client;
         if constexpr (std::is_same_v<value_type, detail::http2_message_head_record>) {
-            return materialize_message_head_event(connection, endpoint, resource, value);
+            return materialize_message_head_event(value);
         } else if constexpr (std::is_same_v<value_type, detail::http2_message_data_record>) {
-            return http2_event::message_body_chunk(
-                endpoint, value.stream_id_, value.bytes_, value.flow_control_bytes_);
+            return ::ruvia::http2_event::message_body_chunk(
+                this, value.stream_id_, value.bytes_, value.flow_control_bytes_);
         } else if constexpr (std::is_same_v<value_type, detail::http2_tunnel_data_record>) {
-            return http2_event::tunnel_data(
-                endpoint, value.stream_id_, value.bytes_, value.flow_control_bytes_);
+            return ::ruvia::http2_event::tunnel_data(
+                this, value.stream_id_, value.bytes_, value.flow_control_bytes_);
         } else if constexpr (std::is_same_v<value_type, detail::http2_message_end_record>) {
-            auto* stream = connection.stream(value.stream_id_);
+            auto* stream = connection_.stream(value.stream_id_);
             if (stream == nullptr) {
                 throw std::logic_error("HTTP/2 message end event has no stream");
             }
-            auto result = http2_event::message_end(
+            auto result = ::ruvia::http2_event::message_end(
                 value.stream_id_, stream->take_remote_trailers(), message_content_semantics(*stream));
             if (client) {
-                connection.release_stream_lease_after_remote_end(value.stream_id_);
+                connection_.release_stream_lease_after_remote_end(value.stream_id_);
             }
             return result;
         } else {
             if constexpr (std::is_same_v<value_type, http2_tunnel_end_event>) {
                 if (client) {
-                    connection.release_stream_lease_after_remote_end(value.stream_id());
+                    connection_.release_stream_lease_after_remote_end(value.stream_id());
                 }
             } else if constexpr (std::is_same_v<value_type, http2_stream_closed_event> ||
                                  std::is_same_v<value_type, http2_request_unprocessed_event>) {
                 if (client) {
-                    connection.release_stream_lease(value.stream_id());
+                    connection_.release_stream_lease(value.stream_id());
                 }
             }
-            return http2_event(std::move(value));
+            return ::ruvia::http2_event(std::move(value));
         }
     }
+    std::size_t references_{1};
     std::pmr::memory_resource* resource_;
     detail::http2_connection connection_;
-    detail::http2_connection_owner_endpoint* endpoint_;
 };
+
+}  // namespace detail
 
 http2_received_data_credit::http2_received_data_credit(detail::http2_connection_owner_endpoint* endpoint,
     std::uint32_t stream_id, std::uint32_t bytes_value) noexcept
@@ -211,41 +224,33 @@ http2_request_head_event::http2_request_head_event(http2_request_head_event&& ot
       endpoint_(std::exchange(other.endpoint_, nullptr)) {}
 
 http2_server_request_view http2_request_head_event::request_view() const& noexcept {
-    if (endpoint_ == nullptr || stream_id_ == 0 || endpoint_->connection() == nullptr) {
+    if (endpoint_ == nullptr || stream_id_ == 0) {
         return {};
     }
-    return endpoint_->connection()->server_request_view(stream_id_).value_or(http2_server_request_view{});
+    return endpoint_->connection_.server_request_view(stream_id_).value_or(http2_server_request_view{});
 }
 
 http_request http2_request_head_event::build_request(
     std::pmr::memory_resource* resource, std::string_view body) const {
-    if (endpoint_ == nullptr || stream_id_ == 0 || endpoint_->connection() == nullptr) {
+    if (endpoint_ == nullptr || stream_id_ == 0) {
         throw std::logic_error("HTTP/2 request head event is not active");
     }
-    auto* stream = endpoint_->connection()->stream(stream_id_);
+    auto* stream = endpoint_->connection_.stream(stream_id_);
     if (stream == nullptr) {
         throw std::logic_error("missing HTTP/2 request stream");
     }
-    auto request = detail::http_request_access::make();
-    auto result_value = detail::http2_request_builder::build(*stream, request, resource, body);
-    if (result_value.failure() != nullptr) {
-        throw std::logic_error("validated HTTP/2 request cannot be materialized");
-    }
-    return request;
+    return detail::http2_request_builder::build(*stream, resource, body);
 }
-void http2_connection::impl_deleter_type::operator()(impl_type* value) const noexcept {
-    if (value == nullptr) {
-        return;
+void http2_connection::impl_deleter_type::operator()(detail::http2_connection_owner_endpoint* value) const noexcept {
+    if (value != nullptr) {
+        value->release();
     }
-    auto* endpoint = value->endpoint_;
-    endpoint->retain_storage(value, &impl_type::destroy);
-    endpoint->detach();
-    endpoint->release();
 }
 
 http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push, bool receive_origin_advertisements) {
     auto* resolved = detail::http_pmr_resource_or_default(resource);
-    impl_.reset(detail::construct_http_pmr_object<impl_type>(resolved, resolved, role, enable_push, receive_origin_advertisements));
+    impl_.reset(detail::construct_http_pmr_object<detail::http2_connection_owner_endpoint>(
+        resolved, resolved, role, enable_push, receive_origin_advertisements));
     impl_->connection_.begin_connection();
 }
 http2_connection http2_connection::server(http2_connection_options options) {
@@ -317,8 +322,7 @@ std::optional<http2_event> http2_connection::next_event() {
     }
     auto result_value = std::visit(
         [this](auto& value) {
-            return impl_->materialize_public_http2_event(
-                impl_->connection_, impl_->endpoint_, impl_->resource_, value);
+            return impl_->materialize_public_http2_event(value);
         },
         event->value());
     connection.consume_event();
@@ -431,7 +435,7 @@ std::variant<http2_request_head_event, http2_push_submit_error> http2_connection
     }
     try {
         impl_->connection_.pin_stream(std::get<0>(id));
-        return http2_request_head_event(impl_->endpoint_, std::get<0>(id), {},
+        return http2_request_head_event(impl_.get(), std::get<0>(id), {},
             http_request_content_indication::no_content, {});
     } catch (...) {
         impl_->connection_.abandon_stream_lease(std::get<0>(id));
@@ -463,7 +467,7 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
     return status;
 }
 http2_received_data_acknowledge_status http2_connection::acknowledge(http2_received_data_credit&& credit) {
-    if (!credit.valid() || credit.endpoint_ != impl_->endpoint_) {
+    if (!credit.valid() || credit.endpoint_ != impl_.get()) {
         throw std::logic_error("invalid HTTP/2 received data credit");
     }
     const bool acknowledged = impl_->connection_.acknowledge_received_data(credit.stream_id_, credit.bytes_);
@@ -500,7 +504,7 @@ std::span<const std::uint32_t> http2_connection::take_drained_data_streams() & n
 }
 http2_server_request_release_status http2_connection::release(http2_request_head_event&& request) {
     if (request.endpoint_ == nullptr || request.stream_id_ == 0 ||
-        request.endpoint_ != impl_->endpoint_) {
+        request.endpoint_ != impl_.get()) {
         throw std::logic_error("invalid HTTP/2 server request lease");
     }
     const bool live = impl_->connection_.stream(request.stream_id_) != nullptr;

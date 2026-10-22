@@ -6,7 +6,6 @@
 #include <stdexcept>
 
 #include "ruvia/web/model.h"
-#include "ruvia/web/model_types.h"
 
 #include "test_harness.h"
 

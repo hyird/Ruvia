@@ -33,7 +33,7 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
             co_return ::ruvia::as_bytes(body_chunk->bytes());
         }
         if (const auto* complete = result_value.complete()) {
-            if ((trailers_.append_http1(complete->trailers()).index() != 0)) {
+            if (trailers_.append_http1(complete->trailers()).has_value()) {
                 throw std::logic_error("HTTP/1 decoder published invalid request trailers");
             }
             co_return std::nullopt;

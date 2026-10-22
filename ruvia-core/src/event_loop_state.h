@@ -11,7 +11,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/detail/worker/worker_dispatcher.h"
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_runtime_context.h"

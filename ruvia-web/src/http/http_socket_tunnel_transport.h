@@ -13,8 +13,8 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
 
-#include "http/http_stream_read_result.h"
 #include "http/tls_tunnel_output.h"
+#include "server/inbound_transport_error.h"
 #include "tls/tls_stream_end.h"
 
 namespace ruvia::detail {
@@ -34,7 +34,7 @@ public:
     // Appends up to 4096 bytes read from the stream to `bytes_value`. A caller
     // that clears and reuses one string reads without allocating after its
     // first read.
-    [[nodiscard]] task<http_stream_read_result> read_more(std::pmr::string& bytes_value) {
+    [[nodiscard]] task<bool> read_more(std::pmr::string& bytes_value) {
         constexpr std::size_t read_bytes = 4096;
         const auto old_size = bytes_value.size();
         bytes_value.resize(old_size + read_bytes);
@@ -45,12 +45,12 @@ public:
         // A TLS peer that closed TCP without close_notify ends the tunnel byte
         // stream exactly like an orderly FIN or close_notify.
         if (is_stream_read_end(result_value.error_code())) {
-            co_return http_stream_read_result::make_end();
+            co_return false;
         }
         if (result_value.error_code()) {
-            co_return http_stream_read_result::make_failure(result_value.error_code());
+            throw inbound_transport_error(result_value.error_code(), "HTTP tunnel read");
         }
-        co_return result_value.result() == 0 ? http_stream_read_result::make_end() : http_stream_read_result::make_data();
+        co_return result_value.result() != 0;
     }
     [[nodiscard]] task<std::error_code> write_bytes(std::string_view bytes_value, http_stream_end end) {
         while (!bytes_value.empty()) {

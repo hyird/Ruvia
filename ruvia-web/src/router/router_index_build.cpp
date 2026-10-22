@@ -8,7 +8,7 @@
 
 namespace ruvia {
 
-void detail::router_impl::build_static_index() {
+void detail::router::build_static_index() {
     auto& plan = *plan_;
 
     // Extension tokens and CONNECT have separate routing semantics.
@@ -40,7 +40,7 @@ void detail::router_impl::build_static_index() {
     }
 }
 
-void detail::router_impl::build_static_method_mask() {
+void detail::router::build_static_method_mask() {
     auto& plan = *plan_;
     for (const auto& route : plan.routes_) {
         if (route_table::is_routable_method(route.method()) && !route.dynamic()) {

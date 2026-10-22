@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "ruvia/core/async.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_server_request_parser.h"
 
 #include "context/context_services.h"
@@ -25,7 +26,6 @@
 #include "server/http_server_auto_https.h"
 #include "server/http_server_body_route_completion.h"
 #include "server/http_server_connection_guards.h"
-#include "server/http_server_request_state.h"
 #include "server/http_server_response_state.h"
 #include "server/http_server_response_stream_route.h"
 #include "server/http_server_stream_body_route.h"
@@ -39,7 +39,12 @@
 // included here.
 
 namespace ruvia::detail {
-
+[[nodiscard]] inline std::optional<http_request_body_failure> content_length_limit_failure(
+    const http1_request_body_plan& body_plan, protocol_byte_limit limit) noexcept {
+    const auto* known_length = body_plan.known_length();
+    return known_length == nullptr ? std::nullopt
+                                   : http_request_body_size_failure(known_length->content_length(), limit);
+}
 // Whether a pipelined request can be served while earlier responses wait in
 // the connection's output: its handling neither reads the socket (no request
 // content, hence no 100 Continue) nor writes to it ahead of its own buffered
@@ -65,7 +70,7 @@ template <typename stream_type>
 struct http1_connection_session final {
     http_server_session_config& listener_;
     stream_type& stream_;
-    connection_scanner::entry_type& scanner_entry_;
+    connection_scanner::entry& scanner_entry_;
     // The connection's route services, bound to its inbound buffer budget.
     const context_services& route_services_;
     inbound_buffer_resource& inbound_buffers_;
@@ -113,8 +118,8 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
     // heavy working set (read buffer, request arena, parse result, response
     // head) is borrowed from a per-worker pool, and the request state lives in
     // the frame of serve_requests.
-    connection_scanner::entry_type scanner_entry;
-    connection_scanner::guard_type scanner_guard(scanner_, scanner_entry, socket);
+    connection_scanner::entry scanner_entry;
+    connection_scanner::guard scanner_guard(scanner_, scanner_entry, socket);
     const auto admission_policy = http_request_admission_policy::server(options_);
     const response_file_io file_output{
         .pool_ = options_.blocking_pool_,
@@ -147,7 +152,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         enable_plain_tcp_sync_write(socket);
     }
     for (;;) {
-        scanner_entry.set_phase(connection_scanner::phase_type::idle);
+        scanner_entry.set_phase(connection_scanner::phase::idle);
 
         // Borrow-on-use / return-on-idle for the whole work set: the
         // connection holds none while it waits for its next request, and reads
@@ -168,8 +173,8 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         // Idle wait for the next keep-alive request uses idle_timeout;
         // the connection's first request uses request_header_timeout.
         scanner_entry.read_request_head(session.served_keepalive_request_
-                                            ? connection_scanner::phase_type::idle
-                                            : connection_scanner::phase_type::reading_initial);
+                                            ? connection_scanner::phase::idle
+                                            : connection_scanner::phase::reading_initial);
         auto idle_completion = co_await ruvia::async_asio<std::size_t>(
             [&stream, &idle_read_buffer](auto handler) mutable {
                 stream.async_read_some(asio::buffer(idle_read_buffer.data(), idle_read_buffer.size()), std::move(handler));
@@ -215,7 +220,6 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
     const auto remote_address = session.remote_address_;
     constexpr bool plain_tcp = std::is_same_v<std::remove_cvref_t<stream_type>, tcp_socket_type>;
     auto& read_buffer = work_set.read_buffer_;
-    auto& parser = work_set.parser_;
     auto& parsed_value = work_set.parsed_;
     auto& response_head = work_set.response_head_;
     auto& route_resolution_value = work_set.route_resolution_;
@@ -234,7 +238,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 request_.reset();
             }
         } header_lifetime{parsed_value.request_};
-        http_response response({.resource_ = request_memory_value.resource()});
+        http_response response(request_memory_value.resource());
         // Holds the next pipelined request when a body reader over-read it into
         // its own buffer, which dies with the route, until the read buffer is
         // cleaned up below. Declared before request_completion, which borrows
@@ -271,7 +275,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 }
             }
             const auto buffer_view = read_buffer.pending();
-            parser.parse_head(buffer_view, parsed_value, header_search_offset, request_memory_value.resource());
+            parsed_value.parse_head(buffer_view, header_search_offset, request_memory_value.resource());
             const auto* const ready_head = parsed_value.head_ready();
             if (ready_head != nullptr) {
                 route_resolution_value = routes_value.resolve(parsed_value.request_);
@@ -289,7 +293,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 if (response_output.complete().error_) {
                     co_return http_connection_close::abort;
                 }
-                scanner_entry.set_phase(connection_scanner::phase_type::idle);
+                scanner_entry.set_phase(connection_scanner::phase::idle);
             }
             if (const auto* request_head = ready_head) {
                 // Reset phase so request_header_timeout stops counting against dispatch
@@ -298,7 +302,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 // writes; the buffered write path sets writing before responding.
                 // Until one of those transitions, idle_timeout governs as the
                 // deadman switch for hung handlers.
-                scanner_entry.set_phase(connection_scanner::phase_type::idle);
+                scanner_entry.set_phase(connection_scanner::phase::idle);
                 const auto expectation_plan =
                     parsed_value.body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
                 admission.emplace(admit_http_request(
@@ -341,7 +345,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 if (const auto body_failure =
                         content_length_limit_failure(parsed_value.body_plan_, admission->body_limit())) {
                     closing_rejection = http_request_rejection::error(copy_http_protocol_error_info(
-                        request_memory_value.resource(), body_failure->protocol_error()));
+                        request_memory_value.resource(), http_request_body_protocol_error(*body_failure)));
                     break;
                 }
 
@@ -496,8 +500,8 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 co_return http_connection_close::abort;
             }
             scanner_entry.read_request_head(read_buffer.empty() && session.served_keepalive_request_
-                                                ? connection_scanner::phase_type::idle
-                                                : connection_scanner::phase_type::reading_initial);
+                                                ? connection_scanner::phase::idle
+                                                : connection_scanner::phase::reading_initial);
             const auto read_space = read_buffer.prepare_read();
             if (read_space.empty()) {
                 // The buffer only fills at max_http_header_bytes, where
@@ -625,11 +629,11 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 // Logged once the write that carries its head commits it.
                 tail.defer_access(options_.access_log_, work_set.deferred_access_, write_start.head_bytes_,
                     response_plan.response_status());
-                scanner_entry.set_phase(connection_scanner::phase_type::idle);
+                scanner_entry.set_phase(connection_scanner::phase::idle);
             } else {
                 std::optional<http1_buffered_response_write_result> write_result;
                 if (file_response) {
-                    scanner_entry.set_phase(connection_scanner::phase_type::writing);
+                    scanner_entry.set_phase(connection_scanner::phase::writing);
                     write_result.emplace(co_await finish_file_response_write(stream, response_head, response,
                         response_plan, write_start, file_output, scanner_entry));
                     response_head.reset();
@@ -644,7 +648,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                     write_result.emplace(classify_http1_buffered_response_write(
                         response_plan, write_start.head_bytes_, written.error_, written.bytes_));
                 }
-                scanner_entry.set_phase(connection_scanner::phase_type::idle);
+                scanner_entry.set_phase(connection_scanner::phase::idle);
                 if (const auto committed_status = write_result->committed_status_) {
                     tail.record_access(options_.access_log_, *committed_status);
                 }
@@ -653,7 +657,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 }
             }
         } else if (const auto* committed = request_completion->committed_stream()) {
-            scanner_entry.set_phase(connection_scanner::phase_type::idle);
+            scanner_entry.set_phase(connection_scanner::phase::idle);
             tail.record_access(options_.access_log_, committed->status());
             if (committed->truncated()) {
                 co_return http_connection_close::abort;
@@ -676,7 +680,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
         if (read_buffer.empty()) {
             co_return std::nullopt;
         }
-        scanner_entry.set_phase(connection_scanner::phase_type::idle);
+        scanner_entry.set_phase(connection_scanner::phase::idle);
     }
 }
 

@@ -8,7 +8,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/web/redis/redis_subscription.h"
+#include "ruvia/web/redis/redis_handle.h"
 
 #include "redis/redis_registry.h"
 

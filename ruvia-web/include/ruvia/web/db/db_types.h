@@ -16,10 +16,10 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/client_tls_config.h"
-#include "ruvia/web/model_types.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia {
 

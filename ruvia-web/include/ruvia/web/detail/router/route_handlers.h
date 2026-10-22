@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include "ruvia/core/task.h"
 #include "ruvia/web/detail/callback_ref.h"
 
@@ -15,9 +17,12 @@ class next;
 
 namespace detail {
 
-using route_handler_type = callback_ref_type<task<http_response>(context&)>;
-using route_stream_handler_type = callback_ref_type<task<void>(context&)>;
-using route_middleware_type = callback_ref_type<task<void>(context&, next&)>;
+enum class request_body_mode : std::uint8_t { buffered,
+    stream };
+
+using route_handler = callback_ref<task<http_response>(context&)>;
+using route_stream_handler = callback_ref<task<void>(context&)>;
+using route_middleware = callback_ref<task<void>(context&, next&)>;
 
 }  // namespace detail
 

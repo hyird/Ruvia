@@ -3,14 +3,14 @@
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_request_trailers.h"
-#include "ruvia/web/http_client_handle.h"
+#include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "client/http_client_output_operation.h"
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
 #include "util/operation_lane_lease.h"
-
+#include "util/pmr_owned_storage.h"
 namespace ruvia::detail {
 struct http_client_upload_end_input final {
     http_client_response pin_;
@@ -115,6 +115,17 @@ scoped_operation<void> http_client_request_body_writer::write(std::string_view b
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
         detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::pmr::string(bytes_value, state_->resource_)}));
 }
+scoped_operation<void> http_client_request_body_writer::write_owned(std::pmr::string&& bytes_value) {
+    if (state_ == nullptr) {
+        throw std::logic_error("HTTP request exchange is empty");
+    }
+    require_writable(*state_);
+    if (bytes_value.size() > state_->upload_->config_.max_chunk_bytes_) {
+        throw std::length_error("HTTP upload chunk exceeds configured bound");
+    }
+    return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
+        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), detail::rebind_owned_storage(bytes_value, state_->resource_)}));
+}
 scoped_operation<void> http_client_request_body_writer::end(std::span<const http_header_view> fields_value) & {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
@@ -122,7 +133,7 @@ scoped_operation<void> http_client_request_body_writer::end(std::span<const http
     require_writable(*state_);
     http_request_trailers validation(state_->resource_);
     for (const auto& field : fields_value) {
-        if ((validation.append(field.name(), field.value()).index() != 0)) {
+        if (validation.append(field.name(), field.value()).has_value()) {
             throw std::invalid_argument("invalid request trailer section");
         }
     }

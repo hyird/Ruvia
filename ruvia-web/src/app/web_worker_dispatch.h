@@ -38,7 +38,7 @@ public:
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
-    [[nodiscard]] web_worker_post_result_type post(job_type job);
+    [[nodiscard]] web_worker_post_result post(job_type job);
     [[nodiscard]] web_worker_stats stats() const noexcept;
 
     // Reconciles the outstanding reservation of an accepted job that core

@@ -6,7 +6,7 @@
 #include <span>
 #include <stdexcept>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/util/fnv1a.h"
 
 #include "util/steady_clock.h"

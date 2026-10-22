@@ -2,7 +2,7 @@
 
 #include <exception>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "client/http_client_config_storage.h"
 #include "client/http_client_pool.h"
@@ -19,19 +19,6 @@ namespace {
 }
 
 }  // namespace
-
-http_client_registry::http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
-    std::pmr::memory_resource* resource, http_client_response_storage response_storage,
-    const http_client_config& default_config,
-    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
-    : resource_(pmr_resource_or_default(resource)),
-      response_storage_(response_storage),
-      pools_(resource_),
-      alias_index_(resource_) {
-    alias_index_.build({default_capability_alias});
-    pools_.reserve(1);
-    add(io_context, worker_value, http_client_config_storage(default_config, resource_), result_budget_domain);
-}
 
 http_client_registry::http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
     std::pmr::memory_resource* resource, http_client_response_storage response_storage,
@@ -97,12 +84,6 @@ http_client_pool& http_client_registry::default_pool() const {
 
 http_client_handle http_client_registry::get(::ruvia::operation_scope& scope) const {
     return http_client_handle(default_pool(), resource_, scope);
-}
-
-http_client_handle http_client_registry::get(::ruvia::operation_scope& scope, operation_options options) const {
-    auto& pool = default_pool();
-    validate_operation_options(options);
-    return http_client_handle(pool, resource_, scope, std::move(options));
 }
 
 http_client_handle http_client_registry::get(std::string_view alias, ::ruvia::operation_scope& scope) const {

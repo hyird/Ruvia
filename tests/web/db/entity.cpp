@@ -18,6 +18,16 @@ RUVIA_DB_ENTITY(entity, "users",
     ruvia::db_column<ruvia::fixed_string{"name"}, std::pmr::string,
         ruvia::db_column_options{.nullable_ = true}>)
 
+RUVIA_DB_ENTITY(owned_type, "owned", ruvia::db_column<"text", ruvia::string>,
+    ruvia::db_column<"values", std::pmr::vector<std::optional<std::pmr::string>>>)
+
+RUVIA_DB_ENTITY(string_array_entity, "string_arrays",
+    ruvia::db_column<"values", std::pmr::vector<std::pmr::string>>)
+
+RUVIA_DB_ENTITY(owned_container_entity, "owned_containers",
+    ruvia::db_column<"text", std::pmr::string>,
+    ruvia::db_column<"values", std::pmr::vector<std::pmr::string>>)
+
 class equivalent_memory_resource final : public std::pmr::memory_resource {
 public:
     explicit equivalent_memory_resource(std::pmr::memory_resource* upstream)
@@ -65,8 +75,6 @@ RUVIA_TEST(db_entity_tracks_unset_null_and_value_states) {
 }
 
 RUVIA_TEST(db_entity_set_normalizes_nested_owned_values_to_entity_resource) {
-    using owned_type = ruvia::db_entity<"owned", ruvia::db_column<"text", ruvia::string>,
-        ruvia::db_column<"values", std::pmr::vector<std::optional<std::pmr::string>>>>;
     ruvia::test::counting_memory_resource source, target;
     {
         owned_type entity(&target);
@@ -91,8 +99,6 @@ RUVIA_TEST(db_entity_set_normalizes_nested_owned_values_to_entity_resource) {
 }
 
 RUVIA_TEST(db_entity_string_vector_assignment_normalizes_equivalent_resource_allocators) {
-    using string_array_entity = ruvia::db_entity<"string_arrays",
-        ruvia::db_column<"values", std::pmr::vector<std::pmr::string>>>;
     ruvia::test::counting_memory_resource upstream;
     equivalent_memory_resource target(&upstream);
     {
@@ -150,9 +156,6 @@ RUVIA_TEST(db_entity_string_vector_assignment_normalizes_equivalent_resource_all
 }
 
 RUVIA_TEST(db_entity_reset_owned_containers_preserves_value_on_allocation_failure) {
-    using owned_container_entity = ruvia::db_entity<"owned_containers",
-        ruvia::db_column<"text", std::pmr::string>,
-        ruvia::db_column<"values", std::pmr::vector<std::pmr::string>>>;
     for (const bool text : {false, true}) {
         ruvia::test::counting_memory_resource upstream;
         equivalent_memory_resource target(&upstream);
@@ -219,14 +222,8 @@ RUVIA_TEST(db_entities_projections_and_rows_construct_from_resource_owners) {
     entity from_owner(owner_entity);
     RUVIA_CHECK_EQ(from_owner.resource(), &resource);
 
-    ruvia::db_entity<"raw", ruvia::db_column<"id", int>> raw_from_owner(owner_entity);
-    RUVIA_CHECK_EQ(raw_from_owner.resource(), &resource);
-
     entity_projection proj_from_owner(owner_entity);
     RUVIA_CHECK_EQ(proj_from_owner.resource(), &resource);
-
-    ruvia::db_projection<ruvia::db_column<"id", int>> raw_proj_from_owner(owner_entity);
-    RUVIA_CHECK_EQ(raw_proj_from_owner.resource(), &resource);
 
     ruvia::entity_rows<entity> rows(owner_entity);
     RUVIA_CHECK_EQ(rows.resource(), &resource);

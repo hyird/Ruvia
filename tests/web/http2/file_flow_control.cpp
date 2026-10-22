@@ -16,7 +16,7 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"

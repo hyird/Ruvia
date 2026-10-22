@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/dotenv.h"
 
 namespace ruvia::detail {

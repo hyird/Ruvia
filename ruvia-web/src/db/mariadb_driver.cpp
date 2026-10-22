@@ -12,7 +12,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/error_text.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/web/detail/db/db_result_access.h"
 #include "ruvia/web/detail/db/db_utils.h"
 

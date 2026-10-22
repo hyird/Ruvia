@@ -3,10 +3,10 @@
 #include <utility>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_request_body_failure.h"
 
 #include "coding/http_content_coding.h"
 #include "request/http_request_access.h"
@@ -43,7 +43,7 @@ std::pmr::string decode_http_request_content(
         case http_content_decode_error::invalid_content:
             throw http_protocol_error(http_status::bad_request, "failed to decode request body");
         case http_content_decode_error::decoded_size_exceeded:
-            throw http_request_body_failure::too_large().protocol_error();
+            throw http_request_body_protocol_error(http_request_body_failure::too_large);
         case http_content_decode_error::decoder_failure:
             throw std::runtime_error("request content decoder failed");
     }

@@ -46,12 +46,12 @@ inline http1_client_response_parse_result parse_wire(std::string_view method, st
                   http1_client_request_wire_policy{.close_policy_ = close_policy})
             : ruvia::http1_client_request_writer().prepare(origin, request, request_head,
                   http1_client_request_wire_policy{.close_policy_ = close_policy});
-    auto* prepared = prepared_result.prepared();
+    auto* prepared = std::get_if<ruvia::prepared_http1_client_request>(&prepared_result);
     if (prepared == nullptr) {
         throw std::runtime_error("test request could not be prepared");
     }
     auto parser = http1_client_response_parser(
-        std::move(*prepared).take_exchange_state(), {.resource_ = resource});
+        std::move(*prepared).take_exchange_state(), resource);
     return parser.parse(wire);
 }
 
@@ -127,19 +127,9 @@ inline const ruvia::http1_client_response_without_content& require_without_conte
     return *without_content;
 }
 
-inline const ruvia::http1_client_response_with_zero_content& require_zero_content(
-    const ruvia::http1_client_response_plan& plan) {
-    const auto* zero_content = plan.zero_content();
-    if (zero_content == nullptr) {
-        throw std::runtime_error("test expected a response with framed zero content");
-    }
-    return *zero_content;
-}
-
 inline std::size_t active_plan_alternative_count(const ruvia::http1_client_response_plan& plan) noexcept {
     return static_cast<std::size_t>(plan.informational() != nullptr) +
            static_cast<std::size_t>(plan.without_content() != nullptr) +
-           static_cast<std::size_t>(plan.zero_content() != nullptr) +
            static_cast<std::size_t>(plan.known_length() != nullptr) +
            static_cast<std::size_t>(plan.chunked() != nullptr) +
            static_cast<std::size_t>(plan.close_delimited() != nullptr) +

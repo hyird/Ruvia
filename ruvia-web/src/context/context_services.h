@@ -14,7 +14,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
-#include "ruvia/web/conn_info.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "context/context_capabilities.h"

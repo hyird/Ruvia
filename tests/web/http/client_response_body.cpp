@@ -33,7 +33,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
@@ -44,11 +44,9 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
-#include "ruvia/web/http_capsule_stream.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_client_response.h"
 #include "ruvia/web/http_client_types.h"
-#include "ruvia/web/http_datagram_stream.h"
+#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/model.h"
 
 #include "test_harness.h"

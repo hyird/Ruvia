@@ -49,7 +49,7 @@ public:
     // Continue an expectation asks for.
     stream_body_reader(stream_type& stream, std::pmr::polymorphic_allocator<char> allocator,
         std::string_view initial_body_and_pipeline, http1_request_body_plan body_plan,
-        protocol_byte_limit body_limit_value, connection_scanner::entry_type& scanner_entry,
+        protocol_byte_limit body_limit_value, connection_scanner::entry& scanner_entry,
         http_interim_response_output& interim_output);
     ~stream_body_reader() = default;
 
@@ -102,7 +102,7 @@ private:
     protocol_byte_limit body_limit_;
     http1_chunked_body_decoder chunk_decoder_;
     http_request_trailers trailers_;
-    connection_scanner::entry_type& scanner_entry_;
+    connection_scanner::entry& scanner_entry_;
     http_interim_response_output& interim_output_;
     // Offset of the first unconsumed byte in the active source: the borrowed
     // initial view while it is set, buffer_ otherwise. Consumed buffer_ bytes are

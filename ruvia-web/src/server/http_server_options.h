@@ -11,7 +11,7 @@
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/server_config.h"
 
-#include "http/cors_options.h"
+#include "http/http_cors.h"
 #include "server/document_root_binding.h"
 #include "server/trusted_proxies.h"
 
@@ -26,7 +26,7 @@ class inbound_buffer_budget;
 class worker_codecs;
 
 struct access_log_sink final {
-    access_log_callback_ref_type callback_;
+    access_log_callback_ref callback_;
 
     void invoke(const access_log_record& record) const noexcept {
         callback_(record);
@@ -70,7 +70,7 @@ struct connection_failure_record_access final {
 // possibly propagated through a handler -- qualifies; any other exception is
 // reported whatever error code it carries.
 struct connection_failure_sink final {
-    connection_failure_callback_ref_type callback_;
+    connection_failure_callback_ref callback_;
     // Owned by the web_worker_runtime this sink was configured for; null before one
     // claims it. Counting here rather than at each reporting site keeps the
     // count and the callback from drifting apart as new sites are added.
@@ -99,12 +99,12 @@ struct http_server_options final {
     // every worker, plus this worker's current generation. Validated
     // configuration carries only the publisher; each worker's
     // static_root_runtime publishes its own generation before serving.
-    class document_root_type final {
+    class document_root_state final {
     public:
-        document_root_type() noexcept = default;
+        document_root_state() noexcept = default;
 
-        [[nodiscard]] static document_root_type refreshing(document_root_publisher& publisher) noexcept {
-            return document_root_type(&publisher);
+        [[nodiscard]] static document_root_state refreshing(document_root_publisher& publisher) noexcept {
+            return document_root_state(&publisher);
         }
 
         [[nodiscard]] document_root_publisher* publisher() const noexcept {
@@ -126,7 +126,7 @@ struct http_server_options final {
         }
 
     private:
-        explicit document_root_type(document_root_publisher* publisher) noexcept
+        explicit document_root_state(document_root_publisher* publisher) noexcept
             : publisher_(publisher) {}
 
         document_root_publisher* publisher_{nullptr};
@@ -147,7 +147,7 @@ struct http_server_options final {
     // synchronous use only.
     worker_codecs* codecs_{nullptr};
     std::optional<cors_options> cors_{};
-    document_root_type document_root_{};
+    document_root_state document_root_{};
     // Peers whose forwarding headers may be believed. Empty by default, so an
     // unconfigured server treats every direct peer as the client.
     trusted_proxy_set trusted_proxies_{};

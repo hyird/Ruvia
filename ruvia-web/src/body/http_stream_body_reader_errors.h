@@ -2,16 +2,16 @@
 
 #include <stdexcept>
 
-#include "ruvia/http/http_request_body_failure.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_transfer_coding_decoder.h"
 namespace ruvia::detail {
 
 [[noreturn]] inline void throw_request_body_too_large() {
-    throw http_request_body_failure::too_large().protocol_error();
+    throw http_request_body_protocol_error(http_request_body_failure::too_large);
 }
 
 [[noreturn]] inline void throw_incomplete_request_body() {
-    throw http_request_body_failure::incomplete().protocol_error();
+    throw http_request_body_protocol_error(http_request_body_failure::incomplete);
 }
 
 [[noreturn]] inline void throw_transfer_coding_protocol_failure(

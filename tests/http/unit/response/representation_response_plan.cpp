@@ -313,8 +313,7 @@ RUVIA_TEST(representation_response_plan_ignores_repeated_date_conditions) {
                 wire.append(field.name()).append(": ").append(first_value).append("\r\n");
                 wire.append(field.name()).append(": ").append(field.value()).append("\r\n\r\n");
                 ruvia::http1_server_request_parse_state parsed;
-                ruvia::http1_server_request_parser{}.parse_head(
-                    wire, parsed, 0, std::pmr::get_default_resource());
+                parsed.parse_head(wire, 0, std::pmr::get_default_resource());
                 RUVIA_CHECK(parsed.head_ready() != nullptr);
                 if (parsed.head_ready() != nullptr) {
                     const auto plan = ruvia::plan_http_representation_response(parsed.request_, representation);

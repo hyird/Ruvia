@@ -8,7 +8,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/web/detail/integration/worker_state_key.h"
+#include "ruvia/web/detail/http/context/request_bindings.h"
 
 namespace ruvia::detail {
 
@@ -49,7 +49,7 @@ public:
 
     template <typename state_type>
     [[nodiscard]] state_type& worker_state() const {
-        return *static_cast<state_type*>(worker_state_instance(worker_state_type_key<state_type>()));
+        return *static_cast<state_type*>(worker_state_instance(type_key<state_type>()));
     }
 
     template <typename callable_type>

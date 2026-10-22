@@ -46,11 +46,11 @@ int main() {
 | `application& http_client(http_client_registration_config config)` / `http_client(std::nullptr_t)` | 注册绑定到每个 worker 的出站 HTTP 客户端池（支持命名 `alias_`，默认 `"default"`） |
 | `application& database(db_registration_config config)` / `database(std::nullptr_t)` | 注册 per-worker SQL 数据库连接池（需 `RUVIA_ENABLE_DATABASE`） |
 | `application& redis(redis_registration_config config)` / `redis(std::nullptr_t)` | 注册 per-worker Redis 连接池（需 `RUVIA_ENABLE_REDIS`） |
-| `application& on_error(http_error_handler_type handler)` | 注册全局错误处理器（另有 `scoped_error_handler_options` 重载支持按路径前缀注册） |
-| `application& on_not_found(http_not_found_handler_type handler)` | 注册全局 404 处理器（另有 `scoped_not_found_handler_options` 重载支持按路径前缀注册） |
-| `application& on_access(access_log_callback_type callback)` | 注册请求访问日志回调（`noexcept`） |
-| `application& on_connection_failure(connection_failure_callback_type callback)` | 注册连接/握手层异常回调（`noexcept`） |
-| `application& on_start(app_hook_type hook)` / `on_stop(app_hook_type hook)` | 注册启动后（accept 开始前）与停机后的生命周期钩子（在 `run()` 调用线程上执行） |
+| `application& on_error(http_error_handler handler)` | 注册全局错误处理器（另有 `scoped_error_handler_options` 重载支持按路径前缀注册） |
+| `application& on_not_found(http_not_found_handler handler)` | 注册全局 404 处理器（另有 `scoped_not_found_handler_options` 重载支持按路径前缀注册） |
+| `application& on_access(access_log_callback callback)` | 注册请求访问日志回调（`noexcept`） |
+| `application& on_connection_failure(connection_failure_callback callback)` | 注册连接/握手层异常回调（`noexcept`） |
+| `application& on_start(app_hook hook)` / `on_stop(app_hook hook)` | 注册启动后（accept 开始前）与停机后的生命周期钩子（在 `run()` 调用线程上执行） |
 | `void run()` | 启动所有业务 worker 并阻塞，直到调用 `stop()` 或收到停止信号；排空完成后返回 |
 | `void stop()` | 线程安全地请求停机：停止接入新连接 → 在 `drain_timeout_` 内排空已接纳请求并发送 WebSocket `1001` 关闭帧 → 强制关闭超时连接 → 退役退出 |
 | `http_server_stats http_stats() const` | 线程安全地汇总所有 worker 的连接与故障统计 |
@@ -226,7 +226,7 @@ for (const auto& worker : ruvia::app().workers()) {
 
 ## 3. 请求上下文 `context` 与 `context_request`
 
-头文件：`"ruvia/web/context.h"`、`"ruvia/web/conn_info.h"`。
+头文件：`"ruvia/web/context.h"`。
 
 ### 3.1 读取请求信息（`c.req()` 与 `c.conn()`）
 
@@ -287,7 +287,7 @@ ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
 | `scoped_operation<http_response> not_found()` | 调用当前匹配的 404 处理器生成响应 |
 | `void respond(http_response&& response)` / `const http_response* response() const noexcept` | 在返回 `task<void>` 的中间件中提前提交响应或检查下游响应 |
 
-### 3.3 进程内子请求（`"ruvia/web/dispatch.h"`）
+### 3.3 进程内子请求（`"ruvia/web/context.h"`）
 
 在控制器或中间件内可通过 `co_await c.dispatch({...})` 在当前 worker 内直接重入路由表发起虚拟子请求（不经过网络 socket）：
 
@@ -326,7 +326,7 @@ auto digest = std::move(result).value();
 
 ## 4. 中间件与内置请求策略
 
-### 4.1 自定义中间件（`"ruvia/web/middleware.h"`, `"ruvia/web/next.h"`）
+### 4.1 自定义中间件（`"ruvia/web/middleware.h"`）
 
 任何声明为 `final`、不继承基类，且提供 `handle(ruvia::context&, ruvia::next&)`（返回 `ruvia::task<void>` 或 `ruvia::task<ruvia::http_response>`）的类均满足 `ruvia::middleware` 概念：
 
@@ -374,13 +374,13 @@ const auto& user = c.request_state<current_user>();
 | `ruvia::security_headers_middleware` (`"ruvia/web/security_headers.h"`) | 自动注入 `X-Content-Type-Options`、`X-Frame-Options`、`Strict-Transport-Security`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头（对 404 响应同样生效） |
 | `ruvia::csrf_protection` (`"ruvia/web/csrf.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件 |
 | `ruvia::session_middleware` (`"ruvia/web/session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话 |
-| `ruvia::make_health_response` / `make_readiness_response` (`"ruvia/web/health.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`） |
+| `ruvia::make_health_response` / `make_readiness_response` (`"ruvia/web/context.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`） |
 
 ---
 
 ## 5. 声明式模型 `RUVIA_MODEL`、序列化与参数校验
 
-头文件：`"ruvia/web/model.h"`、`"ruvia/web/model_types.h"`、`"ruvia/web/model_object.h"`、`"ruvia/web/request_validation.h"`、`"ruvia/web/validation.h"`。
+头文件：`"ruvia/web/model.h"`、`"ruvia/web/validation.h"`。
 
 ### 5.1 模型定义与字段类型
 
@@ -409,12 +409,12 @@ const auto& user = c.request_state<current_user>();
 - `RUVIA_MAX(limit, message)`：数值上限或字符串 UTF-8 字节长度上限
 - `RUVIA_EMAIL(message)`：电子邮件格式校验
 - `RUVIA_ONE_OF(message, val1, val2, ...)`：枚举白名单校验
-- `RUVIA_PATTERN(message, pattern)` / `RUVIA_REGEX(message, pattern)`：整串锚定正则模式校验
+- `RUVIA_PATTERN(message, pattern)`：整串锚定正则模式校验
 - `RUVIA_CUSTOM(message, predicate)`：自定义谓词函数校验
 
 ```cpp
 #include "ruvia/web/model.h"
-#include "ruvia/web/request_validation.h"
+#include "ruvia/web/validation.h"
 
 RUVIA_MODEL(create_user_request,
     RUVIA_REQUIRED_FIELD(username, ruvia::string,
@@ -469,7 +469,7 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
   - `T ruvia::from_json<T>(std::string_view json, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，模型字段校验失败抛 `ruvia::validation_error`）
   - `std::pmr::string ruvia::to_json(const T& value, model_serialize_options options = {})`
   - `T ruvia::from_form<T>(std::string_view form, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，字段校验失败抛 `ruvia::validation_error`）
-- **零拷贝动态 JSON 视图（`"ruvia/web/model_object.h"`）**：
+- **零拷贝动态 JSON 视图（`"ruvia/web/model.h"`）**：
   - `ruvia::json_object::parse(std::string_view body, model_parse_options options = {})` / `ruvia::json_value::parse(std::string_view body, model_parse_options options = {})`（直接返回值，语法非法抛 `std::invalid_argument`）
   - 支持 `obj.get<ruvia::string>("key")`、`obj.get<ruvia::int64>("count")`、`obj.for_each_field([](std::string_view key, const ruvia::json_value& val) { ... })`、`val.for_each_element([](const ruvia::json_value& item) { ... })`。
 - **命令式校验器 `ruvia::validator`（`"ruvia/web/validation.h"`）**：

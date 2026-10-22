@@ -7,7 +7,6 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
-#include "ruvia/http/http_set_cookie_plan.h"
 
 #include "test_harness.h"
 
@@ -16,7 +15,7 @@ namespace {
 using ruvia::http_response;
 
 http_response make_response() {
-    return http_response({.resource_ = std::pmr::new_delete_resource()});
+    return http_response(std::pmr::new_delete_resource());
 }
 
 }  // namespace

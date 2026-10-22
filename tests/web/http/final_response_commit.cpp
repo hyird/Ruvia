@@ -9,7 +9,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/event_loop_attachment.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"

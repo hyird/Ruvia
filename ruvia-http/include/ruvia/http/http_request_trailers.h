@@ -28,8 +28,8 @@ public:
     explicit http_request_trailers(std::pmr::memory_resource* resource);
     http_request_trailers(const http_request_trailers&) = delete;
     http_request_trailers& operator=(const http_request_trailers&) = delete;
-    [[nodiscard]] std::variant<std::monostate, http_request_trailer_error> append(std::string_view name, std::string_view value);
-    [[nodiscard]] std::variant<std::monostate, http_request_trailer_error> append_http1(std::string_view block);
+    [[nodiscard]] std::optional<http_request_trailer_error> append(std::string_view name, std::string_view value);
+    [[nodiscard]] std::optional<http_request_trailer_error> append_http1(std::string_view block);
     [[nodiscard]] std::pmr::vector<http_header> take_fields() && noexcept {
         budget_ = http_trailer_section_budget();
         return std::move(fields_);

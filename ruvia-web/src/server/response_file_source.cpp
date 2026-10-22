@@ -4,7 +4,7 @@
 #include <ios>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {
 

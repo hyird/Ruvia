@@ -10,7 +10,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/task.h"
-#include "ruvia/http/http1_connect.h"
+#include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_response_server.h"
 

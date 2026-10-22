@@ -86,43 +86,43 @@ class controller_registration_access final {
     }
 
     static void add_route(const controller_route_builder& scope, http_known_method method,
-        std::string_view path, route_handler_type handler,
+        std::string_view path, route_handler handler,
         std::span<const controller_middleware_descriptor> middlewares) {
         scope.register_route(method, path, handler, middlewares);
     }
 
     static void add_route(const controller_route_builder& scope, http_known_method method,
-        std::string_view path, route_stream_handler_type handler,
+        std::string_view path, route_stream_handler handler,
         std::span<const controller_middleware_descriptor> middlewares) {
         scope.register_route(method, path, handler, middlewares);
     }
 
     static void add_extension_method_route(const controller_route_builder& scope,
-        std::string_view method_token, std::string_view path, route_handler_type handler,
+        std::string_view method_token, std::string_view path, route_handler handler,
         std::span<const controller_middleware_descriptor> middlewares) {
         scope.register_extension_method_route(method_token, path, handler, middlewares);
     }
 
     static void add_extension_method_route(const controller_route_builder& scope,
-        std::string_view method_token, std::string_view path, route_stream_handler_type handler,
+        std::string_view method_token, std::string_view path, route_stream_handler handler,
         std::span<const controller_middleware_descriptor> middlewares) {
         scope.register_extension_method_route(method_token, path, handler, middlewares);
     }
 
     static void add_tunnel_route(const controller_route_builder& scope, std::string_view protocol,
-        std::string_view target, route_stream_handler_type handler,
+        std::string_view target, route_stream_handler handler,
         std::span<const controller_middleware_descriptor> middlewares, http_tunnel_route_config config = {}) {
         scope.register_tunnel_route(protocol, target, handler, middlewares, config);
     }
 
     static void add_tunnel_route(const controller_route_builder& scope, std::string_view protocol,
-        std::string_view target, route_stream_handler_type handler, http_tunnel_route_config config,
+        std::string_view target, route_stream_handler handler, http_tunnel_route_config config,
         std::span<const controller_middleware_descriptor> middlewares = {}) {
         scope.register_tunnel_route(protocol, target, handler, middlewares, config);
     }
 
     static void add_websocket_route(const controller_route_builder& scope, http_known_method method,
-        std::string_view path, route_stream_handler_type handler,
+        std::string_view path, route_stream_handler handler,
         std::span<const controller_middleware_descriptor> middlewares,
         websocket_route_config websocket_config = {}) {
         scope.register_websocket_route(
@@ -130,7 +130,7 @@ class controller_registration_access final {
     }
 
     static void add_websocket_route(const controller_route_builder& scope, http_known_method method,
-        std::string_view path, route_stream_handler_type handler,
+        std::string_view path, route_stream_handler handler,
         websocket_route_config websocket_config,
         std::span<const controller_middleware_descriptor> middlewares = {}) {
         scope.register_websocket_route(
@@ -152,7 +152,7 @@ class controller_registration_access final {
     }
 
     template <task<void> (controller_type::*handler)(context&)>
-    [[nodiscard]] static route_stream_handler_type bind_stream(controller_type* instance) noexcept {
+    [[nodiscard]] static route_stream_handler bind_stream(controller_type* instance) noexcept {
         return callback_access::make<task<void>(context&)>(instance, &invoke_stream<handler>);
     }
 

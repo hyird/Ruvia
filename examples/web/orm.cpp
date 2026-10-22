@@ -17,8 +17,8 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/event_loop_attachment.h"
-#include "ruvia/web/db/db_client.h"
+#include "ruvia/core/event_loop.h"
+#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_schema.h"
@@ -26,7 +26,7 @@
 
 #include "backend_tls.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_client.h"
+#include "ruvia/web/redis/redis_handle.h"
 #endif
 
 namespace {
@@ -63,7 +63,7 @@ auto migrations() {
 
 task<void> demonstrate(db_client& db) {
     auto handle = db.handle();
-    auto devices = handle.get_repository<device>();
+    auto devices = handle.repository<device>();
     device input;
     input.set<"id">(1);
     input.set<"name">("Pump station");
@@ -95,7 +95,7 @@ task<void> demonstrate(db_client& db) {
         std::cout << "revision=" << one->get<"revision">() << '\n';
     }
 
-    auto builder = devices.create_query_builder("d");
+    auto builder = devices.query_builder("d");
     builder.where(device::column<"revision">() >= 1);
     std::cout << "matching=" << co_await builder.get_count() << '\n';
     builder.limit(1);
@@ -103,7 +103,7 @@ task<void> demonstrate(db_client& db) {
     std::cout << "page=" << page.size() << ", matching=" << matching << '\n';
 
     db_query expressions;
-    auto summary = devices.create_query_builder("d");
+    auto summary = devices.query_builder("d");
     summary.select({{"id"},
         {"label", expressions.call("upper", {expressions.column("name", "d")})},
         {"rank", expressions.over(expressions.call("row_number"), {.order_by_ = {{expressions.column("id", "d")}}})}});
@@ -111,7 +111,7 @@ task<void> demonstrate(db_client& db) {
     for (const auto& item : summaries) {
         std::cout << item.get<"rank">() << ": " << item.get<"label">() << '\n';
     }
-    auto update_summary = devices.create_update_builder();
+    auto update_summary = devices.update_builder();
     update_summary.where(device::column<"id">() == 1)
         .set({
             {"name", expressions.call("upper", {expressions.column("name")})},
@@ -124,15 +124,15 @@ task<void> demonstrate(db_client& db) {
     }
 
     auto transaction = co_await handle.begin_transaction();
-    auto transactional = transaction.get_repository<device>();
-    auto candidates = transactional.create_query_builder("candidate");
+    auto transactional = transaction.repository<device>();
+    auto candidates = transactional.query_builder("candidate");
     candidates.where(device::column<"id">() == 1).limit(1).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
-    auto claim = transactional.create_update_builder("target");
+    auto claim = transactional.update_builder("target");
     claim.update_from_cte("candidates", "candidate")
         .set("name", "Claimed device")
         .where(device::column<"id">("target") == device::column<"id">("candidate"))
         .returning();
-    auto claimed = transactional.create_query_builder("claimed");
+    auto claimed = transactional.query_builder("claimed");
     claimed.with("candidates", candidates).with("claimed", claim).from_cte("claimed");
     const auto claimed_devices = co_await claimed.get_many();
     std::cout << "claimed=" << claimed_devices.size() << '\n';
@@ -151,11 +151,11 @@ task<void> demonstrate(db_client& db) {
 #ifdef RUVIA_ENABLE_REDIS
 task<void> demonstrate_cache(db_client& db) {
     auto handle = db.handle();
-    auto devices = handle.get_repository<device>();
+    auto devices = handle.repository<device>();
     const db_find_options options{.order_ = {{"id"}}, .take_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .milliseconds_ = std::chrono::seconds(30)}};
     auto [page, total] = co_await devices.find_and_count(options);
     std::cout << "cached page=" << page.size() << ", total=" << total << '\n';
-    auto query = devices.create_query_builder();
+    auto query = devices.query_builder();
     query.cache(std::chrono::seconds(5));
     std::cout << "cached count=" << co_await query.get_count() << '\n';
     // The id covers the page and the count find_and_count derived from it.

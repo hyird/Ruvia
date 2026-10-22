@@ -28,12 +28,12 @@ redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const w
       resource_(resource),
       worker_(worker_value),
       tls_context_(make_redis_tls_context(config_.tls_)),
-      general_(make_pmr_object<redis_pool>(resource_, io_context, config_, tls_context_, config_.command_timeout_,
-          config_.pool_size_per_worker_, worker_, resource_)),
+      general_(io_context, config_, tls_context_, config_.command_timeout_,
+          config_.pool_size_per_worker_, worker_, resource_),
       // Blocking waits have their own deadlines; ordinary command timeouts
       // must not interrupt a finite long wait or an explicitly cancelled wait.
-      blocking_(make_pmr_object<redis_pool>(resource_, io_context, config_, tls_context_, std::nullopt,
-          config_.blocking_pool_size_per_worker_, worker_, resource_)),
+      blocking_(io_context, config_, tls_context_, std::nullopt,
+          config_.blocking_pool_size_per_worker_, worker_, resource_),
       subscriptions_(io_context, tls_context_, config_, worker_, resource_) {}
 
 redis_client_runtime::~redis_client_runtime() = default;
@@ -41,12 +41,12 @@ redis_client_runtime::~redis_client_runtime() = default;
 task<void> redis_client_runtime::connect() {
     // Validate ordinary connections at startup; blocking slots and
     // subscriptions connect lazily.
-    co_await general_->connect();
+    co_await general_.connect();
 }
 
 void redis_client_runtime::close_now() noexcept {
-    general_->close_now();
-    blocking_->close_now();
+    general_.close_now();
+    blocking_.close_now();
     subscriptions_.close_now();
 }
 

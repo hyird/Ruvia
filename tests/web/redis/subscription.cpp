@@ -25,7 +25,7 @@
 
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/web/redis/redis_client.h"
+#include "ruvia/web/redis/redis_handle.h"
 
 #include "test_harness.h"
 
@@ -362,7 +362,7 @@ ruvia::task<void> check_malformed_push_closes(ruvia::redis_client& client, ruvia
 
 ruvia::task<void> check_read_timeout(ruvia::redis_client& client, ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
-    auto subscription = client.with_options({.timeout_ = std::chrono::milliseconds(200)}).subscription();
+    auto subscription = client.handle({.timeout_ = std::chrono::milliseconds(200)}).subscription();
     const std::array<std::string_view, 1> channels{"silent"};
     co_await subscription.subscribe(channels);
     auto confirmed = co_await subscription.read();
@@ -381,7 +381,7 @@ ruvia::task<void> check_read_timeout(ruvia::redis_client& client, ruvia::testing
 ruvia::task<void> check_stop_token_ends_the_stream(ruvia::redis_client& client, ruvia::stop_source& stop,
     std::promise<void>& confirmed_promise, ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
-    auto subscription = client.with_options({.stop_token_ = stop.token()}).subscription();
+    auto subscription = client.handle({.stop_token_ = stop.token()}).subscription();
     const std::array<std::string_view, 1> channels{"silent"};
     co_await subscription.subscribe(channels);
     auto confirmed = co_await subscription.read();

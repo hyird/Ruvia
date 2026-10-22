@@ -9,10 +9,9 @@
 #include <openssl/rand.h>
 
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/error_text.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_handle.h"
 
-#include "client/websocket_client_internal.h"
 #include "client/websocket_client_state.h"
 
 namespace ruvia::detail {

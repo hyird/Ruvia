@@ -58,8 +58,7 @@ public:
     worker_connections(const worker_connections&) = delete;
     worker_connections& operator=(const worker_connections&) = delete;
 #if defined(_WIN32)
-    void attach_windows_accept(windows_accept_domain& domain, std::size_t origin,
-        worker_runtime_context& context);
+    void attach_windows_accept(windows_accept_domain& domain, std::size_t origin);
     [[nodiscard]] task<void> run_windows_accepts();
 #endif
     void prepare();

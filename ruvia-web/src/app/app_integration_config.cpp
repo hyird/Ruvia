@@ -1,4 +1,4 @@
-#include "ruvia/core/memory/pmr_resource.h"
+#include "ruvia/core/memory/pmr_object.h"
 
 #include "app/app_config_mutation.h"
 #include "integration/named_capability.h"
@@ -16,8 +16,8 @@ application& application::database(db_registration_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure database while app is running", [&](detail::app_state& state_value) {
             auto* resource = process_resource();
-            detail::validate_capability_alias(config.alias_, "database alias must not be empty");
-            detail::db_definition replacement{std::pmr::string(config.alias_, resource),
+            detail::validate_capability_alias(config.alias_.view(), "database alias must not be empty");
+            detail::db_definition replacement{std::pmr::string(config.alias_.view(), resource),
                 detail::db_config_storage(config.config_, resource)};
 #ifdef RUVIA_ENABLE_REDIS
             if (config.query_cache_) {
@@ -40,7 +40,7 @@ application& application::redis(redis_registration_config config) {
     return detail::mutate_stopped_app(*this, *state_, "cannot configure redis while app is running",
         [&](detail::app_state& state_value) {
             detail::upsert_named_capability_definition(
-                state_value.redis_, config.alias_, config.config_, "redis alias must not be empty");
+                state_value.redis_, config.alias_.view(), config.config_, "redis alias must not be empty");
         });
 }
 
@@ -53,7 +53,7 @@ application& application::redis(std::nullptr_t) {
 application& application::http_client(http_client_registration_config config) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure HTTP client while app is running", [&](detail::app_state& state_value) {
-            detail::upsert_named_capability_definition(state_value.http_clients_, config.alias_, config.config_,
+            detail::upsert_named_capability_definition(state_value.http_clients_, config.alias_.view(), config.config_,
                 "HTTP client alias must not be empty");
         });
 }

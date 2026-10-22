@@ -6,7 +6,7 @@
 
 #include "ruvia/http/detail/coding/http_response_content_semantics.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/http_field_whitespace.h"
+#include "ruvia/http/http_field_syntax.h"
 
 #include "client/http_client_response_head.h"
 #include "field/response_field_validation.h"

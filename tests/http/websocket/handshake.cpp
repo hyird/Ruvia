@@ -10,7 +10,6 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/http/websocket_subprotocol_set.h"
 
 #include "http1_request_message_fixture.h"
 #include "test_harness.h"

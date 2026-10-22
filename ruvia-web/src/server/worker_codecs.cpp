@@ -3,7 +3,6 @@
 #include <stdexcept>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/pmr_resource.h"
 
 namespace ruvia::detail {
 

@@ -37,7 +37,7 @@ struct app_state;
 
 #ifdef RUVIA_ENABLE_DATABASE
 struct db_registration_config final {
-    std::string alias_{"default"};
+    borrowed_text alias_{"default"};
     db_config config_{};
 #ifdef RUVIA_ENABLE_REDIS
     std::optional<db_query_cache_registration> query_cache_{};
@@ -47,13 +47,13 @@ struct db_registration_config final {
 
 #ifdef RUVIA_ENABLE_REDIS
 struct redis_registration_config final {
-    std::string alias_{"default"};
+    borrowed_text alias_{"default"};
     redis_config config_{};
 };
 #endif
 
 struct http_client_registration_config final {
-    std::string alias_{"default"};
+    borrowed_text alias_{"default"};
     http_client_config config_{};
 };
 
@@ -123,8 +123,8 @@ public:
     application& blocking_pool(blocking_pool_options config);
     application& blocking_pool(std::nullptr_t);
 
-    application& on_error(http_error_handler_type handler);
-    application& on_not_found(http_not_found_handler_type handler);
+    application& on_error(http_error_handler handler);
+    application& on_not_found(http_not_found_handler handler);
     // Path-prefix-scoped fallbacks, the Hono sub-app scoping analog: the
     // deepest matching registered prefix wins, matching on whole path
     // segments ("/api" scopes "/api" and "/api/x", never "/apix") compared
@@ -159,22 +159,22 @@ public:
     // workers admits up to N times this rule. Size it accordingly.
     application& rate_limit(rate_limit_config config);
     application& rate_limit(std::nullptr_t);
-    application& on_access(access_log_callback_type callback);
+    application& on_access(access_log_callback callback);
     // Observes connections lost to an exception that escaped their session --
     // the failures on_error cannot answer because the response is already
     // committed or the error handler itself failed. Without a listener these
     // are reported to stderr; they are never silently dropped. A peer reset
     // or close, or I/O this server cancelled (stop, drain, timeouts), is a
     // normal end of connection: it is neither delivered here nor counted.
-    application& on_connection_failure(connection_failure_callback_type callback);
+    application& on_connection_failure(connection_failure_callback callback);
     // Runs on the run() caller after worker capabilities are ready, before
     // TCP admission. All hooks must succeed before serving; failure or a
     // stop request rolls back startup. Ready workers can execute posted jobs.
-    application& on_start(app_hook_type hook);
+    application& on_start(app_hook hook);
     // Runs on the run() caller after admission closes and in-flight requests
     // have drained (or server_config::drain_timeout_ passed), before runtime
     // join. Also runs when published startup is cancelled or a start hook fails.
-    application& on_stop(app_hook_type hook);
+    application& on_stop(app_hook hook);
 #ifdef RUVIA_ENABLE_DATABASE
     application& database(db_registration_config config);
     application& database(std::nullptr_t);

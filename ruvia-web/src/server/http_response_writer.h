@@ -14,16 +14,32 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 
 #include "server/connection_scanner.h"
-#include "server/http1_buffered_response_write.h"
 #include "server/http_file_write.h"
 #include "server/response_file_source.h"
 
 namespace ruvia::detail {
 
+// A write commits the final status only once the entire head is out; it
+// completes only when it also ends without error.
+struct http1_buffered_response_write_result final {
+    std::optional<http_status_code> committed_status_;
+    bool completed_{false};
+};
+
+// `bytes_transferred` is the composed async-write prefix accepted before `error`.
+[[nodiscard]] inline http1_buffered_response_write_result classify_http1_buffered_response_write(
+    const http1_buffered_response_plan& plan, std::size_t response_head_bytes, std::error_code error,
+    std::size_t bytes_transferred) noexcept {
+    if (response_head_bytes == 0 || bytes_transferred < response_head_bytes) {
+        return {};
+    }
+    return {plan.response_status(), !error};
+}
 // Only for a final buffered response followed immediately by send shutdown.
 // Linux can carry the response tail and FIN together; other platforms keep
 // their ordinary send flags. Reusable and streaming writes must not use it.
@@ -38,7 +54,7 @@ inline constexpr asio::socket_base::message_flags final_plain_tcp_send_flags = 0
 // than the time to drain the whole response.
 class http_write_progress final {
 public:
-    explicit http_write_progress(connection_scanner::entry_type& entry) noexcept
+    explicit http_write_progress(connection_scanner::entry& entry) noexcept
         : entry_(&entry) {}
 
     [[nodiscard]] std::size_t operator()(const std::error_code& error, std::size_t bytes_transferred) const noexcept {
@@ -47,7 +63,7 @@ public:
     }
 
 private:
-    connection_scanner::entry_type* entry_;
+    connection_scanner::entry* entry_;
 };
 
 // Puts an accepted plain TCP socket into user non-blocking mode once, before
@@ -112,7 +128,7 @@ template <typename const_buffer_sequence_type>
 // response_file_source.
 template <typename stream_type>
 task<std::error_code> write_http1_file_body(stream_type& stream, const http_response& response,
-    const response_file_io& file_io, connection_scanner::entry_type& progress) {
+    const response_file_io& file_io, connection_scanner::entry& progress) {
     if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket> &&
                   native_response_file_write_available) {
         for (std::size_t index = 0; index < response.body_segment_count(); ++index) {
@@ -202,7 +218,7 @@ template <typename stream_type>
 task<http1_buffered_response_write_result> finish_file_response_write(stream_type& stream,
     http_response_head_buffer& head, const http_response& response,
     const http1_buffered_response_plan& response_plan, const http1_response_write_start& start,
-    const response_file_io& file_io, connection_scanner::entry_type& progress) {
+    const response_file_io& file_io, connection_scanner::entry& progress) {
     const auto response_head_bytes = start.head_bytes_;
     if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket> &&
                   native_response_file_write_available) {

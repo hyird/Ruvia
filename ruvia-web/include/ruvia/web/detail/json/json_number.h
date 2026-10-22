@@ -80,10 +80,10 @@ template <typename number_t_type>
     const auto number = input.substr(0, length);
     if constexpr (std::is_floating_point_v<number_t_type>) {
         const auto parsed_value = detail::parse_decimal_number<number_t_type>(number);
-        if ((parsed_value.index() != 0) || !std::isfinite(std::get<0>(parsed_value))) {
+        if (!parsed_value || !std::isfinite(*parsed_value)) {
             return false;
         }
-        value = std::get<0>(parsed_value);
+        value = *parsed_value;
     } else {
         const auto [ptr, ec] = std::from_chars(number.data(), number.data() + number.size(), value);
         if (ec != std::errc{} || ptr != number.data() + number.size()) {

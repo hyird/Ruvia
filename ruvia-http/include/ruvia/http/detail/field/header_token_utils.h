@@ -9,7 +9,6 @@
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_values.h"
-#include "ruvia/http/http_field_whitespace.h"
 
 namespace ruvia::detail {
 

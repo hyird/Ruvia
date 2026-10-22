@@ -154,7 +154,7 @@ namespace {
 
 template <typename view_type>
 task<std::optional<view_type>> read_body(
-    detail::callback_ref_type<task<std::optional<std::span<const std::byte>>>()> read, bool& read_active) {
+    detail::callback_ref<task<std::optional<std::span<const std::byte>>>()> read, bool& read_active) {
     auto lease = detail::claim_operation_lane(read_active, "request body read is already in progress");
     const auto chunk = co_await read();
     if (!chunk) {
@@ -184,10 +184,10 @@ scoped_operation<void> response_stream_writer::write(std::span<const std::byte> 
 scoped_operation<void> response_stream_writer::write(std::string_view chunk) & {
     require_active();
     std::pmr::string owned(chunk, resource_);
-    return write(std::move(owned));
+    return write_owned(std::move(owned));
 }
 
-scoped_operation<void> response_stream_writer::write(std::pmr::string&& chunk) & {
+scoped_operation<void> response_stream_writer::write_owned(std::pmr::string&& chunk) {
     require_active();
     std::pmr::string owned(std::move(chunk), resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
@@ -198,7 +198,7 @@ scoped_operation<void> response_stream_writer::writeln(std::string_view chunk) &
     require_active();
     std::pmr::string owned(chunk, resource_);
     owned.push_back('\n');
-    return write(std::move(owned));
+    return write_owned(std::move(owned));
 }
 
 scoped_operation<timer_sleep_result> response_stream_writer::sleep(
@@ -257,22 +257,6 @@ scoped_operation<void> websocket::pong(std::string_view payload_value) & {
 
 scoped_operation<void> websocket::ping(std::string_view payload_value) & {
     return write(websocket_opcode::ping, payload_value);
-}
-
-scoped_operation<void> websocket::text(std::pmr::string&& payload_value, websocket_send_options options) & {
-    return write(websocket_opcode::text, std::move(payload_value), options.compress_);
-}
-
-scoped_operation<void> websocket::binary(std::pmr::string&& payload_value, websocket_send_options options) & {
-    return write(websocket_opcode::binary, std::move(payload_value), options.compress_);
-}
-
-scoped_operation<void> websocket::pong(std::pmr::string&& payload_value) & {
-    return write(websocket_opcode::pong, std::move(payload_value));
-}
-
-scoped_operation<void> websocket::ping(std::pmr::string&& payload_value) & {
-    return write(websocket_opcode::ping, std::move(payload_value));
 }
 
 scoped_operation<void> websocket::send(websocket_message&& message, websocket_send_options options) & {

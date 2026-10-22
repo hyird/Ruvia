@@ -31,12 +31,12 @@
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/auth/jwt.h"
-#include "ruvia/web/conn_info.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/csrf.h"
-#include "ruvia/web/db/db_migration.h"
+#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_rows.h"
-#include "ruvia/web/db/db_transaction.h"
+#include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/db/db_types.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/multipart_reader.h"
@@ -228,7 +228,7 @@ private:
 
     ruvia::task<ruvia::http_response> response_slot(ruvia::context& c) {
         c.header("X-Response-Prepared", "true");
-        ruvia::http_response response({.resource_ = c.arena()});
+        ruvia::http_response response(c.arena());
         response.status(ruvia::http_status::non_authoritative_information);
         response.header("X-Response-Remove", "drop");
         response.body("response slot\n");
@@ -326,7 +326,7 @@ private:
 
     ruvia::task<ruvia::http_response> assigned_prepared_response(ruvia::context& c) {
         c.header("X-Surface-Prepared-Assigned", "true");
-        ruvia::http_response response({.resource_ = c.arena()});
+        ruvia::http_response response(c.arena());
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.body("assigned prepared response\n");
         co_return response;
@@ -480,7 +480,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> manual_body(ruvia::context& c) {
-        ruvia::http_response response({.resource_ = c.arena()});
+        ruvia::http_response response(c.arena());
         response.status(ruvia::http_status::accepted);
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.header("X-Manual-Body", "owned");
