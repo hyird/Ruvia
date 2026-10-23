@@ -13,6 +13,8 @@
 
 #include "ruvia/web/db/db_types.h"
 
+#include "db/db_statement_cache.h"
+
 struct pg_conn;
 struct pg_result;
 
@@ -45,73 +47,19 @@ struct postgresql_params final {
 [[nodiscard]] std::uint64_t postgresql_affected_rows(const pg_result& result_value) noexcept;
 
 // Named server-side statements prepared on one PostgreSQL connection, so a
-// repeated statement skips the server's parse and analysis. The server fixes
-// parameter types at Parse, so a statement is keyed by its SQL and the
-// parameter types it declares. A statement is prepared on its second use: the
-// first runs unnamed, so SQL that never repeats (literals, generated lists)
-// costs no more than without the cache and does not evict reused statements.
-// A name is derived from the key's SHA-256: equal names denote equal
-// statements, so a name reaching a server session it was not prepared on (a
-// pooler that shares server sessions) can never run a different statement.
-// Entries live as long as the connection; the least recently used one is
-// closed on the server when a new one needs room.
+// repeated statement skips the server's parse and analysis
+// (db_statement_cache: keyed by SQL and the parameter types it declares,
+// prepared on its second use, least recently used closed for room). A name is
+// derived from the key's SHA-256: equal names denote equal statements, so a
+// name reaching a server session it was not prepared on (a pooler that shares
+// server sessions) can never run a different statement. Every statement in
+// flight on a pipelined connection shares the cache.
 //
-// Every statement in flight on a pipelined connection shares the cache. A
-// handle names one entry by position and generation, so forgetting or
-// replacing an entry never redirects another statement's handle to a
-// different statement; a stale handle is ignored.
-class postgresql_statement_cache final {
-public:
-    static constexpr std::size_t capacity = 128;
-    // "ruvia_", 32 lowercase hex digits of the key digest, and a NUL.
-    using name_type = std::array<char, 39>;
+// "ruvia_", 32 lowercase hex digits of the key digest, and a NUL.
+using postgresql_statement_name = std::array<char, 39>;
+using postgresql_statement_cache = db_statement_cache<postgresql_statement_name>;
 
-    struct handle final {
-        std::size_t index_;
-        std::uint64_t generation_;
-    };
-
-    struct lookup final {
-        // Absent on a first use, which runs as the unnamed statement.
-        std::optional<handle> statement_;
-        // The statement is new to the connection: Parse it before binding.
-        bool inserted_{false};
-        // A statement evicted to make room; it is still prepared on the server.
-        std::optional<name_type> evicted_{};
-    };
-
-    explicit postgresql_statement_cache(std::pmr::memory_resource* resource);
-
-    [[nodiscard]] lookup find_or_insert(std::string_view sql, std::span<const unsigned int> types);
-    // The name of the entry a lookup has just returned.
-    [[nodiscard]] const char* name(handle statement) const noexcept {
-        return entries_[statement.index_].name_.data();
-    }
-    // Drops an entry the server does not hold (a failed Parse) or no longer
-    // holds as cached (a stale statement), unless it was replaced since.
-    void forget(handle statement) noexcept;
-    // A new connection starts without server-side statements.
-    void clear() noexcept;
-
-private:
-    struct entry final {
-        std::pmr::string sql_;
-        std::pmr::vector<unsigned int> types_;
-        std::size_t hash_;
-        std::uint64_t last_use_;
-        // Zero marks a forgotten entry, free for reuse. Never reused across
-        // clear(), so no handle outlives its entry unnoticed.
-        std::uint64_t generation_;
-        name_type name_;
-    };
-
-    std::pmr::vector<entry> entries_;
-    // Key hashes of recent first uses; zero marks a free position. A hash
-    // collision only prepares a statement on its first use.
-    std::array<std::size_t, capacity> first_uses_{};
-    std::size_t next_first_use_{0};
-    std::uint64_t clock_{0};
-    std::uint64_t generation_{0};
-};
+[[nodiscard]] postgresql_statement_name make_postgresql_statement_name(
+    std::string_view sql, std::span<const unsigned int> types, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

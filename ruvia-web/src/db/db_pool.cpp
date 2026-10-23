@@ -10,7 +10,6 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "db/db_transaction_start.h"
 
@@ -411,41 +410,6 @@ db_socket_wait_result db_pool<driver_type>::slot_wait::await_resume() {
     return result_value;
 }
 
-// One buffered statement on a pooled connection: refuse empty SQL before
-// taking a slot, hold the slot for the duration, and close the connection if
-// the statement failed in a way that leaves the slot unusable. Abort is checked
-// before reconnecting; a connected slot needs no readiness task. The lease
-// guard releases the slot either way.
-template <typename driver_type>
-template <typename result_type>
-task<result_type> db_pool<driver_type>::run_leased(std::pmr::string sql, std::pmr::vector<db_value> params,
-    std::pmr::memory_resource* resource, operation_options options, statement_hook_type<result_type> statement,
-    operation_scope* scope) {
-    scoped_request_io_timer timer(scope, request_io_kind::db);
-    if (sql.empty()) {
-        throw std::invalid_argument("SQL must not be empty");
-    }
-    const operation_timeout timeout(options.timeout_);
-    const auto index = co_await lease_acquire(*this, timeout, options.stop_token_);
-    pooled_lease lease(*this, index);
-    typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
-    std::exception_ptr failure;
-    try {
-        leases_.throw_if_aborted(index);
-        if (!slots_[index].connected_) {
-            co_await connect_slot(index, timeout);
-        }
-        co_return co_await statement(*this, index, sql, std::span<const db_value>(params), resource,
-            timeout.constrained_by(config_.query_timeout_));
-    } catch (...) {
-        failure = std::current_exception();
-    }
-    if (!db_slot_reusable_after(failure)) {
-        close_slot(index);
-    }
-    std::rethrow_exception(failure);
-}
-
 // A failed transaction gives its slot back. When the connection is still
 // usable the open transaction is rolled back first so the next caller does
 // not inherit it; a rollback that fails closes the connection, which ends the
@@ -497,24 +461,13 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
 template <typename driver_type>
 task<db_rows> db_pool<driver_type>::query(std::pmr::string sql, std::pmr::vector<db_value> params,
     std::pmr::memory_resource* resource, operation_options options, operation_scope* scope) {
-    if constexpr (driver_type::pipelines_statements) {
-        return driver_type::query_pipelined(*this, std::move(sql), std::move(params), resource, std::move(options), scope);
-    } else {
-        return run_leased<db_rows>(
-            std::move(sql), std::move(params), resource, std::move(options), &driver_type::query, scope);
-    }
+    return driver_type::query_pipelined(*this, std::move(sql), std::move(params), resource, std::move(options), scope);
 }
 
 template <typename driver_type>
 task<db_exec_result> db_pool<driver_type>::execute(std::pmr::string sql, std::pmr::vector<db_value> params,
     std::pmr::memory_resource* resource, operation_options options, operation_scope* scope) {
-    if constexpr (driver_type::pipelines_statements) {
-        return driver_type::execute_pipelined(
-            *this, std::move(sql), std::move(params), resource, std::move(options), scope);
-    } else {
-        return run_leased<db_exec_result>(
-            std::move(sql), std::move(params), resource, std::move(options), &driver_type::execute, scope);
-    }
+    return driver_type::execute_pipelined(*this, std::move(sql), std::move(params), resource, std::move(options), scope);
 }
 
 template <typename driver_type>

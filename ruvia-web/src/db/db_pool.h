@@ -30,6 +30,7 @@
 #include "db/db_config_storage.h"
 #include "db/db_host_resolution.h"
 #include "db/db_slot_socket.h"
+#include "db/mariadb_pipeline.h"
 #include "db/postgresql_pipeline.h"
 #include "integration/slot_pool.h"
 
@@ -78,32 +79,26 @@ class db_pool;
 // connection is idle -- a hook that cannot get there closes the slot before
 // throwing -- so the pool keeps the connection; any other failure closes it.
 //
-// state_type may keep a lease that release_slot() gives back for a caller of
-// its own (take_released_slot() returns true), hears when a caller stops
-// waiting for a lease, and is closed by close_now(). A driver
-// whose pipelines_statements is true runs query() and execute() outside
-// transactions through its own query_pipelined() and execute_pipelined()
-// instead of leasing a slot per statement.
+// Outside transactions, query() and execute() run through the driver's own
+// query_pipelined() and execute_pipelined(), which share connections between
+// callers (db_pipeline.h); state_type is that pipeline's per-pool state and
+// session_type keeps the group of each connection. The state may keep a lease
+// that release_slot() gives back for a caller of its own (take_released_slot()
+// returns true), hears when a caller stops waiting for a lease, and is closed
+// by close_now().
 struct mariadb_driver final {
     using connection_type = st_mysql;
     using pool_type = db_pool<mariadb_driver>;
-    // Statements are sent as text and lease their connection one at a time;
-    // neither a connection nor the pool keeps statement state.
-    struct session_type final {
-        explicit session_type(std::pmr::memory_resource*) noexcept {}
-    };
-    struct state_type final {
-        state_type(pool_type&, const worker_handle&) noexcept {}
-        [[nodiscard]] bool take_released_slot(std::size_t) noexcept {
-            return false;
-        }
-        void exclusive_waiter_left() noexcept {}
-        void close() noexcept {}
-    };
-    static constexpr bool pipelines_statements = false;
+    using session_type = mariadb_session;
+    using state_type = db_pipeline_state<mariadb_pipeline_io>;
     static constexpr db_driver driver = db_driver::mariadb;
     static constexpr std::string_view name{"MariaDB"};
 
+    static task<db_rows> query_pipelined(pool_type& pool, std::pmr::string sql, std::pmr::vector<db_value> params,
+        std::pmr::memory_resource* resource, operation_options options, operation_scope* scope);
+    static task<db_exec_result> execute_pipelined(pool_type& pool, std::pmr::string sql,
+        std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
+        operation_scope* scope);
     static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
     static void close_connection(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
@@ -124,8 +119,7 @@ struct postgresql_driver final {
     using connection_type = pg_conn;
     using pool_type = db_pool<postgresql_driver>;
     using session_type = postgresql_session;
-    using state_type = postgresql_pipeline_state;
-    static constexpr bool pipelines_statements = true;
+    using state_type = db_pipeline_state<postgresql_pipeline_io>;
     static constexpr db_driver driver = db_driver::postgresql;
     static constexpr std::string_view name{"PostgreSQL"};
 
@@ -414,28 +408,6 @@ private:
         task_awaiter<std::size_t> acquire_;
     };
 
-    // Gives a lease back through release_slot(), so the driver state sees it,
-    // on scope exit.
-    class pooled_lease final {
-    public:
-        pooled_lease(db_pool& pool, std::size_t index) noexcept
-            : pool_(pool),
-              index_(index) {}
-        pooled_lease(const pooled_lease&) = delete;
-        pooled_lease& operator=(const pooled_lease&) = delete;
-        ~pooled_lease() {
-            pool_.release_slot(index_);
-        }
-
-    private:
-        db_pool& pool_;
-        std::size_t index_;
-    };
-
-    template <typename result_type>
-    task<result_type> run_leased(std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options, statement_hook_type<result_type> statement,
-        operation_scope* scope = nullptr);
     template <typename result_type>
     task<result_type> run_on_transaction_slot(std::size_t index, std::pmr::string sql,
         std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, const operation_options& options,
@@ -462,9 +434,11 @@ private:
 };
 
 #ifdef RUVIA_ENABLE_MARIADB
+extern template class db_pipeline_state<mariadb_pipeline_io>;
 extern template class db_pool<mariadb_driver>;
 #endif
 #ifdef RUVIA_ENABLE_POSTGRESQL
+extern template class db_pipeline_state<postgresql_pipeline_io>;
 extern template class db_pool<postgresql_driver>;
 #endif
 

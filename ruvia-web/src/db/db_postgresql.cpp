@@ -2,14 +2,12 @@
 
 #include <libpq-fe.h>
 
-#include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
-#include <utility>
 
 #include <openssl/sha.h>
 
@@ -24,17 +22,11 @@ namespace {
 // pg_type OID of float8 (double precision); libpq's headers name no type OIDs.
 constexpr unsigned int postgresql_float8_oid = 701;
 
-[[nodiscard]] std::size_t postgresql_statement_hash(std::string_view sql, std::span<const unsigned int> types) noexcept {
-    auto hash = std::hash<std::string_view>{}(sql) ^ types.size();
-    for (const auto type : types) {
-        hash = (hash ^ type) * 0x100000001b3ULL;
-    }
-    return hash;
-}
+}  // namespace
 
 // The digest covers the SQL, a NUL that SQL never contains, and every type
 // OID as four big-endian bytes, so no two keys share an encoding.
-[[nodiscard]] postgresql_statement_cache::name_type postgresql_statement_name(
+postgresql_statement_name make_postgresql_statement_name(
     std::string_view sql, std::span<const unsigned int> types, std::pmr::memory_resource* resource) {
     std::pmr::string key(resource);
     key.reserve(sql.size() + 1 + types.size() * 4);
@@ -50,14 +42,12 @@ constexpr unsigned int postgresql_float8_oid = 701;
         throw std::runtime_error("PostgreSQL statement name digest failed");
     }
     constexpr std::string_view prefix{"ruvia_"};
-    postgresql_statement_cache::name_type name{};
+    postgresql_statement_name name{};
     prefix.copy(name.data(), prefix.size());
     // Zero initialization leaves the terminating NUL after the hex digits.
     http_encode_lower_hex(name.data() + prefix.size(), std::span(digest.data(), (name.size() - prefix.size()) / 2));
     return name;
 }
-
-}  // namespace
 
 db_error postgresql_error(const pg_conn& connection, std::string_view operation,
     db_error::code_type error_code, const pg_result* result_value) {
@@ -167,62 +157,6 @@ std::uint64_t postgresql_affected_rows(const pg_result& result_value) noexcept {
     }
     const auto parsed_value = std::from_chars(text, end, value);
     return parsed_value.ec == std::errc{} && parsed_value.ptr == end ? value : 0;
-}
-
-postgresql_statement_cache::postgresql_statement_cache(std::pmr::memory_resource* resource)
-    : entries_(pmr_resource_or_default(resource)) {}
-
-postgresql_statement_cache::lookup postgresql_statement_cache::find_or_insert(
-    std::string_view sql, std::span<const unsigned int> types) {
-    const auto hash = postgresql_statement_hash(sql, types);
-    ++clock_;
-    for (std::size_t index = 0; index < entries_.size(); ++index) {
-        auto& existing = entries_[index];
-        if (existing.generation_ != 0 && existing.hash_ == hash && existing.sql_ == sql &&
-            std::ranges::equal(existing.types_, types)) {
-            existing.last_use_ = clock_;
-            return {handle{index, existing.generation_}};
-        }
-    }
-    const auto first_use = std::ranges::find(first_uses_, hash);
-    if (first_use == first_uses_.end()) {
-        first_uses_[next_first_use_] = hash;
-        next_first_use_ = (next_first_use_ + 1) % first_uses_.size();
-        return {};
-    }
-    *first_use = 0;
-    // Build the whole entry before touching the table, so a failed allocation
-    // leaves every entry, and the server statement it names, intact.
-    auto* resource = entries_.get_allocator().resource();
-    entry added{std::pmr::string(sql, resource), std::pmr::vector<unsigned int>(types.begin(), types.end(), resource),
-        hash, clock_, generation_ + 1, postgresql_statement_name(sql, types, resource)};
-    // A forgotten entry is reused before the table grows; only a full table
-    // evicts a statement the server still holds.
-    const auto free_entry = std::ranges::find(entries_, std::uint64_t{0}, &entry::generation_);
-    lookup result{handle{static_cast<std::size_t>(free_entry - entries_.begin()), added.generation_}, true, std::nullopt};
-    if (free_entry != entries_.end()) {
-        *free_entry = std::move(added);
-    } else if (entries_.size() < capacity) {
-        entries_.push_back(std::move(added));
-    } else {
-        const auto oldest = std::ranges::min_element(entries_, {}, &entry::last_use_);
-        result.statement_->index_ = static_cast<std::size_t>(oldest - entries_.begin());
-        result.evicted_ = oldest->name_;
-        *oldest = std::move(added);
-    }
-    ++generation_;
-    return result;
-}
-
-void postgresql_statement_cache::forget(handle statement) noexcept {
-    if (statement.index_ < entries_.size() && entries_[statement.index_].generation_ == statement.generation_) {
-        entries_[statement.index_].generation_ = 0;
-    }
-}
-
-void postgresql_statement_cache::clear() noexcept {
-    entries_.clear();
-    first_uses_.fill(0);
 }
 
 }  // namespace ruvia::detail

@@ -15,63 +15,12 @@
 #include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
+#include "pipeline_support.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 namespace pipeline_test {
-
-using peer_type = ruvia::test::backend_startup_peer;
-
-// What one concurrent caller observed. Failures are recorded rather than
-// thrown so every caller in a scope finishes on its own.
-struct outcome final {
-    std::string value_;
-    std::uint64_t affected_rows_{0};
-    std::optional<ruvia::db_error::code_type> error_;
-    std::string sql_state_;
-};
-
-inline void record_failure(const ruvia::db_error& error, outcome& result) {
-    result.error_ = error.code();
-    result.sql_state_ = error.sql_state().value_or("");
-}
-
-inline ruvia::task<void> query(ruvia::db_handle handle, std::string_view sql, outcome& result) {
-    try {
-        const ruvia::db_rows rows = co_await handle.query(sql);
-        result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
-    } catch (const ruvia::db_error& error) {
-        record_failure(error, result);
-    }
-}
-
-inline ruvia::task<void> query_id(ruvia::db_handle handle, std::string_view sql, std::int64_t id, outcome& result) {
-    try {
-        const ruvia::db_rows rows = co_await handle.query(sql, id);
-        result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
-    } catch (const ruvia::db_error& error) {
-        record_failure(error, result);
-    }
-}
-
-inline ruvia::task<void> execute(ruvia::db_handle handle, std::string_view sql, outcome& result) {
-    try {
-        result.affected_rows_ = (co_await handle.execute(sql)).affected_rows();
-    } catch (const ruvia::db_error& error) {
-        record_failure(error, result);
-    }
-}
-
-inline ruvia::task<void> begin_and_commit(ruvia::db_handle handle, outcome& result) {
-    try {
-        auto transaction = co_await handle.begin_transaction();
-        co_await transaction.commit();
-        result.value_ = "committed";
-    } catch (const ruvia::db_error& error) {
-        record_failure(error, result);
-    }
-}
 
 [[nodiscard]] inline std::vector<std::string> parsed_sql(peer_type& peer) {
     std::vector<std::string> sql;

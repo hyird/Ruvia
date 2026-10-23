@@ -177,7 +177,7 @@ if(RUVIA_BUILD_WEB)
         web/http/document_root_refresh.cpp)
     # Replaces the global operator new to fail one large allocation on a
     # database client's worker.
-    if(RUVIA_ENABLE_POSTGRESQL)
+    if(RUVIA_ENABLE_POSTGRESQL OR RUVIA_ENABLE_MARIADB)
         ruvia_add_web_standalone_test(ruvia_db_allocation_tests 30 web/db/pipeline_allocation.cpp)
     endif()
 

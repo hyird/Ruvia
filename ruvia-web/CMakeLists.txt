@@ -6,7 +6,7 @@ if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
 else()
     if(NOT RUVIA_ENABLE_MARIADB)
         list(FILTER ruvia_web_sources EXCLUDE
-            REGEX "/src/db/(mariadb_driver|db_mysql_runtime|db_sql)\\.cpp$")
+            REGEX "/src/db/(mariadb_driver|mariadb_statements|db_mysql_runtime|db_sql)\\.cpp$")
     endif()
     if(NOT RUVIA_ENABLE_POSTGRESQL)
         list(FILTER ruvia_web_sources EXCLUDE
