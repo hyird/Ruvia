@@ -1,8 +1,8 @@
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <string_view>
 
@@ -10,22 +10,19 @@
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_expectations.h"
-#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_protocol_version.h"
 
 #include "coding/http_content_length.h"
 #include "coding/http_transfer_encoding.h"
 #include "field/http_request_field_validation.h"
+#include "parser/http_header_descriptor_storage.h"
 
 namespace ruvia::detail {
 
-// Slice and parsed_request_header_slot carry no default member initializers on
-// purpose: the fixed header table stays uninitialized per request (slots are
-// always written before they are read up to header_count), so constructing a
-// parsed_request_header_block does not re-zero ~1.5KB on every request.
+// Request slots are assigned only when appended; unused inline slots need no
+// per-request zeroing. Offsets keep their borrowed bytes independent of moves.
 struct http_header_slice {
     std::uint32_t offset_;
     std::uint32_t length_;
@@ -45,15 +42,15 @@ struct parsed_request_header_slot {
 };
 
 using known_request_header_index_type = std::int16_t;
-inline constexpr std::size_t max_http1_request_header_fields =
-    max_http_header_bytes / http_field_line_overhead;
 
 struct parsed_request_header_block {
+    explicit parsed_request_header_block(std::pmr::memory_resource* resource = nullptr) noexcept
+        : headers_(resource) {}
+
     http_header_slice method_;
     http_header_slice target_;
     http_protocol_version protocol_version_;
-    std::array<parsed_request_header_slot, max_http1_request_header_fields> headers_;
-    std::size_t header_count_{0};
+    http_header_descriptor_storage<parsed_request_header_slot> headers_;
     known_request_header_index_type host_header_index_{-1};
     http_connection_options connection_options_;
     http_content_length_state content_length_;

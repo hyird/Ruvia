@@ -54,7 +54,7 @@ namespace {
     }
 
     http_upgrade_protocols selected_protocols;
-    for (const auto& header_value : response.headers()) {
+    for (const auto& header_value : response.headers_.view()) {
         if (!http_ascii_equals_ignore_case(header_value.name(), "Upgrade")) {
             continue;
         }

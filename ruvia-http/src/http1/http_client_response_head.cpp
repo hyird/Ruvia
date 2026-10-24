@@ -6,7 +6,6 @@
 
 #include "ruvia/http/detail/coding/http_response_content_semantics.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_syntax.h"
 
 #include "client/http_client_response_head.h"
@@ -63,30 +62,7 @@ http1_client_parsed_response_head::http1_client_parsed_response_head(
     const http1_client_parsed_status_line& status_line, std::pmr::memory_resource* resource) noexcept
     : status_code_(status_line.status_code_),
       protocol_version_(status_line.protocol_version_),
-      overflow_headers_(http_pmr_resource_or_default(resource)) {}
-
-void http1_client_parsed_response_head::append_header(http_header_view header_value) {
-    if (overflow_headers_.empty()) {
-        if (inline_header_count_ < inline_capacity) {
-            inline_headers_[inline_header_count_++] = header_value;
-            return;
-        }
-        // Allocate before copying the borrowed descriptors; failure leaves the
-        // inline sequence intact and propagates without committing the parser.
-        overflow_headers_.reserve(inline_capacity * 2);
-        for (const auto& inline_header : inline_headers_) {
-            overflow_headers_.push_back(inline_header);
-        }
-    }
-    overflow_headers_.push_back(header_value);
-}
-
-std::span<const http_header_view> http1_client_parsed_response_head::headers() const& noexcept {
-    if (!overflow_headers_.empty()) {
-        return overflow_headers_;
-    }
-    return {inline_headers_.data(), inline_header_count_};
-}
+      headers_(resource) {}
 
 http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
     std::string_view head_section, const http1_client_exchange_state& exchange_state,
@@ -138,7 +114,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                 response_fields) != response_field_status::ok) {
             return http1_client_response_parse_error::invalid_header;
         }
-        output.append_header(http_header_view{name, value});
+        output.headers_.append(http_header_view{name, value});
 
         switch (kind) {
             case request_header_kind::content_length:

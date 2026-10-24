@@ -96,6 +96,63 @@ void verify_parser_allocation_failures(ruvia::testing::test_context& ruvia_ctx,
            std::string_view(actual.what()) == expected.what();
 }
 
+constexpr std::size_t many_headers_repeat_count = 192;
+constexpr std::size_t many_headers_host_index = 160;
+
+[[nodiscard]] std::string make_many_headers_request_head() {
+    std::string head = "POST http://target.example:8080/first?part=one HTTP/1.1\r\n";
+    for (std::size_t index = 0; index < many_headers_repeat_count; ++index) {
+        if (index == many_headers_host_index) {
+            head.append("Host: stale.example\r\n");
+        }
+        head.append("X-Repeat: value-" + std::to_string(index) + "\r\n");
+    }
+    head.append("Content-Length: 5\r\n\r\n");
+    return head;
+}
+
+void verify_many_headers_request_head(ruvia::testing::test_context& ruvia_ctx,
+    const http1_server_request_parse_state& state, std::size_t header_bytes) {
+    RUVIA_CHECK(state.failure() == nullptr);
+    RUVIA_CHECK(state.need_request_head() == nullptr);
+    const auto* ready = state.head_ready();
+    RUVIA_CHECK(ready != nullptr);
+    if (ready == nullptr) {
+        return;
+    }
+    RUVIA_CHECK_EQ(ready->header_bytes(), header_bytes);
+    RUVIA_CHECK_EQ(state.request_.method(), std::string_view("POST"));
+    RUVIA_CHECK(state.request_.known_method() == http_known_method::post);
+    RUVIA_CHECK(state.request_.protocol_version() == http_protocol_version::http11);
+    RUVIA_CHECK(state.request_.target_form() == http_request_target_form::absolute);
+    RUVIA_CHECK_EQ(state.request_.target(), std::string_view("http://target.example:8080/first?part=one"));
+    RUVIA_CHECK_EQ(state.request_.scheme(), std::string_view("http"));
+    RUVIA_CHECK_EQ(state.request_.authority(), std::string_view("target.example:8080"));
+    RUVIA_CHECK_EQ(state.request_.path(), std::string_view("/first"));
+    RUVIA_CHECK_EQ(state.request_.query_string(), std::string_view("part=one"));
+    RUVIA_CHECK_EQ(state.request_.header("Host").value_or("missing"), std::string_view("target.example:8080"));
+    RUVIA_CHECK_EQ(state.request_.header("X-Repeat").value_or("missing"),
+        "value-" + std::to_string(many_headers_repeat_count - 1));
+    RUVIA_CHECK_EQ(state.request_.headers().size(), many_headers_repeat_count + 2);
+    std::size_t index = 0;
+    for (const auto& header : state.request_.headers()) {
+        if (index == many_headers_host_index) {
+            RUVIA_CHECK_EQ(header.name(), std::string_view("Host"));
+            RUVIA_CHECK_EQ(header.value(), std::string_view("target.example:8080"));
+        } else if (index == many_headers_repeat_count + 1) {
+            RUVIA_CHECK_EQ(header.name(), std::string_view("Content-Length"));
+            RUVIA_CHECK_EQ(header.value(), std::string_view("5"));
+        } else {
+            const auto repeat_index = index < many_headers_host_index ? index : index - 1;
+            RUVIA_CHECK_EQ(header.name(), std::string_view("X-Repeat"));
+            RUVIA_CHECK_EQ(header.value(), "value-" + std::to_string(repeat_index));
+        }
+        ++index;
+    }
+    RUVIA_CHECK_EQ(require_known_length(state.body_plan_).content_length(), std::size_t{5});
+    RUVIA_CHECK(state.connection_plan_.disposition() == http1_close_policy::allow_reuse);
+}
+
 }  // namespace
 
 RUVIA_TEST(http1_request_trailer_declaration_metadata_preserves_body_and_pipeline) {
@@ -1264,14 +1321,75 @@ RUVIA_TEST(http1_parse_non_numeric_content_length_rejected) {
 }
 
 RUVIA_TEST(http1_parse_many_headers_within_byte_budget_accepted) {
-    std::string request = "GET / HTTP/1.1\r\nHost: x\r\n";
-    for (int i = 0; i < 80; ++i) {
-        request += "x-h-" + std::to_string(i) + ": v\r\n";
-    }
-    request += "\r\n";
-    const auto result_value = parse_http1_request_message(request);
+    constexpr std::string_view next_wire = "GET /next HTTP/1.1\r\nHost: next.example\r\n\r\n";
+    const auto head = make_many_headers_request_head();
+    const std::string wire = head + "hello" + std::string(next_wire);
+    const auto head_only = parse_http1_request_message(head);
+    RUVIA_CHECK(head_only.need_body());
+    RUVIA_CHECK(!head_only.complete());
+    verify_many_headers_request_head(ruvia_ctx, head_only.state_, head.size());
+
+    const auto result_value = parse_http1_request_message(wire);
     RUVIA_CHECK(result_value.complete());
-    RUVIA_CHECK_EQ(result_value.state_.request_.headers().size(), std::size_t{81});
+    verify_many_headers_request_head(ruvia_ctx, result_value.state_, head.size());
+    if (!result_value.complete()) {
+        return;
+    }
+    RUVIA_CHECK_EQ(result_value.body_, std::string_view("hello"));
+    RUVIA_CHECK_EQ(*result_value.message_bytes_, head.size() + 5);
+    const auto remaining = std::string_view(wire).substr(*result_value.message_bytes_);
+    RUVIA_CHECK_EQ(remaining, next_wire);
+    const auto next = parse_http1_request_message(remaining);
+    RUVIA_CHECK(next.complete());
+    RUVIA_CHECK_EQ(next.state_.request_.path(), std::string_view("/next"));
+    RUVIA_CHECK_EQ(next.state_.request_.header("Host").value_or("missing"), std::string_view("next.example"));
+    RUVIA_CHECK_EQ(next.message_bytes_.value_or(0), next_wire.size());
+}
+
+RUVIA_TEST(http1_parse_many_headers_allocation_failures_allow_same_state_retry) {
+    constexpr std::string_view next_wire = "GET /next HTTP/1.1\r\nHost: next.example\r\n\r\n";
+    const auto head = make_many_headers_request_head();
+    const std::string wire = head + "hello" + std::string(next_wire);
+    bool saw_failure = false;
+    for (std::size_t fail_after = 0;; ++fail_after) {
+        failing_memory_resource resource;
+        resource.fail_after(fail_after);
+        bool allocation_failed = false;
+        {
+            http1_server_request_parse_state state;
+            try {
+                state.parse_head(wire, 0, &resource);
+            } catch (const std::bad_alloc&) {
+                allocation_failed = true;
+                saw_failure = true;
+                RUVIA_CHECK(state.head_ready() == nullptr);
+                RUVIA_CHECK(state.failure() == nullptr);
+                RUVIA_CHECK(state.need_request_head() != nullptr);
+                state.parse_head(wire, 0, &resource);
+            }
+            verify_many_headers_request_head(ruvia_ctx, state, head.size());
+            const auto* ready = state.head_ready();
+            if (ready != nullptr) {
+                const auto message_bytes = ready->header_bytes() + require_known_length(state.body_plan_).content_length();
+                RUVIA_CHECK_EQ(message_bytes, head.size() + 5);
+                RUVIA_CHECK_EQ(std::string_view(wire).substr(ready->header_bytes(), message_bytes - ready->header_bytes()),
+                    std::string_view("hello"));
+                const auto remaining = std::string_view(wire).substr(message_bytes);
+                RUVIA_CHECK_EQ(remaining, next_wire);
+                const auto next = parse_http1_request_message(remaining);
+                RUVIA_CHECK(next.complete());
+                RUVIA_CHECK_EQ(next.state_.request_.path(), std::string_view("/next"));
+                RUVIA_CHECK_EQ(next.message_bytes_.value_or(0), next_wire.size());
+            }
+            state.request_.reset();
+            RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+        if (!allocation_failed) {
+            break;
+        }
+    }
+    RUVIA_CHECK(saw_failure);
 }
 
 RUVIA_TEST(http1_parse_chunk_size_overflow_rejected) {

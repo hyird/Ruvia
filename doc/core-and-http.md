@@ -140,7 +140,7 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
   - `"ruvia/http/http1_client_request_writer.h"` & `"ruvia/http/http1_request_content_writer.h"`：生成客户端请求头与流式分块请求体，产出 `http1_client_exchange_state`。
   - `"ruvia/http/http1_client_response_parser.h"` & `"ruvia/http/http1_client_response_body_decoder.h"`：增量解析服务端 `1xx` 临时响应、最终响应头及定长/分块/EOF 定界响应体。
 
-响应头解析的临时字段描述符采用有界内联存储，超出后按实际字段数使用传入的 PMR；不按首部字节上限预留线程栈数组，也不增加字段数量限制。最终响应头拥有字段数据，原始输入可在解析完成后释放。分配失败正常抛出且不提交交换状态；释放资源后可用同一响应前缀重试。调用方须让 PMR 存活至相关响应结果析构。
+HTTP/1 请求头与响应头解析的字段描述符共用内部存储（`parser/http_header_descriptor_storage.h`）：前 32 项内联，超出后整体迁入传入的 PMR（缺省为默认资源）并按实际字段数增长。内联槽位在解析时不清零，以保持热路径开销。服务端 `parsed_request_header_block` 与客户端 `http1_client_parsed_response_head` 均不按首部字节上限预留线程栈数组，也不增加字段数量限制；64 KiB 首部字节上限仍然生效。服务端请求视图零拷贝借用输入缓冲区，客户端最终响应头拥有字段数据，原始输入可在解析完成后释放。PMR 分配失败以 `std::bad_alloc` 传出且不提交解析状态，释放资源后可用同一缓冲区与偏移重试。调用方须让 PMR 存活至相关请求或响应结果析构。
 
 #### 4.2 HTTP/2 与 HPACK 状态机（`"ruvia/http/http2_connection.h"`, `"ruvia/http/hpack.h"`）
 

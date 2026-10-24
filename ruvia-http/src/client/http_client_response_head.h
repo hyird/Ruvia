@@ -1,12 +1,8 @@
 #pragma once
 
-#include <array>
-#include <cstddef>
 #include <memory_resource>
-#include <span>
 #include <string_view>
 #include <variant>
-#include <vector>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_exchange_state.h"
@@ -17,6 +13,7 @@
 
 #include "coding/http_content_length.h"
 #include "coding/http_transfer_encoding.h"
+#include "parser/http_header_descriptor_storage.h"
 // The two steps between an HTTP/1 client response head on the wire and the plan
 // the parser acts on: reading the status line and header fields into borrowed
 // values, then deciding from them (and the request that produced them) how the
@@ -33,10 +30,6 @@ struct http1_client_parsed_response_head final {
     explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line,
         std::pmr::memory_resource* resource) noexcept;
 
-    void append_header(http_header_view header_value);
-    [[nodiscard]] std::span<const http_header_view> headers() const& noexcept;
-    std::span<const http_header_view> headers() const&& = delete;
-
     http_status_code status_code_;
     http_protocol_version protocol_version_;
     bool content_length_field_present_{false};
@@ -46,14 +39,7 @@ struct http1_client_parsed_response_head final {
     http_content_length_state content_length_;
     http_transfer_encoding_state transfer_encoding_;
 
-private:
-    static constexpr std::size_t inline_capacity = 32;
-
-    // Descriptors borrow field bytes, never each other or this object's table.
-    // Once spilled, the vector holds the complete ordered field sequence.
-    std::array<http_header_view, inline_capacity> inline_headers_;
-    std::size_t inline_header_count_{0};
-    std::pmr::vector<http_header_view> overflow_headers_;
+    http_header_descriptor_storage<http_header_view> headers_;
 };
 
 using http1_client_status_line_parse_result_type =

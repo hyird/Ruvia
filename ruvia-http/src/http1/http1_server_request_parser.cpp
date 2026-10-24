@@ -91,7 +91,7 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
         return;
     }
 
-    parsed_request_header_block block;
+    parsed_request_header_block block(resource);
     if (const auto error = parse_http_header_block(buffer, scan.leading_bytes_, header_bytes, block)) {
         return fail(*error);
     }
@@ -171,9 +171,10 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
     }
 
     http_request_access::set_resource(request_, resource);
-    http_request_access::reserve_headers(request_, block.header_count_);
-    for (std::size_t i = 0; i < block.header_count_; ++i) {
-        const auto& header_value = block.headers_[i];
+    const auto headers = block.headers_.view();
+    http_request_access::reserve_headers(request_, headers.size());
+    for (std::size_t i = 0; i < headers.size(); ++i) {
+        const auto& header_value = headers[i];
         auto value = header_value.value_.bind(buffer);
         // RFC 9112 sections 3.2.2 and 3.3 make the request-target authoritative
         // for absolute-form and authority-form. Rebind both headers() and the

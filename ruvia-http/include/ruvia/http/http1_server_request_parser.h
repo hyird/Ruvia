@@ -82,6 +82,8 @@ class http1_server_request_parse_state final {
 public:
     http1_server_request_parse_state() noexcept;
 
+    // resource 供超出内联容量的请求头描述符使用，缺省为默认 PMR；须存活至请求对象析构。
+    // 分配失败以 std::bad_alloc 传出，state 未提交；释放资源后以同一 buffer 与 offset 重试。
     void parse_head(std::string_view buffer, std::size_t header_search_offset = 0,
         std::pmr::memory_resource* resource = nullptr);
 

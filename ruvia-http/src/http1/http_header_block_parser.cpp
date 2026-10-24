@@ -172,13 +172,12 @@ namespace {
             return error;
         }
 
-        const auto index = block.header_count_++;
-        block.headers_[index] =
+        block.headers_.append(
             parsed_request_header_slot{.name_ = make_slice(name_start, name_end - name_start),
                 .value_ = make_slice(value_start, value_end - value_start),
-                .kind_ = kind};
+                .kind_ = kind});
         if (kind == request_header_kind::host) {
-            block.host_header_index_ = static_cast<known_request_header_index_type>(index);
+            block.host_header_index_ = static_cast<known_request_header_index_type>(block.headers_.size() - 1);
         }
         cursor_value += 2;
     }
