@@ -33,7 +33,7 @@ namespace {
 
 std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
-    std::pmr::string output(http_pmr_resource_or_default(resource));
+    std::pmr::string output("", http_pmr_resource_or_default(resource));
     brotli_decoder_stream decoder(output.get_allocator().resource());
     if (!decoder.initialized()) {
         return http_content_decode_error::decoder_failure;
@@ -84,7 +84,7 @@ std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
 std::optional<std::pmr::string> encode_brotli_content(
     brotli_encoder_stream& encoder, std::string_view input,
     std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
-    std::pmr::string output(http_pmr_resource_or_default(output_resource));
+    std::pmr::string output("", http_pmr_resource_or_default(output_resource));
     auto* state_value = encoder.native();
 
     std::size_t available_input = input.size();

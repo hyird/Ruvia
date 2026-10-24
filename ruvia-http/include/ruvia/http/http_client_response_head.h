@@ -61,23 +61,23 @@ public:
     // metadata but needs to extend the fields' lifetime independently.
     // Repeated extraction, including after moving the head, returns an empty
     // vector in the original PMR resource, which must still be alive.
-    [[nodiscard]] std::pmr::vector<http_header> take_headers() && noexcept {
-        return std::exchange(headers_, std::pmr::vector<http_header>(headers_.get_allocator()));
+    [[nodiscard]] std::pmr::vector<http_header> take_headers() && {
+        return std::pmr::vector<http_header>(std::move(headers_), headers_.get_allocator());
     }
 
 private:
     friend struct detail::http_client_response_head_access;
 
     http_client_response_head(http_status_code status, http_protocol_version protocol_version,
-        std::pmr::memory_resource* resource) noexcept
+        std::pmr::memory_resource* resource)
         : http_client_response_head(detail::http_resolved_pmr_resource_tag{}, status, protocol_version,
               detail::http_pmr_resource_or_default(resource)) {}
 
     http_client_response_head(detail::http_resolved_pmr_resource_tag, http_status_code status,
-        http_protocol_version protocol_version, std::pmr::memory_resource* resource) noexcept
+        http_protocol_version protocol_version, std::pmr::memory_resource* resource)
         : status_(status),
           protocol_version_(protocol_version),
-          headers_(resource) {}
+          headers_(0, http_header({}, {}, resource), resource) {}
 
     http_status_code status_;
     http_protocol_version protocol_version_;

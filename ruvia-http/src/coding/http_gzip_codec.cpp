@@ -17,7 +17,7 @@ namespace ruvia::detail {
 static std::variant<std::pmr::string, http_content_decode_error> decode_zlib_content(std::string_view input,
     std::size_t max_decoded_bytes, std::pmr::memory_resource* resource, int window_bits,
     bool allow_concatenated_members) {
-    std::pmr::string output(http_pmr_resource_or_default(resource));
+    std::pmr::string output("", http_pmr_resource_or_default(resource));
     zlib_inflate_stream inflater(output.get_allocator().resource(), window_bits);
     if (!inflater.initialized()) {
         return http_content_decode_error::decoder_failure;
@@ -81,7 +81,7 @@ static std::variant<std::pmr::string, http_content_decode_error> decode_zlib_con
 
 std::optional<std::pmr::string> encode_zlib_content(zlib_deflate_stream& deflater,
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
-    std::pmr::string output(http_pmr_resource_or_default(output_resource));
+    std::pmr::string output("", http_pmr_resource_or_default(output_resource));
     auto& stream = deflater.native();
     const zlib_borrow_scope borrow(stream);
 

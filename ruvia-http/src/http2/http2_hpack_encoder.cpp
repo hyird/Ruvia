@@ -115,8 +115,8 @@ void hpack_encoder::encode_header(
             {.never_indexed_ = never_indexed});
         return;
     }
-    std::pmr::string owned_name(out.get_allocator());
-    std::pmr::string owned_value(out.get_allocator());
+    std::pmr::string owned_name("", out.get_allocator());
+    std::pmr::string owned_value("", out.get_allocator());
     const auto storage = std::string_view(out.data(), out.size() + 1);
     if (detail::http_text_overlaps(name, storage)) {
         owned_name.assign(name);
@@ -139,7 +139,7 @@ void hpack_encoder::encode_header_with_name_index(std::pmr::string& out, std::ui
         throw std::invalid_argument("HPACK indexed names require a nonzero index");
     }
     validate_hpack_string_length(value);
-    std::pmr::string owned_value(out.get_allocator());
+    std::pmr::string owned_value("", out.get_allocator());
     if (detail::http_text_overlaps(value, std::string_view(out.data(), out.size() + 1))) {
         owned_value.assign(value);
         value = owned_value;

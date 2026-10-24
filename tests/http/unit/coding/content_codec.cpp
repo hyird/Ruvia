@@ -10,6 +10,7 @@
 #include "ruvia/http/http_content_encoder.h"
 
 #include "content_decoding_fixture.h"
+#include "stl_allocation_fixture.h"
 
 using ruvia::http_content_encoder;
 
@@ -315,7 +316,9 @@ RUVIA_TEST(http_content_encoding_stack_skips_identity_stages_without_copying) {
     if (single.has_value() && encoded.has_value()) {
         RUVIA_CHECK_EQ(*encoded, *single);
     }
-    RUVIA_CHECK_EQ(stacked_resource.allocations(), single_resource.allocations());
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        RUVIA_CHECK_EQ(stacked_resource.allocations(), single_resource.allocations());
+    }
 
     constexpr std::array identity_only{http_content_coding::identity, http_content_coding::identity};
     auto copied = encode_http_content(identity_only, input, {.max_encoded_bytes_ = input.size()});

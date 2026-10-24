@@ -124,8 +124,8 @@ public:
 
 private:
     http2_header_list(http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-        : overflow_storage_(resource),
-          overflow_fields_(resource) {}
+        : overflow_storage_("", resource),
+          overflow_fields_(0, resource) {}
 
     static constexpr std::size_t inline_header_fields = 16;
     static constexpr std::size_t inline_header_storage_bytes = 512;

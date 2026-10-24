@@ -35,8 +35,8 @@ public:
 
 private:
     http2_stream_header_blocks(http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-        : remote_(resource),
-          local_(resource) {}
+        : remote_("", resource),
+          local_("", resource) {}
 
     std::pmr::string remote_;
     std::pmr::string local_;

@@ -163,10 +163,14 @@ RUVIA_TEST(jwt_payload_is_move_only_and_transfers_pmr_storage_without_allocating
         const auto expires_at = input.expires_at();
         const auto issued_at = input.issued_at();
         const auto attempts = resource.allocation_attempts();
-        resource.reject_allocations_after(0);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            resource.reject_allocations_after(0);
+        }
         ruvia::jwt_payload moved(std::move(input));
         resource.allow_allocations();
-        RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+        }
         RUVIA_CHECK_EQ(moved.issuer(), std::string_view("ruvia"));
         RUVIA_CHECK_EQ(moved.subject(), std::string_view("user-1"));
         RUVIA_CHECK(moved.has_audience(audience));

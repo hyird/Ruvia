@@ -454,7 +454,9 @@ void check_redis_result_move_guarantees(ruvia::testing::test_context& ruvia_ctx,
         auto input = copy_redis_result(original, resource);
         auto destination = copy_redis_result(seed, resource);
         const auto attempts = resource.allocation_attempts();
-        resource.reject_allocations_after(0);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            resource.reject_allocations_after(0);
+        }
         bool rejected = false;
         try {
             if constexpr (requires { typename result_type::allocator_type; }) {
@@ -474,7 +476,9 @@ void check_redis_result_move_guarantees(ruvia::testing::test_context& ruvia_ctx,
         }
         resource.allow_allocations();
         RUVIA_CHECK(!rejected);
-        RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+        }
     }
     RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
     RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());

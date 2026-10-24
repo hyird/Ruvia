@@ -583,13 +583,13 @@ public:
 // Header callbacks write into stream-owned PMR storage and typed protocol state. A
 // callback is allowed to throw (most commonly from a request-header allocation), so
 // the complete field block needs the same strong exception guarantee as HPACK's
-// connection-global dynamic table. Isolated request decoding swaps out prior data
-// without allocating; response/trailer decoding keeps only a header checkpoint.
+// connection-global dynamic table. Isolated request decoding swaps out prior data;
+// response/trailer decoding keeps only a header checkpoint.
 // Both snapshot scalar protocol state and restore it unless explicitly committed.
 class http2_stream_header_decode_transaction final {
 public:
     explicit http2_stream_header_decode_transaction(
-        http2_stream_state& stream, bool isolate_request_data = true) noexcept
+        http2_stream_state& stream, bool isolate_request_data = true)
         : stream_(&stream),
           remote_content_(stream.remote_content_),
           local_content_(stream.local_content_),

@@ -13,6 +13,7 @@
 
 #include "http1_request_message_fixture.h"
 #include "request_header_memory_fixture.h"
+#include "stl_allocation_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -192,7 +193,11 @@ RUVIA_TEST(owned_header_copies_stay_in_the_source_resource) {
         RUVIA_CHECK_EQ(copied.front().name(), std::string_view("x-name"));
         RUVIA_CHECK_EQ(single.value(), std::string_view("value"));
         // Vector storage plus both field blocks come from the owning resource.
-        RUVIA_CHECK_EQ(memory.allocations_, before + 3);
+        if constexpr (ruvia::test::stl_moves_allocate_debug_metadata) {
+            RUVIA_CHECK(memory.allocations_ >= before + 3);
+        } else {
+            RUVIA_CHECK_EQ(memory.allocations_, before + 3);
+        }
     }
     RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
 }

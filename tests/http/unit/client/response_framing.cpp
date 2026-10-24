@@ -6,6 +6,7 @@
 
 #include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
+#include "stl_allocation_fixture.h"
 
 // HTTP/1 client responses: what the head says about the body.
 
@@ -209,7 +210,9 @@ RUVIA_TEST(http_client_folded_continue_allocation_failure_allows_retry) {
                 return;
             }
             http1_client_response_parser parser(prepared_req->exchange_state(), &resource);
-            resource.fail_after(fail_after);
+            if (!ruvia::test::stl_moves_allocate_debug_metadata || fail_after == 0) {
+                resource.fail_after(fail_after);
+            }
             for (const auto size : {wire.find("\r\n continuation") + 1, wire.size() - 1}) {
                 const auto partial = parser.parse(wire.substr(0, size));
                 RUVIA_CHECK(partial.need_more() != nullptr);
@@ -273,7 +276,9 @@ RUVIA_TEST(http_client_response_parser_propagates_transfer_plan_allocation_failu
     bool saw_success = false;
     for (std::size_t fail_after = 0; fail_after < 32; ++fail_after) {
         failing_memory_resource resource;
-        resource.fail_after(fail_after);
+        if (!ruvia::test::stl_moves_allocate_debug_metadata || fail_after == 0) {
+            resource.fail_after(fail_after);
+        }
         bool allocation_failed = false;
         {
             try {

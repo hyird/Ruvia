@@ -80,10 +80,14 @@ RUVIA_TEST(model_string_assign_owned_pmr_rvalue_rebinds_equivalent_resources) {
         ruvia::string same_resource_target(ruvia::model_options{.resource_ = &target});
         std::pmr::string same_resource_input(same_expected, &target);
         const auto attempts = target.allocation_attempts();
-        target.reject_allocations_after(0);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            target.reject_allocations_after(0);
+        }
         same_resource_target.assign_owned(std::move(same_resource_input));
         target.allow_allocations();
-        RUVIA_CHECK_EQ(target.allocation_attempts(), attempts);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            RUVIA_CHECK_EQ(target.allocation_attempts(), attempts);
+        }
         RUVIA_CHECK_EQ(same_resource_target.view(), std::string_view(same_expected));
     }
     RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});

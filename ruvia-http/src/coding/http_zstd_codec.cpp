@@ -16,7 +16,7 @@ namespace ruvia::detail {
 
 std::variant<std::pmr::string, http_content_decode_error> decode_zstd_content(
     std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
-    std::pmr::string output(http_pmr_resource_or_default(resource));
+    std::pmr::string output("", http_pmr_resource_or_default(resource));
     zstd_decoder_stream decoder(output.get_allocator().resource());
     if (!decoder.initialized()) {
         return http_content_decode_error::decoder_failure;
@@ -52,7 +52,7 @@ std::variant<std::pmr::string, http_content_decode_error> decode_zstd_content(
 std::optional<std::pmr::string> encode_zstd_content(
     zstd_encoder_stream& encoder, std::string_view input,
     std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
-    std::pmr::string output(http_pmr_resource_or_default(output_resource));
+    std::pmr::string output("", http_pmr_resource_or_default(output_resource));
     auto* context_value = encoder.native();
 
     ZSTD_inBuffer in{input.data(), input.size(), 0};

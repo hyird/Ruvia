@@ -174,8 +174,8 @@ RUVIA_TEST(response_content_type_constants_are_valid_fields_set_without_allocati
             RUVIA_CHECK_EQ(response.header("Content-Type").value_or(""), constant.value_);
             RUVIA_CHECK_EQ(resource.live_allocations(), live - 1);
 
-            resource.fail_after(0);
             ruvia::http_response fresh(&resource);
+            resource.fail_after(0);
             fresh.content_type(constant.type_);
             resource.allow_allocations();
             RUVIA_CHECK_EQ(fresh.header("Content-Type").value_or(""), constant.value_);

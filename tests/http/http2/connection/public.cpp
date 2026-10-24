@@ -21,6 +21,7 @@
 #include "ruvia/http/http_response_stream.h"
 
 #include "output_drain.h"
+#include "stl_allocation_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -1908,7 +1909,9 @@ RUVIA_TEST(http2_public_response_submission_stops_after_connection_failure) {
             RUVIA_CHECK(server.feed(invalid_ping) == ruvia::http2_feed_result::protocol_failure);
             (void)ruvia::testing::drain_output(server);
 
-            resource.reject();
+            if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+                resource.reject();
+            }
             const auto attempts = resource.allocation_attempts();
             const auto buffered_head = server.submit_response_head(1, buffered, plan);
             RUVIA_CHECK(std::holds_alternative<ruvia::http2_response_head_submit_error>(buffered_head) &&
@@ -1930,7 +1933,9 @@ RUVIA_TEST(http2_public_response_submission_stops_after_connection_failure) {
             RUVIA_CHECK_EQ(head->request_view().path_, std::string_view("/upload"));
             RUVIA_CHECK(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);
             RUVIA_CHECK(!server.wants_write());
-            RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+            if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+                RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+            }
         }
         RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     }

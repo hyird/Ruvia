@@ -5,6 +5,8 @@
 #include <new>
 #include <optional>
 
+#include "stl_allocation_fixture.h"
+
 namespace ruvia::test {
 
 class rejecting_memory_resource final : public std::pmr::memory_resource {

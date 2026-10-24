@@ -158,8 +158,8 @@ RUVIA_TEST(websocket_deflate_codecs_reset_after_failed_messages) {
 
     // An output allocation failure abandons the deflater mid-message.
     failing_memory_resource output_resource;
-    output_resource.fail_after(0);
     std::pmr::string failed_out(&output_resource);
+    output_resource.fail_after(0);
     bool threw = false;
     try {
         static_cast<void>(codecs.deflate_message(large, failed_out, 6, 15));

@@ -126,7 +126,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
         // folded into the reason phrase. Only normalize within the field block.
         const auto first_fold = detail::find_field_line_fold(head_section, status_line_end + 2);
         if (first_fold != std::string_view::npos) {
-            unfolded_head.emplace(detail::http_pmr_resource_or_default(resource_));
+            unfolded_head.emplace("", detail::http_pmr_resource_or_default(resource_));
             detail::copy_unfolded_field_lines(
                 head_section, first_fold, detail::field_line_folding_policy::http, *unfolded_head);
             head_section = *unfolded_head;

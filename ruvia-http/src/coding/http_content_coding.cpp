@@ -207,7 +207,7 @@ std::optional<std::pmr::string> encode_http_content(
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_encode_options options) {
     auto* const resource = detail::http_pmr_resource_or_default(options.resource_);
-    std::pmr::string current(resource);
+    std::pmr::string current("", resource);
     std::string_view source_value = input;
     bool encoded = false;
     for (const auto coding : codings) {
@@ -236,7 +236,7 @@ std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_decode_options options) {
     auto* const resource = detail::http_pmr_resource_or_default(options.resource_);
-    std::pmr::string current(resource);
+    std::pmr::string current("", resource);
     std::string_view source_value = input;
     bool decoded = false;
     for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {

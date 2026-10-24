@@ -10,6 +10,7 @@
 
 #include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
+#include "stl_allocation_fixture.h"
 
 // HTTP/1 client responses: reading a response head off the wire.
 
@@ -118,8 +119,10 @@ RUVIA_TEST(http_client_fieldless_exchange_completes_with_no_response_storage) {
     if (prepared_req == nullptr) {
         return;
     }
-    http1_client_response_parser parser(
-        prepared_req->exchange_state(), std::pmr::null_memory_resource());
+    auto* resource = ruvia::test::stl_moves_allocate_debug_metadata
+                         ? std::pmr::get_default_resource()
+                         : std::pmr::null_memory_resource();
+    http1_client_response_parser parser(prepared_req->exchange_state(), resource);
     constexpr std::array<std::string_view, 3> heads{
         "HTTP/1.1 103 Early Hints\r\n\r\n",
         "HTTP/1.1 100 Continue\r\n\r\n",
@@ -157,7 +160,9 @@ RUVIA_TEST(http_client_take_head_leaves_empty_parsed_fields_and_retains_owned_he
         if (parsed == nullptr) {
             return;
         }
-        memory.fail_after(0);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            memory.fail_after(0);
+        }
         auto head = std::move(*parsed).take_head();
         memory.allow_allocations();
         check_response_head(ruvia_ctx, head, "kept");
@@ -184,7 +189,9 @@ RUVIA_TEST(http_client_response_result_move_preserves_fields_and_supports_source
     {
         std::optional<http1_client_response_parse_result> source(
             parse_result("GET", retained_head, ruvia::http1_close_policy::allow_reuse, {}, &memory));
-        memory.fail_after(0);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            memory.fail_after(0);
+        }
         auto retained = std::move(*source);
         memory.allow_allocations();
         RUVIA_CHECK(retained.parsed() != nullptr);
@@ -215,7 +222,9 @@ RUVIA_TEST(http_client_response_head_move_preserves_fields_and_supports_source_r
             return;
         }
         std::optional<http_client_response_head> source(std::move(*result.parsed()).take_head());
-        memory.fail_after(0);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            memory.fail_after(0);
+        }
         auto retained = std::move(*source);
         memory.allow_allocations();
         check_response_head(ruvia_ctx, retained, "kept");
@@ -319,6 +328,10 @@ RUVIA_TEST(http_client_many_response_fields_retry_every_allocation_failure_witho
 
     for (std::size_t phase = 0; phase < wires.size(); ++phase) {
         for (std::size_t fail_after = 0; fail_after <= allocation_counts[phase]; ++fail_after) {
+            if (ruvia::test::stl_moves_allocate_debug_metadata &&
+                fail_after != 0 && fail_after != allocation_counts[phase]) {
+                continue;
+            }
             failing_memory_resource memory;
             {
                 http1_client_response_parser parser(prepared_req->exchange_state(), &memory);

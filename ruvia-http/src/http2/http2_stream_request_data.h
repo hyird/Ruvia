@@ -166,14 +166,14 @@ public:
 
 private:
     http2_stream_request_data(http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-        : method_(resource),
-          scheme_(resource),
-          authority_(resource),
-          path_(resource),
-          protocol_(resource),
-          cookie_(resource),
+        : method_("", resource),
+          scheme_("", resource),
+          authority_("", resource),
+          path_("", resource),
+          protocol_("", resource),
+          cookie_("", resource),
           headers_(resource),
-          trailers_(resource) {}
+          trailers_(0, http_header({}, {}, resource), resource) {}
 
     std::pmr::string method_;
     http_known_method known_method_{http_known_method::unknown};

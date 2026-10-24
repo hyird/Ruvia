@@ -749,7 +749,9 @@ RUVIA_TEST(validator_same_resource_moves_and_self_assignment_do_not_allocate) {
         destination.add("seed", "old", std::string(180, 's'));
         std::optional<ruvia::validator> moved;
         const auto attempts = resource.allocation_attempts();
-        resource.reject_allocations_after(0);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            resource.reject_allocations_after(0);
+        }
         bool rejected = false;
         try {
             moved.emplace(std::move(input));
@@ -763,7 +765,9 @@ RUVIA_TEST(validator_same_resource_moves_and_self_assignment_do_not_allocate) {
         }
         resource.allow_allocations();
         RUVIA_CHECK(!rejected);
-        RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+        }
         check_owned_issues(ruvia_ctx, destination, &resource);
         RUVIA_CHECK(input.ok());
         RUVIA_CHECK(input.resource() == &resource);

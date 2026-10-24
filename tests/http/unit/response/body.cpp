@@ -14,6 +14,7 @@
 #include "ruvia/http/http_response_file.h"
 
 #include "failing_memory_resource.h"
+#include "stl_allocation_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -64,8 +65,10 @@ void check_response_body_moves(ruvia::testing::test_context& ruvia_ctx,
                 target.emplace(&target_resource);
                 target->body(std::string(256, 't'));
             }
-            source_resource.fail_after(0);
-            target_resource.fail_after(0);
+            if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+                source_resource.fail_after(0);
+                target_resource.fail_after(0);
+            }
             if (assign) {
                 *target = std::move(source);
             } else {

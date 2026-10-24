@@ -12,6 +12,7 @@
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_deflate_codecs.h"
 
+#include "stl_allocation_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -231,7 +232,9 @@ RUVIA_TEST(ws_connection_buffers_keep_bounded_storage_after_a_large_message) {
     for (int round = 0; round < 4; ++round) {
         exchange(medium, false, noise_message(8 * 1024));
     }
-    RUVIA_CHECK_EQ(server.memory_.allocations_, allocations);
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        RUVIA_CHECK_EQ(server.memory_.allocations_, allocations);
+    }
 }
 
 // Context takeover keeps a private dictionary per direction even when shared

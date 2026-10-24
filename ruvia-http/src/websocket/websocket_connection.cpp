@@ -139,7 +139,7 @@ public:
 
     void append_frame(websocket_opcode opcode, std::string_view payload_value, bool rsv1 = false,
         ws_payload_storage storage = ws_payload_storage::copy) {
-        std::pmr::string owned_payload(out_buffer_.get_allocator().resource());
+        std::pmr::string owned_payload("", out_buffer_.get_allocator().resource());
         if (detail::http_text_overlaps(payload_value, {out_buffer_.data(), out_buffer_.size() + 1})) {
             // output_plan() exposes a borrowed view. Copy only for this aliasing
             // case so reserve() below cannot invalidate its own append source; the

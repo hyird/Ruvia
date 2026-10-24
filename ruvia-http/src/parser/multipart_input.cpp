@@ -69,7 +69,7 @@ void multipart_input_lifecycle::feed(std::string_view chunk) {
     if (open == nullptr) {
         throw std::logic_error("multipart input is not open for feed");
     }
-    std::pmr::string owned_chunk(open->bytes_.get_allocator().resource());
+    std::pmr::string owned_chunk("", open->bytes_.get_allocator().resource());
     if (offset_ >= compact_consumed_prefix_bytes && http_text_overlaps(chunk, open->bytes_)) {
         owned_chunk.assign(chunk);
         chunk = owned_chunk;

@@ -12,6 +12,7 @@
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/validation.h"
 
+#include "memory_resource_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -59,9 +60,11 @@ RUVIA_TEST(exception_text_describes_any_exception) {
 }
 
 RUVIA_TEST(http_error_cross_resource_move_assignment_propagates_bad_alloc) {
-    http_error target({}, std::pmr::null_memory_resource());
+    ruvia::test::rejecting_memory_resource resource;
+    http_error target({}, &resource);
     const std::string long_message(1024, 'x');
     http_error source({.status_ = ruvia::http_status::bad_request, .message_ = long_message});
+    resource.reject_allocations();
     bool caught = false;
     try {
         target = std::move(source);

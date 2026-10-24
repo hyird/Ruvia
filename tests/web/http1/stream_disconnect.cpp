@@ -295,6 +295,7 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
         .listen({.address_ = "127.0.0.1", .http_ = plain_endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}})
         .on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
             errors.fetch_add(1);
+            std::cerr << "stream_disconnect error: " << error.code() << ": " << error.message() << '\n';
             c.status(error.status());
             co_return c.text("unexpected-error");
         })
@@ -362,6 +363,10 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
                     pipeline_client.send("POST /disconnect/echo HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: " +
                                          std::to_string(size) + "\r\n\r\n" + payload);
                     const auto output = pipeline_client.read_until({}, 3s);
+                    if (!output.ends_with(payload)) {
+                        std::cerr << "stream_disconnect pipeline: tls=" << tls << " size=" << size
+                                  << " received=" << output.size() << " response=" << output.substr(0, 256) << '\n';
+                    }
                     RUVIA_CHECK(output.find("pipeline-last") != std::string::npos);
                     RUVIA_CHECK(output.ends_with(payload));
                     RUVIA_CHECK(output.find("HTTP/1.1 200 ") != std::string::npos);

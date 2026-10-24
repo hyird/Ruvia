@@ -109,7 +109,7 @@ bool websocket_deflate_codecs::deflate_message(
         return false;
     }
     const reset_after_message reset_guard(slot, resource_);
-    std::pmr::string owned(out.get_allocator().resource());
+    std::pmr::string owned("", out.get_allocator().resource());
     return detail::websocket_deflate_message(codec->stream_, own_aliased_payload(payload, out, owned), out);
 }
 
@@ -120,7 +120,7 @@ websocket_inflate_result websocket_deflate_codecs::inflate_message(
         return websocket_inflate_result::error;
     }
     const reset_after_message reset_guard(inflater_, resource_);
-    std::pmr::string owned(out.get_allocator().resource());
+    std::pmr::string owned("", out.get_allocator().resource());
     return detail::websocket_inflate_message(
         codec->stream_, own_aliased_payload(payload, out, owned), out, message_limit);
 }

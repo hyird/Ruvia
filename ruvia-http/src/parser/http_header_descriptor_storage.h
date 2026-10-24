@@ -1,11 +1,15 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <limits>
+#include <memory>
 #include <memory_resource>
 #include <span>
+#include <stdexcept>
 #include <type_traits>
-#include <vector>
+#include <utility>
 
 #include "ruvia/http/detail/util/pmr_resource.h"
 
@@ -19,49 +23,73 @@ class http_header_descriptor_storage final {
 
 public:
     explicit http_header_descriptor_storage(std::pmr::memory_resource* resource) noexcept
-        : overflow_(http_pmr_resource_or_default(resource)) {}
+        : resource_(http_pmr_resource_or_default(resource)) {}
 
     http_header_descriptor_storage(const http_header_descriptor_storage&) = delete;
     http_header_descriptor_storage& operator=(const http_header_descriptor_storage&) = delete;
-    http_header_descriptor_storage(http_header_descriptor_storage&&) noexcept = default;
+    http_header_descriptor_storage(http_header_descriptor_storage&& other) noexcept
+        : resource_(other.resource_),
+          overflow_(std::exchange(other.overflow_, nullptr)),
+          size_(std::exchange(other.size_, 0)),
+          capacity_(std::exchange(other.capacity_, inline_capacity)) {
+        if (overflow_ == nullptr) {
+            std::copy_n(other.inline_.data(), size_, inline_.data());
+        }
+    }
     http_header_descriptor_storage& operator=(http_header_descriptor_storage&&) = delete;
 
-    void append(field_type field) {
-        if (overflow_.empty()) {
-            if (inline_size_ < inline_capacity) {
-                inline_[inline_size_++] = field;
-                return;
-            }
-            // Allocation is the only throwing step before the inline fields
-            // have all been copied; failure preserves the existing sequence.
-            overflow_.reserve(inline_capacity * 2);
-            for (const auto& inline_field : inline_) {
-                overflow_.push_back(inline_field);
-            }
+    ~http_header_descriptor_storage() {
+        if (overflow_ != nullptr) {
+            std::pmr::polymorphic_allocator<field_type>(resource_).deallocate(overflow_, capacity_);
         }
-        overflow_.push_back(field);
+    }
+
+    void append(field_type field) {
+        if (size_ == capacity_) {
+            grow();
+        }
+        auto* destination = overflow_ != nullptr ? overflow_ : inline_.data();
+        destination[size_++] = field;
     }
 
     [[nodiscard]] std::size_t size() const noexcept {
-        return overflow_.empty() ? inline_size_ : overflow_.size();
+        return size_;
     }
 
     [[nodiscard]] std::span<const field_type> view() const& noexcept {
-        if (!overflow_.empty()) {
-            return overflow_;
-        }
-        return {inline_.data(), inline_size_};
+        return {overflow_ != nullptr ? overflow_ : inline_.data(), size_};
     }
     std::span<const field_type> view() const&& = delete;
 
 private:
     static constexpr std::size_t inline_capacity = 32;
 
+    void grow() {
+        constexpr auto maximum = std::numeric_limits<std::size_t>::max() / sizeof(field_type);
+        if (capacity_ >= maximum) {
+            throw std::length_error("too many HTTP header descriptors");
+        }
+        const auto next_capacity = capacity_ <= maximum / 2 ? capacity_ * 2 : maximum;
+        std::pmr::polymorphic_allocator<field_type> allocator(resource_);
+        auto* next = allocator.allocate(next_capacity);
+        // Trivial descriptors cannot throw while copying. Publish only after
+        // allocation succeeds, preserving the current fields on failure.
+        const auto fields = view();
+        std::uninitialized_copy_n(fields.data(), fields.size(), next);
+        if (overflow_ != nullptr) {
+            allocator.deallocate(overflow_, capacity_);
+        }
+        overflow_ = next;
+        capacity_ = next_capacity;
+    }
+
     // POD request slots stay uninitialized until appended. Every readable slot
     // is fully assigned before publication, without zeroing unused slots.
     std::array<field_type, inline_capacity> inline_;
-    std::size_t inline_size_{0};
-    std::pmr::vector<field_type> overflow_;
+    std::pmr::memory_resource* resource_;
+    field_type* overflow_{nullptr};
+    std::size_t size_{0};
+    std::size_t capacity_{inline_capacity};
 };
 
 }  // namespace ruvia::detail
