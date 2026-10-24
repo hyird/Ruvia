@@ -13,7 +13,13 @@
         "asio",
         {
           "name": "mimalloc",
-          "default-features": false
+          "default-features": false,
+          "features": [
+            {
+              "name": "override",
+              "platform": "!windows"
+            }
+          ]
         }
       ]
     },

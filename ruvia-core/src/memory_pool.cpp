@@ -103,7 +103,7 @@ std::pmr::memory_resource* process_resource() noexcept {
     // detached blocking work may release completion state during teardown.
     // mimalloc owns its thread heaps and supports freeing on another thread,
     // including after the allocating thread exits. No shared pool is layered
-    // over it, and the host's malloc/new and default PMR resource are untouched.
+    // over it, and the default PMR resource object is not replaced.
     alignas(mimalloc_memory_resource) static std::byte storage[sizeof(mimalloc_memory_resource)];
     static auto* const resource = ::new (storage) mimalloc_memory_resource;
     return resource;

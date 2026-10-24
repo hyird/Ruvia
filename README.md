@@ -4,7 +4,7 @@ Ruvia 是基于 C++20 协程的 HTTP/Web 框架，提供协程路由处理、声
 
 | 库目录 | CMake Target | 职责与公开依赖 |
 | --- | --- | --- |
-| `ruvia-core` | `ruvia::core` | 协程任务、事件循环、有界通道与阻塞卸载池；依赖 standalone Asio、`Threads::Threads` 与 mimalloc（不启用 `override` 特性）。 |
+| `ruvia-core` | `ruvia::core` | 协程任务、事件循环、有界通道与阻塞卸载池；依赖 standalone Asio、`Threads::Threads` 与 mimalloc。 |
 | `ruvia-http` | `ruvia::http` | 独立 sans-I/O 的 HTTP/1.0、HTTP/1.1、HTTP/2、内容压缩与 WebSocket 协议层；依赖 zlib、Brotli 与 Zstandard。 |
 | `ruvia-web` | `ruvia::web` | 服务端、路由、中间件、Model/ORM、TLS、出站客户端与数据接入；依赖 `ruvia::core`、`ruvia::http` 与 OpenSSL 3.0+。 |
 
@@ -28,7 +28,9 @@ Ruvia 是基于 C++20 协程的 HTTP/Web 框架，提供协程路由处理、声
 
 未启用的可选功能不编译对应源码，也不安装对应的公开头文件目录（`db/`、`redis/`、`auth/`）。
 
-安装后的包通过 `find_package(ruvia REQUIRED COMPONENTS core http web)` 与对应的 `ruvia::` target 接入（请求 `web` 组件会自动引入 `core` 与 `http`），消费方工具链须提供相同的第三方依赖。MSVC 消费方需在 `project()` 之前设置匹配的静态 `CMAKE_MSVC_RUNTIME_LIBRARY`。若控制器编译在独立的 `STATIC_LIBRARY` 或 `OBJECT_LIBRARY` 中，使用包配置提供的 `ruvia_link_controllers(<app_target> <controller_target>...)` 确保静态路由注册不被链接器丢弃。
+安装后的包通过 `find_package(ruvia REQUIRED COMPONENTS core http web)` 与对应的 `ruvia::` target 接入（请求 `web` 组件会自动引入 `core` 与 `http`），消费方工具链须提供相同的第三方依赖：非 Windows 使用启用 `override` 的静态 mimalloc，不得同时使用另一套全局 allocator replacement；Windows 使用不带该特性的普通 mimalloc 依赖，不做全局分配接口覆盖。MSVC 消费方需在 `project()` 之前设置匹配的静态 `CMAKE_MSVC_RUNTIME_LIBRARY`。独立 `ruvia::http` 不依赖 mimalloc。
+
+若控制器编译在独立的 `STATIC_LIBRARY` 或 `OBJECT_LIBRARY` 中，使用包配置提供的 `ruvia_link_controllers(<app_target> <controller_target>...)` 确保静态路由注册不被链接器丢弃。
 
 ## 快速开始与最小上手
 

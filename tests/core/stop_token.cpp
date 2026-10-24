@@ -5,9 +5,7 @@
 #include <barrier>
 #include <chrono>
 #include <cstddef>
-#include <cstdlib>
 #include <memory>
-#include <new>
 #include <optional>
 #include <stdexcept>
 #include <thread>
@@ -15,32 +13,6 @@
 #include <utility>
 
 #include "test_harness.h"
-
-namespace {
-
-// Counts global-heap allocations made by this thread while armed.
-thread_local bool global_allocations_armed = false;
-thread_local std::size_t global_allocations = 0;
-
-}  // namespace
-
-void* operator new(std::size_t bytes) {
-    if (global_allocations_armed) {
-        ++global_allocations;
-    }
-    if (void* block = std::malloc(bytes == 0 ? 1 : bytes)) {
-        return block;
-    }
-    throw std::bad_alloc();
-}
-
-void operator delete(void* block) noexcept {
-    std::free(block);
-}
-
-void operator delete(void* block, std::size_t) noexcept {
-    std::free(block);
-}
 
 namespace stop_token_test {
 
@@ -362,24 +334,6 @@ RUVIA_TEST(combined_stop_token_observes_later_sources_after_earlier_source_dies)
     second.request_stop();
     RUVIA_CHECK(combined.stop_requested());
     RUVIA_CHECK_EQ(calls, 1);
-}
-
-RUVIA_TEST(stop_token_combination_and_registration_never_allocate) {
-    std::array<ruvia::stop_source, 16> sources;
-    global_allocations = 0;
-    global_allocations_armed = true;
-    for (auto& source : sources) {
-        auto token = source.token();
-        int calls = 0;
-        auto registration = token.register_callback([&calls] { ++calls; });
-        source.request_stop();
-        if (calls != 1 || !token.stop_requested()) {
-            global_allocations_armed = false;
-            RUVIA_CHECK(false);
-        }
-    }
-    global_allocations_armed = false;
-    RUVIA_CHECK_EQ(global_allocations, std::size_t{0});
 }
 
 RUVIA_TEST(stop_token_outlives_its_source_across_threads) {

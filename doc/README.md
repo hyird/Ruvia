@@ -76,6 +76,8 @@ add_executable(my_service src/main.cpp)
 target_link_libraries(my_service PRIVATE ruvia::web)
 ```
 
+消费方提供与 Ruvia 匹配的依赖清单和工具链：非 Windows 为 mimalloc 启用普通 `override` 特性；Windows 使用普通 mimalloc 依赖与上述静态 CRT，不需要 overlay、对象导出或 EXE 后处理，也不覆盖宿主的标准分配接口。独立 HTTP 组件不依赖 mimalloc。`add_subdirectory` 宿主自行提供依赖清单和工具链。
+
 #### 静态库中的控制器链接（`ruvia_link_controllers`）
 
 控制器通过 `RUVIA_ROUTES_BEGIN(Controller)` 宏在 `main()` 之前的静态初始化阶段自动注册路由。如果将控制器拆分为独立的 `STATIC_LIBRARY` 或 `OBJECT_LIBRARY`，普通 `target_link_libraries` 可能会因可执行文件未直接引用控制器符号而丢弃目标文件。`ruviaConfig.cmake` 在找到 `web` 组件时提供了 `ruvia_link_controllers` 辅助函数：

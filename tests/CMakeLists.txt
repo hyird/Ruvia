@@ -155,8 +155,7 @@ if(RUVIA_BUILD_WEB)
     # otherwise encode the bodies other server suites compare.
     ruvia_add_web_standalone_test(ruvia_response_compression_tests 60
         web/http1/response_compression.cpp)
-    # Owns an application with small inbound budgets and replaces the global
-    # aligned operator new/delete to observe the worker's idle trim.
+    # Owns an application with small inbound budgets.
     ruvia_add_web_standalone_test(ruvia_inbound_memory_tests 60
         web/http1/inbound_memory.cpp)
     # Owns a TLS application with a short write timeout, which must not time
