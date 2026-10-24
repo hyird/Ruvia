@@ -113,7 +113,8 @@ RUVIA_TEST(http2_connection_advertisement_validates_stream_state_and_rejects_tun
     RUVIA_CHECK(pushed_altsvc_seen);
     RUVIA_CHECK(!client.connection_error());
 
-    // 2. Open CONNECT tunnel rejects ALTSVC on stream with RST_STREAM(PROTOCOL_ERROR) and rejects server submission.
+    // 2. Open CONNECT tunnel ignores ALTSVC on stream (RFC 7838 section 4 / RFC 9113
+    // section 5.5 discard) and rejects server submission.
     (void)client.submit_request_head(ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
     const auto connect_submitted = client.submit_request_head(
         ruvia::http2_connect_request_head_view{.authority_ = "example.test:443"});
@@ -147,10 +148,12 @@ RUVIA_TEST(http2_connection_advertisement_validates_stream_state_and_rejects_tun
         8, ruvia::http2_frame_type::alternative_service, 0, connect_id));
     RUVIA_CHECK(client.feed(altsvc_on_tunnel) == ruvia::http2_feed_result::accepted);
     RUVIA_CHECK(!client.connection_error());
-    const auto tunnel_closed = client.next_event();
-    RUVIA_CHECK(tunnel_closed && tunnel_closed->stream_closed() &&
-                tunnel_closed->stream_closed()->stream_id() == connect_id &&
-                tunnel_closed->stream_closed()->error() == ruvia::http2_error_code::protocol_error);
+    while (auto event = client.next_event()) {
+        RUVIA_CHECK(event->stream_closed() == nullptr);
+    }
+    RUVIA_CHECK(!client.stream_aborted(connect_id));
+    // No RST_STREAM (or any other frame) answers the ignored frame.
+    RUVIA_CHECK(ruvia::testing::drain_output(client).empty());
 
     // 3. Reserved push stream receiving ALTSVC triggers connection GOAWAY(PROTOCOL_ERROR).
     auto pushed2 = server.submit_push_request(3, {.authority_ = "example.test", .path_ = "/reserved"});

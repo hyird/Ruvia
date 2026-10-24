@@ -138,12 +138,8 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
         // While the decision is pending the bytes are published as tunnel data
         // whose receive-window debt the owner holds until it consumes them after
         // accepting; once rejected they are discarded and their credit returned.
-        // RFC 8441 WebSocket stays strict: RFC 6455 section 4.1 has the client wait
-        // for the 2xx response before sending any frame.
-        if (!data.empty() && stream->protocol_is_websocket()) {
-            reset_stream(http2_error_code::protocol_error, true);
-            return true;
-        }
+        // RFC 8441 WebSocket follows the same rule: RFC 6455 section 4.1 binds the
+        // client to wait for the 2xx, but gives the recipient no reason to reset.
         const bool early_tunnel_data = pending_connect_control && !data.empty();
         if (early_tunnel_data) {
             reserve_events(1);

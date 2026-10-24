@@ -244,12 +244,26 @@ bool http2_connection::process_rst_stream(const http2_frame_header& header_value
         output_.reserve_segments_additional(1 + static_cast<std::size_t>(close_output_bytes != 0));
         output_.reserve_additional(close_output_bytes + http2_rapid_reset_goaway_bytes);
     }
-    if (!close_stream(header_value.stream_id_, http2_stream_close_source::peer, error)) {
+    // RFC 9113 8.7: REFUSED_STREAM on a stream this client opened means the server
+    // did no processing, so the owner learns that the request may be replayed. A
+    // refusal after a final response head contradicts that and stays a reset.
+    const bool refused_request = role_ == http2_role::client && error == http2_error_code::refused_stream &&
+                                 (header_value.stream_id_ & 1U) != 0 && stream != nullptr &&
+                                 stream->response_status() == nullptr;
+    if (refused_request) {
+        reserve_event_slots(1);
+    }
+    if (!(refused_request ? close_stream_impl(header_value.stream_id_, http2_stream_close_source::peer, error,
+                                close_notification_type::owner_already_knows)
+                          : close_stream(header_value.stream_id_, http2_stream_close_source::peer, error))) {
         // A reset can race with one sent by this endpoint. RFC 9113 requires
         // minimal processing in that state, but the no-op neither opened a
         // handler slot nor freed one and therefore must not spend the
         // rapid-reset lifecycle budget.
         return true;
+    }
+    if (refused_request) {
+        events_.push_back(http2_event(http2_request_unprocessed_event(header_value.stream_id_)));
     }
     ++peer_reset_streams_;
     if (rapid_reset_budget_exceeded) {

@@ -246,12 +246,13 @@ void http_client_connection::on_http2_event(http2_event& event) {
             }
         }
     } else if (const auto* unprocessed = event.request_unprocessed()) {
+        // Published after a peer GOAWAY (whose own event marks the session
+        // draining) or for RST_STREAM(REFUSED_STREAM), which keeps it usable.
         if (auto* stream = find_http2_stream(unprocessed->stream_id());
             stream != nullptr && !stream->complete_ && !stream->failed()) {
             stream->retryable_ = true;
             stream->signal_.notify();
         }
-        http2_.mark_draining();
     } else if (event.goaway() != nullptr) {
         http2_.mark_draining();
     }
@@ -533,8 +534,8 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             continue;
         }
         if (retryable) {
-            throw http_client_error(
-                http_client_error::code_type::protocol_error, "HTTP/2 request was not processed after GOAWAY");
+            throw http_client_error(http_client_error::code_type::protocol_error,
+                "HTTP/2 request was not processed by the server (GOAWAY or REFUSED_STREAM)");
         }
         if (failure != nullptr) {
             std::rethrow_exception(failure);

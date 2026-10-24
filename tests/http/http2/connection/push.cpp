@@ -319,18 +319,17 @@ RUVIA_TEST(http2_push_reservation_does_not_consume_peer_concurrency_until_respon
         RUVIA_CHECK(server.feed(std::string_view(frame.data(), frame.size())) == ruvia::http2_feed_result::accepted);
         (void)ruvia::testing::drain_output(server);
     };
+    // MCS = 0 admits no pushed stream at all, so no promise is made (RFC 9113 8.4).
     set_limit(0);
+    const auto refused = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/zero"});
+    RUVIA_CHECK(refused.index() == 1 && std::get<1>(refused) == ruvia::http2_push_submit_error::stream_limit);
+    set_limit(1);
     const auto first = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/one"});
     const auto second = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/two"});
     RUVIA_CHECK((first.index() == 0) && (second.index() == 0));
     if ((first.index() != 0) || (second.index() != 0)) {
         return;
     }
-    const auto first_blocked = server.submit_streaming_response_head(std::get<0>(first).stream_id(), ruvia::http_response{});
-    RUVIA_CHECK(std::holds_alternative<ruvia::http2_response_head_submit_error>(first_blocked) &&
-                std::get<ruvia::http2_response_head_submit_error>(first_blocked) ==
-                    ruvia::http2_response_head_submit_error::peer_stream_limit_reached);
-    set_limit(1);
     RUVIA_CHECK(std::holds_alternative<ruvia::http_response_stream_commit_plan>(server.submit_streaming_response_head(std::get<0>(first).stream_id(), ruvia::http_response{})));
     const auto second_blocked = server.submit_streaming_response_head(std::get<0>(second).stream_id(), ruvia::http_response{});
     RUVIA_CHECK(std::holds_alternative<ruvia::http2_response_head_submit_error>(second_blocked) &&
@@ -506,6 +505,50 @@ RUVIA_TEST(http2_push_finish_releases_peer_concurrency_while_its_request_lease_i
         RUVIA_CHECK(std::holds_alternative<ruvia::http_response_stream_commit_plan>(server.submit_streaming_response_head(std::get<0>(second).stream_id(), ruvia::http_response{})));
         RUVIA_CHECK_EQ(std::get<0>(first).request_view().path_, "/one");
         RUVIA_CHECK(server.release(std::move(std::get<0>(first))) == ruvia::http2_server_request_release_status::released);
+    }
+}
+
+// RFC 9113 section 8.4: SETTINGS_MAX_CONCURRENT_STREAMS = 0 prevents every pushed
+// response, so no promise is made and nothing reaches the wire.
+RUVIA_TEST(http2_push_refused_up_front_when_peer_concurrency_admits_no_pushed_stream) {
+    ruvia::testing::output_relay relay;
+    for (const std::uint8_t limit : {std::uint8_t{0}, std::uint8_t{1}}) {
+        auto client = ruvia::http2_connection::client({.enable_push_ = true});
+        auto server = ruvia::http2_connection::server();
+        relay.transfer(client, server);
+        relay.transfer(server, client);
+        relay.transfer(client, server);
+        const auto submitted = client.submit_request_head(ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+        RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
+        relay.transfer(client, server);
+        auto request = server.next_event();
+        auto request_end = server.next_event();
+        std::array<char, 15> settings{};
+        RUVIA_CHECK(ruvia::encode_http2_frame_header(std::span(settings).first(9), 6, ruvia::http2_frame_type::settings, 0, 0));
+        settings[10] = 3;
+        settings[14] = static_cast<char>(limit);
+        RUVIA_CHECK(server.feed(std::string_view(settings.data(), settings.size())) == ruvia::http2_feed_result::accepted);
+        (void)ruvia::testing::drain_output(server);
+        std::optional<ruvia::http2_request_head_event> opened;
+        if (limit != 0) {
+            auto first = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/one"});
+            RUVIA_CHECK(first.index() == 0);
+            if (first.index() != 0) {
+                continue;
+            }
+            const auto committed =
+                server.submit_streaming_response_head(std::get<0>(first).stream_id(), ruvia::http_response{});
+            RUVIA_CHECK(std::holds_alternative<ruvia::http_response_stream_commit_plan>(committed));
+            opened.emplace(std::move(std::get<0>(first)));
+            (void)ruvia::testing::drain_output(server);
+        }
+        const auto refused = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/two"});
+        RUVIA_CHECK(refused.index() == 1 && std::get<1>(refused) == ruvia::http2_push_submit_error::stream_limit);
+        RUVIA_CHECK(ruvia::testing::drain_output(server).empty());
+        RUVIA_CHECK(!server.connection_error().has_value());
+        if (opened) {
+            (void)server.release(std::move(*opened));
+        }
     }
 }
 

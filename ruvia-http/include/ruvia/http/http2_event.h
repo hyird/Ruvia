@@ -283,6 +283,11 @@ private:
     http2_error_code error_;
 };
 
+// Client only: the stream this endpoint opened was closed before the server
+// processed it, so the request may be retried (RFC 9113 section 8.7). Published
+// for streams above a peer GOAWAY's last stream id (after the GOAWAY event) and
+// for RST_STREAM(REFUSED_STREAM) received before the final response head; the
+// latter leaves the connection usable. No stream_closed event follows.
 class http2_request_unprocessed_event final {
 public:
     [[nodiscard]] std::uint32_t stream_id() const noexcept {

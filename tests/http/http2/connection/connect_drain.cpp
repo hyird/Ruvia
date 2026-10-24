@@ -300,24 +300,71 @@ RUVIA_TEST(http2_connect_data_after_rejection_is_discarded_with_credit) {
     (void)server.release(std::move(head));
 }
 
-// RFC 6455 section 4.1: a WebSocket client waits for the 2xx, so RFC 8441
-// handshakes keep rejecting DATA before the response.
-RUVIA_TEST(http2_websocket_connect_data_before_response_still_resets_stream) {
+// RFC 6455 section 4.1 binds the WebSocket client to wait for the 2xx; it gives the
+// recipient no reason to reset, so RFC 8441 DATA before the response is held under
+// flow control as tunnel data like any other CONNECT.
+RUVIA_TEST(http2_websocket_connect_data_before_response_is_held_as_tunnel_data) {
     std::pmr::unsynchronized_pool_resource resource;
     auto server = started_server(&resource);
     auto wire = opening_wire(&resource);
     append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag, 1, connect_block(&resource, "websocket"));
     append_frame(wire, ruvia::http2_frame_type::data, 0, 1, "frame");
     RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
-    bool closed = false;
+    bool early_data = false;
+    std::optional<ruvia::http2_request_head_event> head;
     while (auto event = server.next_event()) {
-        RUVIA_CHECK(event->tunnel_data() == nullptr);
-        if (const auto* stream_closed = event->stream_closed()) {
-            closed = stream_closed->error() == ruvia::http2_error_code::protocol_error;
+        RUVIA_CHECK(event->stream_closed() == nullptr);
+        if (auto* request = event->request_head()) {
+            head.emplace(std::move(*request));
+        } else if (auto* data = event->tunnel_data()) {
+            early_data = data->stream_id() == 1 && data->bytes() == "frame";
         }
     }
-    RUVIA_CHECK(closed);
-    RUVIA_CHECK(has_frame(take_frames(server), ruvia::http2_frame_type::rst_stream, 1));
+    RUVIA_CHECK(early_data);
+    RUVIA_CHECK(!has_frame(take_frames(server), ruvia::http2_frame_type::rst_stream, 1));
+    RUVIA_CHECK(!server.connection_error().has_value());
+    if (head) {
+        (void)server.release(std::move(*head));
+    }
+}
+
+// RFC 7838 section 4 and RFC 8336 section 2.1: a server MUST ignore ALTSVC, and
+// ORIGIN on a nonzero stream; an established tunnel keeps them out of its bytes.
+RUVIA_TEST(http2_connect_tunnel_ignores_alternative_service_and_origin_frames) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = started_server(&resource);
+    auto wire = opening_wire(&resource);
+    append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag, 1, connect_block(&resource, {}));
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    auto head = take_request_head(server);
+    RUVIA_CHECK(head.has_value());
+    if (!head) {
+        return;
+    }
+    ruvia::http_response accepted(&resource);
+    accepted.status(ruvia::http_status::ok);
+    RUVIA_CHECK(server.submit_connect_response_head(1, accepted) == ruvia::http2_submit_status::accepted);
+    (void)take_frames(server);
+    while (server.next_event()) {
+    }
+
+    std::pmr::string extension(&resource);
+    append_frame(extension, ruvia::http2_frame_type::alternative_service, 0, 1, std::string_view("\0\0h3", 4));
+    append_frame(extension, ruvia::http2_frame_type::origin, 0, 1, {});
+    append_frame(extension, ruvia::http2_frame_type::data, 0, 1, "after");
+    RUVIA_CHECK(server.feed(extension) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!server.connection_error().has_value());
+    RUVIA_CHECK(!server.stream_aborted(1));
+    RUVIA_CHECK(!has_frame(take_frames(server), ruvia::http2_frame_type::rst_stream, 1));
+    std::string received;
+    while (auto event = server.next_event()) {
+        RUVIA_CHECK(event->stream_closed() == nullptr);
+        if (auto* data = event->tunnel_data()) {
+            received.append(data->bytes());
+        }
+    }
+    RUVIA_CHECK_EQ(received, std::string("after"));
+    (void)server.release(std::move(*head));
 }
 
 // RFC 9113 section 6.8: the first GOAWAY advertises 2^31-1 so streams the client

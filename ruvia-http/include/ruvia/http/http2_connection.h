@@ -152,6 +152,10 @@ public:
         std::span<const http_header_view> trailers = {});
     [[nodiscard]] http2_request_content_release_status release_request_content(
         std::uint32_t stream_id) noexcept;
+    // Returns stream_limit without sending PUSH_PROMISE when the open pushed streams
+    // already reach the peer's SETTINGS_MAX_CONCURRENT_STREAMS (RFC 9113 section
+    // 8.4), including when it is 0. Reserved promises do not count (section 5.1.2);
+    // a response head that later finds no slot gets peer_stream_limit_reached.
     // Commits a promise and returns the server request/storage lease used to
     // produce its response. Release or abandon it exactly like an incoming request.
     // If materializing the lease fails after promise commit, the promised stream
@@ -166,9 +170,10 @@ public:
     // published as tunnel_data events whose credit the owner holds until it consumes
     // the bytes after accepting; a 2xx accept publishes tunnel_end only after them.
     // After a non-2xx response, further DATA is discarded and its credit returned.
-    // RFC 8441 :protocol websocket stays strict (RFC 6455 clients wait for the 2xx):
-    // early DATA resets the stream with PROTOCOL_ERROR. Unknown extension frame types
-    // on an established tunnel are discarded (RFC 9113 section 5.5).
+    // RFC 8441 :protocol websocket is handled the same way (RFC 6455 section 4.1
+    // binds only the client). Unknown extension frame types on an established tunnel
+    // are discarded (RFC 9113 section 5.5); ALTSVC and ORIGIN are ignored there too
+    // (RFC 7838 section 4, RFC 8336 section 2.1).
     [[nodiscard]] http2_submit_status submit_connect_response_head(
         std::uint32_t stream_id, const http_response& response);
     [[nodiscard]] std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_error>

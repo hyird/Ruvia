@@ -593,22 +593,6 @@ bool http2_connection::process_frame(const http2_frame_header& header_value, std
                 return false;
             }
         }
-        if (!http2_stream_is_closed(*stream) && stream->tunnel().open() != nullptr &&
-            (type == http2_frame_type::origin || type == http2_frame_type::alternative_service)) {
-            // RFC 9113 8.5 narrows connected streams to DATA and the three
-            // stream-management frame types. Unknown extension types are still
-            // discarded below, as RFC 9113 5.5 requires for every stream.
-            const auto output_checkpoint = output_.checkpoint();
-            try {
-                output_.append_rst_stream(header_value.stream_id_, http2_error_code::protocol_error);
-                close_stream(header_value.stream_id_, http2_stream_close_source::local,
-                    http2_error_code::protocol_error);
-            } catch (...) {
-                output_.rollback_to(output_checkpoint);
-                throw;
-            }
-            return true;
-        }
     }
     switch (static_cast<http2_frame_type>(header_value.type_)) {
         case http2_frame_type::settings:

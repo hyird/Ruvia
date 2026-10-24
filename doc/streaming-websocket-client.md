@@ -141,7 +141,7 @@ ruvia::task<void> stream_subscription(
 | --- | --- |
 | `co_await c.inform(const http_interim_response_head& response)` | 在最终响应头提交前发送 `1xx` 临时响应（如 `103 Early Hints`：`http_interim_response_head(http_status::early_hints, headers)`） |
 | `c.priority(http_priority_fields{.urgency_ = 2, .incremental_ = true})` | 设置 RFC 9218 `Priority` 响应优先级；通过 `c.req().priority()` 读取客户端请求优先级 |
-| `bool c.push(http_push_request_view request)` | （HTTP/2）向开启了 Server Push 的客户端推送关联资源，同步返回 `bool` 表示是否被接纳 |
+| `bool c.push(http_push_request_view request)` | （HTTP/2）向开启了 Server Push 的客户端推送关联资源，同步返回 `bool` 表示是否被接纳；对端禁用推送，或已打开的推送流（不含仅预留的推送）已达到对端 `SETTINGS_MAX_CONCURRENT_STREAMS`（包括其为 0）时返回 `false`，不发送 `PUSH_PROMISE`；已预留的推送在提交响应头时仍无并发额度则以 `RST_STREAM(CANCEL)` 取消，不视为连接失败 |
 | `void c.advertise_origins(std::span<const std::string_view> origins)` | （HTTP/2）在连接上排入 RFC 8336 `ORIGIN` 帧，通告当前连接可合并服务的权威源集合 |
 | `void c.advertise_alternative_service(std::string_view value)` | （HTTP/2）在连接上排入 RFC 7838 `ALTSVC` 帧通告替代服务 |
 | `c.req().trailers()` / `c.req().trailer(name)` | 在流式请求体读取到 EOF 后，读取客户端发送的请求 Trailer 首部；按 RFC 9110 §6.5.1 不允许出现在 Trailer 中的字段（如 `Content-Length`、`Cache-Control`）被丢弃而不导致请求失败，也不会并入请求头 |
@@ -244,7 +244,7 @@ ruvia::task<void> handle_connect(ruvia::context& c) {
 }
 ```
 
-HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9298 §5，经 RFC 9931 更新）属于隧道数据：协议层在流控窗口内保留这些字节（不归还接收窗口），隧道接受后由 `tunnel.read()` 按序读到；若路由返回非 2xx，已缓冲及后续字节被丢弃并归还流控额度，不复位流。RFC 8441 WebSocket（`:protocol = websocket`）仍要求客户端等待 2xx（RFC 6455 §4.1），提前到达的 `DATA` 以 `RST_STREAM(PROTOCOL_ERROR)` 复位该流。已建立隧道上的未知扩展帧类型按 RFC 9113 §5.5 丢弃。
+HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9298 §5，经 RFC 9931 更新）属于隧道数据：协议层在流控窗口内保留这些字节（不归还接收窗口），隧道接受后由 `tunnel.read()` 按序读到；若路由返回非 2xx，已缓冲及后续字节被丢弃并归还流控额度；非 2xx 响应发送完毕后服务端以 `RST_STREAM(NO_ERROR)` 结束该流（RFC 9113 §8.1），而不是等待客户端结束请求半边。RFC 8441 WebSocket（`:protocol = websocket`）同样处理：RFC 6455 §4.1 要求客户端等待 2xx，但这是对发送方的约束，提前到达的 `DATA` 在流控窗口内保留，握手接受后按序交给 WebSocket 会话。已建立隧道上的未知扩展帧类型按 RFC 9113 §5.5 丢弃；`ALTSVC`、`ORIGIN` 帧也一样忽略（RFC 7838 §4、RFC 8336 §2.1），不复位隧道流。
 
 ### 4.2 服务端 `CONNECT-UDP`（RFC 9298）与 Capsule 数据报隧道
 

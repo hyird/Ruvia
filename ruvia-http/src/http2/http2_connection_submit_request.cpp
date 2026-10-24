@@ -322,6 +322,13 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     if (!peer_settings_.enable_push()) {
         return error_type::push_disabled;
     }
+    // RFC 9113 8.4: the client's SETTINGS_MAX_CONCURRENT_STREAMS bounds pushed
+    // responses. When no pushed stream could open now (the limit is 0 or already
+    // reached by open pushes) the promise is not made. Reserved promises do not
+    // count (RFC 9113 5.1.2); their response head waits for a slot instead.
+    if (active_local_request_streams_ >= peer_settings_.max_concurrent_streams()) {
+        return error_type::stream_limit;
+    }
     const auto known_method = request.method_ == "GET"    ? http_known_method::get
                               : request.method_ == "HEAD" ? http_known_method::head
                                                           : http_known_method::unknown;

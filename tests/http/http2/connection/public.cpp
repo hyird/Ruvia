@@ -549,6 +549,45 @@ RUVIA_TEST(http2_public_peer_reset_preserves_outstanding_data_credit) {
                 ruvia::http2_received_data_acknowledge_status::acknowledged);
 }
 
+// RFC 9113 section 8.7: REFUSED_STREAM means the server did not process the
+// request, so it is published as unprocessed (retryable), not as a reset stream,
+// and the connection stays usable. After a final response head it stays a reset.
+RUVIA_TEST(http2_public_client_refused_stream_reports_request_unprocessed) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto client = prepared_client(&resource);
+    std::pmr::string wire(&resource);
+    append_peer_settings(wire);
+    constexpr std::array<char, 4> refused_payload{0, 0, 0, 7};
+    append_frame(wire, ruvia::http2_frame_type::rst_stream, 0, 1,
+        std::string_view(refused_payload.data(), refused_payload.size()));
+    RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+    bool unprocessed = false;
+    while (auto event = client.next_event()) {
+        RUVIA_CHECK(event->stream_closed() == nullptr);
+        if (const auto* value = event->request_unprocessed()) {
+            unprocessed = value->stream_id() == 1;
+        }
+    }
+    RUVIA_CHECK(unprocessed);
+    RUVIA_CHECK(!client.connection_error().has_value());
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(client.submit_request_head(ruvia::http2_regular_request_head_view{
+        .method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .target_ = "/"})));
+
+    auto started = prepared_client(&resource);
+    auto started_wire = client_response_wire(&resource, "", false, false);
+    append_frame(started_wire, ruvia::http2_frame_type::rst_stream, 0, 1,
+        std::string_view(refused_payload.data(), refused_payload.size()));
+    RUVIA_CHECK(started.feed(started_wire) == ruvia::http2_feed_result::accepted);
+    bool reset = false;
+    while (auto event = started.next_event()) {
+        RUVIA_CHECK(event->request_unprocessed() == nullptr);
+        if (const auto* closed = event->stream_closed()) {
+            reset = closed->error() == ruvia::http2_error_code::refused_stream;
+        }
+    }
+    RUVIA_CHECK(reset);
+}
+
 RUVIA_TEST(http2_public_server_request_view_hides_stream_storage) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::http2_connection::server({.resource_ = &resource});

@@ -259,8 +259,15 @@ private:
                 stream_id_, std::move(response), trailer_intent);
             const auto* submitted_head = std::get_if<http_response_stream_commit_plan>(&head_result);
             if (submitted_head == nullptr) {
-                if (std::get<ruvia::http2_response_head_submit_error>(head_result) ==
-                    ruvia::http2_response_head_submit_error::closed) {
+                const auto head_error = std::get<ruvia::http2_response_head_submit_error>(head_result);
+                if (head_error == ruvia::http2_response_head_submit_error::peer_stream_limit_reached) {
+                    // A promised push whose stream the client's concurrency limit
+                    // cannot admit is cancelled; the connection is unaffected.
+                    (void)connection_.submit_reset(stream_id_, ruvia::http2_error_code::cancel);
+                    wake_writer();
+                }
+                if (head_error == ruvia::http2_response_head_submit_error::closed ||
+                    head_error == ruvia::http2_response_head_submit_error::peer_stream_limit_reached) {
                     throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
                 }
                 throw std::logic_error("HTTP/2 streaming response head submission failed");

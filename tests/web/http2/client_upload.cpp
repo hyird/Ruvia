@@ -30,7 +30,8 @@ enum class response_mode { ordinary,
     abandoned,
     abandoned_pending,
     buffered,
-    disconnected };
+    disconnected,
+    refused };
 
 void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
     std::uint32_t stream_id, std::string_view payload) {
@@ -139,6 +140,19 @@ private:
                     throw std::runtime_error("invalid client request fields");
                 }
                 ++requests_;
+                if (requests_ == 1 && mode_ == response_mode::refused) {
+                    // RFC 9113 section 8.7: the request was not processed.
+                    if (method != "GET" || path != "/next") {
+                        throw std::runtime_error("unexpected refused request");
+                    }
+                    first_stream = header->stream_id_;
+                    request_ended_ = (header->flags_ & 1U) != 0;
+                    const std::array<char, 4> refused_stream{0, 0, 0, 7};
+                    append_frame(wire, ruvia::http2_frame_type::rst_stream, 0, first_stream,
+                        {refused_stream.data(), refused_stream.size()});
+                    co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
+                    continue;
+                }
                 if (requests_ == 1) {
                     if (method != "POST" || path != "/upload") {
                         throw std::runtime_error("unexpected initial request");
@@ -222,7 +236,9 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                                                          .request_timeout_ = std::chrono::seconds(2),
                                                          .protocol_ = ruvia::http_client_protocol::http2_only});
         try {
-            if (mode == response_mode::abandoned_pending) {
+            if (mode == response_mode::refused) {
+                // The refused request is replayed instead of failing.
+            } else if (mode == response_mode::abandoned_pending) {
                 std::optional<ruvia::http_client_response> retained;
                 {
                     auto exchange = co_await client.handle().open_request(
@@ -303,6 +319,9 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                 if (mode == response_mode::ordinary || mode == response_mode::continued || mode == response_mode::buffered) {
                     RUVIA_CHECK_EQ(peer.received_, mode == response_mode::buffered ? std::string(65536, 'b') : std::string("payload"));
                     RUVIA_CHECK(peer.request_ended_);
+                } else if (mode == response_mode::refused) {
+                    RUVIA_CHECK(peer.received_.empty());
+                    RUVIA_CHECK(!peer.request_reset_);
                 } else {
                     RUVIA_CHECK(peer.received_.empty());
                     RUVIA_CHECK(mode == response_mode::reset || peer.request_reset_);
@@ -357,4 +376,8 @@ RUVIA_TEST(http2_client_early_final_drains_window_blocked_buffered_upload_before
 
 RUVIA_TEST(http2_client_upload_transport_failure_preserves_completed_response) {
     http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::disconnected);
+}
+
+RUVIA_TEST(http2_client_retries_request_refused_with_refused_stream) {
+    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::refused);
 }
