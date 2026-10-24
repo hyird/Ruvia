@@ -114,7 +114,8 @@ worker_timer_schedule_status worker_handle::schedule_timer(worker_timer_registra
 }
 
 post_status worker_handle::post_factory(move_only_function<move_only_function<void()>()> factory) const {
-    return dispatcher_ ? dispatcher_->post_factory(std::move(factory)) : post_status::worker_stopping;
+    const auto dispatcher = dispatcher_;
+    return dispatcher ? dispatcher->post_factory(std::move(factory)) : post_status::worker_stopping;
 }
 
 }  // namespace ruvia

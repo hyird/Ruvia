@@ -63,8 +63,11 @@ public:
         std::chrono::steady_clock::time_point,
         move_only_function<void(worker_timer_outcome)>) const&& = delete;
 
-    // Reserves bounded admission before invoking the factory, so the caller
-    // can transfer ownership only for an accepted post.
+    // Reserves bounded admission before synchronously invoking the factory, so
+    // ownership transfers only after admission. Keeps the selected endpoint
+    // alive across user factory code, even if it reentrantly retires the runtime
+    // and clears this handle. accepted does not guarantee execution: detaching
+    // the runtime abandons an admitted callback and releases its owned inputs.
     [[nodiscard]] post_status post_factory(move_only_function<move_only_function<void()>()> factory) const;
 
     template <typename fn_type>

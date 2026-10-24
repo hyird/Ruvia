@@ -11,6 +11,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -578,6 +579,60 @@ bool test_worker_handle_callable_lifetime() {
            invalid.post([] {}) == ruvia::post_status::worker_stopping &&
            repeated_resource.allocations_ > 0 &&
            repeated_resource.allocations_ == repeated_resource.deallocations_;
+}
+
+bool test_post_factory_keeps_endpoint_through_owner_retirement() {
+    asio::io_context context;
+    auto runtime = std::make_unique<ruvia::worker_runtime_context>(context, 1);
+    auto worker = runtime->handle();
+    auto payload = std::make_shared<int>(42);
+    const std::weak_ptr<int> observed = payload;
+    bool ran = false;
+    const auto status = worker.post_factory(
+        [owned = std::move(payload), &runtime, &worker, &ran]() mutable -> ruvia::move_only_function<void()> {
+            runtime.reset();
+            worker = ruvia::worker_handle{};
+            return [owned = std::move(owned), &ran] { ran = *owned == 42; };
+        });
+    context.run();
+    return status == ruvia::post_status::accepted && !runtime && !worker.valid() &&
+           !ran && observed.expired();
+}
+
+bool test_post_factory_exception_releases_admission() {
+    asio::io_context context;
+    ruvia::worker_runtime_context runtime(context, 1);
+    const auto expected = std::make_error_code(std::errc::argument_out_of_domain);
+    bool propagated = false;
+    try {
+        static_cast<void>(runtime.handle().post_factory(
+            [&expected]() -> ruvia::move_only_function<void()> { throw std::system_error(expected); }));
+    } catch (const std::system_error& error) {
+        propagated = error.code() == expected;
+    }
+    bool ran = false;
+    const auto status = runtime.handle().post_factory(
+        [&ran]() -> ruvia::move_only_function<void()> { return [&ran] { ran = true; }; });
+    context.run();
+    return propagated && status == ruvia::post_status::accepted && ran;
+}
+
+bool test_post_factory_close_drains_admitted_callback() {
+    asio::io_context context;
+    ruvia::worker_runtime_context runtime(context, 1);
+    int calls = 0;
+    const auto status = runtime.handle().post_factory([&]() -> ruvia::move_only_function<void()> {
+        runtime.close();
+        return [&calls] { ++calls; };
+    });
+    bool rejected_factory_called = false;
+    const auto rejected = runtime.handle().post_factory([&]() -> ruvia::move_only_function<void()> {
+        rejected_factory_called = true;
+        return [] {};
+    });
+    context.run();
+    return status == ruvia::post_status::accepted && calls == 1 &&
+           rejected == ruvia::post_status::worker_stopping && !rejected_factory_called;
 }
 
 struct queue_destructor_state final {
@@ -2213,6 +2268,12 @@ int main() {
                    run("event_loop_post_protects_reentrant_heap_copy",
                        test_event_loop_post_protects_reentrant_heap_copy) &&
                    run("worker_handle_callable_lifetime", test_worker_handle_callable_lifetime) &&
+                   run("post_factory_keeps_endpoint_through_owner_retirement",
+                       test_post_factory_keeps_endpoint_through_owner_retirement) &&
+                   run("post_factory_exception_releases_admission",
+                       test_post_factory_exception_releases_admission) &&
+                   run("post_factory_close_drains_admitted_callback",
+                       test_post_factory_close_drains_admitted_callback) &&
                    run("post_outcome_invariants_and_empty_callbacks",
                        test_post_outcome_invariants_and_empty_callbacks) &&
                    run("worker_runtime_context_owns_stable_detached_endpoint",
