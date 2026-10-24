@@ -44,17 +44,15 @@ RUVIA_TEST(multipart_range_plan_serializes_owned_inputs_and_every_segment_exactl
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=8-9,0-1", 10);
     std::string media_type = "text/plain; charset=utf-8";
     std::string boundary = "range boundary";
-    std::string encoding = "gzip";
     auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, 10, media_type, boundary, encoding, std::pmr::new_delete_resource());
+        ranges, 10, media_type, boundary, std::pmr::new_delete_resource());
     media_type.assign(media_type.size(), 'x');
     boundary.assign(boundary.size(), 'x');
-    encoding.assign(encoding.size(), 'x');
     const std::string_view expected =
         "--range boundary\r\nContent-Type: text/plain; charset=utf-8\r\n"
-        "Content-Encoding: gzip\r\nContent-Range: bytes 8-9/10\r\n\r\n89\r\n"
+        "Content-Range: bytes 8-9/10\r\n\r\n89\r\n"
         "--range boundary\r\nContent-Type: text/plain; charset=utf-8\r\n"
-        "Content-Encoding: gzip\r\nContent-Range: bytes 0-1/10\r\n\r\n01\r\n"
+        "Content-Range: bytes 0-1/10\r\n\r\n01\r\n"
         "--range boundary--\r\n";
     RUVIA_CHECK_EQ(plan.content_type(), "multipart/byteranges; boundary=\"range boundary\"");
     RUVIA_CHECK_EQ(materialize_multipart(plan, "0123456789"), expected);
@@ -80,7 +78,7 @@ RUVIA_TEST(multipart_range_plan_preserves_all_ranges_across_metadata_growth) {
     const auto ranges = ruvia::resolve_http_byte_range_set(field, payload_value.size());
     RUVIA_CHECK_EQ(ranges.size(), ruvia::http_byte_range_set::capacity);
     const auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, payload_value.size(), "application/octet-stream", "all_ranges", {}, std::pmr::new_delete_resource());
+        ranges, payload_value.size(), "application/octet-stream", "all_ranges", std::pmr::new_delete_resource());
     RUVIA_CHECK_EQ(materialize_multipart(plan, payload_value), expected);
     RUVIA_CHECK_EQ(plan.content_length(), expected.size());
 }
@@ -92,7 +90,7 @@ RUVIA_TEST(multipart_range_plan_retains_cloned_storage_until_owner_destruction) 
     {
         auto retained = [&] {
             auto source_value = ruvia::make_http_multipart_byte_range_plan(
-                ranges, 10, "text/plain", "retained_boundary", {}, &source_resource);
+                ranges, 10, "text/plain", "retained_boundary", &source_resource);
             return source_value.clone(&retained_resource);
         }();
         RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
@@ -103,7 +101,7 @@ RUVIA_TEST(multipart_range_plan_retains_cloned_storage_until_owner_destruction) 
         for (std::size_t index = 0; index < 32; ++index) {
             {
                 auto temporary = ruvia::make_http_multipart_byte_range_plan(
-                    ranges, 10, "application/octet-stream", "temporary_boundary", {}, &source_resource);
+                    ranges, 10, "application/octet-stream", "temporary_boundary", &source_resource);
                 RUVIA_CHECK(temporary.content_length() != 0);
             }
             RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
@@ -129,7 +127,7 @@ RUVIA_TEST(multipart_range_plan_allocation_failures_release_partial_storage_and_
         resource.fail_after(failure);
         try {
             const auto plan = ruvia::make_http_multipart_byte_range_plan(
-                ranges, 10, "application/octet-stream; charset=utf-8", boundary, "gzip", &resource);
+                ranges, 10, "application/octet-stream; charset=utf-8", boundary, &resource);
             RUVIA_CHECK(plan.content_length() != 0);
             succeeded = true;
         } catch (const std::bad_alloc&) {
@@ -140,7 +138,7 @@ RUVIA_TEST(multipart_range_plan_allocation_failures_release_partial_storage_and_
     RUVIA_CHECK(succeeded);
     {
         const auto source_value = ruvia::make_http_multipart_byte_range_plan(
-            ranges, 10, "text/plain", "clone_boundary", {}, &resource);
+            ranges, 10, "text/plain", "clone_boundary", &resource);
         const auto baseline = resource.live_allocations();
         failing_memory_resource clone_resource;
         succeeded = false;
@@ -169,7 +167,7 @@ RUVIA_TEST(multipart_range_plan_formats_uint64_edges_and_reclaims_error_storage)
     const std::string boundary(70, 'b');
     {
         const auto plan = ruvia::make_http_multipart_byte_range_plan(
-            ranges, maximum, "text/plain", boundary, {}, &resource);
+            ranges, maximum, "text/plain", boundary, &resource);
         RUVIA_CHECK(plan.metadata().find("Content-Range: bytes 18446744073709551613-18446744073709551613/18446744073709551615\r\n") != std::string_view::npos);
         RUVIA_CHECK(plan.metadata().find("Content-Range: bytes 0-0/18446744073709551615\r\n") != std::string_view::npos);
         RUVIA_CHECK_EQ(plan.content_length(), plan.metadata().size() + std::uint64_t{2});
@@ -177,7 +175,7 @@ RUVIA_TEST(multipart_range_plan_formats_uint64_edges_and_reclaims_error_storage)
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     bool rejected = false;
     try {
-        (void)ruvia::make_http_multipart_byte_range_plan(ranges, 10, "text/plain", boundary, {}, &resource);
+        (void)ruvia::make_http_multipart_byte_range_plan(ranges, 10, "text/plain", boundary, &resource);
     } catch (const std::invalid_argument&) {
         rejected = true;
     }
@@ -187,7 +185,7 @@ RUVIA_TEST(multipart_range_plan_formats_uint64_edges_and_reclaims_error_storage)
         "bytes=0-9223372036854775806,9223372036854775808-18446744073709551614", maximum);
     rejected = false;
     try {
-        (void)ruvia::make_http_multipart_byte_range_plan(overflowing, maximum, "text/plain", boundary, {}, &resource);
+        (void)ruvia::make_http_multipart_byte_range_plan(overflowing, maximum, "text/plain", boundary, &resource);
     } catch (const std::length_error&) {
         rejected = true;
     }
@@ -198,7 +196,7 @@ RUVIA_TEST(multipart_range_plan_formats_uint64_edges_and_reclaims_error_storage)
 RUVIA_TEST(multipart_range_plan_moved_from_and_empty_file_path_are_rejected_cleanly) {
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,4-5", 10);
     auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, 10, "text/plain", "b", {}, std::pmr::get_default_resource());
+        ranges, 10, "text/plain", "b", std::pmr::get_default_resource());
     auto moved = std::move(plan);
     RUVIA_CHECK(plan.content_type().empty());
     RUVIA_CHECK(plan.metadata().empty());

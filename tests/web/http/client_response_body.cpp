@@ -911,6 +911,35 @@ RUVIA_TEST(http_client_passes_encoded_partial_content_through) {
     run_operation(worker, io, operation);
 }
 
+// RFC 9110 §8.4.1 / §12.5.3: content codings are an open registry and a request
+// without Accept-Encoding accepts any of them. A stack the client cannot fully
+// decode is delivered as received, with Content-Encoding kept.
+RUVIA_TEST(http_client_passes_unsupported_content_codings_through) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    const std::string opaque("\x01opaque\xff", 8);
+    scripted_head_peer peer(io, worker.handle_,
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: x-custom\r\nContent-Length: 8\r\nConnection: close\r\n\r\n" + opaque,
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip, compress\r\nContent-Length: 8\r\nConnection: close\r\n\r\n" +
+                opaque});
+    auto config = local_http_client_config(peer.port());
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        for (const std::string_view coding : {std::string_view("x-custom"), std::string_view("gzip, compress")}) {
+            auto response = co_await client.handle().send({.target_ = "/coded"});
+            RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{200});
+            RUVIA_CHECK(response.header("Content-Encoding") == std::optional<std::string_view>(coding));
+            const auto bytes_value = co_await response.body().read_all();
+            RUVIA_CHECK_EQ(bytes_value.text(), std::string_view(opaque));
+        }
+        co_await peer.wait();
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
 RUVIA_TEST(http_client_handle_options_override_pool_timeout_and_start_when_operation_runs) {
     {
         auto& io = ruvia::test::new_test_io_context();

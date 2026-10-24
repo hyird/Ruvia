@@ -393,3 +393,6 @@ if (bearer) {
     std::optional<std::string_view> role = payload.claim("role");
 }
 ```
+
+- `jwt_bearer_token` 只返回符合 RFC 6750 `b64token` 语法（`ALPHA / DIGIT / - . _ ~ + /`，末尾可跟 `=`）的令牌；含空格、逗号等其他字符时返回 `std::nullopt`。
+- 自定义声明的值可以是任意 JSON 值（RFC 7519 §2）。载荷整体仍校验 JSON 语法与声明名唯一性；字符串值经 `claims()` / `claim(name)` 暴露，数字、布尔、`null`、数组与对象等非字符串自定义声明按 RFC 7519 §4 忽略，不导致令牌被拒绝。注册声明（`iss` / `sub` / `aud` / `jti` / `exp` / `nbf` / `iat`）类型不符时仍拒绝。

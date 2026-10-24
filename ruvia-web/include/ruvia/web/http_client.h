@@ -120,6 +120,11 @@ private:
 // their public response owner does not invalidate a cold or running operation.
 // HTTP/1 body-suppressed and known-zero-length responses do not allocate a
 // framing-decoder scratch block; other response storage and budgets still apply.
+// A body whose Content-Encoding stack is fully supported (gzip, deflate, br,
+// zstd) is decoded before the first byte is exposed. A 206 body, or a stack
+// containing an unsupported coding, is exposed as received with its
+// Content-Encoding field kept; a malformed Content-Encoding field fails the
+// response with protocol_error.
 class http_client_response_body final {
 public:
     http_client_response_body(const http_client_response_body&) = delete;

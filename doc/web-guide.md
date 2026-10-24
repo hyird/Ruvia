@@ -127,7 +127,7 @@ ruvia::app().listen({
 
 #### 压缩、CORS 与可信代理配置
 
-- `compression_config`：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。
+- `compression_config`：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。`min_bytes_` 只是“压缩是否划算”的阈值：请求以 `identity;q=0` 等方式拒绝 identity 时，小于该值的缓冲响应同样压缩（且不要求结果小于原文），而不是回 `406`。响应已带 `Content-Encoding`、`Content-Range`、`Cache-Control: no-transform` 或完整性字段 `Content-Digest` / `Repr-Digest` / `Content-MD5` 时保持原表示不压缩（RFC 9530：摘要随内容编码而变）。
 - `cors_config`：
   - `origin_`：`cors_origin_config{.mode_ = cors_origin_mode::any | exact | credentialed_exact, .value_ = "..."}`
   - `request_headers_`：`cors_request_headers_config{.mode_ = cors_request_headers_mode::reflect | fixed, .names_ = {...}}`
@@ -497,6 +497,8 @@ Ruvia 提供三种静态文件服务方式：
 3. **托管自动刷新的 `app().document_root({...})`**：后台按 `refresh_interval_` 刷新目录索引，并支持 `precompress_gzip_` / `precompress_brotli_` / `precompress_zstd_` 自动预压缩热文件。
 
 三者均内置路径穿越防护、点文件策略（`static_dotfile_policy::deny` 默认拒绝隐藏文件）、`ETag` / `Last-Modified` 条件请求（`304 Not Modified`）与 `Range` 分段响应（`206 Partial Content`）。
+
+多个范围的请求返回 `multipart/byteranges`，各部分只带 `Content-Type` 与 `Content-Range`；选中预压缩变体（带 `Content-Encoding`）时多范围请求返回完整的 `200` 表示（单个范围仍是带 `Content-Encoding` 的单部分 `206`）。`If-Range` 匹配后的 `206` 只带必需字段（`ETag`、`Cache-Control`、`Vary`、`Content-Range` 或 multipart `Content-Type` 等）及描述所发字节的 `Content-Encoding`，不再重复 `Content-Type`、`Last-Modified`（RFC 9110 §15.3.7）。
 
 ### 6.2 内存内无 Socket 测试（`"ruvia/web/testing.h"`）
 

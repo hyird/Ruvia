@@ -315,36 +315,55 @@ struct file_validators final {
     return validators;
 }
 
-// RFC 9110 15.4.5: a 304 carries the validators and cache-guiding fields a
-// 200 would, but no other representation metadata. Last-Modified guides the
-// cache update only when no ETag is sent.
+// Which representation metadata a response repeats. RFC 9110 15.4.5: a 304
+// carries the validators and cache-guiding fields a 200 would, but no other
+// representation metadata; Last-Modified guides the cache update only when no
+// ETag is sent. RFC 9110 15.3.7: a 206 answering a matched If-Range SHOULD NOT
+// repeat representation fields beyond the required ones (ETag, Cache-Control,
+// Content-Range or the multipart Content-Type), because the client already
+// holds them. Content-Encoding stays: it names the coding of the bytes this
+// message carries, and the response coding policy reads it to keep a
+// precompressed variant acceptable to a client that refuses identity.
+enum class file_header_set : std::uint8_t {
+    full,
+    if_range_partial,
+    not_modified,
+};
+
+[[nodiscard]] std::string_view file_media_type(const file_response_source& source_value) {
+    return source_value.content_type_.empty() ? source_value.body_.guessed_content_type()
+                                              : source_value.content_type_;
+}
+
 void add_file_headers(http_response& response, const file_response_source& source_value,
-    const file_validators& validators, bool not_modified = false) {
+    const file_validators& validators, file_header_set header_set = file_header_set::full) {
+    const bool full = header_set == file_header_set::full;
     response.reserve_headers(file_response_header_reserve);
-    if (!not_modified) {
-        if (source_value.content_type_.empty()) {
-            response.header("Content-Type", source_value.body_.guessed_content_type());
-        } else {
-            response.header("Content-Type", source_value.content_type_);
-        }
+    if (full) {
+        response.header("Content-Type", file_media_type(source_value));
     }
     if (!source_value.cache_control_.empty()) {
         response.header("Cache-Control", source_value.cache_control_);
     }
     // A precompressed variant carries the original Content-Type with the
     // encoding declared here.
-    if (!not_modified && source_value.content_coding_ != http_content_coding::identity) {
+    if (header_set != file_header_set::not_modified && source_value.content_coding_ != http_content_coding::identity) {
         response.header("Content-Encoding", http_content_coding_token(source_value.content_coding_));
     }
-    if (!not_modified && source_value.range_requests_ == static_range_request_policy::honor) {
+    if (header_set != file_header_set::not_modified &&
+        source_value.range_requests_ == static_range_request_policy::honor) {
         response.header("Accept-Ranges", "bytes");
     }
     if (source_value.response_validators_ == static_response_validator_policy::emit) {
         response.header("ETag", validators.etag_);
-        if (!not_modified && !validators.last_modified_.empty()) {
+        if (full && !validators.last_modified_.empty()) {
             response.header("Last-Modified", validators.last_modified_);
         }
     }
+}
+
+[[nodiscard]] file_header_set partial_file_header_set(const http_representation_response_plan& plan) noexcept {
+    return plan.authorized_by_if_range() ? file_header_set::if_range_partial : file_header_set::full;
 }
 
 void apply_file_response_state(const context& context_value, const file_response_source& source_value,
@@ -383,7 +402,7 @@ void validate_indexed_file_for_bodyless_response(
     bool& indexed_file_validated, http_status_code status_code) {
     validate_indexed_file_for_bodyless_response(source_value, indexed_file_validated);
     http_response response(context_value.arena());
-    add_file_headers(response, source_value, validators, true);
+    add_file_headers(response, source_value, validators, file_header_set::not_modified);
     apply_file_response_state(context_value, source_value, response, status_code);
     return response;
 }
@@ -400,7 +419,7 @@ void validate_indexed_file_for_bodyless_response(
 
 [[nodiscard]] http_response make_multipart_response(const context& context_value,
     file_response_source& source_value, const file_validators& validators,
-    const http_byte_range_set& ranges) {
+    const http_byte_range_set& ranges, file_header_set header_set) {
     std::array<char, 48> boundary_token{};
     const auto token = detail::generate_secure_token(boundary_token);
     if (!token) {
@@ -408,18 +427,15 @@ void validate_indexed_file_for_bodyless_response(
     }
     std::pmr::string boundary(*token, context_value.arena());
     http_response response(context_value.arena());
-    add_file_headers(response, source_value, validators);
+    add_file_headers(response, source_value, validators, header_set);
     apply_file_response_state(context_value, source_value, response, http_status::partial_content);
     const auto media_type = response.header("Content-Type");
-    const auto selected_media_type = media_type.value_or(source_value.body_.guessed_content_type());
-    const auto content_encoding = source_value.content_coding_ == http_content_coding::identity
-                                      ? std::string_view{}
-                                      : http_content_coding_token(source_value.content_coding_);
-    auto multipart_plan = make_http_multipart_byte_range_plan(ranges, source_value.size_,
-        selected_media_type, boundary, content_encoding, context_value.arena());
+    const auto selected_media_type = media_type.value_or(file_media_type(source_value));
+    auto multipart_plan = make_http_multipart_byte_range_plan(
+        ranges, source_value.size_, selected_media_type, boundary, context_value.arena());
 
-    // The outer representation is multipart, not the encoded file bytes.
-    // Carry the selected representation's coding on each part instead.
+    // The outer representation is the multipart body, which is not
+    // content-coded; coded representations never reach this path.
     response.header("Content-Type", multipart_plan.content_type());
     response.remove_header("Content-Range");
     response.remove_header("Content-Encoding");
@@ -451,6 +467,7 @@ void validate_indexed_file_for_bodyless_response(
             // Filesystem mtime cannot establish that a representation changed
             // at most once during the second in its Last-Modified value.
             .strong_date_validator_ = false,
+            .content_coded_ = source_value.content_coding_ != http_content_coding::identity,
         },
         http_representation_response_options{
             .normal_status_ = detail::context_access::response_status(context_value),
@@ -476,11 +493,12 @@ void validate_indexed_file_for_bodyless_response(
         return response;
     }
     if (const auto* ranges = plan.multipart_ranges()) {
-        return make_multipart_response(context_value, source_value, validators, *ranges);
+        return make_multipart_response(
+            context_value, source_value, validators, *ranges, partial_file_header_set(plan));
     }
     if (const auto* range = plan.partial()) {
         http_response response(context_value.arena());
-        add_file_headers(response, source_value, validators);
+        add_file_headers(response, source_value, validators, partial_file_header_set(plan));
         response.content_range(range->offset(), range->length(), source_value.size_);
         set_file_body(context_value, source_value, response, range->offset(), range->length());
         apply_file_response_state(context_value, source_value, response, plan.status());

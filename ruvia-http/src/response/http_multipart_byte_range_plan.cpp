@@ -8,20 +8,14 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/multipart_parser.h"
 
-#include "coding/http_content_coding.h"
-
 namespace ruvia {
 
 http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     const http_byte_range_set& ranges, std::uint64_t representation_length,
-    std::string_view media_type, std::string_view boundary,
-    std::string_view content_encoding, std::pmr::memory_resource* resource) {
+    std::string_view media_type, std::string_view boundary, std::pmr::memory_resource* resource) {
     if (ranges.ignored() || ranges.unsatisfiable() || ranges.size() < 2 ||
         ranges.size() > http_byte_range_set::capacity || representation_length == 0 ||
         !is_valid_http_content_type_field_value(media_type) ||
-        (!content_encoding.empty() &&
-            !detail::is_valid_http_content_encoding_field_value(
-                content_encoding, detail::http_field_list_role::sender)) ||
         !multipart_boundary::try_create(boundary).has_value() || resource == nullptr) {
         throw std::invalid_argument("invalid multipart byte-range plan input");
     }
@@ -71,10 +65,6 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
         metadata.append(boundary);
         metadata.append("\r\nContent-Type: ");
         metadata.append(media_type);
-        if (!content_encoding.empty()) {
-            metadata.append("\r\nContent-Encoding: ");
-            metadata.append(content_encoding);
-        }
         metadata.append("\r\nContent-Range: bytes ");
         http_append_unsigned(metadata, range.offset_);
         metadata.push_back('-');

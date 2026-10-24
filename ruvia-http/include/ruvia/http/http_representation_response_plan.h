@@ -23,6 +23,14 @@ struct http_selected_representation_metadata final {
     // Only authorizes a date-form If-Range when last_modified is also present.
     // Ordinary date preconditions do not require a strong validator.
     bool strong_date_validator_{false};
+    // The representation carries a content coding (Content-Encoding). Body
+    // parts of multipart/byteranges cannot declare the coding of the whole
+    // representation they slice, and a header-section Content-Encoding would
+    // claim the multipart body itself is coded (RFC 9110 §8.4, §14.6), so a
+    // request for several ranges of such a representation is answered with
+    // the full representation (ignoring Range is permitted, RFC 9110 §14.2).
+    // A single range remains a single-part 206.
+    bool content_coded_{false};
 };
 
 enum class http_range_request_policy {
@@ -62,6 +70,15 @@ public:
     [[nodiscard]] const multipart* multipart_ranges() const& noexcept;
     [[nodiscard]] const multipart* multipart_ranges() const&& = delete;
     [[nodiscard]] http_status_code status() const noexcept;
+    // True when a partial() or multipart_ranges() outcome answers a request
+    // whose If-Range matched. RFC 9110 §15.3.7: such a 206 SHOULD NOT repeat
+    // representation header fields beyond the required ones (Date,
+    // Cache-Control, ETag, Expires, Content-Location, Vary, plus Content-Range
+    // or the multipart Content-Type), since the client already holds them.
+    // Without If-Range a 206 MUST carry every representation field a 200 would.
+    [[nodiscard]] bool authorized_by_if_range() const noexcept {
+        return authorized_by_if_range_;
+    }
 
 private:
     friend http_representation_response_plan plan_http_representation_response(
@@ -71,10 +88,12 @@ private:
     using value_type = std::variant<full_type, not_modified_type, precondition_failed_type, range_unsatisfiable_type, partial_type, multipart>;
 
     template <typename alternative_type>
-    explicit http_representation_response_plan(alternative_type alternative) noexcept
-        : value_(alternative) {}
+    explicit http_representation_response_plan(alternative_type alternative, bool authorized_by_if_range = false) noexcept
+        : value_(alternative),
+          authorized_by_if_range_(authorized_by_if_range) {}
 
     value_type value_;
+    bool authorized_by_if_range_{false};
 };
 
 // Call after normal request checks, before processing request content or

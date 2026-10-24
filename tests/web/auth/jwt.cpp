@@ -347,10 +347,10 @@ RUVIA_TEST(jwt_verify_requires_unique_complete_json_objects) {
     }
 }
 
-RUVIA_TEST(jwt_rejects_non_string_custom_claims) {
-    // A custom claim is either a string or the token is rejected; a silently
-    // dropped value would make "claim absent" indistinguishable from "claim
-    // sent with an unsupported type".
+// RFC 7519 §2: a claim value can be any JSON value; §4: claims that are not
+// understood MUST be ignored. Non-string custom claims are accepted and not
+// exposed, while JSON syntax and claim-name uniqueness are still enforced.
+RUVIA_TEST(jwt_ignores_non_string_custom_claims) {
     const auto nested = [](std::size_t levels) {
         std::string payload = R"({"sub":"user-1","exp":4102444800,"deep":)";
         payload.append(levels, '[');
@@ -361,8 +361,25 @@ RUVIA_TEST(jwt_rejects_non_string_custom_claims) {
     for (const auto& payload : {std::string(R"({"sub":"u","exp":4102444800,"admin":true})"),
              std::string(R"({"sub":"u","exp":4102444800,"scope":5})"),
              std::string(R"({"sub":"u","exp":4102444800,"roles":["a"]})"),
-             std::string(R"({"sub":"u","exp":4102444800,"meta":{}})"),
-             std::string(R"({"sub":"u","exp":4102444800,"nick":null})"), nested(64), nested(65)}) {
+             std::string(R"({"sub":"u","exp":4102444800,"cnf":{"jkt":"x"}})"),
+             std::string(R"({"sub":"u","exp":4102444800,"nick":null})")}) {
+        const auto token = signed_token_with_payload(secret, payload);
+        const auto verified = verify_jwt(token, verify_options(secret));
+        RUVIA_CHECK(verified.claims().empty());
+        const auto unverified = decode_jwt_unverified(token);
+        RUVIA_CHECK(unverified.claims().empty());
+    }
+    const auto mixed = signed_token_with_payload(
+        secret, R"({"sub":"u","exp":4102444800,"email_verified":true,"role":"admin","realm_access":{"roles":[]}})");
+    const auto mixed_payload = verify_jwt(mixed, verify_options(secret));
+    RUVIA_CHECK_EQ(mixed_payload.claims().size(), std::size_t{1});
+    RUVIA_CHECK(mixed_payload.claim("role") == std::optional<std::string_view>("admin"));
+    RUVIA_CHECK(!mixed_payload.claim("email_verified").has_value());
+
+    // Syntax and uniqueness still apply to ignored values; nesting beyond the
+    // JSON depth limit stays a parse failure.
+    for (const auto& payload : {std::string(R"({"sub":"u","exp":4102444800,"x":[1,]})"),
+             std::string(R"({"sub":"u","exp":4102444800,"x":true,"x":"y"})"), nested(65)}) {
         const auto token = signed_token_with_payload(secret, payload);
         RUVIA_CHECK(throws_jwt_error(
             [&] { (void)verify_jwt(token, verify_options(secret)); },
@@ -755,4 +772,10 @@ RUVIA_TEST(jwt_bearer_token_extraction) {
     RUVIA_CHECK(!jwt_bearer_token("Bearer    ").has_value());
     RUVIA_CHECK(
         !jwt_bearer_token("Bearer\tabc").has_value());  // auth-param separator is SP, not HTAB
+    // RFC 6750 §2.1: b64token = 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" ) *"=".
+    RUVIA_CHECK(jwt_bearer_token("Bearer aZ09-._~+/==").value() == std::string_view("aZ09-._~+/=="));
+    for (const auto* malformed : {"Bearer abc def", "Bearer a,b", "Bearer =abc", "Bearer ab=c", "Bearer a\"b",
+             "Bearer a\tb", "Bearer abc ", "Bearer ===", "Bearer a;b"}) {
+        RUVIA_CHECK(!jwt_bearer_token(malformed).has_value());
+    }
 }

@@ -839,6 +839,73 @@ RUVIA_TEST(file_if_range_same_second_updates_require_an_etag) {
     fs::remove_all(dir);
 }
 
+// RFC 9110 §15.3.7: a 206 answering a matched If-Range SHOULD NOT repeat
+// representation fields beyond the required ones; without If-Range it MUST
+// carry every representation field a 200 would.
+RUVIA_TEST(file_partial_responses_to_if_range_omit_repeated_representation_fields) {
+    namespace fs = std::filesystem;
+    const auto dir = fs::temp_directory_path() / "ruvia_if_range_partial_fields";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const auto path = dir / "data.txt";
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << "0123456789";
+    }
+    struct observation {
+        ruvia::http_status_code status{ruvia::http_status::internal_server_error};
+        std::optional<std::string> content_type;
+        std::optional<std::string> last_modified;
+        std::optional<std::string> etag;
+        std::optional<std::string> content_range;
+    };
+    const auto copy = [](std::optional<std::string_view> value) {
+        return value ? std::optional<std::string>(std::string(*value)) : std::nullopt;
+    };
+    std::optional<ruvia::static_root> root;
+    root.emplace(dir);
+    for (const bool use_static : {false, true}) {
+        const auto serve = [&](std::string_view range, std::optional<std::string_view> if_range) {
+            auto request = ruvia::test_request::get("/data.txt");
+            request.header("Range", range);
+            if (if_range) {
+                request.header("If-Range", *if_range);
+            }
+            observation result{};
+            (void)context_request_test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
+                const auto response = use_static ? context.static_file(*root, {.relative_path_ = "data.txt"})
+                                                 : context.file({.path_ = path, .content_type_ = "text/plain"});
+                result = observation{response.status(), copy(response.header("Content-Type")),
+                    copy(response.header("Last-Modified")), copy(response.header("ETag")),
+                    copy(response.header("Content-Range"))};
+                co_return;
+            });
+            return result;
+        };
+        const auto plain = serve("bytes=4-8", std::nullopt);
+        RUVIA_CHECK_EQ(plain.status, ruvia::http_status::partial_content);
+        RUVIA_CHECK(plain.content_type.has_value());
+        RUVIA_CHECK(plain.last_modified.has_value());
+        RUVIA_CHECK(plain.etag.has_value());
+        const auto etag = plain.etag.value_or("");
+
+        const auto conditional = serve("bytes=4-8", etag);
+        RUVIA_CHECK_EQ(conditional.status, ruvia::http_status::partial_content);
+        RUVIA_CHECK(!conditional.content_type.has_value());
+        RUVIA_CHECK(!conditional.last_modified.has_value());
+        RUVIA_CHECK(conditional.etag == std::optional<std::string>(etag));
+        RUVIA_CHECK(conditional.content_range == std::optional<std::string>("bytes 4-8/10"));
+
+        const auto multipart = serve("bytes=0-1,4-5", etag);
+        RUVIA_CHECK_EQ(multipart.status, ruvia::http_status::partial_content);
+        RUVIA_CHECK(multipart.content_type.value_or("").starts_with("multipart/byteranges; boundary="));
+        RUVIA_CHECK(!multipart.last_modified.has_value());
+        RUVIA_CHECK(multipart.etag == std::optional<std::string>(etag));
+    }
+    root.reset();
+    fs::remove_all(dir);
+}
+
 RUVIA_TEST(static_file_historical_last_modified_supports_date_preconditions) {
     namespace fs = std::filesystem;
     using namespace std::chrono;

@@ -148,8 +148,10 @@ public:
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> expires_at() const noexcept;
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> not_before() const noexcept;
     [[nodiscard]] std::optional<std::chrono::system_clock::time_point> issued_at() const noexcept;
-    // Custom claims are string-valued: a token whose custom claim holds any
-    // other JSON value is rejected, like a malformed registered claim.
+    // String-valued custom claims, decoded. A claim value may be any JSON
+    // value (RFC 7519 §2) and unknown claims are ignored (§4): custom claims
+    // holding numbers, booleans, null, arrays or objects are syntax- and
+    // uniqueness-checked with the rest of the payload, then not exposed here.
     [[nodiscard]] std::span<const jwt_claim> claims() const& noexcept;
     [[nodiscard]] std::span<const jwt_claim> claims() const&& = delete;
     [[nodiscard]] std::optional<std::string_view> claim(std::string_view name) const& noexcept;
@@ -174,6 +176,10 @@ private:
 [[nodiscard]] std::pmr::string jwt_sign(const jwt_sign_options& options);
 [[nodiscard]] jwt_payload jwt_verify(const jwt_verify_options& options);
 [[nodiscard]] jwt_payload jwt_decode_unverified(jwt_decode_unverified_options options);
+// Returns the b64token of an "Authorization: Bearer <token>" field value
+// (RFC 6750 §2.1: 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" )
+// *"="), or nullopt for another scheme or a malformed token. The scheme name
+// is case-insensitive and is followed by one or more SP.
 [[nodiscard]] std::optional<std::string_view> jwt_bearer_token(
     std::string_view authorization) noexcept;
 

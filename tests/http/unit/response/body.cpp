@@ -256,7 +256,7 @@ RUVIA_TEST(multipart_body_allocation_failure_preserves_previous_body) {
     response.body("preserved");
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
     auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, 10, "text/plain", "allocation_test", {}, std::pmr::new_delete_resource());
+        ranges, 10, "text/plain", "allocation_test", std::pmr::new_delete_resource());
 
     response_resource.fail_ = true;
     bool threw = false;
@@ -342,7 +342,7 @@ RUVIA_TEST(response_multipart_body_moves_leave_sources_empty_and_reusable) {
         "--moved_ranges--\r\n";
     check_response_body_moves(ruvia_ctx, [&](http_response& source) {
         auto plan = ruvia::make_http_multipart_byte_range_plan(
-            ranges, 10, "text/plain", "moved_ranges", {}, source.memory_resource());
+            ranges, 10, "text/plain", "moved_ranges", source.memory_resource());
         source.multipart_file_body(path.native(), 10, identity, std::move(plan)); }, [&](const http_response& target) {
         RUVIA_CHECK(target.has_multipart_file_body());
         std::string materialized;

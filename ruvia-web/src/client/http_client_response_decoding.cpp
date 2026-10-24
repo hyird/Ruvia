@@ -29,11 +29,18 @@ void configure_http_client_response_decoding(http_client_response_state& state_v
     // Parsed once with the final head; decoding reuses this result at FIN.
     auto& parsed_coding = state_value.content_coding_.emplace(
         parse_http_content_coding_headers(state_value.headers_));
+    // Content codings are an open registry (RFC 9110 §8.4.1, §16.6.1), and a
+    // request without Accept-Encoding accepts every coding (§12.5.3). A
+    // syntactically valid stack this client cannot fully decode is therefore
+    // exposed as received, with Content-Encoding kept, like a 206 body.
+    if (parsed_coding.unsupported() != nullptr) {
+        state_value.content_coding_.reset();
+        return;
+    }
     const bool transforms_body = std::ranges::any_of(parsed_coding.codings(), [](http_content_coding coding) {
         return coding != http_content_coding::identity;
     });
-    state_value.body_decode_required_ =
-        parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr || transforms_body;
+    state_value.body_decode_required_ = parsed_coding.invalid() != nullptr || transforms_body;
     if (state_value.body_decode_required_) {
         state_value.collect_all_ = true;
     } else {
@@ -49,9 +56,9 @@ void decode_http_client_response_body(http_client_response_state& state_value,
     auto* const resource = state_value.resource_;
     try {
         const auto& parsed_coding = *state_value.content_coding_;
-        if (parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr) {
+        if (parsed_coding.invalid() != nullptr) {
             throw http_client_error(http_client_error::code_type::protocol_error,
-                "unsupported HTTP response Content-Encoding");
+                "invalid HTTP response Content-Encoding");
         }
         // Encoded bytes are never exposed, so the unread part of buffered_ and
         // pending_ together are the whole body. Decode in place when one holds it.

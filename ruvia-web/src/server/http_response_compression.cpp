@@ -1,6 +1,8 @@
 #include "server/http_response_compression.h"
 
+#include <cstddef>
 #include <exception>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -17,8 +19,13 @@ namespace {
 
 // A coded representation is worth sending only when strictly smaller than
 // the identity bytes; the encoder stops at this cap instead of finishing.
+// When the client refuses identity (RFC 9110 §12.5.3), any acceptable coding
+// beats a 406, so the cap is lifted.
 [[nodiscard]] http_content_encode_options compressed_body_options(
-    std::string_view plain, std::pmr::memory_resource* resource) noexcept {
+    std::string_view plain, bool identity_accepted, std::pmr::memory_resource* resource) noexcept {
+    if (!identity_accepted) {
+        return {.max_encoded_bytes_ = (std::numeric_limits<std::size_t>::max)(), .resource_ = resource};
+    }
     return {.max_encoded_bytes_ = plain.empty() ? 0 : plain.size() - 1, .resource_ = resource};
 }
 
@@ -101,8 +108,14 @@ http_response_compression_decision prepare_response_compression(
         return http_response_compression_decision::fixed_representation;
     }
     const auto status_code = response.status();
+    // Integrity fields describe the content or the selected representation,
+    // both of which include the content coding (RFC 9530 §1, §2, §3; legacy
+    // Content-MD5 likewise covered the sent content). Encoding here would
+    // leave them describing bytes that are not sent.
     if (status_code == http_status::partial_content || status_code == http_status::reset_content ||
         response.header("Content-Encoding").has_value() || response.header("Content-Range").has_value() ||
+        response.header("Content-Digest").has_value() || response.header("Repr-Digest").has_value() ||
+        response.header("Content-MD5").has_value() ||
         response_content_type_skips_compression(
             response.header("Content-Type").value_or(std::string_view{})) ||
         response_cache_control(response).has(cache_control_directive::no_transform) ||
@@ -126,8 +139,10 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     const auto decision = prepare_response_compression(selection, request_method, response,
         http_response_compression_source::buffered,
         http_response_coding_availability::identity_and_compression);
-    if (decision != http_response_compression_decision::encode || body.size() < options.min_bytes_ ||
-        body.size() > options.max_bytes_) {
+    // min_bytes_ only says when encoding stops paying off; a client that
+    // refuses identity is served a coding at any size instead of a 406.
+    if (decision != http_response_compression_decision::encode ||
+        (body.size() < options.min_bytes_ && selection.identity_accepted()) || body.size() > options.max_bytes_) {
         return not_applicable;
     }
     // Without a blocking pool there is no offload boundary, only the
@@ -139,7 +154,8 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     const auto coding = selection.coding();
     std::optional<std::pmr::string> encoding;
     try {
-        encoding = codecs.encoder(coding).encode(body, compressed_body_options(body, response.memory_resource()));
+        encoding = codecs.encoder(coding).encode(
+            body, compressed_body_options(body, selection.identity_accepted(), response.memory_resource()));
     } catch (...) {
         ruvia::report_unhandled_failure("response compression", std::current_exception());
         return {http_response_compression_status::failed, false};
@@ -147,13 +163,16 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     return {commit_compressed_body(response, coding, std::move(encoding)), false};
 }
 
-task<http_response_compression_status> compress_response_offloaded(http_content_coding coding,
+task<http_response_compression_status> compress_response_offloaded(http_response_coding_selection selection,
     http_response& response, blocking_pool& pool, const worker_handle& worker_value) {
     try {
+        const auto coding = selection.coding();
+        const bool identity_accepted = selection.identity_accepted();
         std::pmr::string plain(response.body_bytes(), process_resource());
         auto result_value =
-            co_await run_blocking(pool, worker_value, [coding, plain = std::move(plain)]() {
-                return encode_http_content(coding, plain, compressed_body_options(plain, process_resource()));
+            co_await run_blocking(pool, worker_value, [coding, identity_accepted, plain = std::move(plain)]() {
+                return encode_http_content(
+                    coding, plain, compressed_body_options(plain, identity_accepted, process_resource()));
             });
         if (result_value.failed()) {
             ruvia::report_unhandled_failure("response compression", result_value.error());

@@ -453,10 +453,27 @@ std::optional<std::string_view> jwt_bearer_token(std::string_view authorization)
     while (token_offset < authorization.size() && authorization[token_offset] == ' ') {
         ++token_offset;
     }
-    if (token_offset == authorization.size()) {
+    // RFC 6750 §2.1: b64token = 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" /
+    // "+" / "/" ) *"=".
+    const auto is_b64token_char = [](char value) noexcept {
+        return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') ||
+               value == '-' || value == '.' || value == '_' || value == '~' || value == '+' || value == '/';
+    };
+    const auto token = authorization.substr(token_offset);
+    std::size_t index = 0;
+    while (index < token.size() && is_b64token_char(token[index])) {
+        ++index;
+    }
+    if (index == 0) {
         return std::nullopt;
     }
-    return authorization.substr(token_offset);
+    while (index < token.size() && token[index] == '=') {
+        ++index;
+    }
+    if (index != token.size()) {
+        return std::nullopt;
+    }
+    return token;
 }
 
 }  // namespace ruvia

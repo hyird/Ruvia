@@ -59,7 +59,7 @@ task<prepared_application_response> http_response_tail::finish_prepare(const htt
             auto compression = pass.status_;
             if (pass.offload_) {
                 compression = co_await compress_response_offloaded(
-                    policy.selection()->coding(), response, *options.blocking_pool_, services.worker());
+                    *policy.selection(), response, *options.blocking_pool_, services.worker());
             }
             step = recovery.advance(policy, request, response, compression);
         }

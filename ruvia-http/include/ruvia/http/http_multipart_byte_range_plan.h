@@ -63,8 +63,7 @@ public:
 
 private:
     friend http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
-        const http_byte_range_set&, std::uint64_t, std::string_view, std::string_view,
-        std::string_view, std::pmr::memory_resource*);
+        const http_byte_range_set&, std::uint64_t, std::string_view, std::string_view, std::pmr::memory_resource*);
 
     struct storage final {
         explicit storage(std::pmr::memory_resource* resource)
@@ -84,9 +83,13 @@ private:
     std::unique_ptr<storage, detail::http_pmr_object_deleter<storage>> state_;
 };
 
+// Each body part carries the selected representation's Content-Type and its
+// Content-Range (RFC 9110 §15.3.7.2). Parts never carry Content-Encoding: a
+// slice of a content-coded representation is not itself a coded body, so
+// plan_http_representation_response() answers multiple ranges of a coded
+// representation with the full representation instead.
 [[nodiscard]] http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     const http_byte_range_set& ranges, std::uint64_t representation_length,
-    std::string_view media_type, std::string_view boundary,
-    std::string_view content_encoding, std::pmr::memory_resource* resource);
+    std::string_view media_type, std::string_view boundary, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia

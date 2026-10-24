@@ -120,9 +120,12 @@ http_representation_response_plan plan_http_representation_response(
             http_representation_response_plan::range_unsatisfiable_type{});
     }
     if (ranges.size() == 1) {
-        return http_representation_response_plan(ranges[0]);
+        return http_representation_response_plan(ranges[0], headers.has_if_range_);
     }
-    return http_representation_response_plan(ranges);
+    if (representation.content_coded_) {
+        return make_full();
+    }
+    return http_representation_response_plan(ranges, headers.has_if_range_);
 }
 
 }  // namespace ruvia

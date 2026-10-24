@@ -264,8 +264,15 @@ bool detail::jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_v
         }
         return false;
     }
-    // Custom claims are string-valued like the registered name claims;
-    // any other JSON value rejects the token instead of vanishing.
+    // A claim value can be any JSON value (RFC 7519 §2), and claims that are
+    // not understood MUST be ignored (§4). The object visit already checked
+    // the value's JSON syntax and the claim name's uniqueness; only string
+    // values are exposed through claims(), every other value is ignored.
+    auto string_value = value;
+    detail::skip_json_whitespace(string_value);
+    if (string_value.empty() || string_value.front() != '"') {
+        return true;
+    }
     if (auto claim_value = detail::jwt_decode_json_string_value(value, resolved)) {
         std::pmr::string claim_name(resolved);
         claim_name.assign(key.data(), key.size());

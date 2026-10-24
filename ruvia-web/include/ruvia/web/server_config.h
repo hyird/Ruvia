@@ -192,10 +192,12 @@ struct listen_config final {
 // server options. They stay top-level so configuration is not copied between
 // models.
 struct compression_config final {
-    // Buffered in-memory responses below this size remain identity. File
-    // responses (context::file, context::static_file) are never encoded at
-    // request time, whether their bytes are read from disk or memory, so GET
-    // and HEAD describe the same representation.
+    // Buffered in-memory responses below this size remain identity, unless the
+    // request refuses identity (e.g. "gzip, identity;q=0"): then any size is
+    // encoded rather than answered with 406. File responses (context::file,
+    // context::static_file) are never encoded at request time, whether their
+    // bytes are read from disk or memory, so GET and HEAD describe the same
+    // representation.
     std::size_t min_bytes_{1024};
     // Eligible bodies through this size are encoded synchronously on the
     // worker; larger bodies are offloaded to the bounded blocking pool when it

@@ -38,10 +38,11 @@ enum class http_response_compression_decision : std::uint8_t {
 };
 
 // Compression policy and encoder execution are separate outcomes. A response
-// may intentionally remain identity (body too small, no-transform, an
-// incompressible media type, or an unsupported runtime capability), or the
-// encoder may actually fail. Those cases have different meanings when the
-// client has forbidden identity and must not collapse back to a bool.
+// may intentionally remain identity (body too small while identity is
+// acceptable, no-transform, integrity digest fields, an incompressible media
+// type, or an unsupported runtime capability), or the encoder may actually
+// fail. Those cases have different meanings when the client has forbidden
+// identity and must not collapse back to a bool.
 enum class http_response_compression_status : std::uint8_t {
     compressed,
     not_applicable,
@@ -133,8 +134,9 @@ struct http_buffered_compression_step final {
 // worker. Rejection by the pool is an intentional identity fallback;
 // encoder/commit failures remain typed failures so a client that forbids
 // identity receives a terminal error.
-[[nodiscard]] task<http_response_compression_status> compress_response_offloaded(http_content_coding coding,
-    http_response& response, blocking_pool& pool, const worker_handle& worker_value);
+[[nodiscard]] task<http_response_compression_status> compress_response_offloaded(
+    http_response_coding_selection selection, http_response& response, blocking_pool& pool,
+    const worker_handle& worker_value);
 
 // Response compression policy. Fixed representations do not vary by coding;
 // eligible representations are annotated before deciding between identity
