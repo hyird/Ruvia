@@ -1,5 +1,7 @@
 #include <algorithm>
 
+#include "ruvia/http/url_encoding.h"
+
 #include "router/path_segments.h"
 #include "router/route_table.h"
 
@@ -77,18 +79,23 @@ std::size_t detail::route_table::find_dynamic_node_no_params(
 
 const detail::route_table::dynamic_static_child_type* detail::route_table::find_dynamic_static_child(
     const dynamic_node_type& node_value, std::string_view segment) noexcept {
+    // Literal segments compare in their canonical form (uri_paths_equivalent),
+    // so "%61dmin" and "admin" select the same child; children are sorted by
+    // compare_uri_paths at build time.
     if (node_value.static_children_.size() <= 4) {
         for (const auto& child : node_value.static_children_) {
-            if (child.segment_ == segment) {
+            if (uri_paths_equivalent(child.segment_, segment)) {
                 return &child;
             }
         }
         return nullptr;
     }
 
-    const auto iter = std::ranges::lower_bound(node_value.static_children_, segment, std::ranges::less{},
-        [](const dynamic_static_child_type& child_value) noexcept { return std::string_view(child_value.segment_); });
-    if (iter != node_value.static_children_.end() && std::string_view(iter->segment_) == segment) {
+    const auto iter = std::ranges::partition_point(node_value.static_children_,
+        [segment](const dynamic_static_child_type& child_value) noexcept {
+            return compare_uri_paths(child_value.segment_, segment) < 0;
+        });
+    if (iter != node_value.static_children_.end() && uri_paths_equivalent(iter->segment_, segment)) {
         return &*iter;
     }
     return nullptr;

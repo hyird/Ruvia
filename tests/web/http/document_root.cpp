@@ -101,24 +101,29 @@ RUVIA_TEST(document_root_never_serves_targets_rejected_by_routing) {
     RUVIA_CHECK(has_status(public_file, "200"));
     RUVIA_CHECK(public_file.ends_with("public"));
 
-    // The guarded route owns its prefix.
-    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/private/file.txt"), "401"));
-    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/private/file.txt/"), "401"));
-    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/admin/panel/secret.txt"), "401"));
+    // The guarded route owns its prefix, under every equivalent spelling
+    // (RFC 3986 6.2.2.2): an encoded unreserved character reaches the same
+    // route and its guard.
+    for (const std::string_view target : {"/private/file.txt", "/private/file.txt/", "/admin/panel/secret.txt",
+             "/%70rivate/file.txt", "/admin/%70anel/secret.txt"}) {
+        RUVIA_CHECK(has_status(exchange(io, server.endpoint(), target), "401"));
+    }
 
-    // Dot-segment, empty-segment ("//", trailing '/') and percent-encoded
-    // spellings of guarded routes must not fall back to the document root.
+    // Dot-segment and empty-segment ("//", trailing '/') spellings of guarded
+    // routes must not fall back to the document root.
     for (const std::string_view target :
         {"/private/./file.txt", "/private/%2E/file.txt", "/private/%2e/file.txt", "/private/x/../file.txt",
-            "//private/file.txt", "/admin//panel/secret.txt",
-            "/%70rivate/file.txt", "/admin/%70anel/secret.txt", "//public.txt", "/public.txt/"}) {
+            "//private/file.txt", "/admin//panel/secret.txt", "//public.txt", "/public.txt/"}) {
         const auto response = exchange(io, server.endpoint(), target);
         RUVIA_CHECK(has_status(response, "404"));
         RUVIA_CHECK(response.find("secret") == std::string::npos);
         RUVIA_CHECK(response.find("public") == std::string::npos);
     }
-    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/%70rivate/file.txt", "POST"), "404"));
-    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/%70rivate/file.txt", "OPTIONS"), "404"));
+    // Another method on an encoded spelling answers for the route, never the file.
+    const auto encoded_post = exchange(io, server.endpoint(), "/%70rivate/file.txt", "POST");
+    RUVIA_CHECK(has_status(encoded_post, "405"));
+    RUVIA_CHECK(encoded_post.find("secret") == std::string::npos);
+    RUVIA_CHECK(has_status(exchange(io, server.endpoint(), "/%70rivate/file.txt", "OPTIONS"), "204"));
 
     // The request path is decoded exactly once into the file name, and no
     // escape may reveal a separator routing never split on.

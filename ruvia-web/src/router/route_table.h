@@ -83,12 +83,6 @@ public:
     [[nodiscard]] route_resolution resolve(const http_request& request) const noexcept;
     [[nodiscard]] route_resolution resolve(route_request_view request) const noexcept;
 
-    // Tokens of the extension routes registered on `path`, for the Allow header
-    // of a 405. Written into caller storage so no allocation outlives the call.
-    [[nodiscard]] std::span<const std::string_view> extension_methods_for(
-        std::string_view path, std::span<std::string_view> buffer) const noexcept;
-    [[nodiscard]] bool has_extension_routes_for(std::string_view path) const noexcept;
-
     // Whether ANY route in the table uses this exact token. RFC 9110 15.5.6
     // makes 405 conditional on the method being "known by the origin server",
     // so a token nobody registered is 501 no matter what the target path holds.
@@ -145,6 +139,9 @@ private:
     // classify_http_method() returned unknown.
     [[nodiscard]] route_resolution resolve_extension_method(
         std::string_view method_token, std::string_view path) const noexcept;
+    // Distinct tokens of the extension routes on `path`, precomputed in the
+    // plan; empty when none is registered there.
+    [[nodiscard]] std::span<const std::string_view> extension_methods_for(std::string_view path) const noexcept;
     [[nodiscard]] route_resolution resolved(const route_entry& route, const route_match& match = {}) const noexcept;
 
     static constexpr std::size_t routable_method_count = compiled_route_plan::routable_method_count;

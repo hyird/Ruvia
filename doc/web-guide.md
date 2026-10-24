@@ -210,14 +210,14 @@ for (const auto& worker : ruvia::app().workers()) {
 
 | 类别 | 宏名称 | 处理器成员函数签名 | 说明 |
 | --- | --- | --- | --- |
-| 缓冲或流式响应路由 | `RUVIA_GET(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `GET` 路由（返回 `task<http_response>` 时为缓冲响应并自动提供 `HEAD` 回退；返回 `task<void>` 时自动推导为 `c.stream()` / `c.stream_text()` / `c.stream_sse()` 流式响应） |
+| 缓冲或流式响应路由 | `RUVIA_GET(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `GET` 路由并自动提供 `HEAD` 回退（返回 `task<http_response>` 时为缓冲响应；返回 `task<void>` 时自动推导为 `c.stream()` / `c.stream_text()` / `c.stream_sse()` 流式响应）。`HEAD` 请求运行同一处理器与中间件，`c.req().method()` 仍为 `"HEAD"`，框架只发送响应头并丢弃响应体（流式处理器在首次写入响应体时结束），`Allow` 同时列出 `HEAD`；WebSocket 路由不提供 `HEAD` 回退 |
 | 缓冲或流式路由 | `RUVIA_POST(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `POST` 路由（附加 `ruvia::stream_body` 时流式消费请求体；返回 `task<void>` 时流式写出响应/SSE） |
 | 缓冲或流式路由 | `RUVIA_PUT(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `PUT` 路由（可附加 `ruvia::stream_body` 流式消费请求体） |
 | 缓冲或流式路由 | `RUVIA_DELETE(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `DELETE` 路由 |
 | 缓冲或流式路由 | `RUVIA_PATCH(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `PATCH` 路由（可附加 `ruvia::stream_body` 流式消费请求体） |
 | 缓冲请求路由 | `RUVIA_HEAD(path, handler, ...)` | `task<http_response> handler(context&)` | 注册显式 `HEAD` 路由 |
 | 缓冲请求路由 | `RUVIA_OPTIONS(path, handler, ...)` | `task<http_response> handler(context&)` | 注册显式 `OPTIONS` 路由 |
-| 缓冲请求路由 | `RUVIA_METHOD(token, path, handler, ...)` | `task<http_response> handler(context&)` | 注册自定义扩展方法（如 `"PROPFIND"`，要求静态路径） |
+| 缓冲请求路由 | `RUVIA_METHOD(token, path, handler, ...)` | `task<http_response> handler(context&)` | 注册自定义扩展方法（如 `"PROPFIND"`，要求静态路径）；405 与 `OPTIONS` 的 `Allow` 列出该路径注册的全部扩展方法 |
 | 缓冲请求路由 | `RUVIA_ALL(path, handler, ...)` | `task<http_response> handler(context&)` | 同时注册 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`OPTIONS` |
 | 缓冲请求路由 | `RUVIA_ON(methods, paths, handler, ...)` | `task<http_response> handler(context&)` | 方法元组与路径元组的笛卡尔积批量注册 |
 | WebSocket | `RUVIA_GET_WS(path, handler, ...)` | `task<void> handler(context&)` | WebSocket 路由（首参可传可选的 `websocket_route_config`，后接中间件） |
@@ -229,6 +229,7 @@ for (const auto& worker : ruvia::app().workers()) {
 - **静态段**：`/api/hello`
 - **命名参数段**：`/api/users/:id`（通过 `c.req().param("id")` 读取）
 - **尾部通配符**：`/api/files/*`（匹配余下路径，通过 `c.req().param("*")` 读取）
+- **路径等价**：请求路径与注册模式按同一规范形式比较：以字面 `/` 切分路径段，段内按百分号解码后的字节比较。因此 `/users/%61dmin`、`/users/adm%69n` 与 `/users/admin` 命中同一路由（十六进制大小写不影响匹配，如 `caf%c3%a9` 与 `caf%C3%A9`），而 `%2F` 始终留在所在段内，不作为路径分隔符。该形式与路径参数的解码结果、`use_at` 前缀作用域中间件以及前缀错误/404 处理器的匹配规则一致；比 RFC 3986 的等价规则更宽，`%3A` 与 `:` 这类保留字符的编码与字面形式也视为同一路径。同一方法下仅拼写不同的两个模式（如 `/a` 与 `/%61`）属于重复注册，启动时抛出 `std::invalid_argument`。
 - **反向路由生成**：`c.url_for("/api/users/:id", {"42"})` 返回经过百分号编码的 `std::pmr::string`（若传入未注册的路由模式则直接抛异常，防止生成死链）。
 
 ---

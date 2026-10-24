@@ -1,8 +1,12 @@
 #include <algorithm>
 #include <bit>
 #include <cstdint>
+#include <span>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
+
+#include "ruvia/http/url_encoding.h"
 
 #include "router/router_impl.h"
 
@@ -46,6 +50,32 @@ void detail::router::build_static_method_mask() {
         if (route_table::is_routable_method(route.method()) && !route.dynamic()) {
             plan.static_method_mask_ |= 1U << route_table::method_index(route.method());
         }
+    }
+}
+
+void detail::router::build_extension_paths() {
+    auto& plan = *plan_;
+    // Every token lands in exactly one group, so reserving the token count up
+    // front keeps the spans into extension_methods_ valid while it is filled.
+    plan.extension_methods_.reserve(plan.extension_route_indices_.size());
+    for (std::size_t i = 0; i < plan.extension_route_indices_.size(); ++i) {
+        const auto path = plan.routes_[plan.extension_route_indices_[i]].path();
+        const auto seen = std::ranges::any_of(plan.extension_paths_,
+            [path](const auto& entry) noexcept { return uri_paths_equivalent(entry.path_, path); });
+        if (seen) {
+            continue;
+        }
+        // Registration rejects a repeated (token, path) pair, so the tokens
+        // collected for one path are already distinct.
+        const auto offset = plan.extension_methods_.size();
+        for (std::size_t j = i; j < plan.extension_route_indices_.size(); ++j) {
+            const auto& route = plan.routes_[plan.extension_route_indices_[j]];
+            if (uri_paths_equivalent(route.path(), path)) {
+                plan.extension_methods_.push_back(route.method_token());
+            }
+        }
+        plan.extension_paths_.push_back({.path_ = path,
+            .methods_ = std::span<const std::string_view>(plan.extension_methods_).subspan(offset)});
     }
 }
 

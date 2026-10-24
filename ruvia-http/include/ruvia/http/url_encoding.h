@@ -171,6 +171,74 @@ template <typename visitor_type>
     return left_index == left.size() && right_index == right.size();
 }
 
+// Origin-form path identity, the one canonical form shared by route matching,
+// path-scoped middleware and fallbacks, and decoded route parameters. A path
+// splits into segments on literal '/' only, and each segment is its
+// percent-decoded octets. Hex case and encoded unreserved characters therefore
+// never make two spellings differ (RFC 3986 6.2.2.1, 6.2.2.2), and an encoded
+// "%2F" stays inside its segment instead of becoming a boundary. The form is
+// deliberately coarser than RFC 3986 equivalence: an encoded reserved
+// character equals its literal ("%3A" and ":"), because a parameter decoded
+// from either spelling reads the same value. RFC 9110 4.2.3 only forbids
+// splitting equivalent URIs across resources, not merging non-equivalent ones.
+//
+// The canonical unit at path[index] (index < path.size()) is its literal or
+// decoded octet (0-255), uri_path_separator_unit for a literal '/', or -1 for
+// a malformed escape; next_uri_path_unit returns it and advances index past it.
+inline constexpr int uri_path_separator_unit = 0x100;
+
+[[nodiscard]] constexpr int next_uri_path_unit(std::string_view path, std::size_t& index) noexcept {
+    const char c = path[index];
+    if (c == '/') {
+        ++index;
+        return uri_path_separator_unit;
+    }
+    if (c == '%') {
+        const auto byte = http_try_decode_percent_byte(path, index);
+        if (!byte) {
+            ++index;
+            return -1;
+        }
+        index += 3;
+        return *byte;
+    }
+    ++index;
+    return static_cast<unsigned char>(c);
+}
+
+// Three-way order of two paths by their canonical units: negative, zero or
+// positive like std::string_view::compare. A total order over well-formed
+// paths, consistent with uri_paths_equivalent, for sorted lookups.
+[[nodiscard]] constexpr int compare_uri_paths(std::string_view left, std::string_view right) noexcept {
+    std::size_t left_index = 0;
+    std::size_t right_index = 0;
+    while (left_index < left.size() && right_index < right.size()) {
+        const auto left_unit = next_uri_path_unit(left, left_index);
+        const auto right_unit = next_uri_path_unit(right, right_index);
+        if (left_unit != right_unit) {
+            return left_unit < right_unit ? -1 : 1;
+        }
+    }
+    if (left_index < left.size()) {
+        return 1;
+    }
+    return right_index < right.size() ? -1 : 0;
+}
+
+// Whether two paths (or two segments) have the same canonical form. Malformed
+// escapes never compare equal. Spellings without '%' compare byte for byte.
+[[nodiscard]] constexpr bool uri_paths_equivalent(std::string_view left, std::string_view right) noexcept {
+    std::size_t left_index = 0;
+    std::size_t right_index = 0;
+    while (left_index < left.size() && right_index < right.size()) {
+        const auto left_unit = next_uri_path_unit(left, left_index);
+        if (left_unit < 0 || left_unit != next_uri_path_unit(right, right_index)) {
+            return false;
+        }
+    }
+    return left_index == left.size() && right_index == right.size();
+}
+
 // Visit raw, borrowed name/value views for each non-empty pair, preserving repeated
 // names in input order. A bool-returning visitor returning false stops iteration
 // and makes this return false; a void visitor always traverses all pairs. Pair

@@ -3,6 +3,7 @@
 #include <utility>
 
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/http/url_encoding.h"
 
 #include "router/router_impl.h"
 
@@ -90,11 +91,13 @@ void detail::router::register_endpoint(http_known_method method, std::string_vie
         if (tunnel != nullptr) {
             const auto* registered_tunnel = registered.endpoint().tunnel();
             if (registered_tunnel != nullptr && registered_tunnel->protocol() == tunnel->protocol() &&
-                (registered.path() == path ||
-                    (tunnel->protocol().empty() && http_authorities_equal(path, registered.path(), 0)))) {
+                (tunnel->protocol().empty()
+                        ? registered.path() == path || http_authorities_equal(path, registered.path(), 0)
+                        : uri_paths_equivalent(registered.path(), path))) {
                 throw std::invalid_argument("duplicate CONNECT route registration");
             }
-        } else if (registered.path() == path) {
+        } else if (uri_paths_equivalent(registered.path(), path)) {
+            // The canonical form the lookup uses: "/a" and "/%61" are one route.
             throw std::invalid_argument("duplicate route registration");
         }
     }

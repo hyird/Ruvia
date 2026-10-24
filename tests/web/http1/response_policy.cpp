@@ -245,6 +245,38 @@ RUVIA_TEST(http1_response_stream_discards_trailers_it_cannot_frame) {
     RUVIA_CHECK(http11_output.ends_with("0\r\nX-Complete: yes\r\n\r\n"));
 }
 
+// RFC 9110 9.3.2: HEAD on a response-stream GET route answers like GET
+// without content, and the connection stays framed for the next request. A
+// websocket GET route is an upgrade, not a representation, so HEAD stays 405.
+RUVIA_TEST(http1_head_falls_back_to_response_stream_get_routes) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto pipelined = exchange(server.endpoint(),
+        "HEAD /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: https://client.test\r\n\r\n"
+        "HEAD /policy-trailer-stream HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    const auto websocket = exchange(server.endpoint(),
+        "HEAD /policy-websocket HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+
+    RUVIA_CHECK(pipelined.has_value());
+    const auto output = pipelined.value_or("");
+    RUVIA_CHECK(output.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(lower_head(output).find("\r\naccess-control-allow-origin: *") != std::string::npos);
+    RUVIA_CHECK(output.find("chunk") == std::string::npos);
+    RUVIA_CHECK(output.find("body") == std::string::npos);
+    const auto second = output.find("HTTP/1.1 200 ", 1);
+    RUVIA_CHECK(second != std::string::npos);
+    const auto third = output.find("HTTP/1.1 200 ", second == std::string::npos ? output.size() : second + 1);
+    RUVIA_CHECK(third != std::string::npos);
+    RUVIA_CHECK(output.ends_with("\r\n\r\nplain"));
+
+    RUVIA_CHECK(websocket.has_value());
+    const auto websocket_output = websocket.value_or("");
+    RUVIA_CHECK(websocket_output.starts_with("HTTP/1.1 405 "));
+    RUVIA_CHECK(lower_head(websocket_output).find("\r\nallow: get, options") != std::string::npos);
+}
+
 // A failed CONNECT closes the connection: bytes the client already sent for
 // the tunnel are never parsed as another request (RFC 9110 9.3.6).
 RUVIA_TEST(http1_failed_connect_closes_instead_of_parsing_tunnel_bytes) {

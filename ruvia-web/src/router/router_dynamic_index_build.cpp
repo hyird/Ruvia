@@ -2,6 +2,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/http/url_encoding.h"
+
 #include "router/path_segments.h"
 #include "router/router_impl.h"
 
@@ -45,10 +47,12 @@ namespace {
 }
 
 // Templated so the plan's private node type is never named outside its friends.
+// Literal children sort by canonical form, the order find_dynamic_static_child
+// searches in.
 template <typename node_type>
 void sort_dynamic_node(node_type& node_value) {
     std::ranges::sort(node_value.static_children_, [](const auto& left, const auto& right) {
-        return std::string_view(left.segment_) < std::string_view(right.segment_);
+        return compare_uri_paths(left.segment_, right.segment_) < 0;
     });
     for (auto& child : node_value.static_children_) {
         sort_dynamic_node(*child.node_);
@@ -192,7 +196,7 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
         } else {
             compiled_route_plan::dynamic_node_type* child_node = nullptr;
             for (auto& child_value : node_value->static_children_) {
-                if (child_value.segment_ == segment) {
+                if (uri_paths_equivalent(child_value.segment_, segment)) {
                     child_node = child_value.node_;
                     break;
                 }
@@ -236,8 +240,15 @@ bool detail::router::same_dynamic_shape(std::string_view left, std::string_view 
             return has_left == has_right;
         }
 
-        const auto both_params = is_param(left_segment) && is_param(right_segment);
-        if (!both_params && left_segment != right_segment) {
+        // Literal segments occupy one trie slot when their canonical forms
+        // match; a parameter or the wildcard is a slot of its own kind.
+        const auto left_literal = !is_param(left_segment) && left_segment != "*";
+        const auto right_literal = !is_param(right_segment) && right_segment != "*";
+        if (left_literal != right_literal) {
+            return false;
+        }
+        if (left_literal ? !uri_paths_equivalent(left_segment, right_segment)
+                         : is_param(left_segment) != is_param(right_segment)) {
             return false;
         }
 

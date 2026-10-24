@@ -160,11 +160,6 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             // add a resident http_response-sized block.
             std::optional<http_error_info> error;
             std::uint32_t allowed_methods = 0;
-            // Room for the extension tokens a 405 must name in Allow. Fixed and
-            // small: a resource carrying more distinct extension methods than
-            // this would be pathological, and truncating beats allocating on
-            // the error path.
-            std::string_view extension_method_buffer[8];
             std::span<const std::string_view> extension_methods;
             if (unmatched_response) {
                 // Served from the document root, or OPTIONS on one of its files.
@@ -189,7 +184,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 // the routes register for this path plus what the file supports.
                 const auto* method_not_allowed = resolution.method_not_allowed();
                 if (method_not_allowed != nullptr) {
-                    extension_methods = extension_methods_for(request.path(), extension_method_buffer);
+                    extension_methods = method_not_allowed->extension_methods();
                     allowed_methods = method_not_allowed->allowed_methods();
                 }
                 if (fallback.resource_exists_) {

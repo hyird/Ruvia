@@ -31,10 +31,11 @@ namespace ruvia::detail {
 // The one prefix-scoping rule, shared by fallback handler selection and by
 // path-scoped middleware. `prefix` is normalized (see normalize_fallback_prefix).
 // A prefix matches on whole path segments only, so "/api" scopes "/api" and
-// "/api/x" but never "/apix"; "/" scopes everything. Segments are split on raw
-// '/' and compared percent-decoded, so "/%61pi/x" is under "/api" just as its
-// decoded route parameters read, while an encoded "%2F" never acts as a
-// segment boundary.
+// "/api/x" but never "/apix"; "/" scopes everything. Segments compare in the
+// canonical form route matching and route parameters use (uri_paths_equivalent):
+// split on raw '/' and percent-decoded, so "/%61pi/x" is under "/api" exactly
+// when it routes like "/api/x", while an encoded "%2F" never acts as a segment
+// boundary.
 [[nodiscard]] inline bool path_is_under_prefix(
     std::string_view path, std::string_view prefix) noexcept {
     if (prefix.empty() || prefix == "/") {
@@ -50,8 +51,8 @@ namespace ruvia::detail {
         const auto prefix_end = prefix_slash == std::string_view::npos ? prefix.size() : prefix_slash;
         const auto path_slash = path.find('/', path_cursor);
         const auto path_end = path_slash == std::string_view::npos ? path.size() : path_slash;
-        if (!url_components_equivalent(path.substr(path_cursor, path_end - path_cursor),
-                prefix.substr(prefix_cursor, prefix_end - prefix_cursor), url_decode_mode::percent)) {
+        if (!uri_paths_equivalent(path.substr(path_cursor, path_end - path_cursor),
+                prefix.substr(prefix_cursor, prefix_end - prefix_cursor))) {
             return false;
         }
         if (prefix_end == prefix.size()) {

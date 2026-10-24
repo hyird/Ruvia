@@ -118,6 +118,30 @@ RUVIA_TEST(url_components_equivalent) {
     RUVIA_CHECK(!url_components_equivalent("%zz", "%zz", m_type::percent));  // malformed escape
 }
 
+RUVIA_TEST(url_uri_paths_equivalent_and_ordered_by_canonical_form) {
+    using ruvia::compare_uri_paths;
+    using ruvia::uri_paths_equivalent;
+    RUVIA_CHECK(uri_paths_equivalent("/users/admin", "/users/%61dmin"));
+    RUVIA_CHECK(uri_paths_equivalent("/caf%C3%A9", "/caf%c3%a9"));
+    RUVIA_CHECK(uri_paths_equivalent("/a:b", "/a%3Ab"));  // decoded, like route parameters
+    RUVIA_CHECK(uri_paths_equivalent("", ""));
+    RUVIA_CHECK(!uri_paths_equivalent("/a/b", "/a%2Fb"));  // an encoded slash is no separator
+    RUVIA_CHECK(uri_paths_equivalent("/a%2fb", "/a%2Fb"));
+    RUVIA_CHECK(!uri_paths_equivalent("/a+b", "/a%20b"));  // '+' is literal in a path
+    RUVIA_CHECK(!uri_paths_equivalent("/api", "/apix"));
+    RUVIA_CHECK(!uri_paths_equivalent("/%zz", "/%zz"));  // malformed escape
+    RUVIA_CHECK(!uri_paths_equivalent("/%2", "/%2"));    // truncated escape
+
+    RUVIA_CHECK_EQ(compare_uri_paths("%61", "a"), 0);
+    RUVIA_CHECK(compare_uri_paths("a", "%62") < 0);
+    RUVIA_CHECK(compare_uri_paths("%62", "a") > 0);
+    RUVIA_CHECK(compare_uri_paths("ab", "%61") > 0);
+    RUVIA_CHECK(compare_uri_paths("a", "a%2F") < 0);
+    // A separator orders after every octet, an encoded slash among them.
+    RUVIA_CHECK(compare_uri_paths("a/", "a%FF") > 0);
+    RUVIA_CHECK(compare_uri_paths("a%2F", "a/") < 0);
+}
+
 RUVIA_TEST(url_visit_pairs_count) {
     std::vector<std::pair<std::string, std::string>> pairs;
     (void)ruvia::visit_url_encoded_pairs(

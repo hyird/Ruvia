@@ -3,6 +3,7 @@
 
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/detail/util/fnv1a.h"
 
 #include "router/path_segments.h"
@@ -103,7 +104,7 @@ detail::route_resolution detail::route_table::resolve_connect(std::string_view p
         if (route.endpoint().tunnel()->protocol() != protocol) {
             continue;
         }
-        if (!route.dynamic() && (protocol.empty() ? http_authorities_equal(route.path(), target, 0) : route.path() == target)) {
+        if (!route.dynamic() && (protocol.empty() ? http_authorities_equal(route.path(), target, 0) : uri_paths_equivalent(route.path(), target))) {
             return resolved(route);
         }
         if (protocol.empty() && route.path() == "*") {
@@ -137,21 +138,20 @@ detail::route_resolution detail::route_table::resolve_extension_method(
     for (const auto index : plan_->extension_route_indices_) {
         const auto& route = plan_->routes_[index];
         // RFC 9110 9.1: the method token is case-sensitive.
-        if (route.method_token() == method_token && route.path() == path) {
+        if (route.method_token() == method_token && uri_paths_equivalent(route.path(), path)) {
             return resolved(route);
         }
     }
 
     // The path exists under other methods, so this is 405 rather than 404. The
-    // mask cannot carry extension tokens; dispatch adds them to Allow from
-    // extension_methods_for().
+    // mask cannot carry extension tokens; the resolution carries them for Allow.
     const auto hash = plan_->static_method_mask_ != 0 ? path_hash(path) : 0;
     auto method_mask = allowed_methods(path, http_known_method::unknown, hash);
-    const bool extension_routes = has_extension_routes_for(path);
-    if (method_mask != 0 || extension_routes) {
+    const auto extension_methods = extension_methods_for(path);
+    if (method_mask != 0 || !extension_methods.empty()) {
         method_mask |= 1U << method_index(http_known_method::options);
     }
-    return route_resolution::method_not_allowed(method_mask, extension_routes);
+    return route_resolution::method_not_allowed(method_mask, extension_methods);
 }
 
 bool detail::route_table::recognizes_method_token(std::string_view method_token) const noexcept {
@@ -163,38 +163,13 @@ bool detail::route_table::recognizes_method_token(std::string_view method_token)
     return false;
 }
 
-bool detail::route_table::has_extension_routes_for(std::string_view path) const noexcept {
-    for (const auto index : plan_->extension_route_indices_) {
-        if (plan_->routes_[index].path() == path) {
-            return true;
+std::span<const std::string_view> detail::route_table::extension_methods_for(std::string_view path) const noexcept {
+    for (const auto& entry : plan_->extension_paths_) {
+        if (uri_paths_equivalent(entry.path_, path)) {
+            return entry.methods_;
         }
     }
-    return false;
-}
-
-std::span<const std::string_view> detail::route_table::extension_methods_for(
-    std::string_view path, std::span<std::string_view> buffer) const noexcept {
-    std::size_t count = 0;
-    for (const auto index : plan_->extension_route_indices_) {
-        if (count == buffer.size()) {
-            break;
-        }
-        const auto& route = plan_->routes_[index];
-        if (route.path() != path) {
-            continue;
-        }
-        bool duplicate = false;
-        for (std::size_t i = 0; i < count; ++i) {
-            if (buffer[i] == route.method_token()) {
-                duplicate = true;
-                break;
-            }
-        }
-        if (!duplicate) {
-            buffer[count++] = route.method_token();
-        }
-    }
-    return buffer.first(count);
+    return {};
 }
 
 detail::route_resolution detail::route_table::resolve(
@@ -239,11 +214,11 @@ detail::route_resolution detail::route_table::resolve(
     // A resource may be served only by extension methods. It still exists, so
     // an unsupported known method is 405 and OPTIONS must answer with Allow --
     // the mask alone cannot tell that apart from no resource at all.
-    const bool extension_routes = has_extension_routes_for(path);
-    if (method_mask != 0 || extension_routes) {
+    const auto extension_methods = extension_methods_for(path);
+    if (method_mask != 0 || !extension_methods.empty()) {
         method_mask |= 1U << method_index(http_known_method::options);
     }
-    return route_resolution::method_not_allowed(method_mask, extension_routes);
+    return route_resolution::method_not_allowed(method_mask, extension_methods);
 }
 
 std::size_t detail::route_table::method_index(http_known_method method) noexcept {
@@ -255,13 +230,26 @@ bool detail::route_table::is_routable_method(http_known_method method) noexcept 
 }
 
 bool detail::route_table::supports_head_fallback(const route_entry& route) noexcept {
-    // Streaming, SSE and websocket endpoints require an explicit HEAD handler;
-    // the ordinary GET handler borrows the original HEAD request unchanged.
-    return route.method() == http_known_method::get && route.endpoint().buffered() != nullptr;
+    // RFC 9110 9.3.2: HEAD is GET without content. A buffered or
+    // response-stream (including SSE) GET handler serves it unchanged: the
+    // response plan suppresses the body and the stream writer finishes the
+    // response at the handler's first body write. A websocket GET route is an
+    // upgrade, not a representation, so HEAD needs its own route there.
+    const auto& endpoint = route.endpoint();
+    return route.method() == http_known_method::get &&
+           (endpoint.buffered() != nullptr || endpoint.response_stream() != nullptr);
 }
 
 std::uint64_t detail::route_table::path_hash(std::string_view path) noexcept {
-    auto hash = detail::fnv1a_accumulate(detail::fnv1a_offset_basis, path);
+    // FNV-1a over the canonical octets (uri_paths_equivalent), so every
+    // spelling of one path hashes alike without decoding into storage. A
+    // literal '/' and a decoded "%2F" hash alike; only equality tells them apart.
+    auto hash = detail::fnv1a_offset_basis;
+    for (std::size_t i = 0; i < path.size();) {
+        const auto unit = path[i] == '%' ? next_uri_path_unit(path, i) : static_cast<unsigned char>(path[i++]);
+        hash ^= static_cast<unsigned char>(unit);
+        hash *= detail::fnv1a_prime;
+    }
 
     // MurmurHash3's public-domain fmix64 spreads common path prefixes across
     // the low bits used by the power-of-two table.
@@ -288,7 +276,8 @@ const detail::route_entry* detail::route_table::find_static_route(
             return nullptr;
         }
         const auto& route = plan_->routes_[slot.route_index_];
-        if (slot.hash_ == key_hash && route.method() == method && route.path() == path) {
+        if (slot.hash_ == key_hash && route.method() == method &&
+            (route.path() == path || uri_paths_equivalent(route.path(), path))) {
             return &route;
         }
         slot_index = (slot_index + 1) & plan_->static_slot_mask_;

@@ -54,9 +54,10 @@ public:
 
 namespace ruvia::detail {
 
-// Methods covered by RUVIA_ALL. HEAD is intentionally omitted: buffered GET
-// routes provide an implicit HEAD fallback without another route record, while
-// streaming/SSE/websocket routes require an explicit HEAD route.
+// Methods covered by RUVIA_ALL. HEAD is intentionally omitted: buffered and
+// response-stream (including SSE) GET routes provide an implicit HEAD fallback
+// without another route record (RFC 9110 9.3.2: same handler and head fields,
+// body suppressed); websocket GET routes require an explicit HEAD route.
 inline constexpr std::array ruvia_all_route_methods = {http_known_method::get, http_known_method::post,
     http_known_method::put, http_known_method::patch, http_known_method::delete_value,
     http_known_method::options};
@@ -177,6 +178,14 @@ private:                                                                        
         ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this), \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
 
+// Route paths and request paths compare in one canonical form
+// (ruvia::uri_paths_equivalent): segments split on literal '/', each compared
+// by its percent-decoded octets, so "/users/%61dmin" reaches the "/users/admin"
+// route and its middleware, hex case never matters, and "%2F" stays inside its
+// segment. Path-scoped middleware, scoped fallbacks and decoded route
+// parameters use the same form; two patterns differing only in spelling are a
+// duplicate registration. A GET route also answers HEAD unless it is a
+// websocket route (see ruvia_all_route_methods).
 #define RUVIA_GET(path, handler, ...) \
     RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::get, path, handler __VA_OPT__(, ) __VA_ARGS__)
 

@@ -33,8 +33,9 @@ enum class middleware_scope_coverage : std::uint8_t {
 // matcher's own segment rules, so the answer holds for the request paths the
 // route actually serves rather than for the pattern text. A request is under
 // the scope exactly when its leading segments are equivalent to the prefix's
-// segments (path_is_under_prefix); a literal route segment matches only its own
-// raw spelling, so comparing it with the same equivalence is exact.
+// segments (path_is_under_prefix); a literal route segment matches exactly the
+// request segments of the same canonical form (uri_paths_equivalent), so
+// comparing it with that equivalence is exact.
 [[nodiscard]] middleware_scope_coverage route_scope_coverage(
     std::string_view pattern, bool dynamic, std::string_view prefix) noexcept {
     if (!dynamic) {
@@ -71,7 +72,7 @@ enum class middleware_scope_coverage : std::uint8_t {
                 return middleware_scope_coverage::none;
             }
             request_dependent = true;
-        } else if (!url_components_equivalent(pattern_segment, prefix_segment, url_decode_mode::percent)) {
+        } else if (!uri_paths_equivalent(pattern_segment, prefix_segment)) {
             return middleware_scope_coverage::none;
         }
         prefix = prefix_rest;

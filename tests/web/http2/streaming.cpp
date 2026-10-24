@@ -505,6 +505,58 @@ RUVIA_TEST(http2_expect_continue_is_answered_when_the_content_is_consumed) {
     server.finish();
 }
 
+// RFC 9110 9.3.2: HEAD on an SSE GET route answers 200 with the GET head and
+// ends the stream without content.
+RUVIA_TEST(http2_head_falls_back_to_sse_get_route_without_content) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::hpack_decoder decoder({.resource_ = &resource});
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    asio::write(client, asio::buffer(request_wire(&resource, "HEAD", "/http2-paced-sse", {})));
+    client.non_blocking(true);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    std::string status;
+    std::string content_type;
+    std::string body;
+    bool ended = false;
+    while (!ended) {
+        const auto frame = http2_streaming_test::read_frame(client, deadline);
+        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
+            (frame.header_.flags_ & 0x1) == 0) {
+            std::string ack;
+            append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
+            asio::write(client, asio::buffer(ack));
+            continue;
+        }
+        RUVIA_CHECK(frame.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway));
+        RUVIA_CHECK(frame.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));
+        if (frame.header_.stream_id_ != 1) {
+            continue;
+        }
+        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
+            (void)decoder.decode(frame.payload_, [&](std::string_view name, std::string_view value) {
+                if (name == ":status") {
+                    status = value;
+                } else if (name == "content-type") {
+                    content_type = value;
+                }
+                return true;
+            });
+            ended = (frame.header_.flags_ & 0x1) != 0;
+        } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
+            body.append(frame.payload_);
+            ended = (frame.header_.flags_ & 0x1) != 0;
+        }
+    }
+    RUVIA_CHECK_EQ(status, std::string("200"));
+    RUVIA_CHECK(content_type.starts_with("text/event-stream"));
+    RUVIA_CHECK(body.empty());
+    client.close();
+    server.finish();
+}
+
 // A GET/SSE stream whose request body is already closed (END_STREAM on HEADERS)
 // must not be held in connection_scanner::phase::reading_payload and killed by
 // request_body_timeout_ or body_completion_timeout_ while streaming responses.

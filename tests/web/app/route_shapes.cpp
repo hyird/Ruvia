@@ -13,6 +13,8 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/error.h"
+#include "ruvia/web/streaming.h"
 #include "ruvia/web/testing.h"
 
 namespace {
@@ -167,6 +169,64 @@ private:
     }
 };
 
+// Refuses every request it guards, so a 403 shows the guarded route matched.
+class route_shapes_deny final {
+public:
+    ruvia::task<void> handle(ruvia::context&, ruvia::next&) {
+        throw ruvia::http_error({.status_ = ruvia::http_status::forbidden});
+        co_return;
+    }
+};
+
+// Literal routes guarded by route-level middleware beside parameter routes
+// that would capture an encoded spelling of the same path, plus resources
+// whose Allow sets the router must report completely.
+class route_shapes_equivalence_controller final {
+public:
+    RUVIA_ROUTES_BEGIN(route_shapes_equivalence_controller)
+    RUVIA_GET("/equiv/users/admin", guarded, route_shapes_deny);
+    RUVIA_GET("/equiv/users/:id", user);
+    RUVIA_GET("/equiv/users/admin/:tab", guarded, route_shapes_deny);
+    RUVIA_GET("/equiv/users/:id/:tab", user);
+    RUVIA_GET("/equiv/files/caf%C3%A9", guarded, route_shapes_deny);
+    RUVIA_GET("/equiv/files/:name", file);
+    RUVIA_GET("/equiv/stream", stream);
+    RUVIA_METHOD("EXT-A", "/equiv/many", user);
+    RUVIA_METHOD("EXT-B", "/equiv/many", user);
+    RUVIA_METHOD("EXT-C", "/equiv/many", user);
+    RUVIA_METHOD("EXT-D", "/equiv/many", user);
+    RUVIA_METHOD("EXT-E", "/equiv/many", user);
+    RUVIA_METHOD("EXT-F", "/equiv/many", user);
+    RUVIA_METHOD("EXT-G", "/equiv/many", user);
+    RUVIA_METHOD("EXT-H", "/equiv/many", user);
+    RUVIA_METHOD("EXT-I", "/equiv/many", user);
+    RUVIA_METHOD("EXT-J", "/equiv/m%61ny", user);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::task<ruvia::http_response> guarded(ruvia::context& c) {
+        co_return c.body("guarded");
+    }
+
+    ruvia::task<ruvia::http_response> user(ruvia::context& c) {
+        std::pmr::string body(c.arena());
+        body.append("user:");
+        body.append(c.req().param("id").value_or("-"));
+        co_return c.body(std::move(body));
+    }
+
+    ruvia::task<ruvia::http_response> file(ruvia::context& c) {
+        std::pmr::string body(c.arena());
+        body.append("file:");
+        body.append(c.req().param("name").value_or("-"));
+        co_return c.body(std::move(body));
+    }
+
+    ruvia::task<void> stream(ruvia::context& c) {
+        co_await c.stream().write("chunk");
+    }
+};
+
 // A non-200 answer reads as its own value so a mismatch is visible in the check.
 [[nodiscard]] std::string body_of(ruvia::test_app& app, std::string_view path) {
     const auto response = app.request(ruvia::test_request::get(path));
@@ -234,6 +294,9 @@ RUVIA_TEST(route_shapes_scoped_middleware_follows_the_request_path) {
     // A route entirely inside the scope and one entirely outside it.
     RUVIA_CHECK_EQ(scope_of(app, "/admin/settings"), std::string("admin"));
     RUVIA_CHECK_EQ(scope_of(app, "/shapes/c/d"), std::string("none"));
+    // An encoded spelling of a static route is that route, under its scope.
+    RUVIA_CHECK_EQ(body_of(app, "/%61dmin/s%65ttings"), std::string("settings:admin"));
+    RUVIA_CHECK_EQ(scope_of(app, "/%61dmin/s%65ttings"), std::string("admin"));
 }
 
 RUVIA_TEST(route_shapes_scoped_middleware_checks_wildcard_captures) {
@@ -353,4 +416,56 @@ RUVIA_TEST(route_shapes_fallback_prefixes_compare_percent_decoded) {
     const auto escaped = app.request(ruvia::test_request::get("/%61pi/missing"));
     RUVIA_CHECK_EQ(escaped.status(), ruvia::http_status::not_found);
     RUVIA_CHECK_EQ(escaped.body(), std::string_view("api-miss"));
+}
+
+RUVIA_TEST(route_shapes_encoded_spellings_select_the_literal_route_and_its_middleware) {
+    // RFC 3986 6.2.2.2: "%61dmin" is "admin". A parameter route must not
+    // capture an encoded spelling of a guarded literal route, neither a static
+    // one nor a literal segment inside a dynamic one.
+    ruvia::test_app app;
+    for (const std::string_view path : {"/equiv/users/admin", "/equiv/users/%61dmin", "/equiv/users/adm%69n",
+             "/equiv/users/%61%64%6D%69%6E", "/equiv/users/admin/x", "/equiv/users/%61dmin/x",
+             "/equiv/users/adm%69n/x"}) {
+        RUVIA_CHECK_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
+    }
+    // Other names still reach the parameter route, decoded.
+    RUVIA_CHECK_EQ(body_of(app, "/equiv/users/%41dmin"), std::string("user:Admin"));
+    RUVIA_CHECK_EQ(body_of(app, "/equiv/users/bob/x"), std::string("user:bob"));
+    // An encoded slash stays inside its segment: it names no literal route.
+    RUVIA_CHECK_EQ(body_of(app, "/equiv/users/admin%2Fx"), std::string("user:admin/x"));
+}
+
+RUVIA_TEST(route_shapes_hex_case_does_not_change_the_route) {
+    // RFC 3986 6.2.2.1: hex digits in a percent-encoding are case-insensitive.
+    ruvia::test_app app;
+    for (const std::string_view path : {"/equiv/files/caf%C3%A9", "/equiv/files/caf%c3%a9", "/equiv/files/caf%C3%a9"}) {
+        RUVIA_CHECK_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
+    }
+    RUVIA_CHECK_EQ(body_of(app, "/equiv/files/caf%C3%A8"), std::string("file:caf\xC3\xA8"));
+}
+
+RUVIA_TEST(route_shapes_allow_names_every_extension_method_of_a_resource) {
+    // RFC 9110 15.5.6: Allow lists the resource's supported methods, however
+    // many extension methods it has and however each route spelled the path.
+    constexpr std::string_view expected = "OPTIONS, EXT-A, EXT-B, EXT-C, EXT-D, EXT-E, EXT-F, EXT-G, EXT-H, EXT-I, EXT-J";
+    ruvia::test_app app;
+    const auto options = app.request(ruvia::test_request::options("/equiv/many"));
+    RUVIA_CHECK_EQ(options.status(), ruvia::http_status::no_content);
+    RUVIA_CHECK_EQ(options.header("Allow").value_or(""), expected);
+    const auto get = app.request(ruvia::test_request::get("/equiv/m%61ny"));
+    RUVIA_CHECK_EQ(get.status(), ruvia::http_status::method_not_allowed);
+    RUVIA_CHECK_EQ(get.header("Allow").value_or(""), expected);
+    const auto extension = app.request(ruvia::test_request::method("EXT-J", "/equiv/many"));
+    RUVIA_CHECK_EQ(extension.status(), ruvia::http_status::ok);
+}
+
+RUVIA_TEST(route_shapes_response_stream_get_route_advertises_head) {
+    // RFC 9110 9.1/9.3.2: a GET resource supports HEAD, streaming or not.
+    ruvia::test_app app;
+    const auto options = app.request(ruvia::test_request::options("/equiv/stream"));
+    RUVIA_CHECK_EQ(options.status(), ruvia::http_status::no_content);
+    RUVIA_CHECK_EQ(options.header("Allow").value_or(""), std::string_view("GET, HEAD, OPTIONS"));
+    const auto post = app.request(ruvia::test_request::post("/equiv/stream"));
+    RUVIA_CHECK_EQ(post.status(), ruvia::http_status::method_not_allowed);
+    RUVIA_CHECK_EQ(post.header("Allow").value_or(""), std::string_view("GET, HEAD, OPTIONS"));
 }

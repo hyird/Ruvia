@@ -160,6 +160,7 @@ detail::compiled_route_plan_ptr_type detail::router::compile() {
             plan.extension_route_indices_.push_back(route.index());
         }
     }
+    build_extension_paths();
     build_static_method_mask();
     build_static_index();
     build_dynamic_routes();

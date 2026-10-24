@@ -72,14 +72,22 @@ public:
     [[nodiscard]] constexpr std::uint32_t allowed_methods() const noexcept {
         return allowed_methods_;
     }
+    // The distinct extension tokens registered on the resource, for Allow.
+    // Borrowed from the compiled route plan.
+    [[nodiscard]] constexpr std::span<const std::string_view> extension_methods() const noexcept {
+        return extension_methods_;
+    }
 
 private:
     friend class route_resolution;
 
-    explicit constexpr route_method_not_allowed(std::uint32_t allowed_methods) noexcept
-        : allowed_methods_(allowed_methods) {}
+    constexpr route_method_not_allowed(
+        std::uint32_t allowed_methods, std::span<const std::string_view> extension_methods) noexcept
+        : allowed_methods_(allowed_methods),
+          extension_methods_(extension_methods) {}
 
     std::uint32_t allowed_methods_;
+    std::span<const std::string_view> extension_methods_;
 };
 
 class resolved_route final {
@@ -126,14 +134,15 @@ public:
     }
 
     // The mask spans only classified methods, so it can be empty for a resource
-    // that has extension-method routes. `resource_exists` carries that fact
-    // separately, ensuring an extension-only path answers 405 with an Allow
-    // built from its tokens instead of collapsing to 404.
-    [[nodiscard]] static route_resolution method_not_allowed(std::uint32_t allowed_methods, bool resource_exists) noexcept {
-        if (allowed_methods == 0 && !resource_exists) {
+    // that has extension-method routes. A non-empty `extension_methods` alone
+    // still makes the resource exist, so an extension-only path answers 405
+    // with an Allow built from its tokens instead of collapsing to 404.
+    [[nodiscard]] static route_resolution method_not_allowed(
+        std::uint32_t allowed_methods, std::span<const std::string_view> extension_methods) noexcept {
+        if (allowed_methods == 0 && extension_methods.empty()) {
             return route_resolution();
         }
-        return route_resolution(route_method_not_allowed(allowed_methods));
+        return route_resolution(route_method_not_allowed(allowed_methods, extension_methods));
     }
 
     [[nodiscard]] static route_resolution reject() noexcept {

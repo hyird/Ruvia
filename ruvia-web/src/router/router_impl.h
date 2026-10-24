@@ -82,6 +82,7 @@ private:
     void build_middleware_frames();
     void build_static_index();
     void build_static_method_mask();
+    void build_extension_paths();
     void build_dynamic_routes();
     void bind_dynamic_param_names(route_entry& route);
     void append_dynamic_param_name(route_entry& route, std::string_view name);

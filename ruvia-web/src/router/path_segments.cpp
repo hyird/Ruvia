@@ -8,8 +8,7 @@ namespace {
 [[nodiscard]] bool is_dot_segment(std::string_view segment) noexcept {
     // The longest spelling is "%2E%2E"; the size check keeps ordinary segments cheap.
     return !segment.empty() && segment.size() <= 6 &&
-           (url_components_equivalent(segment, ".", url_decode_mode::percent) ||
-               url_components_equivalent(segment, "..", url_decode_mode::percent));
+           (uri_paths_equivalent(segment, ".") || uri_paths_equivalent(segment, ".."));
 }
 
 }  // namespace

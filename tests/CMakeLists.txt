@@ -131,6 +131,7 @@ if(RUVIA_BUILD_WEB)
     # protocol token, makes every application in its executable fail startup, so
     # neither can share the process-wide controller registry.
     ruvia_add_web_standalone_test(ruvia_route_conflict 30 web/app/route_conflict.cpp)
+    ruvia_add_web_standalone_test(ruvia_route_encoded_duplicate 30 web/app/route_encoded_duplicate.cpp)
     ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/app/route_protocol.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/app/route_dot_segment.cpp)
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
