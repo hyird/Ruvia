@@ -239,21 +239,28 @@ class db_entity_row_decoder final {
     static constexpr auto missing_column = (std::numeric_limits<std::size_t>::max)();
 
 public:
-    explicit db_entity_row_decoder(const std::array<bool, column_count>& selected)
-        : selected_(selected) {}
+    explicit db_entity_row_decoder(const std::array<bool, column_count>& selected, bool wildcard = false)
+        : selected_(selected),
+          wildcard_(wildcard) {}
 
     e_type decode(const db_row& row, std::pmr::memory_resource* resource) {
         const auto names = db_result_access::column_names(row);
         if (!schema_ || schema_->data() != names.data() || schema_->size() != names.size()) {
             for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
                 indices_[i] = missing_column;
-                if (!selected_[i]) {
+                if (!selected_[i] && !wildcard_) {
                     return;
                 }
                 for (std::size_t index = 0; index < names.size(); ++index) {
                     if (names[index] == column_type::name.view()) {
+                        if (wildcard_ && indices_[i] != missing_column) {
+                            throw db_conversion_error(
+                                db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
+                        }
                         indices_[i] = index;
-                        return;
+                        if (!wildcard_) {
+                            return;
+                        }
                     }
                 }
             });
@@ -261,7 +268,7 @@ public:
         }
         e_type result(resource);
         for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
-            if (!selected_[i]) {
+            if (!selected_[i] && (!wildcard_ || indices_[i] == missing_column)) {
                 return;
             }
             if (indices_[i] == missing_column) {
@@ -276,6 +283,7 @@ public:
 private:
     std::array<bool, column_count> selected_{};
     std::array<std::size_t, column_count> indices_{};
+    bool wildcard_{false};
     // Used only while synchronously mapping a live, immutable db_rows result.
     std::optional<std::span<const std::pmr::string>> schema_{};
 };

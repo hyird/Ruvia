@@ -210,6 +210,59 @@ RUVIA_DB_PROJECTION(device_summary,
 | 删除与软删 | `delete_by(where)` / `remove(entity)` / `soft_delete(where)` / `restore(where)` / `clear()` | 硬删除、按软删列（`.delete_date_ = true`）软删除与恢复、清空表 |
 | 构建器与 `RETURNING` | `query_builder(alias)` / `update_builder` / `delete_builder` / `insert_builder` | 链式构建复杂 JOIN（`left_join_and_select`）、`offset`/`limit`、CTE、窗口函数、`on_conflict(db_upsert_options)` 与子查询；写构建器通过 `.returning(...)` + `.get_many()` / `.get_one()` / `.get_scalar<T>()` 映射 `RETURNING` 结果 |
 
+### 3.4 Builder 与直接 Query 的组合边界
+
+读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 或其 PMR resource 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入，因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
+
+读 Builder 的 `query()` 保留原组合视图语义：它只暴露平面查询，拒绝 relation hydration；**不会应用** `get_many()` / `get_query_and_parameters()` 等执行入口经 `effective_query()` 添加的软删除过滤。组合时若需要排除软删除行，应在源 Builder 显式添加相应条件。写 Builder 的视图先执行既有写安全校验（例如 UPDATE / DELETE 必须有条件），保留完整 INSERT / UPDATE / DELETE / `on_conflict()` 与 `RETURNING`；没有增加新的 SQL 生成路线。
+
+```cpp
+auto repo = c.db().repository<device>();
+auto changed = repo.update_builder("d");
+changed.set("name", "edge-2")
+    .where(device::column<"id">() == 7)
+    .returning({"id", "name"});
+
+ruvia::db_query outer;
+outer.with("changed", changed.query())
+    .select(outer.star("changed"))
+    .from("changed");
+auto statement = outer.compile(ruvia::db_driver::postgresql, nullptr);
+// statement 包含 WITH ... UPDATE ... RETURNING 和统一编号的绑定参数；
+// 外层不持有 changed 的借用，可在 changed 析构后编译或执行。
+```
+
+读写 Builder 的 `join(type, const db_query&, alias, on, db_source_options)` 接受无实体子查询；读 Builder 的 `inner_join()` / `left_join()` 同样支持此入口。`.lateral_ = true` 直接保留为相关 `JOIN LATERAL (SELECT ...)`，不会提升为普通 CTE。`on` 沿既有 predicate 导入规则把根实体限定名重绑定为外层别名；无实体子查询及其输出列没有可推断的实体表映射，相关引用和 JOIN 输出引用请显式使用外层及子查询别名。`options.columns_` 仅在调用方确实需要 SQL 列别名列表时提供，不要求枚举未知输出字段；方言限制沿底层 Query 的编译校验。
+
+```cpp
+auto read = repo.query_builder("d");
+ruvia::db_query latest;
+latest.select(latest.column("score", "s")).from("samples", "s")
+    .where(latest.binary(latest.column("device_id", "s"),
+        ruvia::db_binary_operator::equal, latest.column("id", "d")));
+read.left_join(latest, "matched", ruvia::db_expr::value(true).is_true(),
+    {.lateral_ = true});
+```
+
+`db_selection::star()` / `db_selection::star("samples")` 是真实的 `*` / `samples.*` 投影项，可与具名表达式一起传给 `select()`、`add_select()` 和写 Builder 的 `returning()`。通配项不生成 `AS`，也不根据实体或 CTE 描述展开列名；具名项仍要求非空且相互唯一的输出名，并生成 `AS`。
+
+```cpp
+ruvia::db_query samples;
+samples.select(samples.star()).from("measurements");
+auto mixed = repo.query_builder("samples");
+mixed.with("samples", samples).from_cte("samples")
+    .select({ruvia::db_selection::star("samples"),
+        ruvia::db_expr::value(true).as("matched")});
+// WITH samples AS (...) SELECT samples.*, ... AS matched ...
+```
+
+通配投影的结果仍按数据库返回的**列名元数据**映射，不按位置猜测，也不假设 CTE 与根实体有相同列清单：
+
+- 实体 / DTO 中与实际返回列同名的字段被解码；通配部分没有返回的字段保持 unset。通配带出的其他字段保留在 raw rows 中，不强迫 DTO 声明它们。
+- 显式具名项仍是必需列：在映射类型内声明后，结果缺少该列时抛出 `db_conversion_error::missing_column`；具名项不在映射类型内时仍沿既有规则拒绝，`get_raw_and_entities()` 继续允许额外具名列。
+- 通配项的真实名称在构建期未知，无法静态判断它与具名项是否重名。结果若含两个同名且需要映射的列，抛出 `db_conversion_error::invalid_format`，不会任选第一列；只取 raw rows 时不替数据库重命名或丢弃列。
+- 对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
+
 ---
 
 ## 4. Redis 客户端、Pub/Sub、Streams 与 RediSearch ORM

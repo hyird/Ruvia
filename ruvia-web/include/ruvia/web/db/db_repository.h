@@ -88,9 +88,10 @@ public:
         return row(std::span<const db_expr>(values.begin(), values.size()));
     }
 
-    [[nodiscard]] const db_query& query() const noexcept {
+    [[nodiscard]] const db_query& query() const& noexcept RUVIA_LIFETIMEBOUND {
         return query_;
     }
+    const db_query& query() const&& = delete;
     [[nodiscard]] const std::pmr::vector<std::pmr::string>& columns() const noexcept {
         return columns_;
     }
@@ -243,19 +244,20 @@ db_expression entity_column_value(db_query& query, const e_type& entity) {
 template <typename e_type>
 struct db_map_projection final {
     static_assert(sql_entity<e_type> || sql_projection<e_type>, "SQL results require a SQL entity or a db_projection");
-    explicit db_map_projection(std::span<const std::pmr::string> selected, bool allow_extra_columns = false) {
+    explicit db_map_projection(std::span<const std::pmr::string> selected, bool allow_extra_columns = false, bool wildcard = false)
+        : wildcard_(wildcard) {
         if (!allow_extra_columns) {
             for (const auto& name : selected) {
                 require_entity_column<e_type>(name);
             }
         }
         for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t index> {
-            selected_columns_[index] = selected.empty() || std::ranges::find(selected, c_type::name.view()) != selected.end();
+            selected_columns_[index] = (!wildcard && selected.empty()) || std::ranges::find(selected, c_type::name.view()) != selected.end();
         });
     }
     entity_rows<e_type> operator()(const db_rows& rows, std::pmr::memory_resource* resource) const {
         auto result_value = db_result_access::make_entity_rows<e_type>(resource, rows.size());
-        db_entity_row_decoder<e_type> decoder(selected_columns_);
+        db_entity_row_decoder<e_type> decoder(selected_columns_, wildcard_);
         for (const auto& row : rows) {
             result_value.push_back(decoder.decode(row, resource));
         }
@@ -263,6 +265,7 @@ struct db_map_projection final {
     }
 
     std::array<bool, std::tuple_size_v<typename e_type::columns_type>> selected_columns_{};
+    bool wildcard_{false};
 };
 template <typename e_type>
 struct db_map_one_projection final {
@@ -271,7 +274,7 @@ struct db_map_one_projection final {
         if (rows.empty()) {
             return std::nullopt;
         }
-        db_entity_row_decoder<e_type> decoder(mapper_.selected_columns_);
+        db_entity_row_decoder<e_type> decoder(mapper_.selected_columns_, mapper_.wildcard_);
         return decoder.decode(rows.front(), resource);
     }
 };
@@ -324,13 +327,23 @@ struct db_map_required_one final {
             throw db_conversion_error(
                 db_conversion_error::code_type::unexpected_row_count, "database save did not return the saved row");
         }
-        db_entity_row_decoder<e_type> decoder(mapper_.selected_columns_);
+        db_entity_row_decoder<e_type> decoder(mapper_.selected_columns_, mapper_.wildcard_);
         return decoder.decode(rows.front(), resource);
     }
 };
-// Selects (or returns) the named fields and yields their owned result names.
-std::pmr::vector<std::pmr::string> apply_projection(db_query& query, std::span<const db_selection> selection,
-    std::string_view qualifier, bool returning = false, std::string_view root_table = {});
+struct db_projection final {
+    explicit db_projection(std::pmr::memory_resource* resource)
+        : columns_(resource) {}
+    [[nodiscard]] bool empty() const noexcept {
+        return columns_.empty() && !wildcard_;
+    }
+    std::pmr::vector<std::pmr::string> columns_;
+    bool wildcard_{false};
+};
+// Wildcards stay in the AST; only explicit result names are tracked for mapping.
+db_projection apply_projection(db_query& query, std::span<const db_selection> selection,
+    std::string_view qualifier, bool returning = false, std::string_view root_table = {},
+    const db_projection* previous = nullptr);
 [[nodiscard]] std::pmr::string format_truncate_table(std::string_view table, db_driver driver, std::pmr::memory_resource* resource);
 
 template <typename entity_type, typename c_type>
@@ -449,7 +462,7 @@ public:
     db_query_builder& select(std::span<const db_selection> fields_value) {
         require_plain_projection();
         for (const auto& field : fields_value) {
-            if (!field.has_expression()) {
+            if (!field.has_expression() && !field.is_wildcard()) {
                 detail::require_entity_column<entity_type>(field.column_);
             }
         }
@@ -475,34 +488,20 @@ public:
         if (fields_value.empty()) {
             throw std::invalid_argument("add_select requires at least one field");
         }
-        auto next_selected = selected_;
-        if (next_selected.empty()) {
-            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
-                next_selected.emplace_back(c_type::name.view());
-            });
-        }
-        const auto qualifier = alias_.empty() ? entity_type::table_name() : std::string_view(alias_);
-        const auto alias = qualifier == entity_type::table_name() ? std::string_view{} : qualifier;
-        std::pmr::vector<db_expression> expressions(query_.resource());
-        expressions.reserve(fields_value.size());
         for (const auto& field : fields_value) {
-            if (field.column_.empty() ||
-                std::ranges::find(next_selected, std::string_view(field.column_)) != next_selected.end()) {
-                throw std::invalid_argument("projection requires unique nonempty field names");
-            }
-            if (!field.has_expression()) {
+            if (!field.has_expression() && !field.is_wildcard()) {
                 detail::require_entity_column<entity_type>(field.column_);
-                expressions.push_back(query_.alias(query_.column(field.column_, qualifier), field.column_));
-            } else {
-                expressions.push_back(
-                    query_.alias(field.expression(query_, entity_type::table_name(), alias), field.column_));
             }
-            next_selected.emplace_back(field.column_);
         }
-        for (const auto expression : expressions) {
-            query_.add_select(expression);
+        detail::db_projection implicit(query_.resource());
+        const auto* previous = &selected_;
+        if (selected_.empty()) {
+            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
+                implicit.columns_.emplace_back(c_type::name.view());
+            });
+            previous = &implicit;
         }
-        selected_ = std::move(next_selected);
+        selected_ = detail::apply_projection(query_, fields_value, alias_, false, entity_type::table_name(), previous);
         return *this;
     }
     db_query_builder& add_select(std::initializer_list<db_selection> fields_value) {
@@ -540,6 +539,11 @@ public:
         std::string_view alias, const db_predicate& on = {}, const db_source_options& options = {}) {
         source_value.require_plain_projection();
         query_.join(type, source_value.query_, import_join_predicate<source>(on, alias), alias, options);
+        return *this;
+    }
+    db_query_builder& join(db_join_type type, const db_query& source_value,
+        std::string_view alias, const db_predicate& on = {}, const db_source_options& options = {}) {
+        query_.join(type, source_value, on.expression(query_, entity_type::table_name(), alias_), alias, options);
         return *this;
     }
     db_query_builder& join_cte(db_join_type type, std::string_view name, std::string_view alias, const db_predicate& on = {}) {
@@ -586,17 +590,23 @@ public:
         std::string_view alias, const db_predicate& on = {}, const db_source_options& options = {}) {
         return join(db_join_type::inner, source_value, alias, on, options);
     }
+    db_query_builder& left_join(const db_query& source_value,
+        std::string_view alias, const db_predicate& on = {}, const db_source_options& options = {}) {
+        return join(db_join_type::left, source_value, alias, on, options);
+    }
+    db_query_builder& inner_join(const db_query& source_value,
+        std::string_view alias, const db_predicate& on = {}, const db_source_options& options = {}) {
+        return join(db_join_type::inner, source_value, alias, on, options);
+    }
     template <typename source, typename source_executor_type>
     db_query_builder& with(std::string_view name, const db_query_builder<source, source_executor_type>& source_value, const db_cte_options& options = {}) {
-        source_value.require_plain_projection();
-        query_.with(name, source_value.query_, options);
+        query_.with(name, source_value.query(), options);
         return *this;
     }
     template <typename source, typename source_executor_type>
     db_query_builder& with(std::string_view name, const db_write_query_builder<source, source_executor_type>& source_value, const db_cte_options& options = {}) {
         require_plain_projection();
-        source_value.validate();
-        query_.with(name, source_value.query_, options);
+        query_.with(name, source_value.query(), options);
         return *this;
     }
     db_query_builder& with(std::string_view name, const db_query& source_value, const db_cte_options& options = {}) {
@@ -621,10 +631,13 @@ public:
         query_.from_function(query_.import_expression(function), alias.empty() ? std::string_view(alias_) : alias, options);
         return *this;
     }
-    [[nodiscard]] const db_query& subquery_query() const {
+    // Borrows the flat AST, without applying execution-time soft-delete filtering.
+    // The builder and its resource must outlive the view; consumers clone on import.
+    [[nodiscard]] const db_query& query() const& RUVIA_LIFETIMEBOUND {
         require_plain_projection();
         return query_;
     }
+    const db_query& query() const&& = delete;
     db_expression subquery(db_query& expressions) const {
         require_plain_projection();
         return expressions.subquery(query_);
@@ -939,7 +952,7 @@ private:
                 throw std::invalid_argument("DTO mapping requires an explicit projection");
             }
         }
-        return detail::db_map_projection<output_type>(selected_, allow_extra_columns);
+        return detail::db_map_projection<output_type>(selected_.columns_, allow_extra_columns, selected_.wildcard_);
     }
     db_query_builder(detail::db_repository_input_type<executor_type> executor, std::string_view alias)
         : executor_(executor),
@@ -998,7 +1011,7 @@ private:
     detail::db_repository_executor_type<executor_type> executor_;
     db_query query_;
     std::pmr::string alias_;
-    std::pmr::vector<std::pmr::string> selected_;
+    detail::db_projection selected_;
     std::optional<detail::db_relation_plan> relations_{};
     bool with_deleted_{false};
 };
@@ -1146,6 +1159,11 @@ public:
         query_.join(type, source_value.query_, import_join_predicate<source>(on, alias), alias, options);
         return *this;
     }
+    db_write_query_builder& join(db_join_type type, const db_query& source_value,
+        std::string_view alias, const db_predicate& on = {}, const db_source_options& options = {}) {
+        query_.join(type, source_value, on.expression(query_, entity_type::table_name(), alias_), alias, options);
+        return *this;
+    }
     db_write_query_builder& join_cte(db_join_type type, std::string_view name, std::string_view alias, const db_predicate& on = {}) {
         query_.join(type, name, on.expression(query_, entity_type::table_name(), alias_), alias);
         return *this;
@@ -1208,8 +1226,8 @@ public:
         source_value.require_plain_projection();
         source_value.query_.require_select_query();
         validate_insert_columns(columns);
-        const auto count = source_value.selected_.empty() ? std::tuple_size_v<typename source::columns_type> : source_value.selected_.size();
-        if (count != columns.size()) {
+        const auto count = source_value.selected_.empty() ? std::tuple_size_v<typename source::columns_type> : source_value.selected_.columns_.size();
+        if (!source_value.selected_.wildcard_ && count != columns.size()) {
             throw std::invalid_argument("insert_from projection and target column counts differ");
         }
         record_inserted_columns(columns);
@@ -1247,14 +1265,12 @@ public:
     }
     template <typename source, typename source_executor_type>
     db_write_query_builder& with(std::string_view name, const db_query_builder<source, source_executor_type>& source_value, const db_cte_options& options = {}) {
-        source_value.require_plain_projection();
-        query_.with(name, source_value.query_, options);
+        query_.with(name, source_value.query(), options);
         return *this;
     }
     template <typename source, typename source_executor_type>
     db_write_query_builder& with(std::string_view name, const db_write_query_builder<source, source_executor_type>& source_value, const db_cte_options& options = {}) {
-        source_value.validate();
-        query_.with(name, source_value.query_, options);
+        query_.with(name, source_value.query(), options);
         return *this;
     }
     db_write_query_builder& with(std::string_view name, const db_query& source_value, const db_cte_options& options = {}) {
@@ -1271,10 +1287,11 @@ public:
             std::pmr::vector<db_expression> expressions(query_.resource());
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> { expressions.push_back(query_.column(c_type::name.view(), qualifier())); });
             query_.returning(expressions);
-            selected_.clear();
+            selected_.columns_.clear();
+            selected_.wildcard_ = false;
         } else {
             for (const auto& field : fields) {
-                if (!field.has_expression()) {
+                if (!field.has_expression() && !field.is_wildcard()) {
                     detail::require_entity_column<entity_type>(field.column_);
                 }
             }
@@ -1308,7 +1325,7 @@ public:
                 throw std::invalid_argument("DTO returning requires an explicit projection");
             }
         }
-        return executor_.template query_mapped<entity_rows<output_type>>(query_, detail::db_map_projection<output_type>(selected_));
+        return executor_.template query_mapped<entity_rows<output_type>>(query_, detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_));
     }
     template <typename output_type = entity_type>
     [[nodiscard]] task<std::optional<output_type>> get_one() const {
@@ -1322,7 +1339,7 @@ public:
             }
         }
         return executor_.template query_mapped<std::optional<output_type>>(query_,
-            detail::db_map_one_projection<output_type>{detail::db_map_projection<output_type>(selected_)});
+            detail::db_map_one_projection<output_type>{detail::db_map_projection<output_type>(selected_.columns_, false, selected_.wildcard_)});
     }
     [[nodiscard]] task<db_rows> get_raw_many() const {
         validate();
@@ -1351,6 +1368,13 @@ public:
         validate();
         return query_.compile(executor_.query_driver(), query_.resource());
     }
+    // Borrows the complete validated DML AST, including RETURNING and parameters.
+    // The builder and its resource must outlive the view; with() clones on import.
+    [[nodiscard]] const db_query& query() const& RUVIA_LIFETIMEBOUND {
+        validate();
+        return query_;
+    }
+    const db_query& query() const&& = delete;
 
 private:
     friend class db_repository<entity_type, executor_type>;
@@ -1423,7 +1447,7 @@ private:
     db_query query_;
     bool inserting_;
     std::pmr::string alias_;
-    std::pmr::vector<std::pmr::string> selected_;
+    detail::db_projection selected_;
     std::pmr::vector<std::pmr::string> inserted_columns_;
 };
 

@@ -932,6 +932,16 @@ struct db_selection final {
     db_selection(borrowed_text column, db_expr expression)
         : column_(column),
           expression_(std::move(expression)) {}
+    // A real SQL wildcard, not a named field. Its qualifier is owned.
+    [[nodiscard]] static db_selection star(std::string_view table = {}) {
+        db_selection result;
+        result.expression_ = db_expr::star(table);
+        result.wildcard_ = true;
+        return result;
+    }
+    [[nodiscard]] bool is_wildcard() const noexcept {
+        return wildcard_;
+    }
     [[nodiscard]] bool has_expression() const noexcept {
         return !expression_.empty();
     }
@@ -939,6 +949,9 @@ struct db_selection final {
         db_query& target, std::string_view table = {}, std::string_view alias = {}) const {
         return expression_.empty() ? db_expression{} : expression_.expression(target, table, alias);
     }
+
+private:
+    bool wildcard_{false};
 };
 
 struct db_assignment final {
@@ -1516,17 +1529,17 @@ public:
     }
     template <typename subquery_type>
         requires requires(const subquery_type& s) {
-            { s.subquery_query() } -> std::same_as<const db_query&>;
+            { s.query() } -> std::same_as<const db_query&>;
         }
     [[nodiscard]] db_predicate in(const subquery_type& subquery) const {
-        return compare_subquery(db_binary_operator::in, subquery.subquery_query());
+        return compare_subquery(db_binary_operator::in, subquery.query());
     }
     template <typename subquery_type>
         requires requires(const subquery_type& s) {
-            { s.subquery_query() } -> std::same_as<const db_query&>;
+            { s.query() } -> std::same_as<const db_query&>;
         }
     [[nodiscard]] db_predicate not_in(const subquery_type& subquery) const {
-        return compare_subquery(db_binary_operator::not_in, subquery.subquery_query());
+        return compare_subquery(db_binary_operator::not_in, subquery.query());
     }
 
     template <typename t_type>

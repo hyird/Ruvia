@@ -12,6 +12,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -41,7 +42,7 @@
 
 namespace ruvia::test {
 
-// Connection startup, scripted single-column PostgreSQL results and an
+// Connection startup, scripted PostgreSQL results and an
 // optional transport failure are enough to exercise public backend operations
 // without injecting a backend object or private storage.
 class backend_startup_peer final {
@@ -90,6 +91,9 @@ public:
         bool parse_fails_{false};
         // Nonzero: held, like deferred_, until release_hold() names it.
         std::size_t hold_{0};
+        // Non-empty: multi-column text metadata and row values replace column_/rows_.
+        std::vector<std::string> columns_;
+        std::vector<std::vector<std::string>> values_;
     };
 
     // One extended-protocol Parse message: the statement text, the parameter
@@ -579,7 +583,7 @@ private:
                     if (reply.copy_ != postgres_copy_direction::none) {
                         break;
                     }
-                    if (reply.column_.empty()) {
+                    if (reply.column_.empty() && reply.columns_.empty()) {
                         message(response, 'n', {});
                         break;
                     }
@@ -605,6 +609,18 @@ private:
                             return;
                         }
                     }
+                    for (const auto& values : reply.values_) {
+                        std::string row;
+                        append_short(row, static_cast<std::uint16_t>(values.size()));
+                        for (const auto& value : values) {
+                            append_integer(row, static_cast<std::uint32_t>(value.size()));
+                            row.append(value);
+                        }
+                        message(response, 'D', row);
+                        if (!complete) {
+                            return;
+                        }
+                    }
                     if (!complete) {
                         return;
                     }
@@ -625,15 +641,18 @@ private:
 
     static void postgres_description(std::string& response, const postgres_reply& reply) {
         std::string description;
-        append_short(description, 1);
-        description.append(reply.column_);
-        description.push_back('\0');
-        append_integer(description, 0);
-        append_short(description, 0);
-        append_integer(description, reply.type_);
-        append_short(description, 0xffff);
-        append_integer(description, 0xffffffff);
-        append_short(description, 0);
+        const auto columns = reply.columns_.empty() ? std::span<const std::string>(&reply.column_, 1) : std::span<const std::string>(reply.columns_);
+        append_short(description, static_cast<std::uint16_t>(columns.size()));
+        for (const auto& column : columns) {
+            description.append(column);
+            description.push_back('\0');
+            append_integer(description, 0);
+            append_short(description, 0);
+            append_integer(description, reply.type_);
+            append_short(description, 0xffff);
+            append_integer(description, 0xffffffff);
+            append_short(description, 0);
+        }
         message(response, 'T', description);
     }
 

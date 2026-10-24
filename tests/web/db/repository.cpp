@@ -102,7 +102,123 @@ RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
     });
 }
 
+RUVIA_TEST(db_repository_wildcard_projection_preserves_unknown_cte_columns_and_dialects) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
+        auto repository = client.handle().repository<entity_type>();
+        auto builder = repository.query_builder("samples");
+        {
+            db_query source;
+            source.select(source.star()).from("measurements");
+            std::string qualifier = "samples";
+            builder.with("samples", source).from_cte("samples").select({db_selection::star(qualifier), db_expr::value(5).as("rank")});
+            qualifier.assign("destroyed");
+        }
+        const auto postgres = builder.query().compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(postgres.sql(), "WITH \"samples\" AS (SELECT * FROM \"measurements\") SELECT \"samples\".*, $1 AS \"rank\" FROM \"samples\" AS \"samples\"");
+        RUVIA_CHECK_EQ(postgres.params().size(), std::size_t{1});
+        const auto maria = builder.query().compile(db_driver::mariadb, nullptr);
+        RUVIA_CHECK_EQ(maria.sql(), "WITH `samples` AS (SELECT * FROM `measurements`) SELECT `samples`.*, ? AS `rank` FROM `samples` AS `samples`");
+        RUVIA_CHECK_EQ(maria.params().size(), std::size_t{1});
+        RUVIA_CHECK(testing::throws_on([&] { builder.add_select(db_expr::value(6), "rank"); }));
+        RUVIA_CHECK(testing::throws_on([&] { builder.select({db_selection{}}); }));
+        RUVIA_CHECK(testing::throws_on([&] { builder.select({db_expr::value(1).as("")}); }));
+        const auto unchanged = builder.query().compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(unchanged.sql(), postgres.sql());
+
+        auto appended = repository.query_builder("s");
+        appended.select({db_selection::star("s")}).add_select(db_expr::value(9), "rank");
+        const auto added = appended.query().compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(added.sql(), "SELECT \"s\".*, $1 AS \"rank\" FROM \"items\" AS \"s\"");
+        appended.select({db_expr::value(1).as("rank")}).add_select({db_selection::star("s")});
+        const auto appended_wildcard = appended.query().compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(appended_wildcard.sql(),
+            "SELECT $1 AS \"rank\", \"s\".* FROM \"items\" AS \"s\"");
+        auto archive = repository.insert_builder();
+        archive.insert_from({"id", "name"}, builder);
+        RUVIA_CHECK(testing::throws_on([&] { archive.insert_from({"id", "unknown"}, builder); }));
+        const auto inserted = archive.query().compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK(inserted.sql().find("INSERT INTO \"items\" (\"id\", \"name\")") != std::string_view::npos);
+        RUVIA_CHECK(inserted.sql().find("SELECT \"samples\".*, $1 AS \"rank\"") != std::string_view::npos);
+        co_return;
+    });
+}
+
 #ifdef RUVIA_ENABLE_POSTGRESQL
+RUVIA_TEST(db_repository_wildcards_decode_result_names_and_reject_ambiguous_mapped_columns) {
+    using reply = test::backend_startup_peer::postgres_reply;
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle,
+        {reply{.columns_ = {"name", "rank", "unmapped"}, .values_ = {{"Ada", "7", "extra"}}},
+            reply{.columns_ = {"name", "rank", "unmapped"}, .values_ = {{"Grace", "8", "raw"}}},
+            reply{.columns_ = {"id", "name", "rank"}, .values_ = {{"9", "Linus", "6"}}},
+            reply{.columns_ = {"name"}, .values_ = {{"missing rank"}}},
+            reply{.columns_ = {"name", "name", "rank"}, .values_ = {{"first", "second", "7"}}},
+            reply{.columns_ = {"name", "rank"}}});
+    repository_runtime runtime;
+    db_client client(runtime.attachment_.loop(), peer.config());
+    test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
+        auto repository = connected.handle().repository<entity_type>();
+        auto make_projection = [&] {
+            db_query source;
+            source.select(source.star()).from("measurements");
+            auto builder = repository.query_builder("samples");
+            builder.with("samples", source).from_cte("samples").select({db_selection::star("samples")});
+            builder.add_select(db_expr::value(7), "rank");
+            return builder;
+        };
+        auto operation = [&] {
+            auto builder = make_projection();
+            return builder.get_many<entity_with_rank>();
+        }();
+        const auto many = co_await std::move(operation);
+        RUVIA_CHECK_EQ(many.size(), std::size_t{1});
+        if (!many.empty()) {
+            RUVIA_CHECK(!many[0].is_set<"id">());
+            RUVIA_CHECK_EQ(many[0].get<"name">(), "Ada");
+            RUVIA_CHECK_EQ(many[0].get<"rank">(), std::int64_t{7});
+        }
+        auto builder = make_projection();
+        const auto [entities, raw] = co_await builder.get_raw_and_entities();
+        RUVIA_CHECK_EQ(entities.size(), std::size_t{1});
+        RUVIA_CHECK_EQ(raw.size(), std::size_t{1});
+        if (!entities.empty() && !raw.empty()) {
+            RUVIA_CHECK_EQ(entities[0].get<"name">(), "Grace");
+            RUVIA_CHECK(!entities[0].is_set<"id">());
+            RUVIA_CHECK_EQ(raw[0]["unmapped"].value().value_or(""), "raw");
+            RUVIA_CHECK_EQ(raw[0]["rank"].as<std::int64_t>().value_or(0), std::int64_t{8});
+        }
+        auto returned_operation = [&] {
+            auto remove = repository.delete_builder("d");
+            remove.where(entity_type::column<"id">() == 9)
+                .returning({db_selection::star("d"), db_expr::value(6).as("rank")});
+            return remove.get_one<entity_with_rank>();
+        }();
+        const auto returned = co_await std::move(returned_operation);
+        RUVIA_CHECK(returned.has_value());
+        if (returned) {
+            RUVIA_CHECK_EQ(returned->get<"id">(), std::int64_t{9});
+            RUVIA_CHECK_EQ(returned->get<"name">(), "Linus");
+            RUVIA_CHECK_EQ(returned->get<"rank">(), std::int64_t{6});
+        }
+        bool missing = false;
+        try {
+            (void)co_await builder.get_one<entity_with_rank>();
+        } catch (const db_conversion_error& error) {
+            missing = error.code() == db_conversion_error::code_type::missing_column;
+        }
+        RUVIA_CHECK(missing);
+        bool ambiguous = false;
+        try {
+            (void)co_await builder.get_many<entity_with_rank>();
+        } catch (const db_conversion_error& error) {
+            ambiguous = error.code() == db_conversion_error::code_type::invalid_format;
+        }
+        RUVIA_CHECK(ambiguous);
+        RUVIA_CHECK(!(co_await builder.get_one<entity_with_rank>()).has_value());
+    });
+}
+
 RUVIA_TEST(db_repository_consumes_selected_projection_rows_and_owns_selection) {
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
@@ -334,6 +450,121 @@ RUVIA_TEST(db_repository_write_builder_cancelled_operations_release_input_snapsh
             co_await exercise();
             RUVIA_CHECK(cancelled);
         }
+        co_return;
+    });
+}
+
+RUVIA_TEST(db_repository_imports_raw_correlated_query_joins_and_writer_parameters) {
+    repository_runtime runtime;
+    test::counting_memory_resource source_resource;
+    test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
+        auto repository = client.handle().repository<entity_type>();
+        auto read = repository.query_builder("i");
+        auto write = repository.update_builder("i");
+        write.set("name", "changed").update_from_cte("incoming", "n").where(entity_type::column<"id">() > 8);
+        {
+            db_query cte(&source_resource);
+            cte.values({cte.value(2)});
+            const borrowed_text cte_columns[]{"floor"};
+            read.with("bounds", cte, {.columns_ = cte_columns});
+            db_query source(&source_resource);
+            source.select(source.column("id", "s")).from("samples", "s").where(source.binary(source.column("owner_id", "s"), db_binary_operator::equal, source.column("id", "i"))).and_where(source.binary(source.column("score", "s"), db_binary_operator::greater, source.value(3)));
+            const db_source_column columns[]{{.name_ = "sample_id"}};
+            const auto on = (entity_type::column<"id">() == db_expr::column("sample_id", "matched")) &&
+                            (db_expr::column("sample_id", "matched") > 5);
+            read.left_join(source, "matched", on, {.lateral_ = true, .columns_ = columns});
+            const borrowed_text incoming_columns[]{"id"};
+            write.with("incoming", cte, {.columns_ = incoming_columns});
+            db_query writer_source(&source_resource);
+            writer_source.select(writer_source.column("id", "s")).from("samples", "s").where(writer_source.binary(writer_source.column("owner_id", "s"), db_binary_operator::equal, writer_source.column("id", "n"))).and_where(writer_source.binary(writer_source.column("score", "s"), db_binary_operator::greater, writer_source.value(3)));
+            const auto writer_on = (db_expr::column("id", "n") == db_expr::column("sample_id", "matched")) &&
+                                   (db_expr::column("sample_id", "matched") > 5);
+            write.join(db_join_type::inner, writer_source, "matched", writer_on, {.lateral_ = true, .columns_ = columns});
+            source.where(source.value(false));
+        }
+        RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
+        const auto statement = read.get_query_and_parameters();
+        RUVIA_CHECK_EQ(statement.sql(),
+            "WITH \"bounds\" (\"floor\") AS (VALUES ($1)) SELECT \"i\".\"id\", \"i\".\"name\" FROM \"items\" AS \"i\" LEFT JOIN LATERAL (SELECT \"s\".\"id\" FROM \"samples\" AS \"s\" WHERE ((\"s\".\"owner_id\" = \"i\".\"id\") AND (\"s\".\"score\" > $2))) AS \"matched\" (\"sample_id\") ON ((\"i\".\"id\" = \"matched\".\"sample_id\") AND (\"matched\".\"sample_id\" > $3))");
+        RUVIA_CHECK_EQ(statement.params().size(), std::size_t{3});
+        const auto update = write.get_query_and_parameters();
+        RUVIA_CHECK(update.sql().find("SET \"name\" = $2 FROM \"incoming\" AS \"n\" INNER JOIN LATERAL (SELECT") != std::string_view::npos);
+        RUVIA_CHECK(update.sql().find("\"s\".\"score\" > $3") != std::string_view::npos);
+        RUVIA_CHECK(update.sql().find("\"matched\".\"sample_id\" > $4") != std::string_view::npos);
+        RUVIA_CHECK(update.sql().find("WHERE (\"i\".\"id\" > $5)") != std::string_view::npos);
+        RUVIA_CHECK_EQ(update.params().size(), std::size_t{5});
+        RUVIA_CHECK(testing::throws_on([&] { (void)read.query().compile(db_driver::mariadb, nullptr); }));
+
+        db_query plain;
+        plain.select(plain.value(11));
+        auto inner = repository.query_builder("root");
+        inner.inner_join(plain, "v", entity_type::column<"id">() > 1);
+        const auto inner_statement = inner.get_query_and_parameters();
+        RUVIA_CHECK_EQ(inner_statement.sql(),
+            "SELECT \"root\".\"id\", \"root\".\"name\" FROM \"items\" AS \"root\" INNER JOIN (SELECT $1) AS \"v\" ON (\"root\".\"id\" > $2)");
+        RUVIA_CHECK(testing::throws_on([&] { inner.join(db_join_type::left, plain, ""); }));
+        db_query dml;
+        dml.delete_from("samples").returning({dml.column("id")});
+        RUVIA_CHECK(testing::throws_on([&] { inner.left_join(dml, "bad"); }));
+        co_return;
+    });
+}
+
+RUVIA_TEST(db_repository_public_query_views_compose_all_writes_into_owned_query_ctes) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
+        auto repository = client.handle().repository<entity_type>();
+        db_query outer;
+        {
+            entity_type entity;
+            entity.set<"id">(1);
+            entity.set<"name">("new");
+            auto insert = repository.insert_builder(entity);
+            insert.returning({"id"});
+            outer.with("inserted", insert.query());
+            entity.set<"name">("mutated");
+            insert.values(entity);
+
+            auto update = repository.update_builder("u");
+            update.set("name", "updated").where(entity_type::column<"id">() == 2).returning({db_selection::star("u"), db_expr::value(6).as("rank")});
+            outer.with("updated", std::as_const(update).query());
+            auto remove = repository.delete_builder("d");
+            remove.where(entity_type::column<"id">() == 3).returning({"id"});
+            outer.with("removed", remove.query());
+            auto upsert = repository.insert_builder(entity);
+            const borrowed_text conflicts[]{"id"};
+            upsert.on_conflict({.conflict_paths_ = conflicts}).returning({"id"});
+            outer.with("upserted", upsert.query());
+
+            auto unbounded = repository.delete_builder();
+            RUVIA_CHECK(testing::throws_on([&] { outer.with("unsafe", unbounded.query()); }));
+            RUVIA_CHECK(testing::throws_on([&] { (void)entity_type::column<"id">().in(remove); }));
+            RUVIA_CHECK(testing::throws_on([&] { (void)entity_type::column<"id">().not_in(remove); }));
+            db_values_builder alternatives({"id"});
+            alternatives.row({db_expr::value(4)});
+            db_query membership;
+            membership.select(membership.star()).from("items").where((entity_type::column<"id">().in(alternatives) && entity_type::column<"id">().not_in(alternatives)).expression(membership));
+            const auto values_membership = membership.compile(db_driver::postgresql, nullptr);
+            RUVIA_CHECK_EQ(values_membership.sql(),
+                "SELECT * FROM \"items\" WHERE ((\"items\".\"id\" IN (VALUES ($1))) AND (\"items\".\"id\" NOT IN (VALUES ($2))))");
+            RUVIA_CHECK_EQ(values_membership.params().size(), std::size_t{2});
+            auto ids = repository.query_builder("ids");
+            ids.select({"id"}).where(entity_type::column<"id">() > 4);
+            outer.select(outer.star("updated")).from("updated").where((entity_type::column<"id">("updated").in(ids) && entity_type::column<"id">("updated").not_in(ids)).expression(outer));
+        }
+        const auto statement = outer.compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK_EQ(statement.sql(),
+            "WITH \"inserted\" AS (INSERT INTO \"items\" (\"id\", \"name\") VALUES ($1, $2) RETURNING \"items\".\"id\" AS \"id\"), "
+            "\"updated\" AS (UPDATE \"items\" AS \"u\" SET \"name\" = $3 WHERE (\"u\".\"id\" = $4) RETURNING \"u\".*, $5 AS \"rank\"), "
+            "\"removed\" AS (DELETE FROM \"items\" AS \"d\" WHERE (\"d\".\"id\" = $6) RETURNING \"d\".\"id\" AS \"id\"), "
+            "\"upserted\" AS (INSERT INTO \"items\" (\"id\", \"name\") VALUES ($7, $8) ON CONFLICT (\"id\") DO UPDATE SET \"name\" = excluded.\"name\" RETURNING \"items\".\"id\" AS \"id\") "
+            "SELECT \"updated\".* FROM \"updated\" WHERE ((\"updated\".\"id\" IN (SELECT \"ids\".\"id\" AS \"id\" FROM \"items\" AS \"ids\" WHERE (\"ids\".\"id\" > $9))) AND (\"updated\".\"id\" NOT IN (SELECT \"ids\".\"id\" AS \"id\" FROM \"items\" AS \"ids\" WHERE (\"ids\".\"id\" > $10))))");
+        RUVIA_CHECK_EQ(statement.params().size(), std::size_t{10});
+        const auto literal = outer.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+        RUVIA_CHECK(literal.sql().find("VALUES (1, E'new')") != std::string_view::npos);
+        RUVIA_CHECK(literal.sql().find("VALUES (1, E'mutated')") != std::string_view::npos);
+        RUVIA_CHECK(literal.sql().find("SET \"name\" = E'updated'") != std::string_view::npos);
+        RUVIA_CHECK(literal.params().empty());
         co_return;
     });
 }
@@ -917,10 +1148,13 @@ RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_jo
         RUVIA_CHECK(active_sql.sql().find("(\"a\".\"deleted_at\" IS NULL)") != std::string_view::npos);
         RUVIA_CHECK(active_sql.sql().find("HAVING ((\"a\".\"views\" > $4) OR (\"a\".\"id\" = $5))") != std::string_view::npos);
         RUVIA_CHECK(active_sql.sql().find("LIMIT $6 OFFSET $7") != std::string_view::npos);
+        const auto borrowed = active_qb.query().compile(db_driver::postgresql, nullptr);
+        RUVIA_CHECK(borrowed.sql().find("deleted_at") == std::string_view::npos);
 
         active_qb.with_deleted();
         const auto with_deleted_sql = active_qb.get_query_and_parameters();
         RUVIA_CHECK(with_deleted_sql.sql().find("deleted_at") == std::string_view::npos);
+        RUVIA_CHECK_EQ(with_deleted_sql.sql(), borrowed.sql());
 
         auto parents = client.handle().repository<parent>();
         auto rel_join = parents.query_builder("p");
