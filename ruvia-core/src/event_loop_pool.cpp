@@ -128,14 +128,16 @@ event_loop_pool::event_loop_pool(event_loop_pool_options options)
 }
 
 event_loop_pool::~event_loop_pool() {
-    stop();
-    try {
-        join();
-    } catch (...) {
+    if (std::ranges::any_of(
+            impl_->loops_, [](const auto& loop) { return loop->runtime_.handle().is_current(); })) {
+        std::terminate();
+    }
+    impl_->stop();
+    if (const auto failure = impl_->join()) {
         // Destroying a pool that was never joined explicitly makes this the
-        // only place its first failure is ever rethrown, and a destructor
+        // only place its first failure is ever observed, and a destructor
         // cannot rethrow it further. Report rather than end here.
-        report_unhandled_failure("event loop pool", std::current_exception());
+        report_unhandled_failure("event loop pool", failure);
     }
 }
 

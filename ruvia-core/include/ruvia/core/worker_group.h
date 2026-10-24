@@ -78,6 +78,7 @@ private:
     bool member_stopped_{false};
     std::exception_ptr failure_;
     worker_runtime* failed_member_{nullptr};
+    bool joining_{false};
     bool joined_{false};
     std::exception_ptr join_failure_;
 };

@@ -32,10 +32,8 @@ RUVIA_TEST(redis_predicate_composition_moves_source_and_preserves_range) {
         RUVIA_CHECK(filter.empty());
         RUVIA_CHECK(!options.where_.empty());
         RUVIA_CHECK(!range.empty());
-        RUVIA_CHECK(resource.live_allocations() > 0);
     }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
+    RUVIA_CHECK_EQ(resource.allocation_count(), std::size_t{0});
 }
 
 RUVIA_TEST(redis_predicate_supports_copy_and_where_or_where_combination) {
@@ -57,8 +55,7 @@ RUVIA_TEST(redis_predicate_supports_copy_and_where_or_where_combination) {
         combined.or_where(redis_query_user::column<"age">() >= 21);
         RUVIA_CHECK(!combined.empty());
     }
-    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
-    RUVIA_CHECK_EQ(resource.allocation_count(), resource.deallocation_count());
+    RUVIA_CHECK_EQ(resource.allocation_count(), std::size_t{0});
 }
 
 namespace {

@@ -216,7 +216,7 @@ http_transfer_coding_decode_result transfer_coding_decoder::fail_decoder(std::si
 
 namespace {
 
-constexpr std::size_t k_transfer_coding_scratch_bytes = 4096;
+constexpr std::size_t transfer_coding_scratch_bytes = 4096;
 
 struct transfer_coding_stage final {
     transfer_coding_stage(http_transfer_coding coding, std::pmr::memory_resource* resource,
@@ -275,7 +275,7 @@ struct http_transfer_coding_stack_decoder::impl final {
     std::span<transfer_coding_stage> stages_;
     // Only inter-stage edges own scratch. The final stage writes directly to
     // the caller's buffer, so a one-coding sequence has no internal scratch.
-    std::pmr::vector<std::array<char, k_transfer_coding_scratch_bytes>> buffers_;
+    std::pmr::vector<std::array<char, transfer_coding_scratch_bytes>> buffers_;
     std::optional<http_transfer_coding_decode_error> failure_;
     bool decoder_failed_{false};
 };

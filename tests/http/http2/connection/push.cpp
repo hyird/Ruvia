@@ -502,7 +502,7 @@ RUVIA_TEST(http2_push_finish_releases_peer_concurrency_while_its_request_lease_i
         const std::array fields_value{ruvia::http_header_view{"x-final", "done"}};
         const auto trailers = ruvia::validate_http_response_trailers(
             with_trailers ? std::span<const ruvia::http_header_view>(fields_value) : std::span<const ruvia::http_header_view>{});
-        RUVIA_CHECK(server.finish_response(id, trailers) == ruvia::http2_finish_response_status::accepted);
+        RUVIA_CHECK(server.finish_response(id, trailers) == ruvia::http2_finish_status::accepted);
         RUVIA_CHECK(std::holds_alternative<ruvia::http_response_stream_commit_plan>(server.submit_streaming_response_head(std::get<0>(second).stream_id(), ruvia::http_response{})));
         RUVIA_CHECK_EQ(std::get<0>(first).request_view().path_, "/one");
         RUVIA_CHECK(server.release(std::move(std::get<0>(first))) == ruvia::http2_server_request_release_status::released);

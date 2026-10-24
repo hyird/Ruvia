@@ -216,7 +216,7 @@ public:
             }
             co_await write_encoded(compression_.output());
         }
-        http2_finish_response_status result_value{};
+        http2_finish_status result_value{};
         try {
             result_value = connection_.finish_response(stream_id_, trailer_section);
         } catch (...) {
@@ -225,11 +225,11 @@ public:
             throw;
         }
         wake_writer();
-        if (result_value == http2_finish_response_status::closed) {
+        if (result_value == http2_finish_status::closed) {
             state_.mark_aborted();
             throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
         }
-        if (result_value == http2_finish_response_status::queued) {
+        if (result_value == http2_finish_status::queued) {
             const auto wait_result =
                 co_await await_http2_send_window(connection_, stream_id_, &stream_signal_);
             if (wait_result == http2_send_window_wait_status::aborted) {

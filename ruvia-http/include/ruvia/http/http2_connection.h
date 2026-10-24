@@ -146,7 +146,7 @@ public:
         const http2_extended_connect_request_head_view& request);
     [[nodiscard]] http2_data_submit_status submit_data(
         std::uint32_t stream_id, std::string_view bytes, http2_end_stream end_stream);
-    [[nodiscard]] http2_finish_request_status finish_request(std::uint32_t stream_id,
+    [[nodiscard]] http2_finish_status finish_request(std::uint32_t stream_id,
         std::span<const http_header_view> trailers = {});
     [[nodiscard]] http2_request_content_release_status release_request_content(
         std::uint32_t stream_id) noexcept;
@@ -179,7 +179,7 @@ public:
         http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
     // Encodes trailers before returning accepted or queued; field storage may be
     // released or changed even while the ending waits for DATA flow control.
-    [[nodiscard]] http2_finish_response_status finish_response(
+    [[nodiscard]] http2_finish_status finish_response(
         std::uint32_t stream_id, const http_response_trailer_section& trailers);
     [[nodiscard]] http2_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
     [[nodiscard]] http2_submit_status submit_alternative_service_advertisement(std::uint32_t stream_id,

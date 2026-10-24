@@ -651,8 +651,8 @@ task<void> http_client_connection::stream_http2_upload(
                         trailers.emplace_back(field.name(), field.value());
                     }
                     const auto finished = connection.finish_request(stream.stream_id_, trailers);
-                    finish_queued = finished == http2_finish_request_status::queued;
-                    finish_accepted = finished == http2_finish_request_status::accepted || finish_queued;
+                    finish_queued = finished == http2_finish_status::queued;
+                    finish_accepted = finished == http2_finish_status::accepted || finish_queued;
                 }
             } catch (const std::invalid_argument&) {
                 finish_accepted = false;

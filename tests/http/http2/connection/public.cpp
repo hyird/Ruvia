@@ -1164,7 +1164,7 @@ RUVIA_TEST(http2_public_server_streaming_response_commit_plan_and_finish_are_pub
     RUVIA_CHECK(server.submit_data(1, "body", ruvia::http2_end_stream::keep_open) ==
                 ruvia::http2_data_submit_status::accepted);
     RUVIA_CHECK(server.finish_response(1, trailers) ==
-                ruvia::http2_finish_response_status::accepted);
+                ruvia::http2_finish_status::accepted);
     std::pmr::string frame_bytes(&resource);
     RUVIA_CHECK(server.take_output_batch(1, frame_bytes).status_ == ruvia::http2_output_batch_status::taken);
     const auto trailer_frame = ruvia::parse_http2_frame_header(
@@ -1218,7 +1218,7 @@ RUVIA_TEST(http2_public_queued_trailers_keep_data_and_hpack_state_across_window_
             const auto expected = value;
             const std::array fields{ruvia::http_header_view{"x-tail", value}};
             const auto trailers = ruvia::validate_http_response_trailers(fields);
-            RUVIA_CHECK(server.finish_response(1, trailers) == ruvia::http2_finish_response_status::queued);
+            RUVIA_CHECK(server.finish_response(1, trailers) == ruvia::http2_finish_status::queued);
             value.assign(value_size, 'x');
 
             constexpr std::array<char, 6> zero_table{0, 1, 0, 0, 0, 0};
@@ -1831,7 +1831,7 @@ RUVIA_TEST(http2_public_data_submission_stops_after_connection_failure) {
             const auto before = client.send_window_state(stream_id);
             const auto payload = end_stream == ruvia::http2_end_stream::end_stream ? std::string_view{} : std::string_view("content");
             RUVIA_CHECK(client.submit_data(stream_id, payload, end_stream) == ruvia::http2_data_submit_status::closed);
-            RUVIA_CHECK(client.finish_request(stream_id) == ruvia::http2_finish_request_status::closed);
+            RUVIA_CHECK(client.finish_request(stream_id) == ruvia::http2_finish_status::closed);
             RUVIA_CHECK(!client.wants_write());
             RUVIA_CHECK(!client.has_queued_data(stream_id));
             const auto after = client.send_window_state(stream_id);
@@ -1925,7 +1925,7 @@ RUVIA_TEST(http2_public_response_submission_stops_after_connection_failure) {
             RUVIA_CHECK(submit_buffered_response(server, 1, buffered) == ruvia::http2_submit_status::closed);
             RUVIA_CHECK(server.submit_connect_response_head(1, buffered) == ruvia::http2_submit_status::closed);
             RUVIA_CHECK(server.submit_interim_response_head(1, interim) == ruvia::http2_submit_status::closed);
-            RUVIA_CHECK(server.finish_response(1, trailers) == ruvia::http2_finish_response_status::closed);
+            RUVIA_CHECK(server.finish_response(1, trailers) == ruvia::http2_finish_status::closed);
             const auto websocket = server.submit_websocket_handshake(1, built_request, validation, {});
             RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_handshake_submit_error>(websocket) &&
                         std::get<ruvia::http2_websocket_handshake_submit_error>(websocket) ==
@@ -2980,7 +2980,7 @@ RUVIA_TEST(http2_public_streaming_known_length_keeps_upload_open_for_trailers) {
             RUVIA_CHECK(client.submit_data(1, "abc", ruvia::http2_end_stream::keep_open) == ruvia::http2_data_submit_status::accepted);
         }
         const std::array<ruvia::http_header_view, 1> trailers{{{"x-end", "retained"}}};
-        RUVIA_CHECK(client.finish_request(1, trailers) == ruvia::http2_finish_request_status::accepted);
+        RUVIA_CHECK(client.finish_request(1, trailers) == ruvia::http2_finish_status::accepted);
         exchange_value(client, server);
         while (auto event = server.next_event()) {
             if (const auto* end = event->message_end()) {
@@ -3618,7 +3618,7 @@ RUVIA_TEST(http2_public_completed_response_preserves_request_send_half_and_retir
         if (reset) {
             RUVIA_CHECK(client.submit_reset(id, ruvia::http2_error_code::cancel) == ruvia::http2_submit_status::accepted);
         } else {
-            RUVIA_CHECK(client.finish_request(id) == ruvia::http2_finish_request_status::accepted);
+            RUVIA_CHECK(client.finish_request(id) == ruvia::http2_finish_status::accepted);
         }
         credit.reset();
         while (client.next_event()) {
@@ -3938,7 +3938,7 @@ RUVIA_TEST(http2_public_outbound_request_headers_and_trailers_lowercase_standard
         .method_ = "POST", .scheme_ = "https", .authority_ = "example.test", .target_ = "/mixed", .headers_ = headers, .content_ = ruvia::http2_request_content::streaming()});
     RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
     const std::array<ruvia::http_header_view, 1> trailers{{{"X-Mixed-Trailer", "tail-value"}}};
-    RUVIA_CHECK(client.finish_request(1, trailers) == ruvia::http2_finish_request_status::accepted);
+    RUVIA_CHECK(client.finish_request(1, trailers) == ruvia::http2_finish_status::accepted);
     exchange_value(client, server);
 
     std::optional<ruvia::http2_request_head_event> parent;

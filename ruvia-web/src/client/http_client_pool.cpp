@@ -242,7 +242,6 @@ task<void> http_client_pool::execute_into(
     http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
     http_client_response keep_alive(state_value);
     try {
-        throw_if_abandoned(*state_value);
         co_await execute_request_into(std::move(request), std::move(options), state_value);
     } catch (...) {
         state_value->upload_only_failure_ =
@@ -266,12 +265,17 @@ void http_client_pool::require_accepting() const {
 
 task<void> http_client_pool::execute_request_into(
     http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
-    throw_if_abandoned(*state_value);
+    try {
+        throw_if_abandoned(*state_value);
+    } catch (...) {
+        ++failed_requests_;
+        throw;
+    }
     const operation_timeout timeout(options.timeout_.has_value() ? options.timeout_ : config_.request_timeout_);
     const auto acquire_timeout = timeout.constrained_by(config_.acquire_timeout_);
     if (requests_buffered_ >= config_.max_buffered_requests_) {
         ++failed_requests_;
-        throw http_client_error(http_client_error::code_type::queue_full, "http client request buffer is full");
+        throw http_client_error(http_client_error::code_type::queue_full, "HTTP client request buffer is full");
     }
     ++requests_buffered_;
     std::size_t index = 0;

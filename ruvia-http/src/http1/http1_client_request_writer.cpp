@@ -202,7 +202,7 @@ struct request_head_write_plan final {
     std::span<const http_header_view> headers, http_client_request_content_view content,
     std::span<char> head_buffer, http1_client_request_wire_policy policy,
     std::pmr::memory_resource* resource, const http1_client_request_head_view* streaming = nullptr,
-    bool connect_udp = false) {
+    std::span<const http_header_view> connect_udp_headers = {}) {
     const bool connect = known_method == http_known_method::connect;
     request_header_facts header_facts;
     http1_client_request_prepare_error error = http1_client_request_prepare_error::invalid_header;
@@ -274,13 +274,13 @@ struct request_head_write_plan final {
         return detail::http1_client_request_prepare_result_access::failure(
             http1_client_request_prepare_error::header_too_large);
     }
-    if (connect_udp &&
+    if (!connect_udp_headers.empty() &&
         validate_http_connect_udp_request({
                                               .version_ = http_protocol_version::http11,
                                               .method_ = "GET",
                                               .authority_ = origin.host(),
                                               .path_ = target,
-                                              .headers_ = std::span(headers.data(), headers.size() + 1),
+                                              .headers_ = connect_udp_headers,
                                           })
             .has_value()) {
         return detail::http1_client_request_prepare_result_access::failure(
@@ -423,17 +423,22 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
     std::pmr::vector<http_header_view> fields(resource_);
     fields.reserve(headers.size() + 3);
     for (const auto& field : headers) {
-        if (http_ascii_equals_ignore_case(field.name(), "connection") || http_ascii_equals_ignore_case(field.name(), "upgrade")) {
-            return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_upgrade);
+        if (http_ascii_equals_ignore_case(field.name(), "connection")) {
+            return detail::http1_client_request_prepare_result_access::failure(
+                http1_client_request_prepare_error::invalid_connection);
+        }
+        if (http_ascii_equals_ignore_case(field.name(), "upgrade")) {
+            return detail::http1_client_request_prepare_result_access::failure(
+                http1_client_request_prepare_error::invalid_upgrade);
         }
         fields.push_back(field);
     }
     fields.emplace_back("Connection", "Upgrade");
     fields.emplace_back("Upgrade", "connect-udp");
+    const auto emitted_headers = std::span<const http_header_view>(fields);
     fields.emplace_back("Host", origin.host());
-    return prepare_request(origin, "GET", known_method, target.view(),
-        std::span<const http_header_view>(fields).first(fields.size() - 1),
-        http_client_request_content_view::none(), head_buffer, {}, resource_, nullptr, true);
+    return prepare_request(origin, "GET", known_method, target.view(), emitted_headers,
+        http_client_request_content_view::none(), head_buffer, {}, resource_, nullptr, fields);
 }
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,

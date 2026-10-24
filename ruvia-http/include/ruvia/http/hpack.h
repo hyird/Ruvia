@@ -15,6 +15,10 @@
 
 namespace ruvia {
 
+namespace detail {
+class hpack_decoder;
+}  // namespace detail
+
 enum class hpack_decode_error : std::uint8_t {
     need_more,
     integer_overflow,
@@ -99,11 +103,10 @@ private:
     [[nodiscard]] std::optional<hpack_decode_error> decode_with_callback(
         std::string_view block, void* target, header_callback_type callback);
 
-    class impl_type;
-    struct impl_deleter_type {
-        void operator()(impl_type* value) const noexcept;
+    struct impl_deleter_type final {
+        void operator()(detail::hpack_decoder* value) const noexcept;
     };
-    std::unique_ptr<impl_type, impl_deleter_type> impl_;
+    std::unique_ptr<detail::hpack_decoder, impl_deleter_type> impl_;
 };
 
 struct hpack_header_with_name_index_options final {

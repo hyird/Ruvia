@@ -978,6 +978,12 @@ RUVIA_TEST(http1_client_request_writer_prepare_connect_udp_preserves_specific_pr
     huge_target.front() = '/';
     expect_error(huge_target, valid_capsule, http1_client_request_prepare_error::header_too_large);
 
+    const std::array connection_headers{valid_capsule[0], ruvia::http_header_view{"Connection", "keep-alive"}};
+    expect_error("/udp", connection_headers, http1_client_request_prepare_error::invalid_connection);
+
+    const std::array upgrade_headers{valid_capsule[0], ruvia::http_header_view{"Upgrade", "websocket"}};
+    expect_error("/udp", upgrade_headers, http1_client_request_prepare_error::invalid_upgrade);
+
     const std::array content_type_headers{valid_capsule[0], ruvia::http_header_view{"Content-Type", "application/octet-stream"}};
     expect_error("/udp", content_type_headers, http1_client_request_prepare_error::invalid_header);
 }

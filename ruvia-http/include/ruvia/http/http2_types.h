@@ -13,13 +13,7 @@ namespace detail {
 class http2_connection;
 }  // namespace detail
 
-enum class http2_finish_request_status : std::uint8_t {
-    accepted,
-    queued,
-    closed,
-};
-
-enum class http2_finish_response_status : std::uint8_t {
+enum class http2_finish_status : std::uint8_t {
     accepted,
     queued,
     // The stream disappeared or was reset while its owner was finishing it.

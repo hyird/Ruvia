@@ -41,6 +41,21 @@ using ruvia::detail::request_target_view;
     return http_parse_error::uri_too_long;
 }
 
+void apply_parsed_request_target(http_request& request, const request_target_view& target_view) noexcept {
+    http_request_access::set_path(request, target_view.path_);
+    http_request_access::set_query_string(request, target_view.query_);
+    http_request_access::set_scheme(request, target_view.scheme_);
+    http_request_access::set_authority(request, target_view.authority_);
+    http_request_access::set_target_form(request, target_view.form_);
+}
+
+// RFC 9112 sections 3.2.2 and 3.3 make the request-target authoritative for
+// absolute-form and authority-form. Rebind both headers() and the known-header
+// cache so application code cannot observe a conflicting Host value as a
+// second routing truth.
+[[nodiscard]] constexpr bool target_overrides_host_header(http_request_target_form form) noexcept {
+    return form == http_request_target_form::absolute || form == http_request_target_form::authority;
+}
 }  // namespace
 
 http1_server_request_parse_state::http1_server_request_parse_state() noexcept
@@ -127,11 +142,7 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
     if (!parse_request_target(known_method, target, target_view)) {
         return fail(http_parse_error::invalid_request_target);
     }
-    http_request_access::set_path(request_, target_view.path_);
-    http_request_access::set_query_string(request_, target_view.query_);
-    http_request_access::set_scheme(request_, target_view.scheme_);
-    http_request_access::set_authority(request_, target_view.authority_);
-    http_request_access::set_target_form(request_, target_view.form_);
+    apply_parsed_request_target(request_, target_view);
     if (protocol_version == http_protocol_version::http11 && block.host_header_index_ < 0) {
         return fail(http_parse_error::missing_host);
     }
@@ -176,12 +187,7 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto& header_value = headers[i];
         auto value = header_value.value_.bind(buffer);
-        // RFC 9112 sections 3.2.2 and 3.3 make the request-target authoritative
-        // for absolute-form and authority-form. Rebind both headers() and the
-        // known-header cache so application code cannot observe a conflicting
-        // Host value as a second routing truth.
-        if ((target_view.form_ == http_request_target_form::absolute ||
-                target_view.form_ == http_request_target_form::authority) &&
+        if (target_overrides_host_header(target_view.form_) &&
             host_header_index >= 0 && i == static_cast<std::size_t>(host_header_index)) {
             value = target_view.authority_;
         }
@@ -235,16 +241,11 @@ http_request make_parsed_http_request(
         }
     }
 
-    http_request_access::set_path(request, target_view.path_);
-    http_request_access::set_query_string(request, target_view.query_);
-    http_request_access::set_scheme(request, target_view.scheme_);
-    http_request_access::set_authority(request, target_view.authority_);
-    http_request_access::set_target_form(request, target_view.form_);
+    apply_parsed_request_target(request, target_view);
     http_request_access::reserve_headers(request, headers.size());
     for (const auto& header : headers) {
         auto field = header;
-        if ((target_view.form_ == http_request_target_form::absolute ||
-                target_view.form_ == http_request_target_form::authority) &&
+        if (target_overrides_host_header(target_view.form_) &&
             http_ascii_equals_ignore_case(field.name(), "Host")) {
             field = http_header_view{field.name(), target_view.authority_};
         }

@@ -79,9 +79,6 @@ struct blocking_pool::impl_type final {
           queue_(queue_capacity_, process_resource()),
           nodes_(process_resource()),
           threads_(process_resource()) {
-        if (thread_count_ > std::numeric_limits<std::size_t>::max() - queue_capacity_) {
-            throw std::invalid_argument("blocking pool storage capacity is out of range");
-        }
         // Reserved/queued submissions occupy at most queue_capacity_ nodes;
         // each thread may also hold one node while moving its callable out.
         nodes_.resize(queue_capacity_ + thread_count_);
@@ -126,7 +123,9 @@ struct blocking_pool::impl_type final {
                     // the stop request becomes visible.
                     return;
                 }
-                (void)queue_.try_pop(node);
+                if (!queue_.try_pop(node)) {
+                    std::terminate();
+                }
                 --queued_;
                 ++running_;
             }
@@ -173,7 +172,9 @@ struct blocking_pool::impl_type final {
         // stop(), or submit() safely without recursion.
         node_type* node = nullptr;
         while (dropped-- != 0) {
-            (void)queue_.try_pop(node);
+            if (!queue_.try_pop(node)) {
+                std::terminate();
+            }
             node->task_ = nullptr;
             release_node(*node);
         }
@@ -282,7 +283,9 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
         if (stopped) {
             ++owner.discarded_;
         } else {
-            (void)owner.queue_.try_push(node);
+            if (!owner.queue_.try_push(node)) {
+                std::terminate();
+            }
             ++owner.queued_;
         }
     }

@@ -467,12 +467,11 @@ http2_connection::submit_websocket_handshake(
     return http2_websocket_negotiation(std::move(negotiation).take_subprotocol(), compression);
 }
 
-http2_finish_request_status http2_connection::finish_request(std::uint32_t stream_id,
+http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
     std::span<const http_header_view> trailers) {
-    using status_type = http2_finish_request_status;
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
-        return status_type::closed;
+        return http2_finish_status::closed;
     }
     if (role_ != http2_role::client || stream->local_send().request_content_open() == nullptr ||
         stream->request_continue_pending() || stream->request_content_canceled()) {
@@ -501,7 +500,7 @@ http2_finish_request_status http2_connection::finish_request(std::uint32_t strea
             pending.end_stream_ = block.empty() ? http2_end_stream::end_stream : http2_end_stream::keep_open;
             pending.trailer_block_.swap(block);
             (void)stream->queue_local_end_stream();
-            return status_type::queued;
+            return http2_finish_status::queued;
         }
     }
     if (block.empty()) {
@@ -511,14 +510,14 @@ http2_finish_request_status http2_connection::finish_request(std::uint32_t strea
     }
     (void)stream->commit_local_end_stream();
     release_local_request_stream_if_closed(*stream);
-    return status_type::accepted;
+    return http2_finish_status::accepted;
 }
 
-http2_finish_response_status http2_connection::finish_response(
+http2_finish_status http2_connection::finish_response(
     std::uint32_t stream_id, const http_response_trailer_section& trailers) {
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
-        return http2_finish_response_status::closed;
+        return http2_finish_status::closed;
     }
     if (stream->local_send().response_content_open() == nullptr &&
         stream->local_send().response_trailers_only() == nullptr) {
@@ -550,7 +549,7 @@ http2_finish_response_status http2_connection::finish_response(
                 pending.trailer_block_.swap(trailer_block);
             }
             (void)stream->queue_local_end_stream();
-            return http2_finish_response_status::queued;
+            return http2_finish_status::queued;
         }
     }
     if (trailer_block.empty()) {
@@ -561,7 +560,7 @@ http2_finish_response_status http2_connection::finish_response(
     (void)stream->commit_local_end_stream();
     release_local_request_stream_if_closed(*stream);
     retire_completed_local_push(stream_id);
-    return http2_finish_response_status::accepted;
+    return http2_finish_status::accepted;
 }
 
 http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http2_error_code error) {

@@ -221,10 +221,6 @@ struct db_selection;
 struct db_assignment;
 
 namespace detail {
-struct db_expr_tree_deleter final {
-    std::pmr::memory_resource* resource_{nullptr};
-    void operator()(db_expr_tree* tree) const noexcept;
-};
 
 class db_owned_expression final {
 public:
@@ -345,7 +341,7 @@ public:
         const db_owned_expression& lhs, db_binary_operator op, std::span<const std::string_view> keys);
 
 private:
-    using tree_deleter_type = db_expr_tree_deleter;
+    using tree_deleter_type = pmr_object_deleter<db_expr_tree>;
     using tree_owner_type = std::unique_ptr<db_expr_tree, tree_deleter_type>;
 
     [[nodiscard]] static tree_owner_type allocate_tree(std::pmr::memory_resource* resource = nullptr);

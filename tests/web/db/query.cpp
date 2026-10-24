@@ -922,12 +922,6 @@ RUVIA_TEST(db_predicate_public_overloads_cover_comparisons_membership_nulls_and_
 
 RUVIA_TEST(db_predicate_moves_keep_expression_with_its_owner) {
     test::counting_memory_resource resource;
-    struct default_resource_guard final {
-        std::pmr::memory_resource* previous_;
-        ~default_resource_guard() {
-            std::pmr::set_default_resource(previous_);
-        }
-    } guard{std::pmr::set_default_resource(&resource)};
     {
         auto source = entity_type::column<"name">() == std::string(200, 'x');
         auto destination = entity_type::column<"id">() == 9;

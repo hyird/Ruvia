@@ -50,8 +50,9 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
     if (services().dispatch_depth() >= 8) {
         throw std::logic_error("subrequest nesting limit exceeded");
     }
-    if (!is_valid_http_method_token(options.method_) || !options.target_.starts_with('/') || options.target_.starts_with("//") ||
-        options.target_.find_first_of("\r\n\t #") != std::string_view::npos || options.target_.find('\0') != std::string_view::npos) {
+    if (!is_valid_http_method_token(options.method_) ||
+        classify_http_method(options.method_) == http_known_method::connect ||
+        !is_valid_http_origin_form_target(options.target_)) {
         throw std::invalid_argument("dispatch requires a valid method and origin-form target");
     }
     if (options.body_.size() > services().max_decoded_body_bytes()) {

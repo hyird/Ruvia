@@ -84,6 +84,9 @@ public:
     hpack_decoder& operator=(const hpack_decoder&) = delete;
 
     void set_max_dynamic_table_size(std::size_t bytes);
+    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
+        return resource_;
+    }
     [[nodiscard]] decode_transaction_type begin_transaction() noexcept;
     [[nodiscard]] std::optional<hpack_decode_error> decode(
         std::string_view block, void* target, header_callback_type callback);

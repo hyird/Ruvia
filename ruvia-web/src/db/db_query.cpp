@@ -262,12 +262,6 @@ struct db_expr_tree final {
     std::size_t root_{no_db_node};
 };
 
-void db_expr_tree_deleter::operator()(db_expr_tree* tree) const noexcept {
-    if (tree != nullptr) {
-        std::destroy_at(tree);
-        resource_->deallocate(tree, sizeof(db_expr_tree), alignof(db_expr_tree));
-    }
-}
 namespace {
 
 [[nodiscard]] std::size_t push_tree_node(db_expr_tree& tree, db_query_node&& node) {
@@ -345,15 +339,7 @@ db_owned_expression::db_owned_expression(const db_owned_expression& other)
       scalar_(other.scalar_) {
     if (other.tree_) {
         auto* resource = other.tree_->resource_;
-        void* block = resource->allocate(sizeof(db_expr_tree), alignof(db_expr_tree));
-        try {
-            tree_ = tree_owner_type(
-                std::construct_at(static_cast<db_expr_tree*>(block), *other.tree_, resource),
-                tree_deleter_type{resource});
-        } catch (...) {
-            resource->deallocate(block, sizeof(db_expr_tree), alignof(db_expr_tree));
-            throw;
-        }
+        tree_ = make_pmr_object<db_expr_tree>(resource, *other.tree_, resource);
     }
 }
 
@@ -463,15 +449,7 @@ db_owned_expression db_owned_expression::from_borrowed(
 
 db_owned_expression::tree_owner_type db_owned_expression::allocate_tree(std::pmr::memory_resource* resource) {
     auto* resolved = pmr_resource_or_default(resource);
-    void* block = resolved->allocate(sizeof(db_expr_tree), alignof(db_expr_tree));
-    try {
-        return tree_owner_type(
-            std::construct_at(static_cast<db_expr_tree*>(block), resolved),
-            tree_deleter_type{resolved});
-    } catch (...) {
-        resolved->deallocate(block, sizeof(db_expr_tree), alignof(db_expr_tree));
-        throw;
-    }
+    return make_pmr_object<db_expr_tree>(resolved, resolved);
 }
 
 db_owned_expression db_owned_expression::from_tree(tree_owner_type tree) noexcept {

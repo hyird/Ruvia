@@ -19,6 +19,10 @@ void websocket_client_state::retire(client_abort_reason reason) noexcept {
 }
 
 void websocket_client_state::request_retire(client_abort_reason reason) noexcept {
+    if (worker_.is_current()) {
+        retire(reason);
+        return;
+    }
     bool deferred = false;
     try {
         deferred = loop_.defer_cleanup([state = shared_from_this(), reason] { state->retire(reason); });
@@ -26,7 +30,8 @@ void websocket_client_state::request_retire(client_abort_reason reason) noexcept
         deferred = false;
     }
     if (!deferred) {
-        // The loop is retiring and already owns the shutdown of this client.
+        // The loop is retiring and already owns the shutdown of this client,
+        // or defer_cleanup failed and request_close() enforces the terminal guard.
         lifecycle_.request_close();
     }
 }
@@ -36,10 +41,6 @@ void websocket_client_state::fail_transport() noexcept {
 }
 
 void websocket_client_state::abort() noexcept {
-    if (worker_.is_current()) {
-        retire(client_abort_reason::closing);
-        return;
-    }
     request_retire(client_abort_reason::closing);
 }
 

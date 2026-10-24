@@ -412,16 +412,18 @@ http2_connection::submit_streaming_response_head(
         stream_id, std::move(response), trailer_intent);
 }
 
-http2_finish_request_status http2_connection::finish_request(std::uint32_t stream_id,
+http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
     std::span<const http_header_view> trailers) {
     const auto status = impl_->connection_.finish_request(stream_id, trailers);
     impl_->connection_.retry_deferred_stream_leases();
     return status;
 }
 
-http2_finish_response_status http2_connection::finish_response(
+http2_finish_status http2_connection::finish_response(
     std::uint32_t stream_id, const http_response_trailer_section& trailers) {
-    return impl_->connection_.finish_response(stream_id, trailers);
+    const auto status = impl_->connection_.finish_response(stream_id, trailers);
+    impl_->connection_.retry_deferred_stream_leases();
+    return status;
 }
 
 std::variant<http2_request_head_event, http2_push_submit_error> http2_connection::submit_push_request(

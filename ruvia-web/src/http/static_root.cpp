@@ -163,33 +163,16 @@ void share_memory_variant(detail::static_root_entry& entry_value,
 
 // A file that changed (or vanished) since it was indexed yields nothing: only
 // that entry loses its variants and stays file-backed, validated per request.
-[[nodiscard]] std::optional<std::pmr::string> read_stable_static_root_entry_bytes(
+[[nodiscard]] std::optional<std::pmr::string> read_static_root_entry_bytes(
     const detail::static_root_entry& entry_value, std::pmr::memory_resource* resource) {
     if (entry_value.size_ > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
-        throw std::runtime_error("static file is too large to precompress");
+        throw std::runtime_error("static file is too large to buffer");
     }
     const auto size = static_cast<std::size_t>(entry_value.size_);
     std::pmr::string bytes(resource);
     bytes.resize(size);
-    // Read and revalidate through one handle: the bytes compressed are exactly
-    // those of the indexed snapshot, with no path re-resolution in between.
-    detail::response_file_input input(http_response_file_view(
-        entry_value.file_path_.c_str(), entry_value.size_, 0, entry_value.size_, entry_value.identity_));
-    if (!input || !detail::read_exact(input, bytes.data(), size) ||
-        !input.matches_snapshot(entry_value.identity_, entry_value.size_)) {
-        return std::nullopt;
-    }
-    return bytes;
-}
-
-// Reads an entry through one handle and revalidates that handle afterwards, so
-// the kept bytes are exactly those the indexed metadata describes. A file that
-// changed since it was indexed yields nothing and stays file-backed.
-[[nodiscard]] std::optional<std::pmr::string> read_resident_static_root_entry_bytes(
-    const detail::static_root_entry& entry_value, std::pmr::memory_resource* resource) {
-    const auto size = static_cast<std::size_t>(entry_value.size_);
-    std::pmr::string bytes(resource);
-    bytes.resize(size);
+    // Read and revalidate through one handle: the kept bytes are exactly those
+    // of the indexed snapshot, with no path re-resolution in between.
     detail::response_file_input input(http_response_file_view(
         entry_value.file_path_.c_str(), entry_value.size_, 0, entry_value.size_, entry_value.identity_));
     if (!input || !detail::read_exact(input, bytes.data(), size) ||
@@ -365,7 +348,7 @@ void detail::static_root_access::install_precompressed_variants(
                 }
             }
             if (!plain.has_value()) {
-                plain = read_stable_static_root_entry_bytes(entry, resource);
+                plain = read_static_root_entry_bytes(entry, resource);
                 if (!plain.has_value()) {
                     entry.memory_variants_.clear();
                     break;
@@ -407,7 +390,7 @@ void detail::static_root_access::install_resident_bodies(
                 continue;
             }
         }
-        auto bytes = read_resident_static_root_entry_bytes(entry, resource);
+        auto bytes = read_static_root_entry_bytes(entry, resource);
         if (!bytes.has_value()) {
             continue;
         }

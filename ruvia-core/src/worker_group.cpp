@@ -165,11 +165,15 @@ bool worker_group::stop_requested() const noexcept {
 }
 
 std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
-    if (joined_) {
-        return join_failure_;
-    }
     request_stop();
-    wait_for_stop_dispatch();
+    {
+        std::unique_lock lock(mutex_);
+        stop_changed_.wait(lock, [this] { return !stop_dispatching_ && !joining_; });
+        if (joined_) {
+            return join_failure_;
+        }
+        joining_ = true;
+    }
     for (auto* member : members_) {
         try {
             member->join();
@@ -212,8 +216,11 @@ std::exception_ptr worker_group::join(std::exception_ptr primary) noexcept {
         }
         report_unhandled_failure("additional worker", failure, occurrences);
     }
+    const std::lock_guard lock(mutex_);
     join_failure_ = std::move(primary);
+    joining_ = false;
     joined_ = true;
+    stop_changed_.notify_all();
     return join_failure_;
 }
 

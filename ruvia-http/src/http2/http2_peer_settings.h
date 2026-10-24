@@ -106,8 +106,6 @@ public:
         initial_window_size_ = candidate_value.initial_window_size_;
         max_concurrent_streams_ = candidate_value.max_concurrent_streams_;
         enable_connect_protocol_ = candidate_value.enable_connect_protocol_;
-        header_table_size_ = candidate_value.header_table_size_;
-        max_header_list_size_ = candidate_value.max_header_list_size_;
     }
 
     [[nodiscard]] std::optional<http2_peer_setting_error> apply(
@@ -120,7 +118,6 @@ public:
                 no_rfc7540_priorities_ = value != 0;
                 return std::nullopt;
             case http2_setting_id::header_table_size:
-                header_table_size_ = value;
                 return std::nullopt;
             case http2_setting_id::enable_push:
                 if (value > 1 || (local_role_ == http2_role::client && value == 1)) {
@@ -144,7 +141,6 @@ public:
                 max_frame_size_ = value;
                 return std::nullopt;
             case http2_setting_id::max_header_list_size:
-                max_header_list_size_ = value;
                 return std::nullopt;
             case http2_setting_id::enable_connect_protocol:
                 if (value != 0 && value != 1) {
@@ -162,15 +158,12 @@ public:
 private:
     const http2_role local_role_;
     std::uint32_t max_frame_size_{http2_default_max_frame_size};
-    // header_table_size_ and max_header_list_size_ are parsed and stored to keep the
-    // peer-settings model complete, but no encode path reads them, by design. The
+    // HEADER_TABLE_SIZE and MAX_HEADER_LIST_SIZE need no stored fields: the
     // encoder never indexes the HPACK dynamic table (static index + literal
-    // without indexing only), so the peer's table size cannot be exceeded; and
-    // SETTINGS_MAX_HEADER_LIST_SIZE is advisory (RFC 7540 6.5.2) while outbound
-    // header blocks are already bounded by the local max_http_header_bytes cap.
-    std::uint32_t header_table_size_{4096};
+    // without indexing only), and SETTINGS_MAX_HEADER_LIST_SIZE is advisory
+    // (RFC 9113 §6.5.2) while outbound header blocks are bounded by the local
+    // max_http_header_bytes cap.
     std::uint32_t max_concurrent_streams_{std::numeric_limits<std::uint32_t>::max()};
-    std::uint32_t max_header_list_size_{std::numeric_limits<std::uint32_t>::max()};
     std::int32_t initial_window_size_{http2_default_initial_window_size};
     bool first_frame_{true};
     bool no_rfc7540_priorities_{false};

@@ -38,15 +38,16 @@ namespace detail {
 struct redis_predicate_access;
 }
 
-// An owning Redis filter. Literal text is copied when the filter is built;
-// the default PMR resource must outlive the filter. Compilers normalize their
-// output into the destination worker pool before returning an operation.
+// An owning Redis filter. Literal text is copied into the process resource when
+// the filter is built, so the filter may outlive the strings used to build it.
+// Compilers normalize their output into the destination worker pool before
+// returning an operation.
 class redis_predicate final {
 public:
     redis_predicate() noexcept = default;
     redis_predicate(const redis_predicate& other) {
         if (other.storage_) {
-            auto* resource = std::pmr::get_default_resource();
+            auto* resource = process_resource();
             storage_ = make_pmr_object<detail::redis_predicate_storage>(resource, *other.storage_, resource);
         }
     }
@@ -98,7 +99,7 @@ private:
     friend struct detail::redis_predicate_access;
     static redis_predicate create(std::size_t initial_capacity = 0) {
         redis_predicate result;
-        auto* resource = std::pmr::get_default_resource();
+        auto* resource = process_resource();
         result.storage_ = make_pmr_object<detail::redis_predicate_storage>(resource, resource, initial_capacity);
         return result;
     }

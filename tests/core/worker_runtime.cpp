@@ -868,7 +868,11 @@ RUVIA_TEST(worker_runtime_and_group_reject_repeated_start_and_invalid_serve) {
         RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)group.serve(); }));
         group.request_stop();
         RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)group.start(); }));
+        std::promise<std::exception_ptr> other_joined;
+        std::thread joiner([&] { other_joined.set_value(group.join()); });
         RUVIA_CHECK(group.join() == nullptr);
+        RUVIA_CHECK(other_joined.get_future().get() == nullptr);
+        joiner.join();
     }
 }
 

@@ -194,9 +194,9 @@ public:
     // terminal marker queued behind it once the full length is core-owned.
     [[nodiscard]] std::variant<std::uint32_t, http2_push_submit_error> submit_push_promise(
         std::uint32_t associated_stream_id, http_push_request_view request);
-    [[nodiscard]] http2_finish_request_status finish_request(std::uint32_t stream_id,
+    [[nodiscard]] http2_finish_status finish_request(std::uint32_t stream_id,
         std::span<const http_header_view> trailers = {});
-    [[nodiscard]] http2_finish_response_status finish_response(
+    [[nodiscard]] http2_finish_status finish_response(
         std::uint32_t stream_id, const http_response_trailer_section& trailers);
     [[nodiscard]] http2_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
     [[nodiscard]] http2_submit_status submit_alternative_service_advertisement(std::uint32_t stream_id,
