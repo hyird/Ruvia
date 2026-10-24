@@ -313,11 +313,7 @@ public:
         if (receiver.timer_pending_) {
             if ((stopping || deadline != receiver.timer_deadline_) && !receiver.timer_canceling_) {
                 receiver.timer_canceling_ = true;
-                asio::error_code error;
-                receiver.retry_timer_->cancel(error);
-                if (error) {
-                    report(receiver, error, "cancel TCP accept retry", true);
-                }
+                receiver.retry_timer_->cancel();
             }
             return;
         }
