@@ -77,14 +77,6 @@ RUVIA_TEST(set_cookie_parser_exposes_client_storage_fields) {
 }
 
 RUVIA_TEST(set_cookie_parser_accepts_user_agent_cookie_pair_grammar) {
-    const auto nameless = ruvia::parse_set_cookie("sid; Path=/");
-    RUVIA_CHECK(nameless.has_value());
-    if (!nameless) {
-        return;
-    }
-    RUVIA_CHECK(nameless->name().empty());
-    RUVIA_CHECK(nameless->value() == "sid");
-
     const auto spaced_name = ruvia::parse_set_cookie("bad name=value");
     RUVIA_CHECK(spaced_name.has_value());
     if (!spaced_name) {
@@ -98,24 +90,43 @@ RUVIA_TEST(set_cookie_parser_accepts_user_agent_cookie_pair_grammar) {
         return;
     }
     RUVIA_CHECK(spaced_value->value() == "bad value");
+}
 
-    const auto empty_name = ruvia::parse_set_cookie("=value");
-    RUVIA_CHECK(empty_name.has_value());
-    if (!empty_name) {
-        return;
-    }
-    RUVIA_CHECK(empty_name->name().empty());
-    RUVIA_CHECK(empty_name->value() == "value");
+RUVIA_TEST(set_cookie_parser_ignores_nameless_cookies) {
+    // RFC 6265 section 5.2 steps 2 and 5.
+    RUVIA_CHECK(!ruvia::parse_set_cookie("sid; Path=/").has_value());
+    RUVIA_CHECK(!ruvia::parse_set_cookie("=value").has_value());
+    RUVIA_CHECK(!ruvia::parse_set_cookie(" =value").has_value());
 }
 
 RUVIA_TEST(set_cookie_parser_rejects_invalid_received_cookie) {
     RUVIA_CHECK(!ruvia::parse_set_cookie("=").has_value());
     RUVIA_CHECK(!ruvia::parse_set_cookie("name=bad\x01value").has_value());
-    RUVIA_CHECK(!ruvia::parse_set_cookie("name=value; Domain=bad_domain").has_value());
-    RUVIA_CHECK(!ruvia::parse_set_cookie("name=value; Path=/bad\tpath").has_value());
 
     std::string oversized(4097, 'v');
     RUVIA_CHECK(!ruvia::parse_set_cookie(oversized).has_value());
+}
+
+RUVIA_TEST(set_cookie_parser_follows_user_agent_domain_and_path_algorithm) {
+    // RFC 6265 section 5.2.3: "Domain=." leaves an empty cookie-domain (host-only);
+    // an empty Domain value is ignored rather than overriding an earlier one.
+    const auto dot = ruvia::parse_set_cookie("a=b; Domain=.");
+    RUVIA_CHECK(dot.has_value() && dot->domain().empty());
+    const auto later_empty = ruvia::parse_set_cookie("a=b; Domain=example.com; Domain=");
+    RUVIA_CHECK(later_empty.has_value() && later_empty->domain() == "example.com");
+    const auto later_dot = ruvia::parse_set_cookie("a=b; Domain=example.com; Domain=.");
+    RUVIA_CHECK(later_dot.has_value() && later_dot->domain().empty());
+    const auto underscore = ruvia::parse_set_cookie("a=b; Domain=my_host.example");
+    RUVIA_CHECK(underscore.has_value() && underscore->domain() == "my_host.example");
+
+    // Section 5.2.4: Path never rejects the cookie.
+    const auto tab = ruvia::parse_set_cookie("a=b; Path=/a\tb");
+    RUVIA_CHECK(tab.has_value() && tab->path() == "/a\tb" && tab->has(ruvia::http_set_cookie_attribute::path));
+    const auto utf8 = ruvia::parse_set_cookie("a=b; Path=/caf\xc3\xa9");
+    RUVIA_CHECK(utf8.has_value() && utf8->path() == "/caf\xc3\xa9");
+    const auto relative = ruvia::parse_set_cookie("a=b; Path=/api; Path=relative");
+    RUVIA_CHECK(relative.has_value() && relative->path().empty() &&
+                !relative->has(ruvia::http_set_cookie_attribute::path));
 }
 
 RUVIA_TEST(set_cookie_parser_ignores_oversized_attribute_value) {
@@ -131,13 +142,13 @@ RUVIA_TEST(set_cookie_parser_ignores_oversized_attribute_value) {
 }
 
 RUVIA_TEST(set_cookie_parser_tracks_storage_security_attributes) {
-    const auto parsed_value = ruvia::parse_set_cookie("sid=abc; Path=relative; SameSite=None");
+    const auto parsed_value = ruvia::parse_set_cookie("sid=abc; Path=/rel; SameSite=None");
     RUVIA_CHECK(parsed_value.has_value());
     if (!parsed_value) {
         return;
     }
     RUVIA_CHECK(parsed_value->has(ruvia::http_set_cookie_attribute::path));
-    RUVIA_CHECK(parsed_value->path() == "relative");
+    RUVIA_CHECK(parsed_value->path() == "/rel");
     RUVIA_CHECK(parsed_value->has(ruvia::http_set_cookie_attribute::same_site_none));
 
     const auto overridden = ruvia::parse_set_cookie("sid=abc; SameSite=None; SameSite=Lax");
@@ -161,11 +172,6 @@ RUVIA_TEST(set_cookie_parser_treats_empty_domain_as_host_only) {
     RUVIA_CHECK(parsed_value->domain().empty());
     RUVIA_CHECK(parsed_value->path() == "/api");
 
-    const auto overrides_earlier_domain =
-        ruvia::parse_set_cookie("sid=abc; Domain=example.com; Domain=");
-    RUVIA_CHECK(overrides_earlier_domain.has_value());
-    RUVIA_CHECK(overrides_earlier_domain->domain().empty());
-    RUVIA_CHECK(!ruvia::parse_set_cookie("sid=abc; Domain=.").has_value());
     const std::string overlong_with_nul =
         std::string("sid=abc; Custom=") + std::string(1100, 'a') + std::string("\0b", 2);
     RUVIA_CHECK(!ruvia::parse_set_cookie(overlong_with_nul).has_value());

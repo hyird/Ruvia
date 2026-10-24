@@ -16,6 +16,11 @@ struct uri_reference_layout final {
     // The only '[' and ']' that delimit the authority's IP literal.
     std::size_t ip_literal_open_{npos};
     std::size_t ip_literal_close_{npos};
+    // Authority bytes [authority_begin_, userinfo_end_) are userinfo, which
+    // cannot carry '@' literally (RFC 3986 section 3.2.1); userinfo_end_ is
+    // the delimiting '@'.
+    std::size_t authority_begin_{npos};
+    std::size_t userinfo_end_{npos};
     // Bytes before this index form the colon-free first segment of a
     // relative-path reference; zero when the reference has a scheme or an
     // authority, or starts with a path, query, or fragment delimiter.
@@ -45,6 +50,10 @@ struct uri_reference_layout final {
     const auto authority_end = authority_end_index == npos ? reference.size() : authority_end_index;
     const auto authority = reference.substr(authority_begin, authority_end - authority_begin);
     const auto userinfo_end = authority.rfind('@');
+    if (userinfo_end != npos) {
+        layout.authority_begin_ = authority_begin;
+        layout.userinfo_end_ = authority_begin + userinfo_end;
+    }
     const auto host_begin = authority_begin + (userinfo_end == npos ? 0 : userinfo_end + 1);
     if (host_begin >= authority_end || reference[host_begin] != '[') {
         return layout;
@@ -70,6 +79,8 @@ struct uri_reference_layout final {
             fragment_seen = true;
             return keeps_separator;
         }
+        case '@':
+            return index < layout.authority_begin_ || index >= layout.userinfo_end_;
         case '/':
         case '?':
             return true;

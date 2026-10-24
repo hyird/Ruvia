@@ -394,7 +394,6 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
              "Content-Disposition: form-data; name=unquoted value",
              "Content-Disposition: form-data; name=field; name=shadow",
              "Content-Disposition: form-data; name=field; filename=a; filename=b",
-             "Content-Disposition: form-data; name=field; FileName*=UTF-8''evil.txt",
              "Content-Disposition: form-data; name=field; x=one; X=two",
              "Content-Disposition: form-data; name=field; broken",
              "Content-Disposition: form-data; name=field\r\n"
@@ -641,7 +640,7 @@ RUVIA_TEST(multipart_streaming_handles_bytewise_long_syntax_and_false_delimiters
     body.append(16 * 1024, ' ');
     body += "\r\nContent-Disposition: form-data; name=\"field\"\r\nX-Long: ";
     body.append(16 * 1024, 'h');
-    body += "\r\n\r\nvalue\r\n--abc";
+    body += "\r\n\r\nvalue\r\n--ab";
     body.append(16 * 1024, ' ');
     body += "x\r\n--abc--";
     body.append(16 * 1024, '\t');
@@ -685,7 +684,7 @@ RUVIA_TEST(multipart_part_may_end_at_its_header_block) {
     constexpr std::string_view body =
         "--b\r\nContent-Disposition: form-data; name=\"a\"\r\n\r\n"
         "--b \t\r\nContent-Disposition: form-data; name=\"c\"\r\n\r\nv\r\n"
-        "--b\r\nContent-Disposition: form-data; name=\"d\"\r\n\r\n--bx\r\n"
+        "--b\r\nContent-Disposition: form-data; name=\"d\"\r\n\r\n--ax\r\n"
         "--b\r\nContent-Disposition: form-data; name=\"e\"\r\n\r\n--b--";
 
     const auto parts = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("b")});
@@ -696,7 +695,7 @@ RUVIA_TEST(multipart_part_may_end_at_its_header_block) {
         RUVIA_CHECK_EQ(parts[1].name(), std::string_view("c"));
         RUVIA_CHECK_EQ(parts[1].body(), std::string_view("v"));
         RUVIA_CHECK_EQ(parts[2].name(), std::string_view("d"));
-        RUVIA_CHECK_EQ(parts[2].body(), std::string_view("--bx"));
+        RUVIA_CHECK_EQ(parts[2].body(), std::string_view("--ax"));
         RUVIA_CHECK_EQ(parts[3].name(), std::string_view("e"));
         RUVIA_CHECK_EQ(parts[3].body(), std::string_view(""));
     }
@@ -737,13 +736,13 @@ RUVIA_TEST(multipart_part_may_end_at_its_header_block) {
         drain();
         RUVIA_CHECK(done);
         RUVIA_CHECK_EQ(ended, std::size_t{4});
-        RUVIA_CHECK_EQ(std::string_view(received), std::string_view("[a:][c:v][d:--bx][e:]"));
+        RUVIA_CHECK_EQ(std::string_view(received), std::string_view("[a:][c:v][d:--ax][e:]"));
     }
 }
 
 RUVIA_TEST(multipart_preamble_limit_is_independent_of_input_chunking) {
     constexpr std::size_t preamble_limit = 64 * 1024;
-    constexpr std::string_view expected_body = "value\r\n--abx\r\n--abcX\r\nstill data";
+    constexpr std::string_view expected_body = "value\r\n--abx\r\n--ab-X\r\nstill data";
     for (const auto preamble_bytes : {std::size_t{0}, preamble_limit - 1, preamble_limit, preamble_limit + 1}) {
         for (const std::string_view close_ending : {"\r\n", ""}) {
             std::string wire;
@@ -872,4 +871,52 @@ RUVIA_TEST(multipart_truncated_body_at_eof_fails_without_emitting_partial_part) 
     const auto polled = parser.poll();
     RUVIA_CHECK(polled.part() == nullptr);
     RUVIA_CHECK(polled.failure() != nullptr);
+}
+
+RUVIA_TEST(multipart_part_ignores_filename_star_parameter) {
+    const std::string body =
+        "--b\r\n"
+        "Content-Disposition: form-data; name=\"upload\"; filename=\"a.txt\"; filename*=UTF-8''b.txt\r\n"
+        "\r\n"
+        "data\r\n"
+        "--b--\r\n";
+    const auto parts = ruvia::parse_multipart_body(
+        body, {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = std::pmr::get_default_resource()});
+    RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
+    if (!parts.empty()) {
+        RUVIA_CHECK_EQ(parts[0].filename(), std::string_view("a.txt"));
+        RUVIA_CHECK_EQ(parts[0].body(), std::string_view("data"));
+    }
+}
+
+RUVIA_TEST(multipart_rejects_boundary_line_that_is_not_a_delimiter) {
+    for (const std::string_view body : {
+             std::string_view("--b\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nX\r\n--bX\r\nY\r\n--b--\r\n"),
+             std::string_view("--b\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nX\r\n--b-x\r\n--b--\r\n"),
+             std::string_view("--b\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nX\r\n--b \rY\r\n--b--\r\n"),
+             std::string_view("preamble\r\n--bX\r\n--b\r\nContent-Disposition: form-data; name=\"f\"\r\n\r\nX\r\n--b--\r\n"),
+         }) {
+        bool rejected = false;
+        try {
+            static_cast<void>(ruvia::parse_multipart_body(
+                body, {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = std::pmr::get_default_resource()}));
+        } catch (const ruvia::http_protocol_error& error) {
+            rejected = std::string_view(error.code()) == "multipart_invalid_delimiter";
+        }
+        RUVIA_CHECK(rejected);
+
+        ruvia::multipart_parser parser(
+            {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = std::pmr::get_default_resource()});
+        parser.feed(body);
+        parser.finish_input();
+        bool failed = false;
+        for (int step = 0; step < 8 && !failed; ++step) {
+            const auto result_value = parser.poll();
+            failed = result_value.failure() != nullptr;
+            if (result_value.done() != nullptr) {
+                break;
+            }
+        }
+        RUVIA_CHECK(failed);
+    }
 }

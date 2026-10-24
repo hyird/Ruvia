@@ -857,6 +857,47 @@ RUVIA_TEST(http_client_replaces_host_only_cookie_with_same_named_domain_cookie) 
     run_operation(worker, io, operation);
 }
 
+// RFC 6265 section 5.2: nameless cookies are ignored; "Domain=." leaves a
+// host-only cookie, an invalid Path selects the default-path, and stored values
+// keep their internal whitespace on the way back.
+RUVIA_TEST(http_client_jar_follows_user_agent_set_cookie_algorithm) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    scripted_head_peer peer(io, worker.handle_,
+        {"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n"
+         "Set-Cookie: nameless\r\nSet-Cookie: =emptyname\r\n"
+         "Set-Cookie: f=hello world\r\nSet-Cookie: h=1; Domain=.\r\n"
+         "Set-Cookie: p=2; Path=/caf\xc3\xa9\r\nSet-Cookie: q=3; Path=relative\r\n"
+         "Set-Cookie: d=4; Domain=127.0.0.1; Domain=\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
+    auto config = local_http_client_config(peer.port());
+    config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        for (const auto* target : {"/set", "/check"}) {
+            auto response = co_await client.handle().send({.target_ = target});
+            RUVIA_CHECK((co_await response.body().read_all()).empty());
+        }
+        co_await peer.wait();
+        RUVIA_CHECK_EQ(peer.requests_.size(), std::size_t{2});
+        if (peer.requests_.size() == 2) {
+            const auto& check = peer.requests_[1];
+            RUVIA_CHECK(check.find("=nameless") == std::string::npos);
+            RUVIA_CHECK(check.find("=emptyname") == std::string::npos);
+            RUVIA_CHECK(check.find("f=hello world") != std::string::npos);
+            RUVIA_CHECK(check.find("h=1") != std::string::npos);
+            RUVIA_CHECK(check.find("q=3") != std::string::npos);
+            RUVIA_CHECK(check.find("d=4") != std::string::npos);
+            // Path=/café is stored as given and does not match "/check".
+            RUVIA_CHECK(check.find("p=2") == std::string::npos);
+        }
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
 // RFC 9110 section 9.3.8: stored cookies are sensitive and stay out of TRACE.
 RUVIA_TEST(http_client_omits_stored_cookies_from_trace) {
     auto& io = ruvia::test::new_test_io_context();

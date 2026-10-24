@@ -30,14 +30,20 @@ RUVIA_TEST(model_public_parsers_own_string_fields) {
     RUVIA_CHECK_EQ(form.get<"message">()->view(), std::string_view("form-owned"));
 }
 
-RUVIA_TEST(model_form_parser_validates_encoding_in_unknown_fields) {
-    for (const auto invalid : {"%", "%G0", "%0G"}) {
+RUVIA_TEST(model_form_parser_keeps_malformed_percent_sequences_literally) {
+    for (const std::string_view invalid : {"%", "%G0", "%0G"}) {
         for (const auto& body : {
-                 std::string("message=ready&unknown=") + invalid,
-                 std::string("unknown=") + invalid + "&message=ready",
-                 std::string("message=ready&") + invalid + "=ignored"}) {
-            RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_form<accessor_surface_request>(body); }));
+                 std::string("message=ready&unknown=").append(invalid),
+                 std::string("unknown=").append(invalid) + "&message=ready",
+                 std::string("message=ready&").append(invalid) + "=ignored"}) {
+            const auto parsed = ruvia::from_form<accessor_surface_request>(body);
+            RUVIA_CHECK(parsed.get<"message">().has_value());
         }
+    }
+    const auto literal = ruvia::from_form<accessor_surface_request>("message=100%");
+    RUVIA_CHECK(literal.get<"message">().has_value());
+    if (literal.get<"message">()) {
+        RUVIA_CHECK_EQ(literal.get<"message">()->view(), std::string_view("100%"));
     }
     const auto valid = ruvia::from_form<accessor_surface_request>(
         "message=hello+world&unknown=%00%26%3D%FF&%75nknown=value");

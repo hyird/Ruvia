@@ -16,9 +16,14 @@ enum class http_set_cookie_attribute : std::uint8_t {
     partitioned = 1U << 3,
 };
 
-// Borrowed, allocation-free Set-Cookie fields for outbound client runtimes.
-// Unknown and oversized attributes are ignored; invalid received cookies are
-// rejected. Expires follows RFC 6265 cookie-date token grammar, including its
+// Borrowed, allocation-free Set-Cookie fields for outbound client runtimes,
+// following the RFC 6265 section 5.2 user-agent algorithm. A cookie without '=',
+// with an empty name, over 4096 name+value bytes, or with a control byte other
+// than HTAB is rejected. Unknown and oversized attributes are ignored. path() is
+// empty (and http_set_cookie_attribute::path unset) when the last Path value is
+// empty or does not start with '/', meaning the caller's default-path. An empty
+// Domain value is ignored; a leading '.' is removed, so domain() may be empty
+// (host-only) and is not validated beyond domain-matching by the caller. Expires follows RFC 6265 cookie-date token grammar, including its
 // permitted suffixes; this does not relax the separate HTTP-date grammar.
 // Partitioned is reported independently of Secure; callers own origin policy.
 class http_set_cookie_view final {

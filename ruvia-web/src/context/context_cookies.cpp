@@ -1,4 +1,3 @@
-#include <chrono>
 #include <string_view>
 #include <utility>
 
@@ -68,7 +67,8 @@ void context::set_signed_cookie(set_signed_cookie_options options) {
 }
 
 void context::delete_cookie(delete_cookie_options options) {
-    options.attributes_.max_age_ = std::chrono::seconds(0);
+    options.attributes_.max_age_.reset();
+    options.attributes_.expires_ = cookie_deletion_expires;
     write_cookie(response_state(), options.name_.view(), "", options.attributes_);
 }
 

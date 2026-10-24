@@ -201,7 +201,8 @@ RUVIA_TEST(context_delete_cookie_with_prefix_is_response_only) {
         const auto set_cookie = response.header("Set-Cookie");
         RUVIA_CHECK(set_cookie.has_value());
         RUVIA_CHECK(set_cookie.value_or(std::string_view{}).starts_with("__Host-session=;"));
-        RUVIA_CHECK((set_cookie.value_or(std::string_view{}).find("Max-Age=0") != std::string_view::npos));
+        RUVIA_CHECK((set_cookie.value_or(std::string_view{}).find("; Expires=Thu, 01 Jan 1970 00:00:00 GMT") != std::string_view::npos));
+        RUVIA_CHECK((set_cookie.value_or(std::string_view{}).find("Max-Age") == std::string_view::npos));
         co_return;
     });
 }

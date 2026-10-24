@@ -187,15 +187,15 @@ std::optional<std::time_t> parse_cookie_date(std::string_view value) noexcept {
 std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noexcept {
     const auto first_end = value.find(';');
     const auto cookie_pair = value.substr(0, first_end);
-    std::string_view name;
-    std::string_view cookie_value;
-    if (const auto equals = cookie_pair.find('='); equals == std::string_view::npos) {
-        cookie_value = http_trim_ows(cookie_pair);
-    } else {
-        name = http_trim_ows(cookie_pair.substr(0, equals));
-        cookie_value = http_trim_ows(cookie_pair.substr(equals + 1));
+    // RFC 6265 section 5.2 steps 2 and 5: a pair without '=' or with an empty
+    // name makes the user agent ignore the whole set-cookie-string.
+    const auto equals = cookie_pair.find('=');
+    if (equals == std::string_view::npos) {
+        return std::nullopt;
     }
-    if ((name.empty() && cookie_value.empty()) || name.size() > detail::max_cookie_name_value_bytes ||
+    const auto name = http_trim_ows(cookie_pair.substr(0, equals));
+    const auto cookie_value = http_trim_ows(cookie_pair.substr(equals + 1));
+    if (name.empty() || name.size() > detail::max_cookie_name_value_bytes ||
         cookie_value.size() > detail::max_cookie_name_value_bytes - name.size() ||
         contains_rejected_received_cookie_control(name) ||
         contains_rejected_received_cookie_control(cookie_value)) {
@@ -215,20 +215,22 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
         if (argument.size() > detail::max_cookie_attribute_value_bytes) {
             // Ignore this cookie-av and continue with later attributes.
         } else if (http_ascii_equals_ignore_case(attribute, "Path")) {
-            if (!detail::is_valid_cookie_attribute(argument)) {
-                return std::nullopt;
+            // RFC 6265 section 5.2.4: a value that is empty or does not start
+            // with '/' selects the default-path; the last Path attribute wins.
+            if (argument.empty() || argument.front() != '/') {
+                result.path_ = {};
+                result.clear(http_set_cookie_attribute::path);
+            } else {
+                result.path_ = argument;
+                result.set(http_set_cookie_attribute::path);
             }
-            result.path_ = argument;
-            result.set(http_set_cookie_attribute::path);
         } else if (http_ascii_equals_ignore_case(attribute, "Domain")) {
-            auto domain = argument;
-            if (!domain.empty() && domain.front() == '.') {
-                domain.remove_prefix(1);
+            // RFC 6265 section 5.2.3: an empty value ignores this cookie-av; a
+            // leading '.' is dropped, so "Domain=." yields a host-only cookie.
+            // Domain-match against the request host is the storage step's job.
+            if (!argument.empty()) {
+                result.domain_ = argument.front() == '.' ? argument.substr(1) : argument;
             }
-            if (!argument.empty() && (domain.empty() || !detail::is_valid_cookie_domain(domain))) {
-                return std::nullopt;
-            }
-            result.domain_ = domain;
         } else if (http_ascii_equals_ignore_case(attribute, "Expires")) {
             if (const auto expires = parse_cookie_date(argument)) {
                 result.expires_ = expires;

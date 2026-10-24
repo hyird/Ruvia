@@ -87,7 +87,9 @@ RUVIA_TEST(session_cookie_replaces_a_same_name_cookie_set_by_the_handler) {
             continue;
         }
         ++session_cookies;
-        expired = expired || header.value().starts_with("ruvia_session=;");
+        expired = expired || (header.value().starts_with("ruvia_session=;") &&
+                                 header.value().find("; Expires=Thu, 01 Jan 1970 00:00:00 GMT") != std::string_view::npos &&
+                                 header.value().find("Max-Age") == std::string_view::npos);
     }
     RUVIA_CHECK_EQ(session_cookies, std::size_t{1});
     RUVIA_CHECK(expired);

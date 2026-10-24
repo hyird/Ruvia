@@ -10,6 +10,7 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
+#include "http_connect_udp_send.h"
 #include "parser/http_uri_grammar.h"
 #include "request/http_request_access.h"
 
@@ -20,8 +21,14 @@ bool valid_host(std::string_view host) {
     return !host.empty() && host.find('%') == std::string_view::npos &&
            (host.find(':') != std::string_view::npos ? detail::parse_ipv6_address(host).has_value() : detail::is_valid_reg_name(host));
 }
+// RFC 9297 section 3.2: these statuses cannot start the Capsule Protocol.
+constexpr bool forbids_capsule_protocol(std::uint16_t status) noexcept {
+    return status == 204 || status == 205 || status == 206;
+}
 struct handshake_fields {
-    bool capsule_{false}, upgrade_{false}, connection_{false}, connection_field_{false}, host_{false}, forbidden_{false};
+    // capsule_ is true only for exactly one Capsule-Protocol field holding ?1.
+    bool capsule_{false}, capsule_field_{false}, capsule_invalid_{false};
+    bool upgrade_{false}, connection_{false}, connection_field_{false}, host_{false}, forbidden_{false};
 };
 template <typename header_type>
 std::variant<handshake_fields, http_connect_udp_error> fields(
@@ -33,11 +40,12 @@ std::variant<handshake_fields, http_connect_udp_error> fields(
             return syntax_error;
         }
         if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
+            // RFC 9297 section 3.4: recipients handle a non-Boolean value as if the
+            // field were absent; ?0 has the same meaning as absence.
             const auto value = parse_http_capsule_protocol(field.value());
-            if (found.capsule_ || !value.has_value() || !*value) {
-                return http_connect_udp_error::invalid_capsule_protocol;
-            }
-            found.capsule_ = true;
+            found.capsule_invalid_ = found.capsule_invalid_ || found.capsule_field_ || !value.has_value() || !*value;
+            found.capsule_field_ = true;
+            found.capsule_ = !found.capsule_invalid_;
         } else if (http_ascii_equals_ignore_case(field.name(), "upgrade")) {
             if (found.upgrade_ || !http_ascii_equals_ignore_case(http_trim_ows(field.value()), "connect-udp")) {
                 return syntax_error;
@@ -72,9 +80,11 @@ std::optional<http_connect_udp_error> validate_connect_udp_response(
     if (parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
-    if (!std::get<0>(parsed_value).capsule_ || std::get<0>(parsed_value).forbidden_ ||
+    // The connect-udp token, not Capsule-Protocol, selects the Capsule Protocol
+    // (RFC 9298 section 3); RFC 9297 section 3.2 makes 204/205/206 malformed.
+    if (std::get<0>(parsed_value).forbidden_ ||
         (extended_connect
-                ? status < 200 || status >= 300 || std::get<0>(parsed_value).upgrade_ ||
+                ? status < 200 || status >= 300 || forbids_capsule_protocol(status) || std::get<0>(parsed_value).upgrade_ ||
                       std::get<0>(parsed_value).connection_field_
                 : status != 101 || !std::get<0>(parsed_value).upgrade_ ||
                       !std::get<0>(parsed_value).connection_)) {
@@ -122,7 +132,8 @@ std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect
     }
     return http_connect_udp_target{std::move(*host), std::get<0>(port)};
 }
-std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_connect_udp_request_view request) noexcept {
+namespace {
+std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_view request, bool sending) noexcept {
     const auto authority = parse_http_authority_host(request.authority_);
     if (!authority || authority->empty() || !is_valid_http_origin_form_target(request.path_)) {
         return http_connect_udp_error::invalid_request;
@@ -131,7 +142,10 @@ std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_con
     if (parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
-    if (!std::get<0>(parsed_value).capsule_ || std::get<0>(parsed_value).forbidden_ || request.authority_.empty() || request.path_.empty()) {
+    if (sending && !std::get<0>(parsed_value).capsule_) {
+        return http_connect_udp_error::invalid_capsule_protocol;
+    }
+    if (std::get<0>(parsed_value).forbidden_ || request.authority_.empty() || request.path_.empty()) {
         return http_connect_udp_error::invalid_request;
     }
     if (request.version_ == http_protocol_version::http10) {
@@ -145,6 +159,14 @@ std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_con
         return http_connect_udp_error::invalid_request;
     }
     return std::nullopt;
+}
+}  // namespace
+std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_connect_udp_request_view request) noexcept {
+    return validate_request(request, false);
+}
+std::optional<http_connect_udp_error> detail::validate_http_connect_udp_request_to_send(
+    http_connect_udp_request_view request) noexcept {
+    return validate_request(request, true);
 }
 std::optional<http_connect_udp_error> validate_http_connect_udp_response(
     http_protocol_version version, std::uint16_t status, std::span<const http_header_view> headers) noexcept {
@@ -168,7 +190,7 @@ std::optional<http_connect_udp_error> validate_http_connect_udp_request(const ht
 }
 std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response response, http_protocol_version version) {
     if (version == http_protocol_version::http10 || !response.status().is_successful() ||
-        response.file_body() || !response.body_bytes().empty()) {
+        forbids_capsule_protocol(response.status().value()) || response.file_body() || !response.body_bytes().empty()) {
         return http_connect_udp_error::invalid_response;
     }
     // The response's own fields go through the one CONNECT-UDP handshake walk;
@@ -181,6 +203,10 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
     const auto& found = std::get<0>(parsed_value);
     if (found.upgrade_ || found.connection_field_ || found.forbidden_) {
         return http_connect_udp_error::invalid_response;
+    }
+    // As the sender, the planner only lets a single ?1 through.
+    if (found.capsule_invalid_) {
+        return http_connect_udp_error::invalid_capsule_protocol;
     }
     if (!found.capsule_) {
         response.header("Capsule-Protocol", "?1");

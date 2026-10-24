@@ -121,16 +121,18 @@ RUVIA_TEST(request_binding_serializes_the_validated_model_without_copying_fields
     }
 }
 
-RUVIA_TEST(request_binding_form_rejects_malformed_encoding_in_unknown_fields) {
+RUVIA_TEST(request_binding_form_keeps_malformed_percent_sequences_literally) {
+    // WHATWG application/x-www-form-urlencoded parsing keeps a '%' that does not
+    // start a valid escape.
     ruvia::test_app app;
-    for (const auto invalid : {"%", "%G0", "%0G"}) {
+    for (const std::string_view invalid : {"%", "%G0", "%0G"}) {
         for (const auto& body : {
-                 std::string("name=Al&unknown=") + invalid,
-                 std::string("unknown=") + invalid + "&name=Al"}) {
+                 std::string("name=Al").append(invalid) + "&unknown=" + std::string(invalid),
+                 std::string("unknown=").append(invalid) + "&name=Al" + std::string(invalid)}) {
             const auto response = app.request(
                 ruvia::test_request::post("/request-binding-form").form(body));
-            RUVIA_CHECK(response.status() == ruvia::http_status::bad_request);
-            RUVIA_CHECK(response.body().find("invalid form body") != std::string_view::npos);
+            RUVIA_CHECK(response.status() == ruvia::http_status::ok);
+            RUVIA_CHECK_EQ(response.body(), std::string(R"({"name":"Al)").append(invalid) + R"("})");
         }
     }
     const auto valid = app.request(ruvia::test_request::post("/request-binding-form")

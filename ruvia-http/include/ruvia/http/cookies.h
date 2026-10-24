@@ -36,7 +36,14 @@ enum class cookie_attribute_policy : std::uint8_t {
     emit,
 };
 
-// RFC 6265bis: cookie lifetimes SHOULD NOT exceed 400 days.
+// Expires value for deleting a cookie (Thu, 01 Jan 1970 00:00:00 GMT). RFC 6265
+// section 4.1.1 limits max-age-av to non-zero digits, so deletion uses an
+// Expires date in the past (RFC 6265 section 3.1) instead of Max-Age=0.
+inline constexpr std::chrono::system_clock::time_point cookie_deletion_expires{};
+
+// RFC 6265bis user-agent cookie-age-limit (400 days): the outbound cookie jar caps
+// received lifetimes at this value. The Set-Cookie writer does not enforce it,
+// since the limit binds user agents, not servers.
 inline constexpr std::int64_t max_cookie_age_seconds = 34560000;
 
 // Cookie request pairs always include '=', including for an empty name.
@@ -85,7 +92,8 @@ void append_cookie_request_pair(string& header_value, std::string_view name, std
 }
 
 // Cookie octet validation and name-prefix rules are protocol rules shared by
-// the Set-Cookie writer and outbound cookie jar.
+// the Set-Cookie writer and outbound cookie jar. is_valid_cookie_value accepts
+// the RFC 6265 cookie-value grammar, including one DQUOTE pair around the octets.
 [[nodiscard]] bool is_valid_cookie_value(std::string_view value) noexcept;
 // The prefix a wire cookie name starts with, matched ASCII case-insensitively
 // as user agents do (RFC 6265bis 4.1.3); nullopt when it carries none.
@@ -104,7 +112,7 @@ struct cookie_options final {
     ::ruvia::borrowed_text domain_{};
     std::optional<cookie_same_site> same_site_{};
     std::optional<cookie_priority> priority_{};
-    // UTC, rounded down to whole seconds; year >= 1601 and at most 400 days ahead.
+    // UTC, rounded down to whole seconds; year >= 1601. Lifetime caps belong to user agents.
     std::optional<std::chrono::system_clock::time_point> expires_{};
     std::optional<std::chrono::seconds> max_age_{};
     std::optional<cookie_prefix> prefix_{};

@@ -121,7 +121,9 @@ RUVIA_TEST(response_appended_values_can_borrow_existing_header_storage) {
     RUVIA_CHECK_EQ(populated, std::size_t{64});
 }
 
-RUVIA_TEST(response_cookie_append_preserves_empty_attribute_presence_with_borrowed_value) {
+// RFC 6265 section 5.2.4: an empty Path selects the default-path, the same
+// storage key as an absent Path, so each later field replaces the earlier one.
+RUVIA_TEST(response_cookie_append_treats_empty_path_as_default_path_with_borrowed_value) {
     failing_memory_resource resource;
     {
         ruvia::http_response response(&resource);
@@ -132,9 +134,8 @@ RUVIA_TEST(response_cookie_append_preserves_empty_attribute_presence_with_borrow
         const auto borrowed = response.headers().begin()[0].value();
         response.header("Set-Cookie", borrowed, {.mode_ = ruvia::http_response_header_mode::append});
 
-        RUVIA_CHECK_EQ(response.headers().size(), std::size_t{2});
-        RUVIA_CHECK_EQ(response.headers().begin()[0].value(), "sid = second; Path=");
-        RUVIA_CHECK_EQ(response.headers().begin()[1].value(), "sid=no-path");
+        RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
+        RUVIA_CHECK_EQ(response.headers().begin()[0].value(), "sid=no-path");
     }
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
 }

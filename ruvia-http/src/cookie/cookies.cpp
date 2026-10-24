@@ -153,6 +153,11 @@ set_cookie_plan::written_fields set_cookie_plan::write_fields(char* cursor_value
 namespace ruvia {
 
 bool is_valid_cookie_value(std::string_view value) noexcept {
+    // cookie-value = *cookie-octet / ( DQUOTE *cookie-octet DQUOTE ); the quotes
+    // are part of the value (RFC 6265 section 4.1.1).
+    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
+        value = value.substr(1, value.size() - 2);
+    }
     for (const auto c : value) {
         const auto byte = static_cast<unsigned char>(c);
         if (byte <= 0x20 || byte >= 0x7f || c == '"' || c == ',' || c == ';' || c == '\\') {

@@ -71,6 +71,13 @@ RUVIA_TEST(url_decode_invalid) {
     RUVIA_CHECK(!url_decode("%g0", m_type::percent).has_value());
 }
 
+RUVIA_TEST(url_decode_form_keeps_lone_percent_literally) {
+    using m_type = ruvia::url_decode_mode;
+    RUVIA_CHECK_EQ(url_decode("100%", m_type::form).value_or("<none>"), std::string("100%"));
+    RUVIA_CHECK_EQ(url_decode("%zz+%41", m_type::form).value_or("<none>"), std::string("%zz A"));
+    RUVIA_CHECK_EQ(url_decode("%4%41", m_type::form).value_or("<none>"), std::string("%4A"));
+}
+
 RUVIA_TEST(url_decode_all_bytes_and_malformed_suffix) {
     using m_type = ruvia::url_decode_mode;
     constexpr std::string_view hex = "0123456789aBcDeF";
@@ -88,9 +95,15 @@ RUVIA_TEST(url_decode_all_bytes_and_malformed_suffix) {
         if (result_value) {
             RUVIA_CHECK_EQ(*result_value, expected);
         }
-        RUVIA_CHECK(!url_decode(encoded + "%", mode).has_value());
-        RUVIA_CHECK(!url_decode(encoded + "%0", mode).has_value());
-        RUVIA_CHECK(!url_decode(encoded + "%xz", mode).has_value());
+        for (const std::string_view suffix : {"%", "%0", "%xz"}) {
+            const auto suffixed = url_decode(encoded + std::string(suffix), mode);
+            if (mode == m_type::percent) {
+                RUVIA_CHECK(!suffixed.has_value());
+            } else {
+                // WHATWG percent-decode keeps a '%' that starts no valid escape.
+                RUVIA_CHECK(suffixed.has_value() && *suffixed == expected + std::string(suffix));
+            }
+        }
     }
 }
 

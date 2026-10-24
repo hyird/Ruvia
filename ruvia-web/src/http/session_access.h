@@ -1,6 +1,5 @@
 #pragma once
 
-#include <chrono>
 #include <string_view>
 
 #include "ruvia/http/cookies.h"
@@ -77,7 +76,7 @@ inline void append_expired_session_cookie_header(
     set_session_cookie(headers, cookie_name, "",
         {
             .same_site_ = cookie_same_site::lax,
-            .max_age_ = std::chrono::seconds(0),
+            .expires_ = cookie_deletion_expires,
             .http_only_ = cookie_attribute_policy::emit,
             .secure_ = secure ? cookie_attribute_policy::emit : cookie_attribute_policy::omit,
         });

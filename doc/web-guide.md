@@ -287,7 +287,7 @@ ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
 | --- | --- |
 | `void status(http_status_code code)` | 设置最终响应状态码（`200..599`） |
 | `void header(name, value, options = {})` / `void remove_header(name)` | 设置（默认 `replace`，可指定 `http_response_header_mode::append`）或移除响应头 |
-| `void set_cookie(set_cookie_options)` / `set_signed_cookie(set_signed_cookie_options)` / `delete_cookie(delete_cookie_options)` | 设置普通 Cookie、HMAC 签名 Cookie 或使指定 Cookie 立即过期 |
+| `void set_cookie(set_cookie_options)` / `set_signed_cookie(set_signed_cookie_options)` / `delete_cookie(delete_cookie_options)` | 设置普通 Cookie、HMAC 签名 Cookie 或使指定 Cookie 立即过期（发送过去的 `Expires` 日期，不使用 `Max-Age=0`） |
 | `http_response text(...)` / `html(...)` / `body(...)` | 构造 `text/plain; charset=utf-8`、`text/html; charset=utf-8` 或原始响应体（支持字符串字面量、`std::string_view`、`std::pmr::string&&`、`std::span<const std::byte>`、`ruvia::static_text`） |
 | `template <typename T> http_response json(const T& model) const` | 将 `RUVIA_MODEL` 实例序列化为 `application/json` 响应 |
 | `http_response redirect(redirect_response_options options) const` | 构造重定向响应（默认 `302 Found`，可通过 `.status_` 指定 `301`/`307`/`308` 等） |

@@ -33,6 +33,15 @@ private:
     constexpr http_multipart_delimiter_no_match() noexcept = default;
 };
 
+// The complete dash-boundary follows CRLF but the line is not a delimiter line.
+// RFC 2046 section 5.1.1 lets recipients match on the boundary alone, so the
+// encapsulation is malformed rather than content.
+class http_multipart_delimiter_invalid final {
+private:
+    friend class http_multipart_delimiter_result;
+    constexpr http_multipart_delimiter_invalid() noexcept = default;
+};
+
 class http_multipart_delimiter_need_input final {
 public:
     // Initial search: offset of the leading "--". Body search: offset of the
@@ -92,7 +101,7 @@ private:
     std::size_t line_bytes_;
 };
 
-// Delimiter scanning distinguishes absence, an input-boundary ambiguity, a
+// Delimiter scanning distinguishes absence, a malformed delimiter line, an input-boundary ambiguity, a
 // regular part delimiter, and the terminal close delimiter. Only outcomes
 // that found a candidate expose its offset; only complete delimiter lines
 // expose their line length.
@@ -102,6 +111,10 @@ public:
         return std::get_if<http_multipart_delimiter_no_match>(&value_);
     }
     const http_multipart_delimiter_no_match* no_match() const&& = delete;
+
+    [[nodiscard]] constexpr bool invalid() const noexcept {
+        return std::holds_alternative<http_multipart_delimiter_invalid>(value_);
+    }
 
     [[nodiscard]] constexpr const http_multipart_delimiter_need_input* need_input() const& noexcept {
         return std::get_if<http_multipart_delimiter_need_input>(&value_);
@@ -126,7 +139,8 @@ private:
     friend http_multipart_delimiter_result http_find_multipart_body_delimiter(
         std::string_view, const multipart_boundary&, bool, bool, std::size_t&, std::size_t&) noexcept;
 
-    using value_type = std::variant<http_multipart_delimiter_no_match, http_multipart_delimiter_need_input,
+    using value_type = std::variant<http_multipart_delimiter_no_match, http_multipart_delimiter_invalid,
+        http_multipart_delimiter_need_input,
         http_multipart_part_delimiter, http_multipart_close_delimiter>;
 
     template <typename result_type>
@@ -135,6 +149,10 @@ private:
 
     [[nodiscard]] static constexpr http_multipart_delimiter_result make_no_match() noexcept {
         return http_multipart_delimiter_result(http_multipart_delimiter_no_match());
+    }
+
+    [[nodiscard]] static constexpr http_multipart_delimiter_result make_invalid() noexcept {
+        return http_multipart_delimiter_result(http_multipart_delimiter_invalid());
     }
 
     [[nodiscard]] static constexpr http_multipart_delimiter_result make_need_input(
@@ -162,7 +180,7 @@ private:
         if (const auto* close = this->close()) {
             return make_close(base + close->offset(), close->line_bytes());
         }
-        return make_no_match();
+        return invalid() ? make_invalid() : make_no_match();
     }
 
     value_type value_;
@@ -206,7 +224,7 @@ private:
                                   : http_multipart_delimiter_result::make_need_input();
         }
         if (input[cursor_value + 1] != '-') {
-            return http_multipart_delimiter_result::make_no_match();
+            return http_multipart_delimiter_result::make_invalid();
         }
         close = true;
         cursor_value += 2;
@@ -226,14 +244,14 @@ private:
                               : http_multipart_delimiter_result::make_need_input();
     }
     if (input[cursor_value] != '\r') {
-        return http_multipart_delimiter_result::make_no_match();
+        return http_multipart_delimiter_result::make_invalid();
     }
     if (cursor_value + 1 >= input.size()) {
         return input_finished ? http_multipart_delimiter_result::make_no_match()
                               : http_multipart_delimiter_result::make_need_input();
     }
     if (input[cursor_value + 1] != '\n') {
-        return http_multipart_delimiter_result::make_no_match();
+        return http_multipart_delimiter_result::make_invalid();
     }
     return close ? http_multipart_delimiter_result::make_close(0, cursor_value + 2)
                  : http_multipart_delimiter_result::make_part(0, cursor_value + 2);

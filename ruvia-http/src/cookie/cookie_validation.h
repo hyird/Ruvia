@@ -155,9 +155,6 @@ inline void validate_cookie(
         if (options.max_age_->count() < 0) {
             throw std::invalid_argument("cookie Max-Age must not be negative");
         }
-        if (options.max_age_->count() > max_cookie_age_seconds) {
-            throw std::invalid_argument("cookie Max-Age must not exceed 400 days");
-        }
     }
     if (options.expires_.has_value()) {
         using namespace std::chrono;
@@ -165,12 +162,6 @@ inline void validate_cookie(
         const auto expires = floor<seconds>(options.expires_->time_since_epoch());
         if (expires < minimum) {
             throw std::invalid_argument("cookie Expires must not precede year 1601");
-        }
-        // Compare at the wire's second resolution, without adding a large
-        // offset to the native clock duration near its representable limit.
-        const auto now = floor<seconds>(system_clock::now().time_since_epoch());
-        if (expires > now && expires - now > seconds(max_cookie_age_seconds)) {
-            throw std::invalid_argument("cookie Expires must not exceed 400 days ahead");
         }
     }
     if (options.priority_ && cookie_priority_token(*options.priority_).empty()) {

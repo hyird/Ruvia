@@ -12,20 +12,14 @@
 namespace ruvia::detail {
 
 template <typename visitor_type>
-[[nodiscard]] bool visit_raw_form_fields(std::string_view body, visitor_type&& visitor) {
-    if (!ruvia::validate_url_encoding(body)) {
-        return false;
-    }
-    return ruvia::visit_url_encoded_pairs(body, std::forward<visitor_type>(visitor));
-}
-
-template <typename visitor_type>
 [[nodiscard]] bool visit_form_object_fields(resolved_pmr_resource_tag, std::string_view body,
     std::pmr::memory_resource* resource, visitor_type&& visitor) {
     bool valid = true;
     auto& visitor_ref = visitor;
-    const bool completed = visit_raw_form_fields(body, [&](std::string_view name,
-                                                           std::string_view value) {
+    // Form decoding keeps malformed '%' sequences literally (WHATWG), so the
+    // body needs no separate percent-encoding pass.
+    const bool completed = ruvia::visit_url_encoded_pairs(body, [&](std::string_view name,
+                                                                    std::string_view value) {
         if (!ruvia::has_url_encoding(name, url_decode_mode::form)) {
             return dispatch_json_object_field_visitor(visitor_ref, name, value);
         }

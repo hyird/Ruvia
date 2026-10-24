@@ -29,6 +29,16 @@ bool rejects(const ruvia::cookie_options& options) {
 RUVIA_TEST(cookie_public_validation_and_prefix_parsing) {
     RUVIA_CHECK(ruvia::is_valid_cookie_value("session-token"));
     RUVIA_CHECK(!ruvia::is_valid_cookie_value("invalid;value"));
+    RUVIA_CHECK(ruvia::is_valid_cookie_value("\"abc\""));
+    RUVIA_CHECK(ruvia::is_valid_cookie_value("\"\""));
+    RUVIA_CHECK(!ruvia::is_valid_cookie_value("\"abc"));
+    RUVIA_CHECK(!ruvia::is_valid_cookie_value("\"a\"b\""));
+    RUVIA_CHECK(!ruvia::is_valid_cookie_value("\""));
+    const ruvia::cookie_options no_attributes{.path_ = ""};
+    const ruvia::set_cookie_plan quoted("sid", "\"abc\"", no_attributes);
+    std::string quoted_wire(quoted.size(), '\0');
+    quoted.write(quoted_wire.data());
+    RUVIA_CHECK_EQ(quoted_wire, "sid=\"abc\"");
     RUVIA_CHECK(ruvia::cookie_name_prefix("__secure-id") == ruvia::cookie_prefix::secure);
     RUVIA_CHECK(ruvia::cookie_name_prefix("__HOST-id") == ruvia::cookie_prefix::host);
     RUVIA_CHECK(!ruvia::cookie_name_prefix("id").has_value());
@@ -300,14 +310,15 @@ RUVIA_TEST(cookie_literal_prefix_name_enforces_requirements) {
     RUVIA_CHECK(!rejects_with_name("__Hostname", plain));
 }
 
-RUVIA_TEST(cookie_max_age_capped_at_400_days) {
-    ruvia::cookie_options at_cap;
-    at_cap.max_age_ = std::chrono::seconds(34560000);  // exactly 400 days is allowed
-    RUVIA_CHECK(!rejects(at_cap));
-
+RUVIA_TEST(cookie_writer_leaves_lifetime_caps_to_user_agents) {
+    // RFC 6265bis' 400-day cookie-age-limit binds user agents, not servers.
     ruvia::cookie_options over_cap;
     over_cap.max_age_ = std::chrono::seconds(34560001);
-    RUVIA_CHECK(rejects(over_cap));
+    RUVIA_CHECK(!rejects(over_cap));
+
+    ruvia::cookie_options far_expires;
+    far_expires.expires_ = std::chrono::system_clock::now() + std::chrono::hours(24 * 500);
+    RUVIA_CHECK(!rejects(far_expires));
 
     ruvia::cookie_options deletion;
     deletion.max_age_ = std::chrono::seconds(0);

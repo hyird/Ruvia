@@ -63,15 +63,6 @@ bool cookie_path_matches(std::string_view request_path, std::string_view cookie_
            request_path[cookie_path.size()] == '/';
 }
 
-bool is_valid_received_cookie_request_value(std::string_view value) noexcept {
-    return ::ruvia::is_valid_cookie_value(::ruvia::http_trim_quoted_field_value(value));
-}
-
-bool can_serialize_received_cookie(std::string_view name, std::string_view value) noexcept {
-    return (name.empty() || is_valid_http_header_name(name)) &&
-           is_valid_received_cookie_request_value(value);
-}
-
 std::string_view request_path_only(std::string_view target) noexcept {
     return target.substr(0, target.find_first_of("?#"));
 }
@@ -98,24 +89,20 @@ std::chrono::system_clock::time_point cookie_expiration(
 }
 
 bool satisfies_name_prefix(const http_set_cookie_view& cookie, bool secure) noexcept {
-    // RFC 6265bis: a nameless cookie must not carry a prefix in its value,
-    // which servers may read as a prefixed name that never met the requirements.
-    if (cookie.name().empty() && ::ruvia::cookie_name_prefix(cookie.value())) {
-        return false;
-    }
     const auto prefix = ::ruvia::cookie_name_prefix(cookie.name());
     return !prefix || ::ruvia::cookie_prefix_requirements_met(*prefix, secure, cookie.path(), cookie.domain());
 }
 
 // RFC 6265 section 5.3 storage acceptance for this client's fixed origin.
 // Secure cookies are only accepted over https, which also covers the secure
-// origin that the __Secure-/__Host- prefixes require.
+// origin that the __Secure-/__Host- prefixes require. parse_set_cookie already
+// ignored nameless cookies and control bytes, so the stored name and value
+// (including internal whitespace, RFC 6265 section 5.2) are sent back verbatim.
 std::optional<client_received_cookie> accept_set_cookie(const http_set_cookie_view& parsed,
     const http_client_config_storage& config, std::string_view request_target,
     std::chrono::system_clock::time_point now) {
     const bool secure = parsed.has(http_set_cookie_attribute::secure);
     if ((secure && config.scheme_ != http_scheme::https) || !cookie_domain_matches(config.host_, parsed.domain()) ||
-        !can_serialize_received_cookie(parsed.name(), parsed.value()) ||
         (parsed.has(http_set_cookie_attribute::same_site_none) && !secure) ||
         !satisfies_name_prefix(parsed, secure)) {
         return std::nullopt;
@@ -124,8 +111,7 @@ std::optional<client_received_cookie> accept_set_cookie(const http_set_cookie_vi
     client_received_cookie cookie{
         .name_ = parsed.name(),
         .value_ = parsed.value(),
-        .path_ = parsed.path().empty() || parsed.path().front() != '/' ? default_cookie_path(request_target)
-                                                                       : parsed.path(),
+        .path_ = parsed.path().empty() ? default_cookie_path(request_target) : parsed.path(),
         .domain_ = parsed.domain(),
         .expires_ = std::nullopt,
         .secure_ = secure,

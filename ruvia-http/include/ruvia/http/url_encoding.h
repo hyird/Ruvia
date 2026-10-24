@@ -75,7 +75,8 @@ void http_append_percent_byte(output_type& output, unsigned char byte) {
 // byte are kept byte for byte, so a correctly encoded reference is never
 // encoded twice (RFC 3986 section 2.4). '[' and ']' stay literal only as the
 // authority's IP-literal delimiters, ':' is encoded in the first segment of a
-// relative-path reference (section 4.2), and only the first '#' starts the
+// relative-path reference (section 4.2), '@' inside userinfo is encoded so only
+// the delimiting '@' remains (section 3.2.1), and only the first '#' starts the
 // fragment. Returns no value, without allocating, when the reference needs no
 // encoding; otherwise the encoded reference is allocated from `resource` (or
 // the default PMR resource).
@@ -111,8 +112,11 @@ template <typename visitor_type>
     return true;
 }
 
-// Returns the complete decoded component or no value for malformed percent
-// encoding. Percent mode treats '+' literally; form mode converts it to a space.
+// Returns the complete decoded component. Percent mode treats '+' literally and
+// returns no value for malformed percent encoding (RFC 3986 pct-encoded). Form
+// mode converts '+' to a space and, like the WHATWG percent-decode algorithm
+// used by application/x-www-form-urlencoded, keeps a '%' that does not start a
+// valid escape as a literal byte.
 // The result is allocated from options.resource (or the default PMR resource),
 // which must outlive the returned string. On failure, no decoded prefix escapes.
 [[nodiscard]] inline std::optional<std::pmr::string> decode_url_component(
@@ -126,11 +130,12 @@ template <typename visitor_type>
             c = ' ';
         } else if (c == '%') {
             const auto byte = http_try_decode_percent_byte(input, i);
-            if (!byte) {
+            if (byte) {
+                c = static_cast<char>(*byte);
+                i += 2;
+            } else if (options.mode_ != url_decode_mode::form) {
                 return std::nullopt;
             }
-            c = static_cast<char>(*byte);
-            i += 2;
         }
         output[written++] = c;
     }

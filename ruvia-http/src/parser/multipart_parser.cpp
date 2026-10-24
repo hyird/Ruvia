@@ -210,6 +210,9 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
             const auto delimiter =
                 detail::http_find_initial_multipart_delimiter(buffer_view(), boundary_, input_.eof(),
                     delimiter_scan_offset_, delimiter_padding_offset_);
+            if (delimiter.invalid()) {
+                return multipart_parse_error::invalid_delimiter;
+            }
             if (delimiter.no_match() != nullptr) {
                 if (buffer_view().size() > max_multipart_preamble_bytes) {
                     return multipart_parse_error::preamble_too_large;
@@ -352,6 +355,9 @@ multipart_poll_result multipart_parser::read_body_chunk() {
         const auto delimiter =
             detail::http_find_multipart_body_delimiter(buffer, boundary_, input_.eof(), next_chunk_is_first_,
                 delimiter_scan_offset_, delimiter_padding_offset_);
+        if (delimiter.invalid()) {
+            return fail(multipart_parse_error::invalid_delimiter);
+        }
         const auto* part_delimiter = delimiter.part();
         const auto* close_delimiter = delimiter.close();
         if (part_delimiter != nullptr || close_delimiter != nullptr) {

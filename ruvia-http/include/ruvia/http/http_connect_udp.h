@@ -54,6 +54,9 @@ struct http_connect_udp_request_view final {
     std::string_view path_{};
     std::span<const http_header_view> headers_{};
 };
+// Recipient checks. The connect-udp token selects the Capsule Protocol, so
+// Capsule-Protocol is optional; a non-Boolean, ?0 or repeated field is treated as
+// absent (RFC 9297 section 3.4). Responses with 204/205/206 are malformed (RFC 9297 section 3.2).
 [[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_connect_udp_request_view request) noexcept;
 [[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_response(
     http_protocol_version version, std::uint16_t status, std::span<const http_header_view> headers) noexcept;
@@ -62,7 +65,8 @@ struct http_connect_udp_request_view final {
 // Classifies the HTTP/1 Upgrade token; full validation remains mandatory.
 [[nodiscard]] bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept;
 [[nodiscard]] std::optional<http_connect_udp_error> validate_http_connect_udp_request(const http_request& request) noexcept;
-// Takes application response metadata, validates it, and supplies the required
+// Takes application response metadata, validates it (2xx other than 204/205/206;
+// an application Capsule-Protocol field must be a single ?1), and supplies the
 // Capsule-Protocol and version-specific status/Upgrade fields. HTTP/1 status 101
 // can only be produced by this dedicated driver boundary.
 [[nodiscard]] std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response response, http_protocol_version version);

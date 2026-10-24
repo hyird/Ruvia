@@ -176,13 +176,8 @@ private:
             return http_multipart_part_header_parse_result::make_failure(
                 multipart_parse_error::invalid_content_disposition);
         }
-        // RFC 7578 section 4.2 forbids RFC 5987's filename* parameter in
-        // multipart/form-data; accepting and ignoring it loses the filename.
-        if (http_ascii_equals_ignore_case(key, "filename*")) {
-            return http_multipart_part_header_parse_result::make_failure(
-                multipart_parse_error::invalid_content_disposition);
-        }
-
+        // RFC 7578 section 4.2 forbids senders to use filename*; recipients get no
+        // reject rule, so it falls through with the other unknown parameters.
         const auto decoded = http_trim_quoted_field_value(value);
         if (http_ascii_equals_ignore_case(key, "name")) {
             name = decoded;

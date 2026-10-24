@@ -208,3 +208,39 @@ RUVIA_TEST(http_connect_udp_http2_uses_extended_connect_without_upgrade_fields) 
         RUVIA_CHECK(!std::get<0>(prepared).header("upgrade").has_value());
     }
 }
+
+RUVIA_TEST(http_connect_udp_recipient_treats_capsule_protocol_as_optional) {
+    const std::array upgrade{ruvia::http_header_view{"Host", "example.test"},
+        ruvia::http_header_view{"Connection", "Upgrade"}, ruvia::http_header_view{"Upgrade", "connect-udp"}};
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request({.authority_ = "example.test", .path_ = "/proxy", .headers_ = upgrade})
+            .has_value());
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101,
+        std::span<const ruvia::http_header_view>(upgrade).subspan(1))
+            .has_value());
+    for (const auto value : {"1", "?0", "\"yes\""}) {
+        const std::array ignored{ruvia::http_header_view{"Capsule-Protocol", value}};
+        const ruvia::http_connect_udp_request_view request{.version_ = ruvia::http_protocol_version::http2,
+            .method_ = "CONNECT",
+            .authority_ = "example.test",
+            .path_ = "/proxy",
+            .headers_ = ignored};
+        RUVIA_CHECK(!ruvia::validate_http_connect_udp_request(request).has_value());
+        RUVIA_CHECK(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, ignored).has_value());
+    }
+    const std::array duplicate{ruvia::http_header_view{"Capsule-Protocol", "?1"}, ruvia::http_header_view{"Capsule-Protocol", "?1"}};
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, 200, duplicate).has_value());
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_response(
+        ruvia::http_protocol_version::http2, 200, std::span<const ruvia::http_header_view>{})
+            .has_value());
+}
+
+RUVIA_TEST(http_connect_udp_rejects_statuses_that_cannot_start_capsule_protocol) {
+    const std::array capsule{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
+    for (const std::uint16_t status : {204, 205, 206}) {
+        RUVIA_CHECK(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, status, capsule) ==
+                    ruvia::http_connect_udp_error::invalid_response);
+        ruvia::http_response response;
+        response.status(ruvia::http_status_code::from_value(status));
+        RUVIA_CHECK(ruvia::prepare_http_connect_udp_response(std::move(response), ruvia::http_protocol_version::http2).index() != 0);
+    }
+}
