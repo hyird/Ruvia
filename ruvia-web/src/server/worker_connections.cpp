@@ -274,7 +274,11 @@ void worker_connections::close_listeners() noexcept {
     for (auto& configured : listeners_) {
         asio::error_code ignored;
 #if !defined(_WIN32)
-        configured->retry_.cancel(ignored);
+        try {
+            (void)configured->retry_.cancel();
+        } catch (...) {
+            ruvia::report_unhandled_failure("web accept retry cancellation", std::current_exception());
+        }
 #endif
         configured->socket_.close(ignored);
     }
