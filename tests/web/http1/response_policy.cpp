@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include <asio/read_until.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -93,6 +95,8 @@ std::atomic<bool> head_loop_aborted{false};
 std::atomic<bool> head_loop_sleep_stopped{false};
 std::atomic<bool> head_loop_token_stopped{false};
 std::atomic<bool> head_loop_completed{false};
+std::atomic<bool> naive_loop_failed{false};
+std::atomic<bool> naive_loop_finished{false};
 
 // Turns every exception from the rest of the chain into a 500, as
 // error-wrapping middleware does.
@@ -113,6 +117,7 @@ class response_policy_routes final {
     RUVIA_GET("/policy-trailer-stream", trailer_stream);
     RUVIA_GET("/policy-plain", plain);
     RUVIA_GET("/policy-head-loop", head_loop);
+    RUVIA_GET("/policy-head-naive", head_naive);
     RUVIA_GET("/policy-head-convert", stream, exception_converting_middleware);
     RUVIA_GET_WS("/policy-websocket", websocket);
     RUVIA_CONNECT("policy-target.test:443", tunnel);
@@ -145,6 +150,23 @@ class response_policy_routes final {
             co_await output.sleep(std::chrono::seconds(10)) == ruvia::timer_sleep_result::stop_requested);
         co_await output.end();
         head_loop_completed.store(true);
+    }
+
+    // A naive SSE loop that never checks aborted() or a sleep result: only a
+    // failing write ends it. The cap only keeps a regression from hanging.
+    ruvia::task<void> head_naive(ruvia::context& context_value) {
+        auto& output = context_value.stream_text();
+        try {
+            for (int i = 0; i < 1000; ++i) {
+                co_await output.write("tick");
+                static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(10)));
+            }
+        } catch (...) {
+            naive_loop_failed.store(true);
+            naive_loop_finished.store(true);
+            throw;
+        }
+        naive_loop_finished.store(true);
     }
 
     ruvia::task<void> trailer_stream(ruvia::context& context_value) {
@@ -342,6 +364,30 @@ RUVIA_TEST(http1_head_only_stream_completes_writes_and_reports_aborted) {
     RUVIA_CHECK(head_loop_token_stopped.load());
     RUVIA_CHECK(head_loop_sleep_stopped.load());
     RUVIA_CHECK(head_loop_completed.load());
+}
+
+// The discarded writes after a HEAD succeed only while the connection lives:
+// once the client closes it, the next write of a loop that never checks
+// aborted() fails as a GET write would, and the handler ends promptly.
+RUVIA_TEST(http1_head_only_naive_loop_ends_when_the_client_closes) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    {
+        asio::ip::tcp::socket socket(io);
+        socket.connect(server.endpoint());
+        asio::write(socket, asio::buffer(std::string_view("HEAD /policy-head-naive HTTP/1.1\r\nHost: localhost\r\n\r\n")));
+        std::string head;
+        asio::read_until(socket, asio::dynamic_buffer(head), "\r\n\r\n");
+        RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
+        socket.close();
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!naive_loop_finished.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    RUVIA_CHECK(naive_loop_finished.load());
+    RUVIA_CHECK(naive_loop_failed.load());
+    server.finish();
 }
 
 // Head-only completion raises nothing: middleware converting every exception

@@ -105,10 +105,17 @@ public:
         if (state_.body_suppressed_complete()) {
             // Same discarded write as the HTTP/1 sink: a body-suppressed head
             // already completed the response (HEAD, 304), so the write succeeds
-            // without sending. The minimal positive tick (a zero duration is
-            // await_ready) still suspends, so a handler that keeps writing in a
-            // loop yields the worker thread instead of hard-spinning the event
-            // loop; termination short-circuits it back to ready.
+            // without sending -- but only while the connection and the stream
+            // live. Once either is gone it fails exactly as a GET write does,
+            // so a handler that never checks aborted() still ends. The minimal
+            // positive tick (a zero duration is await_ready) still suspends, so
+            // a handler that keeps writing in a loop yields the worker thread
+            // instead of hard-spinning the event loop.
+            throw_if_terminated();
+            if (connection_.stream_aborted(stream_id_)) {
+                throw inbound_transport_error(
+                    std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
+            }
             co_await http2_sans_io_sleep_awaiter(write_signal_.worker(), stream_signal_.termination(),
                 std::chrono::steady_clock::duration(1));
             co_return;

@@ -123,13 +123,7 @@ public:
         if (request_body_.consumption() != http1_request_body_consumption::complete) {
             throw std::logic_error("peer EOF monitoring requires a fully consumed request body");
         }
-        peer_monitor_.emplace(stream_, worker_, inbound_resource_, request_body_.pipeline_size());
-        try {
-            peer_monitor_->start();
-        } catch (...) {
-            peer_monitor_.reset();
-            throw;
-        }
+        start_peer_monitor(http1_peer_eof_meaning::abandons_response);
         return peer_monitor_->token();
     }
 
@@ -197,13 +191,33 @@ private:
         });
     }
 
+    void start_peer_monitor(http1_peer_eof_meaning eof_meaning) {
+        peer_monitor_.emplace(stream_, worker_, inbound_resource_, request_body_.pipeline_size(), eof_meaning);
+        try {
+            peer_monitor_->start();
+        } catch (...) {
+            peer_monitor_.reset();
+            throw;
+        }
+    }
+
     // A body write after a body-suppressed head completed the response (HEAD,
-    // 304) succeeds without sending: the body a GET would carry is discarded.
-    // It still suspends for the minimal positive tick (a zero duration is
-    // await_ready), so a handler that keeps writing in a loop yields the
-    // worker thread instead of hard-spinning the event loop.
-    [[nodiscard]] task<timer_sleep_result> yield_discarded_body_write() const {
-        return sleep_for(worker_, std::chrono::steady_clock::duration(1));
+    // 304) succeeds without sending -- the body a GET would carry is discarded
+    // -- only while the connection that carried the response lives. Once the
+    // peer has left (seen by the peer monitor) or this server closed the
+    // socket (timeout, drain, shutdown), it fails exactly as a GET body write
+    // fails then, so a handler that never checks aborted() still ends.
+    task<void> discard_body_write() {
+        ensure_peer_writable();
+        if (!stream_.lowest_layer().is_open()) {
+            const std::error_code error = asio::error::bad_descriptor;
+            mark_write_failure(error);
+            throw inbound_transport_error(error, "failed to write HTTP response stream body");
+        }
+        // The minimal positive tick (a zero duration is await_ready) still
+        // suspends, so a handler that keeps writing in a loop yields the
+        // worker thread instead of hard-spinning the event loop.
+        static_cast<void>(co_await sleep_for(worker_, std::chrono::steady_clock::duration(1)));
     }
 
     task<void> commit(http_response_trailer_intent trailer_intent) {
@@ -265,9 +279,18 @@ private:
             mark_write_failure(ec);
             throw inbound_transport_error(ec, "failed to write HTTP response stream head");
         }
-        if (peer_monitor_ && state_.body_suppressed_complete()) {
-            // The head ended the response; waits on the peer-EOF token end now.
-            peer_monitor_->request_stop();
+        if (state_.body_suppressed_complete()) {
+            // The head completed the response. Watch the connection from now
+            // on, when the request body is settled and this is its worker, so
+            // discarded writes of a handler still running fail once the peer
+            // leaves; any peer-EOF token handed out stops now.
+            if (!peer_monitor_ && worker_.is_current() &&
+                request_body_.consumption() == http1_request_body_consumption::complete) {
+                start_peer_monitor(http1_peer_eof_meaning::ends_idle_connection);
+            }
+            if (peer_monitor_) {
+                peer_monitor_->request_stop();
+            }
         }
     }
 
@@ -280,7 +303,7 @@ private:
 
     task<void> write(std::string_view chunk) {
         if (state_.body_suppressed_complete()) {
-            static_cast<void>(co_await yield_discarded_body_write());
+            co_await discard_body_write();
             co_return;
         }
         ensure_peer_writable();

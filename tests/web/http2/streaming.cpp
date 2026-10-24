@@ -40,6 +40,8 @@ struct sleeping_stream_observation final {
     std::atomic<bool> head_loop_sleep_stopped_{};
     std::atomic<bool> head_loop_token_stopped_{};
     std::atomic<bool> head_loop_finished_{};
+    std::atomic<bool> naive_loop_failed_{};
+    std::atomic<bool> naive_loop_finished_{};
 };
 
 const auto sleeping_stream_observed = std::make_shared<sleeping_stream_observation>();
@@ -56,6 +58,7 @@ class sleeping_stream_routes final {
     RUVIA_POST("/http2-post-sse", post_sse);
     RUVIA_GET("/http2-paced-sse", paced_sse);
     RUVIA_GET("/http2-head-loop-sse", head_loop_sse);
+    RUVIA_GET("/http2-head-naive-sse", head_naive_sse);
     RUVIA_POST("/http2-bounded-buffered", bounded_buffered, ruvia::body_limit<16>);
     RUVIA_POST("/http2-bounded-stream", count_upload, ruvia::stream_body, ruvia::body_limit<16>);
     RUVIA_POST("/http2-bounded-delayed-stream", bounded_delayed_stream, ruvia::stream_body, ruvia::body_limit<16>);
@@ -80,6 +83,24 @@ class sleeping_stream_routes final {
             co_await writer.sleep(std::chrono::seconds(30)) == ruvia::timer_sleep_result::stop_requested;
         co_await writer.end();
         observed.head_loop_finished_ = true;
+    }
+
+    // A naive SSE loop that never checks aborted() or a sleep result: only a
+    // failing write ends it. The cap only keeps a regression from hanging.
+    ruvia::task<void> head_naive_sse(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
+        auto writer = context_value.stream_sse();
+        try {
+            for (int i = 0; i < 1000; ++i) {
+                co_await writer.write({.data_ = "tick"});
+                static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(10)));
+            }
+        } catch (...) {
+            observed.naive_loop_failed_ = true;
+            observed.naive_loop_finished_ = true;
+            throw;
+        }
+        observed.naive_loop_finished_ = true;
     }
 
     ruvia::task<ruvia::http_response> bounded_buffered(ruvia::context& context_value) {
@@ -624,6 +645,45 @@ RUVIA_TEST(http2_head_only_stream_completes_writes_and_reports_aborted) {
     RUVIA_CHECK(observed.head_loop_token_stopped_.load());
     RUVIA_CHECK(observed.head_loop_sleep_stopped_.load());
     client.close();
+    server.finish();
+}
+
+// The discarded writes after a HEAD succeed only while the connection lives:
+// once the client closes it, the next write of a loop that never checks
+// aborted() fails as a GET write would, and the handler ends promptly.
+RUVIA_TEST(http2_head_only_naive_loop_ends_when_the_client_closes) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    std::pmr::unsynchronized_pool_resource resource;
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    asio::write(client, asio::buffer(request_wire(&resource, "HEAD", "/http2-head-naive-sse", {})));
+    client.non_blocking(true);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    bool ended = false;
+    while (!ended) {
+        const auto frame = http2_streaming_test::read_frame(client, deadline);
+        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
+            (frame.header_.flags_ & 0x1) == 0) {
+            std::string ack;
+            append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
+            asio::write(client, asio::buffer(ack));
+            continue;
+        }
+        if (frame.header_.stream_id_ == 1) {
+            RUVIA_CHECK(frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers));
+            ended = (frame.header_.flags_ & 0x1) != 0;
+        }
+    }
+    client.close();
+
+    auto& observed = *http2_streaming_test::sleeping_stream_observed;
+    const auto finish_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!observed.naive_loop_finished_ && std::chrono::steady_clock::now() < finish_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    RUVIA_CHECK(observed.naive_loop_finished_.load());
+    RUVIA_CHECK(observed.naive_loop_failed_.load());
     server.finish();
 }
 

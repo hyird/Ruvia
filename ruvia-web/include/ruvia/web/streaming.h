@@ -87,13 +87,20 @@ public:
     /// oversized write buffers are released after completion.
     /// A body-suppressed response (HEAD on a GET stream route, 304) is complete
     /// once its head is sent: the first non-empty write commits that head, and
-    /// it and every later write() / writeln() / end() succeed without sending
-    /// anything (end() still validates and then discards trailers). Each such
-    /// later write suspends briefly instead of returning synchronously.
-    /// Nothing throws, so handlers and middleware see a normal success; from
-    /// then on aborted() is true, sleep() returns stop_requested at once, and
-    /// the cancel_on_peer_eof() token is stopped. A handler that loops must end
-    /// on one of those signals; the discarded writes never stop it.
+    /// it and every later write() / writeln() succeed without sending anything
+    /// while the connection that carried the response lives; each later write
+    /// suspends briefly instead of returning synchronously. Once that
+    /// connection ends (the peer closes or resets it, or the server closes it
+    /// on a timeout, drain or shutdown; on HTTP/2 also the stream is reset) the
+    /// next write fails exactly as a GET write fails after a peer abort, so a
+    /// loop that never checks aborted() ends no later than it would for GET.
+    /// On HTTP/1 the server watches the connection's read side from that head
+    /// on (when the request body is fully read): a peer end with no further
+    /// request bytes ends the connection, one behind pipelined requests is a
+    /// half-close whose requests are still answered. end() succeeds and
+    /// discards trailers after validating them. From the head on aborted() is
+    /// true, sleep() returns stop_requested at once, and the
+    /// cancel_on_peer_eof() token is stopped.
     task<void> write(std::span<const std::byte> chunk) &;
     task<void> write(std::span<const std::byte>) && = delete;
     task<void> write(std::string_view chunk) &;
