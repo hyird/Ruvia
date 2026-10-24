@@ -236,7 +236,7 @@ RUVIA_TEST(http_connect_udp_recipient_treats_capsule_protocol_as_optional) {
 
 RUVIA_TEST(http_connect_udp_rejects_statuses_that_cannot_start_capsule_protocol) {
     const std::array capsule{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
-    for (const std::uint16_t status : {204, 205, 206}) {
+    for (const std::uint16_t status : {std::uint16_t{204}, std::uint16_t{205}, std::uint16_t{206}}) {
         RUVIA_CHECK(ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http2, status, capsule) ==
                     ruvia::http_connect_udp_error::invalid_response);
         ruvia::http_response response;
