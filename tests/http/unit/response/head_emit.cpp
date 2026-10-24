@@ -219,7 +219,7 @@ RUVIA_TEST(http1_buffered_response_plan_owns_request_version_and_length) {
     const auto [http10_head, http10_version] =
         emit_for("GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n");
     RUVIA_CHECK(http10_version == ruvia::http_protocol_version::http10);
-    RUVIA_CHECK(http10_head.starts_with("HTTP/1.0 200 OK\r\n"));
+    RUVIA_CHECK(http10_head.starts_with("HTTP/1.1 200 OK\r\n"));
     RUVIA_CHECK((http10_head.find("Content-Length: 5\r\n") != std::string_view::npos));
     RUVIA_CHECK((http10_head.find("Connection: keep-alive\r\n") != std::string_view::npos));
 

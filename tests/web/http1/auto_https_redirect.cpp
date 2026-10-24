@@ -118,7 +118,7 @@ RUVIA_TEST(auto_https_redirect_points_cleartext_requests_at_the_https_service) {
         // RFC 9112 §3.2.2: an absolute-form target names the host, so an
         // HTTP/1.0 request needs no Host field to be redirected.
         const auto absolute = exchange(io, http_endpoint, "GET http://example.com/x?y HTTP/1.0\r\n\r\n");
-        RUVIA_CHECK(absolute.starts_with("HTTP/1.0 308 "));
+        RUVIA_CHECK(absolute.starts_with("HTTP/1.1 308 "));
         RUVIA_CHECK(absolute.find("\r\nLocation: https://example.com:" + https_port + "/x?y\r\n") != std::string::npos);
 
         error_handler_calls = 0;

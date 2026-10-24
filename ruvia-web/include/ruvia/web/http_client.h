@@ -182,7 +182,11 @@ public:
     // Aggregate field-byte and in-flight allocation budgets still apply.
     [[nodiscard]] std::span<const http_client_informational_response> informational_responses() const& noexcept;
     std::span<const http_client_informational_response> informational_responses() const&& = delete;
+    // The status the response is processed as; a received 600..999 is
+    // processed as 500 (RFC 9110 section 15).
     [[nodiscard]] http_status_code status() const noexcept;
+    // The status code as received, including an invalid 600..999.
+    [[nodiscard]] http_received_status received_status() const noexcept;
     [[nodiscard]] http_protocol_version protocol_version() const noexcept;
     // Queues RFC 9218 PRIORITY_UPDATE on a live HTTP/2 response; a
     // response the peer has already completed is left unchanged. Throws

@@ -73,7 +73,7 @@ inline constexpr std::string_view content_length_name = "Content-Length";
 void emit_response_head(const http_response& response, http_raw_wire_sink& sink_value, http_status_code response_status,
     std::string_view reason_phrase, std::string_view date_header, response_head_flags flags,
     std::string_view content_length_value) noexcept {
-    emit_http1_status_line(sink_value, flags.protocol_version_, response_status, reason_phrase);
+    emit_http1_status_line(sink_value, response_status, reason_phrase);
 
     for (const auto& header : response.headers()) {
         const auto known_bit = http_response_header_access::known_bit(header);

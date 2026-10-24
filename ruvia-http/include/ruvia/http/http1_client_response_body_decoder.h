@@ -19,7 +19,6 @@ enum class http1_client_response_body_error : unsigned char {
     invalid_framing,
     invalid_transfer_coding,
     incomplete_body,
-    non_empty_205,
 };
 
 [[nodiscard]] std::string_view http1_client_response_body_error_message(
@@ -155,6 +154,8 @@ public:
 
     // Transfer coding is present only in chunked or close-delimited plans.
     // Fixed-length plans forward wire content without a transfer-decoding stage.
+    // A plan that discards_content() consumes the content its framing delimits
+    // (without transfer decoding) and never emits output.
     http1_client_response_body_decoder(http1_client_response_plan plan,
         std::pmr::memory_resource* resource);
     ~http1_client_response_body_decoder() = default;
@@ -188,6 +189,7 @@ private:
         drain_output,
         ended };
     [[nodiscard]] result_type step(std::string_view available, std::span<char> scratch, bool eof);
+    [[nodiscard]] result_type step_content(std::string_view available, std::span<char> scratch, bool eof);
     [[nodiscard]] result_type step_fixed(std::string_view available, std::span<char> scratch, bool eof);
     [[nodiscard]] result_type step_close_delimited(std::string_view available, std::span<char> scratch, bool eof);
     [[nodiscard]] result_type step_chunked(std::string_view available, std::span<char> scratch, bool eof);
@@ -200,6 +202,7 @@ private:
     [[nodiscard]] result_type emit(std::size_t consumed, std::string_view bytes);
     [[nodiscard]] result_type emit_transfer_output(std::size_t consumed, std::string_view bytes);
     [[nodiscard]] static result_type with_consumed(const result_type& result, std::size_t consumed) noexcept;
+    [[nodiscard]] static result_type with_consumed_prefix(const result_type& result, std::size_t prefix) noexcept;
     [[nodiscard]] result_type validated_trailers(std::size_t consumed, std::string_view bytes);
     [[nodiscard]] result_type complete(std::size_t consumed);
     [[nodiscard]] result_type fail(http1_client_response_body_error error, std::size_t consumed = 0);
@@ -219,7 +222,7 @@ private:
     // the caller retain its unconsumed wire suffix without storing a borrowed view.
     std::size_t pending_body_bytes_{0};
     std::size_t pending_delimiter_bytes_{0};
-    bool zero_content_{false};
+    bool discard_content_{false};
     bool eof_{false};
     bool trailers_reported_{false};
     transfer_phase_type transfer_phase_{transfer_phase_type::needs_framed_input};

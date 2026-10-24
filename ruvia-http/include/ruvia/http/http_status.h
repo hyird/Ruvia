@@ -174,6 +174,52 @@ inline constexpr auto network_authentication_required = http_status_code::from_v
 
 }  // namespace http_status
 
+// A status code received by a client. RFC 9110 section 15 makes a three-digit
+// code outside 100..599 invalid for senders, but a client that receives one
+// SHOULD process the response as if it had a 5xx status. An unrecognized code
+// is processed as the x00 code of its class, so status() is 500 for a received
+// 600..999 while value() keeps the code as received; for 100..599 both agree.
+class http_received_status final {
+public:
+    // Accepts every three-digit code 100..999; anything else is malformed.
+    [[nodiscard]] static constexpr std::optional<http_received_status> try_from_value(
+        std::uint16_t value) noexcept {
+        if (const auto status = http_status_code::try_from_value(value)) {
+            return http_received_status(*status, value);
+        }
+        if (value >= 600 && value <= 999) {
+            return http_received_status(http_status::internal_server_error, value);
+        }
+        return std::nullopt;
+    }
+
+    constexpr http_received_status(http_status_code status) noexcept
+        : status_(status),
+          value_(status.value()) {}
+
+    // The status the response is processed as.
+    [[nodiscard]] constexpr http_status_code status() const noexcept {
+        return status_;
+    }
+
+    // The three-digit code as received.
+    [[nodiscard]] constexpr std::uint16_t value() const noexcept {
+        return value_;
+    }
+
+    friend constexpr bool operator==(http_received_status, http_received_status) = default;
+
+private:
+    constexpr http_received_status(http_status_code status, std::uint16_t value) noexcept
+        : status_(status),
+          value_(value) {}
+
+    http_status_code status_;
+    std::uint16_t value_;
+};
+
+static_assert(std::is_trivially_copyable_v<http_received_status>);
+
 // RFC 9112 reason-phrase is optional HTTP/1 presentation text, not response
 // semantics. Stable RFC-assigned codes get a conventional phrase; temporary,
 // extension, and unassigned codes deliberately get an empty phrase.

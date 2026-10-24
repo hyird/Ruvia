@@ -129,14 +129,8 @@ private:
     value_type value_;
 };
 
-enum class http1_chunk_trailer_role : std::uint8_t {
-    request,
-    response,
-};
-
 struct http1_chunked_body_decoder_config final {
     protocol_byte_limit body_limit_{protocol_byte_limit::unlimited()};
-    http1_chunk_trailer_role trailer_role_{http1_chunk_trailer_role::request};
 };
 
 // Incremental sans-I/O HTTP/1 chunk framing decoder. Payload and trailer views
@@ -151,9 +145,12 @@ struct http1_chunked_body_decoder_config final {
 // with no terminator reports framing_limit_exceeded without inspecting
 // later bytes. Malformed framing within the permitted prefix still reports
 // invalid_framing.
-// Trailer sections of either role must also fit the http_field_section_budget
-// byte rule (name.size() + value.size() + 4 per field,
-// plus 2 for the terminating empty line; see http_trailer_section_budget()).
+// Trailer sections must also fit the http_field_section_budget byte rule
+// (name.size() + value.size() + 4 per field, plus 2 for the terminating empty
+// line; see http_trailer_section_budget()). The complete view publishes the raw
+// trailer block; fields a sender was not permitted to generate as trailers are
+// not framing errors and are discarded by the block's consumers
+// (http_request_trailers::append_http1, visit_http_response_trailers).
 class http1_chunked_body_decoder final {
 public:
     explicit http1_chunked_body_decoder(http1_chunked_body_decoder_config config = {});
@@ -181,10 +178,9 @@ private:
 
     [[nodiscard]] http1_chunk_decode_result fail(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
     [[nodiscard]] bool consume_delimiter(std::string_view available, std::size_t& cursor) noexcept;
-    [[nodiscard]] bool trailers_valid(std::string_view trailers) const noexcept;
+    [[nodiscard]] static bool trailers_valid(std::string_view trailers) noexcept;
 
     protocol_byte_limit body_limit_;
-    http1_chunk_trailer_role trailer_role_;
     // A failed decoder keeps reporting its error without consuming input.
     std::variant<progress, http1_chunk_decode_error> state_{progress::size_line};
     // Bytes of the pending size line or trailer section already scanned for LF.

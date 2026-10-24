@@ -90,6 +90,9 @@ std::span<const http_client_informational_response> http_client_response::inform
 }
 
 http_status_code http_client_response::status() const noexcept {
+    return state_->status_.status();
+}
+http_received_status http_client_response::received_status() const noexcept {
     return state_->status_;
 }
 http_protocol_version http_client_response::protocol_version() const noexcept {

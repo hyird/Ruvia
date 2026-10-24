@@ -54,6 +54,38 @@ RUVIA_TEST(http1_streaming_request_chunked_upload_and_trailers) {
     writer.commit_finish();
     RUVIA_CHECK(writer.finished());
 }
+
+// RFC 9110 section 6.6.2: a sender that will generate trailer fields SHOULD
+// declare them in a Trailer field; only chunked content carries trailers.
+RUVIA_TEST(http1_streaming_request_declares_trailer_only_for_chunked_content) {
+    const std::array declared{ruvia::http_header_view{"Trailer", "Digest"}};
+    std::array<char, 1024> head{};
+    auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(
+        ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = declared}, head);
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    if (prepared_req != nullptr) {
+        RUVIA_CHECK_EQ(prepared_req->head(), std::string_view("POST / HTTP/1.1\r\nHost: example.com\r\nTrailer: Digest\r\n"
+                                                              "Transfer-Encoding: chunked\r\n\r\n"));
+        ruvia::http1_request_content_writer writer(*prepared_req->content_plan().streaming());
+        std::array<char, 128> finish_value{};
+        const std::array trailers{ruvia::http_header_view{"Digest", "value"}};
+        auto final = writer.plan_finish(finish_value, trailers);
+        RUVIA_CHECK((final.index() == 0));
+    }
+
+    auto known_length = ruvia::http1_client_request_writer{}.prepare_streaming(
+        ruvia::http_origin_view::http({.host_ = "example.com"}),
+        {.method_ = "POST", .headers_ = declared, .content_length_ = 3}, head);
+    const auto* failure = std::get_if<ruvia::http1_client_request_prepare_error>(&known_length);
+    RUVIA_CHECK(failure != nullptr && *failure == ruvia::http1_client_request_prepare_error::trailer_requires_chunked_content);
+
+    const std::array forbidden{ruvia::http_header_view{"Trailer", "Content-Length"}};
+    auto rejected = ruvia::http1_client_request_writer{}.prepare_streaming(
+        ruvia::http_origin_view::http({.host_ = "example.com"}), {.method_ = "POST", .headers_ = forbidden}, head);
+    const auto* invalid = std::get_if<ruvia::http1_client_request_prepare_error>(&rejected);
+    RUVIA_CHECK(invalid != nullptr && *invalid == ruvia::http1_client_request_prepare_error::invalid_header);
+}
 RUVIA_TEST(http1_streaming_request_known_length_and_continue_gate) {
     ruvia::http1_client_request_writer head_writer;
     std::array<char, 4096> head{};

@@ -41,7 +41,8 @@ namespace {
     if (ec != std::errc{} || end != code.data() + code.size()) {
         return http1_client_response_parse_error::invalid_status_code;
     }
-    const auto parsed_status = http_status_code::try_from_value(static_cast<std::uint16_t>(status_code));
+    // RFC 9110 section 15: a received 600..999 is processed as a 5xx response.
+    const auto parsed_status = http_received_status::try_from_value(static_cast<std::uint16_t>(status_code));
     if (!parsed_status) {
         return http1_client_response_parse_error::invalid_status_code;
     }
@@ -52,7 +53,7 @@ namespace {
         return http1_client_response_parse_error::invalid_reason_phrase;
     }
 
-    return http1_client_parsed_status_line{.status_code_ = *parsed_status,
+    return http1_client_parsed_status_line{.received_status_ = *parsed_status,
         .protocol_version_ = version[7] == '0' ? http_protocol_version::http10 : http_protocol_version::http11};
 }
 
@@ -60,7 +61,8 @@ namespace {
 
 http1_client_parsed_response_head::http1_client_parsed_response_head(
     const http1_client_parsed_status_line& status_line, std::pmr::memory_resource* resource) noexcept
-    : status_code_(status_line.status_code_),
+    : received_status_(status_line.received_status_),
+      status_code_(status_line.received_status_.status()),
       protocol_version_(status_line.protocol_version_),
       headers_(resource) {}
 
@@ -79,18 +81,13 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     const auto content_semantics = classify_http_response_content_semantics(
         http1_client_exchange_state_access::method(exchange_state), output.status_code_);
     response_field_state response_fields;
-    const bool framing_fields_apply = content_semantics == http_response_content_semantics::with_content;
-    const bool reset_content_requires_empty =
-        output.status_code_ == http_status::reset_content &&
-        content_semantics != http_response_content_semantics::connect_tunnel;
     // RFC 9112 section 6.3 rule 1 ends 1xx, 204, 304 and HEAD responses at the
-    // header section whatever framing fields they carry, so a recipient ignores
-    // them rather than rejecting a message it can still delimit exactly. HEAD
-    // and 304 Content-Length still describes the selected representation.
-    const bool content_length_describes_representation =
-        framing_fields_apply || reset_content_requires_empty ||
-        (content_semantics == http_response_content_semantics::without_content &&
-            output.status_code_ != http_status::no_content);
+    // header section whatever framing fields they carry, and rule 1 precedes
+    // the rule 5 Content-Length check. A recipient therefore ignores their
+    // framing fields, even invalid ones, rather than rejecting a message it can
+    // still delimit exactly; HEAD and 304 Content-Length remains a retained
+    // field describing the selected representation.
+    const bool framing_fields_apply = content_semantics == http_response_content_semantics::with_content;
 
     auto remaining = first_line_end == std::string_view::npos ? std::string_view{}
                                                               : head_section.substr(first_line_end + 2);
@@ -121,7 +118,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                 output.content_length_field_present_ = true;
                 // A 101 still records its forbidden presence for handshake checks;
                 // successful CONNECT ignores it because the stream becomes a tunnel.
-                if (content_length_describes_representation) {
+                if (framing_fields_apply) {
                     switch (output.content_length_.parse_field(value)) {
                         case http_content_length_parse_status::ok:
                             break;

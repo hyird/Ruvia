@@ -20,13 +20,12 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     return http_is_gzip_coding_token(coding) || http_ascii_equals_ignore_case(coding, "deflate");
 }
 
-[[nodiscard]] inline bool http_te_coding_allows_only_quality_parameter(std::string_view coding) noexcept {
-    return http_ascii_equals_ignore_case(coding, "compress") || http_is_gzip_coding_token(coding) ||
-           http_ascii_equals_ignore_case(coding, "deflate");
-}
-
+// The weight of a t-coding (RFC 9110 section 10.1.4) is validated in both
+// modes. A recipient accepts any other syntactically valid transfer-parameter:
+// it never applies a TE-listed coding, so parameter semantics are irrelevant.
+// A client advertises only the codings it can decode, without parameters.
 [[nodiscard]] inline bool http_te_parameters_are_valid(
-    std::string_view item, http_te_field_validation_mode mode, bool only_quality_parameter) noexcept {
+    std::string_view item, http_te_field_validation_mode mode) noexcept {
     auto start = http_find_unquoted_delimiter(item, 0, ';');
     if (start >= item.size()) {
         return true;
@@ -52,7 +51,7 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
                 return false;
             }
             quality_seen = true;
-        } else if (mode == http_te_field_validation_mode::client_capability || only_quality_parameter) {
+        } else if (mode == http_te_field_validation_mode::client_capability) {
             return false;
         }
 
@@ -79,14 +78,13 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     // the sender; a recipient treats the member as the always-acceptable
     // chunked coding and does not reject the request.
     if (http_ascii_equals_ignore_case(coding, "chunked")) {
-        return mode == http_te_field_validation_mode::recipient &&
-               http_te_parameters_are_valid(item, mode, true);
+        return mode == http_te_field_validation_mode::recipient && http_te_parameters_are_valid(item, mode);
     }
     if (mode == http_te_field_validation_mode::client_capability &&
         !http_is_client_supported_te_transfer_coding(coding)) {
         return false;
     }
-    return http_te_parameters_are_valid(item, mode, http_te_coding_allows_only_quality_parameter(coding));
+    return http_te_parameters_are_valid(item, mode);
 }
 
 [[nodiscard]] inline bool is_valid_http_te_field_value(

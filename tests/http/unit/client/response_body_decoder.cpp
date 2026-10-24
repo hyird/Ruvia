@@ -308,9 +308,9 @@ RUVIA_TEST(http1_response_body_decoder_terminal_result_is_stable_and_replayed) {
         "GET", "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: chunked");
     ruvia::http1_client_response_body_decoder decoder(head.plan(), std::pmr::get_default_resource());
     std::array<char, 4> scratch{};
-    const auto failed = decoder.decode("1\r\nx\r\n0\r\n\r\nTAIL", scratch);
+    const auto failed = decoder.decode("1\r\nxXY0\r\n\r\nTAIL", scratch);
     RUVIA_CHECK(failed.protocol_failure() != nullptr);
-    RUVIA_CHECK(failed.protocol_failure()->error() == ruvia::http1_client_response_body_error::non_empty_205);
+    RUVIA_CHECK(failed.protocol_failure()->error() == ruvia::http1_client_response_body_error::invalid_framing);
     const auto replayed = decoder.decode("ignored", scratch);
     RUVIA_CHECK(replayed.protocol_failure() != nullptr);
     RUVIA_CHECK(replayed.protocol_failure()->error() == failed.protocol_failure()->error());
@@ -383,9 +383,22 @@ RUVIA_TEST(http1_response_body_decoder_205_accepts_empty_gzip_and_rejects_decode
         "\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\xcb\x48\xcd\xc9"
         "\xc9\x07\x00\x86\xa6\x10\x36\x05\x00\x00\x00",
         25};
-    const auto rejected = nonempty.finish_input(gzip_hello, scratch);
-    RUVIA_CHECK(rejected.protocol_failure() != nullptr);
-    RUVIA_CHECK(rejected.protocol_failure()->error() == ruvia::http1_client_response_body_error::non_empty_205);
+    // RFC 9110 section 15.3.6 forbids only generating 205 content: it is
+    // consumed and discarded, never emitted.
+    const auto discarded = nonempty.finish_input(gzip_hello, scratch);
+    RUVIA_CHECK(discarded.output() == nullptr);
+    RUVIA_CHECK(discarded.complete() != nullptr);
+    RUVIA_CHECK_EQ(discarded.consumed_bytes(), gzip_hello.size());
+
+    const auto fixed_head = parse_head("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 2");
+    RUVIA_CHECK(fixed_head.plan().discards_content());
+    ruvia::http1_client_response_body_decoder fixed(fixed_head.plan(), std::pmr::get_default_resource());
+    const auto fixed_result = fixed.decode("okNEXT", scratch);
+    RUVIA_CHECK(fixed_result.complete() != nullptr);
+    RUVIA_CHECK_EQ(fixed_result.consumed_bytes(), std::size_t{2});
+    if (const auto* complete = fixed_result.complete()) {
+        RUVIA_CHECK(complete->persistence() == ruvia::http1_close_policy::allow_reuse);
+    }
 }
 
 RUVIA_TEST(http1_response_body_decoder_chunk_output_is_limited_to_scratch_and_keeps_tail) {
@@ -659,7 +672,7 @@ RUVIA_TEST(http1_response_body_decoder_drains_pending_transfer_output_without_wi
 
 RUVIA_TEST(http1_response_role_chunk_decoder_preserves_typed_views_and_wire_prefix) {
     constexpr std::string_view wire = "1\r\nx\r\n0\r\nAccept-Ranges: bytes\r\n\r\nNEXT";
-    ruvia::http1_chunked_body_decoder decoder({.trailer_role_ = ruvia::http1_chunk_trailer_role::response});
+    ruvia::http1_chunked_body_decoder decoder;
     bool zero_budget_rejected = false;
     try {
         (void)decoder.decode(wire, 0);
@@ -686,7 +699,7 @@ RUVIA_TEST(http1_response_role_chunk_decoder_preserves_typed_views_and_wire_pref
     RUVIA_CHECK(replay.complete() != nullptr);
     RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
 
-    ruvia::http1_chunked_body_decoder invalid({.trailer_role_ = ruvia::http1_chunk_trailer_role::response});
+    ruvia::http1_chunked_body_decoder invalid;
     const auto failure = invalid.decode("1\r\nxXX");
     RUVIA_CHECK(failure.failure() != nullptr);
     if (const auto* error = failure.failure()) {

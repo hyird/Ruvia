@@ -525,9 +525,8 @@ RUVIA_TEST(http_client_connection_fields_use_recipient_list_semantics) {
     RUVIA_CHECK(upgraded.plan().protocol_upgrade() != nullptr);
 }
 
-RUVIA_TEST(http_client_rejects_end_to_end_connection_options) {
-    for (const std::string_view option :
-        {"Content-Length", "DATE", "Set-Cookie", "Authorization", "Cookie", "Range"}) {
+RUVIA_TEST(http_client_rejects_only_protected_connection_options) {
+    for (const std::string_view option : {"Content-Length", "Set-Cookie", "Authorization", "Cookie", "Host"}) {
         std::string response = "HTTP/1.1 200 OK\r\nConnection: ";
         response.append(option);
         response.append("\r\nContent-Length: 0");
@@ -535,10 +534,15 @@ RUVIA_TEST(http_client_rejects_end_to_end_connection_options) {
                     http1_client_response_parse_error::invalid_connection);
     }
 
-    const auto extension = parse_head("GET",
-        "HTTP/1.1 200 OK\r\nConnection: X-Hop\r\n"
-        "X-Hop: local\r\nContent-Length: 0");
-    RUVIA_CHECK(extension.plan().known_length() != nullptr);
+    // RFC 9110 section 7.6.1 forbids only sending these options; the named
+    // end-to-end fields neither frame, route nor authorize the response.
+    for (const std::string_view option : {"X-Hop", "DATE", "Range", "Cache-Control"}) {
+        std::string response = "HTTP/1.1 200 OK\r\nConnection: ";
+        response.append(option);
+        response.append("\r\nX-Hop: local\r\nContent-Length: 0");
+        const auto accepted = parse_head("GET", response);
+        RUVIA_CHECK(accepted.plan().known_length() != nullptr);
+    }
 }
 
 RUVIA_TEST(http_client_switching_protocols_requires_wire_agreement) {

@@ -238,7 +238,7 @@ RUVIA_TEST(http1_client_request_writer_is_the_only_host_and_framing_owner) {
         {"Content-Length", "7", http1_client_request_prepare_error::content_length_managed_by_writer},
         {"Transfer-Encoding", "chunked",
             http1_client_request_prepare_error::transfer_encoding_unsupported},
-        {"Trailer", "Digest", http1_client_request_prepare_error::trailer_section_unsupported},
+        {"Trailer", "Digest", http1_client_request_prepare_error::trailer_requires_chunked_content},
         {"Expect", "100-continue", http1_client_request_prepare_error::expect_header_managed_by_writer},
     };
     for (const auto& test : cases) {
@@ -969,7 +969,7 @@ RUVIA_TEST(http1_client_request_writer_prepare_connect_udp_preserves_specific_pr
     expect_error("/udp", te_headers, http1_client_request_prepare_error::transfer_encoding_unsupported);
 
     const std::array trailer_headers{valid_capsule[0], ruvia::http_header_view{"Trailer", "X-Test"}};
-    expect_error("/udp", trailer_headers, http1_client_request_prepare_error::trailer_section_unsupported);
+    expect_error("/udp", trailer_headers, http1_client_request_prepare_error::trailer_requires_chunked_content);
 
     const std::array expect_headers{valid_capsule[0], ruvia::http_header_view{"Expect", "100-continue"}};
     expect_error("/udp", expect_headers, http1_client_request_prepare_error::expect_header_managed_by_writer);

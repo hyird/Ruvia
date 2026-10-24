@@ -181,8 +181,12 @@ public:
     }
     const http1_client_response_without_content* without_content() const&& = delete;
 
-    [[nodiscard]] constexpr bool requires_zero_content() const noexcept {
-        return requires_zero_content_;
+    // A 205 response with an ordinary framing. RFC 9110 section 15.3.6 forbids
+    // only generating its content, so content the framing delimits is consumed
+    // and discarded: http1_client_response_body_decoder never emits it, and the
+    // connection stays reusable.
+    [[nodiscard]] constexpr bool discards_content() const noexcept {
+        return discards_content_;
     }
     [[nodiscard]] constexpr const http1_client_known_length_response* known_length() const& noexcept {
         return std::get_if<http1_client_known_length_response>(&state_);
@@ -229,14 +233,14 @@ private:
 
     http1_client_response_plan(state_type state_value,
         std::optional<http_client_request_content_signal> request_content_signal,
-        bool requires_zero_content = false)
+        bool discards_content = false)
         : state_(std::move(state_value)),
           request_content_signal_(request_content_signal),
-          requires_zero_content_(requires_zero_content) {}
+          discards_content_(discards_content) {}
 
     state_type state_;
     std::optional<http_client_request_content_signal> request_content_signal_;
-    bool requires_zero_content_{false};
+    bool discards_content_{false};
 };
 
 static_assert(std::is_nothrow_move_constructible_v<http1_client_response_plan>);

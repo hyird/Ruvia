@@ -145,28 +145,28 @@ struct http1_client_response_plan_access final {
 
     [[nodiscard]] static http1_client_response_plan known_length(std::size_t content_length,
         http1_close_policy persistence, request_content_signal_type request_content_signal,
-        bool requires_zero_content) noexcept {
+        bool discards_content) noexcept {
         return http1_client_response_plan(
             http1_client_response_plan::state_type(
                 http1_client_known_length_response(content_length, persistence)),
-            request_content_signal, requires_zero_content);
+            request_content_signal, discards_content);
     }
 
     [[nodiscard]] static http1_client_response_plan chunked(http_transfer_codings transfer_codings,
         http1_close_policy persistence, request_content_signal_type request_content_signal,
-        bool requires_zero_content) {
+        bool discards_content) {
         return http1_client_response_plan(http1_client_response_plan::state_type(http1_client_chunked_response(
                                               std::move(transfer_codings), persistence)),
-            request_content_signal, requires_zero_content);
+            request_content_signal, discards_content);
     }
 
     [[nodiscard]] static http1_client_response_plan close_delimited(
         http_transfer_codings transfer_codings, request_content_signal_type request_content_signal,
-        bool requires_zero_content) {
+        bool discards_content) {
         return http1_client_response_plan(
             http1_client_response_plan::state_type(http1_client_close_delimited_response(
                 std::move(transfer_codings))),
-            request_content_signal, requires_zero_content);
+            request_content_signal, discards_content);
     }
 
     [[nodiscard]] static http1_client_response_plan connect_tunnel() noexcept {
@@ -204,12 +204,12 @@ http1_client_response_planning_result_type plan_http1_client_response(
         return http1_client_response_plan_access::connect_tunnel();
     }
 
-    const bool reset_content_requires_empty = response.status_code_ == http_status::reset_content &&
-                                              content_semantics == http_response_content_semantics::with_content;
+    // RFC 9110 section 15.3.6 forbids only generating 205 content. Its framing
+    // is still authoritative, so delimited content is consumed and discarded
+    // and the connection stays reusable.
+    const bool discards_content = response.status_code_ == http_status::reset_content &&
+                                  content_semantics == http_response_content_semantics::with_content;
     const auto content_length = response.content_length_.value();
-    if (reset_content_requires_empty && content_length.has_value() && *content_length != 0) {
-        return http1_client_response_parse_error::invalid_content_length;
-    }
 
     const auto persistence = final_response_persistence(exchange_state, response, request_content_phase);
     const auto persistent_content_signal = request_content_signal(request_content_phase,
@@ -229,12 +229,12 @@ http1_client_response_planning_result_type plan_http1_client_response(
         if (const auto* final_chunked = transfer_encoding->final_chunked()) {
             return http1_client_response_plan_access::chunked(
                 final_chunked->transfer_codings(), persistence, persistent_content_signal,
-                reset_content_requires_empty);
+                discards_content);
         }
         return http1_client_response_plan_access::close_delimited(
             transfer_encoding->non_chunked()->transfer_codings(),
             request_content_signal(request_content_phase, response.status_code_, true),
-            reset_content_requires_empty);
+            discards_content);
     }
 
     if (content_length.has_value()) {
@@ -243,7 +243,7 @@ http1_client_response_planning_result_type plan_http1_client_response(
         }
         return http1_client_response_plan_access::known_length(
             static_cast<std::size_t>(*content_length), persistence, persistent_content_signal,
-            reset_content_requires_empty);
+            discards_content);
     }
 
     // RFC 9112 section 6.3: a body-allowed response with no declared
@@ -251,7 +251,7 @@ http1_client_response_planning_result_type plan_http1_client_response(
     return http1_client_response_plan_access::close_delimited(
         http_transfer_codings{},
         request_content_signal(request_content_phase, response.status_code_, true),
-        reset_content_requires_empty);
+        discards_content);
 }
 
 }  // namespace ruvia::detail

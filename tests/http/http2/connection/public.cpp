@@ -2259,6 +2259,58 @@ RUVIA_TEST(http2_public_response_head_and_trailers_are_owned_by_events) {
     RUVIA_CHECK(owned_trailers_value.front().value() == "done");
 }
 
+// RFC 9110 section 6.5.1 binds only the sender: a received response trailer
+// that is not permitted as a trailer is discarded, while a connection-specific
+// field keeps the stream malformed (RFC 9113 section 8.2.2).
+RUVIA_TEST(http2_public_client_discards_response_trailers_not_permitted_as_trailers) {
+    for (const std::string_view name : {"content-type", "date", "connection"}) {
+        const bool malformed = name == "connection";
+        std::pmr::monotonic_buffer_resource resource;
+        auto client = prepared_client(&resource);
+        std::pmr::string wire(&resource);
+        append_peer_settings(wire);
+        append_response(wire, &resource, 1, "200", "abc", name, "text/plain");
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        unsigned ends = 0;
+        unsigned resets = 0;
+        std::size_t trailers = 1;
+        while (auto event = client.next_event()) {
+            if (auto* chunk = event->message_body_chunk()) {
+                (void)client.acknowledge(chunk->take_credit());
+            } else if (const auto* end = event->message_end()) {
+                ++ends;
+                trailers = end->trailers().size();
+            } else if (const auto* closed = event->stream_closed()) {
+                resets += closed->error() == ruvia::http2_error_code::protocol_error;
+            }
+        }
+        RUVIA_CHECK_EQ(ends, malformed ? 0U : 1U);
+        RUVIA_CHECK_EQ(resets, malformed ? 1U : 0U);
+        if (!malformed) {
+            RUVIA_CHECK_EQ(trailers, std::size_t{0});
+        }
+        RUVIA_CHECK(!client.connection_error());
+    }
+}
+
+// RFC 9110 section 15: a received :status 600..999 is processed as 5xx.
+RUVIA_TEST(http2_public_client_processes_out_of_range_status_as_server_error) {
+    std::pmr::monotonic_buffer_resource resource;
+    auto client = prepared_client(&resource);
+    std::pmr::string wire(&resource);
+    append_peer_settings(wire);
+    append_response(wire, &resource, 1, "600");
+    RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+    auto head_event = client.next_event();
+    RUVIA_CHECK(head_event && head_event->response_head() != nullptr);
+    if (head_event && head_event->response_head() != nullptr) {
+        const auto head = std::move(*head_event->response_head()).take_head();
+        RUVIA_CHECK(head.status() == ruvia::http_status::internal_server_error);
+        RUVIA_CHECK_EQ(head.received_status().value(), 600);
+    }
+    RUVIA_CHECK(!client.connection_error());
+}
+
 RUVIA_TEST(http2_public_single_and_fragmented_request_fields_are_owned_and_keep_hpack_indexes) {
     const std::string head_name = "x-request-" + std::string(48, 'h');
     const std::string trailer_name = "x-request-" + std::string(48, 't');
@@ -2650,8 +2702,13 @@ RUVIA_TEST(http2_public_request_headers_remain_valid_while_trailers_arrive) {
                 ruvia::http2_server_request_release_status::released);
 }
 
+// A trailer declaration never authorizes forbidden actual trailers. Fields the
+// sender was not permitted to generate (RFC 9110 section 6.5.1) are discarded
+// and never merged into the head; connection-specific fields stay malformed
+// (RFC 9113 section 8.2.2).
 RUVIA_TEST(http2_public_trailer_declaration_does_not_authorize_forbidden_actual_fields) {
-    for (const std::string_view forbidden : {"content-length", "host"}) {
+    for (const std::string_view forbidden : {"content-length", "host", "cache-control", "connection"}) {
+        const bool malformed = forbidden == "connection";
         std::pmr::unsynchronized_pool_resource resource;
         std::pmr::string wire(ruvia::http2_client_preface, &resource);
         append_peer_settings(wire);
@@ -2682,6 +2739,8 @@ RUVIA_TEST(http2_public_trailer_declaration_does_not_authorize_forbidden_actual_
         unsigned resets = 0;
         unsigned first_ends = 0;
         unsigned next_ends = 0;
+        std::size_t first_trailers = 0;
+        bool kept_checksum = false;
         while (auto event = server.next_event()) {
             if (auto* head = event->request_head()) {
                 if (head->stream_id() == 1) {
@@ -2695,13 +2754,24 @@ RUVIA_TEST(http2_public_trailer_declaration_does_not_authorize_forbidden_actual_
                 auto credit = chunk->take_credit();
                 (void)server.acknowledge(std::move(credit));
             } else if (const auto* end = event->message_end()) {
-                first_ends += end->stream_id() == 1;
+                if (end->stream_id() == 1) {
+                    ++first_ends;
+                    first_trailers = end->trailers().size();
+                    kept_checksum = first_trailers != 0 && end->trailers().front().name() == "x-checksum" &&
+                                    end->trailers().front().value() == "kept";
+                }
                 next_ends += end->stream_id() == 3;
             } else if (const auto* closed = event->stream_closed()) {
                 resets += closed->stream_id() == 1 && closed->error() == ruvia::http2_error_code::protocol_error;
             }
         }
-        RUVIA_CHECK(first && next && resets == 1 && first_ends == 0 && next_ends == 1);
+        RUVIA_CHECK(first && next && next_ends == 1);
+        RUVIA_CHECK_EQ(resets, malformed ? 1U : 0U);
+        RUVIA_CHECK_EQ(first_ends, malformed ? 0U : 1U);
+        if (!malformed) {
+            RUVIA_CHECK_EQ(first_trailers, std::size_t{1});
+            RUVIA_CHECK(kept_checksum);
+        }
         RUVIA_CHECK_EQ(body, "abc");
         RUVIA_CHECK(!server.connection_error());
         if (first) {

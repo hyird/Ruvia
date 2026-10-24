@@ -10,6 +10,7 @@
 
 #include "coding/http_content_length.h"
 #include "field/http_request_field_validation.h"
+#include "field/http_te_fields.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_stream_state.h"
 #include "parser/http_request_target.h"
@@ -231,9 +232,15 @@ struct http2_header_decode_context final {
         return false;
     }
 
-    return http2_is_valid_regular_header(name, value) &&
-           !is_forbidden_http_request_trailer_name(name) &&
-           context_value.stream_.append_remote_trailer(name, value);
+    // Pseudo-header and connection-specific fields, including a TE value other
+    // than "trailers", are malformed (RFC 9113 sections 8.1 and 8.2.2). A field
+    // merely not permitted as a trailer binds only the sender (RFC 9110 section
+    // 6.5.1) and is discarded.
+    if (!http2_is_valid_regular_header(name, value) ||
+        (name == "te" && !is_valid_binary_http_te_field_value(value, http_field_list_role::recipient))) {
+        return false;
+    }
+    return is_forbidden_http_request_trailer_name(name) || context_value.stream_.append_remote_trailer(name, value);
 }
 
 }  // namespace ruvia::detail

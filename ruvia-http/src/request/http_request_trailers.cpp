@@ -32,7 +32,8 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
         block.remove_suffix(2);
     }
     // The block is appended all-or-nothing, like append(): it extends the
-    // retained section's field count and byte budget.
+    // retained section's field count and byte budget. Received fields that are
+    // not permitted in request trailers are discarded (RFC 9112 section 7.1.2).
     const auto field_count = fields_.size();
     auto budget = budget_;
     const auto roll_back = [&]() noexcept {
@@ -49,9 +50,6 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
             case detail::http_trailer_block_status::ok:
                 budget_ = budget;
                 return std::nullopt;
-            case detail::http_trailer_block_status::forbidden_field:
-                roll_back();
-                return http_request_trailer_error::forbidden_field;
             case detail::http_trailer_block_status::section_too_large:
                 roll_back();
                 return http_request_trailer_error::section_too_large;

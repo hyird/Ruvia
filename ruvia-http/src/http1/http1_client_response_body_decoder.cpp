@@ -15,8 +15,6 @@ std::string_view http1_client_response_body_error_message(http1_client_response_
             return "invalid HTTP/1 response transfer coding";
         case http1_client_response_body_error::incomplete_body:
             return "incomplete HTTP/1 response body";
-        case http1_client_response_body_error::non_empty_205:
-            return "HTTP 205 response content is not empty";
     }
     return "invalid HTTP/1 response body";
 }
@@ -34,16 +32,16 @@ http1_client_response_body_decoder::http1_client_response_body_decoder(
         persistence_ = without->persistence();
         return;
     }
+    // A discarding (205) plan carries the same framings as an ordinary one,
+    // but its content is never emitted, so it is never transfer-decoded.
+    discard_content_ = plan.discards_content();
     const auto configure_coding = [this, resource](const http_transfer_codings& codings) {
-        if (!codings.empty()) {
+        if (!codings.empty() && !discard_content_) {
             transfer_.emplace(std::span<const http_transfer_coding>(
                                   codings.data(), codings.size()),
                 resource, protocol_byte_limit::unlimited());
         }
     };
-    // A zero-content (205) plan carries the same framings as an ordinary one;
-    // only emit() treats its content differently.
-    zero_content_ = plan.requires_zero_content();
     if (const auto* known = plan.known_length()) {
         framing_ = framing_type::fixed;
         remaining_ = known->content_length();
@@ -52,7 +50,7 @@ http1_client_response_body_decoder::http1_client_response_body_decoder(
         framing_ = framing_type::chunked;
         persistence_ = chunked->persistence();
         configure_coding(chunked->transfer_codings());
-        chunked_.emplace(http1_chunked_body_decoder_config{.trailer_role_ = http1_chunk_trailer_role::response});
+        chunked_.emplace();
     } else if (const auto* close = plan.close_delimited()) {
         framing_ = framing_type::close_delimited;
         configure_coding(close->transfer_codings());
@@ -85,6 +83,24 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
 }
 
 http1_client_response_body_decoder::result_type http1_client_response_body_decoder::step(
+    std::string_view available, std::span<char> scratch, bool eof) {
+    if (!discard_content_) {
+        return step_content(available, scratch, eof);
+    }
+    // RFC 9110 section 15.3.6 forbids only generating 205 content: consume
+    // what the framing delimits without emitting it, then report the next
+    // non-output result over every byte consumed by this call.
+    std::size_t discarded = 0;
+    for (;;) {
+        const auto result_value = step_content(available.substr(discarded), scratch, eof);
+        if (result_value.output() == nullptr) {
+            return with_consumed_prefix(result_value, discarded);
+        }
+        discarded += result_value.consumed_bytes();
+    }
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::step_content(
     std::string_view available, std::span<char> scratch, bool eof) {
     if (trailers_reported_) {
         return finish_transfer(0, scratch);
@@ -302,12 +318,9 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
     return need_input(consumed);
 }
 
-// The single emission point, so a 205 response can never deliver content.
+// The single emission point.
 http1_client_response_body_decoder::result_type http1_client_response_body_decoder::emit(
     std::size_t consumed, std::string_view bytes_value) {
-    if (zero_content_ && !bytes_value.empty()) {
-        return fail(http1_client_response_body_error::non_empty_205, consumed);
-    }
     return result_type(output_view_type(consumed, bytes_value));
 }
 
@@ -332,6 +345,29 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
             return result_type(decoder_failure_type(consumed));
         } else {
             return result_type(payload_value);
+        }
+    },
+        result.value_);
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::with_consumed_prefix(
+    const result_type& result, std::size_t prefix) noexcept {
+    return std::visit([prefix](const auto& payload_value) -> result_type {
+        using t_type = std::decay_t<decltype(payload_value)>;
+        const auto consumed = prefix + payload_value.consumed_bytes();
+        if constexpr (std::is_same_v<t_type, need_input_type>) {
+            return result_type(need_input_type(consumed));
+        } else if constexpr (std::is_same_v<t_type, output_view_type>) {
+            return result_type(output_view_type(consumed, payload_value.bytes()));
+        } else if constexpr (std::is_same_v<t_type, validated_trailers_view_type>) {
+            return result_type(validated_trailers_view_type(consumed, payload_value.bytes()));
+        } else if constexpr (std::is_same_v<t_type, complete_type>) {
+            return result_type(complete_type(consumed, payload_value.persistence()));
+        } else if constexpr (std::is_same_v<t_type, protocol_failure_type>) {
+            return result_type(protocol_failure_type(consumed, payload_value.error()));
+        } else {
+            static_assert(std::is_same_v<t_type, decoder_failure_type>);
+            return result_type(decoder_failure_type(consumed));
         }
     },
         result.value_);

@@ -19,7 +19,6 @@
 
 namespace {
 
-using ruvia::http1_chunk_trailer_role;
 using ruvia::http1_chunked_body_decoder;
 using ruvia::protocol_byte_limit;
 
@@ -332,42 +331,29 @@ RUVIA_TEST(chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
     RUVIA_CHECK_EQ(bad_delimiter.consumed_bytes(), std::size_t{4});
 
     http1_chunked_body_decoder trailer({.body_limit_ = protocol_byte_limit::limited(1024)});
-    const auto bad_trailer = trailer.decode("0\r\nContent-Length: 1\r\n\r\n");
+    const auto bad_trailer = trailer.decode("0\r\nX-Trace abc\r\n\r\n");
     RUVIA_CHECK(bad_trailer.failure() != nullptr);
     RUVIA_CHECK(bad_trailer.failure()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
 }
 
-RUVIA_TEST(chunked_body_decoder_validates_trailers_by_message_role) {
-    http1_chunked_body_decoder response({.body_limit_ = protocol_byte_limit::limited(1024),
-        .trailer_role_ = http1_chunk_trailer_role::response});
-    const auto accepted_response = response.decode("0\r\nAccept-Ranges: bytes\r\n\r\n");
-    RUVIA_CHECK(accepted_response.complete() != nullptr);
-    if (const auto* complete = accepted_response.complete()) {
-        RUVIA_CHECK_EQ(complete->trailers(), std::string_view("Accept-Ranges: bytes"));
+// RFC 9110 section 6.5.1 forbids generating these trailers, but RFC 9112
+// section 7.1.2 lets the recipient discard them: the framing stays valid.
+RUVIA_TEST(chunked_body_decoder_completes_with_fields_not_permitted_as_trailers) {
+    for (const std::string_view trailers : {std::string_view("Content-Length: 1"),
+             std::string_view("Accept-Ranges: bytes"), std::string_view("Date: Sun, 06 Nov 1994 08:49:37 GMT"),
+             std::string_view("Cache-Control: no-cache\r\nX-Trace: abc")}) {
+        http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::limited(1024)});
+        const std::string wire = "0\r\n" + std::string(trailers) + "\r\n\r\nNEXT";
+        const auto result_value = decoder.decode(wire);
+        RUVIA_CHECK(result_value.complete() != nullptr);
+        if (const auto* complete = result_value.complete()) {
+            RUVIA_CHECK_EQ(complete->trailers(), trailers);
+            RUVIA_CHECK_EQ(complete->consumed_bytes(), wire.size() - 4);
+        }
     }
-
-    http1_chunked_body_decoder request({.body_limit_ = protocol_byte_limit::limited(1024)});
-    const auto rejected_request = request.decode("0\r\nAccept-Ranges: bytes\r\n\r\n");
-    RUVIA_CHECK(rejected_request.failure() != nullptr);
-    RUVIA_CHECK(rejected_request.failure()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
-
-    http1_chunked_body_decoder forbidden_response({.body_limit_ = protocol_byte_limit::limited(1024),
-        .trailer_role_ = http1_chunk_trailer_role::response});
-    const auto rejected_response =
-        forbidden_response.decode("0\r\nDate: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\n");
-    RUVIA_CHECK(rejected_response.failure() != nullptr);
-    RUVIA_CHECK(rejected_response.failure()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
 }
 
 RUVIA_TEST(chunked_body_decoder_validates_config_quota_and_neutral_errors) {
-    bool rejected_role = false;
-    try {
-        http1_chunked_body_decoder decoder({.trailer_role_ = static_cast<http1_chunk_trailer_role>(255)});
-    } catch (const std::invalid_argument&) {
-        rejected_role = true;
-    }
-    RUVIA_CHECK(rejected_role);
-
     http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::unlimited()});
     constexpr std::string_view wire = "3\r\nabc\r\n0\r\n\r\n";
     bool rejected_quota = false;
@@ -518,40 +504,38 @@ RUVIA_TEST(chunked_body_decoder_accepts_many_trailer_fields_within_byte_budget) 
 }
 
 RUVIA_TEST(chunked_body_decoder_bounds_trailers_independently_of_input_segmentation) {
-    for (const auto role : {http1_chunk_trailer_role::request, http1_chunk_trailer_role::response}) {
-        for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
-            std::string trailers = "X-Trace: ";
-            trailers.append(ruvia::max_http_header_bytes + excess - trailers.size() - 5, ' ');
-            trailers.append("x\r\n\r\n");
-            const std::string wire = "0\r\n" + trailers + "NEXT";
-            const auto message_end = 3 + trailers.size();
-            for (const auto split : {wire.size(), message_end - 1}) {
-                http1_chunked_body_decoder decoder({.trailer_role_ = role});
-                auto result = decoder.decode(std::string_view(wire).substr(0, split));
-                auto consumed = result.consumed_bytes();
-                if (result.need_more()) {
-                    result = decoder.decode(std::string_view(wire).substr(consumed));
-                    consumed += result.consumed_bytes();
+    for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
+        std::string trailers = "X-Trace: ";
+        trailers.append(ruvia::max_http_header_bytes + excess - trailers.size() - 5, ' ');
+        trailers.append("x\r\n\r\n");
+        const std::string wire = "0\r\n" + trailers + "NEXT";
+        const auto message_end = 3 + trailers.size();
+        for (const auto split : {wire.size(), message_end - 1}) {
+            http1_chunked_body_decoder decoder;
+            auto result = decoder.decode(std::string_view(wire).substr(0, split));
+            auto consumed = result.consumed_bytes();
+            if (result.need_more()) {
+                result = decoder.decode(std::string_view(wire).substr(consumed));
+                consumed += result.consumed_bytes();
+            }
+            if (excess == 0) {
+                RUVIA_CHECK(result.complete() != nullptr);
+                if (const auto* complete = result.complete()) {
+                    RUVIA_CHECK_EQ(complete->trailers(),
+                        std::string_view(trailers).substr(0, trailers.size() - 4));
                 }
-                if (excess == 0) {
-                    RUVIA_CHECK(result.complete() != nullptr);
-                    if (const auto* complete = result.complete()) {
-                        RUVIA_CHECK_EQ(complete->trailers(),
-                            std::string_view(trailers).substr(0, trailers.size() - 4));
-                    }
-                    RUVIA_CHECK_EQ(consumed, message_end);
-                    RUVIA_CHECK_EQ(std::string_view(wire).substr(consumed), "NEXT");
-                } else {
-                    RUVIA_CHECK(result.failure() != nullptr);
-                    RUVIA_CHECK_EQ(consumed, std::size_t{3});
-                    if (const auto* failure = result.failure()) {
-                        RUVIA_CHECK(failure->error() ==
-                                    ruvia::http1_chunk_decode_error::framing_limit_exceeded);
-                    }
-                    const auto replay = decoder.decode({});
-                    RUVIA_CHECK(replay.failure() != nullptr);
-                    RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
+                RUVIA_CHECK_EQ(consumed, message_end);
+                RUVIA_CHECK_EQ(std::string_view(wire).substr(consumed), "NEXT");
+            } else {
+                RUVIA_CHECK(result.failure() != nullptr);
+                RUVIA_CHECK_EQ(consumed, std::size_t{3});
+                if (const auto* failure = result.failure()) {
+                    RUVIA_CHECK(failure->error() ==
+                                ruvia::http1_chunk_decode_error::framing_limit_exceeded);
                 }
+                const auto replay = decoder.decode({});
+                RUVIA_CHECK(replay.failure() != nullptr);
+                RUVIA_CHECK_EQ(replay.consumed_bytes(), std::size_t{0});
             }
         }
     }

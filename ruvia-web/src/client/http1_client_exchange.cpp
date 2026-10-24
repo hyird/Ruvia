@@ -71,7 +71,7 @@ constexpr std::size_t response_read_chunk_bytes = 16384;
     if (head.plan().connect_tunnel() == nullptr && head.plan().protocol_upgrade() == nullptr) {
         return false;
     }
-    if (validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.value(), state_value.headers_).has_value()) {
+    if (validate_http_connect_udp_response(state_value.protocol_version_, state_value.status_.status().value(), state_value.headers_).has_value()) {
         throw http_client_error(http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
     }
     return true;
@@ -425,10 +425,10 @@ void http1_client_exchange::publish_final_head(const http_client_request_storage
         head.plan().request_content_signal() == http_client_request_content_signal::exchange_complete) {
         state_value.upload_->output_.stop();
     }
-    state_value.status_ = head.head().status();
+    state_value.status_ = head.head().received_status();
     state_value.protocol_version_ = head.head().protocol_version();
     state_value.response_body_plan_ =
-        plan_http_response_body(classify_http_method(request.method()), state_value.status_);
+        plan_http_response_body(classify_http_method(request.method()), state_value.status_.status());
     state_value.headers_ = std::move(head).take_head().take_headers();
     // A received final head changes the jar before consumers can issue
     // another request, regardless of body completion or abandonment.

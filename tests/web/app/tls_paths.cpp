@@ -182,7 +182,7 @@ bool truncated_close_delimited_stream_lacks_close_notify(asio::io_context& io, c
         const auto size = stream.read_some(asio::buffer(buffer), error);
         response.append(buffer.data(), size);
     }
-    return response.starts_with("HTTP/1.0 200 ") && response.ends_with("\r\n\r\npartial") &&
+    return response.starts_with("HTTP/1.1 200 ") && response.ends_with("\r\n\r\npartial") &&
            error == asio::ssl::error::stream_truncated;
 }
 

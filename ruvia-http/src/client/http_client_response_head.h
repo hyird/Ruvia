@@ -22,7 +22,7 @@
 namespace ruvia::detail {
 
 struct http1_client_parsed_status_line final {
-    http_status_code status_code_;
+    http_received_status received_status_;
     http_protocol_version protocol_version_;
 };
 
@@ -30,6 +30,8 @@ struct http1_client_parsed_response_head final {
     explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line,
         std::pmr::memory_resource* resource) noexcept;
 
+    http_received_status received_status_;
+    // The status the response is processed as (received_status_.status()).
     http_status_code status_code_;
     http_protocol_version protocol_version_;
     bool content_length_field_present_{false};

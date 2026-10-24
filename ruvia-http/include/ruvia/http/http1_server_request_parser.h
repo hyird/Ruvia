@@ -21,8 +21,12 @@ enum class http1_server_request_parse_failure_source : std::uint8_t { request_li
 
 // Cleartext listeners can silently discard inputs whose request-line failure
 // shows the peer was not speaking HTTP (for example, TLS bytes on an HTTP
-// port): the request-line starts with a byte that cannot begin a method token,
-// or its first CRLF-terminated line carries no HTTP/ version token.
+// port). Input whose first line (after ignored empty lines; the available
+// bytes while no CRLF has arrived) has a whitespace-separated word naming an
+// HTTP version ("HTTP/" in any case, or token "/" DIGITs "." DIGITs) is HTTP
+// and is answered with 400 (RFC 9112 sections 2.2 and 3). Otherwise input is
+// dropped once its first line is CRLF-terminated, or at once when its first
+// byte cannot begin a method token.
 [[nodiscard]] bool should_drop_invalid_cleartext_http1_input(
     std::string_view buffer, http1_server_request_parse_failure_source source_value) noexcept;
 

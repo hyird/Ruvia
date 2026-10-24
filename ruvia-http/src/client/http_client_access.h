@@ -8,7 +8,7 @@
 namespace ruvia::detail {
 
 struct http_client_response_head_access final {
-    [[nodiscard]] static http_client_response_head make(http_status_code status,
+    [[nodiscard]] static http_client_response_head make(http_received_status status,
         http_protocol_version protocol_version, std::pmr::memory_resource* resource) {
         return http_client_response_head(status, protocol_version, resource);
     }

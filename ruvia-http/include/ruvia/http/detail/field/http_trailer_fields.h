@@ -122,22 +122,27 @@ template <typename forbidden_name_type>
 enum class http_trailer_block_status : std::uint8_t {
     ok,
     invalid_field,
-    forbidden_field,
     section_too_large,
     visitor_stopped,
 };
 
-// The single HTTP/1 trailer-block field parser for both message directions.
-// `block` holds the field lines between the last chunk and the empty line that
-// ends the trailer section; a final CRLF after the last field is accepted for
-// standalone validation. Values are exposed with field-line OWS trimmed.
-// `forbidden_name` is the direction's trailer policy. `budget` is the section
-// total before this block, so a caller can extend a retained section; `budget`
-// is advanced for every accepted field.
+// The single HTTP/1 received trailer-block field parser for both message
+// directions. `block` holds the field lines between the last chunk and the
+// empty line that ends the trailer section; a final CRLF after the last field
+// is accepted for standalone validation. Values are exposed with field-line OWS
+// trimmed.
+// `discarded_name` is the direction's sender trailer policy. The sender rule of
+// RFC 9110 section 6.5.1 does not make a received field invalid: a recipient
+// that removes the chunked coding may selectively discard received trailer
+// fields (RFC 9112 section 7.1.2), so a field the sender was not permitted to
+// generate is skipped without reaching the visitor. Syntax errors and the size
+// budget still fail the whole section. `budget` is the section total before this
+// block, so a caller can extend a retained section; it is advanced for every
+// received field, discarded or not.
 // The visitor receives views borrowing `block` and returns false to stop.
-template <typename forbidden_name_type, typename visitor_type>
+template <typename discarded_name_type, typename visitor_type>
 [[nodiscard]] http_trailer_block_status visit_http1_trailer_block(std::string_view block,
-    forbidden_name_type&& forbidden_name, http_field_section_budget& budget,
+    discarded_name_type&& discarded_name, http_field_section_budget& budget,
     visitor_type&& visitor) {
     if (block.size() > max_http_header_bytes) {
         return http_trailer_block_status::section_too_large;
@@ -158,13 +163,10 @@ template <typename forbidden_name_type, typename visitor_type>
         if (!is_valid_http_field_value_bytes(value)) {
             return http_trailer_block_status::invalid_field;
         }
-        if (forbidden_name(name)) {
-            return http_trailer_block_status::forbidden_field;
-        }
         if (!budget.add_field(name, value)) {
             return http_trailer_block_status::section_too_large;
         }
-        if (!visitor(name, value)) {
+        if (!discarded_name(name) && !visitor(name, value)) {
             return http_trailer_block_status::visitor_stopped;
         }
         if (line_end == std::string_view::npos) {

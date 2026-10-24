@@ -120,7 +120,7 @@ public:
     worker_signal space_signal_;
     http_client_pool* pool_{nullptr};
     std::pmr::memory_resource* resource_;
-    http_status_code status_{http_status::ok};
+    http_received_status status_{http_status::ok};
     http_known_method request_method_{http_known_method::unknown};
     http_protocol_version protocol_version_{http_protocol_version::http11};
     std::optional<http_response_body_plan> response_body_plan_{};

@@ -236,7 +236,7 @@ RUVIA_TEST(http1_response_stream_discards_trailers_it_cannot_frame) {
     server.finish();
     RUVIA_CHECK(http10.has_value());
     const auto http10_output = http10.value_or("");
-    RUVIA_CHECK(http10_output.starts_with("HTTP/1.0 200 "));
+    RUVIA_CHECK(http10_output.starts_with("HTTP/1.1 200 "));
     RUVIA_CHECK(lower_head(http10_output).find("\r\ntrailer:") == std::string::npos);
     RUVIA_CHECK(http10_output.ends_with("\r\n\r\nbody"));
     RUVIA_CHECK(http11.has_value());

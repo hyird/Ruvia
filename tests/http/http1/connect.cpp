@@ -17,7 +17,7 @@ RUVIA_TEST(http1_connect_head_transfers_to_tunnel_without_message_framing_for_ev
             const auto plan = ruvia::prepare_http1_connect_response_head(response, version);
             ruvia::http_response_head_buffer head{std::pmr::polymorphic_allocator<char>(&resource)};
             ruvia::append_http1_response_head(response, head, plan);
-            RUVIA_CHECK(head.view().starts_with(version == ruvia::http_protocol_version::http10 ? "HTTP/1.0 " : "HTTP/1.1 "));
+            RUVIA_CHECK(head.view().starts_with("HTTP/1.1 "));
             RUVIA_CHECK(head.view().find("x-tunnel: established\r\n") != std::string_view::npos);
             RUVIA_CHECK(head.view().find("Content-Length:") == std::string_view::npos);
             RUVIA_CHECK(head.view().find("Transfer-Encoding:") == std::string_view::npos);

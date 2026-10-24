@@ -734,6 +734,45 @@ RUVIA_TEST(http1_parse_te_chunked_is_a_sender_rule_only) {
     RUVIA_CHECK_EQ(result_value.state_.request_.header("TE").value_or("missing"), std::string_view("chunked"));
 }
 
+RUVIA_TEST(http1_parse_te_accepts_any_received_transfer_parameter) {
+    // RFC 9110 section 10.1.4: t-codings carry transfer-parameters; the server
+    // never applies a TE coding, so only the weight is checked.
+    for (const auto value : {"gzip;level=1", "deflate; window=\"15\", trailers", "x-custom;a=b;q=0.5", "chunked;x=1"}) {
+        std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: TE\r\nTE: ";
+        wire.append(value);
+        wire.append("\r\n\r\n");
+        const auto result_value = parse_http1_request_message(wire);
+        RUVIA_CHECK(result_value.complete());
+    }
+    for (const auto value : {"gzip;level", "gzip;q=0.5;q=0.5", "gzip;level=1;q=7"}) {
+        std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: TE\r\nTE: ";
+        wire.append(value);
+        wire.append("\r\n\r\n");
+        RUVIA_CHECK(is_failure(parse_http1_request_message(wire).state_, http_parse_error::invalid_header));
+    }
+}
+
+RUVIA_TEST(http1_parse_connection_options_reject_only_protected_fields) {
+    // RFC 9110 section 7.6.1 binds the sender; an option naming another
+    // end-to-end field is ignored and the field kept.
+    for (const auto option : {"Accept", "User-Agent", "Date", "Cache-Control", "Range"}) {
+        std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: ";
+        wire.append(option);
+        wire.append("\r\nUser-Agent: probe\r\n\r\n");
+        const auto result_value = parse_http1_request_message(wire);
+        RUVIA_CHECK(result_value.complete());
+        RUVIA_CHECK(result_value.state_.connection_plan_.disposition() == http1_close_policy::allow_reuse);
+        RUVIA_CHECK_EQ(result_value.state_.request_.header("User-Agent").value_or(""), "probe");
+    }
+    // Options that would strip framing, routing or access fields fail closed.
+    for (const auto option : {"Content-Length", "Host", "Authorization", "Cookie", "Origin"}) {
+        std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: ";
+        wire.append(option);
+        wire.append("\r\n\r\n");
+        RUVIA_CHECK(is_failure(parse_http1_request_message(wire).state_, http_parse_error::invalid_connection));
+    }
+}
+
 RUVIA_TEST(http1_parse_duplicate_authorization_rejected) {
     const auto result_value = parse_http1_request_message(
         "GET / HTTP/1.1\r\nHost: x\r\n"
@@ -742,7 +781,7 @@ RUVIA_TEST(http1_parse_duplicate_authorization_rejected) {
     RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::invalid_header));
 }
 
-RUVIA_TEST(http1_parse_duplicate_websocket_identity_and_user_agent_rejected) {
+RUVIA_TEST(http1_parse_duplicate_websocket_identity_rejected) {
     const std::string_view messages[] = {
         "GET / HTTP/1.1\r\nHost: x\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
@@ -750,13 +789,22 @@ RUVIA_TEST(http1_parse_duplicate_websocket_identity_and_user_agent_rejected) {
         "GET / HTTP/1.1\r\nHost: x\r\n"
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Version: 13\r\n\r\n",
-        "GET / HTTP/1.1\r\nHost: x\r\n"
-        "User-Agent: first/1\r\n"
-        "User-Agent: second/2\r\n\r\n",
     };
     for (const auto message : messages) {
         const auto result_value = parse_http1_request_message(message);
         RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::invalid_header));
+    }
+}
+
+// RFC 9110 section 5.3 forbids only generating repeated singleton lines.
+RUVIA_TEST(http1_parse_duplicate_user_agent_accepted) {
+    const auto result_value = parse_http1_request_message(
+        "GET / HTTP/1.1\r\nHost: x\r\n"
+        "User-Agent: first/1\r\n"
+        "User-Agent: second/2\r\n\r\n");
+    RUVIA_CHECK(result_value.complete());
+    if (result_value.complete()) {
+        RUVIA_CHECK_EQ(result_value.state_.request_.headers().size(), std::size_t{3});
     }
 }
 
@@ -966,7 +1014,7 @@ RUVIA_TEST(http1_parse_head_failures_close_persistent_connections) {
     // message boundary unknown.
     for (const auto wire : {
              "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n",
-             "TRACE / HTTP/1.1\r\nHost: x\r\nContent-Length: 1\r\n\r\nx",
+             "CONNECT a.example:443 HTTP/1.1\r\nHost: a.example:443\r\nContent-Length: 1\r\n\r\nx",
              "POST / HTTP/1.0\r\nConnection: keep-alive\r\nTransfer-Encoding: chunked\r\n\r\n",
              "POST / HTTP/1.1\r\nContent-Length: 1\r\n\r\nx",
          }) {
@@ -1221,14 +1269,14 @@ RUVIA_TEST(http1_parse_connect_uses_target_authority) {
     }
 }
 
-RUVIA_TEST(http1_parse_methods_without_content_accept_zero_length_only) {
+RUVIA_TEST(http1_parse_connect_accepts_zero_length_only_and_trace_frames_content) {
     const auto rejects = [&](std::string_view request, http_parse_error error) {
         const auto result_value = parse_http1_request_message(request);
         RUVIA_CHECK(is_failure(result_value.state_, error));
     };
 
-    // RFC 9110 sections 9.3.6 and 9.3.8 prohibit content, not zero-length
-    // framing. Keep rejecting nonzero and unknown-length content.
+    // RFC 9110 section 9.3.6 leaves CONNECT content without meaning, so any
+    // nonzero or unknown-length CONNECT framing is ambiguous and rejected.
     for (const auto wire : {
              "TRACE /diagnostic HTTP/1.1\r\nHost: example.test\r\nContent-Length: 0\r\n\r\n",
              "CONNECT tunnel.example:443 HTTP/1.1\r\nHost: tunnel.example:443\r\nContent-Length: 0\r\n\r\n",
@@ -1259,23 +1307,21 @@ RUVIA_TEST(http1_parse_methods_without_content_accept_zero_length_only) {
         "Host: tunnel.example:443\r\nTransfer-Encoding: chunked\r\n\r\n"
         "0\r\n\r\n",
         http_parse_error::invalid_transfer_encoding);
-    rejects(
+
+    // RFC 9110 section 9.3.8 forbids only sending TRACE content; its framing is
+    // unambiguous, so the content is framed and consumed like any other.
+    const auto trace_length = parse_http1_request_message(
         "TRACE /diagnostic HTTP/1.1\r\n"
-        "Host: example.test\r\nContent-Length: 4\r\n\r\nbody",
-        http_parse_error::invalid_content_length);
-    rejects(
+        "Host: example.test\r\nContent-Length: 4\r\n\r\nbody");
+    RUVIA_CHECK(trace_length.complete());
+    RUVIA_CHECK_EQ(require_known_length(trace_length.state_.body_plan_).content_length(), std::size_t{4});
+    RUVIA_CHECK_EQ(trace_length.body_, "body");
+    const auto trace_chunked = parse_http1_request_message(
         "TRACE /diagnostic HTTP/1.1\r\n"
         "Host: example.test\r\nTransfer-Encoding: chunked\r\n\r\n"
-        "0\r\n\r\n",
-        http_parse_error::invalid_transfer_encoding);
-
-    // Method tokens are case-sensitive. A lowercase extension method named
-    // "trace" does not acquire the registered TRACE method's semantics.
-    const auto extension = parse_http1_request_message(
-        "trace /diagnostic HTTP/1.1\r\n"
-        "Host: example.test\r\nContent-Length: 4\r\n\r\nbody");
-    RUVIA_CHECK(extension.complete());
-    RUVIA_CHECK_EQ(require_known_length(extension.state_.body_plan_).content_length(), std::size_t{4});
+        "4\r\nbody\r\n0\r\n\r\n");
+    RUVIA_CHECK(trace_chunked.complete());
+    RUVIA_CHECK_EQ(trace_chunked.body_, "body");
 
     // Unframed bytes following a CONNECT head are not request content. The
     // whole-message parser returns the exact head boundary so a tunnel owner
@@ -1643,6 +1689,21 @@ RUVIA_TEST(http1_parse_head_classifies_request_line_before_the_head_completes) {
     // it still identifies an HTTP peer.
     RUVIA_CHECK(!ruvia::should_drop_invalid_cleartext_http1_input(
         "GET /\nHTTP/1.1\r\nHost: x\r\n\r\n", http1_server_request_parse_failure_source::request_line));
+    // RFC 9112 sections 2.2 and 3: an invalid request-line that still names an
+    // HTTP version earns a 400, whatever its first byte or version case.
+    for (const std::string_view http_like :
+        {" GET /hello HTTP/1.1\r\nHost: x\r\n\r\n", "GET /hello http/1.1\r\nHost: x\r\n\r\n",
+            "GET /hello FOO/1.1\r\nHost: x\r\n\r\n", " GET /hello HTTP/1.1"}) {
+        http1_server_request_parse_state state;
+        state.parse_head(http_like);
+        const auto* failure = state.failure();
+        RUVIA_CHECK(failure != nullptr);
+        if (failure != nullptr) {
+            RUVIA_CHECK(failure->source() == http1_server_request_parse_failure_source::request_line);
+        }
+        RUVIA_CHECK(!ruvia::should_drop_invalid_cleartext_http1_input(
+            http_like, http1_server_request_parse_failure_source::request_line));
+    }
 
     {
         http1_server_request_parse_state state;
@@ -1657,5 +1718,33 @@ RUVIA_TEST(http1_parse_head_classifies_request_line_before_the_head_completes) {
         http1_server_request_parse_state state;
         state.parse_head(partial);
         RUVIA_CHECK(state.need_request_head() != nullptr);
+    }
+}
+
+RUVIA_TEST(http1_parse_head_rejects_bare_lf_in_field_section_before_the_head_completes) {
+    // RFC 9112 section 2.2: a bare LF that is not recognized as a line
+    // terminator makes the head invalid; it can never be completed by CRLFCRLF.
+    for (const std::string_view wire :
+        {std::string_view("GET / HTTP/1.1\r\nHost: a\n\r\n"), std::string_view("GET / HTTP/1.1\r\nHost: a\r\nX: b\n")}) {
+        http1_server_request_parse_state whole;
+        whole.parse_head(wire);
+        RUVIA_CHECK(is_failure(whole, http_parse_error::invalid_header));
+
+        std::size_t bare_line_feed = 0;
+        for (std::size_t index = 1; index < wire.size(); ++index) {
+            if (wire[index] == '\n' && wire[index - 1] != '\r') {
+                bare_line_feed = index;
+                break;
+            }
+        }
+        http1_server_request_parse_state incremental;
+        for (std::size_t size = 1; size <= wire.size(); ++size) {
+            incremental.parse_head(wire.substr(0, size), size - 1);
+            if (incremental.failure() != nullptr) {
+                RUVIA_CHECK_EQ(size, bare_line_feed + 1);
+                break;
+            }
+        }
+        RUVIA_CHECK(is_failure(incremental, http_parse_error::invalid_header));
     }
 }

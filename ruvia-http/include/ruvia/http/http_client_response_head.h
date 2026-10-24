@@ -39,7 +39,14 @@ public:
     http_client_response_head(http_client_response_head&&) noexcept = default;
     http_client_response_head& operator=(http_client_response_head&&) = delete;
 
+    // The status the response is processed as: a received 600..999 is
+    // processed as 500 (RFC 9110 section 15).
     [[nodiscard]] http_status_code status() const noexcept {
+        return status_.status();
+    }
+
+    // The status code as received, including an invalid 600..999.
+    [[nodiscard]] http_received_status received_status() const noexcept {
         return status_;
     }
 
@@ -70,18 +77,18 @@ public:
 private:
     friend struct detail::http_client_response_head_access;
 
-    http_client_response_head(http_status_code status, http_protocol_version protocol_version,
+    http_client_response_head(http_received_status status, http_protocol_version protocol_version,
         std::pmr::memory_resource* resource)
         : http_client_response_head(detail::http_resolved_pmr_resource_tag{}, status, protocol_version,
               detail::http_pmr_resource_or_default(resource)) {}
 
-    http_client_response_head(detail::http_resolved_pmr_resource_tag, http_status_code status,
+    http_client_response_head(detail::http_resolved_pmr_resource_tag, http_received_status status,
         http_protocol_version protocol_version, std::pmr::memory_resource* resource)
         : status_(status),
           protocol_version_(protocol_version),
           headers_(0, http_header({}, {}, resource), resource) {}
 
-    http_status_code status_;
+    http_received_status status_;
     http_protocol_version protocol_version_;
     std::pmr::vector<http_header> headers_;
 };

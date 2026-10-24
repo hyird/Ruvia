@@ -425,9 +425,12 @@ RUVIA_TEST(http_client_rejects_malformed_status_and_length_fields) {
                 http1_client_response_parse_error::invalid_status_code);
     RUVIA_CHECK(parse_failure_error("GET", "HTTP/1.1 abc Bad") ==
                 http1_client_response_parse_error::invalid_status_code);
+    // RFC 9110 section 15: 600..999 is processed as 5xx, not rejected.
     for (const std::string_view invalid : {"HTTP/1.1 600 Invalid", "HTTP/1.1 999 Invalid"}) {
-        RUVIA_CHECK(
-            parse_failure_error("GET", invalid) == http1_client_response_parse_error::invalid_status_code);
+        std::string response(invalid);
+        response.append("\r\nContent-Length: 0");
+        const auto parsed = parse_head("GET", response);
+        RUVIA_CHECK(parsed.head().status() == ruvia::http_status::internal_server_error);
     }
     RUVIA_CHECK(parse_failure_error("GET", "HTTP/1.1 200") ==
                 http1_client_response_parse_error::invalid_status_code);

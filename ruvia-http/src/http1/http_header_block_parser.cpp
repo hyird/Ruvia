@@ -200,6 +200,17 @@ std::size_t find_http_header_end(std::string_view buffer, std::size_t search_off
     return std::string_view::npos;
 }
 
+bool has_http_bare_line_feed(std::string_view buffer, std::size_t search_offset) noexcept {
+    buffer = buffer.substr(0, max_http_header_bytes);
+    for (auto line_feed = buffer.find('\n', std::max<std::size_t>(search_offset, 1));
+        line_feed != std::string_view::npos; line_feed = buffer.find('\n', line_feed + 1)) {
+        if (buffer[line_feed - 1] != '\r') {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::size_t http_request_leading_empty_line_bytes(std::string_view buffer, std::size_t skipped) noexcept {
     buffer = buffer.substr(0, max_http_header_bytes);
     auto cursor_value = std::min(skipped, buffer.size());

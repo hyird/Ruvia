@@ -1,8 +1,6 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/http_request_content_semantics.h"
-
 #include "http2/http2_connection.h"
 #include "http2/http2_header_block.h"
 #include "http2/http2_header_rules.h"
@@ -73,18 +71,6 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
                    stream.request_known_method(), stream.request_scheme(), stream.request_path()) ||
                !http2_has_required_request_authority(stream)) {
         return header_decode_status::protocol_error;
-    }
-    if (role_ == http2_role::server && stream.request_known_method() != http_known_method::connect) {
-        const auto content_semantics = classify_http_request_content_semantics(stream.request_method());
-        if (content_semantics == http_request_content_semantics::forbidden) {
-            // Zero-length framing carries no content. Keep the remote half open
-            // for an empty DATA(END_STREAM), but forbid every non-empty DATA.
-            const auto* declared = stream.remote_content().allowed_known_length();
-            if ((declared != nullptr && declared->declared_length() != 0) ||
-                !stream.select_remote_content_metadata_only()) {
-                return header_decode_status::protocol_error;
-            }
-        }
     }
     const bool remote_head_finalized = stream.tunnel().pending() != nullptr
                                            ? stream.finalize_remote_connect_head()

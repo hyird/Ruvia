@@ -222,7 +222,7 @@ inline constexpr auto websocket_switching_protocols_head_prefix = [] {
             *out_++ = value;
         }
     } sink{result_value.data()};
-    emit_http1_status_line(sink, http_protocol_version::http11, http_status::switching_protocols, reason);
+    emit_http1_status_line(sink, http_status::switching_protocols, reason);
     sink.append(upgrade_field);
     sink.append(http_connection_field_name);
     sink.append(field_separator);

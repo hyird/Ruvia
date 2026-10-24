@@ -562,12 +562,12 @@ public:
     }
     [[nodiscard]] const http2_tunnel_state& tunnel() const&& = delete;
 
-    [[nodiscard]] const http_status_code* response_status() const& noexcept {
+    [[nodiscard]] const http_received_status* response_status() const& noexcept {
         return request_state_.response_status();
     }
-    [[nodiscard]] const http_status_code* response_status() const&& = delete;
+    [[nodiscard]] const http_received_status* response_status() const&& = delete;
 
-    [[nodiscard]] bool set_response_status(http_status_code status) noexcept {
+    [[nodiscard]] bool set_response_status(http_received_status status) noexcept {
         return request_state_.set_response_status(status);
     }
 

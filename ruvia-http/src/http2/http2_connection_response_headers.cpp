@@ -35,7 +35,7 @@ struct http2_response_decode_context final {
     http2_header_decode_context base_;
     response_field_state fields_;
     std::pmr::vector<http_header> informational_fields_;
-    std::optional<http_status_code> status_;
+    std::optional<http_received_status> status_;
     http_response_content_semantics content_semantics_{http_response_content_semantics::with_content};
     bool saw_regular_{false};
 };
@@ -61,20 +61,21 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
         if (value.size() != 3 || ec != std::errc{} || ptr != value.data() + value.size()) {
             return false;
         }
-        const auto status = http_status_code::try_from_value(static_cast<std::uint16_t>(parsed_status));
-        if (!status || *status == http_status::switching_protocols) {
+        // RFC 9110 section 15: a received 600..999 is processed as a 5xx response.
+        const auto status = http_received_status::try_from_value(static_cast<std::uint16_t>(parsed_status));
+        if (!status || status->status() == http_status::switching_protocols) {
             return false;
         }
         context_value->status_ = *status;
         context_value->content_semantics_ =
-            classify_http_response_content_semantics(stream.request_known_method(), *status);
+            classify_http_response_content_semantics(stream.request_known_method(), status->status());
         return true;
     }
     if (!context_value->status_ || !http2_is_valid_decoded_response_header(name, value)) {
         return false;
     }
     context_value->saw_regular_ = true;
-    if (context_value->status_->is_informational()) {
+    if (context_value->status_->status().is_informational()) {
         // These fields cannot frame a 1xx or carry over to the final response.
         context_value->informational_fields_.emplace_back(
             name, value, context_value->informational_fields_.get_allocator().resource());
@@ -113,14 +114,15 @@ bool http2_on_decoded_response_trailer(void* target, std::string_view name, std:
         return false;
     }
 
-    // Response trailers have different field semantics from request trailers.
-    // Reuse the same response-specific permission table that proves outbound
-    // trailer sections, after applying HTTP/2's lowercase and connection-field
-    // rules. In particular, Accept-Ranges and ETag are explicitly trailer-safe,
-    // while response controls such as Date and Location are not.
-    return http2_is_valid_decoded_response_header(name, value) &&
-           !is_forbidden_response_trailer_name(name) &&
-           context_value.stream_.append_remote_trailer(name, value);
+    // Pseudo-header, connection-specific and TE fields are malformed (RFC 9113
+    // sections 8.1 and 8.2.2). Response trailer permissions follow the same
+    // response-specific table that proves outbound trailer sections, but that
+    // table binds only the sender (RFC 9110 section 6.5.1): a received field it
+    // does not permit is discarded, never merged into the header section.
+    if (!http2_is_valid_decoded_response_header(name, value)) {
+        return false;
+    }
+    return is_forbidden_response_trailer_name(name) || context_value.stream_.append_remote_trailer(name, value);
 }
 
 header_decode_status http2_connection::decode_response_header_block(http2_stream_state& stream,
@@ -139,7 +141,7 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
     if (!context_value.status_) {
         return header_decode_status::protocol_error;
     }
-    if (context_value.status_->is_informational()) {
+    if (context_value.status_->status().is_informational()) {
         // 1xx interim head cannot carry END_STREAM. Without it, the remote receive
         // state remains head-pending so the next HEADERS is decoded as another head.
         if (stream.remote_receive().head_end_stream_pending() != nullptr) {
@@ -157,7 +159,7 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
             }
         }
         std::optional<http_client_request_content_signal> signal;
-        if (*context_value.status_ == http_status::continue_value && stream.release_request_continue()) {
+        if (context_value.status_->status() == http_status::continue_value && stream.release_request_continue()) {
             signal = http_client_request_content_signal::continue_value;
         }
         events_.push_back(http2_event(http2_informational_head_event(stream.id(), std::move(head), signal)));
@@ -171,7 +173,7 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
     // Ordinary 205 responses have a zero-length content phase (RFC 9110 15.3.6).
     // HEAD keeps representation metadata, and successful CONNECT carries a tunnel;
     // neither uses the ordinary response-content length constraint.
-    if (*context_value.status_ == http_status::reset_content &&
+    if (context_value.status_->status() == http_status::reset_content &&
         content_semantics == http_response_content_semantics::with_content &&
         !stream.declare_remote_content_length(0)) {
         return header_decode_status::protocol_error;

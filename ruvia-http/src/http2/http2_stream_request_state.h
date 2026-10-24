@@ -72,12 +72,12 @@ public:
 
     // Client role: nullptr until the final response :status is committed once for
     // a stream this endpoint opened. Informational heads do not commit that status.
-    [[nodiscard]] const http_status_code* response_status() const& noexcept {
+    [[nodiscard]] const http_received_status* response_status() const& noexcept {
         return response_status_ ? &*response_status_ : nullptr;
     }
-    [[nodiscard]] const http_status_code* response_status() const&& = delete;
+    [[nodiscard]] const http_received_status* response_status() const&& = delete;
 
-    [[nodiscard]] bool set_response_status(http_status_code status) noexcept {
+    [[nodiscard]] bool set_response_status(http_received_status status) noexcept {
         if (response_status_) {
             return false;
         }
@@ -103,7 +103,7 @@ private:
     bool regular_header_seen_ : 1 {false};
     bool has_informational_response_ : 1 {false};
     std::uint16_t scheme_default_port_{0};
-    std::optional<http_status_code> response_status_;
+    std::optional<http_received_status> response_status_;
 };
 
 }  // namespace ruvia::detail

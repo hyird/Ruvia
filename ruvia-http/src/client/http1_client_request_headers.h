@@ -27,6 +27,8 @@ struct request_header_facts final {
     detail::http_connection_options connection_options_;
     detail::http_upgrade_protocols upgrade_protocols_;
     bool has_te_{false};
+    // The caller declared trailer fields; the writer requires chunked content.
+    bool has_trailer_{false};
 };
 
 [[nodiscard]] bool analyze_header(http_header_view header, detail::request_header_kind kind,

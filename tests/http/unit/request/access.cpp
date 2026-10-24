@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -9,7 +10,9 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_status.h"
 
 #include "http1_request_message_fixture.h"
 #include "request_header_memory_fixture.h"
@@ -105,6 +108,30 @@ RUVIA_TEST(request_header_distinguishes_missing_from_present_empty) {
     const auto known_present_empty = request.header("HOST");
     RUVIA_CHECK(known_present_empty.has_value());
     RUVIA_CHECK(known_present_empty.value_or("missing").empty());
+}
+
+RUVIA_TEST(parsed_request_applies_recipient_field_rules_like_wire_parsers) {
+    // RFC 9110 section 5.3: only list fields may repeat; joined Range or
+    // If-Range lines would otherwise resolve to their last line.
+    const http_header_view duplicate_range[]{{"Range", "bytes=0-0"}, {"Range", "bytes=5-5"}};
+    const http_header_view duplicate_if_range[]{{"If-Range", "\"y\""}, {"If-Range", "\"x\""}};
+    const http_header_view duplicate_host[]{{"Host", "a.example"}, {"Host", "b.example"}};
+    for (const auto headers : {std::span<const http_header_view>(duplicate_range),
+             std::span<const http_header_view>(duplicate_if_range), std::span<const http_header_view>(duplicate_host)}) {
+        bool rejected = false;
+        try {
+            (void)ruvia::make_parsed_http_request("GET", "/", headers, {}, std::pmr::get_default_resource());
+        } catch (const ruvia::http_protocol_error& error) {
+            rejected = error.status() == ruvia::http_status::bad_request;
+        }
+        RUVIA_CHECK(rejected);
+    }
+
+    const http_header_view repeated_list[]{{"Accept", "text/plain"}, {"Accept", "text/html"},
+        {"User-Agent", "first/1"}, {"User-Agent", "second/2"}};
+    const auto request = ruvia::make_parsed_http_request(
+        "GET", "/", repeated_list, {}, std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(request.headers().size(), std::size_t{4});
 }
 
 RUVIA_TEST(request_content_coding_accumulates_repeated_header_fields_in_order) {

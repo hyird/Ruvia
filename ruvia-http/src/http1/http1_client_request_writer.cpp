@@ -215,6 +215,12 @@ struct request_head_write_plan final {
     if (!analyze_headers(headers, header_facts, error)) {
         return detail::http1_client_request_prepare_result_access::failure(error);
     }
+    // A sender that will generate trailer fields SHOULD declare them (RFC 9110
+    // section 6.6.2); only chunked content has a trailer section.
+    if (header_facts.has_trailer_ && !chunked) {
+        return detail::http1_client_request_prepare_result_access::failure(
+            http1_client_request_prepare_error::trailer_requires_chunked_content);
+    }
     const bool expect_continue = policy.expectation_ == http_client_request_expectation::continue_value;
     const auto content_indication = explicit_content && (!length || *length != 0)
                                         ? http_request_content_indication::will_follow
@@ -353,8 +359,8 @@ std::string_view http1_client_request_prepare_error_message(
             return "HTTP/1 client Content-Length is managed by the writer";
         case http1_client_request_prepare_error::transfer_encoding_unsupported:
             return "HTTP/1 client Transfer-Encoding is unsupported";
-        case http1_client_request_prepare_error::trailer_section_unsupported:
-            return "HTTP/1 client trailer sections are unsupported";
+        case http1_client_request_prepare_error::trailer_requires_chunked_content:
+            return "HTTP/1 client Trailer requires chunked request content";
         case http1_client_request_prepare_error::expect_header_managed_by_writer:
             return "HTTP/1 client Expect is managed by the writer";
         case http1_client_request_prepare_error::invalid_connection:

@@ -65,12 +65,13 @@ void append_http1_response_trailers(
 template <detail::http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
 
-// Visit normalized response trailer fields from an HTTP/1 trailer block: the
-// bytes between the terminal zero-size chunk and the empty line that ends the
-// trailer section (a final CRLF after the last field is accepted). Values are
-// exposed with optional whitespace stripped and borrow `block`. Returns false
-// for a malformed, forbidden or oversized section, or when the visitor returns
-// false.
+// Visit normalized response trailer fields from a received HTTP/1 trailer
+// block: the bytes between the terminal zero-size chunk and the empty line that
+// ends the trailer section (a final CRLF after the last field is accepted).
+// Values are exposed with optional whitespace stripped and borrow `block`.
+// Fields not permitted in response trailers (RFC 9110 section 6.5.1) are
+// discarded without reaching the visitor (RFC 9112 section 7.1.2). Returns false
+// for a malformed or oversized section, or when the visitor returns false.
 template <typename visitor_type>
 [[nodiscard]] inline bool visit_http_response_trailers(std::string_view block, visitor_type&& visitor) {
     auto budget = http_trailer_section_budget();

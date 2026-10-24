@@ -169,8 +169,11 @@ private:
 // header span count is used to allocate descriptors from `resource`. The caller
 // must keep all supplied text/body storage and the resource alive while the
 // returned request is in use. Invalid method, target, or header fields throw
-// http_protocol_error; body framing fields are intentionally not interpreted
-// because this API represents an already-parsed request.
+// http_protocol_error. Header fields pass the same recipient field rules as
+// the HTTP/1 and HTTP/2 parsers, so a repeated singleton field such as Range or
+// If-Range throws instead of resolving to one of its lines. Body framing fields
+// are intentionally not interpreted because this API represents an
+// already-parsed request.
 [[nodiscard]] http_request make_parsed_http_request(
     std::string_view method, std::string_view target, std::span<const http_header_view> headers,
     std::span<const std::byte> body, std::pmr::memory_resource* resource);

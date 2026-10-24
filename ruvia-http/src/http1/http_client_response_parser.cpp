@@ -152,7 +152,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     // plan have validated. Field views borrow the input or unfolded_head until
     // they are copied below; neither failure nor allocation commits the exchange.
     auto head = detail::http_client_response_head_access::make(
-        parsed_value.status_code_, parsed_value.protocol_version_, resource_);
+        parsed_value.received_status_, parsed_value.protocol_version_, resource_);
     const auto parsed_headers = parsed_value.headers_.view();
     if (!parsed_headers.empty()) {
         auto& headers = detail::http_client_response_head_access::headers(head);

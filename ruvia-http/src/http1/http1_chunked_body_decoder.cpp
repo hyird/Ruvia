@@ -6,7 +6,6 @@
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
-#include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
 
@@ -32,12 +31,7 @@ http1_chunk_decode_result http1_chunk_decode_result::make_failure(
 }
 
 http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder_config config)
-    : body_limit_(config.body_limit_),
-      trailer_role_(config.trailer_role_) {
-    if (trailer_role_ != http1_chunk_trailer_role::request && trailer_role_ != http1_chunk_trailer_role::response) {
-        throw std::invalid_argument("invalid HTTP/1 chunk trailer role");
-    }
-}
+    : body_limit_(config.body_limit_) {}
 
 http1_chunked_body_decoder::~http1_chunked_body_decoder() = default;
 http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder&&) noexcept = default;
@@ -170,13 +164,14 @@ bool http1_chunked_body_decoder::consume_delimiter(std::string_view available, s
     return true;
 }
 
-bool http1_chunked_body_decoder::trailers_valid(std::string_view trailers) const noexcept {
+bool http1_chunked_body_decoder::trailers_valid(std::string_view trailers) noexcept {
+    // Received fields that were not permitted as trailers are discarded by the
+    // consumers, never merged (RFC 9112 section 7.1.2), so framing validity
+    // depends only on field syntax and the section budget.
+    const auto discard_none = [](std::string_view) noexcept { return false; };
     const auto accept = [](std::string_view, std::string_view) noexcept { return true; };
     auto budget = http_trailer_section_budget();
-    const auto status = trailer_role_ == http1_chunk_trailer_role::response
-                            ? detail::visit_http1_trailer_block(trailers, detail::is_forbidden_response_trailer_name, budget, accept)
-                            : detail::visit_http1_trailer_block(trailers, detail::is_forbidden_http_request_trailer_name, budget, accept);
-    return status == detail::http_trailer_block_status::ok;
+    return detail::visit_http1_trailer_block(trailers, discard_none, budget, accept) == detail::http_trailer_block_status::ok;
 }
 
 http1_chunk_decode_result http1_chunked_body_decoder::fail(

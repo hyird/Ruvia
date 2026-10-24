@@ -3,11 +3,12 @@
 #include <algorithm>
 #include <limits>
 
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_request_content_semantics.h"
 
+#include "field/http_request_field_validation.h"
 #include "parser/http_header_block_parser.h"
 #include "parser/http_request_target.h"
 #include "request/http_request_access.h"
@@ -17,6 +18,7 @@ namespace {
 
 using ruvia::detail::classify_http_request_line_prefix;
 using ruvia::detail::find_http_request_head_end;
+using ruvia::detail::has_http_bare_line_feed;
 using ruvia::detail::http_request_access;
 using ruvia::detail::parse_http_header_block;
 using ruvia::detail::parse_request_target;
@@ -60,6 +62,33 @@ void apply_parsed_request_target(http_request& request, const request_target_vie
                ? target_view.authority_
                : value;
 }
+
+// True if a whitespace-separated word of `line` looks like an HTTP-version:
+// "HTTP/" in any case, or token "/" 1*DIGIT "." 1*DIGIT.
+[[nodiscard]] bool names_http_version(std::string_view line) noexcept {
+    while (!line.empty()) {
+        const auto word_end = line.find_first_of(" \t\r\n");
+        const auto word = line.substr(0, word_end);
+        if (word.size() >= 5 && http_ascii_equals_ignore_case(word.substr(0, 5), "HTTP/")) {
+            return true;
+        }
+        const auto name_size = http_token_prefix_size(word);
+        const auto version = word.substr(name_size);
+        const auto dot = version.find('.');
+        const auto digits = [](std::string_view value) noexcept {
+            return !value.empty() && std::ranges::all_of(value, [](char ch) noexcept { return ch >= '0' && ch <= '9'; });
+        };
+        if (name_size != 0 && version.starts_with('/') && dot != std::string_view::npos &&
+            digits(version.substr(1, dot - 1)) && digits(version.substr(dot + 1))) {
+            return true;
+        }
+        if (word_end == std::string_view::npos) {
+            return false;
+        }
+        line.remove_prefix(word_end + 1);
+    }
+    return false;
+}
 }  // namespace
 
 http1_server_request_parse_state::http1_server_request_parse_state() noexcept
@@ -102,6 +131,13 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
                     buffer, scan.leading_bytes_, header_search_offset, scan.request_line_end_)) {
                 return fail(*error);
             }
+        }
+        // A field section line ending in a bare LF can never complete the
+        // CRLF-delimited head (RFC 9112 section 2.2); answer it at once rather
+        // than waiting for the header timeout.
+        if (scan.request_line_end_ != 0 &&
+            has_http_bare_line_feed(buffer, std::max(scan.request_line_end_, header_search_offset))) {
+            return fail(http_parse_error::invalid_header);
         }
         if (buffer.size() >= max_http_header_bytes) {
             return fail(classify_head_cap(buffer, scan.leading_bytes_, scan.request_line_end_));
@@ -158,10 +194,13 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
         return fail(http_parse_error::invalid_transfer_encoding);
     }
 
-    if (classify_http_request_content_semantics(method) == http_request_content_semantics::forbidden) {
-        // RFC 9110 sections 9.3.6 and 9.3.8 disallow request content.
-        // A zero Content-Length frames no content (RFC 9112 section 6.3);
-        // transfer coding leaves the content length unknown at head time.
+    if (known_method == http_known_method::connect) {
+        // RFC 9110 section 9.3.6: CONNECT content has no defined meaning and
+        // bytes after the head belong to the tunnel, so any content framing
+        // leaves the message boundary ambiguous. A zero Content-Length frames
+        // no content (RFC 9112 section 6.3). TRACE content (section 9.3.8) is
+        // a sender prohibition only; its framing is unambiguous, so it is
+        // framed and consumed like any other content.
         if (transfer_encoding.has_value()) {
             return fail(http_parse_error::invalid_transfer_encoding);
         }
@@ -233,7 +272,11 @@ http_request make_parsed_http_request(
     if (!parse_request_target(request.known_method(), target, target_view)) {
         throw http_parse_protocol_error(http_parse_error::invalid_request_target);
     }
+    // The same recipient field rules as the wire parsers: repeated singleton
+    // fields such as Range or If-Range make the request invalid instead of
+    // resolving to one of their lines.
     http_field_section_budget budget;
+    detail::request_field_state fields(detail::request_field_framing::http1);
     for (const auto& header : headers) {
         if (!is_valid_http_header_name(header.name()) ||
             !is_valid_http_header_value(header.value())) {
@@ -241,6 +284,13 @@ http_request make_parsed_http_request(
         }
         if (!budget.add_field(header.name(), header.value())) {
             throw http_parse_protocol_error(http_parse_error::header_too_large);
+        }
+        const auto kind = detail::classify_request_header(header.name());
+        if (detail::validate_request_field(kind, header.value(), detail::http_field_list_role::recipient, fields) !=
+            detail::request_field_status::ok) {
+            throw http_parse_protocol_error(kind == detail::request_header_kind::host
+                                                ? http_parse_error::invalid_host
+                                                : http_parse_error::invalid_header);
         }
     }
 
@@ -269,31 +319,16 @@ bool should_drop_invalid_cleartext_http1_input(
     if (buffer.empty()) {
         return false;
     }
-    if (!is_http_token_char(static_cast<unsigned char>(buffer.front()))) {
-        return true;
-    }
-
+    // A first line that names an HTTP version shows the peer speaks HTTP and
+    // earns the 400 of RFC 9112 sections 2.2 and 3, even when the line starts
+    // with whitespace. Other input (TLS records, SSH banners) is dropped
+    // silently; without a complete line, so is input whose first byte cannot
+    // start a method.
     const auto line_end = buffer.find("\r\n");
-    if (line_end == std::string_view::npos) {
+    if (names_http_version(buffer.substr(0, line_end))) {
         return false;
     }
-
-    // Any whitespace-separated token naming an HTTP/ version shows the peer
-    // speaks HTTP and earns a 400; a line without one (including a line with
-    // no separator at all, such as an SSH banner) is dropped silently. A bare
-    // LF is invalid in the line but still separates what the peer wrote.
-    auto line = buffer.substr(0, line_end);
-    while (!line.empty()) {
-        const auto token_end = line.find_first_of(" \t\n");
-        if (line.substr(0, token_end).starts_with("HTTP/")) {
-            return false;
-        }
-        if (token_end == std::string_view::npos) {
-            return true;
-        }
-        line.remove_prefix(token_end + 1);
-    }
-    return true;
+    return line_end != std::string_view::npos || !is_http_token_char(static_cast<unsigned char>(buffer.front()));
 }
 
 }  // namespace ruvia

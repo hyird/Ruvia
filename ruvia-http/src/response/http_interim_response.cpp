@@ -90,7 +90,7 @@ struct http1_interim_header_facts final {
 [[nodiscard]] char* write_interim_response_head(
     char* output, const http_interim_response_head& response, std::string_view reason_phrase) noexcept {
     detail::http_raw_wire_sink sink(output);
-    detail::emit_http1_status_line(sink, http_protocol_version::http11, response.status(), reason_phrase);
+    detail::emit_http1_status_line(sink, response.status(), reason_phrase);
     for (const auto& header : response.headers()) {
         detail::emit_http1_field_line(sink, header.name(), header.value());
     }

@@ -143,10 +143,12 @@ request_field_status validate_request_field(request_header_kind kind, std::strin
     }
     // Invalid date conditions, including repeated field lines, are ignored
     // rather than rejecting the request (RFC 9110 sections 13.1.3 and 13.1.4).
-    // Senders still cannot generate these singleton fields more than once.
+    // A repeated User-Agent violates only the sender rule of RFC 9110 section
+    // 5.3 and controls no framing, routing or access, so recipients keep its
+    // lines. Senders still cannot generate these singleton fields more than once.
     if (role == http_field_list_role::recipient &&
         (kind == request_header_kind::if_modified_since ||
-            kind == request_header_kind::if_unmodified_since)) {
+            kind == request_header_kind::if_unmodified_since || kind == request_header_kind::user_agent)) {
         return request_field_status::ok;
     }
     if (const auto bit = once_only_bit(kind); bit != 0) {

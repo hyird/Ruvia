@@ -70,9 +70,9 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
         state_value.upload_->output_.stop();
     }
     auto head = std::move(event).take_head();
-    state_value.status_ = head.status();
+    state_value.status_ = head.received_status();
     state_value.protocol_version_ = head.protocol_version();
-    state_value.response_body_plan_ = plan_http_response_body(state_value.request_method_, state_value.status_);
+    state_value.response_body_plan_ = plan_http_response_body(state_value.request_method_, state_value.status_.status());
     const auto headers = head.headers();
     state_value.headers_.clear();
     state_value.headers_.reserve(headers.size());
@@ -86,7 +86,7 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
             state_value.response_body_plan_->content_semantics() == http_response_content_semantics::connect_tunnel;
         if (state_value.tunnel_->accepted_ && state_value.tunnel_->udp_) {
             if (validate_http_connect_udp_response(
-                    state_value.protocol_version_, state_value.status_.value(), state_value.headers_)
+                    state_value.protocol_version_, state_value.status_.status().value(), state_value.headers_)
                     .has_value()) {
                 throw http_client_error(http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
             }

@@ -642,12 +642,14 @@ RUVIA_TEST(http_client_informational_auxiliary_fields_preserve_the_final_respons
     }
 }
 
-RUVIA_TEST(http_client_no_body_content_length_metadata_must_parse) {
-    RUVIA_CHECK(parse_fails("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: invalid"));
-    RUVIA_CHECK(parse_fails("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6"));
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: invalid"));
-    RUVIA_CHECK(
-        parse_fails("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5, 6"));
+RUVIA_TEST(http_client_no_body_content_length_metadata_does_not_fail_the_response) {
+    for (const auto& [method, response] : {std::pair{"HEAD", "HTTP/1.1 200 OK\r\nContent-Length: invalid"},
+             std::pair{"HEAD", "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6"},
+             std::pair{"GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: invalid"},
+             std::pair{"GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5, 6"}}) {
+        const auto parsed = parse_head(method, response);
+        RUVIA_CHECK(parsed.plan().without_content() != nullptr);
+    }
 
     const auto repeated =
         parse_head("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5\r\nContent-Length: 5");
@@ -721,7 +723,7 @@ RUVIA_TEST(http_client_bodyless_framing_fields_do_not_desynchronize_the_connecti
 
 RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     const auto zero_length = parse_head("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 0");
-    RUVIA_CHECK(zero_length.plan().requires_zero_content());
+    RUVIA_CHECK(zero_length.plan().discards_content());
     const auto* zero_length_body = zero_length.plan().known_length();
     RUVIA_CHECK(zero_length_body != nullptr);
     if (zero_length_body == nullptr) {
@@ -731,13 +733,17 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     RUVIA_CHECK(zero_length_body->persistence() == http1_close_policy::allow_reuse);
     RUVIA_CHECK_EQ(active_plan_alternative_count(zero_length.plan()), std::size_t{1});
 
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3"));
+    // RFC 9110 section 15.3.6 binds the sender: delimited content is consumed.
+    const auto with_content = parse_head("GET", "HTTP/1.1 205 Reset Content\r\nContent-Length: 3");
+    RUVIA_CHECK(with_content.plan().discards_content());
+    RUVIA_CHECK_EQ(require_known_length(with_content.plan()).content_length(), std::size_t{3});
+    RUVIA_CHECK(require_known_length(with_content.plan()).persistence() == http1_close_policy::allow_reuse);
 
     const auto chunked = parse_head("GET",
         "HTTP/1.1 205 Reset Content\r\n"
         "Transfer-Encoding: gzip, chunked");
     const auto& chunked_zero = chunked.plan();
-    RUVIA_CHECK(chunked_zero.requires_zero_content());
+    RUVIA_CHECK(chunked_zero.discards_content());
     RUVIA_CHECK(chunked_zero.chunked() != nullptr);
     RUVIA_CHECK(chunked_zero.close_delimited() == nullptr);
     if (chunked_zero.chunked() != nullptr) {
@@ -750,7 +756,7 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     const auto transfer_coded =
         parse_head("GET", "HTTP/1.1 205 Reset Content\r\nTransfer-Encoding: gzip");
     const auto& transfer_coded_zero = transfer_coded.plan();
-    RUVIA_CHECK(transfer_coded_zero.requires_zero_content());
+    RUVIA_CHECK(transfer_coded_zero.discards_content());
     RUVIA_CHECK(transfer_coded_zero.close_delimited() != nullptr);
     if (transfer_coded_zero.close_delimited() != nullptr) {
         RUVIA_CHECK_EQ(transfer_coded_zero.close_delimited()->transfer_codings().size(), std::size_t{1});
@@ -760,7 +766,7 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
 
     const auto unframed = parse_head("GET", "HTTP/1.1 205 Reset Content");
     const auto& close_zero = unframed.plan();
-    RUVIA_CHECK(close_zero.requires_zero_content());
+    RUVIA_CHECK(close_zero.discards_content());
     RUVIA_CHECK(close_zero.close_delimited() != nullptr);
     RUVIA_CHECK(close_zero.chunked() == nullptr);
     RUVIA_CHECK_EQ(active_plan_alternative_count(unframed.plan()), std::size_t{1});
@@ -768,7 +774,30 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     const auto connect =
         parse_head("CONNECT", "HTTP/1.1 205 Reset Content\r\nContent-Length: invalid");
     RUVIA_CHECK(connect.plan().connect_tunnel() != nullptr);
-    RUVIA_CHECK(!connect.plan().requires_zero_content());
+    RUVIA_CHECK(!connect.plan().discards_content());
+}
+
+// RFC 9110 section 15: a received 600..999 is processed as a 5xx response.
+RUVIA_TEST(http_client_processes_out_of_range_status_as_server_error) {
+    for (const std::string_view line : {"HTTP/1.1 600 Odd", "HTTP/1.1 999 "}) {
+        std::string response(line);
+        response.append("\r\nContent-Length: 2");
+        const auto head = parse_head("GET", response);
+        RUVIA_CHECK(head.head().status() == ruvia::http_status::internal_server_error);
+        RUVIA_CHECK_EQ(head.head().received_status().value(), line == "HTTP/1.1 600 Odd" ? 600 : 999);
+        RUVIA_CHECK_EQ(require_known_length(head.plan()).content_length(), std::size_t{2});
+    }
+    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 099 Low\r\nContent-Length: 0"));
+}
+
+// RFC 9112 section 6.3 rule 1 precedes rule 5: HEAD and 304 responses end at
+// the header section, so an invalid Content-Length does not fail them.
+RUVIA_TEST(http_client_ignores_invalid_content_length_without_content) {
+    for (const auto& [method, response] : {std::pair{"HEAD", "HTTP/1.1 200 OK\r\nContent-Length: abc"},
+             std::pair{"GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 1, 2"}}) {
+        const auto head = parse_head(method, response);
+        RUVIA_CHECK(head.plan().without_content() != nullptr);
+    }
 }
 
 RUVIA_TEST(http_client_final_after_continue_does_not_cancel_released_content) {

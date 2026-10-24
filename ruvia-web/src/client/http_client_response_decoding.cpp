@@ -23,7 +23,7 @@ void configure_http_client_response_decoding(http_client_response_state& state_v
     // §15.3.7); it is exposed as received, with Content-Encoding kept.
     if (plan == nullptr || plan->body_suppressed() || !plan->status_allows_body() ||
         plan->content_semantics() != http_response_content_semantics::with_content ||
-        state_value.status_ == http_status::partial_content) {
+        state_value.status_.status() == http_status::partial_content) {
         return;
     }
     // Parsed once with the final head; decoding reuses this result at FIN.

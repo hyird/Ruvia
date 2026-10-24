@@ -62,6 +62,11 @@ struct parsed_request_header_block {
 
 [[nodiscard]] std::size_t find_http_header_end(
     std::string_view buffer, std::size_t search_offset) noexcept;
+// True if an LF at or after search_offset (and within max_http_header_bytes)
+// is not preceded by CR. Within a field section such a line can never end the
+// CRLF-delimited head; the caller passes the end of the accepted request-line
+// or a later offset whose earlier bytes were already scanned.
+[[nodiscard]] bool has_http_bare_line_feed(std::string_view buffer, std::size_t search_offset) noexcept;
 // RFC 9112 section 2.2: a server SHOULD ignore at least one empty line received
 // before the request-line. Leading CRLF or bare LF lines are skipped; they count
 // toward max_http_header_bytes, which bounds how many are ignored. The scan

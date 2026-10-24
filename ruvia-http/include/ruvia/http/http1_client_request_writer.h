@@ -156,7 +156,9 @@ enum class http1_client_request_prepare_error : std::uint8_t {
     host_header_managed_by_writer,
     content_length_managed_by_writer,
     transfer_encoding_unsupported,
-    trailer_section_unsupported,
+    // A Trailer field declares trailer fields (RFC 9110 section 6.6.2), which
+    // only chunked request content can carry (RFC 9112 section 7.1.2).
+    trailer_requires_chunked_content,
     expect_header_managed_by_writer,
     invalid_connection,
     invalid_upgrade,

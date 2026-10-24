@@ -21,9 +21,6 @@ bool analyze_header(http_header_view header, detail::request_header_kind kind,
         case detail::request_header_kind::transfer_encoding:
             error = http1_client_request_prepare_error::transfer_encoding_unsupported;
             return false;
-        case detail::request_header_kind::trailer:
-            error = http1_client_request_prepare_error::trailer_section_unsupported;
-            return false;
         default:
             break;
     }
@@ -53,6 +50,8 @@ bool analyze_header(http_header_view header, detail::request_header_kind kind,
         }
     } else if (kind == detail::request_header_kind::te) {
         facts.has_te_ = true;
+    } else if (kind == detail::request_header_kind::trailer) {
+        facts.has_trailer_ = true;
     }
 
     if (!facts.section_.add_field(name, value)) {
