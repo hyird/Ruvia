@@ -242,6 +242,8 @@ ruvia::task<void> handle_connect(ruvia::context& c) {
 }
 ```
 
+HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9298 §5，经 RFC 9931 更新）属于隧道数据：协议层在流控窗口内保留这些字节（不归还接收窗口），隧道接受后由 `tunnel.read()` 按序读到；若路由返回非 2xx，已缓冲及后续字节被丢弃并归还流控额度，不复位流。RFC 8441 WebSocket（`:protocol = websocket`）仍要求客户端等待 2xx（RFC 6455 §4.1），提前到达的 `DATA` 以 `RST_STREAM(PROTOCOL_ERROR)` 复位该流。已建立隧道上的未知扩展帧类型按 RFC 9113 §5.5 丢弃。
+
 ### 4.2 服务端 `CONNECT-UDP`（RFC 9298）与 Capsule 数据报隧道
 
 使用 `RUVIA_CONNECT_PROTOCOL("connect-udp", path, handler, options, ...)`（设置 `http_tunnel_route_config{.datagrams_ = true}`）注册 RFC 9298 UDP 代理隧道：

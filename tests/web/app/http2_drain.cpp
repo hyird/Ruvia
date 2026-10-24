@@ -239,7 +239,21 @@ void check_drain(ruvia::testing::test_context& ruvia_ctx, bool deadline_expires)
     await_observation([&state] { return state.entered_.load(); });
     app.stop();
     peer client(socket);
+    // RFC 9113 section 6.8: GOAWAY(2^31-1) and a PING first; the final GOAWAY
+    // with the last admitted stream follows the PING ACK.
     frame goaway;
+    do {
+        goaway = client.next();
+    } while (goaway.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway));
+    RUVIA_CHECK_EQ(uint32(goaway.payload_) & 0x7fffffffU, 0x7fffffffU);
+    RUVIA_CHECK_EQ(uint32(std::string_view(goaway.payload_).substr(4)), 0U);
+    frame ping;
+    do {
+        ping = client.next();
+    } while (ping.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::ping) || (ping.header_.flags_ & 0x1) != 0);
+    std::string ack;
+    append_frame(ack, ruvia::http2_frame_type::ping, 0x1, 0, ping.payload_);
+    asio::write(socket, asio::buffer(ack));
     do {
         goaway = client.next();
     } while (goaway.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway));

@@ -220,13 +220,22 @@ public:
         return failure != nullptr ? std::optional<http2_error_code>(failure->error()) : std::nullopt;
     }
 
-    // Graceful local drain: advertise GOAWAY(NO_ERROR) at the current last peer stream
-    // id and keep serving streams already accepted; HEADERS for a stream above the
-    // advertised id are refused (RST_STREAM(REFUSED_STREAM)). Idempotent. Receiving a
-    // valid peer GOAWAY enters this state through the same path so shutdown is bilateral.
+    // Graceful local drain (RFC 9113 §6.8) without a connection error; established
+    // streams keep running. A server advertises GOAWAY(2^31-1, NO_ERROR) followed by a
+    // PING and keeps admitting peer streams; the PING ACK (or a peer opening more than
+    // one concurrency window of streams meanwhile) queues GOAWAY(NO_ERROR) at the last
+    // peer stream id, after which HEADERS above it are refused (RST_STREAM
+    // (REFUSED_STREAM)). A client advertises its final boundary at once. Idempotent.
+    // Receiving a valid peer GOAWAY enters this state through the same path so
+    // shutdown is bilateral.
     void begin_drain();
     [[nodiscard]] bool draining() const noexcept {
         return local_connection_state_.graceful_drain() != nullptr;
+    }
+    // True once a drain's final GOAWAY is queued: no later peer stream is admitted.
+    [[nodiscard]] bool drain_final() const noexcept {
+        const auto* drain = local_connection_state_.graceful_drain();
+        return drain != nullptr && !drain->awaiting_round_trip();
     }
 
     // True while a HEADERS block is still being assembled (awaiting CONTINUATION); the
@@ -374,6 +383,9 @@ public:
 
 private:
     void append_goaway(http2_error_code error, std::string_view debug = {});
+    // Ends a server drain's round trip: queues the final GOAWAY at the last peer
+    // stream id. No-op unless the drain is still awaiting its round trip.
+    void finish_drain_round_trip();
     // Unpin when the owner lease ends; the stream is then removed. No-op / safe if
     // the stream is already gone.
     void unpin_stream(std::uint32_t stream_id);

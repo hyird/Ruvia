@@ -126,16 +126,31 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
     }
 
     if (pending_connect_control || rejected_connect_terminal) {
-        // CONNECT has no request content. Empty DATA remains framing-only until its
-        // END_STREAM, while padding still consumes both flow-control windows.
-        if (!data.empty()) {
+        // CONNECT has no request content, but RFC 9113 section 8.5 makes every DATA
+        // after the request HEADERS tunnel data, and RFC 9298 section 5 (as updated
+        // by RFC 9931 section 6.3) lets an HTTP/2 client send it optimistically.
+        // While the decision is pending the bytes are published as tunnel data
+        // whose receive-window debt the owner holds until it consumes them after
+        // accepting; once rejected they are discarded and their credit returned.
+        // RFC 8441 WebSocket stays strict: RFC 6455 section 4.1 has the client wait
+        // for the 2xx response before sending any frame.
+        if (!data.empty() && stream->protocol_is_websocket()) {
             reset_stream(http2_error_code::protocol_error, true);
             return true;
         }
-        reserve_consumed_data_credit(end_stream ? nullptr : stream, static_cast<std::uint32_t>(flow_bytes));
+        const bool early_tunnel_data = pending_connect_control && !data.empty();
+        if (early_tunnel_data) {
+            reserve_events(1);
+        } else {
+            reserve_consumed_data_credit(end_stream ? nullptr : stream, static_cast<std::uint32_t>(flow_bytes));
+        }
         debit_connection();
         (void)stream->consume_receive_window(flow_bytes);
-        if (flow_bytes > 0) {
+        if (early_tunnel_data) {
+            stream->add_window_debt(static_cast<std::uint32_t>(flow_bytes));
+            events_.push_back(http2_event(http2_tunnel_data_record{
+                header_value.stream_id_, data, static_cast<std::uint32_t>(flow_bytes)}));
+        } else if (flow_bytes > 0) {
             queue_consumed_data_credit(
                 end_stream ? nullptr : stream, static_cast<std::uint32_t>(flow_bytes));
         }

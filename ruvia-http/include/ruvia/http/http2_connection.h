@@ -115,6 +115,8 @@ public:
     http2_connection& operator=(http2_connection&&) noexcept;
 
     [[nodiscard]] http2_role role() const noexcept;
+    // A server ignores a received SETTINGS_ENABLE_CONNECT_PROTOCOL (RFC 8441
+    // section 3: receipt by a server "does not have any impact").
     [[nodiscard]] bool received_peer_settings() const noexcept;
     // Read-only observation for transport timeout decisions while a CONTINUATION
     // sequence is incomplete.
@@ -159,6 +161,14 @@ public:
 
     [[nodiscard]] http2_submit_status submit_interim_response_head(
         std::uint32_t stream_id, const http_interim_response_head& response);
+    // Server CONNECT: DATA received before the accept/reject decision (RFC 9113
+    // section 8.5; optimistic per RFC 9298 section 5 as updated by RFC 9931) is
+    // published as tunnel_data events whose credit the owner holds until it consumes
+    // the bytes after accepting; a 2xx accept publishes tunnel_end only after them.
+    // After a non-2xx response, further DATA is discarded and its credit returned.
+    // RFC 8441 :protocol websocket stays strict (RFC 6455 clients wait for the 2xx):
+    // early DATA resets the stream with PROTOCOL_ERROR. Unknown extension frame types
+    // on an established tunnel are discarded (RFC 9113 section 5.5).
     [[nodiscard]] http2_submit_status submit_connect_response_head(
         std::uint32_t stream_id, const http_response& response);
     [[nodiscard]] std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_error>
@@ -217,8 +227,18 @@ public:
     // Consume the server request event only after every request-derived view has
     // expired. An event cannot be released through another connection.
     [[nodiscard]] http2_server_request_release_status release(http2_request_head_event&& request);
+    // Graceful drain (RFC 9113 section 6.8). A server first sends GOAWAY(2^31-1,
+    // NO_ERROR) and a PING, and keeps admitting peer streams until the PING ACK;
+    // then it sends GOAWAY(NO_ERROR) with the last peer stream id and refuses later
+    // streams. A peer that opens more than 128 further streams before its ACK gets
+    // the final GOAWAY at once (a product bound on the round trip). A client sends
+    // its final GOAWAY immediately. Idempotent.
     void begin_drain();
+    // True from begin_drain() (or a valid peer GOAWAY) on.
     [[nodiscard]] bool draining() const noexcept;
+    // True once the final GOAWAY is queued; no later peer stream will be admitted,
+    // so the owner may close after the remaining streams finish.
+    [[nodiscard]] bool drain_final() const noexcept;
     [[nodiscard]] std::optional<http2_error_code> connection_error() const noexcept;
 
 private:

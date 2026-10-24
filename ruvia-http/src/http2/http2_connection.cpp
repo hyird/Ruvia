@@ -30,6 +30,12 @@ constexpr std::uint32_t http2_max_undrained_pings = 1000;
 // a handful and never trips.
 constexpr std::uint32_t http2_max_undrained_settings = 1000;
 
+constexpr std::uint32_t http2_max_stream_id = 0x7fffffffU;
+constexpr std::string_view http2_drain_debug = "connection draining";
+// Opaque payload of the graceful-drain PING (RFC 9113 §6.7 echoes it unchanged).
+constexpr std::string_view http2_drain_ping_payload = "ruviadrn";
+static_assert(http2_drain_ping_payload.size() == 8);
+
 [[nodiscard]] std::size_t http2_goaway_encoded_bytes(std::string_view debug) {
     constexpr std::size_t goaway_fixed_payload_bytes = 8;
     constexpr std::size_t fixed_bytes = http2_frame_header_bytes + goaway_fixed_payload_bytes;
@@ -157,21 +163,50 @@ void http2_connection::append_goaway(http2_error_code error, std::string_view de
 }
 
 void http2_connection::begin_drain() {
-    // Graceful drain (RFC 9113 §6.8): advertise GOAWAY(NO_ERROR) at the last accepted
-    // stream id WITHOUT a connection error -- established streams keep running, and HEADERS
-    // for a stream above the advertised id are refused in process_headers.
+    // Graceful drain (RFC 9113 §6.8) WITHOUT a connection error: established streams
+    // keep running, and HEADERS for a stream above the advertised id are refused in
+    // process_headers. A server first advertises 2^31-1 and keeps admitting the
+    // streams the client may already have in flight; the final boundary follows the
+    // ACK of a PING queued right behind that GOAWAY, i.e. one round trip later.
     if (local_connection_state_.open() == nullptr) {
         return;
     }
-    // Keep the lifecycle transition and its GOAWAY as one externally visible
+    // Keep the lifecycle transition and its frames as one externally visible
     // operation. The reservation is made while the state is still open, so a
     // failed allocation leaves begin_drain() retryable.
-    output_.reserve_segments_additional(1);
-    output_.reserve_additional(http2_goaway_encoded_bytes("connection draining"));
-    if (!local_connection_state_.begin_graceful_drain(last_stream_id_)) {
+    const bool round_trip = role_ == http2_role::server;
+    output_.reserve_segments_additional(round_trip ? 2 : 1);
+    output_.reserve_additional(http2_goaway_encoded_bytes(http2_drain_debug) +
+                               (round_trip ? http2_frame_header_bytes + http2_drain_ping_payload.size() : 0));
+    if (!round_trip) {
+        if (local_connection_state_.begin_graceful_drain(last_stream_id_)) {
+            output_.append_goaway_frame(last_stream_id_, http2_error_code::no_error, http2_drain_debug);
+        }
         return;
     }
-    output_.append_goaway_frame(last_stream_id_, http2_error_code::no_error, "connection draining");
+    // A client that ignores the first GOAWAY and withholds the ACK still cannot
+    // extend the round trip indefinitely: one concurrency window of further streams
+    // is admitted, then the boundary becomes final.
+    const auto stream_budget = std::uint32_t{2} * http2_local_settings::max_concurrent_streams;
+    const auto round_trip_limit =
+        last_stream_id_ > http2_max_stream_id - stream_budget ? http2_max_stream_id : last_stream_id_ + stream_budget;
+    if (!local_connection_state_.begin_round_trip_drain(http2_max_stream_id, round_trip_limit)) {
+        return;
+    }
+    output_.append_goaway_frame(http2_max_stream_id, http2_error_code::no_error, http2_drain_debug);
+    output_.append_frame(http2_frame_type::ping, 0, 0, http2_drain_ping_payload);
+}
+
+void http2_connection::finish_drain_round_trip() {
+    const auto* drain = local_connection_state_.graceful_drain();
+    if (drain == nullptr || !drain->awaiting_round_trip()) {
+        return;
+    }
+    output_.reserve_segments_additional(1);
+    output_.reserve_additional(http2_goaway_encoded_bytes(http2_drain_debug));
+    if (local_connection_state_.finish_round_trip_drain(last_stream_id_)) {
+        output_.append_goaway_frame(last_stream_id_, http2_error_code::no_error, http2_drain_debug);
+    }
 }
 
 bool http2_connection::apply_settings_payload(std::string_view payload_value) {
@@ -439,7 +474,12 @@ bool http2_connection::process_ping(const http2_frame_header& header_value, std:
         return false;
     }
     if ((header_value.flags_ & http2_flag_ack) != 0) {
-        return true;  // our own ping's ack; ignore
+        // Only the drain PING is ever sent by this endpoint; its ACK completes the
+        // round trip that in-flight stream creation was given (RFC 9113 §6.8).
+        if (payload_value == http2_drain_ping_payload) {
+            finish_drain_round_trip();
+        }
+        return true;
     }
     // PING-flood budget: bound inbound PINGs seen since the owner last flushed output
     // (see http2_max_undrained_pings). A peer echoing keepalive normally lets us drain the
@@ -554,10 +594,10 @@ bool http2_connection::process_frame(const http2_frame_header& header_value, std
             }
         }
         if (!http2_stream_is_closed(*stream) && stream->tunnel().open() != nullptr &&
-            (type == http2_frame_type::origin || type == http2_frame_type::alternative_service || !known_frame)) {
+            (type == http2_frame_type::origin || type == http2_frame_type::alternative_service)) {
             // RFC 9113 8.5 narrows connected streams to DATA and the three
-            // stream-management frame types, even though unknown frames are
-            // normally ignored elsewhere.
+            // stream-management frame types. Unknown extension types are still
+            // discarded below, as RFC 9113 5.5 requires for every stream.
             const auto output_checkpoint = output_.checkpoint();
             try {
                 output_.append_rst_stream(header_value.stream_id_, http2_error_code::protocol_error);

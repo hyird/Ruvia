@@ -199,7 +199,9 @@ void http2_sans_io_session_engine::request_drain() noexcept {
 }
 
 void http2_sans_io_session_engine::finish_drain_if_ready() noexcept {
-    if (!drain_finished_ && connection_.draining() && stream_runtimes_.size() == 0 &&
+    // The first GOAWAY of a server drain still admits in-flight streams; only the
+    // final one (after the PING round trip) lets an idle connection close.
+    if (!drain_finished_ && connection_.drain_final() && stream_runtimes_.size() == 0 &&
         active_handler_tasks_ == 0 && !connection_.wants_write() && !output_write_in_flight_) {
         drain_finished_ = true;
         std::error_code error;
@@ -881,7 +883,10 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
     auto* streaming_body =
         selected_route != nullptr ? selected_route->body().streaming() : nullptr;
     if (streaming_body == nullptr) {
-        reset_event_stream(stream_id, http2_error_code::internal_error);
+        // Only a CONNECT that no tunnel route will accept lacks a streaming body:
+        // its optimistic DATA is never consumed, so return the credit at once.
+        (void)connection_.acknowledge(tunnel_data.take_credit());
+        wake_writer();
         return;
     }
     if (!streaming_body->queue().enqueue_bounded(tunnel_data.bytes(),

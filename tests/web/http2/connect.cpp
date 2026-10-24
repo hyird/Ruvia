@@ -330,6 +330,122 @@ RUVIA_TEST(http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_requ
     }
     RUVIA_CHECK_EQ(allocations.live_allocations(), std::size_t{0});
 }
+// RFC 9113 section 8.5 / RFC 9298 section 5: DATA a client sends before the 2xx
+// is tunnel data. The route consumes it once the tunnel is accepted.
+RUVIA_TEST(http2_connect_route_receives_data_sent_before_the_response) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::counting_memory_resource allocations;
+    std::exception_ptr failure;
+    ruvia::test::http_server_fixture server(io);
+    auto run = [&]() -> ruvia::task<void> {
+        auto& observation_value = *observation;
+        observation_value.return_early_ = false;
+        asio::ip::tcp::socket socket(io);
+        asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
+        bool expired = false;
+        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::close_socket(socket); } });
+        ruvia::worker_memory memory(allocations);
+        try {
+            const auto connected = co_await ruvia::async_asio([&](auto handler) { socket.async_connect(server.endpoint(), std::move(handler)); });
+            if (connected.error_code()) {
+                throw std::system_error(connected.error_code());
+            }
+            auto peer = ruvia::http2_connection::client({.resource_ = memory.resource()});
+            std::array<char, 16384> input{};
+            auto pump = [&]() -> ruvia::task<void> {
+                const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { socket.async_read_some(asio::buffer(input), std::move(handler)); });
+                if (read.error_code()) {
+                    throw std::system_error(read.error_code());
+                }
+                if (peer.feed(std::string_view(input.data(), read.result())) == ruvia::http2_feed_result::protocol_failure) {
+                    throw std::runtime_error("CONNECT peer protocol failure");
+                }
+            };
+            co_await flush_peer(socket, peer, memory.resource());
+            while (!peer.received_peer_settings()) {
+                co_await pump();
+                while (peer.next_event()) {
+                    if (peer.connection_error()) {
+                        throw std::runtime_error("CONNECT SETTINGS failure");
+                    }
+                }
+                co_await flush_peer(socket, peer, memory.resource());
+            }
+            const auto request = peer.submit_request_head(ruvia::http2_connect_request_head_view{.authority_ = "target.test:443"});
+            const auto* id_ptr = std::get_if<std::uint32_t>(&request);
+            if (id_ptr == nullptr) {
+                throw std::runtime_error("CONNECT request submission rejected");
+            }
+            const auto id = *id_ptr;
+            co_await flush_peer(socket, peer, memory.resource());
+            // The client core only sends after the 2xx; write the optimistic
+            // DATA frame directly behind its HEADERS.
+            const std::string early(64, 't');
+            std::array<char, ruvia::http2_frame_header_bytes> frame_header{};
+            if (!ruvia::encode_http2_frame_header(frame_header, static_cast<std::uint32_t>(early.size()), ruvia::http2_frame_type::data, 0, id)) {
+                throw std::logic_error("invalid test DATA frame");
+            }
+            std::string raw(frame_header.data(), frame_header.size());
+            raw.append(early);
+            const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(socket, asio::buffer(raw), std::move(handler)); });
+            if (written.error_code()) {
+                throw std::system_error(written.error_code());
+            }
+            bool established = false;
+            bool finished = false;
+            bool ended = false;
+            std::string echoed;
+            while (!ended) {
+                co_await pump();
+                while (auto event = peer.next_event()) {
+                    if (const auto* head = event->response_head()) {
+                        RUVIA_CHECK(head->head().status() == ruvia::http_status::ok);
+                        established = true;
+                    }
+                    if (auto* data = event->tunnel_data()) {
+                        echoed.append(data->bytes());
+                        (void)peer.acknowledge(data->take_credit());
+                    }
+                    if (event->tunnel_end()) {
+                        ended = true;
+                    }
+                    if (event->stream_closed() || peer.connection_error()) {
+                        throw std::runtime_error("CONNECT stream reset");
+                    }
+                }
+                if (established && !finished && echoed.size() == early.size()) {
+                    finished = true;
+                    const auto submitted = peer.submit_data(id, {}, ruvia::http2_end_stream::end_stream);
+                    RUVIA_CHECK(submitted == ruvia::http2_data_submit_status::accepted);
+                }
+                co_await flush_peer(socket, peer, memory.resource());
+            }
+            RUVIA_CHECK(echoed == early);
+            RUVIA_CHECK(observation_value.saw_eof_ && observation_value.stable_);
+            {
+                std::lock_guard lock(observation_value.mutex_);
+                RUVIA_CHECK(observation_value.received_ == early);
+                observation_value.received_.clear();
+            }
+            observation_value.saw_eof_ = false;
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        ruvia::close_socket(socket);
+        (void)watchdog_value.cancel();
+        server.finish();
+        RUVIA_CHECK(!expired);
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    io.run();
+    root.get();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    RUVIA_CHECK_EQ(allocations.live_allocations(), std::size_t{0});
+}
 RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_peer_input) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);

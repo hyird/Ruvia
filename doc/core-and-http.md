@@ -178,6 +178,9 @@ while (conn.wants_write()) {
 
 - **流控凭证 `http2_received_data_credit`**：`message_body_chunk()` 与 `tunnel_data()` 事件携带移动专属的流控凭证；当上层消费完缓冲数据后，通过析构凭证或调用 `conn.acknowledge(std::move(credit))` 触发连接与流级 `WINDOW_UPDATE` 帧发送，实现精确背压。
 - **服务端请求租约 `http2_request_head_event`**：持有服务端流请求头的底层内存租约；请求处理完毕后调用 `conn.release(std::move(event))` 归还存储。
+- **优雅排空 `begin_drain()` / `draining()` / `drain_final()`**：服务端按 RFC 9113 §6.8 两阶段排空——先发 `GOAWAY(2^31-1, NO_ERROR)` 与 `PING`，继续接纳在途的流；收到该 `PING` 的 ACK 后发出携带最后对端流 ID 的最终 `GOAWAY` 并拒绝之后的流（对端此间新开超过 128 条流时提前进入最终阶段，属产品上限）。`drain_final()` 为真后，所有者在剩余流结束时即可关闭连接。客户端角色一步发出最终 `GOAWAY`。
+- **服务端 `CONNECT` 乐观数据**：接受/拒绝前收到的 `DATA` 以 `tunnel_data()` 事件发布，其流控凭证由所有者持有到接受隧道后消费；`submit_connect_response_head()` 接受后再发布 `tunnel_end()`（若请求半边已结束）。非 2xx 拒绝后到达的 `DATA` 丢弃并归还流控额度。RFC 8441 `:protocol = websocket` 仍以 `RST_STREAM(PROTOCOL_ERROR)` 拒绝提前 `DATA`。已建立隧道上的未知扩展帧被丢弃（RFC 9113 §5.5）。
+- **`SETTINGS_ENABLE_CONNECT_PROTOCOL`**：服务端收到该参数不产生任何影响（RFC 8441 §3）；客户端仍校验服务端发送的取值与 1→0 回退。
 
 ---
 

@@ -168,6 +168,12 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
                 return false;
             }
             new_peer_stream = true;
+            if (const auto* round_trip = local_connection_state_.graceful_drain();
+                round_trip != nullptr && round_trip->awaiting_round_trip() &&
+                header_value.stream_id_ > round_trip->round_trip_stream_limit()) {
+                // The final boundary is the high-water mark before this stream.
+                finish_drain_round_trip();
+            }
             const auto* graceful_drain = local_connection_state_.graceful_drain();
             const bool drain_refused =
                 graceful_drain != nullptr && header_value.stream_id_ > graceful_drain->last_stream_id();

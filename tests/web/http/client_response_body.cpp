@@ -2930,10 +2930,20 @@ RUVIA_TEST(http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_mi
                     connection.take_output(output);
                     co_await asio::async_write(stream, asio::buffer(output), asio::use_awaitable);
                 }
-                if (answered && !connection.wants_write()) {
+                // The drain ends with the final GOAWAY sent after the client's
+                // PING ACK, or earlier when the retiring client closes first.
+                if (answered && connection.drain_final() && !connection.wants_write()) {
                     break;
                 }
-                const auto count = co_await stream.async_read_some(asio::buffer(input), asio::use_awaitable);
+                std::error_code read_error;
+                const auto count = co_await stream.async_read_some(
+                    asio::buffer(input), asio::redirect_error(asio::use_awaitable, read_error));
+                if (read_error && answered) {
+                    break;
+                }
+                if (read_error) {
+                    throw std::system_error(read_error);
+                }
                 (void)connection.feed(std::string_view(input.data(), count));
                 while (auto event = connection.next_event()) {
                     if (auto* request = event->request_head()) {
@@ -2946,10 +2956,10 @@ RUVIA_TEST(http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_mi
                         (void)connection.submit_data(
                             stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream);
                         (void)connection.release(std::move(*request));
-                        // GOAWAY(last_stream_id = 1) precedes the close so the
-                        // client retires this session deterministically: seen
-                        // before the next send it opens a new connection, seen
-                        // after it the unprocessed stream is retried on one.
+                        // GOAWAY precedes the close so the client retires this
+                        // session deterministically: seen before the next send it
+                        // opens a new connection; the PING round trip then
+                        // advertises last_stream_id = 1 before the close.
                         connection.begin_drain();
                         answered = true;
                     }

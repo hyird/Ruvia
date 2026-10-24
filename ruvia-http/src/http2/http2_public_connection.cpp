@@ -521,6 +521,9 @@ void http2_connection::begin_drain() {
 bool http2_connection::draining() const noexcept {
     return impl_->connection_.draining();
 }
+bool http2_connection::drain_final() const noexcept {
+    return impl_->connection_.drain_final();
+}
 std::optional<http2_error_code> http2_connection::connection_error() const noexcept {
     return impl_->connection_.connection_error();
 }

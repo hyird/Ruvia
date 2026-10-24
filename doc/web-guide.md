@@ -68,7 +68,7 @@ int main() {
 | --- | --- | --- |
 | `worker_count_` | `std::size_t`（默认 `max(1u, hardware_concurrency())`） | 业务 worker 线程数 |
 | `process_signal_handlers_` | `process_signal_handler_policy`（默认 `external_owner`） | 设为 `install` 时自动安装 `SIGINT` / `SIGTERM` 信号处理以触发优雅停机 |
-| `drain_timeout_` | `std::chrono::milliseconds`（默认 `10s`） | 停机排空阶段等待在途请求完成的最大时长 |
+| `drain_timeout_` | `std::chrono::milliseconds`（默认 `10s`） | 停机排空阶段等待在途请求完成的最大时长。HTTP/2 连接按 RFC 9113 §6.8 两阶段排空：先发 `GOAWAY(2^31-1, NO_ERROR)` 与 `PING`，继续接纳客户端已在途的流；收到 `PING` ACK（或客户端此间新开超过 128 条流）后再发携带最后流 ID 的 `GOAWAY` 并拒绝之后的流 |
 | `worker_queue_capacity_` | `std::size_t`（默认 `1024`） | 每个 worker 跨线程任务投递队列容量 |
 | `idle_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `75s`） | 空闲连接超时时间 |
 | `connection_scan_interval_` | `std::chrono::milliseconds`（默认 `1s`） | 连接超时扫描周期 |
@@ -78,7 +78,7 @@ int main() {
 | `body_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `120s`） | 请求体整体完成截止时间 |
 | `write_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 响应写入超时 |
 | `max_connections_per_worker_` | `std::optional<std::size_t>`（默认 `1024`） | 单个 worker 允许的最大并发连接数 |
-| `max_requests_per_connection_` | `std::optional<std::size_t>`（默认 `1000`） | 单条连接最大处理请求数 |
+| `max_requests_per_connection_` | `std::optional<std::size_t>`（默认 `1000`） | 单条连接最大处理请求数；HTTP/2 达到上限时按上述两阶段 `GOAWAY` 排空，往返期间在途的流仍被处理（产品上限：最多再接纳 128 条） |
 | `max_buffered_body_bytes_` | `std::size_t`（默认 `default_max_buffered_body_bytes`） | 缓冲式路由默认允许的最大请求体字节数 |
 | `max_inbound_buffer_bytes_per_worker_` | `std::size_t`（默认 `256 MiB`） | 单 worker 入站缓冲总字节上限 |
 | `max_inbound_buffer_bytes_per_connection_` | `std::size_t`（默认 `64 MiB`） | 单连接入站缓冲字节上限 |

@@ -143,6 +143,12 @@ public:
             case http2_setting_id::max_header_list_size:
                 return std::nullopt;
             case http2_setting_id::enable_connect_protocol:
+                // RFC 8441 section 3: "Receipt of this parameter by a server does not
+                // have any impact." The 0/1 range and the 1->0 ban are sender rules a
+                // client enforces on the server that grants Extended CONNECT.
+                if (local_role_ == http2_role::server) {
+                    return std::nullopt;
+                }
                 if (value != 0 && value != 1) {
                     return http2_peer_setting_error::invalid_enable_connect_protocol;
                 }

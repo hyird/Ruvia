@@ -88,7 +88,9 @@ struct server_config final {
     // Excess accepted sockets are closed before TLS or HTTP protocol
     // detection, so admission never fabricates a response.
     std::optional<std::size_t> max_connections_per_worker_{1024};
-    // Cumulative request cap for each connection.
+    // Cumulative request cap for each connection. HTTP/2 then drains gracefully
+    // (RFC 9113 section 6.8): streams the client had in flight before the final
+    // GOAWAY are still served, at most 128 beyond the cap.
     std::optional<std::size_t> max_requests_per_connection_{1000};
     std::size_t max_buffered_body_bytes_{default_max_buffered_body_bytes};
     // Live inbound buffer allocations across buffered and streamed HTTP request

@@ -1,7 +1,8 @@
 // A connection whose max_requests_per_connection_ is reached starts its
-// GOAWAY drain on the request head that reached the limit; that head is below
-// the advertised last stream id, so it is served like any accepted stream even
-// when it is a CONNECT tunnel or an RFC 8441 WebSocket handshake.
+// graceful GOAWAY drain on the request head that reached the limit. The first
+// GOAWAY advertises 2^31-1 (RFC 9113 section 6.8), so that head is served like
+// any accepted stream even when it is a CONNECT tunnel or an RFC 8441 WebSocket
+// handshake.
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -202,12 +203,12 @@ RUVIA_TEST(http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_ser
     if (client_failure) {
         std::rethrow_exception(client_failure);
     }
-    // The limit was reached by this very request: GOAWAY advertises it as the
-    // last accepted stream, and the upgrade still completes on it.
+    // The limit was reached by this very request: the drain's first GOAWAY
+    // (2^31-1) precedes its response, and the upgrade still completes on it.
     RUVIA_CHECK_EQ(tunnel->answer_, std::string("200"));
     RUVIA_CHECK(tunnel->goaway_last_stream_id_.has_value());
-    RUVIA_CHECK_EQ(tunnel->goaway_last_stream_id_.value_or(0), 1U);
+    RUVIA_CHECK_EQ(tunnel->goaway_last_stream_id_.value_or(0), 0x7fffffffU);
     RUVIA_CHECK_EQ(websocket->answer_, std::string("200"));
     RUVIA_CHECK(websocket->goaway_last_stream_id_.has_value());
-    RUVIA_CHECK_EQ(websocket->goaway_last_stream_id_.value_or(0), 1U);
+    RUVIA_CHECK_EQ(websocket->goaway_last_stream_id_.value_or(0), 0x7fffffffU);
 }
