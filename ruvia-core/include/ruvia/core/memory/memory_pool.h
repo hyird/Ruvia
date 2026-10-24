@@ -51,8 +51,8 @@ void validate_memory_pool_config(const memory_pool_config& config);
 // the OS is up to the C allocator. The pool must outlive every object using it.
 class worker_memory final {
 public:
-    // Uses std::pmr::new_delete_resource() directly, never the global PMR
-    // default and never the lock-shared process resource.
+    // Uses the process-lifetime mimalloc resource directly, never the global
+    // PMR default. The upstream has no shared pooling layer.
     explicit worker_memory(const memory_pool_config& config = {});
     // Bind an upstream once at construction (for custom allocation/accounting).
     // It must outlive this pool and all of its borrowers, and receives every

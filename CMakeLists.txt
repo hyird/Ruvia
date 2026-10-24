@@ -87,6 +87,7 @@ endmacro()
 
 if(RUVIA_BUILD_CORE)
     ruvia_find_package(CORE asio CONFIG)
+    ruvia_find_package(CORE mimalloc CONFIG)
     ruvia_find_package(CORE Threads)
     set(RUVIA_CORE_DEPENDENCIES asio::asio Threads::Threads)
 endif()

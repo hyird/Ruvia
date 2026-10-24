@@ -71,6 +71,8 @@ private:
 
 [[nodiscard]] void* task_frame_allocate(std::size_t bytes_value);
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept;
+[[nodiscard]] void* task_frame_allocate_aligned(std::size_t bytes_value, std::size_t alignment);
+void task_frame_deallocate_aligned(void* pointer) noexcept;
 // This thread's cached frame bytes, and the drain worker_memory::trim() uses.
 [[nodiscard]] std::size_t task_frame_cached_bytes() noexcept;
 void task_frame_cache_release() noexcept;
@@ -78,7 +80,7 @@ void task_frame_cache_release() noexcept;
 template <std::size_t t_alignment>
 [[nodiscard]] void* task_frame_allocate(std::size_t bytes_value) {
     if constexpr (t_alignment > __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
-        return ::operator new(bytes_value, std::align_val_t{t_alignment});
+        return task_frame_allocate_aligned(bytes_value, t_alignment);
     } else {
         return task_frame_allocate(bytes_value);
     }
@@ -87,7 +89,7 @@ template <std::size_t t_alignment>
 template <std::size_t t_alignment>
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept {
     if constexpr (t_alignment > __STDCPP_DEFAULT_NEW_ALIGNMENT__) {
-        ::operator delete(pointer, std::align_val_t{t_alignment});
+        task_frame_deallocate_aligned(pointer);
     } else {
         task_frame_deallocate_sized(pointer, bytes_value);
     }

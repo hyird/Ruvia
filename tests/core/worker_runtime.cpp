@@ -612,8 +612,7 @@ RUVIA_TEST(worker_group_member_exit_wakes_an_earlier_asynchronous_startup) {
             });
             startup_waiting.set_value(); },
             .stop_admission_ = [&] {
-            asio::error_code ignored;
-            startup_timer.cancel(ignored);
+            startup_timer.cancel();
             pending.finalize(); },
         });
         failing.configure({

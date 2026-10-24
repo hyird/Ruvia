@@ -3,18 +3,20 @@
 #include <memory_resource>
 #include <new>
 
+#include "ruvia/core/memory/pmr_object.h"
+
 namespace ruvia {
 
 namespace detail {
 
 stop_state_ref stop_state::create() {
-    void* storage = std::pmr::new_delete_resource()->allocate(sizeof(stop_state), alignof(stop_state));
+    void* storage = process_resource()->allocate(sizeof(stop_state), alignof(stop_state));
     return stop_state_ref(::new (storage) stop_state());
 }
 
 void stop_state::destroy() noexcept {
     this->~stop_state();
-    std::pmr::new_delete_resource()->deallocate(this, sizeof(stop_state), alignof(stop_state));
+    process_resource()->deallocate(this, sizeof(stop_state), alignof(stop_state));
 }
 
 void stop_state::request_stop() noexcept {
@@ -94,10 +96,9 @@ void stop_state::unlink(stop_callback_node& node) noexcept {
 
 }  // namespace detail
 
-// Request deadlines create a source per request on every worker. The process
-// pool would serialize those workers on its shared lock, so the state comes
-// from new/delete, whose small-object path is thread-local. The resource is
-// never destroyed, so a state may retire on any thread at any time.
+// Request deadlines create a source per request on every worker. The mimalloc
+// resource has no shared pooling layer and outlives every observer, including
+// tokens retired after the allocating worker has exited.
 stop_source::stop_source()
     : state_(detail::stop_state::create()) {}
 

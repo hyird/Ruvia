@@ -10,7 +10,11 @@
     "runtime": {
       "description": "Dependencies for the ruvia-core runtime library.",
       "dependencies": [
-        "asio"
+        "asio",
+        {
+          "name": "mimalloc",
+          "default-features": false
+        }
       ]
     },
     "protocol": {

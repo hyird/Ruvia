@@ -6,6 +6,8 @@ ruvia_configure_library(ruvia-core core)
 target_link_libraries(ruvia-core
     PUBLIC
         ${RUVIA_CORE_DEPENDENCIES}
+    PRIVATE
+        $<IF:$<TARGET_EXISTS:mimalloc-static>,mimalloc-static,mimalloc>
 )
 target_compile_definitions(ruvia-core PUBLIC ASIO_STANDALONE)
 

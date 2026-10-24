@@ -6,12 +6,14 @@
 
 namespace ruvia {
 
+// Process-lifetime, thread-safe mimalloc resource. The host's malloc/new and
+// global PMR default are unchanged; explicit caller-owned resources take precedence.
 [[nodiscard]] std::pmr::memory_resource* process_resource() noexcept;
 
 struct resolved_pmr_resource_tag final {};
 
 // Resolve a caller-supplied resource once at the ownership boundary. Runtime
-// objects with no explicit resource use the process-wide pool.
+// objects with no explicit resource use the process-wide mimalloc resource.
 [[nodiscard]] inline std::pmr::memory_resource* pmr_resource_or_default(
     std::pmr::memory_resource* resource) noexcept {
     return resource == nullptr ? process_resource() : resource;

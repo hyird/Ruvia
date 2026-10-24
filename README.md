@@ -4,7 +4,7 @@ Ruvia 是基于 C++20 协程的 HTTP/Web 框架，提供协程路由处理、声
 
 | 库目录 | CMake Target | 职责与公开依赖 |
 | --- | --- | --- |
-| `ruvia-core` | `ruvia::core` | 协程任务、事件循环、有界通道与阻塞卸载池；依赖 standalone Asio 与 `Threads::Threads`。 |
+| `ruvia-core` | `ruvia::core` | 协程任务、事件循环、有界通道与阻塞卸载池；依赖 standalone Asio、`Threads::Threads` 与 mimalloc（不启用 `override` 特性）。 |
 | `ruvia-http` | `ruvia::http` | 独立 sans-I/O 的 HTTP/1.0、HTTP/1.1、HTTP/2、内容压缩与 WebSocket 协议层；依赖 zlib、Brotli 与 Zstandard。 |
 | `ruvia-web` | `ruvia::web` | 服务端、路由、中间件、Model/ORM、TLS、出站客户端与数据接入；依赖 `ruvia::core`、`ruvia::http` 与 OpenSSL 3.0+。 |
 

@@ -383,19 +383,33 @@ RUVIA_TEST(stop_token_combination_and_registration_never_allocate) {
 }
 
 RUVIA_TEST(stop_token_outlives_its_source_across_threads) {
-    std::optional<ruvia::stop_source> source(std::in_place);
-    auto token = source->token();
-    source->request_stop();
-    source.reset();
-    RUVIA_CHECK(token.stop_requested());
-    RUVIA_CHECK(token.stoppable());
-    std::thread([retained = std::move(token)]() mutable { retained = {}; }).join();
+    for (const bool request_stop : {false, true}) {
+        std::optional<ruvia::stop_source> source;
+        std::thread([&] { source.emplace(); }).join();
+        auto token = source->token();
+        int calls = 0;
+        auto registration = token.register_callback([&calls] { ++calls; });
+        if (request_stop) {
+            source->request_stop();
+        }
+        source.reset();
+        RUVIA_CHECK_EQ(token.stop_requested(), request_stop);
+        RUVIA_CHECK_EQ(token.stoppable(), request_stop);
+        RUVIA_CHECK_EQ(calls, request_stop ? 1 : 0);
 
-    std::optional<ruvia::stop_source> idle(std::in_place);
-    auto idle_token = idle->token();
-    idle.reset();
-    RUVIA_CHECK(!idle_token.stop_requested());
-    RUVIA_CHECK(!idle_token.stoppable());
+        bool retained_state_valid = false;
+        std::thread([retained = std::move(token), &registration, &retained_state_valid, request_stop]() mutable {
+            retained_state_valid = retained.stop_requested() == request_stop &&
+                                   retained.stoppable() == request_stop;
+            retained = {};
+            // The registration now owns the last reference, on a thread other
+            // than the already-exited thread that created the source.
+            registration.reset();
+        }).join();
+        RUVIA_CHECK(retained_state_valid);
+        RUVIA_CHECK(!registration.registered());
+        RUVIA_CHECK_EQ(calls, request_stop ? 1 : 0);
+    }
 }
 
 RUVIA_TEST(stop_registration_reset_waits_for_callback_running_on_another_thread) {

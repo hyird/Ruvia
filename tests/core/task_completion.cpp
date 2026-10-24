@@ -1,11 +1,13 @@
 #include <memory>
+#include <optional>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "ruvia/core/task.h"
 
-namespace {
+namespace ruvia::test::task_completion_tests {
 
 struct allocation_counts final {
     std::size_t allocations_{0};
@@ -65,20 +67,37 @@ ruvia::task<result_type> cold_frame(frame_allocation frame, bool& ran) {
 }
 
 template <typename result_type>
-bool check_cold_frame() {
+bool check_cold_frame(bool cross_thread) {
     allocation_counts counts;
     bool ran = false;
-    {
-        auto task_value = cold_frame<result_type>(frame_allocation(counts), ran);
-        if (ran || counts.allocations_ == counts.deallocations_) {
-            return false;
-        }
+    std::optional<ruvia::task<result_type>> task_value;
+    auto create = [&] {
+        task_value.emplace(cold_frame<result_type>(frame_allocation(counts), ran));
+    };
+    if (cross_thread) {
+        std::thread(create).join();
+    } else {
+        create();
+    }
+    if (ran || counts.allocations_ == counts.deallocations_) {
+        return false;
+    }
+    if (cross_thread) {
+        std::thread([&] { task_value.reset(); }).join();
+    } else {
+        task_value.reset();
     }
     return !ran && counts.allocations_ == counts.deallocations_;
 }
 
-}  // namespace
+}  // namespace ruvia::test::task_completion_tests
 
 int main() {
-    return check_cold_frame<void>() && check_cold_frame<int>() ? 0 : 1;
+    for (const bool cross_thread : {false, true}) {
+        if (!ruvia::test::task_completion_tests::check_cold_frame<void>(cross_thread) ||
+            !ruvia::test::task_completion_tests::check_cold_frame<int>(cross_thread)) {
+            return 1;
+        }
+    }
+    return 0;
 }

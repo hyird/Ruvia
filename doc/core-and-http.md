@@ -70,10 +70,14 @@ pool.join();
 | `"ruvia/core/worker_notification.h"` | `class worker_notification final` | 跨线程闩锁合并通知原语（任意线程无锁 `notify()`，所属 Worker 上 `co_await notification.wait()`） |
 | `"ruvia/core/pool_lease_scheduler.h"` | `class pool_lease_scheduler final`、`class pool_lease_acquire final` | 单 Worker 连接/槽位池租约调度器（空闲时同步返回槽位下标，满载时挂起排队并支持超时与取消） |
 | `"ruvia/core/memory/memory_pool.h"` | `class worker_memory final`、`class request_memory final`、`struct memory_pool_config` | Worker 级可回收内存池与单次请求单调 Arena（支持 `allocator<T>()`、`resource()`、`fork()`、`trim(owner)`） |
-| `"ruvia/core/memory/pmr_object.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)`、`construct_pmr_object`、`destroy_pmr_object`、`make_pmr_unique` | 进程级线程安全 PMR 内存资源、回退辅助与 PMR 对象构造/销毁工具 |
+| `"ruvia/core/memory/pmr_object.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)`、`construct_pmr_object`、`destroy_pmr_object`、`make_pmr_unique` | 进程级线程安全 mimalloc PMR 适配资源、回退辅助与 PMR 对象构造/销毁工具 |
 | `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器 |
 | `"ruvia/core/local_ring_queue.h"` / `"ruvia/core/mpsc_ring_queue.h"` | `class local_ring_queue<T>`、`class mpsc_ring_queue<T>` | 预分配容量的单线程零分配环形队列与多生产者单消费者有界环形队列 |
 | `"ruvia/core/bytes.h"` / `"ruvia/core/failure_report.h"` / `"ruvia/core/socket.h"` | `as_bytes`、`as_chars`、`error_code_text`、`system_error_text`、`parse_ip_address` | 字节/字符视图转换、跨平台 UTF-8 系统错误文本转换、严格 IPv4/IPv6 字面量解析（返回 `std::optional<asio::ip::address>`） |
+
+框架默认内存由 mimalloc 承载：`process_resource()` 是存活至进程结束的线程安全 PMR 适配器，不再叠加进程级共享 pool；默认 Worker 内存、停止状态与协程帧使用该资源。Worker 的小对象 pool、大块缓存、协程帧缓存及 `trim(owner)` 契约保持不变。接受显式 PMR 的 API 始终优先使用调用方资源，调用方仍须保证资源覆盖所分配对象的生命周期。
+
+集成仅调用 mimalloc 的显式分配 API，不替换宿主 `malloc` / `free`、全局 `new` / `delete`，也不更改 `std::pmr::get_default_resource()`。独立 `ruvia::http` 不依赖 core 或 mimalloc，未显式指定 PMR 时仍遵循调用方的标准 PMR 默认资源。
 
 ---
 

@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -86,6 +87,10 @@ public:
 
 private:
     std::pmr::memory_resource* previous_;
+};
+
+struct alignas(4096) retained_process_value final {
+    std::array<std::byte, 257> bytes_;
 };
 }  // namespace
 
@@ -192,7 +197,7 @@ RUVIA_TEST(worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
     constexpr std::size_t class_bytes = 32 * 1024;
     counting_resource upstream;
     ruvia::worker_memory worker_value(upstream);
-    // Default upstream (new/delete): cached and pass-through sizes.
+    // Default upstream (mimalloc): cached and pass-through sizes.
     ruvia::worker_memory default_memory;
     auto* const resource = worker_value.resource();
     auto* const block = static_cast<std::byte*>(resource->allocate(block_bytes));
@@ -325,6 +330,47 @@ RUVIA_TEST(worker_memory_and_process_resource_align_small_blocks) {
         }
     }
     RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
+}
+
+RUVIA_TEST(process_resource_storage_survives_its_allocating_thread) {
+    constexpr std::size_t text_bytes = 2 * 1024 * 1024;
+    std::optional<std::pmr::string> text;
+    std::optional<std::pmr::vector<retained_process_value>> values;
+    std::thread([&] {
+        text.emplace(text_bytes, 's', ruvia::process_resource());
+        values.emplace(3, ruvia::process_resource());
+        for (std::size_t index = 0; index < values->size(); ++index) {
+            (*values)[index].bytes_.fill(static_cast<std::byte>(index + 1));
+        }
+    }).join();
+
+    for (std::size_t index = 0; index < values->size(); ++index) {
+        const auto& value = (*values)[index];
+        RUVIA_CHECK_EQ(reinterpret_cast<std::uintptr_t>(&value) % alignof(retained_process_value), std::uintptr_t{0});
+        RUVIA_CHECK(std::ranges::all_of(value.bytes_, [index](std::byte byte) {
+            return byte == static_cast<std::byte>(index + 1);
+        }));
+    }
+    RUVIA_CHECK_EQ(text->size(), text_bytes);
+    RUVIA_CHECK_EQ(text->find_first_not_of('s'), std::pmr::string::npos);
+
+    bool preserved_after_growth = false;
+    std::thread([&] {
+        // Grow and retire both consumers after their allocating thread exited.
+        values->reserve(values->capacity() + 1);
+        text->append(text->capacity() + 1, 't');
+        preserved_after_growth = text->find_first_not_of('s') == text_bytes &&
+                                 text->find_first_not_of('t', text_bytes) == std::pmr::string::npos;
+        for (std::size_t index = 0; index < values->size(); ++index) {
+            preserved_after_growth = preserved_after_growth &&
+                                     std::ranges::all_of((*values)[index].bytes_, [index](std::byte byte) {
+                                         return byte == static_cast<std::byte>(index + 1);
+                                     });
+        }
+        text.reset();
+        values.reset();
+    }).join();
+    RUVIA_CHECK(preserved_after_growth);
 }
 
 RUVIA_TEST(worker_memory_validates_retained_block_bytes) {
@@ -616,16 +662,18 @@ RUVIA_TEST(request_memory_fork_uses_the_configured_initial_buffer_bytes) {
     RUVIA_CHECK(upstream.matched_returns_);
 }
 
-RUVIA_TEST(memory_pools_honor_max_align_for_zero_byte_allocations) {
+RUVIA_TEST(memory_pools_honor_alignment_for_zero_byte_allocations) {
     constexpr std::size_t alignment = alignof(std::max_align_t);
-    std::array<void*, 8> process_blocks{};
-    for (auto& block : process_blocks) {
-        block = ruvia::process_resource()->allocate(0, alignment);
-        RUVIA_CHECK(block != nullptr);
-        RUVIA_CHECK_EQ(reinterpret_cast<std::uintptr_t>(block) % alignment, std::uintptr_t{0});
-    }
-    for (auto* block : process_blocks) {
-        ruvia::process_resource()->deallocate(block, 0, alignment);
+    for (const std::size_t process_alignment : {alignment, std::size_t{128}, std::size_t{4096}, std::size_t{65536}}) {
+        std::array<void*, 8> process_blocks{};
+        for (auto& block : process_blocks) {
+            block = ruvia::process_resource()->allocate(0, process_alignment);
+            RUVIA_CHECK(block != nullptr);
+            RUVIA_CHECK_EQ(reinterpret_cast<std::uintptr_t>(block) % process_alignment, std::uintptr_t{0});
+        }
+        for (auto* block : process_blocks) {
+            ruvia::process_resource()->deallocate(block, 0, process_alignment);
+        }
     }
 
     counting_resource upstream;

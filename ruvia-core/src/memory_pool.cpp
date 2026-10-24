@@ -1,6 +1,9 @@
 #include "ruvia/core/memory/memory_pool.h"
 
+#include <mimalloc.h>
+
 #include <array>
+#include <new>
 #include <stdexcept>
 
 #include "ruvia/core/detail/task/task_promise.h"
@@ -13,12 +16,27 @@ namespace ruvia {
 
 namespace {
 
-// Pool small reusable objects, but return bulk arrays directly upstream. An
-// implementation's default can pool any size: MSVC's 0 default means "pool
-// everything", and each pool's first chunk holds several blocks, so a single
-// multi-megabyte buffer would reserve several equally large spare blocks and
-// retain them for the resource's life.
-constexpr std::pmr::pool_options bounded_pool_options{.largest_required_pool_block = 64 * 1024};
+[[nodiscard]] void* allocate_mimalloc(std::size_t bytes_value, std::size_t alignment) {
+    if (void* block = mi_malloc_aligned(bytes_value == 0 ? 1 : bytes_value, alignment)) {
+        return block;
+    }
+    throw std::bad_alloc();
+}
+
+class mimalloc_memory_resource final : public std::pmr::memory_resource {
+private:
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        return allocate_mimalloc(bytes_value, alignment);
+    }
+
+    void do_deallocate(void* block, std::size_t, std::size_t) override {
+        mi_free(block);
+    }
+
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return this == &other;
+    }
+};
 
 // A worker pool keeps every class it ever served, so it pools only small
 // objects; larger blocks go to the worker's bounded block cache, whose
@@ -81,20 +99,13 @@ private:
 }  // namespace
 
 std::pmr::memory_resource* process_resource() noexcept {
-    // Explicit process-lifetime storage for startup metadata and shutdown
-    // cross-thread completions. It is never installed as std::pmr's default
-    // resource: embedding Ruvia must not alter unrelated PMR allocations in the
-    // host process.
-    //
-    // This resource intentionally has no C++ static destructor. blocking_pool
-    // destructors may detach already-running callables, and those callables can
-    // still destroy PMR-backed completion state while the process is leaving
-    // main(). A function-local static resource would be released during static
-    // teardown before those detached threads necessarily finish.
-    // Bind the upstream explicitly: first use may occur while an embedding
-    // application has temporarily replaced the global PMR default resource.
-    static auto* const resource = new aligned_pool_resource<std::pmr::synchronized_pool_resource>(
-        bounded_pool_options, std::pmr::new_delete_resource());
+    // The adapter has process lifetime without a C++ static destructor:
+    // detached blocking work may release completion state during teardown.
+    // mimalloc owns its thread heaps and supports freeing on another thread,
+    // including after the allocating thread exits. No shared pool is layered
+    // over it, and the host's malloc/new and default PMR resource are untouched.
+    alignas(mimalloc_memory_resource) static std::byte storage[sizeof(mimalloc_memory_resource)];
+    static auto* const resource = ::new (storage) mimalloc_memory_resource;
     return resource;
 }
 
@@ -146,7 +157,7 @@ public:
         for (void*& head : bins_) {
             while (head != nullptr) {
                 void* next_value = *static_cast<void**>(head);
-                ::operator delete(head);
+                mi_free(head);
                 head = next_value;
             }
         }
@@ -198,7 +209,7 @@ void* task_frame_allocate(std::size_t bytes_value) {
             return cached;
         }
     }
-    return ::operator new(class_bytes);
+    return allocate_mimalloc(class_bytes, alignof(std::max_align_t));
 }
 
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept {
@@ -207,7 +218,15 @@ void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcep
         frame_cache.store_block(pointer, class_bytes)) {
         return;
     }
-    ::operator delete(pointer);
+    mi_free(pointer);
+}
+
+void* task_frame_allocate_aligned(std::size_t bytes_value, std::size_t alignment) {
+    return allocate_mimalloc(bytes_value, alignment);
+}
+
+void task_frame_deallocate_aligned(void* pointer) noexcept {
+    mi_free(pointer);
 }
 
 std::size_t task_frame_cached_bytes() noexcept {
@@ -246,13 +265,11 @@ void validate_memory_pool_config(const memory_pool_config& config) {
     }
 }
 
-// Workers draw blocks from new/delete, never from process_resource(): that
-// would serialize every worker on its shared lock and second big-block table;
-// that pool stays for startup and shutdown metadata. new_delete_resource() is
-// never destroyed, so it outlives every worker pool and the pool object's own
-// storage released at teardown.
+// The default upstream is the process-lifetime mimalloc adapter, not a shared
+// pool. Each worker retains its own bounded caches and can also bind an
+// explicit caller-owned upstream without changing its allocation contract.
 worker_memory::worker_memory(const memory_pool_config& config)
-    : worker_memory(*std::pmr::new_delete_resource(), config) {}
+    : worker_memory(*process_resource(), config) {}
 
 worker_memory::worker_memory(std::pmr::memory_resource& upstream, const memory_pool_config& config)
     : impl_((validate_memory_pool_config(config),

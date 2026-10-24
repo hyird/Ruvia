@@ -1,14 +1,11 @@
-#include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <cstdlib>
 #include <memory_resource>
 #include <new>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
 #include <utility>
 #include <vector>
 
@@ -19,11 +16,6 @@
 #include <asio/read_until.hpp>
 #include <asio/write.hpp>
 
-#ifdef _WIN32
-#include <malloc.h>
-#endif
-
-#include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -35,94 +27,7 @@
 #include "test_io_context.h"
 
 // Inbound buffer budgets on the streamed request body and CONNECT tunnel
-// paths, and the worker's memory trim, which runs only after a scan interval
-// without request exchanges. This executable owns its application (small
-// budgets) and replaces the global aligned operator new/delete: worker memory
-// takes its cached large blocks from them, so a block handed back to them is
-// one the worker has trimmed.
-
-namespace {
-
-std::atomic<void*> watched_block{nullptr};
-std::atomic<bool> watched_block_freed{false};
-// Set on the worker while a handler allocates the block to watch.
-thread_local bool capturing_block = false;
-constexpr std::size_t watched_block_bytes = std::size_t{200} * 1024;
-
-void* aligned_allocate(std::size_t bytes, std::size_t alignment) noexcept {
-    const auto size = bytes == 0 ? alignment : (bytes + alignment - 1) / alignment * alignment;
-#ifdef _WIN32
-    return _aligned_malloc(size, alignment);
-#else
-    return std::aligned_alloc(alignment, size);
-#endif
-}
-
-void aligned_release(void* pointer) noexcept {
-    if (pointer == nullptr) {
-        return;
-    }
-    if (pointer == watched_block.load()) {
-        watched_block_freed = true;
-    }
-#ifdef _WIN32
-    _aligned_free(pointer);
-#else
-    std::free(pointer);
-#endif
-}
-
-void* aligned_new(std::size_t bytes, std::align_val_t alignment) {
-    auto* const pointer = aligned_allocate(bytes, static_cast<std::size_t>(alignment));
-    if (pointer == nullptr) {
-        throw std::bad_alloc();
-    }
-    if (capturing_block && bytes >= watched_block_bytes) {
-        watched_block = pointer;
-    }
-    return pointer;
-}
-
-}  // namespace
-
-void* operator new(std::size_t bytes, std::align_val_t alignment) {
-    return aligned_new(bytes, alignment);
-}
-void* operator new[](std::size_t bytes, std::align_val_t alignment) {
-    return aligned_new(bytes, alignment);
-}
-void* operator new(std::size_t bytes, std::align_val_t alignment, const std::nothrow_t&) noexcept {
-    try {
-        return aligned_new(bytes, alignment);
-    } catch (...) {
-        return nullptr;
-    }
-}
-void* operator new[](std::size_t bytes, std::align_val_t alignment, const std::nothrow_t&) noexcept {
-    try {
-        return aligned_new(bytes, alignment);
-    } catch (...) {
-        return nullptr;
-    }
-}
-void operator delete(void* pointer, std::align_val_t) noexcept {
-    aligned_release(pointer);
-}
-void operator delete[](void* pointer, std::align_val_t) noexcept {
-    aligned_release(pointer);
-}
-void operator delete(void* pointer, std::size_t, std::align_val_t) noexcept {
-    aligned_release(pointer);
-}
-void operator delete[](void* pointer, std::size_t, std::align_val_t) noexcept {
-    aligned_release(pointer);
-}
-void operator delete(void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
-    aligned_release(pointer);
-}
-void operator delete[](void* pointer, std::align_val_t, const std::nothrow_t&) noexcept {
-    aligned_release(pointer);
-}
+// paths. This executable owns its application with small inbound budgets.
 
 namespace {
 
@@ -145,7 +50,6 @@ constexpr std::size_t worker_budget = 10000;
 class inbound_memory_routes final {
     RUVIA_ROUTES_BEGIN(inbound_memory_routes)
     RUVIA_POST("/inbound-stream", stream_body, ruvia::stream_body);
-    RUVIA_GET("/inbound-trim", trim);
     RUVIA_CONNECT("inbound-tunnel.test:443", tunnel);
     RUVIA_ROUTES_END
 
@@ -156,22 +60,6 @@ class inbound_memory_routes final {
             received += chunk->size();
         }
         co_return context_value.text(std::pmr::string(std::to_string(received), context_value.pool()));
-    }
-
-    // Caches one large freed block in the worker's memory, then keeps the
-    // exchange running for many scan intervals before reporting whether the
-    // block was trimmed meanwhile.
-    ruvia::task<ruvia::http_response> trim(ruvia::context& context_value) {
-        auto* const pool = context_value.pool();
-        capturing_block = true;
-        auto* const block = pool->allocate(watched_block_bytes);
-        capturing_block = false;
-        pool->deallocate(block, watched_block_bytes);
-        if (watched_block.load() == nullptr) {
-            co_return context_value.text("uncached\n");
-        }
-        co_await ruvia::sleep_for(context_value.worker(), 30 * scan_interval);
-        co_return context_value.text(std::string_view(watched_block_freed ? "freed\n" : "kept\n"));
     }
 
     // Keeps every chunk until the peer ends, acknowledging each, and reports
@@ -335,24 +223,5 @@ RUVIA_TEST(tunnel_reads_count_against_the_worker_inbound_budget) {
         RUVIA_CHECK(client->read_to_end() == "end\n");
         client->close();
     }
-    server.finish();
-}
-
-RUVIA_TEST(worker_memory_is_trimmed_only_after_an_idle_scan_interval) {
-    auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io, inbound_memory_config());
-    test_client client(io, server.endpoint());
-    client.send("GET /inbound-trim HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    const auto head = client.read_until("\r\n\r\n");
-    RUVIA_CHECK(head && head->starts_with("HTTP/1.1 200 "));
-    // Thirty scan intervals passed while the exchange ran: none trimmed.
-    RUVIA_CHECK(client.read_until("\n") == std::optional<std::string>("kept\n"));
-    // The connection stays open but idle; a later scan trims the block.
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!watched_block_freed && std::chrono::steady_clock::now() < deadline) {
-        std::this_thread::sleep_for(scan_interval);
-    }
-    RUVIA_CHECK(watched_block_freed);
-    client.close();
     server.finish();
 }

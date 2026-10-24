@@ -58,8 +58,8 @@ private:
 };
 
 // The state one stop_source shares with its tokens and registrations. It is
-// allocated from std::pmr::new_delete_resource(), which is thread-safe and
-// never destroyed, so its last owner may retire on any thread at any time.
+// allocated from the process-lifetime mimalloc resource, which supports
+// releasing its last owner on any thread, even after the allocating thread exits.
 //
 // Callbacks form an intrusive list under a mutex. request_stop() runs each one
 // with the mutex released; unlinking a callback that is running on another
@@ -456,9 +456,8 @@ private:
 [[nodiscard]] stop_token combine_stop_tokens(stop_token first, stop_token second);
 
 // Owns one stop state and requests its stop. The state comes from
-// std::pmr::new_delete_resource(), which is thread-safe and never destroyed,
-// and lives until this source and every token and registration observing it
-// retire, on whichever thread that is.
+// the process-lifetime mimalloc resource and lives until this source and every
+// token and registration observing it retire, on whichever thread that is.
 class stop_source final {
 public:
     stop_source();
