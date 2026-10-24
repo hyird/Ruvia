@@ -211,7 +211,6 @@ void append_response_head(
     };
     charge(head_budget.add(
         http11_status_prefix.size() + http_status_code_token_size + 1 + reason_phrase.size() + 2));
-    std::size_t field_count = 0;
     http_connection_options connection_options;
     http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
@@ -224,26 +223,19 @@ void append_response_head(
                 emit_chunked_transfer_encoding, connection_options, upgrade_protocols)) {
             throw std::invalid_argument("invalid HTTP response header");
         }
-        ++field_count;
         charge(head_budget.add_field(header.name(), header.value()));
     }
     if (upgrade_protocols.has_field() && !connection_options.upgrade()) {
         throw std::invalid_argument("HTTP Upgrade response requires Connection: Upgrade");
     }
     if ((known_bits & response_header_date) == 0 && !date_header.empty()) {
-        ++field_count;
         charge(head_budget.add(date_header.size()));
     }
     if (emit_chunked_transfer_encoding) {
-        ++field_count;
         charge(head_budget.add(chunked_transfer_encoding_header.size()));
     }
     if (flags.emit_content_length_) {
-        ++field_count;
         charge(head_budget.add_field(content_length_name.size(), content_length_value.size()));
-    }
-    if (field_count > max_http_header_fields) {
-        throw std::length_error("too many HTTP response headers");
     }
     charge(head_budget.add(2));
 
@@ -291,9 +283,6 @@ void append_http1_response_trailers(
 
 http_response_trailer_section validate_http_response_trailers(
     std::span<const http_header_view> trailers) {
-    if (trailers.size() > max_http_header_fields) {
-        throw std::invalid_argument("too many HTTP response trailers");
-    }
     auto section_size = http_trailer_section_budget();
     for (const auto& trailer : trailers) {
         if (!detail::response_trailer_field_valid(trailer.name(), trailer.value()) ||

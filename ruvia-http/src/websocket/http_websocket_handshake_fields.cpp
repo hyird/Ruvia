@@ -25,9 +25,6 @@ namespace {
 [[nodiscard]] std::pmr::vector<http_header> copy_websocket_response_headers(
     std::span<const http_header_view> headers, std::string_view subprotocol,
     std::string_view extension, std::pmr::memory_resource* resource) {
-    if (headers.size() > max_http_header_fields - 5) {
-        throw std::length_error("too many WebSocket handshake response headers");
-    }
     // Account for the whole emitted head: the 101 status line, the generated
     // fields, the application field section, and the terminating empty line.
     http_field_section_budget size;

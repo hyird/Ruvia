@@ -68,8 +68,7 @@ RUVIA_MODEL(http_error_response_model,
         .set<"code">(error.code());
     if (!error.validation_issues().empty()) {
         auto& details = model.ensure<"errors">();
-        const auto issues = error.validation_issues().first(
-            std::min(error.validation_issues().size(), max_validation_issues));
+        const auto issues = error.validation_issues();
         details.reserve(issues.size());
         for (const auto& issue : issues) {
             details.emplace_back(model_options{.resource_ = resource})

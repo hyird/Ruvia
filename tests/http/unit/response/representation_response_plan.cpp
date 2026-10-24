@@ -20,24 +20,16 @@ using ruvia::http_header_view;
 using ruvia::http_request;
 
 http_request request(std::string_view method) {
-    auto parsed = ruvia::make_parsed_http_request(
+    return ruvia::make_parsed_http_request(
         method, method == "CONNECT" ? "example.test:443" : "/", {}, {},
         std::pmr::get_default_resource());
-    if (!std::holds_alternative<http_request>(parsed)) {
-        throw std::logic_error("representation request rejected");
-    }
-    return std::move(std::get<http_request>(parsed));
 }
 
 void add(http_request& req, std::string_view name, std::string_view value) {
     std::vector<http_header_view> fields(req.headers().begin(), req.headers().end());
     fields.emplace_back(name, value);
-    auto parsed = ruvia::make_parsed_http_request(
+    req = ruvia::make_parsed_http_request(
         req.method(), req.target(), fields, req.body_bytes(), std::pmr::get_default_resource());
-    if (!std::holds_alternative<http_request>(parsed)) {
-        throw std::logic_error("representation request header rejected");
-    }
-    req = std::move(std::get<http_request>(parsed));
 }
 
 constexpr ruvia::http_selected_representation_metadata representation{

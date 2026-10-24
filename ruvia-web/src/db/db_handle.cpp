@@ -124,7 +124,7 @@ task<std::pair<db_rows, db_rows>> db_handle::query_and_count_task(const db_query
     return detail::execute_db_query_plan<true>(std::move(plan), backend, options_);
 }
 
-scoped_operation<db_exec_result> db_handle::execute_query(const db_query& query) const {
+task<db_exec_result> db_handle::execute_query(const db_query& query) const {
     registration_.require_active();
     auto statement = query.compile(query_driver(), resource_);
     if (statement.returns_rows()) {
@@ -137,7 +137,7 @@ scoped_operation<db_exec_result> db_handle::execute_query(const db_query& query)
         }));
 }
 
-scoped_operation<db_rows> db_handle::query(
+task<db_rows> db_handle::query(
     std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, resource_);
@@ -148,7 +148,7 @@ scoped_operation<db_rows> db_handle::query(
         }));
 }
 
-scoped_operation<db_exec_result> db_handle::execute(
+task<db_exec_result> db_handle::execute(
     std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, resource_);
@@ -159,7 +159,7 @@ scoped_operation<db_exec_result> db_handle::execute(
         }));
 }
 
-scoped_operation<db_stream_result> db_handle::query_stream(
+task<db_stream_result> db_handle::query_stream(
     std::string_view sql, std::span<const db_value> params) const {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, resource_);
@@ -178,7 +178,7 @@ task<db_stream_result> db_handle::query_stream_prepared(detail::db_pool_ref_type
     co_return result_value;
 }
 
-scoped_operation<db_transaction> db_handle::begin_transaction(db_transaction_options options) const {
+task<db_transaction> db_handle::begin_transaction(db_transaction_options options) const {
     registration_.require_active();
     auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(scope,
@@ -195,7 +195,7 @@ task<db_transaction> db_handle::begin_transaction_prepared(detail::db_query_back
     co_return transaction;
 }
 
-scoped_operation<void> db_handle::notify(std::string_view channel, std::string_view payload) const {
+task<void> db_handle::notify(std::string_view channel, std::string_view payload) const {
     registration_.require_active();
     if (query_driver() != db_driver::postgresql) {
         throw std::invalid_argument("database notify requires PostgreSQL");

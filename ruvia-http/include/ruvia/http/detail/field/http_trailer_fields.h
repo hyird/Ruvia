@@ -131,22 +131,19 @@ enum class http_trailer_block_status : std::uint8_t {
 // `block` holds the field lines between the last chunk and the empty line that
 // ends the trailer section; a final CRLF after the last field is accepted for
 // standalone validation. Values are exposed with field-line OWS trimmed.
-// `forbidden_name` is the direction's trailer policy. `budget` and
-// `field_count` are the section totals before this block, so a caller can
-// extend a retained section; `budget` is advanced for every accepted field.
+// `forbidden_name` is the direction's trailer policy. `budget` is the section
+// total before this block, so a caller can extend a retained section; `budget`
+// is advanced for every accepted field.
 // The visitor receives views borrowing `block` and returns false to stop.
 template <typename forbidden_name_type, typename visitor_type>
 [[nodiscard]] http_trailer_block_status visit_http1_trailer_block(std::string_view block,
-    forbidden_name_type&& forbidden_name, http_field_section_budget& budget, std::size_t field_count,
+    forbidden_name_type&& forbidden_name, http_field_section_budget& budget,
     visitor_type&& visitor) {
     if (block.size() > max_http_header_bytes) {
         return http_trailer_block_status::section_too_large;
     }
     std::size_t cursor_value = 0;
     while (cursor_value < block.size()) {
-        if (field_count == max_http_header_fields) {
-            return http_trailer_block_status::section_too_large;
-        }
         const auto line_end = block.find("\r\n", cursor_value);
         const auto line = line_end == std::string_view::npos
                               ? block.substr(cursor_value)
@@ -167,7 +164,6 @@ template <typename forbidden_name_type, typename visitor_type>
         if (!budget.add_field(name, value)) {
             return http_trailer_block_status::section_too_large;
         }
-        ++field_count;
         if (!visitor(name, value)) {
             return http_trailer_block_status::visitor_stopped;
         }

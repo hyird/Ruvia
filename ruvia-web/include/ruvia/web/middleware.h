@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
@@ -186,5 +187,15 @@ template <typename middleware_type>
 concept middleware = std::is_class_v<middleware_type> && std::is_final_v<middleware_type> &&
                      (detail::void_handle_middleware<middleware_type> ||
                          detail::response_handle_middleware<middleware_type>);
+
+template <typename policy_type>
+concept route_policy =
+    std::is_class_v<policy_type> && std::is_final_v<policy_type> && !middleware<policy_type> &&
+    (requires {
+        { policy_type::ruvia_request_body_limit_bytes } -> std::convertible_to<std::size_t>; } || requires {
+            { policy_type::ruvia_stream_request_body } -> std::convertible_to<bool>; });
+
+template <typename modifier_type>
+concept route_modifier = middleware<modifier_type> || route_policy<modifier_type>;
 
 }  // namespace ruvia

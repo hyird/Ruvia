@@ -216,12 +216,12 @@ void db_query_result_cache::expire_capability(void* target) noexcept {
     cache.state_ = nullptr;
     cache.options_ = {};
 }
-scoped_operation<void> db_query_result_cache::remove(std::span<const std::string_view> ids) const {
+task<void> db_query_result_cache::remove(std::span<const std::string_view> ids) const {
     registration_.require_active();
     auto& scope = registration_.scope();
     return make_scoped_operation(scope, state_->remove(ids, scope, options_));
 }
-scoped_operation<void> db_query_result_cache::clear() const {
+task<void> db_query_result_cache::clear() const {
     registration_.require_active();
     auto& scope = registration_.scope();
     return make_scoped_operation(scope, state_->clear(scope, options_));

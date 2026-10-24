@@ -400,19 +400,13 @@ std::optional<std::string_view> context_request::negotiate(
                                 ? http_accept_token_match_mode::language_prefix
                                 : http_accept_token_match_mode::exact;
 
-    std::array<std::string_view, max_http_header_fields> field_values{};
-    std::size_t field_value_count = 0;
     bool saw_field = false;
     const auto headers = context_->request_.headers();
     for (const auto& header_field : headers) {
-        if (!http_ascii_equals_ignore_case(header_field.name(), header_name)) {
-            continue;
+        if (http_ascii_equals_ignore_case(header_field.name(), header_name)) {
+            saw_field = true;
+            break;
         }
-        saw_field = true;
-        if (header_field.value().empty() || field_value_count == field_values.size()) {
-            continue;
-        }
-        field_values[field_value_count++] = header_field.value();
     }
 
     if (!saw_field) {
@@ -424,13 +418,17 @@ std::optional<std::string_view> context_request::negotiate(
     for (const auto offered : supported) {
         http_accept_match match;
         http_accepted_encoding_quality encoding_quality;
-        for (std::size_t i = 0; i < field_value_count; ++i) {
+        for (const auto& header_field : headers) {
+            if (!http_ascii_equals_ignore_case(header_field.name(), header_name) ||
+                header_field.value().empty()) {
+                continue;
+            }
             if (media_type) {
-                match.update_media_type(field_values[i], offered);
+                match.update_media_type(header_field.value(), offered);
             } else if (encoding) {
-                encoding_quality.update(field_values[i], offered);
+                encoding_quality.update(header_field.value(), offered);
             } else {
-                match.update_token(field_values[i], offered, token_mode);
+                match.update_token(header_field.value(), offered, token_mode);
             }
         }
         const auto quality = encoding ? encoding_quality.quality(http_ascii_equals_ignore_case(offered, "identity"))
@@ -451,7 +449,7 @@ std::optional<std::string_view> context_request::negotiate(
     return best;
 }
 
-scoped_operation<std::string_view> context_request::text() const {
+task<std::string_view> context_request::text() const {
     const auto run = [](const context* context_value) -> task<std::string_view> {
         if (context_value->body_decoded_) {
             const auto& decoded = *context_value->request_storage_->decoded_body_;
@@ -498,7 +496,7 @@ scoped_operation<std::string_view> context_request::text() const {
     return ::ruvia::make_scoped_operation(context_->operation_scope_, run(context_));
 }
 
-scoped_operation<std::span<const std::byte>> context_request::bytes() const {
+task<std::span<const std::byte>> context_request::bytes() const {
     const auto run = [](const context* context_value) -> task<std::span<const std::byte>> {
         const auto body = co_await context_value->req().text();
         co_return std::as_bytes(std::span(body));
@@ -528,7 +526,7 @@ std::optional<std::string_view> context_request::signed_cookie(
     return value;
 }
 
-scoped_operation<std::pmr::vector<multipart_part>> context_request::multipart() const {
+task<std::pmr::vector<multipart_part>> context_request::multipart() const {
     const auto run = [](const context* context_value) -> task<std::pmr::vector<multipart_part>> {
         const auto boundary = get_multipart_boundary(context_value->request_);
         const auto request_body = co_await context_value->req().text();
@@ -537,7 +535,7 @@ scoped_operation<std::pmr::vector<multipart_part>> context_request::multipart() 
     return ::ruvia::make_scoped_operation(context_->operation_scope_, run(context_));
 }
 
-scoped_operation<void> context_request::discard_body() const {
+task<void> context_request::discard_body() const {
     const auto run = [](const context* context_value) -> task<void> {
         if (const auto* lazy = context_value->request_body_source().lazy()) {
             co_await lazy->loader().discard();

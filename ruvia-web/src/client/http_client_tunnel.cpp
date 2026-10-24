@@ -99,16 +99,16 @@ void http_client_tunnel::abort() & noexcept {
 http_udp_tunnel http_client_tunnel::udp(http_capsule_config config) && {
     return http_udp_tunnel(std::move(*this).datagrams(config));
 }
-scoped_operation<std::optional<std::span<const std::byte>>> http_client_tunnel::read() & {
+task<std::optional<std::span<const std::byte>>> http_client_tunnel::read() & {
     if (response_.state_ == nullptr) {
         throw std::logic_error("HTTP client tunnel is empty");
     }
     return response_.body().read();
 }
-scoped_operation<void> http_client_tunnel::write(std::span<const std::byte> bytes_value) & {
+task<void> http_client_tunnel::write(std::span<const std::byte> bytes_value) & {
     return write(std::string_view(reinterpret_cast<const char*>(bytes_value.data()), bytes_value.size()));
 }
-scoped_operation<void> http_client_tunnel::write(std::string_view bytes_value) & {
+task<void> http_client_tunnel::write(std::string_view bytes_value) & {
     require_output(response_.state_, false);
     auto& state_value = *response_.state_;
     if (bytes_value.size() > state_value.tunnel_->config_.max_chunk_bytes_) {
@@ -117,7 +117,7 @@ scoped_operation<void> http_client_tunnel::write(std::string_view bytes_value) &
     return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_,
         detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), std::pmr::string(bytes_value, state_value.resource_)}));
 }
-scoped_operation<void> http_client_tunnel::write_owned(std::pmr::string&& bytes_value) {
+task<void> http_client_tunnel::write_owned(std::pmr::string&& bytes_value) {
     require_output(response_.state_, false);
     auto& state_value = *response_.state_;
     if (bytes_value.size() > state_value.tunnel_->config_.max_chunk_bytes_) {
@@ -126,7 +126,7 @@ scoped_operation<void> http_client_tunnel::write_owned(std::pmr::string&& bytes_
     return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_,
         detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), detail::rebind_owned_storage(bytes_value, state_value.resource_)}));
 }
-scoped_operation<void> http_client_tunnel::finish() & {
+task<void> http_client_tunnel::finish() & {
     require_output(response_.state_, true);
     auto& state_value = *response_.state_;
     return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_,

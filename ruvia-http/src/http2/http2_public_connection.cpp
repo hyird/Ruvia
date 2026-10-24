@@ -37,8 +37,7 @@ namespace {
         headers.reserve(header_count);
         for (std::size_t index = 0; index < header_count; ++index) {
             const auto field = stream.remote_header_at(index);
-            headers.push_back(
-                http_header::copy_of(field.name_, field.value_, resource));
+            headers.emplace_back(field.name_, field.value_, resource);
         }
     }
     return result_value;

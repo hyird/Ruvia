@@ -9,102 +9,102 @@
 
 namespace ruvia {
 
-scoped_operation<std::int64_t> redis_handle::sadd(
+task<std::int64_t> redis_handle::sadd(
     std::string_view key, std::string_view member) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"SADD", key, member}, resource_), resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::srem(
+task<std::int64_t> redis_handle::srem(
     std::string_view key, std::string_view member) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"SREM", key, member}, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::smembers(
+task<std::pmr::vector<std::pmr::string>> redis_handle::smembers(
     std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_string_array_command(
         executor(), detail::own_redis_args({"SMEMBERS", key}, resource_), resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::scard(std::string_view key) const {
+task<std::int64_t> redis_handle::scard(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"SCARD", key}, resource_), resource_));
 }
 
-scoped_operation<bool> redis_handle::sismember(std::string_view key, std::string_view member) const {
+task<bool> redis_handle::sismember(std::string_view key, std::string_view member) const {
     registration_.require_active();
     return scoped(detail::execute_redis_integer_bool(
         executor(), detail::own_redis_args({"SISMEMBER", key, member}, resource_), resource_));
 }
 
-scoped_operation<std::optional<std::pmr::string>> redis_handle::spop(std::string_view key) const {
+task<std::optional<std::pmr::string>> redis_handle::spop(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_string_command(
         executor(), detail::own_redis_args({"SPOP", key}, resource_), resource_));
 }
 
-scoped_operation<std::optional<std::pmr::string>> redis_handle::srand_member(
+task<std::optional<std::pmr::string>> redis_handle::srand_member(
     std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_string_command(
         executor(), detail::own_redis_args({"SRANDMEMBER", key}, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::sinter(
+task<std::pmr::vector<std::pmr::string>> redis_handle::sinter(
     std::span<const std::string_view> keys) const {
     registration_.require_active();
     return scoped(detail::redis_string_array_command(
         executor(), detail::redis_command_with_keys("SINTER", keys, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::sunion(
+task<std::pmr::vector<std::pmr::string>> redis_handle::sunion(
     std::span<const std::string_view> keys) const {
     registration_.require_active();
     return scoped(detail::redis_string_array_command(
         executor(), detail::redis_command_with_keys("SUNION", keys, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::sdiff(
+task<std::pmr::vector<std::pmr::string>> redis_handle::sdiff(
     std::span<const std::string_view> keys) const {
     registration_.require_active();
     return scoped(detail::redis_string_array_command(
         executor(), detail::redis_command_with_keys("SDIFF", keys, resource_), resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::zadd(
+task<std::int64_t> redis_handle::zadd(
     std::string_view key, double score, std::string_view member) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(executor(),
         detail::make_redis_zadd_command(key, score, member, resource_).args_, resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::zrem(
+task<std::int64_t> redis_handle::zrem(
     std::string_view key, std::string_view member) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"ZREM", key, member}, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::zrange(
+task<std::pmr::vector<std::pmr::string>> redis_handle::zrange(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
     return scoped(detail::redis_string_array_command(executor(),
         detail::make_redis_range_command("ZRANGE", key, start, stop, resource_).args_, resource_));
 }
 
-scoped_operation<std::pmr::vector<redis_scored_value>> redis_handle::zrange_with_scores(
+task<std::pmr::vector<redis_scored_value>> redis_handle::zrange_with_scores(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
     auto command = detail::make_redis_range_command("ZRANGE", key, start, stop, resource_, true);
     return scoped(detail::execute_redis_scored_array(executor(), std::move(command.args_), resource_));
 }
 
-scoped_operation<std::optional<double>> redis_handle::zscore(
+task<std::optional<double>> redis_handle::zscore(
     std::string_view key, std::string_view member) const {
     registration_.require_active();
     return scoped(detail::execute_redis_optional_double(executor(),
@@ -112,13 +112,13 @@ scoped_operation<std::optional<double>> redis_handle::zscore(
         resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::zcard(std::string_view key) const {
+task<std::int64_t> redis_handle::zcard(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"ZCARD", key}, resource_), resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::zcount(
+task<std::int64_t> redis_handle::zcount(
     std::string_view key, double min_value, double max_value) const {
     registration_.require_active();
     auto min_text = detail::redis_score_string(min_value, resource_);

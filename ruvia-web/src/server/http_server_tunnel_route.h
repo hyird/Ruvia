@@ -30,52 +30,35 @@ namespace ruvia::detail {
 // one rule of its own: a CONNECT request cannot carry request content. A
 // successful handshake is access-logged through `tail` once its head reaches
 // the transport; a buffered answer is left to the session's ordinary tail.
-[[nodiscard]] inline std::variant<http1_response_head_plan, http_protocol_error>
-prepare_http1_tunnel_response_head_plan(
+[[nodiscard]] inline http1_response_head_plan prepare_http1_tunnel_response_head_plan(
     const http_response& head_response, http_protocol_version version, bool udp) {
     if (!udp) {
         return prepare_http1_connect_response_head(head_response, version);
     }
     const auto upgrade = prepare_http1_connect_udp_response_head(head_response);
-    if ((upgrade.index() != 0)) {
-        return http_protocol_error(http_status::internal_server_error,
+    if (upgrade.index() != 0) {
+        throw http_protocol_error(http_status::internal_server_error,
             "invalid_connect_udp_response_head", "invalid CONNECT-UDP response head");
     }
     return std::get<0>(upgrade);
 }
 
 template <typename stream_type>
-struct http1_tunnel_upgrade_operation final {
+struct http1_tunnel_upgrade_commit final {
     using transport_type = http_socket_tunnel_transport<stream_type>;
-    using session_type = http_tunnel_session<transport_type>;
 
     http1_route_dispatch<stream_type>& dispatch_;
     http_response_tail& tail_;
-    const resolved_route& resolved_;
-    const tunnel_route_endpoint& endpoint_;
     bool udp_;
-    std::string_view pending_;
     std::optional<tls_tunnel_output>& tls_output_;
-    std::optional<session_type>& tunnel_;
 
-    [[nodiscard]] task<void> operator()(context& context_value) {
-        auto head_response = context_access::streaming_head(context_value);
-        if (udp_) {
-            auto negotiated = prepare_http_connect_udp_response(
-                std::move(head_response), dispatch_.parsed_.request_.protocol_version());
-            if ((negotiated.index() != 0)) {
-                throw std::invalid_argument("invalid CONNECT-UDP response metadata");
-            }
-            head_response = std::move(std::get<0>(negotiated));
-        }
+    [[nodiscard]] task<transport_type> operator()(
+        context& context_value, const http_response& head_response) const {
         const auto plan = prepare_http1_tunnel_response_head_plan(
             head_response, dispatch_.parsed_.request_.protocol_version(), udp_);
-        if (plan.index() != 0) {
-            throw std::get<1>(plan);
-        }
         http_response_head_buffer head(
             std::pmr::polymorphic_allocator<char>(dispatch_.memory_.resource()));
-        append_http1_response_head(head_response, head, std::get<0>(plan));
+        append_http1_response_head(head_response, head, plan);
         context_access::commit_upgrade(context_value);
         const auto written = co_await async_asio<std::size_t>([this, &head](auto handler) {
             asio::async_write(dispatch_.stream_, asio::buffer(head.view()), std::move(handler));
@@ -89,18 +72,7 @@ struct http1_tunnel_upgrade_operation final {
                 dispatch_.base_route_services_.worker(), *dispatch_.memory_.resource());
             tls_output_->start();
         }
-        tunnel_.emplace(transport_type(dispatch_.stream_, tls_output_ ? &*tls_output_ : nullptr),
-            dispatch_.base_route_services_.worker(), *dispatch_.memory_.resource(),
-            dispatch_.inbound_buffer_pool_, pending_);
-        co_await invoke_tunnel_handler(
-            *tunnel_, dispatch_.scanner_entry_, resolved_.stream_handler(), context_value);
-    }
-
-    [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
-        return finish_tunnel_session(session_value, std::move(failure),
-            dispatch_.options_.connection_failure_,
-            dispatch_.base_route_services_.get_conn_info().remote().address(),
-            dispatch_.scanner_entry_, endpoint_.config().peer_transport_fin_timeout_);
+        co_return transport_type(dispatch_.stream_, tls_output_ ? &*tls_output_ : nullptr);
     }
 };
 
@@ -115,32 +87,26 @@ template <typename stream_type>
             http_error_info({.status_ = http_status::bad_request, .message_ = "CONNECT route does not accept HTTP request content"}), d.base_route_services_);
         co_return close_with_framework_response(d.response_, d.parsed_.connection_plan_);
     }
-    const auto& endpoint = *resolved.route().endpoint().tunnel();
-    using upgrade_type = http1_tunnel_upgrade_operation<stream_type>;
     std::optional<tls_tunnel_output> tls_output;
-    std::optional<typename upgrade_type::session_type> tunnel;
-    upgrade_type upgrade{
-        .dispatch_ = d,
-        .tail_ = tail,
-        .resolved_ = resolved,
-        .endpoint_ = endpoint,
-        .udp_ = udp,
-        .pending_ = pending,
-        .tls_output_ = tls_output,
-        .tunnel_ = tunnel,
-    };
     // The TLS output pump must be stopped and joined on every exit, including
-    // a handler failure that run_http_upgrade_route surfaces.
+    // a handler failure that execute_tunnel_upgrade_session surfaces.
     std::optional<http_response> buffered;
     std::exception_ptr failure;
     try {
-        buffered = co_await run_http_upgrade_route(d.routes_, d.parsed_.request_,
-            resolved, d.request_memory_, d.base_route_services_, tunnel, upgrade, upgrade);
+        buffered = co_await execute_tunnel_upgrade_session<http_socket_tunnel_transport<stream_type>>(
+            d.routes_, d.parsed_.request_, resolved, d.request_memory_, d.base_route_services_,
+            d.options_, d.scanner_entry_, d.inbound_buffer_pool_, udp, pending,
+            http1_tunnel_upgrade_commit<stream_type>{
+                .dispatch_ = d,
+                .tail_ = tail,
+                .udp_ = udp,
+                .tls_output_ = tls_output,
+            });
     } catch (...) {
         failure = std::current_exception();
     }
     if (tls_output) {
-        if (!tunnel) {
+        if (failure) {
             tls_output->abort();
         }
         co_await tls_output->join();

@@ -78,12 +78,13 @@ class pipelining_routes final {
         co_return c.text("long-hinted");
     }
 
-    // More fields than an HTTP/1 response head may carry, so its head cannot
-    // be serialized.
+    // More header bytes than an HTTP/1 response head may carry, so its head
+    // cannot be serialized.
     ruvia::task<ruvia::http_response> too_many_fields(ruvia::context& c) {
         auto response = c.text("unsendable");
+        const std::string value(1024, 'v');
         for (int index = 0; index < 70; ++index) {
-            response.header("X-Field-" + std::to_string(index), "value");
+            response.header("X-Field-" + std::to_string(index), value);
         }
         co_return response;
     }

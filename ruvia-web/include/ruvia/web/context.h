@@ -378,17 +378,17 @@ public:
     [[nodiscard]] std::optional<std::string_view> signed_cookie(signed_cookie_lookup_options options) const;
 
     // Buffered views borrow context storage; read the media type with header("Content-Type").
-    [[nodiscard]] scoped_operation<std::string_view> text() const;
-    [[nodiscard]] scoped_operation<std::span<const std::byte>> bytes() const;
-    scoped_operation<void> discard_body() const;
+    [[nodiscard]] task<std::string_view> text() const;
+    [[nodiscard]] task<std::span<const std::byte>> bytes() const;
+    task<void> discard_body() const;
 
     // Typed optional parsing with schema and field-rule validation. Only a
     // media-type mismatch yields nullopt; selected but malformed input throws
     // HTTP 400, and rule violations throw an http_error carrying the issues.
     template <typename t_type>
-    [[nodiscard]] scoped_operation<std::optional<t_type>> json_if() const;
+    [[nodiscard]] task<std::optional<t_type>> json_if() const;
     template <typename t_type>
-    [[nodiscard]] scoped_operation<std::optional<t_type>> form_if() const;
+    [[nodiscard]] task<std::optional<t_type>> form_if() const;
     template <typename t_type>
     [[nodiscard]] const t_type& validated() const;
 
@@ -397,7 +397,7 @@ public:
     // multipart() decodes a supported Content-Encoding; multipart_reader()
     // decodes none, so a coded body is refused with 415 and an invalid
     // Content-Encoding field with 400.
-    [[nodiscard]] scoped_operation<std::pmr::vector<multipart_part>> multipart() const;
+    [[nodiscard]] task<std::pmr::vector<multipart_part>> multipart() const;
     [[nodiscard]] ::ruvia::body_reader& body_reader() const;
     [[nodiscard]] ::ruvia::multipart_reader multipart_reader() const;
 
@@ -506,7 +506,7 @@ public:
     // block the final response; starting one after the final head commits throws.
     // A failed write throws std::system_error, which is not routed through
     // on_error: the connection ends.
-    [[nodiscard]] scoped_operation<void> inform(const http_interim_response_head& response);
+    [[nodiscard]] task<void> inform(const http_interim_response_head& response);
 
     // Queues a promised request on this HTTP/2 connection. False means the
     // peer disabled push or its stream capacity cannot admit the promise.
@@ -588,7 +588,6 @@ public:
 
     // Present only while session_middleware is bound for this request.
     [[nodiscard]] ruvia::session session();
-    [[nodiscard]] std::optional<ruvia::session> try_session() noexcept;
 
     // Request and handshake lifetime resource. Allocations remain in the
     // request arena until the owning request_memory is destroyed and are not
@@ -635,20 +634,15 @@ public:
         requires(!std::is_lvalue_reference_v<t_type>)
     [[nodiscard]] request_state_binding<std::remove_cvref_t<t_type>> bind_request_state(t_type&&) = delete;
 
-    // Throws std::logic_error when nothing of this type is bound. Use
-    // try_request_state<T>() where absence is a normal outcome -- an optional
-    // auth middleware, say.
+    // Throws std::logic_error when nothing of this type is bound.
     template <typename t_type>
     [[nodiscard]] const std::remove_cvref_t<t_type>& request_state() const;
-
-    template <typename t_type>
-    [[nodiscard]] const std::remove_cvref_t<t_type>* try_request_state() const noexcept;
 
     [[nodiscard]] const ruvia::env& env() const noexcept;
 
     // Re-enter the immutable route table on this worker. Authentication,
     // validation and middleware run in a fresh request context and arena.
-    [[nodiscard]] scoped_operation<dispatch_response> dispatch(dispatch_options options);
+    [[nodiscard]] task<dispatch_response> dispatch(dispatch_options options);
     [[nodiscard]] bool is_subrequest() const noexcept;
 
     // Builds a request path from a registered route pattern; the pattern is
@@ -770,7 +764,7 @@ public:
 
     [[nodiscard]] http_response error(http_error_info_options options) const;
 
-    [[nodiscard]] scoped_operation<http_response> not_found();
+    [[nodiscard]] task<http_response> not_found();
 
 private:
     [[nodiscard]] http_response streaming_head() const;

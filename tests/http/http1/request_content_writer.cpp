@@ -166,7 +166,7 @@ RUVIA_TEST(http1_streaming_request_finish_accepts_trailers_borrowed_from_output)
     }
 }
 
-RUVIA_TEST(http1_streaming_request_finish_accepts_output_alias_at_trailer_limit) {
+RUVIA_TEST(http1_streaming_request_finish_accepts_output_alias_at_header_byte_limit) {
     auto writer = chunked_request_writer();
     constexpr std::size_t framing_bytes = std::string_view("0\r\nDigest: \r\n\r\n").size();
     const std::string value(ruvia::max_http_header_bytes - framing_bytes, 'v');

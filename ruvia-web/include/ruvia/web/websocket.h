@@ -81,58 +81,58 @@ public:
 
     /// Only one read operation may run at a time. Starting another before the
     /// current operation completes throws std::logic_error. Unstarted operations may coexist.
-    [[nodiscard]] scoped_operation<std::optional<websocket_message>> read() &;
-    scoped_operation<std::optional<websocket_message>> read() && = delete;
+    [[nodiscard]] task<std::optional<websocket_message>> read() &;
+    task<std::optional<websocket_message>> read() && = delete;
 
     /// The string_view overloads copy payloads into owner-worker PMR storage
     /// before returning. PMR-string inputs with the matching owner allocator
     /// can transfer their existing allocation; incompatible inputs are copied.
-    scoped_operation<void> text(std::string_view payload, websocket_send_options options = {}) &;
-    scoped_operation<void> text(std::string_view, websocket_send_options = {}) && = delete;
+    task<void> text(std::string_view payload, websocket_send_options options = {}) &;
+    task<void> text(std::string_view, websocket_send_options = {}) && = delete;
 
     /// Zero-copy text frame: takes ownership of an already-allocated payload.
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> text(string_type&& payload, websocket_send_options options = {}) & {
+    task<void> text(string_type&& payload, websocket_send_options options = {}) & {
         return write(websocket_opcode::text, std::move(payload), options.compress_);
     }
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> text(string_type&&, websocket_send_options = {}) && = delete;
+    task<void> text(string_type&&, websocket_send_options = {}) && = delete;
 
-    scoped_operation<void> binary(std::string_view payload, websocket_send_options options = {}) &;
-    scoped_operation<void> binary(std::string_view, websocket_send_options = {}) && = delete;
+    task<void> binary(std::string_view payload, websocket_send_options options = {}) &;
+    task<void> binary(std::string_view, websocket_send_options = {}) && = delete;
 
-    scoped_operation<void> binary(std::span<const std::byte> payload, websocket_send_options options = {}) &;
-    scoped_operation<void> binary(std::span<const std::byte>, websocket_send_options = {}) && = delete;
+    task<void> binary(std::span<const std::byte> payload, websocket_send_options options = {}) &;
+    task<void> binary(std::span<const std::byte>, websocket_send_options = {}) && = delete;
 
     /// Zero-copy binary frame.
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> binary(string_type&& payload, websocket_send_options options = {}) & {
+    task<void> binary(string_type&& payload, websocket_send_options options = {}) & {
         return write(websocket_opcode::binary, std::move(payload), options.compress_);
     }
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> binary(string_type&&, websocket_send_options = {}) && = delete;
+    task<void> binary(string_type&&, websocket_send_options = {}) && = delete;
 
-    scoped_operation<void> pong(std::string_view payload) &;
-    scoped_operation<void> pong(std::string_view) && = delete;
+    task<void> pong(std::string_view payload) &;
+    task<void> pong(std::string_view) && = delete;
 
     /// Zero-copy pong frame.
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> pong(string_type&& payload) & {
+    task<void> pong(string_type&& payload) & {
         return write(websocket_opcode::pong, std::move(payload));
     }
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> pong(string_type&&) && = delete;
+    task<void> pong(string_type&&) && = delete;
 
-    scoped_operation<void> ping(std::string_view payload = {}) &;
-    scoped_operation<void> ping(std::string_view = {}) && = delete;
+    task<void> ping(std::string_view payload = {}) &;
+    task<void> ping(std::string_view = {}) && = delete;
 
     /// Zero-copy ping frame.
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> ping(string_type&& payload) & {
+    task<void> ping(string_type&& payload) & {
         return write(websocket_opcode::ping, std::move(payload));
     }
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> ping(string_type&&) && = delete;
+    task<void> ping(string_type&&) && = delete;
 
     /// Zero-copy send of a message returned by this connection's read(), with
     /// the message's own opcode (for example an echo). The frame borrows the
@@ -142,12 +142,12 @@ public:
     /// call throws std::logic_error while a read is pending. A message built
     /// with websocket_message::borrow over caller storage must keep that
     /// storage alive and unchanged until the operation completes.
-    scoped_operation<void> send(websocket_message&& message, websocket_send_options options = {}) &;
-    scoped_operation<void> send(websocket_message&&, websocket_send_options = {}) && = delete;
+    task<void> send(websocket_message&& message, websocket_send_options options = {}) &;
+    task<void> send(websocket_message&&, websocket_send_options = {}) && = delete;
 
     /// Started close cannot overlap a running read, close, or output operation.
-    scoped_operation<void> close(websocket_close_options options = {}) &;
-    scoped_operation<void> close(websocket_close_options = {}) && = delete;
+    task<void> close(websocket_close_options options = {}) &;
+    task<void> close(websocket_close_options = {}) && = delete;
     void abort() noexcept;
 
 private:
@@ -178,8 +178,8 @@ private:
         }
     }
 
-    scoped_operation<void> write(websocket_opcode opcode, std::string_view payload, bool compress = true);
-    scoped_operation<void> write(websocket_opcode opcode, std::pmr::string&& payload, bool compress = true);
+    task<void> write(websocket_opcode opcode, std::string_view payload, bool compress = true);
+    task<void> write(websocket_opcode opcode, std::pmr::string&& payload, bool compress = true);
 
     std::pmr::memory_resource* resource_;
     const worker_handle* worker_;

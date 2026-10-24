@@ -155,7 +155,7 @@ private:
     http_request_target_form target_form_{http_request_target_form::origin};
     detail::http_request_header_block headers_{};
     // One-based indices; zero means absent. No duplicated string views.
-    std::array<std::uint8_t, cached_header_slots> cached_headers_{};
+    std::array<std::uint16_t, cached_header_slots> cached_headers_{};
     std::span<const std::byte> body_{};
     std::pmr::memory_resource* resource_{nullptr};
 };
@@ -168,10 +168,10 @@ private:
 // Header names/values and body bytes are borrowed from the caller; the exact
 // header span count is used to allocate descriptors from `resource`. The caller
 // must keep all supplied text/body storage and the resource alive while the
-// returned request is in use. Invalid method, target, or header fields are
-// reported as http_parse_error; body framing fields are intentionally not
-// interpreted because this API represents an already-parsed request.
-[[nodiscard]] std::variant<http_request, http_parse_error> make_parsed_http_request(
+// returned request is in use. Invalid method, target, or header fields throw
+// http_protocol_error; body framing fields are intentionally not interpreted
+// because this API represents an already-parsed request.
+[[nodiscard]] http_request make_parsed_http_request(
     std::string_view method, std::string_view target, std::span<const http_header_view> headers,
     std::span<const std::byte> body, std::pmr::memory_resource* resource);
 

@@ -20,18 +20,9 @@ struct http2_header_decode_context final {
     explicit http2_header_decode_context(http2_stream_state& stream_value) noexcept
         : stream_(stream_value) {}
 
-    [[nodiscard]] bool accept_regular_field() noexcept {
-        if (regular_field_count_ == max_http_header_fields) {
-            return false;
-        }
-        ++regular_field_count_;
-        return true;
-    }
-
     http2_stream_state& stream_;
     http_header_section_size decoded_header_list_size_;
     request_field_state request_fields_{request_field_framing::binary};
-    std::size_t regular_field_count_{0};
 };
 
 [[nodiscard]] inline bool http2_is_http_request_scheme(std::string_view scheme) noexcept {
@@ -196,7 +187,7 @@ struct http2_header_decode_context final {
         return false;
     }
 
-    if (!context_value.accept_regular_field() || !http2_is_valid_regular_header(name, value)) {
+    if (!http2_is_valid_regular_header(name, value)) {
         return false;
     }
     stream.mark_regular_header_seen();
@@ -240,7 +231,7 @@ struct http2_header_decode_context final {
         return false;
     }
 
-    return context_value.accept_regular_field() && http2_is_valid_regular_header(name, value) &&
+    return http2_is_valid_regular_header(name, value) &&
            !is_forbidden_http_request_trailer_name(name) &&
            context_value.stream_.append_remote_trailer(name, value);
 }

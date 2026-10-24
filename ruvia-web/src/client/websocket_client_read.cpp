@@ -11,7 +11,7 @@
 #include "websocket/http_websocket_liveness.h"
 namespace ruvia::detail {
 
-scoped_operation<std::optional<websocket_message>> websocket_client_state::read(
+task<std::optional<websocket_message>> websocket_client_state::read(
     const operation_options& options) {
     require_current();
     return ::ruvia::make_scoped_operation(lifecycle_.operation_scope(),

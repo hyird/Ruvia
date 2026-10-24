@@ -416,12 +416,20 @@ RUVIA_TEST(db_repository_expression_writes_own_sources_and_validate_returning) {
                 auto erase = repository.delete_builder().where(where).returning().get_many();
                 auto plain_update = repository.update_builder().set(entity).where(where).returning().get_many();
                 db_query x;
-                db_upsert_options options{.conflict_paths_ = {"id"}, .skip_update_if_no_values_changed_ = true, .update_expressions_ = {{"name", x.call("concat", {x.excluded("name"), x.value("suffix")})}}, .update_where_ = x.binary(x.column("id", "items"), db_binary_operator::greater, x.value(0))};
+                const std::array<borrowed_text, 1> conflict_paths{"id"};
+                const db_assignment name_update{"name", x.call("concat", {x.excluded("name"), x.value("suffix")})};
+                const std::array<db_assignment, 2> duplicate_updates{name_update, name_update};
+                db_upsert_options options{
+                    .conflict_paths_ = conflict_paths,
+                    .skip_update_if_no_values_changed_ = true,
+                    .update_expressions_ = std::span<const db_assignment>(duplicate_updates.data(), 1),
+                    .update_where_ = x.binary(x.column("id", "items"), db_binary_operator::greater, x.value(0)),
+                };
                 auto upsert = repository.insert_builder(entity).on_conflict(options).returning().get_many();
                 auto direct_result = repository.update(where, {{"name", x.value("replacement")}});
                 RUVIA_CHECK(testing::throws_on([&] { (void)repository.update(where, {{"missing", x.value(1)}}); }));
                 RUVIA_CHECK(testing::throws_on([&] { (void)repository.update(where, {{"id", x.value(1)}, {"id", x.value(2)}}); }));
-                options.update_expressions_.push_back(options.update_expressions_.front());
+                options.update_expressions_ = duplicate_updates;
                 RUVIA_CHECK(testing::throws_on([&] { (void)repository.upsert(entity, options); }));
             }
         }
@@ -528,9 +536,10 @@ RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_stora
             key_only_type key;
             key.set<"id">(1);
             {
+                const std::array<borrowed_text, 1> conflict_paths{"id"};
                 db_upsert_options options;
                 if (config.driver_ == db_driver::postgresql) {
-                    options.conflict_paths_ = {"id"};
+                    options.conflict_paths_ = conflict_paths;
                 } else {
                     options.any_unique_key_ = true;
                 }
@@ -663,17 +672,19 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
             input.set<"id">(1);
             input.set<"name">("Ada");
 
+            const std::array<borrowed_text, 1> conflict_paths{"id"};
+            const std::array<borrowed_text, 1> update_columns{"name"};
             db_upsert_options options;
             if (driver == db_driver::postgresql) {
-                options.conflict_paths_ = {"id"};
-                options.update_columns_ = {"name"};
+                options.conflict_paths_ = conflict_paths;
+                options.update_columns_ = update_columns;
                 options.skip_update_if_no_values_changed_ = true;
                 options.index_predicate_ = entity_type::column<"name">().is_not_null();
                 auto conditional = repository.upsert(input, options);
                 (void)conditional;
 
                 options = {};
-                options.conflict_paths_ = {"id"};
+                options.conflict_paths_ = conflict_paths;
                 options.do_nothing_ = true;
                 auto nothing = repository.upsert(input, options);
                 (void)nothing;

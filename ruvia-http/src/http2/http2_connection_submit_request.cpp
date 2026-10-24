@@ -35,12 +35,7 @@ namespace {
 [[nodiscard]] bool http2_are_valid_outbound_request_headers(std::optional<std::string_view> authority,
     std::uint16_t default_port, std::span<const http_header_view> headers, bool allow_host,
     bool allow_trailers, http_header_section_size& section_size, request_field_state& fields,
-    std::size_t generated_fields = 0, bool websocket_connect = false,
-    std::span<request_header_kind> classified_kinds = {}) noexcept {
-    if (generated_fields > max_http_header_fields ||
-        headers.size() > max_http_header_fields - generated_fields) {
-        return false;
-    }
+    bool websocket_connect = false) noexcept {
     websocket_request_header_validator websocket_headers;
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto& header = headers[i];
@@ -49,9 +44,6 @@ namespace {
             return false;
         }
         const auto kind = classify_request_header(header.name());
-        if (i < classified_kinds.size()) {
-            classified_kinds[i] = kind;
-        }
         if ((!allow_trailers && (kind == request_header_kind::trailer || kind == request_header_kind::te)) ||
             (!allow_host && kind == request_header_kind::host)) {
             return false;
@@ -84,8 +76,7 @@ namespace {
     std::optional<std::string_view> authority, std::string_view path,
     std::span<const http_header_view> headers,
     http_request_content_indication content_indication, std::string_view content_length_value,
-    http_client_request_expectation expectation,
-    std::span<request_header_kind> classified_kinds = {}) noexcept {
+    http_client_request_expectation expectation) noexcept {
     if (!http2_is_valid_outbound_method(method, known_method) || !is_valid_uri_scheme(scheme) ||
         (authority.has_value() && !http2_is_valid_request_authority(scheme, *authority)) ||
         !http2_is_valid_regular_request_path(known_method, scheme, path) ||
@@ -113,9 +104,7 @@ namespace {
     request_field_state fields{request_field_framing::binary};
     if (!http2_are_valid_outbound_request_headers(authority, default_port, headers,
             /*allow_host=*/true,
-            /*allow_trailers=*/true, section_size, fields,
-            (content_length_value.empty() ? 0 : 1) + (expect_continue ? 1 : 0),
-            /*websocket_connect=*/false, classified_kinds)) {
+            /*allow_trailers=*/true, section_size, fields)) {
         return false;
     }
     if (!content_length_value.empty() && !section_size.add("content-length", content_length_value)) {
@@ -292,7 +281,7 @@ http2_connection::submit_extended_connect_request_head(
         !http2_are_valid_outbound_request_headers(authority, default_port, headers,
             /*allow_host=*/!websocket_value,
             /*allow_trailers=*/false, section_size, fields,
-            /*generated_fields=*/0, /*websocket_connect=*/websocket_value)) {
+            /*websocket_connect=*/websocket_value)) {
         return http2_request_head_submit_error::invalid_message;
     }
 
@@ -337,12 +326,10 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
                               : request.method_ == "HEAD" ? http_known_method::head
                                                           : http_known_method::unknown;
     const auto default_port = http_uri_scheme_default_port(request.scheme_);
-    std::array<request_header_kind, max_http_header_fields> header_kinds{};
     if (known_method == http_known_method::unknown ||
         !http2_is_valid_outbound_regular_request_head(request.method_, known_method, request.scheme_,
             default_port, request.authority_, request.path_, request.headers_,
-            http_request_content_indication::no_content, {}, http_client_request_expectation::none,
-            header_kinds)) {
+            http_request_content_indication::no_content, {}, http_client_request_expectation::none)) {
         return error_type::invalid_request;
     }
     std::pmr::string block(resource_);
@@ -373,7 +360,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         std::pmr::string lower_name_scratch(resource_);
         for (std::size_t i = 0; i < request.headers_.size(); ++i) {
             const auto& header = request.headers_[i];
-            const auto kind = header_kinds[i];
+            const auto kind = classify_request_header(header.name());
             if (kind == request_header_kind::host) {
                 stream->mark_host();
             }

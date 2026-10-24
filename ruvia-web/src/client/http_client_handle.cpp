@@ -220,13 +220,13 @@ bool http_client_response_body::complete() const noexcept {
                                     state_->pending_.empty());
 }
 
-scoped_operation<std::optional<std::span<const std::byte>>> http_client_response_body::read() & {
+task<std::optional<std::span<const std::byte>>> http_client_response_body::read() & {
     check_response_operation_affinity(state_);
     return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
         state_->consume_body<std::span<const std::byte>>(), check_response_operation_affinity, state_);
 }
 
-scoped_operation<std::optional<std::string_view>> http_client_response_body::text() & {
+task<std::optional<std::string_view>> http_client_response_body::text() & {
     check_response_operation_affinity(state_);
     return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
         state_->consume_body<std::string_view>(), check_response_operation_affinity, state_);
@@ -278,7 +278,7 @@ template task<std::optional<std::span<const std::byte>>> detail::http_client_res
 template task<std::optional<std::string_view>> detail::http_client_response_state::consume_body<std::string_view>(response_stream_writer*);
 template task<void> detail::http_client_response_state::consume_body<void>(response_stream_writer*);
 
-scoped_operation<http_client_response_bytes> http_client_response_body::read_all(std::size_t max_bytes) & {
+task<http_client_response_bytes> http_client_response_body::read_all(std::size_t max_bytes) & {
     check_response_operation_affinity(state_);
     return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
         state_->read_all(max_bytes), check_response_operation_affinity, state_);
@@ -331,7 +331,7 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
     co_return std::move(result_value);
 }
 
-scoped_operation<void> http_client_response_body::pipe_to(response_stream_writer& output) & {
+task<void> http_client_response_body::pipe_to(response_stream_writer& output) & {
     check_response_operation_affinity(state_);
     return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
         state_->consume_body<void>(&output), check_response_operation_affinity, state_);
@@ -383,7 +383,7 @@ http_client_handle http_client_handle::with_options(operation_options options) c
     return copy;
 }
 
-scoped_operation<http_client_response> http_client_handle::send(
+task<http_client_response> http_client_handle::send(
     const http_client_request_view& view) const {
     registration_.require_active();
     detail::http_client_request_storage request(view.method_.view(), view.target_.view(), view.headers_, resource_);
@@ -395,7 +395,7 @@ scoped_operation<http_client_response> http_client_handle::send(
         registration_.scope(), pool_->execute(std::move(request), options_));
 }
 
-scoped_operation<http_client_exchange> http_client_handle::open_request(const http_client_request_view& head, http_client_upload_config upload) const {
+task<http_client_exchange> http_client_handle::open_request(const http_client_request_view& head, http_client_upload_config upload) const {
     registration_.require_active();
     if (head.content_.borrowed_bytes() != nullptr || upload.max_chunk_bytes_ == 0 || upload.continue_timeout_ <= std::chrono::milliseconds::zero() ||
         upload.continue_timeout_ > std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::duration::max()) ||
@@ -406,7 +406,7 @@ scoped_operation<http_client_exchange> http_client_handle::open_request(const ht
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_request(std::move(request), upload, options_));
 }
 
-scoped_operation<http_client_tunnel_result> http_client_handle::open_udp_tunnel(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config) const {
+task<http_client_tunnel_result> http_client_handle::open_udp_tunnel(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config) const {
     registration_.require_active();
     if (!is_valid_http_origin_form_target(head.target_) || config.max_chunk_bytes_ == 0 ||
         config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
@@ -425,7 +425,7 @@ scoped_operation<http_client_tunnel_result> http_client_handle::open_udp_tunnel(
     return open_tunnel({.authority_ = pool_->config().authority_, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config);
 }
 
-scoped_operation<http_client_tunnel_result> http_client_handle::open_tunnel(const http_client_tunnel_request_view& head, http_client_tunnel_config config) const {
+task<http_client_tunnel_result> http_client_handle::open_tunnel(const http_client_tunnel_request_view& head, http_client_tunnel_config config) const {
     registration_.require_active();
     if (config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes ||
         (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority_host(borrowed_text(head.authority_)) || head.authority_.empty()))) {

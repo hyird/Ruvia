@@ -82,7 +82,7 @@ int main() {
 首次接入通用规则：
 
 - 通过进程级单例 `ruvia::app()` 配置应用，在调用 `run()` 前完成监听、中间件、错误处理与后端注册。
-- 路由处理器与异步接口返回 `ruvia::task<t_type>`（或绑定作用域的惰性操作）。任务默认惰性执行；一旦启动必须 `co_await` 或 `join` 直至完成，取消后同样如此。
+- 路由处理器与异步接口统一返回 `ruvia::task<t_type>`。任务默认惰性执行；一旦启动必须 `co_await` 或 `join` 直至完成，取消后同样如此。
 - 请求与消息上的视图仅借用所属 owner，不延长其生命周期。跨请求生命周期保存或投递到阻塞卸载池前必须复制为自有数据；阻塞卸载任务不得访问 `ruvia::context` 或 worker 局部状态。
 - 服务端与出站客户端支持基于 TCP 和 TLS 的 HTTP/1.0、HTTP/1.1 与 HTTP/2：TLS 通过 ALPN 协商 HTTP/2，明文 HTTP/2 使用 prior knowledge（不支持 HTTP/1 `Upgrade: h2c`）；WebSocket 使用 HTTP/1.1 `Upgrade` 或 HTTP/2 Extended `CONNECT`。
 - 服务端每个业务 worker 独立绑定监听器，连接始终留在接受它的 worker 上。Linux 等 POSIX 平台要求 `SO_REUSEADDR` + `SO_REUSEPORT`，不可用则启动失败；Windows 使用 `SO_REUSEADDR` 绑定并通过共享监听句柄矩阵发起原生 `AcceptEx`，不保证严格均衡或端口独占。

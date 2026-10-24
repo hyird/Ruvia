@@ -22,7 +22,7 @@ enum class http1_request_content_write_error : std::uint8_t {
     invalid_trailer,
     trailers_require_chunked,
     output_too_small,
-    trailer_limit,
+    header_too_large,
 };
 
 // Bound to a successfully prepared streaming request's immutable framing facts.

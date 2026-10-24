@@ -8,7 +8,9 @@
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_exchange_state.h"
 #include "ruvia/http/http1_client_response_parser.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_status.h"
 
@@ -26,12 +28,15 @@ struct http1_client_parsed_status_line final {
     http_protocol_version protocol_version_;
 };
 
+inline constexpr std::size_t max_http1_wire_header_fields =
+    max_http_header_bytes / http_field_line_overhead;
+
 struct http1_client_parsed_response_head final {
     explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line) noexcept
         : status_code_(status_line.status_code_),
           protocol_version_(status_line.protocol_version_) {}
 
-    std::array<http_header_view, max_http_header_fields> headers_;
+    std::array<http_header_view, max_http1_wire_header_fields> headers_;
     std::size_t header_count_{0};
     http_status_code status_code_;
     http_protocol_version protocol_version_;

@@ -77,7 +77,7 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
     state_value.headers_.clear();
     state_value.headers_.reserve(headers.size());
     for (const auto& header : headers) {
-        state_value.headers_.push_back(http_header::copy_of(header.name(), header.value(), state_value.resource_));
+        state_value.headers_.emplace_back(header.name(), header.value(), state_value.resource_);
     }
     // Publish cookies with the final head, not again when its body completes.
     pool_.policy().retain_response_cookies(stream.request_target_, state_value.headers_);
@@ -150,7 +150,7 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
         state_value.trailers_.clear();
         state_value.trailers_.reserve(trailers.size());
         for (const auto& trailer : trailers) {
-            state_value.trailers_.push_back(http_header::copy_of(trailer.name(), trailer.value(), state_value.resource_));
+            state_value.trailers_.emplace_back(trailer.name(), trailer.value(), state_value.resource_);
         }
         if (stream->timeout_ == nullptr) {
             std::terminate();
@@ -734,7 +734,7 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
         request.path_ = promise.request_.path_;
         request.headers_.reserve(promise.request_.headers_.size());
         for (const auto& field : promise.request_.headers_) {
-            request.headers_.push_back(http_header::copy_of(field.name(), field.value(), state_value.resource_));
+            request.headers_.emplace_back(field.name(), field.value(), state_value.resource_);
         }
         auto driver = make_pmr_object<http2_push_driver>(
             resource_, *this, connection, http_client_response(response.state_), state_value);

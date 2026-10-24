@@ -159,7 +159,7 @@ http_response context::error(http_error_info_options options) const {
     return response;
 }
 
-scoped_operation<http_response> context::not_found() {
+task<http_response> context::not_found() {
     return ::ruvia::make_scoped_operation(operation_scope_, not_found_task());
 }
 
@@ -186,7 +186,7 @@ http_response context::streaming_head() const {
 }
 
 task<http_response> detail::context_access::commit_streaming_head(context& context_value) {
-    if (context_value.try_session()) {
+    if (session_access::available(context_value)) {
         co_await session_access::commit(context_value);
     }
     co_return context_value.streaming_head();

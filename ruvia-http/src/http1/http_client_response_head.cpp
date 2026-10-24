@@ -102,9 +102,6 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
         if (!fields_valid) {
             return http1_client_response_parse_error::invalid_header;
         }
-        if (output.header_count_ == max_http_header_fields) {
-            return http1_client_response_parse_error::too_many_headers;
-        }
         const auto kind = classify_request_header(name);
         if (validate_response_field(kind, value, http_field_list_role::recipient,
                 response_fields) != response_field_status::ok) {

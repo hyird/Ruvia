@@ -254,7 +254,6 @@ enum class http1_client_response_parse_error : std::uint8_t {
     invalid_header,
     invalid_connection,
     invalid_upgrade,
-    too_many_headers,
     invalid_content_length,
     conflicting_content_length,
     invalid_transfer_encoding,

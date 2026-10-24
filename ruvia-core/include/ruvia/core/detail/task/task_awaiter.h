@@ -30,11 +30,7 @@ template <typename t_type>
 class task_awaiter final {
 public:
     explicit task_awaiter(task<t_type>&& task_value)
-        : task_(std::move(task_value)) {
-        if (task_.handle_ == nullptr) {
-            throw std::logic_error("cannot await an empty ruvia::task");
-        }
-    }
+        : task_(take_ready_to_start(std::move(task_value))) {}
 
     [[nodiscard]] bool await_ready() const noexcept {
         return task_.handle_.done();
@@ -48,6 +44,13 @@ public:
     }
 
     t_type await_resume() {
+        task_.prepare_direct_completion();
+        struct complete_guard final {
+            task_awaiter& awaiter_;
+            ~complete_guard() {
+                awaiter_.task_.finish_direct_completion();
+            }
+        } complete_value{*this};
         return task_.handle_.promise().result();
     }
 
@@ -62,6 +65,15 @@ public:
     }
 
 private:
+    [[nodiscard]] static task<t_type> take_ready_to_start(task<t_type>&& task_value) {
+        task_value.prepare_direct_start();
+        task<t_type> moved(std::move(task_value));
+        if (moved.registration_.scoped()) {
+            moved.registration_.start();
+        }
+        return moved;
+    }
+
     task<t_type> task_;
 };
 

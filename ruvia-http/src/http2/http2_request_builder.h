@@ -63,7 +63,7 @@ public:
         const bool synthesize_host = http2_request_synthesizes_host(stream);
         const auto header_count = stream.remote_header_count() + static_cast<std::size_t>(synthesize_host) +
                                   static_cast<std::size_t>(stream.has_cookie());
-        if (header_count > max_http_header_fields) {
+        if (header_count > UINT16_MAX) {
             throw std::logic_error("validated HTTP/2 request cannot be materialized");
         }
         http_request_access::reserve_headers(request, header_count);

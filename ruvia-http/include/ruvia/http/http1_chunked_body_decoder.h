@@ -151,8 +151,8 @@ struct http1_chunked_body_decoder_config final {
 // with no terminator reports framing_limit_exceeded without inspecting
 // later bytes. Malformed framing within the permitted prefix still reports
 // invalid_framing.
-// Trailer sections of either role must also fit max_http_header_fields and the
-// http_field_section_budget byte rule (name.size() + value.size() + 4 per field,
+// Trailer sections of either role must also fit the http_field_section_budget
+// byte rule (name.size() + value.size() + 4 per field,
 // plus 2 for the terminating empty line; see http_trailer_section_budget()).
 class http1_chunked_body_decoder final {
 public:

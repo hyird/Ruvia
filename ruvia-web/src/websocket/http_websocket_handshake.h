@@ -18,14 +18,16 @@ namespace ruvia::detail {
 template <typename stream_type>
 task<std::error_code> write_websocket_handshake(
     stream_type& stream, const websocket_server_handshake& handshake) {
-    std::array<asio::const_buffer, 10 + 4 * max_http_header_fields> buffers;
-    std::size_t count = 0;
-    handshake.for_each_response_part(
-        [&buffers, &count](std::string_view part) { buffers[count++] = asio::buffer(part); });
-    const auto active_buffers = std::span<const asio::const_buffer>(buffers.data(), count);
+    std::array<char, max_http_header_bytes> head_bytes;
+    std::size_t size = 0;
+    handshake.for_each_response_part([&head_bytes, &size](std::string_view part) {
+        std::char_traits<char>::copy(head_bytes.data() + size, part.data(), part.size());
+        size += part.size();
+    });
+    const auto active_buffer = asio::buffer(head_bytes.data(), size);
 
-    const auto write_completion = co_await ruvia::async_asio([&stream, active_buffers](auto handler) mutable {
-        asio::async_write(stream, active_buffers, std::move(handler));
+    const auto write_completion = co_await ruvia::async_asio([&stream, active_buffer](auto handler) mutable {
+        asio::async_write(stream, active_buffer, std::move(handler));
     });
     co_return write_completion.error_code();
 }

@@ -58,13 +58,13 @@ public:
         return worker_;
     }
 
-    [[nodiscard]] scoped_operation<std::optional<websocket_message>> read(const operation_options& options);
+    [[nodiscard]] task<std::optional<websocket_message>> read(const operation_options& options);
     // Owns payload bytes in the client resource before returning a cold task.
-    [[nodiscard]] scoped_operation<void> write(websocket_opcode opcode, std::string_view payload,
+    [[nodiscard]] task<void> write(websocket_opcode opcode, std::string_view payload,
         const operation_options& options, websocket_send_options send_options = {});
-    [[nodiscard]] scoped_operation<void> write(websocket_opcode opcode, std::pmr::string&& payload,
+    [[nodiscard]] task<void> write(websocket_opcode opcode, std::pmr::string&& payload,
         const operation_options& options, websocket_send_options send_options = {});
-    [[nodiscard]] scoped_operation<void> close(
+    [[nodiscard]] task<void> close(
         websocket_close_options options, const operation_options& operation_options);
 
 private:

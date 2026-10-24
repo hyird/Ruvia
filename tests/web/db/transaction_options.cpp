@@ -91,14 +91,14 @@ struct queued_transaction_operations final {
           mapped_(transaction.repository<text_entity>().find()),
           page_(transaction.repository<text_entity>().find_and_count()) {}
 
-    ruvia::scoped_operation<void> commit_;
-    ruvia::scoped_operation<void> rollback_;
-    ruvia::scoped_operation<ruvia::db_rows> query_;
-    ruvia::scoped_operation<ruvia::db_exec_result> execute_;
-    ruvia::scoped_operation<ruvia::db_rows> compiled_query_;
-    ruvia::scoped_operation<ruvia::db_exec_result> compiled_execute_;
-    ruvia::scoped_operation<ruvia::entity_rows<text_entity>> mapped_;
-    ruvia::scoped_operation<std::pair<ruvia::entity_rows<text_entity>, std::uint64_t>> page_;
+    ruvia::task<void> commit_;
+    ruvia::task<void> rollback_;
+    ruvia::task<ruvia::db_rows> query_;
+    ruvia::task<ruvia::db_exec_result> execute_;
+    ruvia::task<ruvia::db_rows> compiled_query_;
+    ruvia::task<ruvia::db_exec_result> compiled_execute_;
+    ruvia::task<ruvia::entity_rows<text_entity>> mapped_;
+    ruvia::task<std::pair<ruvia::entity_rows<text_entity>, std::uint64_t>> page_;
 };
 
 struct queued_stream_operations final {
@@ -106,8 +106,8 @@ struct queued_stream_operations final {
         : close_(stream.close()),
           read_(stream.read()) {}
 
-    ruvia::scoped_operation<void> close_;
-    ruvia::scoped_operation<std::optional<ruvia::db_row>> read_;
+    ruvia::task<void> close_;
+    ruvia::task<std::optional<ruvia::db_row>> read_;
 };
 
 RUVIA_TEST(db_transaction_can_prepare_cold_operations_while_a_statement_is_running) {

@@ -29,7 +29,7 @@ void redis_subscription::expire_capability(void* target) noexcept {
     static_cast<redis_subscription*>(target)->connection_->abort(detail::client_abort_reason::closing);
 }
 
-scoped_operation<void> redis_subscription::send(
+task<void> redis_subscription::send(
     std::string_view command, std::span<const std::string_view> names, bool require_names) {
     registration_.require_active();
     if (require_names && names.empty()) {
@@ -40,23 +40,23 @@ scoped_operation<void> redis_subscription::send(
         &require_subscription_worker, const_cast<worker_handle*>(&connection_->worker()));
 }
 
-scoped_operation<void> redis_subscription::subscribe(std::span<const std::string_view> channels) & {
+task<void> redis_subscription::subscribe(std::span<const std::string_view> channels) & {
     return send("SUBSCRIBE", channels, true);
 }
 
-scoped_operation<void> redis_subscription::psubscribe(std::span<const std::string_view> patterns) & {
+task<void> redis_subscription::psubscribe(std::span<const std::string_view> patterns) & {
     return send("PSUBSCRIBE", patterns, true);
 }
 
-scoped_operation<void> redis_subscription::unsubscribe(std::span<const std::string_view> channels) & {
+task<void> redis_subscription::unsubscribe(std::span<const std::string_view> channels) & {
     return send("UNSUBSCRIBE", channels, false);
 }
 
-scoped_operation<void> redis_subscription::punsubscribe(std::span<const std::string_view> patterns) & {
+task<void> redis_subscription::punsubscribe(std::span<const std::string_view> patterns) & {
     return send("PUNSUBSCRIBE", patterns, false);
 }
 
-scoped_operation<std::optional<redis_pubsub_event>> redis_subscription::read() & {
+task<std::optional<redis_pubsub_event>> redis_subscription::read() & {
     registration_.require_active();
     return make_scoped_operation(registration_.scope(), connection_->read(), &require_subscription_worker,
         const_cast<worker_handle*>(&connection_->worker()));

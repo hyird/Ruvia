@@ -76,8 +76,6 @@ std::string_view http1_client_response_parse_error_message(
             return "invalid response Connection header";
         case http1_client_response_parse_error::invalid_upgrade:
             return "invalid response Upgrade header";
-        case http1_client_response_parse_error::too_many_headers:
-            return "too many response headers";
         case http1_client_response_parse_error::invalid_content_length:
             return "invalid response Content-Length";
         case http1_client_response_parse_error::conflicting_content_length:
@@ -160,7 +158,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
         headers.reserve(parsed_value.header_count_);
         for (std::size_t i = 0; i < parsed_value.header_count_; ++i) {
             const auto& header_value = parsed_value.headers_[i];
-            headers.push_back(http_header::copy_of(header_value.name(), header_value.value(), resource_));
+            headers.emplace_back(header_value.name(), header_value.value(), resource_);
         }
     }
 

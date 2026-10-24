@@ -57,7 +57,6 @@ enum class http_parse_error : std::uint8_t {
     invalid_header,
     invalid_connection,
     invalid_upgrade,
-    too_many_headers,
     missing_host,
     invalid_host,
     invalid_content_length,

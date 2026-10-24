@@ -155,7 +155,7 @@ task<detail::db_query_result<with_count>> db_transaction::query_plan_prepared(
     }
 }
 
-scoped_operation<db_exec_result> db_transaction::execute_query(const db_query& query) {
+task<db_exec_result> db_transaction::execute_query(const db_query& query) {
     registration_.require_active();
     const auto& lease_value = state_->operation_.preparation_payload();
     auto statement = query.compile(detail::db_pool_driver(lease_value.client_), lease_value.resource_);
@@ -168,7 +168,7 @@ scoped_operation<db_exec_result> db_transaction::execute_query(const db_query& q
         execute_prepared(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
 }
 
-scoped_operation<db_rows> db_transaction::query(
+task<db_rows> db_transaction::query(
     std::string_view sql, std::span<const db_value> params) & {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
@@ -178,7 +178,7 @@ scoped_operation<db_rows> db_transaction::query(
         query_prepared(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
 }
 
-scoped_operation<db_exec_result> db_transaction::execute(
+task<db_exec_result> db_transaction::execute(
     std::string_view sql, std::span<const db_value> params) & {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
@@ -212,7 +212,7 @@ task<db_exec_result> db_transaction::execute_prepared(
     co_return result_value;
 }
 
-scoped_operation<void> db_transaction::commit() & {
+task<void> db_transaction::commit() & {
     registration_.require_active();
     auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
@@ -228,7 +228,7 @@ task<void> db_transaction::commit_task(operation_scope& scope, operation_guard_t
     operation.finish_closed();
 }
 
-scoped_operation<void> db_transaction::rollback() & {
+task<void> db_transaction::rollback() & {
     registration_.require_active();
     auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
@@ -243,19 +243,19 @@ task<void> db_transaction::rollback_task(operation_scope& scope, operation_guard
     co_await rollback_pool_transaction(lease_value.client_, lease_value.slot_, lease_value.resource_, lease_value.options_);
     operation.finish_closed();
 }
-scoped_operation<void> db_transaction::savepoint(std::string_view name) & {
+task<void> db_transaction::savepoint(std::string_view name) & {
     return run_savepoint_command("SAVEPOINT ", name);
 }
 
-scoped_operation<void> db_transaction::rollback_to_savepoint(std::string_view name) & {
+task<void> db_transaction::rollback_to_savepoint(std::string_view name) & {
     return run_savepoint_command("ROLLBACK TO SAVEPOINT ", name);
 }
 
-scoped_operation<void> db_transaction::release_savepoint(std::string_view name) & {
+task<void> db_transaction::release_savepoint(std::string_view name) & {
     return run_savepoint_command("RELEASE SAVEPOINT ", name);
 }
 
-scoped_operation<void> db_transaction::run_savepoint_command(std::string_view prefix, std::string_view name) {
+task<void> db_transaction::run_savepoint_command(std::string_view prefix, std::string_view name) {
     registration_.require_active();
     const auto& lease_value = state_->operation_.preparation_payload();
     std::pmr::string sql(prefix, lease_value.resource_);
@@ -283,7 +283,7 @@ void db_transaction::require_postgresql_transaction(std::string_view feature) co
     }
 }
 
-scoped_operation<void> db_transaction::query_void_prepared(std::string_view sql, std::span<const db_value> params) {
+task<void> db_transaction::query_void_prepared(std::string_view sql, std::span<const db_value> params) {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
     operation_guard_type operation(state_->operation_);
@@ -292,7 +292,7 @@ scoped_operation<void> db_transaction::query_void_prepared(std::string_view sql,
         query_void_task(std::move(statement.sql_), std::move(statement.params_), scope, std::move(operation)));
 }
 
-scoped_operation<bool> db_transaction::query_bool_prepared(std::string_view sql, std::span<const db_value> params) {
+task<bool> db_transaction::query_bool_prepared(std::string_view sql, std::span<const db_value> params) {
     registration_.require_active();
     auto statement = prepare_db_statement(sql, params, state_->operation_.preparation_payload().resource_);
     operation_guard_type operation(state_->operation_);
@@ -344,7 +344,7 @@ task<bool> db_transaction::query_bool_task(
     }
 }
 
-scoped_operation<void> db_transaction::notify(std::string_view channel, std::string_view payload) & {
+task<void> db_transaction::notify(std::string_view channel, std::string_view payload) & {
     require_postgresql_transaction("database notify");
     if (channel.empty()) {
         throw std::invalid_argument("database notify channel must not be empty");
@@ -353,43 +353,43 @@ scoped_operation<void> db_transaction::notify(std::string_view channel, std::str
     return query_void_prepared("SELECT \"pg_notify\"($1::text, $2::text)", params);
 }
 
-scoped_operation<void> db_transaction::advisory_lock(std::int64_t key) & {
+task<void> db_transaction::advisory_lock(std::int64_t key) & {
     require_postgresql_transaction("advisory_lock");
     const std::array<db_value, 1> params{db_value(key)};
     return query_void_prepared("SELECT \"pg_advisory_xact_lock\"($1::bigint)", params);
 }
 
-scoped_operation<void> db_transaction::advisory_lock(std::int32_t class_id, std::int32_t object_id) & {
+task<void> db_transaction::advisory_lock(std::int32_t class_id, std::int32_t object_id) & {
     require_postgresql_transaction("advisory_lock");
     const std::array<db_value, 2> params{db_value(class_id), db_value(object_id)};
     return query_void_prepared("SELECT \"pg_advisory_xact_lock\"($1::integer, $2::integer)", params);
 }
 
-scoped_operation<void> db_transaction::advisory_lock(std::string_view key, std::int64_t seed) & {
+task<void> db_transaction::advisory_lock(std::string_view key, std::int64_t seed) & {
     require_postgresql_transaction("advisory_lock");
     const std::array<db_value, 2> params{db_value(key), db_value(seed)};
     return query_void_prepared("SELECT \"pg_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))", params);
 }
 
-scoped_operation<bool> db_transaction::try_advisory_lock(std::int64_t key) & {
+task<bool> db_transaction::try_advisory_lock(std::int64_t key) & {
     require_postgresql_transaction("try_advisory_lock");
     const std::array<db_value, 1> params{db_value(key)};
     return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"($1::bigint)", params);
 }
 
-scoped_operation<bool> db_transaction::try_advisory_lock(std::int32_t class_id, std::int32_t object_id) & {
+task<bool> db_transaction::try_advisory_lock(std::int32_t class_id, std::int32_t object_id) & {
     require_postgresql_transaction("try_advisory_lock");
     const std::array<db_value, 2> params{db_value(class_id), db_value(object_id)};
     return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"($1::integer, $2::integer)", params);
 }
 
-scoped_operation<bool> db_transaction::try_advisory_lock(std::string_view key, std::int64_t seed) & {
+task<bool> db_transaction::try_advisory_lock(std::string_view key, std::int64_t seed) & {
     require_postgresql_transaction("try_advisory_lock");
     const std::array<db_value, 2> params{db_value(key), db_value(seed)};
     return query_bool_prepared("SELECT \"pg_try_advisory_xact_lock\"(\"hashtextextended\"($1::text, $2::bigint))", params);
 }
 
-scoped_operation<void> db_transaction::declare_cursor(
+task<void> db_transaction::declare_cursor(
     std::string_view name, std::string_view sql, std::span<const db_value> params, bool scroll) & {
     require_postgresql_transaction("declare_cursor");
     if (sql.empty()) {
@@ -407,7 +407,7 @@ scoped_operation<void> db_transaction::declare_cursor(
         execute_void_task(std::move(command), std::move(statement.params_), scope, std::move(operation)));
 }
 
-scoped_operation<db_rows> db_transaction::fetch_cursor(std::string_view name, std::uint64_t count) & {
+task<db_rows> db_transaction::fetch_cursor(std::string_view name, std::uint64_t count) & {
     require_postgresql_transaction("fetch_cursor");
     if (count > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
         throw std::invalid_argument("cursor fetch count exceeds signed 64-bit range");
@@ -423,7 +423,7 @@ scoped_operation<db_rows> db_transaction::fetch_cursor(std::string_view name, st
         query_prepared(std::move(sql), {}, scope, std::move(operation)));
 }
 
-scoped_operation<void> db_transaction::close_cursor(std::string_view name) & {
+task<void> db_transaction::close_cursor(std::string_view name) & {
     require_postgresql_transaction("close_cursor");
     return run_savepoint_command("CLOSE ", name);
 }

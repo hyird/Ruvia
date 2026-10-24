@@ -1,5 +1,10 @@
 #include "server/windows_accept_domain.h"
 
+#include <cerrno>
+#include <system_error>
+
+#include <asio/error.hpp>
+
 #if defined(_WIN32)
 
 #include <mswsock.h>
@@ -12,7 +17,6 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
-#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -22,8 +26,37 @@
 
 #include "ruvia/core/worker_notification.h"
 #include "ruvia/core/worker_runtime.h"
+#endif
 
 namespace ruvia::detail {
+
+accept_error_action classify_accept_error(const std::error_code& error) noexcept {
+    if (error == asio::error::connection_aborted || error == asio::error::connection_reset ||
+        error == asio::error::eof || error == asio::error::try_again ||
+        error == asio::error::would_block || error == asio::error::interrupted
+#if defined(_WIN32)
+        || (error.category() == asio::system_category() && error.value() == ERROR_NETNAME_DELETED)
+#endif
+    ) {
+        return accept_error_action::retry;
+    }
+    if (error == asio::error::no_descriptors || error == asio::error::no_buffer_space ||
+        error == asio::error::no_memory || error == std::errc::too_many_files_open_in_system ||
+        error == std::errc::protocol_error || error == asio::error::network_down ||
+        error == asio::error::network_unreachable || error == asio::error::host_unreachable ||
+        error == asio::error::no_protocol_option || error == asio::error::operation_not_supported ||
+        error == asio::error::no_permission || error == asio::error::timed_out) {
+        return accept_error_action::report_and_retry;
+    }
+#if defined(EHOSTDOWN) && defined(ENONET)
+    if (error.category() == asio::system_category() && (error.value() == EHOSTDOWN || error.value() == ENONET)) {
+        return accept_error_action::report_and_retry;
+    }
+#endif
+    return accept_error_action::fail;
+}
+
+#if defined(_WIN32)
 namespace {
 
 std::size_t checked_product(std::size_t left, std::size_t right) {
@@ -49,28 +82,6 @@ class operation_storage final : public std::pmr::memory_resource {
     }
     alignas(std::max_align_t) std::array<std::byte, 1024> storage_{};
 };
-
-enum class error_action { retry,
-    report,
-    fail };
-
-error_action classify_error(const asio::error_code& error) noexcept {
-    if (error == asio::error::connection_aborted || error == asio::error::connection_reset ||
-        error == asio::error::eof || error == asio::error::try_again ||
-        error == asio::error::would_block || error == asio::error::interrupted ||
-        (error.category() == asio::system_category() && error.value() == ERROR_NETNAME_DELETED)) {
-        return error_action::retry;
-    }
-    if (error == asio::error::no_descriptors || error == asio::error::no_buffer_space ||
-        error == asio::error::no_memory || error == std::errc::too_many_files_open_in_system ||
-        error == std::errc::protocol_error || error == asio::error::network_down ||
-        error == asio::error::network_unreachable || error == asio::error::host_unreachable ||
-        error == asio::error::no_protocol_option || error == asio::error::operation_not_supported ||
-        error == asio::error::no_permission || error == asio::error::timed_out) {
-        return error_action::report;
-    }
-    return error_action::fail;
-}
 
 }  // namespace
 
@@ -255,10 +266,10 @@ public:
                     failed(receiver, std::current_exception());
                 }
             } else {
-                const auto action = classify_error(error);
-                if (action != error_action::retry) {
-                    report(receiver, error, action == error_action::fail ? "fatal TCP AcceptEx error" : "recoverable TCP AcceptEx error",
-                        action == error_action::fail);
+                const auto action = classify_accept_error(error);
+                if (action != accept_error_action::retry) {
+                    report(receiver, error, action == accept_error_action::fail ? "fatal TCP AcceptEx error" : "recoverable TCP AcceptEx error",
+                        action == accept_error_action::fail);
                 }
                 operation.retry_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(25);
             }
@@ -520,6 +531,6 @@ void windows_accept_domain::request_stop() noexcept {
     impl_->stop();
 }
 
-}  // namespace ruvia::detail
-
 #endif
+
+}  // namespace ruvia::detail

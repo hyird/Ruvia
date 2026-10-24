@@ -86,7 +86,7 @@ void db_stream_result::expire_capability(void* target) noexcept {
     result_value.reset();
 }
 
-scoped_operation<std::optional<db_row>> db_stream_result::read() & {
+task<std::optional<db_row>> db_stream_result::read() & {
     registration_.require_active();
     auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
@@ -108,7 +108,7 @@ task<std::optional<db_row>> db_stream_result::read_task(operation_scope& scope, 
     co_return row;
 }
 
-scoped_operation<void> db_stream_result::close() & {
+task<void> db_stream_result::close() & {
     registration_.require_active();
     auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(

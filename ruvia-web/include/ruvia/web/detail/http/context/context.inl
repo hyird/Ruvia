@@ -23,11 +23,6 @@ inline const std::remove_cvref_t<t_type>& context::request_state() const {
 }
 
 template <typename t_type>
-inline const std::remove_cvref_t<t_type>* context::try_request_state() const noexcept {
-    return request_bindings().try_get_state<t_type>();
-}
-
-template <typename t_type>
     requires detail::is_model<t_type>
 inline http_response context::json(const t_type& value) const {
     auto body = to_json(value, {.resource_ = arena()});
@@ -35,7 +30,7 @@ inline http_response context::json(const t_type& value) const {
 }
 
 template <typename t_type>
-scoped_operation<std::optional<t_type>> context_request::json_if() const {
+task<std::optional<t_type>> context_request::json_if() const {
     static_assert(detail::is_model<t_type>, "JSON body type must use RUVIA_MODEL");
     const auto run = [](const context* context_value) -> task<std::optional<t_type>> {
         if (!detail::content_type_matches(
@@ -62,7 +57,7 @@ scoped_operation<std::optional<t_type>> context_request::json_if() const {
 }
 
 template <typename t_type>
-scoped_operation<std::optional<t_type>> context_request::form_if() const {
+task<std::optional<t_type>> context_request::form_if() const {
     static_assert(detail::is_model<t_type>, "form body type must use RUVIA_MODEL");
     const auto run = [](const context* context_value) -> task<std::optional<t_type>> {
         if (!detail::content_type_matches(

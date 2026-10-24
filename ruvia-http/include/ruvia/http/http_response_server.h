@@ -74,7 +74,7 @@ http_response_trailer_section validate_http_response_trailers(headers_type&&) = 
 template <typename visitor_type>
 [[nodiscard]] inline bool visit_http_response_trailers(std::string_view block, visitor_type&& visitor) {
     auto budget = http_trailer_section_budget();
-    return detail::visit_http1_trailer_block(block, detail::is_forbidden_response_trailer_name, budget, 0,
+    return detail::visit_http1_trailer_block(block, detail::is_forbidden_response_trailer_name, budget,
                std::forward<visitor_type>(visitor)) == detail::http_trailer_block_status::ok;
 }
 }  // namespace ruvia

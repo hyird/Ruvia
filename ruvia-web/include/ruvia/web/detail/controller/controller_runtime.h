@@ -156,12 +156,12 @@ class controller_registration_access final {
         return callback_access::make<task<void>(context&)>(instance, &invoke_stream<handler>);
     }
 
-    template <middleware... middleware_types>
+    template <route_modifier... modifier_types>
     [[nodiscard]] static middleware_list_type make_middlewares() {
         middleware_list_type middlewares(registration_resource());
-        if constexpr (sizeof...(middleware_types) > 0) {
-            middlewares.reserve(sizeof...(middleware_types));
-            (middlewares.push_back(make_middleware_descriptor<middleware_types>()), ...);
+        if constexpr (sizeof...(modifier_types) > 0) {
+            middlewares.reserve(sizeof...(modifier_types));
+            (middlewares.push_back(make_route_modifier_descriptor<modifier_types>()), ...);
         }
         return middlewares;
     }

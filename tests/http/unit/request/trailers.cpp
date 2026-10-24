@@ -67,11 +67,10 @@ RUVIA_TEST(request_trailers_append_http1_is_atomic_and_classifies_forbidden_fiel
     RUVIA_CHECK(invalid == ruvia::http_request_trailer_error::invalid_field);
     RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{1});
 
-    // A block that would exceed the remaining field budget leaves no partial fields behind.
-    std::string block;
-    for (std::size_t index = 0; index < ruvia::max_http_header_fields; ++index) {
-        block += "X-Fill: v\r\n";
-    }
+    // A block that would exceed the remaining byte budget leaves no partial fields behind.
+    std::string block = "X-Fill: v\r\nX-Oversize: ";
+    block.append(ruvia::max_http_header_bytes, 'x');
+    block.append("\r\n");
     const auto too_large = trailers.append_http1(block);
     RUVIA_CHECK(too_large == ruvia::http_request_trailer_error::section_too_large);
     RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{1});
@@ -81,7 +80,7 @@ RUVIA_TEST(request_trailers_append_http1_is_atomic_and_classifies_forbidden_fiel
 }
 
 RUVIA_TEST(request_trailers_enforce_normalized_section_limit_during_chunk_decoding) {
-    for (const std::size_t field_count : {std::size_t{3}, ruvia::max_http_header_fields}) {
+    for (const std::size_t field_count : {std::size_t{3}, std::size_t{80}}) {
         for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
             // Each "X:a" field costs 6 normalized bytes and the last field 5 plus
             // its value; the section also pays 2 for its terminating empty line.

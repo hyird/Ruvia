@@ -89,9 +89,6 @@ std::variant<std::string_view, error_type> http1_request_content_writer::plan_fi
     if (length_ && !trailers.empty()) {
         return error_type::trailers_require_chunked;
     }
-    if (trailers.size() > max_http_header_fields) {
-        return error_type::trailer_limit;
-    }
     // The last-chunk line shares the section budget, which keeps the whole
     // encoded ending within the bounded wire snapshot.
     auto section = http_trailer_section_budget();
@@ -101,7 +98,7 @@ std::variant<std::string_view, error_type> http1_request_content_writer::plan_fi
             return error_type::invalid_trailer;
         }
         if (!section.add_field(field.name(), field.value())) {
-            return error_type::trailer_limit;
+            return error_type::header_too_large;
         }
     }
     const auto required = length_ ? std::size_t{0} : section.bytes();

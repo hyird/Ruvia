@@ -876,13 +876,15 @@ RUVIA_TEST(http1_client_upgrade_state_allocation_failure_leaves_head_buffer_unto
     RUVIA_CHECK(std::ranges::all_of(output, [](char value) { return value == 'u'; }));
 }
 
-RUVIA_TEST(http1_client_request_writer_enforces_header_count_and_size_transactionally) {
-    std::array<ruvia::http_header_view, ruvia::max_http_header_fields> headers;
+RUVIA_TEST(http1_client_request_writer_enforces_header_size_transactionally) {
+    std::array<ruvia::http_header_view, 80> headers;
     headers.fill(ruvia::http_header_view("X-Test", "x"));
-    http_client_request_view too_many;
-    too_many.headers_ = headers;
-    RUVIA_CHECK(prepare_error(too_many) == http1_client_request_prepare_error::too_many_headers);
-
+    http_client_request_view many;
+    many.headers_ = headers;
+    std::array<char, 2048> many_output{};
+    const auto many_prepared = http1_client_request_writer().prepare(
+        http_origin_view::https({.host_ = "example.test"}), many, many_output);
+    RUVIA_CHECK(std::holds_alternative<prepared_http1_client_request>(many_prepared));
     http_client_request_view oversized;
     std::string target(ruvia::max_http_header_bytes, 'a');
     target.front() = '/';
@@ -971,11 +973,6 @@ RUVIA_TEST(http1_client_request_writer_prepare_connect_udp_preserves_specific_pr
 
     const std::array expect_headers{valid_capsule[0], ruvia::http_header_view{"Expect", "100-continue"}};
     expect_error("/udp", expect_headers, http1_client_request_prepare_error::expect_header_managed_by_writer);
-
-    std::array<ruvia::http_header_view, ruvia::max_http_header_fields> many_headers;
-    many_headers.fill(ruvia::http_header_view{"X-Test", "1"});
-    many_headers[0] = valid_capsule[0];
-    expect_error("/udp", many_headers, http1_client_request_prepare_error::too_many_headers);
 
     std::string huge_target(ruvia::max_http_header_bytes, 'a');
     huge_target.front() = '/';

@@ -9,73 +9,73 @@
 
 namespace ruvia {
 
-scoped_operation<std::optional<std::pmr::string>> redis_handle::hget(
+task<std::optional<std::pmr::string>> redis_handle::hget(
     std::string_view key, std::string_view field) const {
     registration_.require_active();
     return scoped(detail::redis_string_command(
         executor(), detail::own_redis_args({"HGET", key, field}, resource_), resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::hset(
+task<std::int64_t> redis_handle::hset(
     std::string_view key, std::string_view field, std::string_view value) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"HSET", key, field, value}, resource_), resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::hset(std::string_view key,
+task<std::int64_t> redis_handle::hset(std::string_view key,
     std::span<const std::pair<std::string_view, std::string_view>> fields_value) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::redis_hset_fields_args(key, fields_value, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<std::optional<std::pmr::string>>> redis_handle::hmget(
+task<std::pmr::vector<std::optional<std::pmr::string>>> redis_handle::hmget(
     std::string_view key, std::span<const std::string_view> fields_value) const {
     registration_.require_active();
     return scoped(detail::redis_optional_string_array_command(
         executor(), detail::redis_command_with_key_fields("HMGET", key, fields_value, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<redis_key_value>> redis_handle::hget_all(std::string_view key) const {
+task<std::pmr::vector<redis_key_value>> redis_handle::hget_all(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::execute_redis_key_value_array(executor(),
         detail::own_redis_args({"HGETALL", key}, resource_), "unexpected redis hgetall reply",
         resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::hdel(
+task<std::int64_t> redis_handle::hdel(
     std::string_view key, std::string_view field) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"HDEL", key, field}, resource_), resource_));
 }
 
-scoped_operation<bool> redis_handle::hexists(std::string_view key, std::string_view field) const {
+task<bool> redis_handle::hexists(std::string_view key, std::string_view field) const {
     registration_.require_active();
     return scoped(detail::execute_redis_integer_bool(
         executor(), detail::own_redis_args({"HEXISTS", key, field}, resource_), resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::hlen(std::string_view key) const {
+task<std::int64_t> redis_handle::hlen(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"HLEN", key}, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::hkeys(std::string_view key) const {
+task<std::pmr::vector<std::pmr::string>> redis_handle::hkeys(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_string_array_command(
         executor(), detail::own_redis_args({"HKEYS", key}, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::hvals(std::string_view key) const {
+task<std::pmr::vector<std::pmr::string>> redis_handle::hvals(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_string_array_command(
         executor(), detail::own_redis_args({"HVALS", key}, resource_), resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::hincr_by(
+task<std::int64_t> redis_handle::hincr_by(
     std::string_view key, std::string_view field, std::int64_t value) const {
     registration_.require_active();
     auto amount = detail::redis_int_string(value, resource_);
@@ -84,53 +84,53 @@ scoped_operation<std::int64_t> redis_handle::hincr_by(
         resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::lpush(
+task<std::int64_t> redis_handle::lpush(
     std::string_view key, std::string_view value) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"LPUSH", key, value}, resource_), resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::rpush(
+task<std::int64_t> redis_handle::rpush(
     std::string_view key, std::string_view value) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"RPUSH", key, value}, resource_), resource_));
 }
 
-scoped_operation<std::optional<std::pmr::string>> redis_handle::lpop(std::string_view key) const {
+task<std::optional<std::pmr::string>> redis_handle::lpop(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_string_command(
         executor(), detail::own_redis_args({"LPOP", key}, resource_), resource_));
 }
 
-scoped_operation<std::optional<std::pmr::string>> redis_handle::rpop(std::string_view key) const {
+task<std::optional<std::pmr::string>> redis_handle::rpop(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_string_command(
         executor(), detail::own_redis_args({"RPOP", key}, resource_), resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::llen(std::string_view key) const {
+task<std::int64_t> redis_handle::llen(std::string_view key) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"LLEN", key}, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<std::pmr::string>> redis_handle::lrange(
+task<std::pmr::vector<std::pmr::string>> redis_handle::lrange(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
     return scoped(detail::redis_string_array_command(executor(),
         detail::make_redis_range_command("LRANGE", key, start, stop, resource_).args_, resource_));
 }
 
-scoped_operation<std::optional<std::pmr::string>> redis_handle::lindex(
+task<std::optional<std::pmr::string>> redis_handle::lindex(
     std::string_view key, std::int64_t index) const {
     registration_.require_active();
     return scoped(detail::redis_string_command(executor(),
         detail::make_redis_integer_command("LINDEX", key, index, resource_).args_, resource_));
 }
 
-scoped_operation<void> redis_handle::lset(
+task<void> redis_handle::lset(
     std::string_view key, std::int64_t index, std::string_view value) const {
     registration_.require_active();
     auto index_value = detail::redis_int_string(index, resource_);
@@ -139,14 +139,14 @@ scoped_operation<void> redis_handle::lset(
         resource_));
 }
 
-scoped_operation<void> redis_handle::ltrim(
+task<void> redis_handle::ltrim(
     std::string_view key, std::int64_t start, std::int64_t stop) const {
     registration_.require_active();
     return scoped(detail::redis_ok_command(executor(),
         detail::make_redis_range_command("LTRIM", key, start, stop, resource_).args_, resource_));
 }
 
-scoped_operation<std::int64_t> redis_handle::lrem(
+task<std::int64_t> redis_handle::lrem(
     std::string_view key, std::int64_t count, std::string_view value) const {
     registration_.require_active();
     auto count_value = detail::redis_int_string(count, resource_);

@@ -97,10 +97,10 @@ public:
     ~db_stream_result();
 
     [[nodiscard]] bool active() const noexcept;
-    scoped_operation<std::optional<db_row>> read() &;
-    scoped_operation<std::optional<db_row>> read() && = delete;
-    scoped_operation<void> close() &;
-    scoped_operation<void> close() && = delete;
+    task<std::optional<db_row>> read() &;
+    task<std::optional<db_row>> read() && = delete;
+    task<void> close() &;
+    task<void> close() && = delete;
 
 private:
     friend class db_handle;

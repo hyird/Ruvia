@@ -103,10 +103,9 @@ ruvia_link_controllers(my_service user_controllers)
 
 ### 3.2 协程与作用域操作契约
 
-- **`ruvia::task<T>`**：惰性（lazy）协程。调用返回 `task<T>` 的函数仅分配协程帧而不开始执行，直到被右值 `co_await` 或传入 `event_loop::start()`。
-  - **未启动（cold）**的 `task<T>` 可直接析构丢弃。
+- **`ruvia::task<T>`**：全库统一的惰性（lazy）协程。调用返回 `task<T>` 的函数仅分配协程帧而不开始执行，直到被右值 `co_await` 或传入 `event_loop::start()`。`context`、`http_client`、`db_handle`、`redis_handle` 等对象上的异步 I/O 方法返回的 `task<T>` 同时绑定到所属请求或客户端的 `operation_scope`。
+  - **未启动（cold）**的 `task<T>` 可直接析构丢弃，或随所属 `operation_scope` 关闭自动回收。
   - **已启动（started）但尚未完成**的 `task<T>` 严禁直接析构（会直接触发 `std::terminate()`）。请求取消（`stop_source::request_stop()`）后，仍必须 `co_await` 或 `join` 等待其完成退出。
-- **`ruvia::scoped_operation<T>`**：`context`、`http_client`、`db_handle`、`redis_handle` 等对象上的异步 I/O 方法返回 `scoped_operation<T>`。它将惰性操作绑定到所属请求或客户端的 `operation_scope`，只能对右值立即 `co_await`（不可拷贝、不可移动、不可取地址）。
 
 ### 3.3 内存资源与借用生命周期
 
@@ -143,7 +142,7 @@ ruvia_link_controllers(my_service user_controllers)
 | [files_static.cpp](../examples/web/files_static.cpp) | `ruvia_example_files_static` | 默认 | 单文件响应 `c.file()`、不可变静态快照 `static_root` 与 `c.static_file()`、定时刷新 `document_root`、Range、ETag 与预压缩 |
 | [streaming.cpp](../examples/web/streaming.cpp) | `ruvia_example_streaming` | 默认 | 流式请求体 `body_reader()`、流式 Multipart `multipart_reader()`、分块文本流 `stream_text()` 与 SSE `stream_sse()` |
 | [http_features.cpp](../examples/web/http_features.cpp) | `ruvia_example_http_features` | 默认 | `103 Early Hints`（`c.inform`）、RFC 9218 优先级（`c.priority`）、HTTP/2 Server Push（`c.push`）、`ORIGIN` / `ALTSVC` 通告与请求/响应 Trailer |
-| [websocket.cpp](../examples/web/websocket.cpp) | `ruvia_example_websocket` | 默认 | WebSocket 服务端路由（`RUVIA_GET_WS` / `RUVIA_WS`）、子协议协商、心跳与关闭握手、零拷贝帧回显 |
+| [websocket.cpp](../examples/web/websocket.cpp) | `ruvia_example_websocket` | 默认 | WebSocket 服务端路由（`RUVIA_GET_WS`）、子协议协商、心跳与关闭握手、零拷贝帧回显 |
 | [tunnels.cpp](../examples/web/tunnels.cpp) | `ruvia_example_tunnels` | 默认 | HTTP/1.1 & HTTP/2 `CONNECT` 字节流隧道与 RFC 9298 `CONNECT-UDP` 数据报隧道（含服务端与 `--client` 客户端模式） |
 | [http_client.cpp](../examples/web/http_client.cpp) | `ruvia_example_http_client` | 默认 | Worker 绑定的出站 `http_client`：超时控制、POST 转发、`read_all()` 与 `pipe_to(c.stream())` 流式反向代理 |
 | [http_client_advanced.cpp](../examples/web/http_client_advanced.cpp) | `ruvia_example_http_client_advanced` | 默认 | 独立 `event_loop_pool` 上的 HTTP/1.1 & HTTP/2 高级客户端：流式上传、`100-continue`、Trailer、1xx 响应、重设优先级、接收 Push 与通告、同源重定向 |

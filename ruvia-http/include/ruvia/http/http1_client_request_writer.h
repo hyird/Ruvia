@@ -153,7 +153,6 @@ enum class http1_client_request_prepare_error : std::uint8_t {
     connect_requires_dedicated_entry,
     invalid_connect_origin,
     invalid_header,
-    too_many_headers,
     host_header_managed_by_writer,
     content_length_managed_by_writer,
     transfer_encoding_unsupported,

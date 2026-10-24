@@ -153,10 +153,7 @@ public:
     }
 
     [[nodiscard]] bool append_trailer(std::string_view name, std::string_view value) {
-        if (trailers_.size() == max_http_header_fields) {
-            return false;
-        }
-        trailers_.push_back(http_header::copy_of(name, value, resource()));
+        trailers_.emplace_back(name, value, resource());
         return true;
     }
 

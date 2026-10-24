@@ -183,10 +183,6 @@ struct model_parse_options final {
     std::size_t max_representation_bytes_{16 * 1024 * 1024};
 };
 
-struct model_serialize_options final {
-    std::pmr::memory_resource* resource_{nullptr};
-};
-
 class string final {
 public:
     explicit string(model_options options = {})
@@ -1566,7 +1562,7 @@ namespace ruvia {
 // ill-formed UTF-8 has each maximal ill-formed subpart replaced by U+FFFD.
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
-[[nodiscard]] inline std::pmr::string to_json(const t_type& value, model_serialize_options options = {}) {
+[[nodiscard]] inline std::pmr::string to_json(const t_type& value, model_options options = {}) {
     std::pmr::string output(pmr_resource_or_default(options.resource_));
     // MSVC reserve(n) can leave no room for the trailing NUL, so resize(n)
     // allocates again. One extra byte stays in the same allocation.

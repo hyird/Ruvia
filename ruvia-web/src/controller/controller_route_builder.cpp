@@ -74,9 +74,6 @@ std::pmr::string join_controller_paths(std::string_view prefix, std::string_view
 }
 }  // namespace
 
-task<void> stream_body::handle(context&, next& next_value) {
-    co_await next_value();
-}
 detail::controller_route_builder::controller_route_builder(router& router_value, std::string_view prefix,
     std::pmr::vector<controller_middleware_descriptor> middlewares)
     : controller_route_builder(

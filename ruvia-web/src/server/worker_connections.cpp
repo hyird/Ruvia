@@ -37,6 +37,7 @@
 #include "server/http_server_stream_session.h"
 #include "server/http_server_tls_handshake.h"
 #include "server/http_server_tls_identity.h"
+#include "server/windows_accept_domain.h"
 #include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
@@ -74,36 +75,6 @@ bool is_http2_alpn_selected(server_tls_stream& tls_stream) noexcept {
     SSL_get0_alpn_selected(tls_stream.native_handle(), &selected, &selected_length);
     return selected_length == 2 && selected != nullptr && std::memcmp(selected, "h2", 2) == 0;
 }
-
-#if !defined(_WIN32)
-enum class accept_error_action { retry,
-    report_and_retry,
-    fail };
-
-// Peer disappearance and readiness races are normal accept outcomes. Resource
-// and network failures leave the listener usable but must remain observable.
-accept_error_action classify_accept_error(const asio::error_code& error) noexcept {
-    if (error == asio::error::connection_aborted || error == asio::error::connection_reset ||
-        error == asio::error::eof || error == asio::error::try_again ||
-        error == asio::error::would_block || error == asio::error::interrupted) {
-        return accept_error_action::retry;
-    }
-    if (error == asio::error::no_descriptors || error == asio::error::no_buffer_space ||
-        error == asio::error::no_memory || error == std::errc::too_many_files_open_in_system ||
-        error == std::errc::protocol_error || error == asio::error::network_down ||
-        error == asio::error::network_unreachable || error == asio::error::host_unreachable ||
-        error == asio::error::no_protocol_option || error == asio::error::operation_not_supported ||
-        error == asio::error::no_permission || error == asio::error::timed_out) {
-        return accept_error_action::report_and_retry;
-    }
-#if defined(EHOSTDOWN) && defined(ENONET)
-    if (error.category() == asio::system_category() && (error.value() == EHOSTDOWN || error.value() == ENONET)) {
-        return accept_error_action::report_and_retry;
-    }
-#endif
-    return accept_error_action::fail;
-}
-#endif
 
 void configure_listener_address(asio::ip::tcp::acceptor& socket) {
     socket.set_option(asio::socket_base::reuse_address(true));

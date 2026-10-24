@@ -68,17 +68,14 @@ RUVIA_TEST(request_header_blocks_reclaim_repeated_parses_and_preserve_retained_r
 RUVIA_TEST(request_public_reset_clears_borrowed_views_and_owned_headers) {
     header_memory resource;
     const http_header_view headers[]{{"Host", "example.test"}};
-    auto parsed_request = ruvia::make_parsed_http_request(
+    auto request = ruvia::make_parsed_http_request(
         "GET", "https://example.test/path?key=value", headers, {}, &resource);
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
-    auto& request = std::get<ruvia::http_request>(parsed_request);
     RUVIA_CHECK(resource.live_bytes_ > 0);
     {
         const http_header_view conflicting_host[]{{"Host", "conflicting.example"}};
         auto rebound_req = ruvia::make_parsed_http_request(
             "GET", "https://example.test/path", conflicting_host, {}, &resource);
-        RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(rebound_req));
-        RUVIA_CHECK_EQ(std::get<ruvia::http_request>(rebound_req).header("Host").value_or(""), std::string_view("example.test"));
+        RUVIA_CHECK_EQ(rebound_req.header("Host").value_or(""), std::string_view("example.test"));
     }
     request.reset();
     RUVIA_CHECK_EQ(resource.live_bytes_, std::size_t{0});
@@ -97,10 +94,8 @@ RUVIA_TEST(request_public_reset_clears_borrowed_views_and_owned_headers) {
 
 RUVIA_TEST(request_header_distinguishes_missing_from_present_empty) {
     const http_header_view headers[]{{"X-Empty", ""}, {"Host", ""}};
-    auto parsed_request = ruvia::make_parsed_http_request(
+    const auto request = ruvia::make_parsed_http_request(
         "GET", "/", headers, {}, std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
-    const auto& request = std::get<ruvia::http_request>(parsed_request);
     RUVIA_CHECK(!request.header("X-Missing").has_value());
     const auto present_empty = request.header("x-empty");
     RUVIA_CHECK(present_empty.has_value());
@@ -113,10 +108,8 @@ RUVIA_TEST(request_header_distinguishes_missing_from_present_empty) {
 
 RUVIA_TEST(request_content_coding_accumulates_repeated_header_fields_in_order) {
     const http_header_view headers[]{{"Content-Encoding", "br"}, {"Content-Encoding", "gzip"}};
-    auto parsed_request = ruvia::make_parsed_http_request(
+    const auto request = ruvia::make_parsed_http_request(
         "POST", "/", headers, {}, std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
-    const auto& request = std::get<ruvia::http_request>(parsed_request);
     const auto coding = request_content_coding(request);
     RUVIA_CHECK(coding.invalid() == nullptr);
     RUVIA_CHECK(coding.unsupported() == nullptr);
@@ -129,10 +122,8 @@ RUVIA_TEST(request_content_coding_accumulates_repeated_header_fields_in_order) {
 
 RUVIA_TEST(request_content_coding_combines_field_lines_with_list_semantics) {
     const http_header_view headers[]{{"Content-Encoding", ","}, {"Content-Encoding", "gzip"}};
-    auto parsed_request = ruvia::make_parsed_http_request(
+    const auto request = ruvia::make_parsed_http_request(
         "POST", "/", headers, {}, std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
-    const auto& request = std::get<ruvia::http_request>(parsed_request);
 
     const auto coding = request_content_coding(request);
     RUVIA_CHECK(coding.invalid() == nullptr);
@@ -144,11 +135,9 @@ RUVIA_TEST(request_content_coding_combines_field_lines_with_list_semantics) {
 }
 
 RUVIA_TEST(request_access_raw_query_lookup_preserves_encoding_and_uses_last_match) {
-    auto parsed_request = ruvia::make_parsed_http_request(
+    const auto request = ruvia::make_parsed_http_request(
         "GET", "/?a=first&b=2&a=second+value&encoded%20key=raw%2Fvalue",
         {}, {}, std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
-    const auto& request = std::get<ruvia::http_request>(parsed_request);
 
     const auto value = request.last_raw_query_value("a");
     RUVIA_CHECK(value.has_value());
@@ -159,10 +148,8 @@ RUVIA_TEST(request_access_raw_query_lookup_preserves_encoding_and_uses_last_matc
 
 RUVIA_TEST(request_access_cookie_lookup_uses_last_match) {
     const http_header_view headers[]{{"Cookie", "sid=first; theme=dark; sid=second"}};
-    auto parsed_request = ruvia::make_parsed_http_request(
+    const auto request = ruvia::make_parsed_http_request(
         "GET", "/", headers, {}, std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
-    const auto& request = std::get<ruvia::http_request>(parsed_request);
 
     const auto value = request.cookie("sid");
     RUVIA_CHECK(value.has_value());
@@ -171,10 +158,8 @@ RUVIA_TEST(request_access_cookie_lookup_uses_last_match) {
 
 RUVIA_TEST(request_access_cookie_lookup_scans_repeated_cookie_fields) {
     const http_header_view headers[]{{"Cookie", "a=1"}, {"Cookie", "b=2"}};
-    auto parsed_request = ruvia::make_parsed_http_request(
+    const auto request = ruvia::make_parsed_http_request(
         "GET", "/", headers, {}, std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
-    const auto& request = std::get<ruvia::http_request>(parsed_request);
 
     const auto first = request.cookie("a");
     RUVIA_CHECK(first.has_value());
@@ -187,10 +172,8 @@ RUVIA_TEST(request_access_cookie_lookup_scans_repeated_cookie_fields) {
 RUVIA_TEST(request_access_cookie_lookup_preserves_distinct_fields_with_shared_storage) {
     constexpr std::string_view shared = "sid=old; sid=new; token=present";
     const http_header_view headers[]{{"Cookie", shared}, {"Cookie", shared.substr(0, 7)}};
-    auto parsed_request = ruvia::make_parsed_http_request(
+    const auto request = ruvia::make_parsed_http_request(
         "GET", "/", headers, {}, std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
-    const auto& request = std::get<ruvia::http_request>(parsed_request);
     RUVIA_CHECK_EQ(request.headers().size(), std::size_t{2});
     RUVIA_CHECK_EQ(request.header("Cookie").value_or("missing"), std::string_view("sid=old"));
     RUVIA_CHECK_EQ(request.cookie("sid").value_or("missing"), std::string_view("old"));
@@ -202,7 +185,7 @@ RUVIA_TEST(owned_header_copies_stay_in_the_source_resource) {
     header_memory memory;
     {
         std::pmr::vector<ruvia::http_header> headers(&memory);
-        headers.push_back(ruvia::http_header::copy_of("x-name", "value", &memory));
+        headers.emplace_back("x-name", "value", &memory);
         const auto before = memory.allocations_;
         const std::pmr::vector<ruvia::http_header> copied(headers, &memory);
         const ruvia::http_header single(headers.front());

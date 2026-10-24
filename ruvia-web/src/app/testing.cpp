@@ -137,14 +137,17 @@ struct test_app::impl_type final {
         if (!request.cookies_.empty()) {
             headers.emplace_back("Cookie", request.cookies_);
         }
-        auto parsed_request = make_parsed_http_request(request.method_, request.target_, headers,
-            std::as_bytes(std::span(request.body_.data(), request.body_.size())),
-            request_memory_value.resource());
-        const auto* parse_error = std::get_if<http_parse_error>(&parsed_request);
-        auto parsed_value = parse_error == nullptr
-                                ? std::move(std::get<http_request>(parsed_request))
-                                : std::get<http_request>(make_parsed_http_request(
-                                      "GET", "/", {}, {}, request_memory_value.resource()));
+        std::optional<http_protocol_error> parse_error;
+        auto parsed_value = [&]() {
+            try {
+                return make_parsed_http_request(request.method_, request.target_, headers,
+                    std::as_bytes(std::span(request.body_.data(), request.body_.size())),
+                    request_memory_value.resource());
+            } catch (const http_protocol_error& error) {
+                parse_error = error;
+                return make_parsed_http_request("GET", "/", {}, {}, request_memory_value.resource());
+            }
+        }();
 
         const auto& routes_value = *routes_;
         const auto resolution = routes_value.resolve(parsed_value);
@@ -154,11 +157,11 @@ struct test_app::impl_type final {
         // promise, exactly as a server answers a malformed head.
         std::optional<detail::http_request_admission> admission;
         http_response response(request_memory_value.resource());
-        if (parse_error != nullptr) {
+        if (parse_error.has_value()) {
             response = co_await detail::respond_http_request_rejection(routes_value, parsed_value,
                 request_memory_value,
-                detail::http_request_rejection::error(detail::copy_http_protocol_error_info(
-                    request_memory_value.resource(), http_parse_protocol_error(*parse_error))),
+                detail::http_request_rejection::error(
+                    detail::copy_http_protocol_error_info(request_memory_value.resource(), *parse_error)),
                 services);
         } else {
             admission.emplace(co_await detail::admit_and_dispatch_buffered_request(routes_value,

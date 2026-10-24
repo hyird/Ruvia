@@ -28,9 +28,6 @@ bool http_push_output::push(http_push_request_view request) {
     count(request.scheme_);
     count(request.authority_);
     count(request.path_);
-    if (request.headers_.size() > max_http_header_fields - 4) {
-        throw std::length_error("push request exceeds field count bound");
-    }
     for (const auto& field : request.headers_) {
         count(field.name());
         count(field.value());

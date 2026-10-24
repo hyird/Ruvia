@@ -105,12 +105,8 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
 }
 
 [[nodiscard]] inline http2_interim_response_header_encode_status validate_http2_interim_response_headers(
-    const http_interim_response_head& response,
-    std::span<std::uint32_t, max_http_header_fields> known_bits) noexcept {
+    const http_interim_response_head& response) noexcept {
     const auto headers = response.headers();
-    if (headers.size() > max_http_header_fields) {
-        return http2_interim_response_header_encode_status::invalid_header;
-    }
     const auto status_token = http_status_code_token(response.status());
     http_header_section_size section_size;
     if (!section_size.add(":status", http_status_code_token_view(status_token))) {
@@ -120,7 +116,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto name = headers[i].name();
         const auto value = headers[i].value();
-        if (validator.validate(name, value, &known_bits[i]) !=
+        if (validator.validate(name, value) !=
                 http_interim_response_header_validation_status::ok ||
             is_forbidden_http_binary_response_field(name) ||
             !section_size.add(name, value)) {
@@ -130,16 +126,9 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     return http2_interim_response_header_encode_status::ok;
 }
 
-[[nodiscard]] inline http2_interim_response_header_encode_status validate_http2_interim_response_headers(
-    const http_interim_response_head& response) noexcept {
-    std::array<std::uint32_t, max_http_header_fields> known_bits{};
-    return validate_http2_interim_response_headers(response, known_bits);
-}
-
 [[nodiscard]] inline http2_interim_response_header_encode_status append_http2_interim_response_headers(
     http2_stream_state& stream, const http_interim_response_head& response) {
-    std::array<std::uint32_t, max_http_header_fields> known_bits{};
-    if (const auto status = validate_http2_interim_response_headers(response, known_bits);
+    if (const auto status = validate_http2_interim_response_headers(response);
         status != http2_interim_response_header_encode_status::ok) {
         return status;
     }
@@ -153,7 +142,8 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         const auto headers = response.headers();
         for (std::size_t i = 0; i < headers.size(); ++i) {
             append_http2_encoded_response_header(header_block, headers[i].name(),
-                headers[i].value(), known_bits[i], lower_name_stack, lower_name_scratch);
+                headers[i].value(), classify_response_header_name(headers[i].name()),
+                lower_name_stack, lower_name_scratch);
         }
     } catch (...) {
         header_block.clear();
@@ -174,26 +164,20 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     if (!section_size.add(":status", http_status_code_token_view(status_token))) {
         return false;
     }
-    std::size_t field_count = 0;
     for (const auto& header : response.headers()) {
         const auto known_bit = http_response_header_access::known_bit(header);
         if (known_bit == response_header_content_length) {
             continue;
         }
-        ++field_count;
-        if (field_count > max_http_header_fields ||
-            !section_size.add(header.name(), header.value())) {
+        if (!section_size.add(header.name(), header.value())) {
             return false;
         }
     }
     std::string_view generated_date;
     if ((known_bits & response_header_date) == 0) {
         generated_date = cached_date_value();
-        if (!generated_date.empty()) {
-            ++field_count;
-            if (field_count > max_http_header_fields || !section_size.add("date", generated_date)) {
-                return false;
-            }
+        if (!generated_date.empty() && !section_size.add("date", generated_date)) {
+            return false;
         }
     }
     std::array<char, 20> content_length_bytes;
@@ -206,9 +190,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
         }
         content_length_value = std::string_view(
             content_length_bytes.data(), static_cast<std::size_t>(end - content_length_bytes.data()));
-        ++field_count;
-        if (field_count > max_http_header_fields ||
-            !section_size.add("content-length", content_length_value)) {
+        if (!section_size.add("content-length", content_length_value)) {
             return false;
         }
     }

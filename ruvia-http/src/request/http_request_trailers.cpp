@@ -16,7 +16,7 @@ std::optional<http_request_trailer_error> http_request_trailers::append(std::str
         return http_request_trailer_error::forbidden_field;
     }
     auto budget = budget_;
-    if (fields_.size() == max_http_header_fields || !budget.add_field(name, value)) {
+    if (!budget.add_field(name, value)) {
         return http_request_trailer_error::section_too_large;
     }
     fields_.push_back(
@@ -40,9 +40,9 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
     };
     try {
         const auto status = detail::visit_http1_trailer_block(
-            block, detail::is_forbidden_http_request_trailer_name, budget, field_count,
+            block, detail::is_forbidden_http_request_trailer_name, budget,
             [this](std::string_view name, std::string_view value) {
-                fields_.push_back(http_header::copy_of(name, value, fields_.get_allocator().resource()));
+                fields_.emplace_back(name, value, fields_.get_allocator().resource());
                 return true;
             });
         switch (status) {

@@ -95,54 +95,54 @@ task<std::optional<redis_x_read_group_result>> execute_redis_x_read_group(detail
 
 }  // namespace
 
-scoped_operation<redis_scan_result> redis_handle::scan(redis_scan_options options) const {
+task<redis_scan_result> redis_handle::scan(redis_scan_options options) const {
     registration_.require_active();
     return scoped(
         execute_redis_scan(executor(), redis_scan_args("SCAN", options, resource_), resource_));
 }
 
-scoped_operation<redis_hash_scan_result> redis_handle::hscan(
+task<redis_hash_scan_result> redis_handle::hscan(
     std::string_view key, redis_scan_options options) const {
     registration_.require_active();
     return scoped(execute_redis_hash_scan(
         executor(), redis_key_scan_args("HSCAN", key, options, resource_), resource_));
 }
 
-scoped_operation<redis_scan_result> redis_handle::sscan(
+task<redis_scan_result> redis_handle::sscan(
     std::string_view key, redis_scan_options options) const {
     registration_.require_active();
     return scoped(execute_redis_scan(
         executor(), redis_key_scan_args("SSCAN", key, options, resource_), resource_));
 }
 
-scoped_operation<redis_z_scan_result> redis_handle::zscan(
+task<redis_z_scan_result> redis_handle::zscan(
     std::string_view key, redis_scan_options options) const {
     registration_.require_active();
     return scoped(execute_redis_z_scan(
         executor(), redis_key_scan_args("ZSCAN", key, options, resource_), resource_));
 }
 
-scoped_operation<redis_value> redis_handle::eval(std::string_view script,
+task<redis_value> redis_handle::eval(std::string_view script,
     std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
     registration_.require_active();
     return scoped(detail::execute_owned_redis_command(
         executor(), detail::redis_eval_args("EVAL", script, keys, args, resource_), resource_));
 }
 
-scoped_operation<redis_value> redis_handle::eval_sha(std::string_view sha1,
+task<redis_value> redis_handle::eval_sha(std::string_view sha1,
     std::span<const std::string_view> keys, std::span<const std::string_view> args) const {
     registration_.require_active();
     return scoped(detail::execute_owned_redis_command(
         executor(), detail::redis_eval_args("EVALSHA", sha1, keys, args, resource_), resource_));
 }
 
-scoped_operation<std::pmr::string> redis_handle::script_load(std::string_view script) const {
+task<std::pmr::string> redis_handle::script_load(std::string_view script) const {
     registration_.require_active();
     return scoped(detail::redis_status_command(
         executor(), detail::own_redis_args({"SCRIPT", "LOAD", script}, resource_), resource_));
 }
 
-scoped_operation<std::pmr::vector<bool>> redis_handle::script_exists(
+task<std::pmr::vector<bool>> redis_handle::script_exists(
     std::span<const std::string_view> sha1s) const {
     registration_.require_active();
     if (sha1s.empty()) {
@@ -158,7 +158,7 @@ scoped_operation<std::pmr::vector<bool>> redis_handle::script_exists(
     return scoped(detail::redis_bool_array_command(executor(), std::move(args), resource_));
 }
 
-scoped_operation<std::optional<redis_key_value>> redis_handle::blpop(
+task<std::optional<redis_key_value>> redis_handle::blpop(
     std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
     const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
@@ -167,7 +167,7 @@ scoped_operation<std::optional<redis_key_value>> redis_handle::blpop(
         resource_));
 }
 
-scoped_operation<std::optional<redis_key_value>> redis_handle::brpop(
+task<std::optional<redis_key_value>> redis_handle::brpop(
     std::span<const std::string_view> keys, redis_block_wait wait) const {
     registration_.require_active();
     const auto reply_timeout = redis_block_reply_timeout(operation_options_, wait);
@@ -176,7 +176,7 @@ scoped_operation<std::optional<redis_key_value>> redis_handle::brpop(
         resource_));
 }
 
-scoped_operation<std::optional<redis_x_read_group_result>> redis_handle::xread_group(
+task<std::optional<redis_x_read_group_result>> redis_handle::xread_group(
     std::string_view group, std::string_view consumer, std::span<const redis_stream_read_view> streams,
     redis_x_read_group_options options) const {
     registration_.require_active();
@@ -201,7 +201,7 @@ redis_transaction redis_handle::transaction() const {
     return redis_transaction(pool(), operation_options_, resource_, registration_.scope());
 }
 
-scoped_operation<std::int64_t> redis_handle::publish(std::string_view channel, std::string_view payload) const {
+task<std::int64_t> redis_handle::publish(std::string_view channel, std::string_view payload) const {
     registration_.require_active();
     return scoped(detail::redis_integer_command(
         executor(), detail::own_redis_args({"PUBLISH", channel, payload}, resource_), resource_));

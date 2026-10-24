@@ -174,8 +174,8 @@ bool http1_chunked_body_decoder::trailers_valid(std::string_view trailers) const
     const auto accept = [](std::string_view, std::string_view) noexcept { return true; };
     auto budget = http_trailer_section_budget();
     const auto status = trailer_role_ == http1_chunk_trailer_role::response
-                            ? detail::visit_http1_trailer_block(trailers, detail::is_forbidden_response_trailer_name, budget, 0, accept)
-                            : detail::visit_http1_trailer_block(trailers, detail::is_forbidden_http_request_trailer_name, budget, 0, accept);
+                            ? detail::visit_http1_trailer_block(trailers, detail::is_forbidden_response_trailer_name, budget, accept)
+                            : detail::visit_http1_trailer_block(trailers, detail::is_forbidden_http_request_trailer_name, budget, accept);
     return status == detail::http_trailer_block_status::ok;
 }
 

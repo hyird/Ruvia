@@ -16,8 +16,58 @@ namespace ruvia {
 template <typename t_type>
 class task;
 class task_scope;
+class operation_scope;
 
 namespace detail {
+
+// Internal registration composed by ruvia::task and operation_scope::drain_guard.
+// Unscoped tasks never touch a scope list; scoped tasks relink in O(1) on move.
+class scoped_operation_registration final {
+public:
+    scoped_operation_registration() noexcept = default;
+    explicit scoped_operation_registration(operation_scope& scope) noexcept;
+    scoped_operation_registration(
+        scoped_operation_registration&& other, void* new_frame_target) noexcept;
+    ~scoped_operation_registration();
+
+    scoped_operation_registration(const scoped_operation_registration&) = delete;
+    scoped_operation_registration& operator=(const scoped_operation_registration&) = delete;
+    scoped_operation_registration(scoped_operation_registration&&) = delete;
+    scoped_operation_registration& operator=(scoped_operation_registration&&) = delete;
+
+    [[nodiscard]] bool scoped() const noexcept {
+        return phase_ != phase::unscoped;
+    }
+
+    void bind(operation_scope& scope, void* target, void (*retire_cold)(void*) noexcept,
+        void (*check_affinity)(void*) noexcept, void* affinity_target) noexcept;
+    void prepare_start() const;
+    void start() noexcept;
+    void prepare_completion() const noexcept;
+    void complete() noexcept;
+    void retire_frame() noexcept;
+
+private:
+    friend class ::ruvia::operation_scope;
+    enum class phase : std::uint8_t {
+        unscoped,
+        cold,
+        running,
+        retiring,
+        complete,
+        expired,
+    };
+    void clear_frame_binding() noexcept;
+
+    operation_scope* scope_{nullptr};
+    scoped_operation_registration* previous_{nullptr};
+    scoped_operation_registration* next_{nullptr};
+    phase phase_{phase::unscoped};
+    void* frame_target_{nullptr};
+    void (*retire_cold_)(void*) noexcept {nullptr};
+    void (*check_affinity_)(void*) noexcept {nullptr};
+    void* affinity_target_{nullptr};
+};
 
 [[nodiscard]] void* task_frame_allocate(std::size_t bytes_value);
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept;

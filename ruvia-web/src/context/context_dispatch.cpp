@@ -43,7 +43,7 @@ std::optional<std::string_view> dispatch_response::header(std::string_view name)
     return std::nullopt;
 }
 
-scoped_operation<dispatch_response> context::dispatch(dispatch_options options) {
+task<dispatch_response> context::dispatch(dispatch_options options) {
     if (!services().routes() || !capabilities_.worker().is_current()) {
         throw std::logic_error("dispatch requires a routed context on its owning worker");
     }
@@ -98,13 +98,15 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
         headers.emplace_back(fields[index], fields[index + 1]);
     }
     headers.emplace_back("Content-Length", content_length);
-    auto parsed_request = make_parsed_http_request(fields[subrequest_field_method],
-        fields[subrequest_field_target], headers, std::as_bytes(std::span(body.data(), body.size())), memory.resource());
-    auto* parsed = std::get_if<http_request>(&parsed_request);
-    if (parsed == nullptr) {
-        throw std::invalid_argument("invalid subrequest");
-    }
-    const auto& request = *parsed;
+    const auto request = [&]() {
+        try {
+            return make_parsed_http_request(fields[subrequest_field_method],
+                fields[subrequest_field_target], headers,
+                std::as_bytes(std::span(body.data(), body.size())), memory.resource());
+        } catch (const http_protocol_error&) {
+            throw std::invalid_argument("invalid subrequest");
+        }
+    }();
     const auto& routes = *services().routes();
     const auto resolution = routes.resolve(request);
     if (const auto* resolved = resolution.resolved()) {

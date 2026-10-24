@@ -91,6 +91,14 @@ public:
     }
 };
 
+struct invalid_app_body_limit_middleware final {
+    static constexpr std::size_t ruvia_request_body_limit_bytes = 16;
+
+    ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
+        co_await next_value();
+    }
+};
+
 class configured_by_type_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/route-config")
@@ -244,10 +252,12 @@ RUVIA_TEST(route_body_limit_bounds_the_decoded_representation) {
 }
 
 RUVIA_TEST(app_rejects_route_only_body_limit_middleware) {
+    static_assert(!ruvia::middleware<ruvia::body_limit<16>> && ruvia::route_policy<ruvia::body_limit<16>> &&
+                  !ruvia::middleware<ruvia::stream_body> && ruvia::route_policy<ruvia::stream_body>);
     ruvia::test_app app;
     bool body_limit_rejected = false;
     try {
-        app.use<ruvia::body_limit<16>>();
+        app.use<invalid_app_body_limit_middleware>();
     } catch (const std::invalid_argument&) {
         body_limit_rejected = true;
     }
@@ -340,8 +350,8 @@ RUVIA_TEST(app_wide_route_declarations_are_rejected_instead_of_ignored) {
         }
         return false;
     };
-    RUVIA_CHECK(rejects([&app] { app.use<ruvia::body_limit<16>>(); }));
-    RUVIA_CHECK(rejects([&app] { app.use_at<ruvia::body_limit<16>>({.prefix_ = "/route-config"}); }));
+    RUVIA_CHECK(rejects([&app] { app.use<invalid_app_body_limit_middleware>(); }));
+    RUVIA_CHECK(rejects([&app] { app.use_at<invalid_app_body_limit_middleware>({.prefix_ = "/route-config"}); }));
 
     const auto response = app.request(ruvia::test_request::post("/route-config/default").body(std::string(64, 'x')));
     RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);

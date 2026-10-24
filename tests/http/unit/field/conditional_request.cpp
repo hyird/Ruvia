@@ -91,20 +91,16 @@ RUVIA_TEST(http_etag_preconditions_fold_repeated_field_lines) {
     using ruvia::http_header_view;
 
     const http_header_view fields[]{{"If-None-Match", R"("current")"}, {"If-None-Match", R"("stale")"}};
-    const auto parsed_request = ruvia::make_parsed_http_request(
+    const auto request = ruvia::make_parsed_http_request(
         "GET", "/", fields, {}, std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_request));
-    const auto& request = std::get<ruvia::http_request>(parsed_request);
 
     const auto matched = get_http_etag_preconditions(request, R"("current")");
     RUVIA_CHECK(matched.if_none_match_.present_);
     RUVIA_CHECK(matched.if_none_match_.matches());
 
     const http_header_view wildcard_fields[]{{"If-Match", "*"}};
-    const auto parsed_wildcard = ruvia::make_parsed_http_request(
+    const auto wildcard = ruvia::make_parsed_http_request(
         "GET", "/", wildcard_fields, {}, std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(parsed_wildcard));
-    const auto& wildcard = std::get<ruvia::http_request>(parsed_wildcard);
     const auto existence = get_http_etag_preconditions(wildcard, R"("unused")");
     RUVIA_CHECK(existence.if_match_.present_);
     RUVIA_CHECK(existence.if_match_.matches());

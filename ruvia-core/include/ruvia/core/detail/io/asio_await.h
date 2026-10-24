@@ -84,6 +84,7 @@ private:
         // An owning completion handler can publish external readiness in its
         // destructor only after moved-from result storage has been reclaimed.
         auto handler = std::move(owner_value->handler_);
+        owner_value->task_.prepare_direct_completion();
         auto result_value = [&owner_value]() -> task_completion_result<t_type> {
             try {
                 if constexpr (std::is_void_v<t_type>) {
@@ -97,6 +98,7 @@ private:
                 return task_completion_result<t_type>(std::in_place_index<1>, std::current_exception());
             }
         }();
+        owner_value->task_.finish_direct_completion();
         owner_value.reset();
         std::move(handler)(std::move(result_value));
     }
@@ -109,9 +111,7 @@ private:
 template <typename t_type, typename completion_token_type>
     requires asio_task_result<t_type>
 inline auto async_start_task(task<t_type>&& pending_task, completion_token_type&& token) {
-    if (pending_task.handle_ == nullptr) {
-        throw std::logic_error("cannot adapt an empty ruvia::task to asio::awaitable");
-    }
+    pending_task.prepare_direct_start();
     return asio::async_initiate<completion_token_type, void(task_completion_result<t_type>)>(
         [](auto&& handler, task<t_type> task_value) {
             using handler_type = std::decay_t<decltype(handler)>;

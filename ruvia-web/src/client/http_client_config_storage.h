@@ -135,7 +135,7 @@ private:
           cookies_(resource) {
         cookies_.reserve(source_value.cookies_.size());
         for (const auto& cookie : source_value.cookies_) {
-            cookies_.push_back(http_header::copy_of(cookie.name(), cookie.value(), resource));
+            cookies_.emplace_back(cookie.name(), cookie.value(), resource);
         }
     }
 };

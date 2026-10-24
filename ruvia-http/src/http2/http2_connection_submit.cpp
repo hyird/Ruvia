@@ -481,9 +481,6 @@ http2_finish_request_status http2_connection::finish_request(std::uint32_t strea
     if (!stream->local_content().length_complete()) {
         throw std::invalid_argument("HTTP/2 request ended before declared Content-Length");
     }
-    if (trailers.size() > max_http_header_fields) {
-        throw std::invalid_argument("too many HTTP/2 request trailers");
-    }
     http_header_section_size size;
     for (const auto& field : trailers) {
         if (!http2_is_valid_outbound_regular_header(field.name(), field.value()) ||

@@ -75,7 +75,7 @@ http1_websocket_client_handshake::http1_websocket_client_handshake(
     http_base64_encode(key_.data(), options.nonce_);
     headers_.reserve(options.headers_.size());
     for (auto header : options.headers_) {
-        headers_.push_back(http_header::copy_of(header.name(), header.value(), resource_));
+        headers_.emplace_back(header.name(), header.value(), resource_);
     }
 }
 

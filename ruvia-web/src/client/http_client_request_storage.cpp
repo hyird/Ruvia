@@ -24,7 +24,7 @@ http_client_request_storage::http_client_request_storage(std::string_view method
     headers_.reserve(fields.size());
     auto* const field_resource = this->resource();
     for (const auto& field : fields) {
-        headers_.push_back(http_header::copy_of(field.name(), field.value(), field_resource));
+        headers_.emplace_back(field.name(), field.value(), field_resource);
     }
 }
 
@@ -64,7 +64,7 @@ http_client_request_storage http_client_request_storage::into_resource(
     http_client_request_storage result(method_, target_, destination_resource);
     result.headers_.reserve(headers_.size());
     for (const auto& header : headers_) {
-        result.headers_.push_back(http_header::copy_of(header.name(), header.value(), destination_resource));
+        result.headers_.emplace_back(header.name(), header.value(), destination_resource);
     }
     result.body_.assign(body_);
     result.has_body_ = has_body_;

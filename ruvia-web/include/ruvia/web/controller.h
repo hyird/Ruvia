@@ -48,13 +48,6 @@ public:
     static_assert(max_bytes > 0, "body limit must be greater than 0");
 
     static constexpr std::size_t ruvia_request_body_limit_bytes = max_bytes;
-
-    // Satisfies the middleware concept so the type can sit in a route's
-    // middleware list; the router drops the descriptor from the chain, so this
-    // never runs.
-    task<void> handle(context&, next& next_value) {
-        co_await next_value();
-    }
 };
 
 }  // namespace ruvia
@@ -179,10 +172,13 @@ private:                                                                        
     RUVIA_DETAIL_CONTROLLER_RETAIN inline static const bool ruvia_controller_registered_ = \
         ::ruvia::detail::register_controller<ruvia_controller_type>();
 
-#define RUVIA_GET(path, handler, ...)                                                                 \
-    ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::get, path, \
-        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),           \
+#define RUVIA_DETAIL_ADD_METHOD_ROUTE(method, path, handler, ...)                           \
+    ruvia_controller_access_type::add_route(ruvia_route_scope, method, path,                \
+        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this), \
         ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+
+#define RUVIA_GET(path, handler, ...) \
+    RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::get, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
 #define RUVIA_DETAIL_SELECT_SECOND(first, second, ...) second
 #define RUVIA_DETAIL_CHOOSE_VA_MACRO(with_args, without_args, ...) \
@@ -250,37 +246,23 @@ private:                                                                        
     RUVIA_DETAIL_CHOOSE_VA_MACRO(RUVIA_DETAIL_ADD_WS_ROUTE_WITH_ARGS, \
         RUVIA_DETAIL_ADD_WS_ROUTE_NO_ARGS, __VA_ARGS__)(path, handler __VA_OPT__(, ) __VA_ARGS__)
 
-#define RUVIA_WS(path, handler, ...) RUVIA_GET_WS(path, handler __VA_OPT__(, ) __VA_ARGS__)
+#define RUVIA_POST(path, handler, ...) \
+    RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::post, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
-#define RUVIA_POST(path, handler, ...)                                                                 \
-    ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::post, path, \
-        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),            \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+#define RUVIA_PUT(path, handler, ...) \
+    RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::put, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
-#define RUVIA_PUT(path, handler, ...)                                                                 \
-    ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::put, path, \
-        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),           \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+#define RUVIA_DELETE(path, handler, ...) \
+    RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::delete_value, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
-#define RUVIA_DELETE(path, handler, ...)                                                                       \
-    ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::delete_value, path, \
-        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),                    \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+#define RUVIA_PATCH(path, handler, ...) \
+    RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::patch, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
-#define RUVIA_PATCH(path, handler, ...)                                                                 \
-    ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::patch, path, \
-        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),             \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+#define RUVIA_HEAD(path, handler, ...) \
+    RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::head, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
-#define RUVIA_HEAD(path, handler, ...)                                                                 \
-    ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::head, path, \
-        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),            \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
-
-#define RUVIA_OPTIONS(path, handler, ...)                                                                 \
-    ruvia_controller_access_type::add_route(ruvia_route_scope, ::ruvia::http_known_method::options, path, \
-        ruvia_controller_access_type::template bind<&ruvia_controller_type::handler>(this),               \
-        ruvia_controller_access_type::template make_middlewares<__VA_ARGS__>())
+#define RUVIA_OPTIONS(path, handler, ...) \
+    RUVIA_DETAIL_ADD_METHOD_ROUTE(::ruvia::http_known_method::options, path, handler __VA_OPT__(, ) __VA_ARGS__)
 
 // An extension method, routed by its exact wire token: PROPFIND, PURGE, LOCK.
 // HTTP's method space is open (http_known_method is only this framework's fixed

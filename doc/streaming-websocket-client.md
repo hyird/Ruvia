@@ -16,8 +16,8 @@
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `scoped_operation<std::optional<std::span<const std::byte>>> read() &` | 读取下一个请求体字节块；返回 `std::nullopt` 表示已到达请求体末尾（EOF） |
-| `scoped_operation<std::optional<std::string_view>> text() &` | 读取下一个请求体字符视图块；返回 `std::nullopt` 表示 EOF |
+| `task<std::optional<std::span<const std::byte>>> read() &` | 读取下一个请求体字节块；返回 `std::nullopt` 表示已到达请求体末尾（EOF） |
+| `task<std::optional<std::string_view>> text() &` | 读取下一个请求体字符视图块；返回 `std::nullopt` 表示 EOF |
 
 > **生命周期约束**：每次 `read()` 或 `text()` 返回的视图仅在下一次调用 `read()` / `text()` 启动前有效；同一 `body_reader` 上同一时刻只能有一个运行中的读取操作。
 
@@ -25,7 +25,7 @@
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `scoped_operation<std::optional<multipart_stream_part>> read() &` | 流式读取 `multipart/form-data` 的下一个分片块，返回 `std::nullopt` 表示全部解析完成 |
+| `task<std::optional<multipart_stream_part>> read() &` | 流式读取 `multipart/form-data` 的下一个分片块，返回 `std::nullopt` 表示全部解析完成 |
 
 `multipart_stream_part` 提供：
 - `name()`、`filename()`、`has_filename()`、`content_type()`、`body()`（当前块内容视图）
@@ -52,14 +52,14 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `scoped_operation<void> write(std::span<const std::byte> chunk) &` | 写入一段字节块（HTTP/1.1 自动使用 `Transfer-Encoding: chunked`，HTTP/2 使用 `DATA` 帧） |
-| `scoped_operation<void> write(std::string_view chunk) &` | 写入一段字符串视图 |
-| `scoped_operation<void> write(std::pmr::string&& chunk) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
-| `scoped_operation<void> writeln(std::string_view chunk) &` | 写入文本并追加 `\n` |
-| `scoped_operation<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 等待指定时长；请求取消或停机返回 `stop_requested`。HTTP/1 默认不主动检测断开；HTTP/2 流终止抛入站传输异常 |
+| `task<void> write(std::span<const std::byte> chunk) &` | 写入一段字节块（HTTP/1.1 自动使用 `Transfer-Encoding: chunked`，HTTP/2 使用 `DATA` 帧） |
+| `task<void> write(std::string_view chunk) &` | 写入一段字符串视图 |
+| `task<void> write(std::pmr::string&& chunk) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
+| `task<void> writeln(std::string_view chunk) &` | 写入文本并追加 `\n` |
+| `task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 等待指定时长；请求取消或停机返回 `stop_requested`。HTTP/1 默认不主动检测断开；HTTP/2 流终止抛入站传输异常 |
 | `bool aborted() const noexcept` | 检查客户端连接或流是否已中止 |
 | `stop_token cancel_on_peer_eof() &` | 显式启用读侧终止取消，返回供业务等待使用的组合 token，语义见下文 |
-| `scoped_operation<void> end(std::span<const http_header_view> trailers = {}) &` | 正常结束流式响应，可选附带响应 Trailer 字段 |
+| `task<void> end(std::span<const http_header_view> trailers = {}) &` | 正常结束流式响应，可选附带响应 Trailer 字段 |
 
 ---
 
@@ -84,11 +84,11 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 | `ruvia::sse_writer` 方法 | 说明 |
 | --- | --- |
-| `scoped_operation<void> write(const sse_message& message)` | 格式化并发送一条 SSE 事件（自动处理多行 `data:` 切分与 UTF-8 校验） |
-| `scoped_operation<timer_sleep_result> sleep(std::chrono::milliseconds duration)` | 挂起等待指定时长 |
+| `task<void> write(const sse_message& message)` | 格式化并发送一条 SSE 事件（自动处理多行 `data:` 切分与 UTF-8 校验） |
+| `task<timer_sleep_result> sleep(std::chrono::milliseconds duration)` | 挂起等待指定时长 |
 | `bool aborted() const noexcept` | 检查客户端是否已断开 |
 | `stop_token cancel_on_peer_eof()` | 与 `response_stream_writer` 同名方法相同 |
-| `scoped_operation<void> end(std::span<const http_header_view> trailers = {})` | 结束 SSE 流 |
+| `task<void> end(std::span<const http_header_view> trailers = {})` | 结束 SSE 流 |
 
 #### 空闲 SSE 的断连取消
 
@@ -206,12 +206,12 @@ private:
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `scoped_operation<std::optional<websocket_message>> read() &` | 读取下一条完整 WebSocket 数据消息（底层自动处理分片重组与 Ping/Pong 心跳）；收到对端 Close 帧或连接结束时返回 `std::nullopt` |
-| `scoped_operation<void> text(std::string_view payload, websocket_send_options options = {}) &` | 发送 UTF-8 文本消息（另有 `std::pmr::string&&` 重载） |
-| `scoped_operation<void> binary(std::string_view payload, websocket_send_options options = {}) &` | 发送二进制消息（另有 `std::pmr::string&&` 重载） |
-| `scoped_operation<void> send(websocket_message&& message, websocket_send_options options = {}) &` | 零拷贝发送 `read()` 返回的 `websocket_message`（发送完成前会占用读缓冲） |
-| `scoped_operation<void> ping(std::string_view payload = {}) &` / `pong(std::string_view payload) &` | 发送显式 `Ping` 或 `Pong` 控制帧 |
-| `scoped_operation<void> close(websocket_close_options options = {}) &` | 发起或完成 WebSocket 关闭握手（默认 `code_ = 1000`） |
+| `task<std::optional<websocket_message>> read() &` | 读取下一条完整 WebSocket 数据消息（底层自动处理分片重组与 Ping/Pong 心跳）；收到对端 Close 帧或连接结束时返回 `std::nullopt` |
+| `task<void> text(std::string_view payload, websocket_send_options options = {}) &` | 发送 UTF-8 文本消息（另有 `std::pmr::string&&` 重载） |
+| `task<void> binary(std::string_view payload, websocket_send_options options = {}) &` | 发送二进制消息（另有 `std::pmr::string&&` 重载） |
+| `task<void> send(websocket_message&& message, websocket_send_options options = {}) &` | 零拷贝发送 `read()` 返回的 `websocket_message`（发送完成前会占用读缓冲） |
+| `task<void> ping(std::string_view payload = {}) &` / `pong(std::string_view payload) &` | 发送显式 `Ping` 或 `Pong` 控制帧 |
+| `task<void> close(websocket_close_options options = {}) &` | 发起或完成 WebSocket 关闭握手（默认 `code_ = 1000`） |
 | `void abort() noexcept` | 立即中止底层传输而不执行关闭握手 |
 
 `websocket_message` 方法：
@@ -349,13 +349,14 @@ std::string_view text = body_bytes.text();
 ```cpp
 #include "ruvia/web/websocket_client.h"
 
+inline constexpr std::array<ruvia::borrowed_text, 1> subprotocols{"chat.v1"};
 ruvia::websocket_client_config config{
     .scheme_ = ruvia::websocket_scheme::ws,
     .protocol_ = ruvia::websocket_client_protocol::http1,
     .host_ = "127.0.0.1",
     .port_ = 8080,
     .target_ = "/ws/echo",
-    .subprotocols_ = {"chat.v1"},
+    .subprotocols_ = subprotocols,
 };
 
 ruvia::websocket_client client(loop, config);
@@ -374,9 +375,9 @@ co_await client.shutdown();
 | --- | --- |
 | `task<void> connect() &` | 建立底层 TCP/TLS 连接并完成 WebSocket 握手（失败抛 `websocket_client_error`） |
 | `websocket_client_handle with_options(operation_options options) const` | 绑定单次操作的 `timeout_` 与 `stop_token_` |
-| `scoped_operation<std::optional<websocket_message>> read()` | 读取下一条消息；对端关闭时返回 `std::nullopt` |
-| `scoped_operation<void> text(payload, options = {})` / `binary(payload, options = {})` | 发送文本或二进制消息 |
-| `scoped_operation<void> ping(payload = {})` / `pong(payload)` | 发送 `Ping` 或 `Pong` 控制帧 |
-| `scoped_operation<void> close(websocket_close_options options = {})` | 句柄方法：发起优雅关闭握手 |
+| `task<std::optional<websocket_message>> read()` | 读取下一条消息；对端关闭时返回 `std::nullopt` |
+| `task<void> text(payload, options = {})` / `binary(payload, options = {})` | 发送文本或二进制消息 |
+| `task<void> ping(payload = {})` / `pong(payload)` | 发送 `Ping` 或 `Pong` 控制帧 |
+| `task<void> close(websocket_close_options options = {})` | 句柄方法：发起优雅关闭握手 |
 | `void close() noexcept` / `void abort() noexcept` | 客户端 `client.close()`（或句柄 `peer.abort()`）请求立即中止连接 |
 | `task<void> shutdown() &` | 关闭并等待底层全部挂起 I/O 安全退役 |

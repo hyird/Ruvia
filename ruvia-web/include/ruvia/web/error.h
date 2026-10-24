@@ -27,7 +27,6 @@ namespace ruvia {
 class context;
 class validator;
 
-inline constexpr std::size_t max_validation_issues = 64;
 inline constexpr std::size_t max_validation_text_bytes = 1024;
 
 namespace detail {
@@ -101,15 +100,13 @@ struct validation_issue_access final {
     }
 };
 
-// Copies at most max_validation_issues issues into resource. The vector is
-// built with a constructor that can propagate allocation failure while the
-// source diagnostics remain intact.
+// Copies issues into resource. The vector is built with a constructor that can
+// propagate allocation failure while the source diagnostics remain intact.
 [[nodiscard]] inline std::pmr::vector<validation_issue> clone_validation_issues(
     std::span<const validation_issue> issues, std::pmr::memory_resource* resource) {
     std::pmr::vector<validation_issue> copied(std::initializer_list<validation_issue>{}, resource);
-    const auto count = std::min(issues.size(), max_validation_issues);
-    copied.reserve(count);
-    for (const auto& issue : issues.first(count)) {
+    copied.reserve(issues.size());
+    for (const auto& issue : issues) {
         copied.push_back(validation_issue_access::copy(issue, resource));
     }
     return copied;

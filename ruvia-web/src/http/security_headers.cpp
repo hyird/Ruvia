@@ -171,7 +171,7 @@ security_headers_middleware::security_headers_middleware(
     permissions_policy_.assign(source_value.permissions_policy_);
     custom_headers_.reserve(source_value.custom_headers_.size());
     for (const auto& header : source_value.custom_headers_) {
-        custom_headers_.push_back(http_header::copy_of(header.name_, header.value_, resource));
+        custom_headers_.emplace_back(header.name_, header.value_, resource);
     }
 }
 

@@ -45,7 +45,7 @@
 namespace websocket_client_test {
 
 template <typename value_type>
-ruvia::task<bool> rejects_running_operation(ruvia::scoped_operation<value_type>&& operation,
+ruvia::task<bool> rejects_running_operation(ruvia::task<value_type>&& operation,
     std::string_view message) {
     try {
         static_cast<void>(co_await std::move(operation));
@@ -55,11 +55,11 @@ ruvia::task<bool> rejects_running_operation(ruvia::scoped_operation<value_type>&
     co_return false;
 }
 
-ruvia::task<void> await_output(ruvia::scoped_operation<void>&& operation) {
+ruvia::task<void> await_output(ruvia::task<void>&& operation) {
     co_await std::move(operation);
 }
 
-ruvia::task<void> receive_payload(ruvia::scoped_operation<std::optional<ruvia::websocket_message>>&& operation,
+ruvia::task<void> receive_payload(ruvia::task<std::optional<ruvia::websocket_message>>&& operation,
     std::string& payload) {
     const auto message = co_await std::move(operation);
     if (!message) {
@@ -89,12 +89,9 @@ namespace {
         ruvia::http_header_view("Sec-WebSocket-Key", key),
     };
     std::pmr::monotonic_buffer_resource resource;
-    auto parsed_request =
+    const auto parsed_request =
         ruvia::make_parsed_http_request("GET", "/", headers, {}, &resource);
-    if (parsed_request.index() != 0) {
-        throw std::runtime_error("could not parse WebSocket request");
-    }
-    auto handshake = ruvia::make_websocket_server_handshake(std::get<0>(parsed_request), {.resource_ = &resource});
+    auto handshake = ruvia::make_websocket_server_handshake(parsed_request, {.resource_ = &resource});
     std::string response;
     handshake.for_each_response_part([&response](std::string_view part) {
         response.append(part);

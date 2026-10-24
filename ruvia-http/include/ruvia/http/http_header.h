@@ -15,8 +15,6 @@
 
 namespace ruvia {
 
-inline constexpr std::size_t max_http_header_fields = 64;
-
 // An owned field returned by protocol parsers and events. The same value type
 // represents initial fields and trailers for requests and responses.
 class http_header final {
@@ -42,7 +40,7 @@ public:
     }
 
     // A copy shares the source's owning resource, mirroring the move
-    // constructor; use copy_of() to place the copy in another resource.
+    // constructor; construct directly to place the copy in another resource.
     http_header(const http_header& other)
         : http_header(other.name(), other.value(), other.resource_) {}
 
@@ -80,16 +78,11 @@ public:
         release();
     }
 
-    [[nodiscard]] static http_header copy_of(std::string_view name, std::string_view value,
-        std::pmr::memory_resource* resource = nullptr) {
-        return http_header(name, value, resource);
-    }
-
     // Owning boundaries that normalize field names lower-case them while
     // copying, so the field still costs one allocation.
     [[nodiscard]] static http_header copy_with_lowercase_name(std::string_view name,
         std::string_view value, std::pmr::memory_resource* resource) {
-        auto result = copy_of(name, value, resource);
+        auto result = http_header(name, value, resource);
         for (std::size_t index = 0; index < result.name_size_; ++index) {
             result.bytes_[index] =
                 static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(result.bytes_[index])));

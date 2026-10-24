@@ -129,10 +129,10 @@ bool http2_connection::finish_push_promise(std::string_view block) {
     request.headers_.reserve(scratch.remote_header_count() + static_cast<std::size_t>(scratch.has_cookie()));
     for (std::size_t i = 0; i < scratch.remote_header_count(); ++i) {
         const auto field = scratch.remote_header_at(i);
-        request.headers_.push_back(http_header::copy_of(field.name_, field.value_, resource_));
+        request.headers_.emplace_back(field.name_, field.value_, resource_);
     }
     if (scratch.has_cookie()) {
-        request.headers_.push_back(http_header::copy_of("cookie", scratch.request_cookie(), resource_));
+        request.headers_.emplace_back("cookie", scratch.request_cookie(), resource_);
     }
     reserve_event_slots(1);
     const auto id = scratch.id();

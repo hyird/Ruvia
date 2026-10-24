@@ -393,17 +393,17 @@ public:
     }
     redis_repository& operator=(redis_repository&&) = delete;
 
-    [[nodiscard]] scoped_operation<redis_write_result> insert(
+    [[nodiscard]] task<redis_write_result> insert(
         const entity_type& entity, redis_write_options options = {}) const {
         return write("insert", detail::redis_entity_id(entity, resource()), entity, options);
     }
 
-    [[nodiscard]] scoped_operation<redis_write_result> upsert(
+    [[nodiscard]] task<redis_write_result> upsert(
         const entity_type& entity, redis_write_options options = {}) const {
         return write("upsert", detail::redis_entity_id(entity, resource()), entity, options);
     }
 
-    [[nodiscard]] scoped_operation<redis_write_result> update(
+    [[nodiscard]] task<redis_write_result> update(
         const redis_predicate& predicate, const entity_type& changes,
         redis_write_options options = {}) const {
         auto* memory = resource();
@@ -411,7 +411,7 @@ public:
         return write("update", id, changes, options);
     }
 
-    [[nodiscard]] scoped_operation<entity_rows<entity_type>> find(
+    [[nodiscard]] task<entity_rows<entity_type>> find(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         auto args = detail::compile_redis_find(mapping(), options, memory);
@@ -420,7 +420,7 @@ public:
         return handle_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
     }
 
-    [[nodiscard]] scoped_operation<std::optional<entity_type>> find_one(
+    [[nodiscard]] task<std::optional<entity_type>> find_one(
         const redis_find_options& options) const {
         const auto memory = resource();
         const bool plain = !options.order_.has_value() && !options.skip_ && !options.take_;
@@ -442,7 +442,7 @@ public:
         return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
     }
 
-    [[nodiscard]] scoped_operation<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(
+    [[nodiscard]] task<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         auto args = detail::compile_redis_find(mapping(), options, memory);
@@ -451,14 +451,14 @@ public:
             std::move(args), std::move(mapper));
     }
 
-    [[nodiscard]] scoped_operation<std::uint64_t> count(
+    [[nodiscard]] task<std::uint64_t> count(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         return handle_.template command_mapped<std::uint64_t>(
             detail::compile_redis_find(mapping(), options, memory, true), detail::redis_map_count{});
     }
 
-    [[nodiscard]] scoped_operation<bool> exists(
+    [[nodiscard]] task<bool> exists(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         if (!options.order_.has_value() && !options.skip_ && !options.take_) {
@@ -472,19 +472,19 @@ public:
             detail::redis_map_exists{});
     }
 
-    [[nodiscard]] scoped_operation<redis_write_result> delete_by(
+    [[nodiscard]] task<redis_write_result> delete_by(
         const redis_predicate& predicate) const {
         auto* memory = resource();
         const auto id = require_primary_key(predicate, memory);
         return delete_by_id(id, memory);
     }
 
-    [[nodiscard]] scoped_operation<redis_write_result> remove(const entity_type& entity) const {
+    [[nodiscard]] task<redis_write_result> remove(const entity_type& entity) const {
         auto* memory = resource();
         return delete_by_id(detail::redis_entity_id(entity, memory), memory);
     }
 
-    [[nodiscard]] scoped_operation<bool> expire(
+    [[nodiscard]] task<bool> expire(
         const redis_predicate& predicate, std::chrono::seconds ttl) const {
         auto* memory = resource();
         const auto id = require_primary_key(predicate, memory);
@@ -492,7 +492,7 @@ public:
         return handle_.expire(key, ttl);
     }
 
-    [[nodiscard]] scoped_operation<redis_ttl> ttl(const redis_predicate& predicate) const {
+    [[nodiscard]] task<redis_ttl> ttl(const redis_predicate& predicate) const {
         auto* memory = resource();
         const auto id = require_primary_key(predicate, memory);
         const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
@@ -501,13 +501,13 @@ public:
 
     // Explicit schema management. Repository acquisition never creates an
     // index, and an existing index is reported by Redis.
-    [[nodiscard]] scoped_operation<void> create_index() const {
+    [[nodiscard]] task<void> create_index() const {
         const auto memory = resource();
         return handle_.template command_mapped<void>(
             detail::compile_redis_index(mapping(), memory), detail::redis_orm_status_result);
     }
 
-    [[nodiscard]] scoped_operation<void> drop_index() const {
+    [[nodiscard]] task<void> drop_index() const {
         auto* memory = resource();
         detail::redis_orm_arguments_type args(memory);
         args.reserve(2);
@@ -558,14 +558,14 @@ private:
         return std::move(*result_value);
     }
 
-    [[nodiscard]] scoped_operation<redis_write_result> delete_by_id(
+    [[nodiscard]] task<redis_write_result> delete_by_id(
         std::string_view id, std::pmr::memory_resource* memory) const {
         const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
         return handle_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(),
             detail::redis_orm_delete_arguments(key, memory), detail::redis_orm_delete_result);
     }
 
-    [[nodiscard]] scoped_operation<redis_write_result> write(
+    [[nodiscard]] task<redis_write_result> write(
         std::string_view mode, std::string_view id, const entity_type& entity,
         redis_write_options options) const {
         auto* memory = resource();

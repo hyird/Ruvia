@@ -13,8 +13,8 @@ RUVIA_TEST(http_owned_header_assignment_preserves_resources_and_allows_retry) {
     failing_memory_resource first_resource;
     failing_memory_resource second_resource;
     {
-        auto first = ruvia::http_header::copy_of("X-First", "retained", &first_resource);
-        auto second = ruvia::http_header::copy_of("X-Second", "replacement", &second_resource);
+        auto first = ruvia::http_header("X-First", "retained", &first_resource);
+        auto second = ruvia::http_header("X-Second", "replacement", &second_resource);
         const auto* first_bytes = first.name().data();
         first_resource.fail_after(0);
         bool failed = false;

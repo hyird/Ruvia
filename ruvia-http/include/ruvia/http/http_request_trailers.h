@@ -20,8 +20,7 @@ enum class http_request_trailer_error : unsigned char { invalid_field,
 // Owns decoded terminal request fields, separately from the initial head.
 // Drivers populate this object before reporting successful body completion.
 // resource must outlive this object and every borrowed field view.
-// At most max_http_header_fields fields can be retained, and the section must
-// fit the http_field_section_budget byte rule, starting from
+// The section must fit the http_field_section_budget byte rule, starting from
 // http_trailer_section_budget().
 class http_request_trailers final {
 public:

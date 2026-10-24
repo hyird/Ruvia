@@ -85,8 +85,7 @@ void detail::router::append_route_middlewares(
     route_middleware_descriptors_.reserve(offset + controller_middlewares.size() + route_middlewares.size());
     for (const auto middlewares : {controller_middlewares, route_middlewares}) {
         for (const auto& descriptor : middlewares) {
-            // Declarations the server reads before the body is accepted; their
-            // handle() only exists to satisfy the middleware concept.
+            // Declarations the server reads before the body is accepted.
             if (descriptor.stream_request_body() || descriptor.request_body_limit() != 0) {
                 continue;
             }

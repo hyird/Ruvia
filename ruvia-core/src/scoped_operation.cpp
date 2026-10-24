@@ -258,10 +258,44 @@ namespace detail {
 
 scoped_operation_registration::scoped_operation_registration(operation_scope& scope) noexcept {
     if (scope.active()) {
+        phase_ = phase::cold;
         scope.link(*this);
     } else {
         phase_ = phase::expired;
     }
+}
+
+scoped_operation_registration::scoped_operation_registration(
+    scoped_operation_registration&& other, void* new_frame_target) noexcept {
+    if (other.phase_ == phase::running || other.phase_ == phase::retiring) {
+        std::terminate();
+    }
+    if (other.phase_ == phase::unscoped) {
+        return;
+    }
+    scope_ = other.scope_;
+    previous_ = other.previous_;
+    next_ = other.next_;
+    phase_ = other.phase_;
+    frame_target_ = other.frame_target_ != nullptr ? new_frame_target : nullptr;
+    retire_cold_ = other.retire_cold_;
+    check_affinity_ = other.check_affinity_;
+    affinity_target_ = other.affinity_target_;
+    if (scope_ != nullptr) {
+        if (previous_ != nullptr) {
+            previous_->next_ = this;
+        } else {
+            scope_->head_ = this;
+        }
+        if (next_ != nullptr) {
+            next_->previous_ = this;
+        }
+    }
+    other.scope_ = nullptr;
+    other.previous_ = nullptr;
+    other.next_ = nullptr;
+    other.phase_ = phase::unscoped;
+    other.clear_frame_binding();
 }
 
 scoped_operation_registration::~scoped_operation_registration() {
@@ -270,24 +304,24 @@ scoped_operation_registration::~scoped_operation_registration() {
     }
 }
 
-void scoped_operation_registration::bind_frame(void* target, void (*retire_cold)(void*) noexcept,
-    void (*check_affinity)(void*) noexcept, void* affinity_target) noexcept {
-    if (retire_cold == nullptr || retire_cold_ != nullptr) {
+void scoped_operation_registration::bind(operation_scope& scope, void* target,
+    void (*retire_cold)(void*) noexcept, void (*check_affinity)(void*) noexcept,
+    void* affinity_target) noexcept {
+    if (phase_ != phase::unscoped || retire_cold == nullptr || retire_cold_ != nullptr) {
         std::terminate();
     }
-    if (phase_ == phase::expired) {
+    if (!scope.active()) {
         phase_ = phase::retiring;
         retire_cold(target);
         phase_ = phase::expired;
         return;
     }
-    if (phase_ != phase::cold) {
-        std::terminate();
-    }
+    phase_ = phase::cold;
     frame_target_ = target;
     retire_cold_ = retire_cold;
     check_affinity_ = check_affinity;
     affinity_target_ = affinity_target;
+    scope.link(*this);
 }
 
 void scoped_operation_registration::clear_frame_binding() noexcept {

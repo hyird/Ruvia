@@ -281,7 +281,7 @@ struct db_function_parameter final {
 
 struct db_function_definition final {
     borrowed_text name_{};
-    std::vector<db_function_parameter> parameters_{};
+    std::pmr::vector<db_function_parameter> parameters_{};
     db_type_definition return_type_{};
     bool returns_set_{false};
     db_function_language language_{db_function_language::plpgsql};
@@ -296,13 +296,13 @@ struct db_trigger_definition final {
     borrowed_text table_{};
     borrowed_text function_{};
     db_trigger_timing timing_{db_trigger_timing::before};
-    std::vector<db_trigger_event> events_{};
+    std::pmr::vector<db_trigger_event> events_{};
     bool for_each_row_{true};
-    std::vector<borrowed_text> update_columns_{};
+    std::pmr::vector<borrowed_text> update_columns_{};
     borrowed_text old_table_{};
     borrowed_text new_table_{};
     db_expression when_{};
-    std::vector<borrowed_text> arguments_{};
+    std::pmr::vector<borrowed_text> arguments_{};
 };
 
 struct db_schema_column final {
@@ -320,9 +320,9 @@ struct db_schema_column final {
 struct db_schema_constraint final {
     borrowed_text name_{};
     db_constraint_kind kind_{db_constraint_kind::check};
-    std::vector<borrowed_text> columns_{};
+    std::pmr::vector<borrowed_text> columns_{};
     borrowed_text referenced_table_{};
-    std::vector<borrowed_text> referenced_columns_{};
+    std::pmr::vector<borrowed_text> referenced_columns_{};
     db_referential_action on_delete_{db_referential_action::no_action};
     db_referential_action on_update_{db_referential_action::no_action};
     bool deferrable_{false};
@@ -333,8 +333,8 @@ struct db_schema_constraint final {
 
 struct db_table_definition final {
     borrowed_text name_{};
-    std::vector<db_schema_column> columns_{};
-    std::vector<db_schema_constraint> constraints_{};
+    std::pmr::vector<db_schema_column> columns_{};
+    std::pmr::vector<db_schema_constraint> constraints_{};
     bool if_not_exists_{false};
     bool temporary_{false};
     bool unlogged_{false};
@@ -351,12 +351,12 @@ struct db_index_key final {
 struct db_index_definition final {
     borrowed_text name_{};
     borrowed_text table_{};
-    std::vector<db_index_key> keys_{};
+    std::pmr::vector<db_index_key> keys_{};
     bool unique_{false};
     bool if_not_exists_{false};
     bool concurrently_{false};
     db_index_method method_{db_index_method::btree};
-    std::vector<borrowed_text> include_{};
+    std::pmr::vector<borrowed_text> include_{};
     db_expression where_{};
 };
 
@@ -374,9 +374,9 @@ struct db_column_generated final {
     db_expression expression_{};
 };
 struct db_entity_table_options final {
-    std::vector<db_column_default> defaults_{};
-    std::vector<db_column_generated> generated_columns_{};
-    std::vector<db_schema_constraint> constraints_{};
+    std::pmr::vector<db_column_default> defaults_{};
+    std::pmr::vector<db_column_generated> generated_columns_{};
+    std::pmr::vector<db_schema_constraint> constraints_{};
     bool if_not_exists_{false};
     bool temporary_{false};
     bool unlogged_{false};
@@ -400,8 +400,8 @@ struct db_compression_order final {
 };
 struct db_compression_options final {
     bool enabled_{true};
-    std::vector<borrowed_text> segment_by_{};
-    std::vector<db_compression_order> order_by_{};
+    std::pmr::vector<borrowed_text> segment_by_{};
+    std::pmr::vector<db_compression_order> order_by_{};
 };
 
 // Explicit, versioned schema changes. Each operation consumes its borrowed
@@ -513,9 +513,9 @@ private:
 
 template <typename entity_type>
 void db_schema::create_table(const db_entity_table_options& options) {
-    db_table_definition table_value{.name_ = entity_type::table_name(), .constraints_ = options.constraints_, .if_not_exists_ = options.if_not_exists_, .temporary_ = options.temporary_, .unlogged_ = options.unlogged_};
+    db_table_definition table_value{.name_ = entity_type::table_name(), .columns_ = std::pmr::vector<db_schema_column>(resource_), .constraints_ = std::pmr::vector<db_schema_constraint>(options.constraints_.begin(), options.constraints_.end(), resource_), .if_not_exists_ = options.if_not_exists_, .temporary_ = options.temporary_, .unlogged_ = options.unlogged_};
     db_query defaults(resource_);
-    std::vector<borrowed_text> primary;
+    std::pmr::vector<borrowed_text> primary(resource_);
     bool conflicting_generation = false;
     bool conflicting_read_only = false;
     detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
@@ -622,7 +622,7 @@ void db_schema::create_table(const db_entity_table_options& options) {
             fkey_name.push_back('_');
             fkey_name.append(r_type::name.view());
             fkey_name.append("_fkey");
-            db_schema_constraint fk{.name_ = fkey_name, .kind_ = db_constraint_kind::foreign_key, .referenced_table_ = target_type::table_name()};
+            db_schema_constraint fk{.name_ = fkey_name, .kind_ = db_constraint_kind::foreign_key, .columns_ = std::pmr::vector<borrowed_text>(resource_), .referenced_table_ = target_type::table_name(), .referenced_columns_ = std::pmr::vector<borrowed_text>(resource_)};
             detail::for_each_descriptor<typename mapping_type::join_columns_type>([&]<typename j_type, std::size_t> { fk.columns_.emplace_back(j_type::local.view()); fk.referenced_columns_.emplace_back(j_type::referenced.view()); });
             table_value.constraints_.push_back(std::move(fk));
             if constexpr (r_type::kind == db_relation_kind::one_to_one) {
@@ -644,7 +644,7 @@ void db_schema::create_relation_tables() {
             detail::validate_db_relation<entity_type, r_type>();
             using m_type = detail::db_relation_mapping<entity_type, r_type>;
             using target_type = typename r_type::target_entity_type;
-            db_table_definition table_value{.name_ = m_type::table_name()};
+            db_table_definition table_value{.name_ = m_type::table_name(), .columns_ = std::pmr::vector<db_schema_column>(resource_), .constraints_ = std::pmr::vector<db_schema_constraint>(resource_)};
             const auto dot = m_type::table_name().rfind('.');
             const auto local_table = m_type::table_name().substr(dot == std::string_view::npos ? 0 : dot + 1);
             std::pmr::string owner_fk_name(local_table, resource_);
@@ -656,7 +656,9 @@ void db_schema::create_relation_tables() {
             const auto add_side = [&]<typename referenced_entity_type, typename columns_type>(const std::pmr::string& fk_name) {
                 db_schema_constraint fk{.name_ = fk_name,
                     .kind_ = db_constraint_kind::foreign_key,
-                    .referenced_table_ = referenced_entity_type::table_name()};
+                    .columns_ = std::pmr::vector<borrowed_text>(resource_),
+                    .referenced_table_ = referenced_entity_type::table_name(),
+                    .referenced_columns_ = std::pmr::vector<borrowed_text>(resource_)};
                 detail::for_each_descriptor<columns_type>([&]<typename j_type, std::size_t> {
                     using c_type = std::tuple_element_t<referenced_entity_type::template column_index<j_type::referenced>(), typename referenced_entity_type::columns_type>;
                     table_value.columns_.push_back({.name_ = j_type::local.view(), .type_ = entity_column_type<c_type>(), .nullable_ = false});
@@ -667,7 +669,7 @@ void db_schema::create_relation_tables() {
             };
             add_side.template operator()<entity_type, typename m_type::source_columns_type>(owner_fk_name);
             add_side.template operator()<target_type, typename m_type::target_columns_type>(inverse_fk_name);
-            std::vector<borrowed_text> primary;
+            std::pmr::vector<borrowed_text> primary(resource_);
             primary.reserve(table_value.columns_.size());
             for (const auto& column : table_value.columns_) {
                 primary.push_back(column.name_);

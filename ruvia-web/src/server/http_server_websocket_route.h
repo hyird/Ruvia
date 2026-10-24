@@ -31,18 +31,13 @@ namespace ruvia::detail {
 // transport ownership to the websocket session, so no HTTP request completion
 // remains.
 template <typename stream_type>
-struct http1_websocket_upgrade_operation final {
-    using connection_type = server_websocket_connection<stream_type>;
-
+struct http1_websocket_upgrade_commit final {
     http1_route_dispatch<stream_type>& dispatch_;
     http_response_tail& tail_;
-    const resolved_route& resolved_;
     const websocket_route_endpoint& websocket_endpoint_;
-    std::string_view pending_frames_;
-    std::optional<connection_type>& websocket_connection_;
 
-    [[nodiscard]] task<void> operator()(context& context_value) {
-        const auto response_headers_value = websocket_response_headers(context_value);
+    [[nodiscard]] task<std::optional<websocket_upgrade_commit<stream_type>>> operator()(
+        context& context_value, std::span<const http_header_view> response_headers_value) const {
         const auto handshake = make_websocket_server_handshake(
             dispatch_.parsed_.request_, {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
                                             .response_headers_ = response_headers_value,
@@ -50,28 +45,10 @@ struct http1_websocket_upgrade_operation final {
                                             .deflate_ = websocket_endpoint_.deflate()});
         context_access::commit_upgrade(context_value);
         if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake); ec) {
-            co_return;
+            co_return std::nullopt;
         }
         tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
-        const auto& deflate_config = websocket_endpoint_.deflate();
-        // Directions without context takeover borrow the worker's codecs, which
-        // outlive every connection, so they allocate no codec state here.
-        websocket_connection_.emplace(dispatch_.stream_, dispatch_.base_route_services_.worker(),
-            dispatch_.scanner_entry_, websocket_endpoint_.lifecycle(),
-            protocol_byte_limit::limited(dispatch_.options_.server_.max_websocket_message_bytes_),
-            &dispatch_.inbound_buffer_pool_, pending_frames_,
-            websocket_connection_options{.compression_ = handshake.compression(),
-                .compression_level_ = deflate_config.compression_level_,
-                .mem_level_ = deflate_config.mem_level_,
-                .shared_deflate_ = &dispatch_.options_.codecs_->websocket_deflate()});
-        co_await invoke_websocket_handler(
-            *websocket_connection_, dispatch_.scanner_entry_, resolved_.stream_handler(), context_value);
-    }
-
-    [[nodiscard]] task<void> operator()(connection_type& connection_value, std::exception_ptr failure) const {
-        return finish_websocket_session(connection_value, std::move(failure),
-            dispatch_.options_.connection_failure_,
-            dispatch_.base_route_services_.get_conn_info().remote().address());
+        co_return websocket_upgrade_commit<stream_type>(dispatch_.stream_, handshake.compression());
     }
 };
 
@@ -91,18 +68,14 @@ task<std::optional<http1_session_request_completion>> dispatch_http_websocket_ro
         failure->apply_required_response_headers(d.response_);
         co_return close_with_framework_response(d.response_, d.parsed_.connection_plan_);
     }
-    using upgrade_type = http1_websocket_upgrade_operation<stream_type>;
-    std::optional<typename upgrade_type::connection_type> websocket_connection;
-    upgrade_type upgrade{
-        .dispatch_ = d,
-        .tail_ = tail,
-        .resolved_ = resolved,
-        .websocket_endpoint_ = websocket_endpoint,
-        .pending_frames_ = pending_frames,
-        .websocket_connection_ = websocket_connection,
-    };
-    auto buffered = co_await run_http_upgrade_route(d.routes_, d.parsed_.request_,
-        resolved, d.request_memory_, d.base_route_services_, websocket_connection, upgrade, upgrade);
+    auto buffered = co_await execute_websocket_upgrade_session<stream_type>(
+        d.routes_, d.parsed_.request_, resolved, d.request_memory_, d.base_route_services_,
+        d.options_, d.scanner_entry_, d.inbound_buffer_pool_, pending_frames,
+        http1_websocket_upgrade_commit<stream_type>{
+            .dispatch_ = d,
+            .tail_ = tail,
+            .websocket_endpoint_ = websocket_endpoint,
+        });
     if (buffered) {
         d.response_ = std::move(*buffered);
         co_return finalize_closing_route_response(d.response_, d.parsed_.connection_plan_);

@@ -91,7 +91,7 @@ private:
     ruvia::scoped_capability_registration registration_;
 };
 
-ruvia::task<void> await_scoped_operation(ruvia::scoped_operation<void>& operation) {
+ruvia::task<void> await_scoped_operation(ruvia::task<void>& operation) {
     co_await std::move(operation);
 }
 
@@ -246,15 +246,15 @@ ruvia::task<throw_on_second_move> wait_and_return_throwing_result(std::pmr::stri
     co_return result;
 }
 
-ruvia::task<void> await_throwing_result(ruvia::scoped_operation<throw_on_second_move>& operation) {
+ruvia::task<void> await_throwing_result(ruvia::task<throw_on_second_move>& operation) {
     static_cast<void>(co_await std::move(operation));
 }
 
-ruvia::task<owned_result> await_scoped_result(ruvia::scoped_operation<owned_result>& operation) {
+ruvia::task<owned_result> await_scoped_result(ruvia::task<owned_result>& operation) {
     co_return co_await std::move(operation);
 }
 
-ruvia::task<bool> await_scoped_bool(ruvia::scoped_operation<bool>& operation) {
+ruvia::task<bool> await_scoped_bool(ruvia::task<bool>& operation) {
     co_return co_await std::move(operation);
 }
 
@@ -353,7 +353,7 @@ ruvia::task<void> cold_with_reentrant_input(reentrant_frame_input input) {
 
 struct sibling_drop_input final {
     sibling_drop_input(counting_resource& resource,
-        std::unique_ptr<ruvia::scoped_operation<void>>& sibling)
+        std::unique_ptr<ruvia::task<void>>& sibling)
         : payload_(1024, 's', &resource),
           sibling_(&sibling) {}
     sibling_drop_input(const sibling_drop_input&) = delete;
@@ -369,7 +369,7 @@ struct sibling_drop_input final {
     }
 
     std::pmr::string payload_;
-    std::unique_ptr<ruvia::scoped_operation<void>>* sibling_;
+    std::unique_ptr<ruvia::task<void>>* sibling_;
 };
 
 ruvia::task<void> cold_with_sibling_drop(sibling_drop_input input) {
@@ -871,9 +871,8 @@ RUVIA_TEST(scoped_operation_join_rescans_after_frame_cleanup_drops_a_sibling) {
     int expired_count = 0;
     std::size_t bytes_at_expire = std::numeric_limits<std::size_t>::max();
     test_scoped_capability capability(scope, expired_count, &resource, &bytes_at_expire);
-    std::unique_ptr<ruvia::scoped_operation<void>> sibling(
-        new auto(ruvia::make_scoped_operation(scope,
-            cold_with_payload(std::pmr::string(1024, 'p', &resource)))));
+    auto sibling = std::make_unique<ruvia::task<void>>(ruvia::make_scoped_operation(
+        scope, cold_with_payload(std::pmr::string(1024, 'p', &resource))));
     const auto sibling_allocations = resource.in_use_allocations_;
     auto operation = ruvia::make_scoped_operation(scope,
         cold_with_sibling_drop(sibling_drop_input(resource, sibling)));
@@ -1020,7 +1019,7 @@ RUVIA_TEST(scoped_capability_cleanup_can_reenter_scope_close_during_join_resume)
         static ruvia::task<void> wait_for_signal(ruvia::worker_signal& sig) {
             static_cast<void>(co_await sig.wait());
         }
-        static ruvia::task<void> run_operation(ruvia::scoped_operation<void>& op) {
+        static ruvia::task<void> run_operation(ruvia::task<void>& op) {
             co_await std::move(op);
         }
         static ruvia::task<void> run_join(ruvia::operation_scope& target_scope, bool& completed) {
@@ -1028,7 +1027,7 @@ RUVIA_TEST(scoped_capability_cleanup_can_reenter_scope_close_during_join_resume)
             completed = true;
         }
         static ruvia::task<void> drive(const ruvia::worker_handle& worker, ruvia::worker_signal& sig,
-            ruvia::operation_scope& target_scope, ruvia::scoped_operation<void>& op, bool& completed) {
+            ruvia::operation_scope& target_scope, ruvia::task<void>& op, bool& completed) {
             ruvia::task_scope tasks(worker);
             tasks.spawn(run_operation(op));
             tasks.spawn(run_join(target_scope, completed));

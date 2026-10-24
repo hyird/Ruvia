@@ -5,6 +5,7 @@
 // Keep writes in one explicit transaction when several entities must agree.
 // backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY for database transport.
 
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -90,9 +91,11 @@ auto migrations() {
 
 task<void> query_example(db_client& db) {
     auto employees = db.handle().repository<employee>();
+    const std::array<borrowed_text, 2> employee_relations{"department", "department.employees"};
+    const std::array<db_find_order, 1> employee_order{{{"id", db_order_direction::asc}}};
     const db_find_options employee_options{
-        .relations_ = {"department", "department.employees"},
-        .order_ = {{"id", db_order_direction::asc}},
+        .relations_ = employee_relations,
+        .order_ = employee_order,
         .take_ = 25,
     };
     auto [rows, total] = co_await employees.find_and_count(employee_options);
@@ -169,7 +172,9 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
             co_await memberships.upsert(membership, {.conflict_paths_ = {"student_id", "course_id"}, .do_nothing_ = true});
         }
         co_await query_example(db);
-        const db_find_options department_page_options{.relations_ = {"employees"}, .order_ = {{"id"}}, .take_ = 1};
+        const std::array<borrowed_text, 1> department_relations{"employees"};
+        const std::array<db_find_order, 1> id_order{{{"id"}}};
+        const db_find_options department_page_options{.relations_ = department_relations, .order_ = id_order, .take_ = 1};
         auto [department_page, department_count] = co_await departments.find_and_count(department_page_options);
         if (department_page.size() != 1 || department_count != 2 || department_page[0].get<"employees">().size() != 2) {
             throw std::runtime_error("one-to-many pagination truncated the employees");
@@ -193,7 +198,8 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
         if (user_rows.size() != 1 || profile_rows.size() != 1 || user_rows[0].get<"profile">().get<"id">() != 1 || profile_rows[0].get<"user">().get<"id">() != 1) {
             throw std::runtime_error("one-to-one owning and inverse mapping failed");
         }
-        const db_find_options course_options{.relations_ = {"courses.students"}, .order_ = {{"id"}}, .take_ = 1};
+        const std::array<borrowed_text, 1> course_relations{"courses.students"};
+        const db_find_options course_options{.relations_ = course_relations, .order_ = id_order, .take_ = 1};
         auto [course_rows, student_count] = co_await students.find_and_count(course_options);
         if (course_rows.size() != 1 || student_count != 2 || course_rows[0].get<"courses">().size() != 2) {
             throw std::runtime_error("many-to-many pagination truncated the courses");

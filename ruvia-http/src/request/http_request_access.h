@@ -91,7 +91,7 @@ struct http_request_access final {
     // Binding happens before allocation; changing the auxiliary request resource
     // later does not change ownership of an existing descriptor block.
     static void reserve_headers(http_request& request, std::size_t count) {
-        if (count > max_http_header_fields || !request.headers_.empty()) {
+        if (count > UINT16_MAX || !request.headers_.empty()) {
             throw std::logic_error("invalid request header block reservation");
         }
         request.headers_.reserve(count, request.resource());
@@ -104,7 +104,7 @@ struct http_request_access final {
 
     static bool add_header(
         http_request& request, http_header_view header_value, std::size_t known_slot) {
-        if (request.headers_.size() == max_http_header_fields) {
+        if (request.headers_.size() == UINT16_MAX) {
             return false;
         }
         const auto kind = known_slot < cached_header_slots
@@ -112,7 +112,7 @@ struct http_request_access final {
                               : std::uint8_t{0};
         request.headers_.append(header_value, kind);
         if (known_slot < cached_header_slots) {
-            request.cached_headers_[known_slot] = static_cast<std::uint8_t>(request.headers_.size());
+            request.cached_headers_[known_slot] = static_cast<std::uint16_t>(request.headers_.size());
         }
         return true;
     }

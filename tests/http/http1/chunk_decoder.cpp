@@ -506,18 +506,15 @@ RUVIA_TEST(chunked_body_decoder_rejects_bare_lf_without_waiting_for_crlf) {
     }
 }
 
-RUVIA_TEST(chunked_body_decoder_rejects_excess_trailer_fields) {
+RUVIA_TEST(chunked_body_decoder_accepts_many_trailer_fields_within_byte_budget) {
     std::string fields_value = "0\r\n";
-    for (std::size_t index = 0; index <= ruvia::max_http_header_fields; ++index) {
+    for (std::size_t index = 0; index < 80; ++index) {
         fields_value.append("X-Trace: ok\r\n");
     }
     fields_value.append("\r\n");
     http1_chunked_body_decoder field_limit;
     const auto field_result = field_limit.decode(fields_value);
-    RUVIA_CHECK(field_result.failure() != nullptr);
-    if (const auto* failure = field_result.failure()) {
-        RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
-    }
+    RUVIA_CHECK(field_result.complete() != nullptr);
 }
 
 RUVIA_TEST(chunked_body_decoder_bounds_trailers_independently_of_input_segmentation) {

@@ -5,8 +5,10 @@
 #include <exception>
 #include <memory>
 
+#include <asio/io_context.hpp>
+
 #include "ruvia/core/move_only_function.h"
-#include "ruvia/core/worker_runtime_context.h"
+#include "ruvia/core/worker_handle.h"
 
 namespace ruvia {
 
@@ -18,6 +20,7 @@ enum class worker_runtime_state : std::uint8_t {
 };
 
 class worker_group;
+class worker_runtime_context;
 
 namespace detail {
 struct event_loop_state;

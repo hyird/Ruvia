@@ -114,7 +114,7 @@ task<std::pmr::vector<redis_value>> redis_batch<mode>::execute_owned(
 }
 
 template <redis_batch_mode mode>
-scoped_operation<std::pmr::vector<redis_value>> redis_batch<mode>::exec() && {
+task<std::pmr::vector<redis_value>> redis_batch<mode>::exec() && {
     auto& scope = registration_.scope();
     auto payload_value = consume();
     return make_scoped_operation(scope, execute_owned(scope, std::move(payload_value)));

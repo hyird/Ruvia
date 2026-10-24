@@ -130,26 +130,26 @@ public:
     // The returned view remains valid until the next body operation starts. A null
     // optional is the only end-of-body signal; an empty data chunk is never
     // returned. Reads are linear and concurrent operations are rejected.
-    [[nodiscard]] scoped_operation<std::optional<std::span<const std::byte>>> read() &;
-    scoped_operation<std::optional<std::span<const std::byte>>> read() && = delete;
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() &;
+    task<std::optional<std::span<const std::byte>>> read() && = delete;
 
     // Reads one chunk as characters, without decoding or charset validation.
     // Encoded characters may straddle chunks. Uses the same linear read lane.
-    [[nodiscard]] scoped_operation<std::optional<std::string_view>> text() &;
-    scoped_operation<std::optional<std::string_view>> text() && = delete;
+    [[nodiscard]] task<std::optional<std::string_view>> text() &;
+    task<std::optional<std::string_view>> text() && = delete;
 
     // Collects the unread remainder of this same stream. max_bytes is a caller
     // bound in addition to the origin's transport bound.
-    [[nodiscard]] scoped_operation<http_client_response_bytes> read_all(
+    [[nodiscard]] task<http_client_response_bytes> read_all(
         std::size_t max_bytes = default_max_buffered_body_bytes) &;
-    scoped_operation<http_client_response_bytes> read_all(
+    task<http_client_response_bytes> read_all(
         std::size_t = default_max_buffered_body_bytes) && = delete;
 
     // Copies this same stream into a controller response stream with natural
     // backpressure. This is the common forwarding path for both small and
     // long-lived upstream responses.
-    [[nodiscard]] scoped_operation<void> pipe_to(response_stream_writer& output) &;
-    scoped_operation<void> pipe_to(response_stream_writer&) && = delete;
+    [[nodiscard]] task<void> pipe_to(response_stream_writer& output) &;
+    task<void> pipe_to(response_stream_writer&) && = delete;
 
     [[nodiscard]] bool complete() const noexcept;
 
@@ -253,21 +253,21 @@ public:
         return response_.informational_responses();
     }
     std::span<const http_client_informational_response> informational_responses() const&& = delete;
-    [[nodiscard]] scoped_operation<std::optional<std::span<const std::byte>>> read() &;
-    scoped_operation<std::optional<std::span<const std::byte>>> read() && = delete;
-    [[nodiscard]] scoped_operation<void> write(std::string_view bytes) &;
-    scoped_operation<void> write(std::string_view) && = delete;
-    [[nodiscard]] scoped_operation<void> write(std::span<const std::byte> bytes) &;
-    scoped_operation<void> write(std::span<const std::byte>) && = delete;
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() &;
+    task<std::optional<std::span<const std::byte>>> read() && = delete;
+    [[nodiscard]] task<void> write(std::string_view bytes) &;
+    task<void> write(std::string_view) && = delete;
+    [[nodiscard]] task<void> write(std::span<const std::byte> bytes) &;
+    task<void> write(std::span<const std::byte>) && = delete;
     template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] scoped_operation<void> write(string_type&& bytes) & {
+    [[nodiscard]] task<void> write(string_type&& bytes) & {
         return write_owned(std::move(bytes));
     }
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> write(string_type&&) && = delete;
+    task<void> write(string_type&&) && = delete;
     // A successful finish stays idempotent after transport retirement.
-    [[nodiscard]] scoped_operation<void> finish() &;
-    scoped_operation<void> finish() && = delete;
+    [[nodiscard]] task<void> finish() &;
+    task<void> finish() && = delete;
     void abort() & noexcept;
     void abort() && = delete;
     // Transfers tunnel ownership to the Capsule Protocol adapter.
@@ -286,7 +286,7 @@ private:
     friend class detail::http_capsule_stream_state;
     friend class http_capsule_stream;
     explicit http_client_tunnel(http_client_response response) noexcept;
-    [[nodiscard]] scoped_operation<void> write_owned(std::pmr::string&& bytes);
+    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes);
     void release() noexcept;
     http_client_response response_;
 };
@@ -360,8 +360,8 @@ public:
     const http_push_request& request() const&& = delete;
     // Transfers the response once, when the operation is started. Promise
     // metadata remains available through this push until it is destroyed.
-    [[nodiscard]] scoped_operation<http_client_response> response() &;
-    scoped_operation<http_client_response> response() && = delete;
+    [[nodiscard]] task<http_client_response> response() &;
+    task<http_client_response> response() && = delete;
 
 private:
     friend class detail::http_client_pool;
@@ -380,18 +380,18 @@ class http_client_request_body_writer final {
 public:
     http_client_request_body_writer(const http_client_request_body_writer&) = delete;
     http_client_request_body_writer& operator=(const http_client_request_body_writer&) = delete;
-    [[nodiscard]] scoped_operation<void> write(std::span<const std::byte> bytes) &;
-    scoped_operation<void> write(std::span<const std::byte>) && = delete;
-    [[nodiscard]] scoped_operation<void> write(std::string_view bytes) &;
-    scoped_operation<void> write(std::string_view) && = delete;
+    [[nodiscard]] task<void> write(std::span<const std::byte> bytes) &;
+    task<void> write(std::span<const std::byte>) && = delete;
+    [[nodiscard]] task<void> write(std::string_view bytes) &;
+    task<void> write(std::string_view) && = delete;
     template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] scoped_operation<void> write(string_type&& bytes) & {
+    [[nodiscard]] task<void> write(string_type&& bytes) & {
         return write_owned(std::move(bytes));
     }
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> write(string_type&&) && = delete;
-    [[nodiscard]] scoped_operation<void> end(std::span<const http_header_view> trailers = {}) &;
-    scoped_operation<void> end(std::span<const http_header_view> = {}) && = delete;
+    task<void> write(string_type&&) && = delete;
+    [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}) &;
+    task<void> end(std::span<const http_header_view> = {}) && = delete;
     [[nodiscard]] bool complete() const noexcept;
 
 private:
@@ -399,7 +399,7 @@ private:
     explicit http_client_request_body_writer(detail::http_client_response_state* state_value) noexcept
         : state_(state_value) {}
     ~http_client_request_body_writer() = default;
-    [[nodiscard]] scoped_operation<void> write_owned(std::pmr::string&& bytes);
+    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes);
     detail::http_client_response_state* state_;
 };
 
@@ -417,8 +417,8 @@ public:
         return body_;
     }
     http_client_request_body_writer& body() && = delete;
-    [[nodiscard]] scoped_operation<http_client_response> response() &;
-    scoped_operation<http_client_response> response() && = delete;
+    [[nodiscard]] task<http_client_response> response() &;
+    task<http_client_response> response() && = delete;
 
 private:
     friend class detail::http_client_pool;
@@ -435,15 +435,15 @@ public:
     http_client_handle& operator=(const http_client_handle&) = delete;
 
     [[nodiscard]] http_client_handle with_options(operation_options options) const;
-    [[nodiscard]] scoped_operation<http_client_response> send(
+    [[nodiscard]] task<http_client_response> send(
         const http_client_request_view& request) const;
-    [[nodiscard]] scoped_operation<http_client_exchange> open_request(
+    [[nodiscard]] task<http_client_exchange> open_request(
         const http_client_request_view& head, http_client_upload_config upload = {}) const;
-    [[nodiscard]] scoped_operation<http_client_tunnel_result> open_tunnel(const http_client_tunnel_request_view& request, http_client_tunnel_config config = {}) const;
+    [[nodiscard]] task<http_client_tunnel_result> open_tunnel(const http_client_tunnel_request_view& request, http_client_tunnel_config config = {}) const;
     // Negotiates RFC 9298 and returns an accepted tunnel or ordinary rejection.
     // The proxy authority comes from this registered origin. Capsule-Protocol
     // and HTTP/1 Upgrade fields are driver-owned. Use accepted.tunnel()->udp().
-    [[nodiscard]] scoped_operation<http_client_tunnel_result> open_udp_tunnel(const http_client_udp_tunnel_request_view& request, http_client_tunnel_config config = {}) const;
+    [[nodiscard]] task<http_client_tunnel_result> open_udp_tunnel(const http_client_udp_tunnel_request_view& request, http_client_tunnel_config config = {}) const;
     [[nodiscard]] http_client_stats stats() const;
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const;
     [[nodiscard]] std::optional<http_client_push> next_push() const;

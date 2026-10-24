@@ -83,7 +83,7 @@ private:
         for (const auto& header : source_value.headers_) {
             result_value.push_back(source_value.protocol_ == websocket_client_protocol::http2
                                        ? http_header::copy_with_lowercase_name(header.name(), header.value(), resource)
-                                       : http_header::copy_of(header.name(), header.value(), resource));
+                                       : http_header(header.name(), header.value(), resource));
         }
         return result_value;
     }
@@ -93,7 +93,7 @@ private:
         std::pmr::vector<std::pmr::string> result_value(resource);
         result_value.reserve(source_value.subprotocols_.size());
         for (const auto& subprotocol : source_value.subprotocols_) {
-            result_value.emplace_back(subprotocol);
+            result_value.emplace_back(subprotocol.view());
         }
         return result_value;
     }

@@ -72,11 +72,13 @@ task<void> demonstrate(db_client& db) {
     labels.emplace_back("telemetry");
     labels.emplace_back("zone-a");
     input.set<"labels">(std::move(labels));
-    const db_upsert_options upsert_options{.conflict_paths_ = {"id"}, .skip_update_if_no_values_changed_ = true};
+    const std::array<borrowed_text, 1> upsert_conflict_paths{"id"};
+    const db_upsert_options upsert_options{.conflict_paths_ = upsert_conflict_paths, .skip_update_if_no_values_changed_ = true};
     co_await devices.upsert(input, upsert_options);
 
+    const std::array<db_find_order, 1> find_order{{{"id", db_order_direction::asc}}};
     const db_find_options find_options{.where_ = device::column<"id">().between(1, 100) && device::column<"name">().like("%station%") && device::column<"labels">().array_contains({"telemetry"}),
-        .order_ = {{"id", db_order_direction::asc}},
+        .order_ = find_order,
         .take_ = 20};
     auto [found, total] = co_await devices.find_and_count(find_options);
     std::cout << "total=" << total << '\n';
@@ -152,7 +154,8 @@ task<void> demonstrate(db_client& db) {
 task<void> demonstrate_cache(db_client& db) {
     auto handle = db.handle();
     auto devices = handle.repository<device>();
-    const db_find_options options{.order_ = {{"id"}}, .take_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .milliseconds_ = std::chrono::seconds(30)}};
+    const std::array<db_find_order, 1> cache_order{{{"id"}}};
+    const db_find_options options{.order_ = cache_order, .take_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .milliseconds_ = std::chrono::seconds(30)}};
     auto [page, total] = co_await devices.find_and_count(options);
     std::cout << "cached page=" << page.size() << ", total=" << total << '\n';
     auto query = devices.query_builder();

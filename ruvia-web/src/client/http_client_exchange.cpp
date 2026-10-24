@@ -101,10 +101,10 @@ void http_client_exchange::release() noexcept {
     body_.state_ = nullptr;
 }
 
-scoped_operation<void> http_client_request_body_writer::write(std::span<const std::byte> bytes_value) & {
+task<void> http_client_request_body_writer::write(std::span<const std::byte> bytes_value) & {
     return write(std::string_view(reinterpret_cast<const char*>(bytes_value.data()), bytes_value.size()));
 }
-scoped_operation<void> http_client_request_body_writer::write(std::string_view bytes_value) & {
+task<void> http_client_request_body_writer::write(std::string_view bytes_value) & {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
     }
@@ -115,7 +115,7 @@ scoped_operation<void> http_client_request_body_writer::write(std::string_view b
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
         detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::pmr::string(bytes_value, state_->resource_)}));
 }
-scoped_operation<void> http_client_request_body_writer::write_owned(std::pmr::string&& bytes_value) {
+task<void> http_client_request_body_writer::write_owned(std::pmr::string&& bytes_value) {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
     }
@@ -126,7 +126,7 @@ scoped_operation<void> http_client_request_body_writer::write_owned(std::pmr::st
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
         detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), detail::rebind_owned_storage(bytes_value, state_->resource_)}));
 }
-scoped_operation<void> http_client_request_body_writer::end(std::span<const http_header_view> fields_value) & {
+task<void> http_client_request_body_writer::end(std::span<const http_header_view> fields_value) & {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
     }
@@ -144,7 +144,7 @@ bool http_client_request_body_writer::complete() const noexcept {
     return state_ == nullptr || state_->upload_->output_.ended_;
 }
 
-scoped_operation<http_client_response> http_client_exchange::response() & {
+task<http_client_response> http_client_exchange::response() & {
     auto* state_value = response_.state_;
     if (state_value == nullptr || state_value->upload_->response_taken_) {
         throw std::logic_error("HTTP exchange response has already been transferred");

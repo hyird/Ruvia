@@ -76,7 +76,7 @@ task<void> websocket_client_state::join_transports() {
     }
 }
 
-scoped_operation<void> websocket_client_state::close(
+task<void> websocket_client_state::close(
     websocket_close_options options, const operation_options& operation_options_value) {
     require_current();
     std::pmr::string reason(options.reason_.view(), memory_.resource());

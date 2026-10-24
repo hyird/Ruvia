@@ -24,6 +24,9 @@ class controller_middleware_descriptor;
 template <middleware middleware_type, typename args_type>
 [[nodiscard]] controller_middleware_descriptor describe_middleware(const void* args) noexcept;
 
+template <route_policy policy_type>
+[[nodiscard]] constexpr controller_middleware_descriptor describe_route_policy() noexcept;
+
 class controller_middleware_descriptor final {
 public:
     using invoke_type = route_middleware::invoke_type;
@@ -92,6 +95,8 @@ public:
 private:
     template <middleware middleware_type, typename args_type>
     friend controller_middleware_descriptor describe_middleware(const void* args) noexcept;
+    template <route_policy policy_type>
+    friend constexpr controller_middleware_descriptor describe_route_policy() noexcept;
 
     constexpr controller_middleware_descriptor(invoke_type invoke, create_type create, destroy_type destroy,
         const void* args, const void* validated_model_type_key, bool uses_route_rate_limit,

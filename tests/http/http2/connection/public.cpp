@@ -3275,8 +3275,8 @@ RUVIA_TEST(http2_public_received_te_accepts_empty_lists_without_dropping_fields)
     }
 }
 
-RUVIA_TEST(http2_public_normalized_request_capacity_rejects_only_the_oversized_stream) {
-    for (const std::size_t fields : {ruvia::max_http_header_fields - 1, ruvia::max_http_header_fields}) {
+RUVIA_TEST(http2_public_normalized_request_capacity_accepts_many_fields_within_byte_budget) {
+    for (const std::size_t fields : {std::size_t{63}, std::size_t{80}}) {
         for (const bool explicit_host : {false, true}) {
             for (const unsigned cookies : {0U, 1U, 2U}) {
                 std::pmr::unsynchronized_pool_resource resource;
@@ -3307,7 +3307,6 @@ RUVIA_TEST(http2_public_normalized_request_capacity_rejects_only_the_oversized_s
                 RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
                 const auto normalized = fields - cookies + static_cast<std::size_t>(cookies != 0) +
                                         static_cast<std::size_t>(!explicit_host);
-                const bool oversized = normalized > ruvia::max_http_header_fields;
                 unsigned first_heads = 0;
                 unsigned first_ends = 0;
                 unsigned resets = 0;
@@ -3347,9 +3346,9 @@ RUVIA_TEST(http2_public_normalized_request_capacity_rejects_only_the_oversized_s
                         }
                     }
                 }
-                RUVIA_CHECK(first_heads == (oversized ? 0U : 1U));
-                RUVIA_CHECK(first_ends == (oversized ? 0U : 1U));
-                RUVIA_CHECK(resets == (oversized ? 1U : 0U));
+                RUVIA_CHECK(first_heads == 1U);
+                RUVIA_CHECK(first_ends == 1U);
+                RUVIA_CHECK(resets == 0U);
                 RUVIA_CHECK(following_heads == 1 && following_ends == 1 && !server.connection_error());
             }
         }

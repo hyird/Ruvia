@@ -10,8 +10,7 @@ namespace ruvia::detail {
 // Representation-independent field-section accounting. The fixed 32-byte
 // charge matches HTTP/2's decoded header-list definition and also reserves a
 // conservative metadata budget for protocols whose wire syntax is smaller.
-// Pseudo-fields participate in the byte budget but are counted separately from
-// max_http_header_fields by the protocol state that owns them.
+// Pseudo-fields participate in the byte budget alongside regular fields.
 class http_header_section_size final {
 public:
     explicit http_header_section_size(std::size_t limit = max_http_header_bytes) noexcept

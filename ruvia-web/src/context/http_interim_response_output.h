@@ -19,7 +19,7 @@ public:
           target_(target),
           write_(write) {}
 
-    [[nodiscard]] scoped_operation<void> inform(const http_interim_response_head& response);
+    [[nodiscard]] task<void> inform(const http_interim_response_head& response);
     // Answers a 100-continue expectation before the body is read, on the same
     // lane as inform() so the two heads never interleave. A final response
     // that has started already answered the expectation, and RFC 9110 §15.2

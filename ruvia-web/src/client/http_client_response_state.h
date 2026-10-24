@@ -96,7 +96,7 @@ public:
                 throw http_client_error(http_client_error::code_type::protocol_error, "informational response metadata exceeds byte limit");
             }
             if constexpr (!transferring) {
-                head.headers_.push_back(http_header::copy_of(field.name(), field.value(), resource_));
+                head.headers_.emplace_back(field.name(), field.value(), resource_);
             }
         }
         if constexpr (transferring) {

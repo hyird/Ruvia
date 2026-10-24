@@ -22,9 +22,11 @@
 
 namespace ruvia {
 
+inline constexpr std::size_t max_websocket_subprotocols = 64;
+
 // Allocation-free validated RFC 6455 subprotocol list, suitable for server
 // route configuration and parsing offered protocol lists. Capacity is a product
-// limit of max_http_header_fields distinct protocols across all list elements;
+// limit of max_websocket_subprotocols distinct protocols across all list elements;
 // a handshake offering more is rejected as invalid rather than truncated.
 class websocket_subprotocol_set final {
 public:
@@ -64,7 +66,7 @@ public:
     }
 
 private:
-    std::array<std::string_view, max_http_header_fields> protocols_{};
+    std::array<std::string_view, max_websocket_subprotocols> protocols_{};
     std::size_t size_{0};
 };
 

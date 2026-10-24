@@ -65,7 +65,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
             // then the handler runs. A response stream commits it lazily with
             // its head, so the handler may still change the session first.
             auto terminal = [&handler_invoked, &handler, &route](context& terminal_context) -> task<void> {
-                if (route.endpoint().response_stream() == nullptr && terminal_context.try_session()) {
+                if (route.endpoint().response_stream() == nullptr && session_access::available(terminal_context)) {
                     co_await session_access::commit(terminal_context);
                 }
                 handler_invoked = true;

@@ -95,7 +95,7 @@ void publish_body_progress(http_client_response_state& state_value,
         state_value.data_signal_.notify();
     } else if (const auto* trailers = decoded.trailers()) {
         const auto ok = visit_http_response_trailers(trailers->bytes(), [&](std::string_view name, std::string_view value) {
-            state_value.trailers_.push_back(http_header::copy_of(name, value, state_value.resource_));
+            state_value.trailers_.emplace_back(name, value, state_value.resource_);
             return true;
         });
         if (!ok) {

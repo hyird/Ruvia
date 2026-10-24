@@ -18,18 +18,18 @@ struct context_body_read_observation final {
     std::optional<ruvia::http_status_code> error_status_;
 };
 
-inline std::unique_ptr<ruvia::scoped_operation<std::string_view>> make_expired_context_text_read() {
-    std::unique_ptr<ruvia::scoped_operation<std::string_view>> operation;
+inline std::unique_ptr<ruvia::task<std::string_view>> make_expired_context_text_read() {
+    std::unique_ptr<ruvia::task<std::string_view>> operation;
     (void)context_request_test::with_context(ruvia::test_request::post("/").body("body"),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
-            operation.reset(new ruvia::scoped_operation<std::string_view>(context_value.req().text()));
+            operation.reset(new ruvia::task<std::string_view>(context_value.req().text()));
             co_return;
         });
     return operation;
 }
 
 inline ruvia::task<void> await_expired_context_text_read(
-    ruvia::scoped_operation<std::string_view>& operation, bool& rejected) {
+    ruvia::task<std::string_view>& operation, bool& rejected) {
     try {
         (void)co_await std::move(operation);
     } catch (const std::logic_error&) {

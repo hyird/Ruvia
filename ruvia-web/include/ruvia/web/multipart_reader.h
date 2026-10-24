@@ -32,8 +32,8 @@ public:
     /// Returns one typed chunk of the current multipart part. All returned views
     /// remain valid only until the next read operation starts, parent body-reader
     /// expiry, or this reader's destruction. Unstarted read operations may coexist.
-    [[nodiscard]] scoped_operation<std::optional<multipart_stream_part>> read() &;
-    scoped_operation<std::optional<multipart_stream_part>> read() && = delete;
+    [[nodiscard]] task<std::optional<multipart_stream_part>> read() &;
+    task<std::optional<multipart_stream_part>> read() && = delete;
 
 private:
     struct receiving_state_type final {

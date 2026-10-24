@@ -10,7 +10,7 @@
 
 namespace ruvia {
 
-scoped_operation<std::optional<multipart_stream_part>> multipart_reader::read() & {
+task<std::optional<multipart_stream_part>> multipart_reader::read() & {
     registration_.require_active();
     return ::ruvia::make_scoped_operation(operation_scope_, read_task());
 }

@@ -60,9 +60,7 @@ class validator final {
 public:
     using issue_list_type = std::pmr::vector<validation_issue>;
 
-    struct options_type final {
-        std::pmr::memory_resource* resource_{nullptr};
-    };
+    using options_type = model_options;
 
     validator()
         : validator(options_type{}) {}
@@ -101,14 +99,7 @@ public:
 
     ~validator() = default;
 
-    [[nodiscard]] bool full() const noexcept {
-        return issues_.size() >= max_validation_issues;
-    }
-
     validator& add(std::string_view field, std::string_view code, std::string_view message) & {
-        if (full()) {
-            return *this;
-        }
         issues_.push_back(validation_issue(
             {.field_ = field, .code_ = code, .message_ = message, .resource_ = resource()}));
         return *this;

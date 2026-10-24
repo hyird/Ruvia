@@ -242,12 +242,6 @@ struct request_head_write_plan final {
         header_facts.connection_options_.close() || generate_connection_close
             ? http1_close_policy::close_after_response
             : http1_close_policy::allow_reuse;
-    const std::size_t generated_fields = 1 + (explicit_content ? 1 : 0) + (expect_continue ? 1 : 0) +
-                                         (generate_connection_close ? 1 : 0);
-    if (headers.size() > max_http_header_fields - generated_fields) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::too_many_headers);
-    }
 
     // Reuse each decimal token in measurement and emission. CONNECT uses the
     // same port token for both its authority target and generated Host field.
@@ -352,8 +346,6 @@ std::string_view http1_client_request_prepare_error_message(
             return "invalid HTTP/1 CONNECT origin";
         case http1_client_request_prepare_error::invalid_header:
             return "invalid HTTP/1 client request header";
-        case http1_client_request_prepare_error::too_many_headers:
-            return "too many HTTP/1 client request headers";
         case http1_client_request_prepare_error::host_header_managed_by_writer:
             return "HTTP/1 client Host is managed by the writer";
         case http1_client_request_prepare_error::content_length_managed_by_writer:

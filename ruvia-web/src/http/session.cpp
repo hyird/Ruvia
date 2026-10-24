@@ -33,13 +33,6 @@ session context::session() {
     return ruvia::session(session_state());
 }
 
-std::optional<session> context::try_session() noexcept {
-    if (!session_state().available()) {
-        return std::nullopt;
-    }
-    return ruvia::session(session_state());
-}
-
 task<void> detail::session_access::commit(context& context_value) {
     auto& state_value = context_value.session_state();
     if (!state_value.begin_commit()) {

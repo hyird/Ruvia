@@ -49,9 +49,7 @@ void task_scope::spawn(task<void> task_value) & {
     if (join_started()) {
         throw std::logic_error("cannot spawn a task after task scope join started");
     }
-    if (task_value.handle_ == nullptr) {
-        throw std::logic_error("cannot spawn an empty ruvia::task");
-    }
+    task_value.prepare_direct_start();
 
     std::pmr::polymorphic_allocator<node_type> allocator(resource_);
     auto* node_value = allocator.new_object<node_type>(*this, std::move(task_value));
@@ -141,6 +139,7 @@ void task_scope::child_complete(void* raw) noexcept {
 
 void task_scope::finish(node_type* node_value) noexcept {
     bool notify_stop = false;
+    node_value->task_.prepare_direct_completion();
     try {
         node_value->task_.handle_.promise().result();
     } catch (...) {
@@ -150,7 +149,7 @@ void task_scope::finish(node_type* node_value) noexcept {
             notify_stop = true;
         }
     }
-
+    node_value->task_.finish_direct_completion();
     if (notify_stop) {
         request_stop();
     }

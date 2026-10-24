@@ -160,7 +160,7 @@ RUVIA_TEST(ws_subprotocol_offers_require_unique_http_tokens) {
                                        "Sec-WebSocket-Protocol: superchat, chat\r\n")));
 
     std::string too_many = "Sec-WebSocket-Protocol: ";
-    for (std::size_t i = 0; i <= ruvia::max_http_header_fields; ++i) {
+    for (std::size_t i = 0; i <= ruvia::max_websocket_subprotocols; ++i) {
         if (i != 0) {
             too_many.append(", ");
         }
@@ -420,16 +420,10 @@ RUVIA_TEST(ws_handshake_rejects_application_framing_and_invalid_fields) {
     RUVIA_CHECK(rejected);
 }
 
-RUVIA_TEST(ws_handshake_bounds_application_header_count_and_size) {
+RUVIA_TEST(ws_handshake_bounds_application_header_size) {
     const auto request = parse_request(valid_handshake());
-    const std::vector<ruvia::http_header_view> too_many(ruvia::max_http_header_fields, {"x", "v"});
-    bool count_rejected = false;
-    try {
-        (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = too_many});
-    } catch (const std::length_error&) {
-        count_rejected = true;
-    }
-    RUVIA_CHECK(count_rejected);
+    const std::vector<ruvia::http_header_view> many(80, {"x", "v"});
+    (void)ruvia::make_websocket_server_handshake(request, {.response_headers_ = many});
     const std::string oversized(ruvia::max_http_header_bytes, 'a');
     const std::array fields_value{ruvia::http_header_view("x", oversized)};
     bool size_rejected = false;

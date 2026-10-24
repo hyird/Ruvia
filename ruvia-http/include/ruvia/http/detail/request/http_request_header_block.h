@@ -60,7 +60,7 @@ public:
     }
 
     void reserve(std::size_t count, std::pmr::memory_resource* resource) {
-        if (count > max_http_header_fields) {
+        if (count > UINT16_MAX) {
             throw std::logic_error("request header block exceeds field limit");
         }
         if (count <= capacity_) {
@@ -80,15 +80,15 @@ public:
         kinds_ = replacement_kinds;
         resource_ = owner_value;
         size_ = size;
-        capacity_ = static_cast<std::uint8_t>(count);
+        capacity_ = static_cast<std::uint16_t>(count);
     }
 
     void append(http_header_view field, std::uint8_t kind) {
-        if (size_ == max_http_header_fields) {
+        if (size_ == UINT16_MAX) {
             throw std::logic_error("request header block is full");
         }
         if (size_ == capacity_) {
-            reserve((std::min)(max_http_header_fields,
+            reserve((std::min)(std::size_t{UINT16_MAX},
                         (std::max)(std::size_t{1}, std::size_t(capacity_) * 2)),
                 resource_);
         }
@@ -114,12 +114,11 @@ private:
         capacity_ = 0;
     }
 
-    static_assert(max_http_header_fields <= UINT8_MAX);
     http_header_view* fields_{nullptr};
     std::uint8_t* kinds_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
-    std::uint8_t size_{0};
-    std::uint8_t capacity_{0};
+    std::uint16_t size_{0};
+    std::uint16_t capacity_{0};
 };
 
 }  // namespace ruvia::detail

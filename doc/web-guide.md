@@ -211,7 +211,7 @@ for (const auto& worker : ruvia::app().workers()) {
 | 缓冲请求路由 | `RUVIA_METHOD(token, path, handler, ...)` | `task<http_response> handler(context&)` | 注册自定义扩展方法（如 `"PROPFIND"`，要求静态路径） |
 | 缓冲请求路由 | `RUVIA_ALL(path, handler, ...)` | `task<http_response> handler(context&)` | 同时注册 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`OPTIONS` |
 | 缓冲请求路由 | `RUVIA_ON(methods, paths, handler, ...)` | `task<http_response> handler(context&)` | 方法元组与路径元组的笛卡尔积批量注册 |
-| WebSocket | `RUVIA_GET_WS(path, handler, ...)` / `RUVIA_WS(path, handler, ...)` | `task<void> handler(context&)` | WebSocket 路由（首参可传可选的 `websocket_route_config`，后接中间件） |
+| WebSocket | `RUVIA_GET_WS(path, handler, ...)` | `task<void> handler(context&)` | WebSocket 路由（首参可传可选的 `websocket_route_config`，后接中间件） |
 | HTTP 隧道 | `RUVIA_CONNECT(authority, handler, ...)` | `task<void> handler(context&)` | `CONNECT` 字节流隧道（`authority` 为 `"host:port"` 或 `"*"`，首参可传可选的 `http_tunnel_route_config`） |
 | 扩展 CONNECT 隧道 | `RUVIA_CONNECT_PROTOCOL(proto, path, handler, ...)` | `task<void> handler(context&)` | Extended `CONNECT` 路由（如 `"connect-udp"`，首参可传可选的 `http_tunnel_route_config`） |
 
@@ -284,7 +284,7 @@ ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
 | `http_response file(file_response_options options) const` | 发送磁盘文件响应（支持自动 Range 与条件请求处理） |
 | `http_response static_file(const static_root& root, static_file_response_options options) const` | 从预构建的 `static_root` 快照发送静态文件响应 |
 | `http_response error(http_error_info_options options) const` | 构造标准 JSON 错误响应 |
-| `scoped_operation<http_response> not_found()` | 调用当前匹配的 404 处理器生成响应 |
+| `task<http_response> not_found()` | 调用当前匹配的 404 处理器生成响应 |
 | `void respond(http_response&& response)` / `const http_response* response() const noexcept` | 在返回 `task<void>` 的中间件中提前提交响应或检查下游响应 |
 
 ### 3.3 进程内子请求（`"ruvia/web/context.h"`）
@@ -362,7 +362,6 @@ public:
 
 // 在下游路由处理器中读取：
 const auto& user = c.request_state<current_user>();
-// 或非抛异常探测：const auto* user_ptr = c.try_request_state<current_user>();
 ```
 
 ### 4.2 内置中间件与运维组件
@@ -467,7 +466,7 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
 
 - **JSON / Form 编解码**：
   - `T ruvia::from_json<T>(std::string_view json, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，模型字段校验失败抛携带 issues 的 `ruvia::http_error`）
-  - `std::pmr::string ruvia::to_json(const T& value, model_serialize_options options = {})`
+  - `std::pmr::string ruvia::to_json(const T& value, model_options options = {})`
   - `T ruvia::from_form<T>(std::string_view form, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，字段校验失败抛携带 issues 的 `ruvia::http_error`）
 - **零拷贝动态 JSON 视图（`"ruvia/web/model.h"`）**：
   - `ruvia::json_object::parse(std::string_view body, model_parse_options options = {})` / `ruvia::json_value::parse(std::string_view body, model_parse_options options = {})`（直接返回值，语法非法抛 `std::invalid_argument`）

@@ -117,8 +117,6 @@ std::string_view http1_interim_response_prepare_error_message(
     switch (error) {
         case http1_interim_response_prepare_error::invalid_header:
             return "invalid HTTP/1 interim response header";
-        case http1_interim_response_prepare_error::too_many_headers:
-            return "too many HTTP/1 interim response headers";
         case http1_interim_response_prepare_error::content_length_forbidden:
             return "Content-Length is forbidden on an interim response";
         case http1_interim_response_prepare_error::transfer_encoding_forbidden:
@@ -145,10 +143,6 @@ std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_
     http1_interim_response_prepare_error>
 prepare_http1_interim_response_head(
     const http_interim_response_head& response, std::span<char> head_buffer) noexcept {
-    if (response.headers().size() > max_http_header_fields) {
-        return http1_interim_response_prepare_error::too_many_headers;
-    }
-
     const auto reason_phrase = http_reason_phrase(response.status());
     const auto status_token = detail::http_status_code_token(response.status());
     http1_interim_header_facts facts;

@@ -16,7 +16,7 @@
 
 namespace {
 void add(std::vector<ruvia::http_header>& head, std::string_view name, std::string_view value) {
-    head.push_back(ruvia::http_header::copy_of(name, value, std::pmr::get_default_resource()));
+    head.emplace_back(name, value, std::pmr::get_default_resource());
 }
 }  // namespace
 

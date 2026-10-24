@@ -113,14 +113,14 @@ task<void> websocket_client_state::throw_protocol_error_after_flush(std::string_
     throw websocket_client_error(websocket_client_error::code_type::protocol_error, message);
 }
 
-scoped_operation<void> websocket_client_state::write(websocket_opcode opcode, std::string_view payload_value,
+task<void> websocket_client_state::write(websocket_opcode opcode, std::string_view payload_value,
     const operation_options& options, websocket_send_options send_options) {
     require_current();
     std::pmr::string owned(payload_value, memory_.resource());
     return write(opcode, std::move(owned), options, send_options);
 }
 
-scoped_operation<void> websocket_client_state::write(websocket_opcode opcode, std::pmr::string&& payload_value,
+task<void> websocket_client_state::write(websocket_opcode opcode, std::pmr::string&& payload_value,
     const operation_options& options, websocket_send_options send_options) {
     require_current();
     std::pmr::string owned(std::move(payload_value), memory_.resource());

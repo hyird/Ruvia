@@ -95,14 +95,6 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
     if (http2_remote_peer_half_closed(stream) && !stream.remote_content().terminal_length_valid()) {
         return header_decode_status::protocol_error;
     }
-    // The runtime view adds Host when possible and coalesces Cookie. Check a
-    // full descriptor block before publishing its event, not in next_event().
-    // Client-side PUSH_PROMISE metadata has no synthesized Host descriptor.
-    if (role_ == http2_role::server &&
-        stream.remote_header_count() + static_cast<std::size_t>(stream.has_cookie()) == max_http_header_fields &&
-        http2_request_synthesizes_host(stream)) {
-        return header_decode_status::protocol_error;
-    }
     // NOTE (sans-I/O): resolve_stream_route is deliberately NOT called here -- route
     // resolution and body-mode selection are application policy the owner applies
     // after pulling the message_head event.

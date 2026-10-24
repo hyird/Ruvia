@@ -2,6 +2,7 @@
 
 #include <coroutine>
 #include <exception>
+#include <stdexcept>
 #include <utility>
 
 #include "ruvia/core/detail/task/task_promise.h"
@@ -40,11 +41,16 @@ public:
     task& operator=(const task&) = delete;
 
     task(task&& other) noexcept
-        : handle_(std::exchange(other.handle_, {})) {}
+        : handle_(std::exchange(other.handle_, {})),
+          registration_(std::move(other.registration_), std::addressof(handle_)) {}
     task& operator=(task&&) = delete;
 
     ~task() {
-        reset();
+        if (registration_.scoped()) {
+            registration_.retire_frame();
+        } else {
+            reset();
+        }
     }
 
     [[nodiscard]] detail::task_awaiter<t_type> operator co_await() &&;
@@ -63,18 +69,49 @@ private:
         requires detail::asio_task_result<u_type>
     friend auto detail::async_start_task(task<u_type>&&, completion_token_type&&);
     friend class task_scope;
+    template <typename u_type>
+    friend task<u_type> make_scoped_operation(operation_scope&, task<u_type>);
+    template <typename u_type>
+    friend task<u_type> make_scoped_operation(
+        operation_scope&, task<u_type>, void (*)(void*) noexcept, void*);
 
     explicit task(handle_type handle) noexcept
         : handle_(handle) {}
 
+    void prepare_direct_start() const {
+        if (registration_.scoped()) {
+            registration_.prepare_start();
+        }
+        if (handle_ == nullptr) {
+            throw std::logic_error("cannot start an empty ruvia::task");
+        }
+    }
+
     void start() noexcept {
+        if (registration_.scoped()) {
+            registration_.start();
+        }
         handle_.promise().control_.mark_started();
         handle_.resume();
     }
 
-    void reset() noexcept {
-        if (handle_ != nullptr) {
-            auto handle = std::exchange(handle_, {});
+    void prepare_direct_completion() const noexcept {
+        if (registration_.scoped()) {
+            registration_.prepare_completion();
+        }
+    }
+
+    void finish_direct_completion() noexcept {
+        if (registration_.scoped()) {
+            reset();
+            registration_.complete();
+        }
+    }
+
+    static void retire_cold_handle(void* target) noexcept {
+        auto& handle_ref = *static_cast<handle_type*>(target);
+        if (handle_ref != nullptr) {
+            auto handle = std::exchange(handle_ref, {});
             if (!handle.done() && handle.promise().control_.started()) {
                 std::terminate();
             }
@@ -82,7 +119,18 @@ private:
         }
     }
 
-    handle_type handle_;
+    void reset() noexcept {
+        retire_cold_handle(std::addressof(handle_));
+    }
+
+    void bind_scope(operation_scope& scope, void (*check_affinity)(void*) noexcept,
+        void* affinity_target) noexcept {
+        registration_.bind(
+            scope, std::addressof(handle_), &task::retire_cold_handle, check_affinity, affinity_target);
+    }
+
+    handle_type handle_{};
+    detail::scoped_operation_registration registration_{};
 };
 
 }  // namespace ruvia

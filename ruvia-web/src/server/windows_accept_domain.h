@@ -1,7 +1,9 @@
 #pragma once
 
-#if defined(_WIN32)
+#include <cstdint>
+#include <system_error>
 
+#if defined(_WIN32)
 #include <cstddef>
 #include <exception>
 #include <memory>
@@ -15,9 +17,19 @@
 namespace ruvia {
 class worker_runtime;
 }
+#endif
 
 namespace ruvia::detail {
 
+enum class accept_error_action : std::uint8_t { retry,
+    report_and_retry,
+    fail };
+
+// Peer disappearance and readiness races are normal accept outcomes. Resource
+// and network failures leave the listener usable but must remain observable.
+[[nodiscard]] accept_error_action classify_accept_error(const std::error_code& error) noexcept;
+
+#if defined(_WIN32)
 // A fixed origin x (listener owner x configured endpoint) accept matrix. Native
 // completions only publish into their reserved slot; the socket and all Web
 // callbacks stay on the origin. The domain outlives every attached worker.
@@ -55,6 +67,6 @@ private:
     std::unique_ptr<impl, pmr_object_deleter<impl>> impl_;
 };
 
-}  // namespace ruvia::detail
-
 #endif
+
+}  // namespace ruvia::detail

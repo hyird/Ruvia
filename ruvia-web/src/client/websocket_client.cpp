@@ -210,56 +210,56 @@ websocket_client_handle websocket_client_handle::with_options(operation_options 
         *state_, registration_.scope(), merge_operation_options(options_, std::move(options)));
 }
 
-scoped_operation<std::optional<websocket_message>> websocket_client_handle::read() const {
+task<std::optional<websocket_message>> websocket_client_handle::read() const {
     registration_.require_active();
     return state_->read(options_);
 }
 
-scoped_operation<void> websocket_client_handle::text(std::string_view payload_value, websocket_send_options options) const {
+task<void> websocket_client_handle::text(std::string_view payload_value, websocket_send_options options) const {
     registration_.require_active();
     return state_->write(websocket_opcode::text, payload_value, options_, options);
 }
 
-scoped_operation<void> websocket_client_handle::text_owned(std::pmr::string&& payload_value, websocket_send_options options) const {
+task<void> websocket_client_handle::text_owned(std::pmr::string&& payload_value, websocket_send_options options) const {
     registration_.require_active();
     return state_->write(websocket_opcode::text, std::move(payload_value), options_, options);
 }
 
-scoped_operation<void> websocket_client_handle::binary(std::string_view payload_value, websocket_send_options options) const {
+task<void> websocket_client_handle::binary(std::string_view payload_value, websocket_send_options options) const {
     registration_.require_active();
     return state_->write(websocket_opcode::binary, payload_value, options_, options);
 }
 
-scoped_operation<void> websocket_client_handle::binary(std::span<const std::byte> payload_value, websocket_send_options options) const {
+task<void> websocket_client_handle::binary(std::span<const std::byte> payload_value, websocket_send_options options) const {
     return binary(as_chars(payload_value), options);
 }
 
-scoped_operation<void> websocket_client_handle::binary_owned(std::pmr::string&& payload_value, websocket_send_options options) const {
+task<void> websocket_client_handle::binary_owned(std::pmr::string&& payload_value, websocket_send_options options) const {
     registration_.require_active();
     return state_->write(websocket_opcode::binary, std::move(payload_value), options_, options);
 }
 
-scoped_operation<void> websocket_client_handle::ping(std::string_view payload_value) const {
+task<void> websocket_client_handle::ping(std::string_view payload_value) const {
     registration_.require_active();
     return state_->write(websocket_opcode::ping, payload_value, options_);
 }
 
-scoped_operation<void> websocket_client_handle::ping_owned(std::pmr::string&& payload_value) const {
+task<void> websocket_client_handle::ping_owned(std::pmr::string&& payload_value) const {
     registration_.require_active();
     return state_->write(websocket_opcode::ping, std::move(payload_value), options_);
 }
 
-scoped_operation<void> websocket_client_handle::pong(std::string_view payload_value) const {
+task<void> websocket_client_handle::pong(std::string_view payload_value) const {
     registration_.require_active();
     return state_->write(websocket_opcode::pong, payload_value, options_);
 }
 
-scoped_operation<void> websocket_client_handle::pong_owned(std::pmr::string&& payload_value) const {
+task<void> websocket_client_handle::pong_owned(std::pmr::string&& payload_value) const {
     registration_.require_active();
     return state_->write(websocket_opcode::pong, std::move(payload_value), options_);
 }
 
-scoped_operation<void> websocket_client_handle::close(websocket_close_options options) const {
+task<void> websocket_client_handle::close(websocket_close_options options) const {
     registration_.require_active();
     return state_->close(options, options_);
 }

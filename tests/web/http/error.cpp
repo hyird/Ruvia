@@ -71,3 +71,23 @@ RUVIA_TEST(http_error_cross_resource_move_assignment_propagates_bad_alloc) {
     RUVIA_CHECK(caught);
     RUVIA_CHECK_EQ(source.info().message(), std::string_view(long_message));
 }
+
+RUVIA_TEST(http_error_preserves_all_validation_issues_beyond_64) {
+    ruvia::validator validator_value;
+    constexpr std::size_t issue_count = 80;
+    for (std::size_t index = 0; index < issue_count; ++index) {
+        validator_value.add("field_" + std::to_string(index), "invalid", "msg_" + std::to_string(index));
+    }
+    RUVIA_CHECK_EQ(validator_value.issues().size(), issue_count);
+
+    const http_error error({.status_ = ruvia::http_status::bad_request,
+        .code_ = "validation_failed",
+        .message_ = "request validation failed",
+        .validation_issues_ = validator_value.issues()});
+    RUVIA_CHECK_EQ(error.validation_issues().size(), issue_count);
+    RUVIA_CHECK_EQ(error.info().validation_issues().size(), issue_count);
+    if (error.validation_issues().size() == issue_count) {
+        RUVIA_CHECK_EQ(error.validation_issues().front().field(), std::string_view("field_0"));
+        RUVIA_CHECK_EQ(error.validation_issues().back().field(), std::string_view("field_79"));
+    }
+}

@@ -18,6 +18,10 @@ struct session_access final {
         context_value.session_state().bind(owner);
     }
 
+    [[nodiscard]] static bool available(const context& context_value) noexcept {
+        return context_value.session_state().available();
+    }
+
     // No callback chain: the bound session_middleware owns this capability's
     // single response-commit stage for both buffered and long-lived routes.
     [[nodiscard]] static task<void> commit(context& context);

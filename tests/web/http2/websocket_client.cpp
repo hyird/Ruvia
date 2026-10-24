@@ -154,12 +154,13 @@ void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer, b
     asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peer_failure = failure; });
     bool reset_observed = false;
     const auto run = [&]() -> ruvia::task<void> {
+        const std::array<ruvia::http_header_view, 1> headers{{{"X-Client", "unified"}}};
         ruvia::websocket_client_config config{
             .scheme_ = secure ? ruvia::websocket_scheme::wss : ruvia::websocket_scheme::ws,
             .protocol_ = ruvia::websocket_client_protocol::http2,
             .host_ = "127.0.0.1",
             .port_ = peer.local_endpoint().port(),
-            .headers_ = {{"X-Client", "unified"}},
+            .headers_ = headers,
             .deflate_ = {.enabled_ = true},
             .read_timeout_ = std::chrono::milliseconds(2000),
             .write_timeout_ = std::chrono::milliseconds(2000)};

@@ -74,16 +74,16 @@ public:
     http_capsule_stream(http_capsule_stream&& other) noexcept;
     http_capsule_stream& operator=(http_capsule_stream&& other) noexcept;
     ~http_capsule_stream();
-    [[nodiscard]] scoped_operation<std::optional<http_capsule>> read() &;
-    scoped_operation<std::optional<http_capsule>> read() && = delete;
+    [[nodiscard]] task<std::optional<http_capsule>> read() &;
+    task<std::optional<http_capsule>> read() && = delete;
     // Owns input before returning its cold operation. Unknown capsule types are
     // delivered to the protocol consumer, which must ignore types it does not understand.
-    [[nodiscard]] scoped_operation<void> write(std::uint64_t type, std::string_view payload) &;
-    scoped_operation<void> write(std::uint64_t, std::string_view) && = delete;
-    [[nodiscard]] scoped_operation<void> write(std::uint64_t type, std::span<const std::byte> payload) &;
-    scoped_operation<void> write(std::uint64_t, std::span<const std::byte>) && = delete;
-    [[nodiscard]] scoped_operation<void> finish() &;
-    scoped_operation<void> finish() && = delete;
+    [[nodiscard]] task<void> write(std::uint64_t type, std::string_view payload) &;
+    task<void> write(std::uint64_t, std::string_view) && = delete;
+    [[nodiscard]] task<void> write(std::uint64_t type, std::span<const std::byte> payload) &;
+    task<void> write(std::uint64_t, std::span<const std::byte>) && = delete;
+    [[nodiscard]] task<void> finish() &;
+    task<void> finish() && = delete;
     void abort() & noexcept;
     void abort() && = delete;
 
@@ -93,7 +93,7 @@ private:
     friend class http_udp_tunnel;
     friend class http_datagram_stream;
     [[nodiscard]] static task<std::optional<http_capsule>> read_owned(detail::capsule_state_pin pin);
-    [[nodiscard]] scoped_operation<void> write_frame(std::string_view prefix, std::string_view payload);
+    [[nodiscard]] task<void> write_frame(std::string_view prefix, std::string_view payload);
     explicit http_capsule_stream(http_tunnel& tunnel, http_capsule_config config);
     explicit http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config);
     void release() noexcept;
@@ -136,16 +136,16 @@ public:
     http_datagram_stream& operator=(const http_datagram_stream&) = delete;
     http_datagram_stream(http_datagram_stream&&) noexcept = default;
     http_datagram_stream& operator=(http_datagram_stream&&) noexcept = default;
-    [[nodiscard]] scoped_operation<std::optional<http_datagram>> read() &;
-    scoped_operation<std::optional<http_datagram>> read() && = delete;
-    [[nodiscard]] scoped_operation<void> send(std::span<const std::byte> payload) &;
-    scoped_operation<void> send(std::span<const std::byte>) && = delete;
-    [[nodiscard]] scoped_operation<void> send(std::string_view payload) &;
-    scoped_operation<void> send(std::string_view) && = delete;
-    [[nodiscard]] scoped_operation<void> finish() & {
+    [[nodiscard]] task<std::optional<http_datagram>> read() &;
+    task<std::optional<http_datagram>> read() && = delete;
+    [[nodiscard]] task<void> send(std::span<const std::byte> payload) &;
+    task<void> send(std::span<const std::byte>) && = delete;
+    [[nodiscard]] task<void> send(std::string_view payload) &;
+    task<void> send(std::string_view) && = delete;
+    [[nodiscard]] task<void> finish() & {
         return stream_.finish();
     }
-    scoped_operation<void> finish() && = delete;
+    task<void> finish() && = delete;
     void abort() & noexcept {
         stream_.abort();
     }
@@ -157,7 +157,7 @@ private:
     friend class http_udp_tunnel;
     explicit http_datagram_stream(http_capsule_stream&& stream);
     static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp);
-    [[nodiscard]] scoped_operation<void> send_payload(std::string_view payload, bool udp);
+    [[nodiscard]] task<void> send_payload(std::string_view payload, bool udp);
     http_capsule_stream stream_;
 };
 
@@ -176,16 +176,16 @@ public:
     http_udp_tunnel& operator=(const http_udp_tunnel&) = delete;
     http_udp_tunnel(http_udp_tunnel&&) noexcept = default;
     http_udp_tunnel& operator=(http_udp_tunnel&&) noexcept = default;
-    [[nodiscard]] scoped_operation<std::optional<http_datagram>> read() &;
-    scoped_operation<std::optional<http_datagram>> read() && = delete;
-    [[nodiscard]] scoped_operation<void> send(std::span<const std::byte> payload) &;
-    scoped_operation<void> send(std::span<const std::byte>) && = delete;
-    [[nodiscard]] scoped_operation<void> send(std::string_view payload) &;
-    scoped_operation<void> send(std::string_view) && = delete;
-    [[nodiscard]] scoped_operation<void> finish() & {
+    [[nodiscard]] task<std::optional<http_datagram>> read() &;
+    task<std::optional<http_datagram>> read() && = delete;
+    [[nodiscard]] task<void> send(std::span<const std::byte> payload) &;
+    task<void> send(std::span<const std::byte>) && = delete;
+    [[nodiscard]] task<void> send(std::string_view payload) &;
+    task<void> send(std::string_view) && = delete;
+    [[nodiscard]] task<void> finish() & {
         return stream_.finish();
     }
-    scoped_operation<void> finish() && = delete;
+    task<void> finish() && = delete;
     void abort() & noexcept {
         stream_.abort();
     }
@@ -216,22 +216,22 @@ public:
 
     // One running read and one running output operation are allowed.
     // An operation occupies its lane when started; unstarted operations may coexist.
-    [[nodiscard]] scoped_operation<std::optional<std::pmr::string>> read() &;
-    scoped_operation<std::optional<std::pmr::string>> read() && = delete;
-    [[nodiscard]] scoped_operation<void> write(std::string_view bytes) &;
-    scoped_operation<void> write(std::string_view) && = delete;
-    [[nodiscard]] scoped_operation<void> write(std::span<const std::byte> bytes) &;
-    scoped_operation<void> write(std::span<const std::byte>) && = delete;
+    [[nodiscard]] task<std::optional<std::pmr::string>> read() &;
+    task<std::optional<std::pmr::string>> read() && = delete;
+    [[nodiscard]] task<void> write(std::string_view bytes) &;
+    task<void> write(std::string_view) && = delete;
+    [[nodiscard]] task<void> write(std::span<const std::byte> bytes) &;
+    task<void> write(std::span<const std::byte>) && = delete;
     template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] scoped_operation<void> write(string_type&& bytes) & {
+    [[nodiscard]] task<void> write(string_type&& bytes) & {
         return write_owned(std::move(bytes));
     }
     template <std::same_as<std::pmr::string> string_type>
-    scoped_operation<void> write(string_type&&) && = delete;
+    task<void> write(string_type&&) && = delete;
 
     // Half-close the send direction; reading remains available until peer EOF.
-    [[nodiscard]] scoped_operation<void> finish() &;
-    scoped_operation<void> finish() && = delete;
+    [[nodiscard]] task<void> finish() &;
+    task<void> finish() && = delete;
     void abort() noexcept;
     // Borrow the established route tunnel for HTTP Datagrams. The route protocol
     // owns negotiation; use only in its negotiated datagram handler, exclusively
@@ -254,7 +254,7 @@ private:
     using abort_type = void (*)(void*) noexcept;
     http_tunnel(std::pmr::memory_resource& resource, const worker_handle& worker_value,
         void* target, read_type read, write_type write, finish_type finish_value, abort_type abort) noexcept;
-    [[nodiscard]] scoped_operation<void> write_owned(std::pmr::string&& bytes);
+    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes);
     void require_active() const;
     std::pmr::memory_resource& resource_;
     const worker_handle& worker_;

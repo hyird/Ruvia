@@ -164,10 +164,6 @@ public:
     explicit model_issue_sink(validator_type& validator_value) noexcept
         : validator_(validator_value) {}
 
-    [[nodiscard]] bool full() const noexcept {
-        return validator_.full();
-    }
-
     void add(const model_path& path, std::string_view code, std::string_view message) {
         if (!path_) {
             path_.emplace(validator_.resource());

@@ -643,7 +643,7 @@ RUVIA_TEST(validator_assignment_retains_destination_resource_after_source_retire
             ruvia::test::equivalent_tracking_resource source(upstream);
             ruvia::test::equivalent_tracking_resource target(upstream);
             RUVIA_CHECK(source.is_equal(target));
-            std::optional<ruvia::validator> destination(std::in_place, ruvia::validator::options_type{.resource_ = &target});
+            std::optional<ruvia::validator> destination(std::in_place, ruvia::model_options{.resource_ = &target});
             destination->add("seed", "old", std::string(180, 's'));
             {
                 ruvia::validator input({.resource_ = &source});
@@ -829,6 +829,23 @@ RUVIA_TEST(validator_model_paths_are_built_only_for_emitted_issues) {
         }
     }
     RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(validator_retains_all_model_validation_issues_beyond_64) {
+    lazy_path_envelope model;
+    model.set<"label">("ok");
+    auto& items = model.ensure<"items">();
+    constexpr std::size_t invalid_count = 80;
+    for (std::size_t index = 0; index < invalid_count; ++index) {
+        items.emplace_back().set<"value">(-1);
+    }
+    validator result;
+    ruvia::validate_model(model, result);
+    RUVIA_CHECK_EQ(result.issues().size(), invalid_count);
+    if (result.issues().size() == invalid_count) {
+        RUVIA_CHECK_EQ(result.issues().front().field(), std::string_view("items[0].value"));
+        RUVIA_CHECK_EQ(result.issues().back().field(), std::string_view("items[79].value"));
+    }
 }
 
 namespace {

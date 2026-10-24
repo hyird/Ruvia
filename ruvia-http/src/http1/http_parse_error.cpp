@@ -28,9 +28,6 @@ http_protocol_error http_parse_protocol_error(http_parse_error error) noexcept {
         case http_parse_error::invalid_upgrade:
             return http_protocol_error(
                 http_status::bad_request, "invalid_upgrade", "invalid Upgrade header");
-        case http_parse_error::too_many_headers:
-            return http_protocol_error(http_status::request_header_fields_too_large,
-                "too_many_headers", "too many request headers");
         case http_parse_error::missing_host:
             return http_protocol_error(
                 http_status::bad_request, "missing_host", "missing Host header");

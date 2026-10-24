@@ -363,8 +363,7 @@ template <typename fn_type>
                                                             : blocking_status::pool_stopped);
     }
 
-    auto waited = timeout.has_value() ? co_await receiver.wait_for(*timeout, std::move(stop_token_value))
-                                      : co_await receiver.wait(std::move(stop_token_value));
+    auto waited = co_await detail::make_one_shot_awaiter(receiver, timeout, std::move(stop_token_value));
     if (waited.has_value()) {
         auto& payload_value = waited.value();
         if (payload_value.status_ != blocking_status::completed) {

@@ -10,7 +10,9 @@
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_expectations.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_protocol_version.h"
 
@@ -43,12 +45,14 @@ struct parsed_request_header_slot {
 };
 
 using known_request_header_index_type = std::int16_t;
+inline constexpr std::size_t max_http1_request_header_fields =
+    max_http_header_bytes / http_field_line_overhead;
 
 struct parsed_request_header_block {
     http_header_slice method_;
     http_header_slice target_;
     http_protocol_version protocol_version_;
-    std::array<parsed_request_header_slot, max_http_header_fields> headers_;
+    std::array<parsed_request_header_slot, max_http1_request_header_fields> headers_;
     std::size_t header_count_{0};
     known_request_header_index_type host_header_index_{-1};
     http_connection_options connection_options_;

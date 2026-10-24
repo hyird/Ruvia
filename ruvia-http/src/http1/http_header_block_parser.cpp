@@ -146,10 +146,6 @@ namespace {
     std::size_t headers_end, std::size_t cursor_value, bool ignore_upgrade,
     parsed_request_header_block& block) {
     while (cursor_value < headers_end) {
-        if (block.header_count_ == max_http_header_fields) {
-            return http_parse_error::too_many_headers;
-        }
-
         const auto name_start = cursor_value;
         cursor_value += http_token_prefix_size({buffer.data() + cursor_value, headers_end - cursor_value});
         if (cursor_value == name_start || cursor_value >= headers_end || buffer[cursor_value] != ':') {

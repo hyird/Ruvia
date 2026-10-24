@@ -56,13 +56,11 @@ RUVIA_TEST(http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
     const auto abs_req = ruvia::make_parsed_http_request("GET",
         "https://example.test/.well-known/masque/udp/192.0.2.1/443/", fields, {},
         std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(abs_req));
-    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request(std::get<ruvia::http_request>(abs_req)).has_value());
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request(abs_req).has_value());
     const auto abs_query_req = ruvia::make_parsed_http_request("GET",
         "https://example.test/.well-known/masque/udp/192.0.2.1/443/?target=1", fields, {},
         std::pmr::get_default_resource());
-    RUVIA_CHECK(std::holds_alternative<ruvia::http_request>(abs_query_req));
-    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request(std::get<ruvia::http_request>(abs_query_req)).has_value());
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request(abs_query_req).has_value());
 }
 RUVIA_TEST(http_udp_capsule_session_checks_context_size_and_half_close) {
     ruvia::http_datagram_session session;

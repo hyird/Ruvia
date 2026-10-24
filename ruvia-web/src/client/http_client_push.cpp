@@ -44,7 +44,7 @@ const http_push_request& http_client_push::request() const& {
     }
     return *state_value->promised_request_;
 }
-scoped_operation<http_client_response> http_client_push::response() & {
+task<http_client_response> http_client_push::response() & {
     auto* state_value = response_.state_;
     (void)request();
     if (state_value->push_response_taken_ || state_value->push_response_scope_.has_pending_operations()) {

@@ -141,6 +141,21 @@ template <middleware middleware_type>
     return describe_middleware<middleware_type, std::tuple<>>(nullptr);
 }
 
+template <route_policy policy_type>
+[[nodiscard]] constexpr controller_middleware_descriptor describe_route_policy() noexcept {
+    return controller_middleware_descriptor(nullptr, nullptr, nullptr, nullptr, nullptr, false, false,
+        middleware_request_body_limit<policy_type>(), middleware_stream_request_body<policy_type>());
+}
+
+template <route_modifier modifier_type>
+[[nodiscard]] controller_middleware_descriptor make_route_modifier_descriptor() noexcept {
+    if constexpr (route_policy<modifier_type>) {
+        return describe_route_policy<modifier_type>();
+    } else {
+        return make_middleware_descriptor<modifier_type>();
+    }
+}
+
 // Registers one app-level middleware type together with the arguments every
 // instance of it is constructed from. Arguments are decayed and copied once,
 // at registration; a middleware is built per worker route table, so they must

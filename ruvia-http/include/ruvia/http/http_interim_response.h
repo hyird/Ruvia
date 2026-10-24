@@ -70,7 +70,6 @@ private:
 
 enum class http1_interim_response_prepare_error : std::uint8_t {
     invalid_header,
-    too_many_headers,
     content_length_forbidden,
     transfer_encoding_forbidden,
     trailer_forbidden,

@@ -196,6 +196,17 @@ private:
 };
 
 template <typename t_type>
+class one_shot_receiver;
+
+namespace detail {
+template <typename t_type>
+[[nodiscard]] one_shot_awaiter<t_type> make_one_shot_awaiter(
+    const one_shot_receiver<t_type>& receiver,
+    std::optional<std::chrono::steady_clock::duration> timeout,
+    stop_token stop_token_value);
+}  // namespace detail
+
+template <typename t_type>
 class one_shot_receiver final {
 public:
     one_shot_receiver() = delete;
@@ -279,7 +290,25 @@ private:
     std::shared_ptr<detail::one_shot_state<t_type>> state_;
     template <typename u_type>
     friend auto make_one_shot(worker_handle, one_shot_options);
+    template <typename u_type>
+    friend detail::one_shot_awaiter<u_type> detail::make_one_shot_awaiter(
+        const one_shot_receiver<u_type>&,
+        std::optional<std::chrono::steady_clock::duration>,
+        stop_token);
 };
+
+namespace detail {
+template <typename t_type>
+[[nodiscard]] one_shot_awaiter<t_type> make_one_shot_awaiter(
+    const one_shot_receiver<t_type>& receiver,
+    std::optional<std::chrono::steady_clock::duration> timeout,
+    stop_token stop_token_value) {
+    if (!receiver.state_ || !receiver.state_->worker_.is_current()) {
+        throw std::logic_error("one-shot wait must run on its bound worker");
+    }
+    return one_shot_awaiter<t_type>(receiver.state_, timeout, std::move(stop_token_value));
+}
+}  // namespace detail
 
 template <typename t_type>
 // The value parameter accepts both lvalue handles and rvalue handles before

@@ -7,6 +7,7 @@
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
@@ -189,18 +190,18 @@ struct db_source_column final {
 struct db_source_options final {
     bool lateral_{false};
     bool with_ordinality_{false};
-    std::vector<db_source_column> columns_{};
+    borrowed_slice<db_source_column> columns_{};
 };
 struct db_cte_options final {
     bool recursive_{false};
     db_materialization materialization_{db_materialization::default_value};
-    std::vector<borrowed_text> columns_{};
+    borrowed_slice<borrowed_text> columns_{};
 };
 struct db_lock_options final {
     db_row_lock mode_{db_row_lock::update};
     bool nowait_{false};
     bool skip_locked_{false};
-    std::vector<borrowed_text> tables_{};
+    borrowed_slice<borrowed_text> tables_{};
 };
 
 class db_query;
@@ -898,8 +899,8 @@ struct db_order_term final {
     db_nulls_order nulls_{db_nulls_order::default_value};
 };
 struct db_window_options final {
-    std::vector<db_expr> partition_by_{};
-    std::vector<db_order_term> order_by_{};
+    borrowed_slice<db_expr> partition_by_{};
+    borrowed_slice<db_order_term> order_by_{};
     std::optional<db_window_frame_options> frame_{};
 };
 struct db_case_branch final {
@@ -946,10 +947,10 @@ struct db_assignment final {
 };
 
 struct db_conflict_options final {
-    std::vector<borrowed_text> columns_{};
+    borrowed_slice<borrowed_text> columns_{};
     borrowed_text constraint_{};
     db_expression target_where_{};
-    std::vector<db_assignment> update_{};
+    borrowed_slice<db_assignment> update_{};
     db_expression update_where_{};
     bool do_nothing_{false};
     // MariaDB matches any unique key. This explicit mode does not pretend to

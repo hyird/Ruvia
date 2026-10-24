@@ -17,8 +17,7 @@ inline constexpr std::size_t http_field_line_overhead = 4;
 // http_field_line_overhead (independent of received optional whitespace).
 // Fixed head bytes such as a start line or the terminating empty line are
 // charged with add(); a trailer section starts from
-// http_trailer_section_budget(). Field counts are bounded separately by
-// max_http_header_fields. A failed charge leaves the budget unchanged.
+// http_trailer_section_budget(). A failed charge leaves the budget unchanged.
 class http_field_section_budget final {
 public:
     [[nodiscard]] constexpr bool add(std::size_t bytes_value) noexcept {

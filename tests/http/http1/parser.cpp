@@ -1263,14 +1263,15 @@ RUVIA_TEST(http1_parse_non_numeric_content_length_rejected) {
     RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::invalid_content_length));
 }
 
-RUVIA_TEST(http1_parse_too_many_headers_rejected) {
+RUVIA_TEST(http1_parse_many_headers_within_byte_budget_accepted) {
     std::string request = "GET / HTTP/1.1\r\nHost: x\r\n";
-    for (int i = 0; i < 70; ++i) {  // exceeds max_http_header_fields (64)
+    for (int i = 0; i < 80; ++i) {
         request += "x-h-" + std::to_string(i) + ": v\r\n";
     }
     request += "\r\n";
     const auto result_value = parse_http1_request_message(request);
-    RUVIA_CHECK(is_failure(result_value.state_, http_parse_error::too_many_headers));
+    RUVIA_CHECK(result_value.complete());
+    RUVIA_CHECK_EQ(result_value.state_.request_.headers().size(), std::size_t{81});
 }
 
 RUVIA_TEST(http1_parse_chunk_size_overflow_rejected) {

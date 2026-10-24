@@ -208,11 +208,11 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
     progress_ = http1_server_request_head_ready(header_bytes);
 }
 
-std::variant<http_request, http_parse_error> make_parsed_http_request(
+http_request make_parsed_http_request(
     std::string_view method, std::string_view target, std::span<const http_header_view> headers,
     std::span<const std::byte> body, std::pmr::memory_resource* resource) {
     if (!is_valid_http_method_token(method)) {
-        return http_parse_error::invalid_request_line;
+        throw http_parse_protocol_error(http_parse_error::invalid_request_line);
     }
     auto request = http_request_access::make();
     http_request_access::set_resource(request, resource);
@@ -221,19 +221,16 @@ std::variant<http_request, http_parse_error> make_parsed_http_request(
 
     request_target_view target_view;
     if (!parse_request_target(request.known_method(), target, target_view)) {
-        return http_parse_error::invalid_request_target;
-    }
-    if (headers.size() > max_http_header_fields) {
-        return http_parse_error::too_many_headers;
+        throw http_parse_protocol_error(http_parse_error::invalid_request_target);
     }
     http_field_section_budget budget;
     for (const auto& header : headers) {
         if (!is_valid_http_header_name(header.name()) ||
             !is_valid_http_header_value(header.value())) {
-            return http_parse_error::invalid_header;
+            throw http_parse_protocol_error(http_parse_error::invalid_header);
         }
         if (!budget.add_field(header.name(), header.value())) {
-            return http_parse_error::header_too_large;
+            throw http_parse_protocol_error(http_parse_error::header_too_large);
         }
     }
 
@@ -251,7 +248,7 @@ std::variant<http_request, http_parse_error> make_parsed_http_request(
             field = http_header_view{field.name(), target_view.authority_};
         }
         if (!http_request_access::add_header(request, field)) {
-            return http_parse_error::too_many_headers;
+            throw http_parse_protocol_error(http_parse_error::header_too_large);
         }
     }
     http_request_access::set_body(request, body);

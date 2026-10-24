@@ -30,7 +30,7 @@ public:
         std::size_t storage_size_;
         std::size_t overflow_storage_size_;
         std::size_t overflow_field_count_;
-        std::uint8_t count_;
+        std::uint16_t count_;
         bool using_overflow_storage_;
     };
 
@@ -42,7 +42,7 @@ public:
     }
 
     [[nodiscard]] bool full() const noexcept {
-        return count_ == max_http_header_fields;
+        return count_ == UINT16_MAX;
     }
 
     void swap(http2_header_list& other) noexcept {
@@ -116,9 +116,6 @@ public:
         if (count_ < inline_header_fields) {
             inline_fields_[count_] = field;
         } else {
-            if (overflow_fields_.empty()) {
-                overflow_fields_.reserve(max_http_header_fields - inline_header_fields);
-            }
             overflow_fields_.push_back(field);
         }
         ++count_;
@@ -178,7 +175,7 @@ private:
     std::array<header_field_type, inline_header_fields> inline_fields_{};
     std::pmr::vector<header_field_type> overflow_fields_;
     std::size_t storage_size_{0};
-    std::uint8_t count_{0};
+    std::uint16_t count_{0};
     bool using_overflow_storage_{false};
 };
 

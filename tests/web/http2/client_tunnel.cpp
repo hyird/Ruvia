@@ -207,7 +207,7 @@ RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after
     ruvia::test::http_server_fixture server(io);
     auto run = [&]() -> ruvia::task<void> {
         std::optional<ruvia::http_capsule> retained;
-        std::unique_ptr<ruvia::scoped_operation<void>> cold;
+        std::unique_ptr<ruvia::task<void>> cold;
         {
             ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = server.endpoint().port(), .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http2_only});
             const auto client_origin = client.handle();
@@ -238,7 +238,7 @@ RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after
                 }
                 {
                     auto stream = std::move(*second.tunnel()).capsules();
-                    cold.reset(new ruvia::scoped_operation<void>(stream.write(12, std::string(4099, 'x'))));
+                    cold.reset(new ruvia::task<void>(stream.write(12, std::string(4099, 'x'))));
                 }
             } catch (...) {
                 failure = std::current_exception();

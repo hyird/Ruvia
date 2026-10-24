@@ -53,7 +53,6 @@ RUVIA_TEST(context_session_capability_requires_explicit_middleware_binding) {
     const auto response = context_request_test::with_context(
         ruvia::test_request::get("/capabilities"),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
-            RUVIA_CHECK(!context_value.try_session().has_value());
             bool rejected = false;
             try {
                 static_cast<void>(context_value.session());

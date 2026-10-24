@@ -1,8 +1,13 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
+#include <initializer_list>
+#include <ranges>
+#include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
 
@@ -113,5 +118,78 @@ private:
 };
 
 static_assert(sizeof(borrowed_text) == sizeof(std::string_view));
+
+template <typename element_type>
+class borrowed_slice final {
+public:
+    using value_type = element_type;
+    using size_type = std::size_t;
+    using difference_type = std::ptrdiff_t;
+    using pointer = const element_type*;
+    using const_pointer = const element_type*;
+    using reference = const element_type&;
+    using const_reference = const element_type&;
+    using iterator = typename std::span<const element_type>::iterator;
+    using const_iterator = typename std::span<const element_type>::iterator;
+
+    constexpr borrowed_slice() noexcept = default;
+
+    constexpr borrowed_slice(std::span<const element_type> values) noexcept
+        : values_(values) {}
+
+    constexpr borrowed_slice(std::initializer_list<element_type> values RUVIA_LIFETIMEBOUND) noexcept
+        : values_(values.begin(), values.size()) {}
+
+    template <typename range_type>
+        requires(!std::same_as<std::remove_cvref_t<range_type>, borrowed_slice> &&
+                 !std::same_as<std::remove_cvref_t<range_type>, std::span<const element_type>> &&
+                 std::ranges::contiguous_range<range_type&> &&
+                 std::constructible_from<std::span<const element_type>, range_type&>)
+    constexpr borrowed_slice(range_type& values RUVIA_LIFETIMEBOUND) noexcept
+        : values_(values) {}
+
+    [[nodiscard]] constexpr iterator begin() const noexcept {
+        return values_.begin();
+    }
+
+    [[nodiscard]] constexpr iterator end() const noexcept {
+        return values_.end();
+    }
+
+    [[nodiscard]] constexpr const element_type* data() const noexcept {
+        return values_.data();
+    }
+
+    [[nodiscard]] constexpr std::size_t size() const noexcept {
+        return values_.size();
+    }
+
+    [[nodiscard]] constexpr bool empty() const noexcept {
+        return values_.empty();
+    }
+
+    [[nodiscard]] constexpr const element_type& front() const noexcept {
+        return values_.front();
+    }
+
+    [[nodiscard]] constexpr const element_type& back() const noexcept {
+        return values_.back();
+    }
+
+    [[nodiscard]] constexpr const element_type& operator[](std::size_t index) const noexcept {
+        return values_[index];
+    }
+
+    [[nodiscard]] constexpr std::span<const element_type> span() const noexcept {
+        return values_;
+    }
+
+    [[nodiscard]] constexpr operator std::span<const element_type>() const noexcept {
+        return values_;
+    }
+
+private:
+    std::span<const element_type> values_{};
+};
 
 }  // namespace ruvia

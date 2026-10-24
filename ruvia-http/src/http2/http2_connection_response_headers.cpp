@@ -73,14 +73,11 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
     if (!context_value->status_ || !http2_is_valid_decoded_response_header(name, value)) {
         return false;
     }
-    if (!context_value->base_.accept_regular_field()) {
-        return false;
-    }
     context_value->saw_regular_ = true;
     if (context_value->status_->is_informational()) {
         // These fields cannot frame a 1xx or carry over to the final response.
-        context_value->informational_fields_.push_back(http_header::copy_of(
-            name, value, context_value->informational_fields_.get_allocator().resource()));
+        context_value->informational_fields_.emplace_back(
+            name, value, context_value->informational_fields_.get_allocator().resource());
         return true;
     }
     const auto kind = classify_request_header(name);
@@ -121,7 +118,7 @@ bool http2_on_decoded_response_trailer(void* target, std::string_view name, std:
     // trailer sections, after applying HTTP/2's lowercase and connection-field
     // rules. In particular, Accept-Ranges and ETag are explicitly trailer-safe,
     // while response controls such as Date and Location are not.
-    return context_value.accept_regular_field() && http2_is_valid_decoded_response_header(name, value) &&
+    return http2_is_valid_decoded_response_header(name, value) &&
            !is_forbidden_response_trailer_name(name) &&
            context_value.stream_.append_remote_trailer(name, value);
 }

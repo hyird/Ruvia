@@ -184,23 +184,17 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
         unlisted_upgrade, http1_interim_response_prepare_error::upgrade_connection_option_required));
 }
 
-RUVIA_TEST(http1_interim_response_writer_enforces_field_and_size_limits) {
-    std::vector<http_header_view> too_many(
-        ruvia::max_http_header_fields + 1, http_header_view("X-Hint", "value"));
+RUVIA_TEST(http1_interim_response_writer_enforces_size_limit) {
+    std::vector<http_header_view> many(80, http_header_view("X-Hint", "value"));
+    std::array<char, 2048> many_buffer{};
+    const auto many_result = prepare_http1_interim_response_head(
+        http_interim_response_head(
+            ruvia::http_status::early_hints, std::span<const http_header_view>(many)),
+        many_buffer);
+    RUVIA_CHECK(std::holds_alternative<prepared_http1_interim_response>(many_result));
+
     std::array<char, 64> buffer;
     buffer.fill('!');
-    const auto too_many_result = prepare_http1_interim_response_head(
-        http_interim_response_head(
-            ruvia::http_status::early_hints, std::span<const http_header_view>(too_many)),
-        buffer);
-    const auto* const too_many_failure = std::get_if<http1_interim_response_prepare_error>(&too_many_result);
-    RUVIA_CHECK(too_many_failure != nullptr);
-    if (too_many_failure != nullptr) {
-        RUVIA_CHECK_EQ(
-            *too_many_failure, http1_interim_response_prepare_error::too_many_headers);
-    }
-    RUVIA_CHECK(unchanged(buffer, '!'));
-
     const std::string oversized_value(ruvia::max_http_header_bytes, 'x');
     const http_header_view oversized[] = {{"X-Hint", oversized_value}};
     const auto oversized_result = prepare_http1_interim_response_head(

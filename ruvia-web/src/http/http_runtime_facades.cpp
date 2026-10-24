@@ -30,7 +30,7 @@ struct owned_trailers final {
         fields_.reserve(source_value.size());
         views_.reserve(source_value.size());
         for (const auto& header : source_value) {
-            const auto& field = fields_.emplace_back(ruvia::http_header::copy_of(header.name(), header.value(), resource));
+            const auto& field = fields_.emplace_back(header.name(), header.value(), resource);
             views_.emplace_back(field.name(), field.value());
         }
     }
@@ -169,39 +169,39 @@ task<std::optional<view_type>> read_body(
 
 }  // namespace
 
-scoped_operation<std::optional<std::span<const std::byte>>> body_reader::read() & {
+task<std::optional<std::span<const std::byte>>> body_reader::read() & {
     return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::span<const std::byte>>(read_, read_active_));
 }
 
-scoped_operation<std::optional<std::string_view>> body_reader::text() & {
+task<std::optional<std::string_view>> body_reader::text() & {
     return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::string_view>(read_, read_active_));
 }
 
-scoped_operation<void> response_stream_writer::write(std::span<const std::byte> chunk) & {
+task<void> response_stream_writer::write(std::span<const std::byte> chunk) & {
     return write(as_chars(chunk));
 }
 
-scoped_operation<void> response_stream_writer::write(std::string_view chunk) & {
+task<void> response_stream_writer::write(std::string_view chunk) & {
     require_active();
     std::pmr::string owned(chunk, resource_);
     return write_owned(std::move(owned));
 }
 
-scoped_operation<void> response_stream_writer::write_owned(std::pmr::string&& chunk) {
+task<void> response_stream_writer::write_owned(std::pmr::string&& chunk) {
     require_active();
     std::pmr::string owned(std::move(chunk), resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
         write_transferred_chunk(target_, write_, std::move(owned), output_active_));
 }
 
-scoped_operation<void> response_stream_writer::writeln(std::string_view chunk) & {
+task<void> response_stream_writer::writeln(std::string_view chunk) & {
     require_active();
     std::pmr::string owned(chunk, resource_);
     owned.push_back('\n');
     return write_owned(std::move(owned));
 }
 
-scoped_operation<timer_sleep_result> response_stream_writer::sleep(
+task<timer_sleep_result> response_stream_writer::sleep(
     std::chrono::milliseconds duration) & {
     require_active();
     return ::ruvia::make_scoped_operation(operation_scope_, sleep_(target_, duration, stop_token_));
@@ -213,14 +213,14 @@ stop_token response_stream_writer::cancel_on_peer_eof() & {
     return stop_token_;
 }
 
-scoped_operation<void> response_stream_writer::end(std::span<const http_header_view> trailers) & {
+task<void> response_stream_writer::end(std::span<const http_header_view> trailers) & {
     require_active();
     auto owned_trailers_value = owned_trailers(trailers, resource_);
     return ::ruvia::make_scoped_operation(
         operation_scope_, end_owned(target_, end_, std::move(owned_trailers_value), output_active_));
 }
 
-scoped_operation<timer_sleep_result> sse_writer::sleep(std::chrono::milliseconds duration) {
+task<timer_sleep_result> sse_writer::sleep(std::chrono::milliseconds duration) {
     return writer().sleep(duration);
 }
 
@@ -228,38 +228,38 @@ stop_token sse_writer::cancel_on_peer_eof() {
     return writer().cancel_on_peer_eof();
 }
 
-scoped_operation<void> sse_writer::end(std::span<const http_header_view> trailers) {
+task<void> sse_writer::end(std::span<const http_header_view> trailers) {
     return writer().end(trailers);
 }
 
-scoped_operation<std::optional<websocket_message>> websocket::read() & {
+task<std::optional<websocket_message>> websocket::read() & {
     require_active();
     return ::ruvia::make_scoped_operation(operation_scope_,
         read_websocket(target_, read_, read_active_), &require_websocket_worker,
         const_cast<worker_handle*>(worker_));
 }
 
-scoped_operation<void> websocket::text(std::string_view payload_value, websocket_send_options options) & {
+task<void> websocket::text(std::string_view payload_value, websocket_send_options options) & {
     return write(websocket_opcode::text, payload_value, options.compress_);
 }
 
-scoped_operation<void> websocket::binary(std::string_view payload_value, websocket_send_options options) & {
+task<void> websocket::binary(std::string_view payload_value, websocket_send_options options) & {
     return write(websocket_opcode::binary, payload_value, options.compress_);
 }
 
-scoped_operation<void> websocket::binary(std::span<const std::byte> payload_value, websocket_send_options options) & {
+task<void> websocket::binary(std::span<const std::byte> payload_value, websocket_send_options options) & {
     return binary(as_chars(payload_value), options);
 }
 
-scoped_operation<void> websocket::pong(std::string_view payload_value) & {
+task<void> websocket::pong(std::string_view payload_value) & {
     return write(websocket_opcode::pong, payload_value);
 }
 
-scoped_operation<void> websocket::ping(std::string_view payload_value) & {
+task<void> websocket::ping(std::string_view payload_value) & {
     return write(websocket_opcode::ping, payload_value);
 }
 
-scoped_operation<void> websocket::send(websocket_message&& message, websocket_send_options options) & {
+task<void> websocket::send(websocket_message&& message, websocket_send_options options) & {
     require_active();
     auto read_lease = detail::claim_operation_lane(read_active_, "websocket message send cannot overlap a read");
     return ::ruvia::make_scoped_operation(operation_scope_,
@@ -267,7 +267,7 @@ scoped_operation<void> websocket::send(websocket_message&& message, websocket_se
         &require_websocket_worker, const_cast<worker_handle*>(worker_));
 }
 
-scoped_operation<void> websocket::close(websocket_close_options options) & {
+task<void> websocket::close(websocket_close_options options) & {
     require_active();
     std::pmr::string owned(options.reason_.view(), resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
@@ -286,13 +286,13 @@ void websocket::abort() noexcept {
     abort_(target_);
 }
 
-scoped_operation<void> websocket::write(websocket_opcode opcode, std::string_view payload_value, bool compress) {
+task<void> websocket::write(websocket_opcode opcode, std::string_view payload_value, bool compress) {
     require_active();
     std::pmr::string owned(payload_value, resource_);
     return write(opcode, std::move(owned), compress);
 }
 
-scoped_operation<void> websocket::write(websocket_opcode opcode, std::pmr::string&& payload_value, bool compress) {
+task<void> websocket::write(websocket_opcode opcode, std::pmr::string&& payload_value, bool compress) {
     require_active();
     std::pmr::string owned(std::move(payload_value), resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
@@ -300,7 +300,7 @@ scoped_operation<void> websocket::write(websocket_opcode opcode, std::pmr::strin
         &require_websocket_worker, const_cast<worker_handle*>(worker_));
 }
 
-scoped_operation<void> sse_writer::write(const sse_message& message) {
+task<void> sse_writer::write(const sse_message& message) {
     auto& stream_writer = writer();
     auto frame = format_sse_message(message, {.resource_ = stream_writer.resource_});
     return stream_writer.write(std::move(frame));

@@ -304,106 +304,64 @@ bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_
     return true;
 }
 
-struct http2_sans_io_session_engine::tunnel_upgrade_operation final {
+struct http2_sans_io_session_engine::tunnel_upgrade_commit final {
     using transport_type = http2_sans_io_tunnel_transport<asio::any_io_executor>;
-    using session_type = http_tunnel_session<transport_type>;
 
     http2_sans_io_session_engine& engine_;
     std::uint32_t stream_id_;
-    bool udp_;
     http2_streaming_request_body& streaming_body_;
     http2_sans_io_stream_signal& stream_signal_;
-    const resolved_route& resolved_;
-    const tunnel_route_endpoint& tunnel_endpoint_;
-    const context_services& base_services_;
-    std::optional<session_type>& tunnel_session_;
 
-    [[nodiscard]] task<void> operator()(context& context_value) {
-        auto head = context_access::streaming_head(context_value);
-        if (udp_) {
-            auto negotiated = prepare_http_connect_udp_response(std::move(head), http_protocol_version::http2);
-            if ((negotiated.index() != 0)) {
-                throw std::invalid_argument("invalid CONNECT-UDP response metadata");
-            }
-            head = std::move(std::get<0>(negotiated));
-        }
-        const auto committed = engine_.connection_.submit_connect_response_head(stream_id_, head);
-        if (committed != http2_submit_status::accepted) {
-            throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
-        }
-        if (!engine_.stream_runtimes_.mark_tunnel(stream_id_)) {
-            std::terminate();
-        }
-        engine_.set_inactivity_phase();
+    [[nodiscard]] static transport_type finish_commit(http2_sans_io_session_engine& engine_value,
+        std::uint32_t stream_id_value, http2_streaming_request_body& streaming_body_value,
+        http2_sans_io_stream_signal& stream_signal_value, context& context_value) {
+        engine_value.set_inactivity_phase();
         context_access::commit_upgrade(context_value);
-        engine_.wake_writer();
-        tunnel_session_.emplace(
-            transport_type(engine_.connection_, stream_id_, streaming_body_.queue(), stream_signal_,
-                engine_.write_signal_, engine_.output_budget_, engine_.executor_),
-            base_services_.worker(), *context_value.pool(), engine_.inbound_buffers_);
-        co_await invoke_tunnel_handler(
-            *tunnel_session_, engine_.session_.scanner_entry(), resolved_.stream_handler(), context_value);
+        engine_value.wake_writer();
+        return transport_type(engine_value.connection_, stream_id_value, streaming_body_value.queue(),
+            stream_signal_value, engine_value.write_signal_, engine_value.output_budget_,
+            engine_value.executor_);
     }
 
-    [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
-        return finish_tunnel_session(session_value, std::move(failure),
-            engine_.session_.options().connection_failure_, engine_.remote_address_,
-            engine_.session_.scanner_entry(), tunnel_endpoint_.config().peer_transport_fin_timeout_);
+    [[nodiscard]] transport_type operator()(
+        context& context_value, const http_response& head_response) const {
+        if (engine_.connection_.submit_connect_response_head(stream_id_, head_response) !=
+                http2_submit_status::accepted ||
+            !engine_.stream_runtimes_.mark_tunnel(stream_id_)) {
+            throw std::invalid_argument("HTTP/2 CONNECT response head rejected");
+        }
+        return finish_commit(engine_, stream_id_, streaming_body_, stream_signal_, context_value);
     }
 };
 
-struct http2_sans_io_session_engine::websocket_upgrade_operation final {
+struct http2_sans_io_session_engine::websocket_upgrade_commit final {
     using transport_type = http2_sans_io_tunnel_transport<asio::any_io_executor>;
-    using session_type = server_websocket_connection<transport_type>;
 
     http2_sans_io_session_engine& engine_;
     std::uint32_t stream_id_;
     const http_request& request_;
     const websocket_handshake_validation_result& handshake_validation_;
+    const websocket_route_endpoint& websocket_endpoint_;
     http2_streaming_request_body& streaming_body_;
     http2_sans_io_stream_signal& stream_signal_;
-    const resolved_route& resolved_;
-    const websocket_route_endpoint& websocket_endpoint_;
-    const context_services& base_services_;
-    std::optional<session_type>& websocket_session_;
 
-    [[nodiscard]] task<void> operator()(context& context_value) {
-        const auto& options = engine_.session_.options();
-        const auto response_headers_value = websocket_response_headers(context_value);
+    [[nodiscard]] ruvia::detail::websocket_upgrade_commit<transport_type> operator()(
+        context& context_value, std::span<const http_header_view> response_headers_value) const {
         const auto handshake_result = engine_.connection_.submit_websocket_handshake(stream_id_, request_,
             handshake_validation_,
             {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
                 .response_headers_ = response_headers_value,
                 .deflate_ = websocket_endpoint_.deflate()});
         const auto* submitted_handshake = std::get_if<http2_websocket_negotiation>(&handshake_result);
-        if (submitted_handshake == nullptr) {
+        if (submitted_handshake == nullptr || !engine_.stream_runtimes_.mark_tunnel(stream_id_)) {
             // The handshake is not started, so stream dispatch still
             // answers this pending CONNECT with an error response.
             throw std::invalid_argument("HTTP/2 WebSocket handshake rejected");
         }
-        if (!engine_.stream_runtimes_.mark_tunnel(stream_id_)) {
-            std::terminate();
-        }
-        engine_.set_inactivity_phase();
-        context_access::commit_upgrade(context_value);
-        engine_.wake_writer();
-        websocket_session_.emplace(
-            transport_type(engine_.connection_, stream_id_, streaming_body_.queue(), stream_signal_,
-                engine_.write_signal_, engine_.output_budget_, engine_.executor_),
-            base_services_.worker(), engine_.session_.scanner_entry(), websocket_endpoint_.lifecycle(),
-            protocol_byte_limit::limited(options.server_.max_websocket_message_bytes_),
-            &engine_.inbound_buffers_, std::string_view{},
-            websocket_connection_options{.compression_ = submitted_handshake->compression(),
-                .compression_level_ = websocket_endpoint_.deflate().compression_level_,
-                .mem_level_ = websocket_endpoint_.deflate().mem_level_,
-                .shared_deflate_ = &options.codecs_->websocket_deflate()});
-        co_await invoke_websocket_handler(
-            *websocket_session_, engine_.session_.scanner_entry(), resolved_.stream_handler(), context_value);
-    }
-
-    [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
-        return finish_websocket_session(session_value, std::move(failure),
-            engine_.session_.options().connection_failure_, engine_.remote_address_);
+        return ruvia::detail::websocket_upgrade_commit<transport_type>(
+            tunnel_upgrade_commit::finish_commit(
+                engine_, stream_id_, streaming_body_, stream_signal_, context_value),
+            submitted_handshake->compression());
     }
 };
 
@@ -532,21 +490,17 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
                     wake_writer();
                     co_return;
                 }
-                const auto& tunnel_endpoint = *resolved->route().endpoint().tunnel();
-                std::optional<tunnel_upgrade_operation::session_type> tunnel_session;
-                tunnel_upgrade_operation upgrade{
-                    .engine_ = *this,
-                    .stream_id_ = stream_id,
-                    .udp_ = admission.udp_tunnel(),
-                    .streaming_body_ = *streaming_body,
-                    .stream_signal_ = *stream_signal,
-                    .resolved_ = *resolved,
-                    .tunnel_endpoint_ = tunnel_endpoint,
-                    .base_services_ = base_services,
-                    .tunnel_session_ = tunnel_session,
-                };
-                auto buffered = co_await run_http_upgrade_route(
-                    routes_, request, *resolved, request_memory_value, dispatch_services, tunnel_session, upgrade, upgrade);
+                auto buffered = co_await execute_tunnel_upgrade_session<
+                    http2_sans_io_tunnel_transport<asio::any_io_executor>>(
+                    routes_, request, *resolved, request_memory_value, dispatch_services, options,
+                    session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(),
+                    std::string_view{},
+                    tunnel_upgrade_commit{
+                        .engine_ = *this,
+                        .stream_id_ = stream_id,
+                        .streaming_body_ = *streaming_body,
+                        .stream_signal_ = *stream_signal,
+                    });
                 if (!buffered) {
                     co_return;
                 }
@@ -573,21 +527,19 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
                     wake_writer();
                     co_return;
                 }
-                std::optional<websocket_upgrade_operation::session_type> websocket_session;
-                websocket_upgrade_operation upgrade{
-                    .engine_ = *this,
-                    .stream_id_ = stream_id,
-                    .request_ = request,
-                    .handshake_validation_ = handshake_validation,
-                    .streaming_body_ = *streaming_body,
-                    .stream_signal_ = *stream_signal,
-                    .resolved_ = *resolved,
-                    .websocket_endpoint_ = websocket_endpoint,
-                    .base_services_ = base_services,
-                    .websocket_session_ = websocket_session,
-                };
-                auto buffered = co_await run_http_upgrade_route(routes_, request, *resolved,
-                    request_memory_value, dispatch_services, websocket_session, upgrade, upgrade);
+                auto buffered = co_await execute_websocket_upgrade_session<
+                    http2_sans_io_tunnel_transport<asio::any_io_executor>>(
+                    routes_, request, *resolved, request_memory_value, dispatch_services, options,
+                    session_.scanner_entry(), inbound_buffers_, std::string_view{},
+                    websocket_upgrade_commit{
+                        .engine_ = *this,
+                        .stream_id_ = stream_id,
+                        .request_ = request,
+                        .handshake_validation_ = handshake_validation,
+                        .websocket_endpoint_ = websocket_endpoint,
+                        .streaming_body_ = *streaming_body,
+                        .stream_signal_ = *stream_signal,
+                    });
                 if (!buffered) {
                     co_return;
                 }
