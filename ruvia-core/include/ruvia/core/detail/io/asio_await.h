@@ -112,7 +112,9 @@ template <typename t_type, typename completion_token_type>
     requires asio_task_result<t_type>
 inline auto async_start_task(task<t_type>&& pending_task, completion_token_type&& token) {
     pending_task.prepare_direct_start();
-    return asio::async_initiate<completion_token_type, void(task_completion_result<t_type>)>(
+    // MSVC cannot pass over-aligned results by value. Delivery owns the result
+    // until the handler returns, so its completion argument can be an rvalue reference.
+    return asio::async_initiate<completion_token_type, void(task_completion_result<t_type>&&)>(
         [](auto&& handler, task<t_type> task_value) {
             using handler_type = std::decay_t<decltype(handler)>;
             auto* state_value = task_completion_state<t_type, handler_type>::create(

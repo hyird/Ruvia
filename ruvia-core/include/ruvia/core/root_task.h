@@ -153,9 +153,9 @@ public:
     }
 
     template <typename value_type>
-        requires std::same_as<value_type, std::remove_cv_t<t_type>>
-    void stage_value(value_type value) {
-        value_.emplace(std::move(value));
+        requires std::same_as<std::remove_cvref_t<value_type>, std::remove_cv_t<t_type>>
+    void stage_value(value_type&& value) {
+        value_.emplace(std::forward<value_type>(value));
     }
 
     void stage_value() noexcept

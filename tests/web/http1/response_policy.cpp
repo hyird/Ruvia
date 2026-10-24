@@ -96,7 +96,8 @@ class response_policy_routes final {
     RUVIA_CONNECT("policy-target.test:443", tunnel);
     RUVIA_CONNECT("denied-target.test:443", tunnel, connect_denying_middleware);
 #ifdef RUVIA_ENABLE_REDIS
-    RUVIA_CONNECT("session-target.test:443", tunnel, ruvia::session_middleware, session_clearing_middleware);
+    RUVIA_CONNECT("session-target.test:443", tunnel, (ruvia::http_tunnel_route_config{}),
+        ruvia::session_middleware, session_clearing_middleware);
 #endif
     RUVIA_ROUTES_END
 

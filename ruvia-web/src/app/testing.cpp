@@ -158,22 +158,24 @@ struct test_app::impl_type final {
         std::optional<detail::http_request_admission> admission;
         http_response response(request_memory_value.resource());
         if (parse_error.has_value()) {
+            const auto rejection = detail::http_request_rejection::error(
+                detail::copy_http_protocol_error_info(request_memory_value.resource(), *parse_error));
             response = co_await detail::respond_http_request_rejection(routes_value, parsed_value,
-                request_memory_value,
-                detail::http_request_rejection::error(
-                    detail::copy_http_protocol_error_info(request_memory_value.resource(), *parse_error)),
-                services);
+                request_memory_value, rejection, services);
         } else {
-            admission.emplace(co_await detail::admit_and_dispatch_buffered_request(routes_value,
-                {
-                    .request_ = parsed_value,
-                    .resolution_ = resolution,
-                    .coding_ = http_response_coding_selection_for(parsed_value),
-                    .resource_ = request_memory_value.resource(),
-                    .start_ = request_start,
-                },
-                detail::http_request_admission_policy::server(options_), services,
-                request_memory_value, response));
+            // These borrowed arguments must remain in the coroutine frame across
+            // suspension. MSVC cannot tail-transfer this call with braced temporaries.
+            const detail::http_request_admission_input input{
+                .request_ = parsed_value,
+                .resolution_ = resolution,
+                .coding_ = http_response_coding_selection_for(parsed_value),
+                .resource_ = request_memory_value.resource(),
+                .start_ = request_start,
+            };
+            const auto policy = detail::http_request_admission_policy::server(options_);
+            auto admitted = co_await detail::admit_and_dispatch_buffered_request(
+                routes_value, input, policy, services, request_memory_value, response);
+            admission.emplace(std::move(admitted));
         }
         const auto& request_services = admission ? admission->services() : services;
         const auto tail = admission ? admission->tail()

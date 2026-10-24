@@ -90,7 +90,7 @@ private:
 };
 
 struct alignas(4096) retained_process_value final {
-    std::array<std::byte, 257> bytes_;
+    std::array<std::byte, 4096> bytes_;
 };
 }  // namespace
 

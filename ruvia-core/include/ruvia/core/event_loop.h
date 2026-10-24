@@ -135,18 +135,23 @@ public:
             }
         };
         struct root_completion final {
+            using executor_type = asio::io_context::executor_type;
+
+            executor_type executor_;
             std::shared_ptr<detail::root_task_state<t_type>> completion_;
             std::shared_ptr<void> retirement_lease_;
             bool delivered_{false};
 
-            root_completion(std::shared_ptr<detail::root_task_state<t_type>> state_value,
+            root_completion(executor_type executor_value, std::shared_ptr<detail::root_task_state<t_type>> state_value,
                 std::shared_ptr<void> lease_value) noexcept
-                : completion_(std::move(state_value)),
+                : executor_(std::move(executor_value)),
+                  completion_(std::move(state_value)),
                   retirement_lease_(std::move(lease_value)) {}
             root_completion(const root_completion&) = delete;
             root_completion& operator=(const root_completion&) = delete;
             root_completion(root_completion&& other) noexcept
-                : completion_(std::move(other.completion_)),
+                : executor_(std::move(other.executor_)),
+                  completion_(std::move(other.completion_)),
                   retirement_lease_(std::move(other.retirement_lease_)),
                   delivered_(std::exchange(other.delivered_, false)) {}
             root_completion& operator=(root_completion&&) = delete;
@@ -155,7 +160,10 @@ public:
                     completion_->publish_completion();
                 }
             }
-            void operator()(detail::task_completion_result<t_type> result_value) noexcept {
+            [[nodiscard]] executor_type get_executor() const noexcept {
+                return executor_;
+            }
+            void operator()(detail::task_completion_result<t_type>&& result_value) noexcept {
                 try {
                     if (result_value.index() == 1) {
                         completion_->stage_failure(std::get<1>(result_value));
@@ -175,7 +183,7 @@ public:
                                launch = launch_guard(std::move(task_value), completion)]() mutable {
             try {
                 detail::async_start_task(std::move(*launch.task_),
-                    asio::bind_executor(bound_executor, root_completion(completion, retirement_lease)));
+                    root_completion(bound_executor, completion, retirement_lease));
                 launch.release();
             } catch (...) {
                 launch.release();

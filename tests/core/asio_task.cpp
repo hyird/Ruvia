@@ -1,4 +1,6 @@
+#include <array>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <future>
 #include <memory>
@@ -22,6 +24,8 @@ struct alignas(4096) aligned_result final {
 
     std::unique_ptr<int> value_;
     bool addresses_aligned_;
+    // Fill the alignment boundary explicitly; C4324 is an error under MSVC /WX.
+    std::array<std::byte, 4096 - sizeof(std::unique_ptr<int>) - sizeof(bool)> padding_;
 
 private:
     static bool is_aligned(const void* value) noexcept {

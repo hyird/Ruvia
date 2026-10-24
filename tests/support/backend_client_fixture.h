@@ -938,7 +938,7 @@ private:
             if (index != 0) {
                 logged.push_back(',');
             }
-            if ((maria_integer(payload, bitmap + index / 8, 1) & (1u << (index % 8))) != 0) {
+            if ((maria_integer(payload, bitmap + index / 8, 1) & (std::uint64_t{1} << (index % 8))) != 0) {
                 logged.append("null");
                 continue;
             }
