@@ -1251,11 +1251,12 @@ private:
             try {
                 co_await serve_connection(selected, socket);
             } catch (const std::system_error& error) {
-                // EOF/reset/broken pipe are the client's public close path
+                // EOF/reset/connection abort/broken pipe are the client's public close path
                 // (a reply written after the client closed). Only cancellation
                 // caused by this peer's own teardown may suppress an aborted wait.
                 if (error.code() != asio::error::eof &&
                     error.code() != asio::error::connection_reset &&
+                    error.code() != asio::error::connection_aborted &&
                     error.code() != asio::error::broken_pipe &&
                     !(closing_ && (error.code() == asio::error::operation_aborted ||
                                       error.code() == asio::error::bad_descriptor))) {

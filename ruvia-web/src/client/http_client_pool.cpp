@@ -1,6 +1,8 @@
 #include "client/http_client_pool.h"
 
+#include <cstdint>
 #include <exception>
+#include <optional>
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -301,6 +303,7 @@ task<void> http_client_pool::execute_request_into(
 task<void> http_client_pool::execute_tcp(http_client_connection& connection_value,
     const http_client_request_storage& request, const operation_timeout& timeout,
     const operation_timeout& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value) {
+    std::optional<std::uint64_t> connected_http1_generation;
     // A cancelled HTTP/1 producer still owns its SSL stream until its
     // serialized exchange unwinds. Join that exchange before reconnecting,
     // including when negotiated HTTP/2-capacity leases share the pool slot.
@@ -312,6 +315,7 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
         if (co_await connection_value.execute_http2(request, timeout, stop_token_value, state_value)) {
             co_return;
         }
+        connected_http1_generation = connection_value.generation_;
     }
     // A negotiated HTTP/1 connection can have several operations that already
     // hold outer HTTP/2-capacity slots. Waiting for this connection's single
@@ -369,7 +373,13 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
             // before the slot is released; pool handoff resumes the next waiter
             // synchronously.
             try {
-                co_await connection_value.ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
+                // The HTTP/2 fallback already connected and negotiated HTTP/1.
+                // Do not idle-probe this fresh TLS stream before its first response:
+                // session tickets can look like unsolicited response bytes. A connect
+                // or exchange while waiting for this slot invalidates the snapshot.
+                if (!connection_value.connected_ || connected_http1_generation != connection_value.generation_) {
+                    co_await connection_value.ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
+                }
                 if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
                     retry_as_http2 = true;
                 } else {
