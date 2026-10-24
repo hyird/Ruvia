@@ -252,6 +252,34 @@ private:
     bool tls_;
 };
 
+void check_pipeline_upload(ruvia::testing::test_context& ruvia_ctx, asio::io_context& io,
+    const asio::ip::tcp::endpoint& endpoint, bool tls, std::size_t size, bool defer_body) {
+    peer client(io, endpoint, tls);
+    client.send("GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    RUVIA_CHECK(client.read_until("pipeline-first").find("pipeline-first") != std::string::npos);
+    if (tls) {
+        client.request_key_update();
+    }
+    const std::string payload(size, 'p');
+    const auto prefix = defer_body ? size / 2 : size;
+    client.send("POST /disconnect/echo HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: " +
+                std::to_string(size) + "\r\n\r\n" + payload.substr(0, prefix));
+    std::string output;
+    if (defer_body) {
+        // 前一响应结束后，EOF 监测器必须 join；剩余上传由后续请求接管。
+        output = client.read_until("pipeline-last");
+        client.send(payload.substr(prefix));
+    }
+    output += client.read_until({}, 3s);
+    if (!output.ends_with(payload)) {
+        std::cerr << "stream_disconnect pipeline: tls=" << tls << " size=" << size << " deferred=" << defer_body
+                  << " received=" << output.size() << " response=" << output.substr(0, 256) << '\n';
+    }
+    RUVIA_CHECK(output.find("pipeline-last") != std::string::npos);
+    RUVIA_CHECK(output.ends_with(payload));
+    RUVIA_CHECK(output.find("HTTP/1.1 200 ") != std::string::npos);
+}
+
 std::string request(std::string_view mode) {
     return "GET /disconnect/events?mode=" + std::string(mode) + " HTTP/1.1\r\nHost: localhost\r\n\r\n";
 }
@@ -353,23 +381,10 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
                 RUVIA_CHECK(wait_until([&] { return app.http_stats().active_connections_ == 0; }));
 
                 for (const std::size_t size : {std::size_t{31}, std::size_t{256 * 1024}}) {
-                    peer pipeline_client(io, endpoint, tls);
-                    pipeline_client.send("GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n");
-                    RUVIA_CHECK(pipeline_client.read_until("pipeline-first").find("pipeline-first") != std::string::npos);
+                    check_pipeline_upload(ruvia_ctx, io, endpoint, tls, size, false);
                     if (tls) {
-                        pipeline_client.request_key_update();
+                        check_pipeline_upload(ruvia_ctx, io, endpoint, true, size, true);
                     }
-                    const std::string payload(size, 'p');
-                    pipeline_client.send("POST /disconnect/echo HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: " +
-                                         std::to_string(size) + "\r\n\r\n" + payload);
-                    const auto output = pipeline_client.read_until({}, 3s);
-                    if (!output.ends_with(payload)) {
-                        std::cerr << "stream_disconnect pipeline: tls=" << tls << " size=" << size
-                                  << " received=" << output.size() << " response=" << output.substr(0, 256) << '\n';
-                    }
-                    RUVIA_CHECK(output.find("pipeline-last") != std::string::npos);
-                    RUVIA_CHECK(output.ends_with(payload));
-                    RUVIA_CHECK(output.find("HTTP/1.1 200 ") != std::string::npos);
                 }
                 for (const auto mode : {"write", "timeout"}) {
                     peer racing(io, endpoint, tls);

@@ -7,6 +7,7 @@
 #include <span>
 #include <string_view>
 #include <system_error>
+#include <type_traits>
 #include <utility>
 
 #include <asio.hpp>
@@ -19,6 +20,7 @@
 #include "ruvia/http/http_limits.h"
 
 #include "server/inbound_transport_error.h"
+#include "server/server_tls_stream.h"
 
 namespace ruvia::detail {
 
@@ -44,7 +46,16 @@ public:
           allowance_(max_http_header_bytes - std::min(max_http_header_bytes, existing_pipeline_bytes)) {}
 
     void start() {
+        if constexpr (std::is_same_v<stream_type, server_tls_stream>) {
+            stream_.next_layer().bind_peer_read_cancellation(cancellation_.slot(), closing_);
+        }
         tasks_.spawn(read_peer());
+    }
+
+    ~http1_peer_eof_monitor() {
+        if constexpr (std::is_same_v<stream_type, server_tls_stream>) {
+            stream_.next_layer().clear_peer_read_cancellation();
+        }
     }
 
     [[nodiscard]] stop_token token() const noexcept {
@@ -101,13 +112,15 @@ private:
                 char first_byte;
                 const bool first_read = input_.capacity() == 0;
                 const auto space = first_read ? std::span<char>(&first_byte, 1) : input_.prepare_spare();
-                // Cancel this operation, not the socket's concurrent writer.
-                // Asio's SSL io_op feeds received encrypted input into its
-                // engine before honoring read cancellation; it remains there
-                // for the session's next read after this task has joined.
+                // TLS 只取消底层读，组合操作继续排完控制记录输出。直接取消
+                // SSL 组合操作可能截断已经从 BIO 取出的记录，使后续复用失步。
                 const auto completion = co_await async_asio<std::size_t>([this, space](auto handler) mutable {
+                    asio::cancellation_slot slot;
+                    if constexpr (!std::is_same_v<stream_type, server_tls_stream>) {
+                        slot = cancellation_.slot();
+                    }
                     stream_.async_read_some(asio::buffer(space.data(), space.size()),
-                        asio::bind_cancellation_slot(cancellation_.slot(), std::move(handler)));
+                        asio::bind_cancellation_slot(slot, std::move(handler)));
                 });
                 // A terminal cancellation can race a successful read. Preserve
                 // every returned byte before inspecting the shutdown state.
