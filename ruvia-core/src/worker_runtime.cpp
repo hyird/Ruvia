@@ -396,7 +396,7 @@ public:
     std::size_t group_notifications_{0};
 };
 
-void worker_runtime::impl_deleter::operator()(impl_type* value) const noexcept {
+void worker_runtime::impl_deleter_type::operator()(impl_type* value) const noexcept {
     destroy_pmr_object(value, process_resource());
 }
 

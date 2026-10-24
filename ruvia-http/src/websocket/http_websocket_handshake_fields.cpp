@@ -25,16 +25,13 @@ namespace {
 [[nodiscard]] std::pmr::vector<http_header> copy_websocket_response_headers(
     std::span<const http_header_view> headers, std::string_view subprotocol,
     std::string_view extension, std::pmr::memory_resource* resource) {
-    // Account for the whole emitted head: the 101 status line, the generated
-    // fields, the application field section, and the terminating empty line.
+    // Account for the whole emitted head: the fixed 101 prefix, the accept
+    // key line, the negotiated and application fields, and the terminating
+    // empty line.
     http_field_section_budget size;
-    constexpr auto status = http_status_code_token(http_status::switching_protocols);
-    (void)size.add(std::string_view("HTTP/1.1 ").size() + status.size() + 1 +
-                   http_reason_phrase(http_status::switching_protocols).size() + 2);
-    (void)size.add(2);
-    (void)size.add_field("upgrade", "websocket");
-    (void)size.add_field("connection", "Upgrade");
-    (void)size.add_field("sec-websocket-accept", "0000000000000000000000000000");
+    (void)size.add(websocket_switching_protocols_head_prefix.size() + websocket_accept_key_type{}.size() +
+                   std::string_view("\r\n").size());
+    (void)size.add(std::string_view("\r\n").size());
     if (!subprotocol.empty() && !size.add_field("sec-websocket-protocol", subprotocol)) {
         throw std::length_error("WebSocket handshake response headers are too large");
     }

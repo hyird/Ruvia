@@ -5,14 +5,12 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/http_field_syntax.h"
+
 namespace ruvia::detail {
 
 enum class field_line_folding_policy { mime,
     http };
-
-[[nodiscard]] inline bool is_field_line_whitespace(char byte) noexcept {
-    return byte == ' ' || byte == '\t';
-}
 
 // A fold always starts with CRLF followed by SP/HTAB. Leave bare CR/LF and
 // ordinary field separators visible to the protocol's field validator.
@@ -20,7 +18,7 @@ enum class field_line_folding_policy { mime,
     std::string_view input, std::size_t start = 0) noexcept {
     auto position = input.find("\r\n", start);
     while (position != std::string_view::npos) {
-        if (position + 2 < input.size() && is_field_line_whitespace(input[position + 2])) {
+        if (position + 2 < input.size() && is_http_ows_char(input[position + 2])) {
             return position;
         }
         position = input.find("\r\n", position + 2);
@@ -41,10 +39,10 @@ inline void copy_unfolded_field_lines(std::string_view input, std::size_t first_
         auto segment_end = position;
         auto next_segment = position + 2;
         if (policy == field_line_folding_policy::http) {
-            while (segment_end > segment_begin && is_field_line_whitespace(input[segment_end - 1])) {
+            while (segment_end > segment_begin && is_http_ows_char(input[segment_end - 1])) {
                 --segment_end;
             }
-            while (next_segment < input.size() && is_field_line_whitespace(input[next_segment])) {
+            while (next_segment < input.size() && is_http_ows_char(input[next_segment])) {
                 ++next_segment;
             }
         }

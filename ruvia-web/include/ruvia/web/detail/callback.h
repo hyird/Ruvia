@@ -15,6 +15,7 @@ namespace ruvia::detail {
 // Value-semantic PMR owner composed with the allocation-free invocation view.
 // Copy/move/clone/destruction have one implementation for both signature
 // policies. Captured references must still outlive the owning callback.
+// Unlike core move_only_function it is copyable, enforces noexcept signatures, and keeps a heap target whose address callback_ref views may borrow.
 template <typename result_type, bool is_noexcept, typename... args_types>
 class callback_owner final {
 public:

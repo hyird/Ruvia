@@ -83,7 +83,7 @@ public:
     [[nodiscard]] std::size_t size() const noexcept;
 
 private:
-    struct state_deleter_type {
+    struct state_deleter_type final {
         void operator()(detail::env_state* state) const noexcept;
     };
 

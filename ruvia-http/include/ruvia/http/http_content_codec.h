@@ -62,10 +62,10 @@ public:
         std::string_view input, http_content_encode_options options);
 
 private:
-    struct state;
+    struct impl_type;
     http_content_coding coding_;
     std::pmr::memory_resource* resource_;
-    state* state_{nullptr};
+    impl_type* impl_{nullptr};
 };
 
 // gzip members and zstd frames are consumed through the end of input; Brotli

@@ -262,8 +262,8 @@ using transfer_stages_owner = std::unique_ptr<transfer_coding_stage, transfer_st
 
 }  // namespace
 
-struct http_transfer_coding_stack_decoder::impl final {
-    impl(std::span<const http_transfer_coding> codings, std::pmr::memory_resource* resource,
+struct http_transfer_coding_stack_decoder::impl_type final {
+    impl_type(std::span<const http_transfer_coding> codings, std::pmr::memory_resource* resource,
         protocol_byte_limit decoded_limit)
         : resource_(detail::http_pmr_resource_or_default(resource)),
           stage_storage_(make_transfer_stages(codings, this->resource_, decoded_limit)),
@@ -284,13 +284,13 @@ http_transfer_coding_stack_decoder::http_transfer_coding_stack_decoder(
     std::span<const http_transfer_coding> codings, std::pmr::memory_resource* resource,
     protocol_byte_limit decoded_limit) {
     auto* memory = detail::http_pmr_resource_or_default(resource);
-    std::pmr::polymorphic_allocator<impl> allocator(memory);
-    impl_ = allocator.new_object<impl>(codings, memory, decoded_limit);
+    std::pmr::polymorphic_allocator<impl_type> allocator(memory);
+    impl_ = allocator.new_object<impl_type>(codings, memory, decoded_limit);
 }
 
 http_transfer_coding_stack_decoder::~http_transfer_coding_stack_decoder() {
     if (impl_ != nullptr) {
-        std::pmr::polymorphic_allocator<impl>(impl_->resource_).delete_object(impl_);
+        std::pmr::polymorphic_allocator<impl_type>(impl_->resource_).delete_object(impl_);
     }
 }
 

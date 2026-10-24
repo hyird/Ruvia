@@ -72,6 +72,37 @@ inline constexpr std::span<const std::string_view, 2> http_websocket_key_exchang
     return is_forbidden_http_binary_connection_field(name) || http_ascii_equals_ignore_case(name, "te");
 }
 
+// The field identity of a response field line: classify_request_header(name),
+// which also identifies response control fields (Trailer, TE, Upgrade). A
+// field already indexed by classify_response_header_name (known_bit) needs no
+// second name scan; indexed response-only fields have no shared identity.
+[[nodiscard]] inline request_header_kind classify_response_field(
+    std::string_view name, std::uint32_t known_bit) noexcept {
+    switch (known_bit) {
+        case 0:
+            return classify_request_header(name);
+        case response_header_connection:
+            return request_header_kind::connection;
+        case response_header_content_encoding:
+            return request_header_kind::content_encoding;
+        case response_header_content_length:
+            return request_header_kind::content_length;
+        case response_header_content_type:
+            return request_header_kind::content_type;
+        case response_header_transfer_encoding:
+            return request_header_kind::transfer_encoding;
+        default:
+            return request_header_kind::other;
+    }
+}
+
+// Spellings of every generated Connection field line. A sender of Upgrade
+// lists the "Upgrade" connection option (RFC 9110 section 7.8); an HTTP/1.0
+// persistent connection lists "keep-alive" (RFC 9112 section 9.3).
+inline constexpr std::string_view http_connection_field_name = "Connection";
+inline constexpr std::string_view http_connection_upgrade_option = "Upgrade";
+inline constexpr std::string_view http_connection_keep_alive_option = "keep-alive";
+
 enum class http_connection_option : std::uint8_t {
     close = 1U << 0,
     keep_alive = 1U << 1,
@@ -155,9 +186,9 @@ public:
                 }
                 if (http_ascii_equals_ignore_case(option, "close")) {
                     parsed_bits |= bit(http_connection_option::close);
-                } else if (http_ascii_equals_ignore_case(option, "keep-alive")) {
+                } else if (http_ascii_equals_ignore_case(option, http_connection_keep_alive_option)) {
                     parsed_bits |= bit(http_connection_option::keep_alive);
-                } else if (http_ascii_equals_ignore_case(option, "Upgrade")) {
+                } else if (http_ascii_equals_ignore_case(option, http_connection_upgrade_option)) {
                     parsed_bits |= bit(http_connection_option::upgrade);
                 } else if (http_ascii_equals_ignore_case(option, "TE")) {
                     parsed_bits |= bit(http_connection_option::te);

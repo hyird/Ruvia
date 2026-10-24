@@ -13,6 +13,7 @@
 #include "ruvia/http/http_pmr_string.h"
 
 #include "util/http_text_overlap.h"
+#include "util/http_utf8.h"
 #include "websocket/http_websocket_close_payload.h"
 #include "websocket/http_websocket_frame_reader.h"
 #include "websocket/http_websocket_inbound_assembler.h"

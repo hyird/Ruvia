@@ -85,7 +85,7 @@ class operation_storage final : public std::pmr::memory_resource {
 
 }  // namespace
 
-class windows_accept_domain::impl final {
+class windows_accept_domain::impl_type final {
 public:
     struct descriptor final {
         SOCKET handle_{INVALID_SOCKET};
@@ -100,7 +100,7 @@ public:
         ready,
         consuming };
     struct slot final {
-        impl* domain_{};
+        impl_type* domain_{};
         origin* origin_{};
         descriptor* listener_{};
         operation_storage storage_;
@@ -113,12 +113,12 @@ public:
         std::chrono::steady_clock::time_point retry_{};
     };
     struct origin final {
-        origin(impl& domain, worker_runtime& runtime, callbacks completion)
+        origin(impl_type& domain, worker_runtime& runtime, callbacks completion)
             : domain_(domain),
               runtime_(runtime),
               completion_(completion),
               wake_(runtime) {}
-        impl& domain_;
+        impl_type& domain_;
         worker_runtime& runtime_;
         callbacks completion_;
         worker_notification wake_;
@@ -135,7 +135,7 @@ public:
         asio::error_code timer_error_;
     };
 
-    impl(std::size_t workers, std::size_t listeners, std::pmr::memory_resource* resource)
+    impl_type(std::size_t workers, std::size_t listeners, std::pmr::memory_resource* resource)
         : worker_count_(workers),
           listener_count_(listeners),
           descriptors_(checked_product(workers, listeners), resource),
@@ -441,14 +441,14 @@ public:
 
 windows_accept_domain::windows_accept_domain(std::size_t workers, std::size_t listeners,
     std::pmr::memory_resource* resource)
-    : impl_(make_pmr_object<impl>(resource, workers, listeners, resource)) {}
+    : impl_(make_pmr_object<impl_type>(resource, workers, listeners, resource)) {}
 windows_accept_domain::~windows_accept_domain() = default;
 
 void windows_accept_domain::attach(std::size_t index, worker_runtime& runtime, callbacks completion) {
     if (index >= impl_->worker_count_ || impl_->origins_[index] || !completion.accepted_ || !completion.failure_) {
         throw std::logic_error("invalid Windows accept origin attachment");
     }
-    auto receiver = make_pmr_object<impl::origin>(impl_->origins_.get_allocator().resource(), *impl_, runtime, completion);
+    auto receiver = make_pmr_object<impl_type::origin>(impl_->origins_.get_allocator().resource(), *impl_, runtime, completion);
     receiver->slots_ = impl_->slots_.data() + index * impl_->descriptors_.size();
     for (std::size_t listener = 0; listener < impl_->descriptors_.size(); ++listener) {
         auto& operation = receiver->slots_[listener];

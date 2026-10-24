@@ -21,16 +21,6 @@ namespace ruvia::detail {
 inline constexpr std::size_t max_cookie_name_value_bytes = 4096;
 inline constexpr std::size_t max_cookie_attribute_value_bytes = 1024;
 
-[[nodiscard]] inline bool is_valid_cookie_value(std::string_view value) noexcept {
-    for (const auto c : value) {
-        const auto byte = static_cast<unsigned char>(c);
-        if (byte <= 0x20 || byte >= 0x7f || c == '"' || c == ',' || c == ';' || c == '\\') {
-            return false;
-        }
-    }
-    return true;
-}
-
 [[nodiscard]] inline bool is_valid_cookie_attribute(std::string_view value) noexcept {
     // RFC 6265bis path-value is *av-octet: ASCII %x20-3A / %x3C-7E.
     // HTTP field values can carry HTAB and obs-text, but emitting either inside
@@ -42,12 +32,6 @@ inline constexpr std::size_t max_cookie_attribute_value_bytes = 1024;
         }
     }
     return true;
-}
-
-[[nodiscard]] inline bool cookie_name_starts_with_ignore_case(
-    std::string_view name, std::string_view prefix) noexcept {
-    return name.size() >= prefix.size() &&
-           http_ascii_equals_ignore_case(name.substr(0, prefix.size()), prefix);
 }
 
 [[nodiscard]] inline bool is_valid_cookie_domain(std::string_view value) noexcept {
@@ -120,16 +104,6 @@ inline constexpr std::size_t max_cookie_attribute_value_bytes = 1024;
     return {};
 }
 
-[[nodiscard]] inline std::optional<cookie_prefix> cookie_name_prefix(std::string_view name) noexcept {
-    if (cookie_name_starts_with_ignore_case(name, "__Host-")) {
-        return cookie_prefix::host;
-    }
-    if (cookie_name_starts_with_ignore_case(name, "__Secure-")) {
-        return cookie_prefix::secure;
-    }
-    return std::nullopt;
-}
-
 [[nodiscard]] inline bool cookie_prefix_requirements_met(
     cookie_prefix prefix, bool secure, std::string_view path, std::string_view domain) noexcept {
     switch (prefix) {
@@ -160,7 +134,7 @@ inline void validate_cookie(
     if (!is_valid_http_header_name(name)) {
         throw std::invalid_argument("invalid cookie name");
     }
-    if (!is_valid_cookie_value(value)) {
+    if (!::ruvia::is_valid_cookie_value(value)) {
         throw std::invalid_argument("invalid cookie value");
     }
     const auto prefix_size = options.prefix_ ? cookie_prefix_text(*options.prefix_).size() : 0;
@@ -218,7 +192,7 @@ inline void validate_cookie(
     // that receive-side rule for literal wire names so every cookie emitted by
     // this sender can actually be stored. A typed prefix is canonical and is the
     // outermost wire prefix, so it takes precedence over bytes in `name`.
-    const auto prefix = options.prefix_ ? options.prefix_ : detail::cookie_name_prefix(name);
+    const auto prefix = options.prefix_ ? options.prefix_ : ::ruvia::cookie_name_prefix(name);
     if (prefix && !detail::cookie_prefix_requirements_met(*prefix, secure, options.path_, options.domain_)) {
         throw std::invalid_argument(*prefix == cookie_prefix::host
                                         ? "__Host- cookie requires Secure, Path=/, and no Domain"

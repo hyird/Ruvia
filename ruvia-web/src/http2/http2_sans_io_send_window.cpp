@@ -55,16 +55,6 @@ task<http2_stream_data_write_status> write_http2_stream_data_chunk(
         if (signal == nullptr) {
             co_return http2_stream_data_write_status::peer_closed;
         }
-        // Empty END_STREAM needs no flow-control credit (RFC 9113 section
-        // 6.9.1), but must not overtake older core-owned DATA.
-        if (chunk.empty() && end_stream == http2_end_stream::end_stream &&
-            connection.has_queued_data(stream_id)) {
-            if (co_await await_http2_send_window(connection, stream_id, signal, aborted) ==
-                http2_send_window_wait_status::aborted) {
-                co_return classify_aborted_write(signal, aborted);
-            }
-            continue;
-        }
         if (!chunk.empty()) {
             for (;;) {
                 const auto window = connection.send_window_state(stream_id);

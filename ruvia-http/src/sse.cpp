@@ -7,7 +7,7 @@
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_number_format.h"
 
-#include "websocket/http_websocket_payload_validation.h"
+#include "util/http_utf8.h"
 
 namespace ruvia {
 namespace {

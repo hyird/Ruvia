@@ -15,14 +15,6 @@ namespace {
         .offset_ = static_cast<std::uint32_t>(offset), .length_ = static_cast<std::uint32_t>(length)};
 }
 
-[[nodiscard]] std::size_t trim_right_ows(
-    std::string_view buffer, std::size_t begin, std::size_t end) noexcept {
-    while (end > begin && (buffer[end - 1] == ' ' || buffer[end - 1] == '\t')) {
-        --end;
-    }
-    return end;
-}
-
 // The request line: method SP request-target SP HTTP-version CRLF (RFC 9112
 // section 3.1). On success `cursor` sits on the first header field and the
 // block carries the accepted protocol version.
@@ -154,7 +146,7 @@ namespace {
         const auto name_end = cursor_value;
         ++cursor_value;
 
-        while (cursor_value < headers_end && (buffer[cursor_value] == ' ' || buffer[cursor_value] == '\t')) {
+        while (cursor_value < headers_end && is_http_ows_char(buffer[cursor_value])) {
             ++cursor_value;
         }
         const auto value_start = cursor_value;
@@ -162,10 +154,10 @@ namespace {
         if (cursor_value + 1 >= headers_end || buffer[cursor_value] != '\r' || buffer[cursor_value + 1] != '\n') {
             return http_parse_error::invalid_header;
         }
-        const auto value_end = trim_right_ows(buffer, value_start, cursor_value);
+        // Leading OWS is already consumed, so trimming only drops trailing OWS.
+        const auto value = http_trim_ows(buffer.substr(value_start, cursor_value - value_start));
 
         const auto name = buffer.substr(name_start, name_end - name_start);
-        const auto value = buffer.substr(value_start, value_end - value_start);
 
         const auto kind = classify_request_header(name);
         if (const auto error = apply_request_header(kind, value, ignore_upgrade, block)) {
@@ -174,7 +166,7 @@ namespace {
 
         block.headers_.append(
             parsed_request_header_slot{.name_ = make_slice(name_start, name_end - name_start),
-                .value_ = make_slice(value_start, value_end - value_start),
+                .value_ = make_slice(value_start, value.size()),
                 .kind_ = kind});
         if (kind == request_header_kind::host) {
             block.host_header_index_ = static_cast<known_request_header_index_type>(block.headers_.size() - 1);

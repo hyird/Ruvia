@@ -50,11 +50,15 @@ void apply_parsed_request_target(http_request& request, const request_target_vie
 }
 
 // RFC 9112 sections 3.2.2 and 3.3 make the request-target authoritative for
-// absolute-form and authority-form. Rebind both headers() and the known-header
-// cache so application code cannot observe a conflicting Host value as a
-// second routing truth.
-[[nodiscard]] constexpr bool target_overrides_host_header(http_request_target_form form) noexcept {
-    return form == http_request_target_form::absolute || form == http_request_target_form::authority;
+// absolute-form and authority-form. Host field lines bind to this value in
+// both headers() and the known-header cache so application code cannot
+// observe a conflicting Host value as a second routing truth.
+[[nodiscard]] std::string_view bound_host_field_value(
+    const request_target_view& target_view, std::string_view value) noexcept {
+    return target_view.form_ == http_request_target_form::absolute ||
+                   target_view.form_ == http_request_target_form::authority
+               ? target_view.authority_
+               : value;
 }
 }  // namespace
 
@@ -187,9 +191,8 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto& header_value = headers[i];
         auto value = header_value.value_.bind(buffer);
-        if (target_overrides_host_header(target_view.form_) &&
-            host_header_index >= 0 && i == static_cast<std::size_t>(host_header_index)) {
-            value = target_view.authority_;
+        if (host_header_index >= 0 && i == static_cast<std::size_t>(host_header_index)) {
+            value = bound_host_field_value(target_view, value);
         }
         (void)http_request_access::add_header(request_,
             http_header_view{header_value.name_.bind(buffer), value},
@@ -245,9 +248,8 @@ http_request make_parsed_http_request(
     http_request_access::reserve_headers(request, headers.size());
     for (const auto& header : headers) {
         auto field = header;
-        if (target_overrides_host_header(target_view.form_) &&
-            http_ascii_equals_ignore_case(field.name(), "Host")) {
-            field = http_header_view{field.name(), target_view.authority_};
+        if (http_ascii_equals_ignore_case(field.name(), "Host")) {
+            field = http_header_view{field.name(), bound_host_field_value(target_view, field.value())};
         }
         if (!http_request_access::add_header(request, field)) {
             throw http_parse_protocol_error(http_parse_error::header_too_large);

@@ -6,8 +6,6 @@
 #include <utility>
 #include <variant>
 
-#include <openssl/rand.h>
-
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
@@ -18,6 +16,7 @@
 
 #include "client/http1_request_head.h"
 #include "client/websocket_client_state.h"
+#include "tls/tls_random.h"
 
 namespace ruvia::detail {
 
@@ -79,7 +78,7 @@ task<void> websocket_client_state::establish() {
 
 task<void> websocket_client_state::perform_handshake() {
     std::array<std::uint8_t, websocket_client_handshake_nonce_bytes> nonce{};
-    if (RAND_bytes_ex(nullptr, nonce.data(), nonce.size(), 0) != 1) {
+    if (!fill_random_bytes(nonce)) {
         throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
             "failed to generate WebSocket handshake key");
     }

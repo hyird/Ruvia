@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/http_field_syntax.h"
 
 // Shared quality parsing and accumulation (RFC 9110 section 12.4.2). Token
 // fields use one optional weight; media ranges extract q from their parameters.
@@ -50,10 +51,7 @@ namespace ruvia::detail {
     if (semicolon == std::string_view::npos) {
         return 1000;
     }
-    auto weight = value.substr(semicolon + 1);
-    while (!weight.empty() && (weight.front() == ' ' || weight.front() == '\t')) {
-        weight.remove_prefix(1);
-    }
+    auto weight = http_trim_ows(value.substr(semicolon + 1));
     if (weight.size() < 3 || http_ascii_to_lower(static_cast<unsigned char>(weight[0])) != 'q' ||
         weight[1] != '=') {
         return 0;

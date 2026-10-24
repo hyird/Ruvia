@@ -3,14 +3,15 @@
 #include <stdexcept>
 
 #include <openssl/crypto.h>
-#include <openssl/rand.h>
 #include <openssl/ssl.h>
+
+#include "tls/tls_random.h"
 
 namespace ruvia::detail {
 
 tls_session_ticket_keys tls_session_ticket_keys::generate() {
     tls_session_ticket_keys keys;
-    if (RAND_bytes(keys.bytes_.data(), static_cast<int>(keys.bytes_.size())) != 1) {
+    if (!fill_random_bytes(keys.bytes_)) {
         throw std::runtime_error("failed to generate TLS session ticket keys");
     }
     return keys;

@@ -59,6 +59,11 @@ zlib_deflate_stream::zlib_deflate_stream(
     }
 }
 
+zlib_deflate_stream::zlib_deflate_stream(std::pmr::memory_resource* resource, zlib_content_format format)
+    : zlib_deflate_stream(resource, Z_DEFAULT_COMPRESSION,
+          format == zlib_content_format::gzip ? zlib_gzip_window_bits : zlib_deflate_window_bits,
+          zlib_default_mem_level, Z_DEFAULT_STRATEGY) {}
+
 zlib_deflate_stream::~zlib_deflate_stream() {
     if (initialized()) {
         (void)deflateEnd(&stream_);

@@ -13,6 +13,7 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_number_format.h"
+#include "ruvia/http/http_protocol_managed_fields.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
@@ -71,10 +72,8 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
         if (!is_valid_http_header_name(header.name()) || !is_valid_http_header_value(header.value())) {
             throw std::invalid_argument("invalid subrequest header");
         }
-        for (const auto name : {"host", "content-length", "transfer-encoding", "connection", "upgrade", "expect", "trailer"}) {
-            if (http_ascii_equals_ignore_case(header.name(), name)) {
-                throw std::invalid_argument("subrequest framing headers are owned by dispatch");
-            }
+        if (is_http_protocol_managed_request_field(header.name())) {
+            throw std::invalid_argument("subrequest framing headers are owned by dispatch");
         }
         header_bytes += header.name().size() + header.value().size();
         if (header_bytes > max_subrequest_header_bytes) {

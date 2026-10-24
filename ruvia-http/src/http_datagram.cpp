@@ -50,6 +50,23 @@ std::variant<std::size_t, http_capsule_codec_error> encode_capsule_var_int(std::
     output[0] = static_cast<char>(static_cast<unsigned char>(output[0]) | tag);
     return size;
 }
+// CONNECT-UDP context ID 0 (RFC 9298 section 5) as its one-byte variable-length integer.
+constexpr std::string_view udp_payload_context_id{"\0", 1};
+// One DATAGRAM capsule (RFC 9297 section 3.5) whose value is `context_prefix`
+// followed by the borrowed payload.
+std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(
+    std::span<const char> payload_value, std::string_view context_prefix) noexcept {
+    http_datagram_write_plan plan{.payload_ = payload_value};
+    const auto header = encode_http_capsule_header(
+        plan.prefix_, http_datagram_capsule_type, context_prefix.size() + payload_value.size());
+    if (header.index() != 0) {
+        return http_datagram_error::payload_too_large;
+    }
+    plan.prefix_size_ = std::get<0>(header);
+    std::ranges::copy(context_prefix, plan.prefix_.data() + plan.prefix_size_);
+    plan.prefix_size_ += context_prefix.size();
+    return plan;
+}
 }  // namespace
 std::optional<bool> parse_http_capsule_protocol(std::string_view value) noexcept {
     detail::http_structured_parser parser{detail::http_structured_text_input{value}};
@@ -186,13 +203,7 @@ std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_sessio
     if (!send_open_) {
         return http_datagram_error::send_closed;
     }
-    http_datagram_write_plan plan{.payload_ = payload_value};
-    const auto prefix = encode_http_capsule_header(plan.prefix_, http_datagram_capsule_type, payload_value.size());
-    if (prefix.index() != 0) {
-        return http_datagram_error::payload_too_large;
-    }
-    plan.prefix_size_ = std::get<0>(prefix);
-    return plan;
+    return plan_datagram_capsule(payload_value, {});
 }
 std::optional<std::span<const char>> http_datagram_session::receive_datagram(
     std::span<const char> input) const noexcept {
@@ -209,11 +220,7 @@ std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_sessio
     if (payload_value.size() > 65527) {
         return http_datagram_error::payload_too_large;
     }
-    http_datagram_write_plan plan{.payload_ = payload_value};
-    const auto prefix = encode_http_capsule_header(plan.prefix_, http_datagram_capsule_type, payload_value.size() + 1);
-    plan.prefix_size_ = std::get<0>(prefix);
-    plan.prefix_[plan.prefix_size_++] = 0;
-    return plan;
+    return plan_datagram_capsule(payload_value, udp_payload_context_id);
 }
 std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> http_datagram_session::receive_udp_datagram(
     std::span<const char> input) const noexcept {

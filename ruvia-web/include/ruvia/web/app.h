@@ -221,7 +221,7 @@ private:
     application& use_middleware(detail::owned_middleware_descriptor descriptor);
     application& use_worker_state_definition(detail::worker_state_definition definition);
 
-    struct state_deleter_type {
+    struct state_deleter_type final {
         void operator()(detail::app_state* state) const noexcept;
     };
 

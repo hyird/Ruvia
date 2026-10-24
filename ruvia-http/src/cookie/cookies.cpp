@@ -153,11 +153,26 @@ set_cookie_plan::written_fields set_cookie_plan::write_fields(char* cursor_value
 namespace ruvia {
 
 bool is_valid_cookie_value(std::string_view value) noexcept {
-    return detail::is_valid_cookie_value(value);
+    for (const auto c : value) {
+        const auto byte = static_cast<unsigned char>(c);
+        if (byte <= 0x20 || byte >= 0x7f || c == '"' || c == ',' || c == ';' || c == '\\') {
+            return false;
+        }
+    }
+    return true;
 }
 
 std::optional<cookie_prefix> cookie_name_prefix(std::string_view name) noexcept {
-    return detail::cookie_name_prefix(name);
+    const auto starts_with_ignore_case = [name](std::string_view prefix) noexcept {
+        return name.size() >= prefix.size() && http_ascii_equals_ignore_case(name.substr(0, prefix.size()), prefix);
+    };
+    if (starts_with_ignore_case("__Host-")) {
+        return cookie_prefix::host;
+    }
+    if (starts_with_ignore_case("__Secure-")) {
+        return cookie_prefix::secure;
+    }
+    return std::nullopt;
 }
 
 bool cookie_prefix_requirements_met(

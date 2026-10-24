@@ -5,8 +5,8 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_request.h"
 #include "ruvia/web/static_files.h"
 
 #include "http/static_root_index.h"
@@ -55,14 +55,16 @@ private:
     http_content_coding content_coding_;
 };
 
-// Selects the best precompressed sidecar (foo.js.br / .gz / .zst) the client
-// accepts and that exists in the index -- highest Accept-Encoding q-value wins,
-// ties resolve br > zstd > gzip. The served bytes are the variant's, so its
-// size/etag/modified describe the wire representation; the caller keeps the
-// original Content-Type. Index lookups only (no per-request filesystem stat).
+// Selects the best precompressed sidecar (foo.js.br / .gz / .zst) or
+// refresh-built in-memory variant the request's Accept-Encoding selection
+// accepts -- highest q-value wins, ties resolve br > zstd > gzip. The served
+// bytes are the variant's, so its size/etag/modified describe the wire
+// representation; the caller keeps the original Content-Type. Index lookups
+// only (no per-request filesystem stat). nullopt means no acceptable
+// representation exists.
 [[nodiscard]] std::optional<static_file_representation> select_static_file_representation(
-    const static_root& root, std::string_view relative, const http_request& request,
-    std::pmr::memory_resource* resource, detail::static_root_entry_view identity,
-    detail::static_file_selection_mode mode);
+    const static_root& root, std::string_view relative,
+    const std::optional<http_response_coding_selection>& selection, std::pmr::memory_resource* resource,
+    detail::static_root_entry_view identity);
 
 }  // namespace ruvia

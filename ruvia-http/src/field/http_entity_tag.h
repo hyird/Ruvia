@@ -3,6 +3,7 @@
 #include <string_view>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/http_field_syntax.h"
 
 namespace ruvia::detail {
 
@@ -45,8 +46,7 @@ struct http_etag_list_match_result final {
     std::size_t offset = 0;
 
     while (offset < values.size()) {
-        while (offset < values.size() &&
-               (values[offset] == ' ' || values[offset] == '\t' || values[offset] == ',')) {
+        while (offset < values.size() && (is_http_ows_char(values[offset]) || values[offset] == ',')) {
             ++offset;
         }
         if (offset == values.size()) {
@@ -76,7 +76,7 @@ struct http_etag_list_match_result final {
         matched = matched || (strong ? http_strong_etag_equals(entity_tag, expected)
                                      : http_weak_etag_equals(entity_tag, expected));
 
-        while (offset < values.size() && (values[offset] == ' ' || values[offset] == '\t')) {
+        while (offset < values.size() && is_http_ows_char(values[offset])) {
             ++offset;
         }
         if (offset < values.size() && values[offset] != ',') {

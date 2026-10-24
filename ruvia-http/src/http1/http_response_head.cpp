@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/response/http1_status_line.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
@@ -32,10 +33,6 @@ struct response_head_flags {
 };
 
 inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-Encoding: chunked\r\n";
-inline constexpr std::string_view http10_status_prefix = "HTTP/1.0 ";
-inline constexpr std::string_view http11_status_prefix = "HTTP/1.1 ";
-// The head is measured before the protocol version is chosen for emission.
-static_assert(http10_status_prefix.size() == http11_status_prefix.size());
 
 [[nodiscard]] std::optional<std::uint64_t> explicit_content_length(const http_response& response) {
     // A ok parse_field always populates the state's value, and a Content-Length
@@ -61,32 +58,22 @@ inline constexpr std::string_view content_length_name = "Content-Length";
 [[nodiscard]] bool is_valid_http1_emitted_response_header(std::string_view name, std::string_view value,
     std::uint32_t known_bit, bool trailer_header_allowed, http_connection_options& connection_options,
     http_upgrade_protocols& upgrade_protocols) noexcept {
-    if (known_bit == response_header_connection) {
-        return connection_options.parse_field(value, http_field_list_role::sender) == http_field_list_parse_status::ok;
+    switch (classify_response_field(name, known_bit)) {
+        case request_header_kind::connection:
+            return connection_options.parse_field(value, http_field_list_role::sender) == http_field_list_parse_status::ok;
+        case request_header_kind::trailer:
+            return trailer_header_allowed || http_trim_ows(value).empty();
+        case request_header_kind::upgrade:
+            return upgrade_protocols.parse_field(value, http_field_list_role::sender) == http_field_list_parse_status::ok;
+        default:
+            return true;
     }
-    if (known_bit != 0) {
-        return true;
-    }
-    if (http_ascii_equals_ignore_case(name, "Trailer")) {
-        return trailer_header_allowed || http_trim_ows(value).empty();
-    }
-    if (http_ascii_equals_ignore_case(name, "Upgrade")) {
-        return upgrade_protocols.parse_field(value, http_field_list_role::sender) == http_field_list_parse_status::ok;
-    }
-    return true;
 }
 
 void emit_response_head(const http_response& response, http_raw_wire_sink& sink_value, http_status_code response_status,
     std::string_view reason_phrase, std::string_view date_header, response_head_flags flags,
     std::string_view content_length_value) noexcept {
-    sink_value.append(
-        flags.protocol_version_ == http_protocol_version::http10 ? http10_status_prefix : http11_status_prefix);
-    const auto status_token = http_status_code_token(response_status);
-    sink_value.append(http_status_code_token_view(status_token));
-    // RFC 9112 requires this SP even when the optional reason phrase is empty.
-    sink_value.append(' ');
-    sink_value.append(reason_phrase);
-    sink_value.append(std::string_view("\r\n"));
+    emit_http1_status_line(sink_value, flags.protocol_version_, response_status, reason_phrase);
 
     for (const auto& header : response.headers()) {
         const auto known_bit = http_response_header_access::known_bit(header);
@@ -209,8 +196,7 @@ void append_response_head(
             throw std::length_error("HTTP response head is too large");
         }
     };
-    charge(head_budget.add(
-        http11_status_prefix.size() + http_status_code_token_size + 1 + reason_phrase.size() + 2));
+    charge(head_budget.add(http1_status_line_size(reason_phrase)));
     http_connection_options connection_options;
     http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
@@ -309,6 +295,21 @@ const char* http1_final_response_commit_error::what() const noexcept {
     return "unknown HTTP final response commit failure";
 }
 
+namespace {
+
+// Lists one generated option; an application Connection line is extended
+// rather than replaced, so its own options survive.
+void add_http1_connection_option(http_response& response, std::string_view option, bool field_present) {
+    if (field_present) {
+        response.header(detail::http_connection_field_name, option,
+            http_response_header_options{.mode_ = http_response_header_mode::append});
+    } else {
+        response.header_stable_view(detail::http_connection_field_name, option);
+    }
+}
+
+}  // namespace
+
 http1_request_connection_plan http1_commit_final_response(
     http_response& response, http1_request_connection_plan plan) {
     const auto control_result = detail::http1_final_response_control_plan(response);
@@ -321,12 +322,7 @@ http1_request_connection_plan http1_commit_final_response(
     const bool preserve_upgrade = upgrade_protocols.has_field();
     const bool generate_upgrade_option = preserve_upgrade && !response_options.upgrade();
     if (generate_upgrade_option) {
-        if (response_options.has_field()) {
-            response.header("Connection", "Upgrade",
-                http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
-        } else {
-            response.header_stable_view("Connection", "Upgrade");
-        }
+        add_http1_connection_option(response, detail::http_connection_upgrade_option, response_options.has_field());
     }
     // A failed CONNECT never becomes a tunnel. RFC 9931 section 8 requires
     // closing instead of interpreting optimistic tunnel data as more requests.
@@ -339,12 +335,8 @@ http1_request_connection_plan http1_commit_final_response(
                                                   : http1_connection_close_field_policy::close_only);
     } else if (plan.protocol_version() == http_protocol_version::http10 &&
                !response_options.keep_alive()) {
-        if (response_options.has_field() || generate_upgrade_option) {
-            response.header("Connection", "keep-alive",
-                http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
-        } else {
-            response.header_stable_view("Connection", "keep-alive");
-        }
+        add_http1_connection_option(response, detail::http_connection_keep_alive_option,
+            response_options.has_field() || generate_upgrade_option);
     }
     return plan;
 }

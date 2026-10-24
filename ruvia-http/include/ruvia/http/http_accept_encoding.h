@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -158,12 +160,21 @@ public:
     [[nodiscard]] static std::optional<http_response_coding_selection> select(
         const http_response_coding_qualities& qualities,
         http_response_coding_candidates candidates) noexcept;
+
+    // Ranks the same Accept-Encoding snapshot over the codings one
+    // representation store actually holds (for example indexed precompressed
+    // files), so that store never parses the request's fields again.
+    [[nodiscard]] constexpr std::optional<http_response_coding_selection> select(
+        http_response_coding_candidates candidates) const noexcept {
+        return rank(scores_, candidates);
+    }
+
     [[nodiscard]] constexpr http_content_coding coding() const noexcept {
         return coding_;
     }
 
     [[nodiscard]] constexpr bool identity_accepted() const noexcept {
-        return identity_accepted_;
+        return accepts(http_content_coding::identity);
     }
 
     // The selected coding is the server's preference, while this predicate
@@ -172,22 +183,23 @@ public:
     // missing Accept-Encoding field accepts every coding; an explicitly
     // present field uses the parsed q-value set, including wildcard rules.
     [[nodiscard]] constexpr bool accepts(http_content_coding coding) const noexcept {
-        return http_response_coding_candidates::all().contains(coding) &&
-               (!accept_encoding_present_ || acceptable_codings_.contains(coding));
+        const auto index = static_cast<std::size_t>(coding);
+        return index < scores_.size() && scores_[index] >= 0;
     }
 
 private:
-    constexpr http_response_coding_selection(http_content_coding coding, bool identity_accepted,
-        bool accept_encoding_present, http_response_coding_candidates acceptable_codings) noexcept
-        : coding_(coding),
-          identity_accepted_(identity_accepted),
-          accept_encoding_present_(accept_encoding_present),
-          acceptable_codings_(acceptable_codings) {}
+    // Client score per http_content_coding value; -1 marks an unacceptable coding.
+    using scores_type = std::array<std::int16_t, 5>;
 
+    constexpr http_response_coding_selection(http_content_coding coding, scores_type scores) noexcept
+        : scores_(scores),
+          coding_(coding) {}
+
+    [[nodiscard]] static constexpr std::optional<http_response_coding_selection> rank(
+        scores_type scores, http_response_coding_candidates candidates) noexcept;
+
+    scores_type scores_;
     http_content_coding coding_;
-    bool identity_accepted_;
-    bool accept_encoding_present_;
-    http_response_coding_candidates acceptable_codings_;
 };
 
 // Picks the best response coding from the supplied representation candidates.
@@ -203,28 +215,30 @@ inline std::optional<http_response_coding_selection> http_response_coding_select
 inline std::optional<http_response_coding_selection> http_response_coding_selection::select(
     const http_response_coding_qualities& qualities,
     http_response_coding_candidates candidates) noexcept {
-    const int identity_score = qualities.score(http_content_coding::identity);
-    const http_content_coding available_codings[] = {
+    scores_type scores{};
+    for (std::size_t index = 0; index < scores.size(); ++index) {
+        scores[index] = static_cast<std::int16_t>(qualities.score(static_cast<http_content_coding>(index)));
+    }
+    return rank(scores, candidates);
+}
+
+constexpr std::optional<http_response_coding_selection> http_response_coding_selection::rank(
+    scores_type scores, http_response_coding_candidates candidates) noexcept {
+    constexpr http_content_coding preference[] = {
         http_content_coding::brotli,
         http_content_coding::zstd,
         http_content_coding::gzip,
         http_content_coding::deflate,
         http_content_coding::identity,
     };
-    auto acceptable_codings = http_response_coding_candidates::empty();
-    for (const auto coding : available_codings) {
-        if (qualities.accepts(coding)) {
-            acceptable_codings.include(coding);
-        }
-    }
     http_content_coding best = http_content_coding::identity;
     bool found = false;
     int best_score = -1;
-    for (const auto coding : available_codings) {
+    for (const auto coding : preference) {
         if (!candidates.contains(coding)) {
             continue;
         }
-        const int score = qualities.score(coding);
+        const int score = scores[static_cast<std::size_t>(coding)];
         if (score > best_score) {
             best_score = score;
             best = coding;
@@ -234,8 +248,7 @@ inline std::optional<http_response_coding_selection> http_response_coding_select
     if (!found) {
         return std::nullopt;
     }
-    return http_response_coding_selection(
-        best, identity_score >= 0, qualities.field_present_, acceptable_codings);
+    return http_response_coding_selection(best, scores);
 }
 
 class http_request;

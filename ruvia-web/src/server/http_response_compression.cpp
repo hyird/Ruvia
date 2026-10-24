@@ -15,11 +15,29 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] std::optional<std::pmr::string> encode_buffered_body(
-    http_content_coding coding, std::pmr::string plain) {
-    const auto max_encoded_bytes = plain.empty() ? 0 : plain.size() - 1;
-    return encode_http_content(
-        coding, plain, {.max_encoded_bytes_ = max_encoded_bytes, .resource_ = process_resource()});
+// A coded representation is worth sending only when strictly smaller than
+// the identity bytes; the encoder stops at this cap instead of finishing.
+[[nodiscard]] http_content_encode_options compressed_body_options(
+    std::string_view plain, std::pmr::memory_resource* resource) noexcept {
+    return {.max_encoded_bytes_ = plain.empty() ? 0 : plain.size() - 1, .resource_ = resource};
+}
+
+// Publishes an encoder result as the response representation. The commit
+// stages every affected header before publishing the owned body, so a
+// request-resource failure leaves the identity response usable for the typed
+// 500 path instead of exposing a mixed body/metadata state.
+[[nodiscard]] http_response_compression_status commit_compressed_body(
+    http_response& response, http_content_coding coding, std::optional<std::pmr::string>&& encoding) noexcept {
+    if (!encoding.has_value()) {
+        return http_response_compression_status::not_applicable;
+    }
+    try {
+        response.replace_body_with_content_encoding(std::move(*encoding), http_content_coding_token(coding));
+    } catch (...) {
+        ruvia::report_unhandled_failure("response compression", std::current_exception());
+        return http_response_compression_status::failed;
+    }
+    return http_response_compression_status::compressed;
 }
 
 [[nodiscard]] bool media_type_starts_with(
@@ -119,31 +137,14 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     }
 
     const auto coding = selection.coding();
-    const auto max_encoded_bytes = body.empty() ? 0 : body.size() - 1;
     std::optional<std::pmr::string> encoding;
     try {
-        encoding = codecs.encoder(coding).encode(
-            body, {.max_encoded_bytes_ = max_encoded_bytes, .resource_ = response.memory_resource()});
+        encoding = codecs.encoder(coding).encode(body, compressed_body_options(body, response.memory_resource()));
     } catch (...) {
         ruvia::report_unhandled_failure("response compression", std::current_exception());
         return {http_response_compression_status::failed, false};
     }
-    if (!encoding.has_value()) {
-        return not_applicable;
-    }
-
-    try {
-        response.replace_body_with_content_encoding(
-            std::move(*encoding), http_content_coding_token(coding));
-    } catch (...) {
-        ruvia::report_unhandled_failure("response compression", std::current_exception());
-        // The representation commit stages every affected header before
-        // publishing the owned body. A request-resource failure therefore
-        // leaves the identity response usable for the typed 500 path instead
-        // of exposing a mixed body/metadata state.
-        return {http_response_compression_status::failed, false};
-    }
-    return {http_response_compression_status::compressed, false};
+    return {commit_compressed_body(response, coding, std::move(encoding)), false};
 }
 
 task<http_response_compression_status> compress_response_offloaded(http_content_coding coding,
@@ -151,8 +152,8 @@ task<http_response_compression_status> compress_response_offloaded(http_content_
     try {
         std::pmr::string plain(response.body_bytes(), process_resource());
         auto result_value =
-            co_await run_blocking(pool, worker_value, [coding, plain = std::move(plain)]() mutable {
-                return encode_buffered_body(coding, std::move(plain));
+            co_await run_blocking(pool, worker_value, [coding, plain = std::move(plain)]() {
+                return encode_http_content(coding, plain, compressed_body_options(plain, process_resource()));
             });
         if (result_value.failed()) {
             ruvia::report_unhandled_failure("response compression", result_value.error());
@@ -163,18 +164,7 @@ task<http_response_compression_status> compress_response_offloaded(http_content_
             // not broken encoders. Preserve the identity representation.
             co_return http_response_compression_status::not_applicable;
         }
-        auto encoding = std::move(result_value).value();
-        if (!encoding.has_value()) {
-            co_return http_response_compression_status::not_applicable;
-        }
-        try {
-            response.replace_body_with_content_encoding(
-                std::move(*encoding), http_content_coding_token(coding));
-        } catch (...) {
-            ruvia::report_unhandled_failure("response compression", std::current_exception());
-            co_return http_response_compression_status::failed;
-        }
-        co_return http_response_compression_status::compressed;
+        co_return commit_compressed_body(response, coding, std::move(result_value).value());
     } catch (...) {
         ruvia::report_unhandled_failure("response compression", std::current_exception());
         // Failure to allocate/copy the request-owned input or create the

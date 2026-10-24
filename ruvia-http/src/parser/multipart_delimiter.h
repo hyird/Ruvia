@@ -5,6 +5,7 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/multipart_parser.h"
 
 // Locating a multipart delimiter line in a byte run (RFC 2046 section 5.1.1):
@@ -212,7 +213,8 @@ private:
     }
 
     cursor_value = std::max(cursor_value, padding_cursor);
-    while (cursor_value < input.size() && (input[cursor_value] == ' ' || input[cursor_value] == '\t')) {
+    // transport-padding is *LWSP-char (RFC 2046 section 5.1.1): SP / HTAB.
+    while (cursor_value < input.size() && is_http_ows_char(input[cursor_value])) {
         ++cursor_value;
     }
     padding_cursor = cursor_value;

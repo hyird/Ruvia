@@ -69,6 +69,19 @@ void http_append_percent_byte(output_type& output, unsigned char byte) {
     output.push_back(http_upper_hex_digit(byte));
 }
 
+// Repairs an application-supplied RFC 3986 URI-reference (for example a
+// Location field value) by percent-encoding every byte that cannot appear
+// literally at its position. Well-formed pct-encoded triplets and every legal
+// byte are kept byte for byte, so a correctly encoded reference is never
+// encoded twice (RFC 3986 section 2.4). '[' and ']' stay literal only as the
+// authority's IP-literal delimiters, ':' is encoded in the first segment of a
+// relative-path reference (section 4.2), and only the first '#' starts the
+// fragment. Returns no value, without allocating, when the reference needs no
+// encoding; otherwise the encoded reference is allocated from `resource` (or
+// the default PMR resource).
+[[nodiscard]] std::optional<std::pmr::string> percent_encode_uri_reference(
+    std::string_view reference, std::pmr::memory_resource* resource);
+
 namespace detail {
 template <typename visitor_type>
 [[nodiscard]] bool dispatch_url_encoded_pair_visitor(

@@ -6,13 +6,12 @@
 #include <stdexcept>
 #include <utility>
 
-#include <openssl/rand.h>
-
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_handle.h"
 
 #include "client/websocket_client_state.h"
+#include "tls/tls_random.h"
 
 namespace ruvia::detail {
 
@@ -65,8 +64,7 @@ bool websocket_client_state::protocol_open() const noexcept {
 }
 
 bool websocket_client_state::generate_mask(void*, websocket_mask_key_type& key) noexcept {
-    return RAND_bytes_ex(nullptr, reinterpret_cast<unsigned char*>(key.data()), key.size(), 0) ==
-           1;
+    return fill_random_bytes(std::span<unsigned char>(reinterpret_cast<unsigned char*>(key.data()), key.size()));
 }
 
 void websocket_client_state::check_operation_affinity(void* target) noexcept {

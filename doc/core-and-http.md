@@ -95,7 +95,7 @@ pool.join();
 | `"ruvia/http/http_status.h"` | `class http_status_code final`、`namespace ruvia::http_status`、`http_reason_phrase` | 强类型 HTTP 状态码（`100..599`）与标准状态码常量（`http_status::ok`、`not_found` 等） |
 | `"ruvia/http/http_protocol_error.h"` | `class http_protocol_error final : public std::exception`、`enum class http_parse_error` | 零动态分配的协议错误异常（`http_protocol_error(status, code, message)`：携带 `http_status_code`、静态存储期的稳定 snake_case 机器码 `code()`（如 `missing_host`、`conflicting_content_length`）与定长诊断文本）与解析错误枚举 |
 | `"ruvia/http/http_request_target.h"` | `http_authority_view`、`http_origin_view`、`parse_http_authority`、`is_valid_http_origin_form_target`、`is_valid_http_connect_authority`、`is_valid_http_serialized_origin` | RFC 9110 / RFC 3986 请求目标、Authority 与 Origin 语法校验和解析 |
-| `"ruvia/http/url_encoding.h"` / `"ruvia/http/http_hex.h"` / `"ruvia/http/http_base64.h"` | `decode_url_component`、`validate_url_encoding`、`visit_url_encoded_pairs`、`http_encode_lower_hex`、`http_base64_encode`、`http_base64_decode` | URL 百分号/表单编解码、十六进制转换、标准与 URL-safe Base64 编解码 |
+| `"ruvia/http/url_encoding.h"` / `"ruvia/http/http_hex.h"` / `"ruvia/http/http_base64.h"` | `decode_url_component`、`validate_url_encoding`、`visit_url_encoded_pairs`、`percent_encode_uri_reference`、`http_encode_lower_hex`、`http_base64_encode`、`http_base64_decode` | URL 百分号/表单编解码、RFC 3986 URI-reference 规范化编码、十六进制转换、标准与 URL-safe Base64 编解码 |
 
 ---
 
@@ -103,7 +103,7 @@ pool.join();
 
 | 头文件 | 核心公开类型 / 函数 | 说明 |
 | --- | --- | --- |
-| `"ruvia/http/http_header.h"` / `"ruvia/http/http_field_syntax.h"` | `class http_header final`、`class http_header_view final`、`is_valid_http_header_name`、`is_valid_http_header_value` | PMR 拥有型首部键值对、非拥有型首部视图及 RFC 9110 字段语法校验 |
+| `"ruvia/http/http_header.h"` / `"ruvia/http/http_field_syntax.h"` / `"ruvia/http/http_protocol_managed_fields.h"` | `class http_header final`、`class http_header_view final`、`is_valid_http_header_name`、`is_valid_http_header_value`、`is_http_ows_char`、`is_http_protocol_managed_request_field` | PMR 拥有型首部键值对、非拥有型首部视图、RFC 9110 字段语法校验及分帧/连接专用请求字段判定 |
 | `"ruvia/http/http_accept_match.h"` / `"ruvia/http/http_accept_encoding.h"` | `class http_accept_match final`、`http_response_coding_selection_for(request)` | `Accept` 媒体类型/语言权重匹配与 `Accept-Encoding` 响应压缩算法协商 |
 | `"ruvia/http/http_date.h"` / `"ruvia/http/http_cache.h"` | `format_http_date`、`parse_http_date`、`class cache_control final`、`parse_cache_control` | IMF-fixdate 日期格式化/解析与 `Cache-Control` 指令解析 |
 | `"ruvia/http/http_conditional_request.h"` / `"ruvia/http/http_byte_range.h"` / `"ruvia/http/http_representation_response_plan.h"` | `get_http_etag_preconditions`、`resolve_http_byte_range_set`、`plan_http_representation_response` | 条件请求（`If-Match` / `If-None-Match` / `If-Modified-Since` / `If-Unmodified-Since` / `If-Range`）与 `Range` 字节范围响应计划计算 |

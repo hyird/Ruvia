@@ -476,6 +476,21 @@ private:
         } catch (const std::logic_error&) {
             multipart_file_rejected = true;
         }
+        // Connection-specific fields (RFC 9110 section 7.6.1) belong to the
+        // protocol, like framing fields; a subrequest cannot supply them.
+        bool connection_fields_rejected = true;
+        for (const auto name : {"TE", "Keep-Alive", "Proxy-Connection", "Transfer-Encoding"}) {
+            const ruvia::http_header_view connection_headers[] = {{name, "trailers"}};
+            try {
+                (void)co_await c.dispatch({
+                    .method_ = "GET",
+                    .target_ = "/t/hello",
+                    .headers_ = connection_headers,
+                });
+                connection_fields_rejected = false;
+            } catch (const std::invalid_argument&) {
+            }
+        }
         const ruvia::http_header_view encoding_headers[] = {{"Accept-Encoding", "identity;q=0"}};
         const auto not_acceptable = co_await c.dispatch({
             .method_ = "GET",
@@ -486,6 +501,7 @@ private:
         reply.push_back(stream_rejected ? '1' : '0');
         reply.push_back(multipart_file_rejected ? '1' : '0');
         reply.push_back(not_acceptable.status() == ruvia::http_status::not_acceptable ? '1' : '0');
+        reply.push_back(connection_fields_rejected ? '1' : '0');
         co_return c.body(std::move(reply));
     }
 
@@ -1495,7 +1511,7 @@ RUVIA_TEST(testing_facade_wildcard_capture_rejects_encoded_separators) {
     RUVIA_CHECK_EQ(named.body(), "a/b");
 }
 
-RUVIA_TEST(testing_facade_subrequest_rejects_non_buffered_routes_and_enforces_406) {
+RUVIA_TEST(testing_facade_subrequest_rejects_non_buffered_routes_protocol_fields_and_enforces_406) {
     namespace fs = std::filesystem;
     const auto dir = fs::temp_directory_path() / "ruvia_testing_facade_subrequest_file";
     std::error_code ignored;
@@ -1509,7 +1525,7 @@ RUVIA_TEST(testing_facade_subrequest_rejects_non_buffered_routes_and_enforces_40
     ruvia::test_app app;
     const auto res = app.request(ruvia::test_request::get("/t/sub-checks"));
     RUVIA_CHECK_EQ(res.status(), ruvia::http_status::ok);
-    RUVIA_CHECK_EQ(res.body(), "111");
+    RUVIA_CHECK_EQ(res.body(), "1111");
     fs::remove_all(dir, ignored);
 }
 

@@ -10,9 +10,9 @@
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
 
+#include "util/http_utf8.h"
 #include "websocket/http_websocket_frame_codec.h"
 #include "websocket/http_websocket_frame_view.h"
-#include "websocket/http_websocket_payload_validation.h"
 
 namespace ruvia::detail {
 

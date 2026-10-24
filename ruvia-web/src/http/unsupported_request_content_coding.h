@@ -3,6 +3,8 @@
 #include <exception>
 #include <string_view>
 
+#include "ruvia/http/http_content_coding.h"
+
 namespace ruvia::detail {
 
 // Web-runtime signal for an otherwise valid request whose complete
@@ -11,20 +13,23 @@ namespace ruvia::detail {
 // what the failed read accepts: a streaming read decodes nothing.
 class unsupported_request_content_coding final : public std::exception {
 public:
-    // `accepted_codings` is an Accept-Encoding field value with static storage.
-    explicit unsupported_request_content_coding(std::string_view accepted_codings) noexcept
-        : accepted_codings_(accepted_codings) {}
+    enum class read_type { decoded,
+        streaming };
+
+    explicit unsupported_request_content_coding(read_type read) noexcept
+        : read_(read) {}
 
     [[nodiscard]] const char* what() const noexcept override {
         return "request Content-Encoding is not supported";
     }
 
+    // An Accept-Encoding field value with static storage.
     [[nodiscard]] std::string_view accepted_codings() const noexcept {
-        return accepted_codings_;
+        return read_ == read_type::decoded ? http_supported_request_content_codings() : "identity";
     }
 
 private:
-    std::string_view accepted_codings_;
+    read_type read_;
 };
 
 }  // namespace ruvia::detail

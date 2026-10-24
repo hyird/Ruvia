@@ -167,8 +167,8 @@ public:
     [[nodiscard]] http_transfer_coding_decode_result finish_input() noexcept;
 
 private:
-    struct impl;
-    impl* impl_{nullptr};
+    struct impl_type;
+    impl_type* impl_{nullptr};
 };
 
 }  // namespace ruvia

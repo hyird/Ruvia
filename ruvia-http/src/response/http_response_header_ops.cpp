@@ -34,29 +34,28 @@ namespace {
         throw std::invalid_argument("invalid HTTP header value");
     }
     const auto known_bit = detail::classify_response_header_name(key);
-    auto kind = detail::request_header_kind::other;
-    if (known_bit == detail::response_header_content_type) {
-        kind = detail::request_header_kind::content_type;
-    } else if (known_bit == detail::response_header_content_encoding) {
-        kind = detail::request_header_kind::content_encoding;
-    } else if (known_bit == detail::response_header_connection) {
-        detail::http_connection_options options;
-        if (options.parse_field(value, detail::http_field_list_role::sender) !=
-            detail::http_field_list_parse_status::ok) {
-            throw std::invalid_argument("invalid HTTP Connection header");
+    const auto kind = detail::classify_response_field(key, known_bit);
+    switch (kind) {
+        case detail::request_header_kind::connection: {
+            detail::http_connection_options options;
+            if (options.parse_field(value, detail::http_field_list_role::sender) !=
+                detail::http_field_list_parse_status::ok) {
+                throw std::invalid_argument("invalid HTTP Connection header");
+            }
+            break;
         }
-    } else if (known_bit == 0) {
-        if (http_ascii_equals_ignore_case(key, "Trailer")) {
-            kind = detail::request_header_kind::trailer;
-        } else if (http_ascii_equals_ignore_case(key, "Upgrade")) {
+        case detail::request_header_kind::upgrade: {
             detail::http_upgrade_protocols protocols;
             if (protocols.parse_field(value, detail::http_field_list_role::sender) !=
                 detail::http_field_list_parse_status::ok) {
                 throw std::invalid_argument("invalid HTTP Upgrade header");
             }
-        } else if (http_ascii_equals_ignore_case(key, "TE")) {
-            throw std::invalid_argument("TE is not a response field");
+            break;
         }
+        case detail::request_header_kind::te:
+            throw std::invalid_argument("TE is not a response field");
+        default:
+            break;
     }
     detail::response_field_state fields;
     if (detail::validate_response_field(kind, value,

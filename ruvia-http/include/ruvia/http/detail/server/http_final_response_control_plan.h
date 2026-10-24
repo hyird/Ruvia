@@ -70,22 +70,23 @@ private:
     http_connection_options connection_options;
     http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
-        if (http_ascii_equals_ignore_case(header.name(), "Connection")) {
-            if (connection_options.parse_field(header.value(), http_field_list_role::sender) !=
-                http_field_list_parse_status::ok) {
-                return http1_final_response_control_plan_error::invalid_connection_field;
-            }
-            continue;
-        }
-        if (http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
-            if (upgrade_protocols.parse_field(header.value(), http_field_list_role::sender) !=
-                http_field_list_parse_status::ok) {
-                return http1_final_response_control_plan_error::invalid_upgrade_field;
-            }
-            continue;
-        }
-        if (http_ascii_equals_ignore_case(header.name(), "TE")) {
-            return http1_final_response_control_plan_error::te_field_forbidden;
+        switch (classify_request_header(header.name())) {
+            case request_header_kind::connection:
+                if (connection_options.parse_field(header.value(), http_field_list_role::sender) !=
+                    http_field_list_parse_status::ok) {
+                    return http1_final_response_control_plan_error::invalid_connection_field;
+                }
+                break;
+            case request_header_kind::upgrade:
+                if (upgrade_protocols.parse_field(header.value(), http_field_list_role::sender) !=
+                    http_field_list_parse_status::ok) {
+                    return http1_final_response_control_plan_error::invalid_upgrade_field;
+                }
+                break;
+            case request_header_kind::te:
+                return http1_final_response_control_plan_error::te_field_forbidden;
+            default:
+                break;
         }
     }
     if (status_code == http_status::upgrade_required && !upgrade_protocols.has_protocol()) {

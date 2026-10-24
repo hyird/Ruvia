@@ -1,5 +1,3 @@
-#include <zlib.h>
-
 #include <variant>
 
 #include "ruvia/http/detail/util/http_pmr_object.h"
@@ -15,10 +13,10 @@ namespace ruvia {
 
 // The kept state of a resettable coding. The native libraries retain its
 // address, so it lives in one stable allocation from the context resource.
-struct http_content_encode_context::state final {
+struct http_content_encode_context::impl_type final {
     using stream_type = std::variant<detail::zlib_deflate_stream, detail::zstd_encoder_stream>;
 
-    state(http_content_coding coding, std::pmr::memory_resource* resource)
+    impl_type(http_content_coding coding, std::pmr::memory_resource* resource)
         : stream_(make_stream(coding, resource)) {}
 
     [[nodiscard]] bool initialized() const noexcept {
@@ -45,9 +43,9 @@ private:
         if (coding == http_content_coding::zstd) {
             return stream_type(std::in_place_type<detail::zstd_encoder_stream>, resource);
         }
-        return stream_type(std::in_place_type<detail::zlib_deflate_stream>, resource, Z_DEFAULT_COMPRESSION,
-            coding == http_content_coding::gzip ? detail::zlib_gzip_window_bits : detail::zlib_deflate_window_bits,
-            detail::zlib_default_mem_level, Z_DEFAULT_STRATEGY);
+        return stream_type(std::in_place_type<detail::zlib_deflate_stream>, resource,
+            coding == http_content_coding::gzip ? detail::zlib_content_format::gzip
+                                                : detail::zlib_content_format::deflate);
     }
 };
 
@@ -57,7 +55,7 @@ http_content_encode_context::http_content_encode_context(
       resource_(detail::http_pmr_resource_or_default(state_resource)) {}
 
 http_content_encode_context::~http_content_encode_context() {
-    detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, state_, resource_);
+    detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, impl_, resource_);
 }
 
 std::optional<std::pmr::string> http_content_encode_context::encode(
@@ -79,14 +77,14 @@ std::optional<std::pmr::string> http_content_encode_context::encode(
             return encode_http_content(coding_, input, options);
     }
 
-    if (state_ == nullptr) {
-        auto* created = detail::construct_http_pmr_object<state>(
+    if (impl_ == nullptr) {
+        auto* created = detail::construct_http_pmr_object<impl_type>(
             detail::http_resolved_pmr_resource_tag{}, resource_, coding_, resource_);
         if (!created->initialized()) {
             detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, created, resource_);
             throw http_content_encode_error("content encoder initialization failed");
         }
-        state_ = created;
+        impl_ = created;
     }
     // Every exit, including a rethrown allocation failure, leaves the next
     // representation a fresh stream. A state that cannot reset is dropped and
@@ -94,13 +92,13 @@ std::optional<std::pmr::string> http_content_encode_context::encode(
     struct reset_after_use final {
         http_content_encode_context& self_;
         ~reset_after_use() {
-            if (!self_.state_->reset()) {
-                detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, self_.state_, self_.resource_);
-                self_.state_ = nullptr;
+            if (!self_.impl_->reset()) {
+                detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, self_.impl_, self_.resource_);
+                self_.impl_ = nullptr;
             }
         }
     } reset_guard{*this};
-    return state_->encode(input, options);
+    return impl_->encode(input, options);
 }
 
 }  // namespace ruvia

@@ -3,7 +3,7 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
-#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/detail/response/http1_status_line.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
@@ -14,7 +14,6 @@
 namespace ruvia {
 namespace {
 
-constexpr std::string_view http11_status_prefix = "HTTP/1.1 ";
 constexpr std::string_view crlf = "\r\n";
 
 struct http1_interim_header_facts final {
@@ -48,29 +47,32 @@ struct http1_interim_header_facts final {
     for (const auto& header : response.headers()) {
         const auto name = header.name();
         const auto value = header.value();
-        std::uint32_t known_bit = 0;
-        const auto status = validator.validate(name, value, &known_bit);
+        auto kind = detail::request_header_kind::other;
+        const auto status = validator.validate(name, value, &kind);
         if (status != detail::http_interim_response_header_validation_status::ok) {
             error = common_validation_error(status);
             return false;
         }
-        if (known_bit == detail::response_header_connection) {
-            if (facts.connection_options_.parse_field(value, detail::http_field_list_role::sender) !=
-                detail::http_field_list_parse_status::ok) {
-                error = http1_interim_response_prepare_error::invalid_connection;
-                return false;
-            }
-        } else if (known_bit == 0) {
-            if (http_ascii_equals_ignore_case(name, "Upgrade")) {
+        switch (kind) {
+            case detail::request_header_kind::connection:
+                if (facts.connection_options_.parse_field(value, detail::http_field_list_role::sender) !=
+                    detail::http_field_list_parse_status::ok) {
+                    error = http1_interim_response_prepare_error::invalid_connection;
+                    return false;
+                }
+                break;
+            case detail::request_header_kind::upgrade:
                 if (facts.upgrade_protocols_.parse_field(value, detail::http_field_list_role::sender) !=
                     detail::http_field_list_parse_status::ok) {
                     error = http1_interim_response_prepare_error::invalid_upgrade;
                     return false;
                 }
-            } else if (http_ascii_equals_ignore_case(name, "TE")) {
+                break;
+            case detail::request_header_kind::te:
                 error = http1_interim_response_prepare_error::te_field_forbidden;
                 return false;
-            }
+            default:
+                break;
         }
 
         if (!facts.section_.add_field(name, value)) {
@@ -85,14 +87,10 @@ struct http1_interim_header_facts final {
     return true;
 }
 
-[[nodiscard]] char* write_interim_response_head(char* output, const http_interim_response_head& response,
-    std::string_view status_token, std::string_view reason_phrase) noexcept {
+[[nodiscard]] char* write_interim_response_head(
+    char* output, const http_interim_response_head& response, std::string_view reason_phrase) noexcept {
     detail::http_raw_wire_sink sink(output);
-    sink.append(http11_status_prefix);
-    sink.append(status_token);
-    sink.append(' ');
-    sink.append(reason_phrase);
-    sink.append(crlf);
+    detail::emit_http1_status_line(sink, http_protocol_version::http11, response.status(), reason_phrase);
     for (const auto& header : response.headers()) {
         detail::emit_http1_field_line(sink, header.name(), header.value());
     }
@@ -144,15 +142,12 @@ std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_
 prepare_http1_interim_response_head(
     const http_interim_response_head& response, std::span<char> head_buffer) noexcept {
     const auto reason_phrase = http_reason_phrase(response.status());
-    const auto status_token = detail::http_status_code_token(response.status());
     http1_interim_header_facts facts;
     http1_interim_response_prepare_error error = http1_interim_response_prepare_error::invalid_header;
     if (!analyze_http1_fields(response, facts, error)) {
         return error;
     }
-    if (!facts.section_.add(
-            http11_status_prefix.size() + status_token.size() + 1 + reason_phrase.size() + crlf.size()) ||
-        !facts.section_.add(crlf.size())) {
+    if (!facts.section_.add(detail::http1_status_line_size(reason_phrase)) || !facts.section_.add(crlf.size())) {
         return http1_interim_response_prepare_error::header_too_large;
     }
     const auto head_bytes = facts.section_.bytes();
@@ -161,11 +156,10 @@ prepare_http1_interim_response_head(
     }
 
     const auto output = head_buffer.first(head_bytes);
-    const auto status_text = detail::http_status_code_token_view(status_token);
     detail::write_http_wire(output,
         detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), response.headers()),
         [&](char* destination) noexcept {
-            return write_interim_response_head(destination, response, status_text, reason_phrase);
+            return write_interim_response_head(destination, response, reason_phrase);
         });
 
     return prepared_http1_interim_response(std::string_view(head_buffer.data(), head_bytes),

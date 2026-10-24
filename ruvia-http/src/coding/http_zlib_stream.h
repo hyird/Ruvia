@@ -35,6 +35,9 @@ inline constexpr int zlib_default_mem_level = 8;
 inline constexpr int zlib_gzip_window_bits = 15 + 16;
 inline constexpr int zlib_deflate_window_bits = 15;
 
+enum class zlib_content_format : unsigned char { gzip,
+    deflate };
+
 // Supplies the next window of `input` once zlib has consumed the previous
 // one: inputs can exceed zlib's 32-bit avail_in, so they are handed over in
 // windows instead of truncated. `supplied` counts the bytes handed over so far.
@@ -96,6 +99,8 @@ class zlib_deflate_stream final {
 public:
     zlib_deflate_stream(
         std::pmr::memory_resource* resource, int level, int window_bits, int mem_level, int strategy);
+    // The gzip or deflate content-coding stream with zlib's default parameters.
+    zlib_deflate_stream(std::pmr::memory_resource* resource, zlib_content_format format);
     ~zlib_deflate_stream();
     zlib_deflate_stream(const zlib_deflate_stream&) = delete;
     zlib_deflate_stream& operator=(const zlib_deflate_stream&) = delete;

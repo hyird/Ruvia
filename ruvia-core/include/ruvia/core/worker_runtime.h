@@ -117,10 +117,10 @@ private:
     void unbind_group(worker_group& group) noexcept;
 
     class impl_type;
-    struct impl_deleter final {
+    struct impl_deleter_type final {
         void operator()(impl_type* value) const noexcept;
     };
-    std::unique_ptr<impl_type, impl_deleter> impl_;
+    std::unique_ptr<impl_type, impl_deleter_type> impl_;
 };
 
 }  // namespace ruvia

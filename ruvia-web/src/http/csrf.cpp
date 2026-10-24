@@ -4,14 +4,13 @@
 #include <cstddef>
 #include <stdexcept>
 
-#include <openssl/rand.h>
-
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/util/registration_resource.h"
 
 #include "http/secure_token.h"
+#include "tls/tls_random.h"
 #include "util/constant_time.h"
 
 namespace ruvia::detail {
@@ -22,7 +21,7 @@ std::optional<std::string_view> generate_secure_token(std::span<char> buffer) no
         return std::nullopt;
     }
     unsigned char raw[random_bytes];
-    if (RAND_bytes_ex(nullptr, raw, random_bytes, 0) != 1) {
+    if (!fill_random_bytes(raw)) {
         return std::nullopt;
     }
     http_encode_lower_hex(buffer.data(), std::span<const unsigned char>(raw));

@@ -479,7 +479,8 @@ task<std::string_view> context_request::text() const {
                 invalid->status(), "invalid_content_encoding", "invalid request Content-Encoding");
         }
         if (parsed_coding.unsupported() != nullptr) {
-            throw detail::unsupported_request_content_coding(http_supported_request_content_codings());
+            throw detail::unsupported_request_content_coding(
+                detail::unsupported_request_content_coding::read_type::decoded);
         }
         const auto codings = parsed_coding.codings();
         if (codings.empty()) {
@@ -569,7 +570,8 @@ multipart_reader context_request::multipart_reader() const {
     const auto coded = std::ranges::any_of(
         parsed_coding.codings(), [](http_content_coding coding) { return coding != http_content_coding::identity; });
     if (parsed_coding.unsupported() != nullptr || coded) {
-        throw detail::unsupported_request_content_coding("identity");
+        throw detail::unsupported_request_content_coding(
+            detail::unsupported_request_content_coding::read_type::streaming);
     }
     return ::ruvia::multipart_reader(body_reader(), {.boundary_ = boundary, .resource_ = context_->pool()});
 }

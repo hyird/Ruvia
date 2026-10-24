@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 
+#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
@@ -433,7 +434,7 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
         }
         fields.push_back(field);
     }
-    fields.emplace_back("Connection", "Upgrade");
+    fields.emplace_back(detail::http_connection_field_name, detail::http_connection_upgrade_option);
     fields.emplace_back("Upgrade", "connect-udp");
     const auto emitted_headers = std::span<const http_header_view>(fields);
     fields.emplace_back("Host", origin.host());

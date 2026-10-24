@@ -14,14 +14,19 @@
 
 namespace ruvia {
 
+// OWS / BWS byte: SP or HTAB (RFC 9110 section 5.6.3).
+[[nodiscard]] constexpr bool is_http_ows_char(char c) noexcept {
+    return c == ' ' || c == '\t';
+}
+
 // Removes only SP and HTAB from the ends of an HTTP field value (OWS,
 // RFC 9110 section 5.6.3). The result borrows the caller's input.
 [[nodiscard]] constexpr std::string_view http_trim_ows(borrowed_text text) noexcept {
     auto value = text.view();
-    while (!value.empty() && (value.front() == ' ' || value.front() == '\t')) {
+    while (!value.empty() && is_http_ows_char(value.front())) {
         value.remove_prefix(1);
     }
-    while (!value.empty() && (value.back() == ' ' || value.back() == '\t')) {
+    while (!value.empty() && is_http_ows_char(value.back())) {
         value.remove_suffix(1);
     }
     return value;
@@ -119,9 +124,7 @@ namespace detail {
     if (value.empty()) {
         return true;
     }
-    const auto first = static_cast<unsigned char>(value.front());
-    const auto last = static_cast<unsigned char>(value.back());
-    if (first == ' ' || first == '\t' || last == ' ' || last == '\t') {
+    if (is_http_ows_char(value.front()) || is_http_ows_char(value.back())) {
         return false;
     }
     return is_valid_http_field_value_bytes(value);

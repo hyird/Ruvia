@@ -11,6 +11,8 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/detail/field/http_connection_fields.h"
+#include "ruvia/http/detail/response/http1_status_line.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_limits.h"
@@ -192,6 +194,46 @@ private:
     const http_request& request, const http1_request_body_plan& body_plan,
     websocket_handshake_validation_options options = {}) noexcept;
 
+namespace detail {
+
+// The fixed bytes of the HTTP/1.1 101 opening-handshake response (RFC 6455
+// section 4.2.2) through the Sec-WebSocket-Accept field name; the accept key
+// and its CRLF follow.
+inline constexpr auto websocket_switching_protocols_head_prefix = [] {
+    constexpr auto reason = http_reason_phrase(http_status::switching_protocols);
+    constexpr std::string_view upgrade_field = "Upgrade: websocket\r\n";
+    constexpr std::string_view field_separator = ": ";
+    constexpr std::string_view crlf = "\r\n";
+    constexpr std::string_view accept_field_name = "Sec-WebSocket-Accept: ";
+    std::array<char, http1_status_line_size(reason) + upgrade_field.size() + http_connection_field_name.size() +
+                         field_separator.size() + http_connection_upgrade_option.size() + crlf.size() +
+                         accept_field_name.size()>
+        result_value{};
+    struct sink_type final {
+        char* out_;
+
+        constexpr void append(std::string_view part) noexcept {
+            for (const char value : part) {
+                *out_++ = value;
+            }
+        }
+
+        constexpr void append(char value) noexcept {
+            *out_++ = value;
+        }
+    } sink{result_value.data()};
+    emit_http1_status_line(sink, http_protocol_version::http11, http_status::switching_protocols, reason);
+    sink.append(upgrade_field);
+    sink.append(http_connection_field_name);
+    sink.append(field_separator);
+    sink.append(http_connection_upgrade_option);
+    sink.append(crlf);
+    sink.append(accept_field_name);
+    return result_value;
+}();
+
+}  // namespace detail
+
 // Owned HTTP/1.1 101 response plan. for_each_response_part emits stable views for
 // scatter-gather I/O; compression() configures the subsequent websocket driver
 // from the exact negotiation encoded in this response.
@@ -213,8 +255,8 @@ public:
 
     template <typename visitor_type>
     void for_each_response_part(visitor_type&& visitor) const& {
-        visitor(
-            std::string_view(switching_protocols_prefix.data(), switching_protocols_prefix.size()));
+        visitor(std::string_view(detail::websocket_switching_protocols_head_prefix.data(),
+            detail::websocket_switching_protocols_head_prefix.size()));
         visitor(std::string_view(accept_.data(), accept_.size()));
         visitor(crlf);
         if (!subprotocol_.empty()) {
@@ -243,30 +285,6 @@ private:
     friend websocket_server_handshake make_websocket_server_handshake(
         const http_request&, websocket_server_handshake_options);
 
-    inline static constexpr auto switching_protocols_prefix = [] {
-        constexpr std::string_view protocol = "HTTP/1.1 ";
-        constexpr auto status = detail::http_status_code_token(http_status::switching_protocols);
-        constexpr auto reason = http_reason_phrase(http_status::switching_protocols);
-        constexpr std::string_view suffix =
-            "\r\n"
-            "Upgrade: websocket\r\n"
-            "Connection: Upgrade\r\n"
-            "Sec-WebSocket-Accept: ";
-        std::array<char, protocol.size() + status.size() + 1 + reason.size() + suffix.size()>
-            result_value{};
-        std::size_t cursor_value = 0;
-        const auto append = [&result_value, &cursor_value](std::string_view part) {
-            for (const char value : part) {
-                result_value[cursor_value++] = value;
-            }
-        };
-        append(protocol);
-        append(detail::http_status_code_token_view(status));
-        append(" ");
-        append(reason);
-        append(suffix);
-        return result_value;
-    }();
     inline static constexpr std::string_view subprotocol_header_prefix = "Sec-WebSocket-Protocol: ";
     inline static constexpr std::string_view extensions_header_prefix = "Sec-WebSocket-Extensions: ";
     inline static constexpr std::string_view crlf = "\r\n";

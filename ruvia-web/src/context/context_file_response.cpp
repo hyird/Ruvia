@@ -13,6 +13,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/http/http_representation_response_plan.h"
@@ -562,8 +563,18 @@ http_response context::static_file(const static_root& root, static_file_response
 
     // Serve a precompressed variant when the client accepts one; the bytes and
     // validators come from the variant, the Content-Type from the base entry.
-    const auto served =
-        select_static_file_representation(root, relative, request_, pool(), base_entry, mode);
+    // Admission already folded Accept-Encoding; only a context created outside
+    // admission negotiates from the request here.
+    const auto served = [&]() -> std::optional<static_file_representation> {
+        if (mode == detail::static_file_selection_mode::identity_only) {
+            return static_file_representation(base_entry, http_content_coding::identity);
+        }
+        if (const auto* admitted = services().response_coding()) {
+            return select_static_file_representation(root, relative, *admitted, pool(), base_entry);
+        }
+        return select_static_file_representation(
+            root, relative, http_response_coding_selection_for(request_), pool(), base_entry);
+    }();
     if (!served.has_value()) {
         throw http_error(detail::http_not_acceptable_coding_error());
     }

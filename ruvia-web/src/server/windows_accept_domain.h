@@ -63,8 +63,8 @@ public:
     void request_stop() noexcept;
 
 private:
-    class impl;
-    std::unique_ptr<impl, pmr_object_deleter<impl>> impl_;
+    class impl_type;
+    std::unique_ptr<impl_type, pmr_object_deleter<impl_type>> impl_;
 };
 
 #endif

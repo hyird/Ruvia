@@ -27,16 +27,16 @@ using encoder_stream = std::variant<detail::zlib_deflate_stream, detail::brotli_
 template <typename stream_type>
 [[noreturn]] void fail_encoding(const stream_type& stream, const char* message) {
     stream.rethrow_allocation_failure();
-    throw http_content_encoder_error(message);
+    throw http_content_encode_error(message);
 }
 
 [[nodiscard]] encoder_stream make_encoder_stream(http_content_coding coding, std::pmr::memory_resource* resource) {
     switch (coding) {
         case http_content_coding::gzip:
         case http_content_coding::deflate:
-            return encoder_stream(std::in_place_type<detail::zlib_deflate_stream>, resource, Z_DEFAULT_COMPRESSION,
-                coding == http_content_coding::gzip ? detail::zlib_gzip_window_bits : detail::zlib_deflate_window_bits,
-                detail::zlib_default_mem_level, Z_DEFAULT_STRATEGY);
+            return encoder_stream(std::in_place_type<detail::zlib_deflate_stream>, resource,
+                coding == http_content_coding::gzip ? detail::zlib_content_format::gzip
+                                                    : detail::zlib_content_format::deflate);
         case http_content_coding::brotli:
             return encoder_stream(std::in_place_type<detail::brotli_encoder_stream>, resource);
         case http_content_coding::zstd:
@@ -164,13 +164,13 @@ void encode_stream(detail::zstd_encoder_stream& encoder, std::string_view input,
 // One pinned codec stream per non-identity encoder. A failed initialization
 // unwinds through the stream destructor, including an exception captured at
 // the C ABI.
-struct http_content_encoder::impl final {
-    impl(http_content_coding coding, std::pmr::memory_resource* resource)
+struct http_content_encoder::impl_type final {
+    impl_type(http_content_coding coding, std::pmr::memory_resource* resource)
         : stream_(make_encoder_stream(coding, resource)),
           resource_(resource) {
         std::visit([](const auto& stream) {
             if (!stream.initialized()) {
-                throw http_content_encoder_error(initialization_failure(stream));
+                throw http_content_encode_error(initialization_failure(stream));
             }
         },
             stream_);
@@ -187,16 +187,16 @@ struct http_content_encoder::impl final {
     void reset() {
         if (auto* deflater = std::get_if<detail::zlib_deflate_stream>(&stream_)) {
             if (!deflater->reset()) {
-                throw http_content_encoder_error("failed to reset zlib content encoder");
+                throw http_content_encode_error("failed to reset zlib content encoder");
             }
         } else if (auto* encoder = std::get_if<detail::zstd_encoder_stream>(&stream_)) {
             if (!encoder->reset()) {
-                throw http_content_encoder_error("failed to reset Zstd content encoder");
+                throw http_content_encode_error("failed to reset Zstd content encoder");
             }
         } else {
             const auto& rebuilt = stream_.emplace<detail::brotli_encoder_stream>(resource_);
             if (!rebuilt.initialized()) {
-                throw http_content_encoder_error(initialization_failure(rebuilt));
+                throw http_content_encode_error(initialization_failure(rebuilt));
             }
         }
     }
@@ -209,7 +209,7 @@ http_content_encoder::http_content_encoder(http_content_coding coding, std::pmr:
     : coding_(coding),
       resource_(detail::http_pmr_resource_or_default(resource)) {
     if (coding_ != http_content_coding::identity) {
-        impl_ = detail::construct_http_pmr_object<impl>(resource_, coding_, resource_);
+        impl_ = detail::construct_http_pmr_object<impl_type>(resource_, coding_, resource_);
     }
 }
 

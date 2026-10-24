@@ -3,9 +3,9 @@
 #include <cstdint>
 #include <string_view>
 
+#include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/response/http_response_header_bits.h"
 #include "ruvia/http/detail/response/http_response_known_headers.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 
@@ -28,31 +28,26 @@ enum class http_interim_response_header_validation_status : std::uint8_t {
 // RFC 9113 section 8.1.1).
 class http_interim_response_sender_validator final {
 public:
+    // kind_out receives the field identity of an accepted line.
     [[nodiscard]] http_interim_response_header_validation_status validate(
         std::string_view name, std::string_view value,
-        std::uint32_t* known_bit_out = nullptr) noexcept {
+        request_header_kind* kind_out = nullptr) noexcept {
         if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
             return http_interim_response_header_validation_status::invalid_header;
         }
 
         const auto known_bit = classify_response_header_name(name);
-        if (known_bit_out != nullptr) {
-            *known_bit_out = known_bit;
+        const auto kind = classify_response_field(name, known_bit);
+        switch (kind) {
+            case request_header_kind::content_length:
+                return http_interim_response_header_validation_status::content_length_forbidden;
+            case request_header_kind::transfer_encoding:
+                return http_interim_response_header_validation_status::transfer_encoding_forbidden;
+            case request_header_kind::trailer:
+                return http_interim_response_header_validation_status::trailer_forbidden;
+            default:
+                break;
         }
-        if (known_bit == response_header_content_length) {
-            return http_interim_response_header_validation_status::content_length_forbidden;
-        }
-        if (known_bit == response_header_transfer_encoding) {
-            return http_interim_response_header_validation_status::transfer_encoding_forbidden;
-        }
-        if (known_bit == 0 && http_ascii_equals_ignore_case(name, "Trailer")) {
-            return http_interim_response_header_validation_status::trailer_forbidden;
-        }
-        const auto kind = known_bit == response_header_content_type
-                              ? request_header_kind::content_type
-                              : (known_bit == response_header_content_encoding
-                                        ? request_header_kind::content_encoding
-                                        : request_header_kind::other);
         switch (validate_response_field(kind, value, http_field_list_role::sender, fields_)) {
             case response_field_status::ok:
                 break;
@@ -66,6 +61,9 @@ public:
             return http_interim_response_header_validation_status::repeated_singleton;
         }
         known_bits_ |= known_bit;
+        if (kind_out != nullptr) {
+            *kind_out = kind;
+        }
         return http_interim_response_header_validation_status::ok;
     }
 

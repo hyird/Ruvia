@@ -6,6 +6,7 @@
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_base64.h"
+#include "ruvia/http/http_protocol_managed_fields.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 
 #include "client/http1_client_request_headers.h"
@@ -13,29 +14,22 @@
 
 namespace ruvia {
 namespace {
-// The one application-header policy of the client handshake: it generates
-// Host, the Upgrade/Connection pair and every Sec-WebSocket-* field, and an
-// Upgrade request carries no content, so Trailer and Expect have no place.
+// The one application-header policy of the client handshake: the request
+// writer owns every protocol-managed field (Host, framing, Expect and the
+// Upgrade/Connection pair) and the handshake generates every Sec-WebSocket-*
+// field.
 bool is_reserved_handshake_header(std::string_view name, detail::request_header_kind kind) noexcept {
     switch (kind) {
-        case detail::request_header_kind::host:
-        case detail::request_header_kind::trailer:
-        case detail::request_header_kind::expect:
-        case detail::request_header_kind::connection:
-        case detail::request_header_kind::upgrade:
-        case detail::request_header_kind::content_length:
-        case detail::request_header_kind::transfer_encoding:
         case detail::request_header_kind::sec_websocket_key:
         case detail::request_header_kind::sec_websocket_version:
         case detail::request_header_kind::sec_websocket_protocol:
         case detail::request_header_kind::sec_websocket_extensions:
             return true;
         case detail::request_header_kind::other:
-            return http_ascii_equals_ignore_case(name, "keep-alive") ||
-                   http_ascii_equals_ignore_case(name, "proxy-connection") ||
+            return is_http_protocol_managed_request_field(name) ||
                    http_ascii_equals_ignore_case(name, "sec-websocket-accept");
         default:
-            return false;
+            return is_http_protocol_managed_request_field(name);
     }
 }
 }  // namespace
@@ -89,7 +83,7 @@ http1_websocket_client_handshake::prepare_request(
         headers.emplace_back(header.name(), header.value());
     }
     headers.emplace_back("Upgrade", "websocket");
-    headers.emplace_back("Connection", "Upgrade");
+    headers.emplace_back(detail::http_connection_field_name, detail::http_connection_upgrade_option);
     headers.emplace_back("Sec-WebSocket-Key", std::string_view(key_.data(), key_.size()));
     for (const auto& field : negotiation_.request_fields()) {
         headers.emplace_back(field.name(), field.value());
@@ -112,14 +106,23 @@ http1_websocket_client_handshake::validate_response(const http1_parsed_client_re
     std::size_t accepts = 0;
     bool accept_matches = false, has_upgrade = false, has_connection = false;
     for (const auto& header : response.head().headers()) {
-        if (http_ascii_equals_ignore_case(header.name(), "Sec-WebSocket-Accept")) {
-            ++accepts;
-            accept_matches = http_trim_ows(header.value()) ==
-                             std::string_view(expected.data(), expected.size());
-        } else if (http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
-            has_upgrade = has_upgrade || detail::http_has_token(header.value(), "websocket");
-        } else if (http_ascii_equals_ignore_case(header.name(), "Connection")) {
-            has_connection = has_connection || detail::http_has_token(header.value(), "upgrade");
+        switch (detail::classify_request_header(header.name())) {
+            case detail::request_header_kind::upgrade:
+                has_upgrade = has_upgrade || detail::http_has_token(header.value(), "websocket");
+                break;
+            case detail::request_header_kind::connection:
+                has_connection = has_connection ||
+                                 detail::http_has_token(header.value(), detail::http_connection_upgrade_option);
+                break;
+            case detail::request_header_kind::other:
+                if (http_ascii_equals_ignore_case(header.name(), "Sec-WebSocket-Accept")) {
+                    ++accepts;
+                    accept_matches = http_trim_ows(header.value()) ==
+                                     std::string_view(expected.data(), expected.size());
+                }
+                break;
+            default:
+                break;
         }
     }
     if (accepts != 1 || !accept_matches) {

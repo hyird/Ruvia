@@ -171,26 +171,23 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
         response.file_body() || !response.body_bytes().empty()) {
         return http_connect_udp_error::invalid_response;
     }
-    bool capsule = false;
-    for (const auto& field : response.headers()) {
-        if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
-            const auto enabled = parse_http_capsule_protocol(field.value());
-            if (capsule || !enabled.has_value() || !*enabled) {
-                return http_connect_udp_error::invalid_capsule_protocol;
-            }
-            capsule = true;
-        } else if (http_ascii_equals_ignore_case(field.name(), "connection") ||
-                   http_ascii_equals_ignore_case(field.name(), "upgrade") ||
-                   detail::http_field_name_in(field.name(), detail::http_connect_forbidden_fields)) {
-            return http_connect_udp_error::invalid_response;
-        }
+    // The response's own fields go through the one CONNECT-UDP handshake walk;
+    // the protocol, not the application, generates the Upgrade pair.
+    const auto parsed_value = fields(std::span(response.headers().begin(), response.headers().size()),
+        http_connect_udp_error::invalid_response);
+    if (parsed_value.index() != 0) {
+        return std::get<1>(parsed_value);
     }
-    if (!capsule) {
+    const auto& found = std::get<0>(parsed_value);
+    if (found.upgrade_ || found.connection_field_ || found.forbidden_) {
+        return http_connect_udp_error::invalid_response;
+    }
+    if (!found.capsule_) {
         response.header("Capsule-Protocol", "?1");
     }
     if (version == http_protocol_version::http11) {
         response.status_code_ = http_status::switching_protocols;
-        response.header("Connection", "Upgrade");
+        response.header(detail::http_connection_field_name, detail::http_connection_upgrade_option);
         response.header("Upgrade", "connect-udp");
     }
     return response;
