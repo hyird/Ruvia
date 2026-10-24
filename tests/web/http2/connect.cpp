@@ -213,7 +213,7 @@ RUVIA_TEST(http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_requ
             for (unsigned round = 0; round != 3; ++round) {
                 observation_value.return_early_ = round == 2;
                 const auto request = round != 1 ? peer.submit_request_head(ruvia::http2_connect_request_head_view{.authority_ = "TARGET.TEST:443"})
-                                                : peer.submit_request_head(ruvia::http2_extended_connect_request_head_view{.protocol_ = "test-tunnel", .scheme_ = "https", .authority_ = "proxy.test", .target_ = "/udp/target.test/443"});
+                                                : peer.submit_request_head(ruvia::http2_extended_connect_request_head_view{.protocol_ = "test-tunnel", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/udp/target.test/443"});
                 const auto* id_ptr = std::get_if<std::uint32_t>(&request);
                 if (id_ptr == nullptr) {
                     throw std::runtime_error("CONNECT request submission rejected");
@@ -293,7 +293,7 @@ RUVIA_TEST(http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_requ
                 }
                 observation_value.saw_eof_ = false;
             }
-            auto sibling = peer.submit_request_head(ruvia::http2_regular_request_head_view{.authority_ = "proxy.test", .target_ = "/after"});
+            auto sibling = peer.submit_request_head(ruvia::http2_regular_request_head_view{.scheme_ = "http", .authority_ = "proxy.test", .target_ = "/after"});
             if (!std::holds_alternative<std::uint32_t>(sibling)) {
                 throw std::runtime_error("sibling request failed");
             }
@@ -488,7 +488,7 @@ RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_pe
             const std::string payload_value(std::size_t{3} * 1024 * 1024 + 7, 'w');
             const auto expected = std::to_string(payload_value.size());
 
-            const auto tunnel = peer.submit_request_head(ruvia::http2_extended_connect_request_head_view{.protocol_ = "slow-tunnel", .scheme_ = "https", .authority_ = "proxy.test", .target_ = "/slow-tunnel"});
+            const auto tunnel = peer.submit_request_head(ruvia::http2_extended_connect_request_head_view{.protocol_ = "slow-tunnel", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/slow-tunnel"});
             const auto* tunnel_id_ptr = std::get_if<std::uint32_t>(&tunnel);
             if (tunnel_id_ptr == nullptr) {
                 throw std::runtime_error("slow tunnel request submission rejected");
@@ -532,7 +532,7 @@ RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_pe
             }
             RUVIA_CHECK(tunnel_reply == expected);
 
-            const auto upload = peer.submit_request_head(ruvia::http2_regular_request_head_view{.method_ = "POST", .authority_ = "proxy.test", .target_ = "/slow-upload", .content_ = ruvia::http2_request_content::streaming()});
+            const auto upload = peer.submit_request_head(ruvia::http2_regular_request_head_view{.method_ = "POST", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/slow-upload", .content_ = ruvia::http2_request_content::streaming()});
             const auto* upload_id_ptr = std::get_if<std::uint32_t>(&upload);
             if (upload_id_ptr == nullptr) {
                 throw std::runtime_error("slow upload request submission rejected");
@@ -619,7 +619,7 @@ RUVIA_TEST(http2_websocket_request_half_closed_before_handshake_receives_error_r
                 co_await flush_peer(socket, peer, memory.resource());
             }
             const std::array<ruvia::http_header_view, 1> headers{ruvia::http_header_view("sec-websocket-version", "13")};
-            const auto request = peer.submit_request_head(ruvia::http2_extended_connect_request_head_view{.protocol_ = "websocket", .scheme_ = "https", .authority_ = "proxy.test", .target_ = "/late-fin-websocket", .headers_ = headers});
+            const auto request = peer.submit_request_head(ruvia::http2_extended_connect_request_head_view{.protocol_ = "websocket", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/late-fin-websocket", .headers_ = headers});
             const auto* id_ptr = std::get_if<std::uint32_t>(&request);
             if (id_ptr == nullptr) {
                 throw std::runtime_error("websocket request submission rejected");

@@ -4,11 +4,13 @@
 
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_connect_udp.h"
+#include "ruvia/http/http_target_origin.h"
 
 #include "http/http_protocol_error_info.h"
 #include "ratelimit/rate_limit_decision.h"
 #include "router/route_table.h"
 #include "server/http_connection_state.h"
+#include "tls/tls_served_certificate.h"
 
 namespace ruvia::detail {
 namespace {
@@ -31,6 +33,24 @@ namespace {
     return protocol_byte_limit::limited(limit);
 }
 
+// RFC 9110 §7.4 against the transport connection's facts. A secured
+// connection without a recorded certificate cannot vouch for any host.
+[[nodiscard]] bool connection_carries_target(const http_request& request, const context_services& services) noexcept {
+    const auto origin = decide_http_target_origin(request,
+        {.secured_ = services.get_conn_info().tls() != nullptr, .trusted_gateway_ = services.peer_trusted()});
+    switch (origin.action()) {
+        case http_target_origin_action::accept:
+            return true;
+        case http_target_origin_action::verify_certificate: {
+            auto* certificate = services.served_certificate();
+            return certificate != nullptr && certificate->covers(origin);
+        }
+        case http_target_origin_action::misdirected:
+            break;
+    }
+    return false;
+}
+
 }  // namespace
 http_request_admission_policy http_request_admission_policy::server(const http_server_options& options) noexcept {
     return {
@@ -40,6 +60,7 @@ http_request_admission_policy http_request_admission_policy::server(const http_s
                                     ? http_response_coding_availability::identity_and_compression
                                     : http_response_coding_availability::identity_only,
         .apply_rate_limit_ = true,
+        .verify_target_origin_ = true,
     };
 }
 
@@ -124,6 +145,14 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         admission.rejection_ = rejection;
         return std::move(admission);
     };
+
+    // Before any expectation, limit or endpoint decision: a request this
+    // connection cannot carry is not this server's to evaluate.
+    if (policy.verify_target_origin_ && !connection_carries_target(request, services)) {
+        return reject(http_request_endpoint::rejection,
+            http_request_rejection::error(http_error_info(
+                {.status_ = http_status::misdirected_request, .message_ = "misdirected request"})));
+    }
 
     // Expect extensions are valid HTTP syntax. The protocol reports the
     // semantic fact; this product implements only 100-continue and chooses the

@@ -296,7 +296,9 @@ using namespace tls_paths_test;
 // ECDHE+AEAD suites in the server's order (RFC 9325 §4.1-4.2.1), and a TLS 1.2
 // session resumes only under its own server_name (RFC 6066 §3).
 RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
-    ruvia::test::tls_identity identity("localhost");
+    // The SNI identity reuses this certificate, so it must also name sni.test
+    // (RFC 9110 §7.4: other hosts get 421).
+    ruvia::test::tls_identity identity("localhost", "DNS:localhost,DNS:sni.test");
     const non_ascii_directory directory;
     const auto certificate = directory.file(u8"\u8bc1\u4e66.pem");
     const auto private_key = directory.file(u8"\u79c1\u94a5-\U0001F511.pem");

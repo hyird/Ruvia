@@ -95,6 +95,7 @@ pool.join();
 | `"ruvia/http/http_status.h"` | `class http_status_code final`、`namespace ruvia::http_status`、`http_reason_phrase` | 强类型 HTTP 状态码（`100..599`）与标准状态码常量（`http_status::ok`、`not_found` 等） |
 | `"ruvia/http/http_protocol_error.h"` | `class http_protocol_error final : public std::exception`、`enum class http_parse_error` | 零动态分配的协议错误异常（`http_protocol_error(status, code, message)`：携带 `http_status_code`、静态存储期的稳定 snake_case 机器码 `code()`（如 `missing_host`、`conflicting_content_length`）与定长诊断文本）与解析错误枚举 |
 | `"ruvia/http/http_request_target.h"` | `http_authority_view`、`http_origin_view`、`parse_http_authority`、`is_valid_http_origin_form_target`、`is_valid_http_connect_authority`、`is_valid_http_serialized_origin` | RFC 9110 / RFC 3986 请求目标、Authority 与 Origin 语法校验和解析 |
+| `"ruvia/http/http_target_origin.h"` | `decide_http_target_origin`、`http_target_origin`、`http_target_origin_connection`、`http_target_origin_action` | RFC 9110 §7.4 目标源判定：服务器提供连接事实（是否 TLS、对端是否可信网关），返回接受、需按证书校验的主机（DNS 名去掉末尾点 / IPv4 / IPv6 网络字节序）或 `421` 拒绝；明文连接上的 `https` 目标直接判为 misdirected，零分配 |
 | `"ruvia/http/url_encoding.h"` / `"ruvia/http/http_hex.h"` / `"ruvia/http/http_base64.h"` | `decode_url_component`、`validate_url_encoding`、`visit_url_encoded_pairs`、`percent_encode_uri_reference`、`uri_paths_equivalent`、`compare_uri_paths`、`http_encode_lower_hex`、`http_base64_encode`、`http_base64_decode` | URL 百分号/表单编解码、RFC 3986 URI-reference 规范化编码、路由使用的路径规范形式比较（字面 `/` 分段、段内按百分号解码后的字节比较，`%2F` 不作分隔符）、十六进制转换、标准与 URL-safe Base64 编解码 |
 
 ---

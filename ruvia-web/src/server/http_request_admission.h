@@ -35,14 +35,16 @@ class http1_deferred_access_log;
 class route_table;
 
 // The deployment limits that shape admission. Servers build it from their
-// options; a subrequest builds it from its parent (no rate limit: the parent
-// request already passed it).
+// options; a subrequest builds it from its parent (no rate limit and no
+// target-origin check: the parent request already passed both).
 struct http_request_admission_policy final {
     std::optional<std::size_t> max_stream_body_bytes_{};
     std::size_t max_buffered_body_bytes_{};
     http_response_coding_availability coding_availability_{http_response_coding_availability::identity_only};
     bool apply_rate_limit_{true};
-
+    // RFC 9110 §7.4: answer 421 when the connection cannot carry the target
+    // (decide_http_target_origin against the services' transport facts).
+    bool verify_target_origin_{true};
     [[nodiscard]] static http_request_admission_policy server(const http_server_options& options) noexcept;
 };
 

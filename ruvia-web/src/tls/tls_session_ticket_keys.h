@@ -18,6 +18,12 @@ namespace ruvia::detail {
 // no key outlives two intervals.
 inline constexpr std::chrono::seconds tls_session_lifetime{std::chrono::hours{2}};
 
+// Product limit: after a failed copy_to, a worker retries this soon instead of
+// at the next rotation, so a transient random-generator failure (or a key
+// another worker has since generated) costs seconds of ticketless handshakes,
+// not an epoch.
+inline constexpr std::chrono::seconds tls_ticket_key_retry_delay{5};
+
 // One ticket key: 16-byte key name, HMAC-SHA256 key and AES-256-CBC key, the
 // protection OpenSSL applies to its own tickets. Cleansed on destruction.
 struct tls_session_ticket_key final {

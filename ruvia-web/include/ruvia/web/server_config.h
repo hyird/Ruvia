@@ -163,9 +163,15 @@ struct tls_sni_config final {
 // primary certificate: a product choice for single-certificate and wildcard
 // deployments, deliberately not RFC 9325 §3.7's unrecognized_name alert, so
 // such clients still complete the handshake. Sessions resume across workers
-// of the listener; TLS 1.2 sessions only under the server_name they were
-// established with. Ticket keys rotate every two hours (the session lifetime)
-// and are destroyed one interval after their last use for new tickets.
+// of the listener, in both TLS versions only under the server_name (compared
+// ASCII case-insensitively) they were established with. Ticket keys rotate
+// every two hours (the session lifetime) and are destroyed one interval after
+// their last use for new tickets. RFC 9110 §7.4: a request whose target is
+// an "https" resource is answered 421 (Misdirected Request) unless the
+// certificate this connection presented names its host in a subjectAltName
+// DNS or IP entry (whole-label wildcards only; the subject CN is ignored);
+// on HTTP/2 only that stream is refused. Cleartext listeners answer 421 to
+// "https" targets. Peers in trusted_proxy_config are exempt from both checks.
 struct tls_config final {
     std::filesystem::path certificate_chain_file_{};
     std::filesystem::path private_key_file_{};

@@ -37,6 +37,7 @@ class http_interim_response_output;
 class http_connection_advertisement_output;
 class http_push_output;
 class route_table;
+class tls_served_certificate;
 class worker_state_registry;
 
 struct context_worker_services final {
@@ -59,6 +60,8 @@ struct context_connection_services final {
     // connection: the peer address never changes, so its IP parse and block
     // match are not repeated per request.
     bool peer_trusted_{false};
+    // The certificate a TLS connection presented; null for cleartext.
+    tls_served_certificate* served_certificate_{};
 };
 
 // Borrowed protocol channels outlive every context for this request.
@@ -297,6 +300,17 @@ public:
         connection_services_.info_ = resolved;
     }
 
+    // The RFC 9110 §7.4 facts of the transport connection, never of a
+    // forwarded hop: whether its peer is a trusted gateway, and the
+    // certificate it presented (null for cleartext and for subrequests).
+    [[nodiscard]] constexpr bool peer_trusted() const noexcept {
+        return connection_services_.peer_trusted_;
+    }
+
+    [[nodiscard]] constexpr tls_served_certificate* served_certificate() const noexcept {
+        return connection_services_.served_certificate_;
+    }
+
     // Views borrow connection-owned storage and remain valid for every context
     // created while that connection is dispatched.
     [[nodiscard]] context_services with_plain_transport(
@@ -305,6 +319,7 @@ public:
         services.connection_services_.info_ = conn_info::plain(remote_address);
         services.connection_services_.info_.set_remote_port(remote_port);
         services.connection_services_.peer_trusted_ = trusts_peer(remote_address);
+        services.connection_services_.served_certificate_ = nullptr;
         return services;
     }
 
@@ -313,21 +328,23 @@ public:
         std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t) const = delete;
 
     [[nodiscard]] context_services with_tls_transport(std::string_view remote_address,
-        std::string_view client_certificate_subject, std::uint16_t remote_port) const noexcept {
+        std::string_view client_certificate_subject, std::uint16_t remote_port,
+        tls_served_certificate& served_certificate) const noexcept {
         auto services = *this;
         services.connection_services_.info_ = conn_info::tls(remote_address, client_certificate_subject);
         services.connection_services_.info_.set_remote_port(remote_port);
         services.connection_services_.peer_trusted_ = trusts_peer(remote_address);
+        services.connection_services_.served_certificate_ = &served_certificate;
         return services;
     }
 
     template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(
-        std::basic_string<char, traits_type, allocator_type>&&, std::string_view, std::uint16_t) const = delete;
+    context_services with_tls_transport(std::basic_string<char, traits_type, allocator_type>&&, std::string_view,
+        std::uint16_t, tls_served_certificate&) const = delete;
 
     template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(
-        std::string_view, std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t) const = delete;
+    context_services with_tls_transport(std::string_view, std::basic_string<char, traits_type, allocator_type>&&,
+        std::uint16_t, tls_served_certificate&) const = delete;
 
 private:
     [[nodiscard]] bool trusts_peer(std::string_view remote_address) const noexcept {

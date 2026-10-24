@@ -127,6 +127,8 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_app_http2_drain 30 web/app/http2_drain.cpp)
     ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/app/http2_request_limit.cpp)
     ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
+    # Trusts the loopback peer in its second run.
+    ruvia_add_web_standalone_test(ruvia_app_misdirected_request 30 web/app/misdirected_request.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT
     # protocol token, makes every application in its executable fail startup, so
     # neither can share the process-wide controller registry.

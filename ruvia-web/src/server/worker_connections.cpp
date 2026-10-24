@@ -44,6 +44,7 @@
 #include "server/http_server_tls_identity.h"
 #include "server/windows_accept_domain.h"
 #include "tls/tls_protocol_policy.h"
+#include "tls/tls_served_certificate.h"
 #include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
@@ -109,13 +110,13 @@ int select_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_len
     return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 
-// RFC 6066 §3: a TLS 1.2 session never resumes under a server_name other than
-// the one it was established with. Each connection's session ID context names
-// its offered server_name (ASCII case-insensitively), and OpenSSL resumes a
-// TLS 1.2 session -- by ticket or by session ID -- only when the contexts
-// match, so any other name, or none, gets a full handshake. TLS 1.3 binds no
-// server_name to a session; OpenSSL adopts the connection's context for a PSK.
-// Names longer than a context are bound by their SHA-256 digest.
+// RFC 6066 §3: a session never resumes under a server_name other than the one
+// it was established with. Each connection's session ID context names its
+// offered server_name (ASCII case-insensitively), and OpenSSL resumes a
+// session -- TLS 1.2 by ticket or session ID, TLS 1.3 by PSK -- only when the
+// contexts match, so any other name, or none, gets a full handshake (RFC 9846
+// §4.6.1 permits declining such a PSK). Names longer than a context are bound
+// by their SHA-256 digest.
 int bind_session_to_server_name(SSL* ssl, int* alert, void*) noexcept {
     // Without server_name: one NUL byte, which no host name contains.
     std::array<unsigned char, SSL_MAX_SID_CTX_LENGTH> context{};
@@ -342,12 +343,15 @@ task<void> worker_connections::rotate_tls_ticket_keys() {
             }
             auto& ring = tls_session_ticket_keys(*tls);
             if (!ring.copy_to(now, *session.ticket_keys_)) {
-                // This epoch issues no tickets; a later rotation retries.
+                // This worker issues no tickets until a copy succeeds; retry
+                // soon rather than waiting out the epoch, since another worker
+                // may already have generated the shared key.
                 try {
                     throw std::runtime_error("failed to generate TLS session ticket keys");
                 } catch (...) {
                     ruvia::report_unhandled_failure("TLS session ticket key rotation", std::current_exception());
                 }
+                next = std::min(next, now + tls_ticket_key_retry_delay);
             }
             next = std::min(next, ring.next_rotation(now));
         }
@@ -550,8 +554,10 @@ task<void> worker_connections::run_tls_session(
         }
         std::pmr::string client_certificate(memory_.allocator<char>());
         extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
+        // After any SNI switch: the leaf this handshake presented.
+        tls_served_certificate served_certificate(SSL_get_certificate(tls_stream.native_handle()));
         const auto services = capabilities_.make_context_services(stop_token_)
-                                  .with_tls_transport(remote_address, client_certificate, remote_port);
+                                  .with_tls_transport(remote_address, client_certificate, remote_port, served_certificate);
         const auto close_mode = is_http2_alpn_selected(tls_stream)
                                     ? co_await run_http2(tls_stream, socket, services)
                                     : co_await run_stream(listener_value, tls_stream, socket, services);

@@ -120,10 +120,12 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     if (stop.stop_requested()) {
         throw std::system_error(asio::error::operation_aborted);
     }
-    // The parent request already passed the application rate limit.
+    // The parent request already passed the application rate limit and the
+    // target-origin check of its connection.
     const detail::http_request_admission_policy policy{
         .max_buffered_body_bytes_ = services().max_decoded_body_bytes(),
         .apply_rate_limit_ = false,
+        .verify_target_origin_ = false,
     };
     http_response response(memory.resource());
     auto admission = co_await detail::admit_and_dispatch_buffered_request(routes,
