@@ -158,15 +158,13 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
                     ++active;
                 }
             });
-            // A HEADERS frame that itself exceeds the advertised limit is a stream
-            // error (RFC 9113 5.1.2): refuse it below. Only idle-stream priorities
-            // that crowd out an otherwise admissible stream end the connection.
-            const bool concurrency_exceeded = active >= http2_local_settings::max_concurrent_streams;
-            if (!concurrency_exceeded &&
-                prioritized_idle + active + 1 > http2_local_settings::max_concurrent_streams) {
-                append_goaway(http2_error_code::protocol_error, "idle priorities and active streams exceed concurrency");
-                return false;
-            }
+            // A HEADERS frame that exceeds the advertised limit is a stream error
+            // (RFC 9113 5.1.2). RFC 9218 7.1 prescribes a connection error only for
+            // the PRIORITY_UPDATE that over-commits idle priorities; a HEADERS that
+            // would push retained idle priorities plus active streams past the limit
+            // is refused (REFUSED_STREAM, RFC 9113 8.7) so priority state stays bounded.
+            const bool concurrency_exceeded =
+                prioritized_idle + active + 1 > http2_local_settings::max_concurrent_streams;
             new_peer_stream = true;
             if (const auto* round_trip = local_connection_state_.graceful_drain();
                 round_trip != nullptr && round_trip->awaiting_round_trip() &&

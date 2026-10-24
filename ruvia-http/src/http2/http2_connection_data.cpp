@@ -110,9 +110,15 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
     const bool rejected_connect_terminal = remote.connect_rejected_awaiting_end_stream() != nullptr;
     const bool tunnel_data = remote.tunnel_open() != nullptr;
     const bool content_data = remote.content_open() != nullptr;
-    const bool metadata_only_content =
+    // HEAD-like responses carry metadata only; a 205 response's content is
+    // consumed and discarded because its sender MUST NOT generate any (RFC 9110
+    // 15.3.6). Both keep flow control and Content-Length accounting intact.
+    const auto* response_status = stream->response_status();
+    const bool discarded_content =
         content_data && (stream->remote_content().metadata_only_without_length() != nullptr ||
-                            stream->remote_content().metadata_only_known_length() != nullptr);
+                            stream->remote_content().metadata_only_known_length() != nullptr ||
+                            (response_status != nullptr &&
+                                response_status->status() == http_status::reset_content));
     if (!pending_connect_control && !rejected_connect_terminal && !tunnel_data && !content_data) {
         reset_stream(http2_error_code::stream_closed, false);
         return true;
@@ -189,15 +195,16 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
             // pre-reserved publication batch; the close path flushes the matching
             // receive debt, so this branch must not return the same bytes again via
             // release_dropped_data_connection_window().
-            reserve_stream_error(data.empty() ? 0 : 1);
-            if (data.empty() && flow_bytes > 0) {
+            const bool publish_data = !discarded_content && !data.empty();
+            reserve_stream_error(publish_data ? 1 : 0);
+            if (!publish_data && flow_bytes > 0) {
                 reserve_consumed_data_credit(nullptr, static_cast<std::uint32_t>(flow_bytes));
             }
             debit_connection();
             (void)stream->consume_receive_window(flow_bytes);
             (void)stream->account_remote_content(data.size());
             if (flow_bytes > 0) {
-                if (!data.empty()) {
+                if (publish_data) {
                     stream->add_window_debt(static_cast<std::uint32_t>(flow_bytes));
                     events_.push_back(http2_event(http2_message_data_record{
                         header_value.stream_id_, data, static_cast<std::uint32_t>(flow_bytes)}));
@@ -212,7 +219,7 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
         }
     }
 
-    const bool deliver_data = !metadata_only_content && !data.empty();
+    const bool deliver_data = !discarded_content && !data.empty();
     if (deliver_data) {
         reserve_events(end_stream ? 2 : 1);
     } else if (end_stream) {

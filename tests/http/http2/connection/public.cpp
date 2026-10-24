@@ -2481,6 +2481,63 @@ RUVIA_TEST(http2_public_head_205_keeps_nonzero_content_length_as_metadata) {
     RUVIA_CHECK(!client.connection_error());
 }
 
+RUVIA_TEST(http2_public_205_content_is_discarded_with_flow_control_credit_returned) {
+    // RFC 9110 section 15.3.6 binds only the 205 sender; DATA framing is
+    // unambiguous, so the client consumes and discards content.
+    for (const bool declared : {false, true}) {
+        std::pmr::monotonic_buffer_resource resource;
+        auto client = prepared_client_method(&resource, "GET");
+        (void)ruvia::testing::drain_output(client);
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_status(block, ruvia::http_status::reset_content);
+        // Enough discarded bytes to cross the half-window WINDOW_UPDATE threshold.
+        const std::string bulk(16384, 'e');
+        constexpr int bulk_frames = 33;
+        if (declared) {
+            ruvia::hpack_encoder::encode_header(
+                block, "content-length", std::to_string(bulk.size() * bulk_frames));
+        }
+        std::pmr::string wire(&resource);
+        append_peer_settings(wire);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
+        for (int frame = 0; frame != bulk_frames; ++frame) {
+            append_frame(wire, ruvia::http2_frame_type::data, frame + 1 == bulk_frames ? 0x1 : 0x0, 1, bulk);
+        }
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        const auto head = client.next_event();
+        RUVIA_CHECK(head && head->response_head() &&
+                    head->response_head()->head().status() == ruvia::http_status::reset_content);
+        const auto end = client.next_event();
+        RUVIA_CHECK(end && end->message_end());
+        RUVIA_CHECK(!client.next_event());
+        RUVIA_CHECK(!client.connection_error());
+        // The discarded bytes' connection credit is returned without an owner.
+        constexpr std::string_view connection_window_update{"\0\0\x04\x08\0\0\0\0\0", 9};
+        const auto output = ruvia::testing::drain_output(client);
+        RUVIA_CHECK(std::string_view(output).find(connection_window_update) != std::string_view::npos);
+    }
+
+    // Content-Length still binds the DATA sum (RFC 9113 section 8.1.1).
+    std::pmr::monotonic_buffer_resource resource;
+    auto client = prepared_client_method(&resource, "GET");
+    (void)ruvia::testing::drain_output(client);
+    std::pmr::string block(&resource);
+    ruvia::hpack_encoder::encode_status(block, ruvia::http_status::reset_content);
+    ruvia::hpack_encoder::encode_header(block, "content-length", "2");
+    std::pmr::string wire(&resource);
+    append_peer_settings(wire);
+    append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
+    append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, "hello");
+    RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+    const auto head = client.next_event();
+    RUVIA_CHECK(head && head->response_head());
+    while (auto event = client.next_event()) {
+        RUVIA_CHECK(!event->message_body_chunk());
+        RUVIA_CHECK(!event->message_end());
+    }
+    RUVIA_CHECK(!client.connection_error());
+}
+
 RUVIA_TEST(http2_public_message_end_reports_metadata_only_and_empty_trailers) {
     for (const auto method : {std::string_view("HEAD"), std::string_view("GET")}) {
         std::pmr::monotonic_buffer_resource resource;

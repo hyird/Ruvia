@@ -19,6 +19,15 @@ namespace {
         *static_cast<http2_header_decode_context*>(target), name, value);
 }
 
+// CONNECT has no request content; DATA after its HEADERS is tunnel data (RFC
+// 9113 8.5). RFC 9110 8.6 makes Content-Length on CONNECT only a sender SHOULD
+// NOT, so a declared zero is harmless, while a non-zero length would claim
+// content that the stream never frames and stays malformed (as in HTTP/1).
+[[nodiscard]] bool http2_connect_content_length_acceptable(const http2_stream_state& stream) noexcept {
+    const auto* known = stream.remote_content().allowed_known_length();
+    return known == nullptr || known->declared_length() == 0;
+}
+
 }  // namespace
 
 header_decode_status http2_connection::decode_header_block(http2_stream_state& stream,
@@ -40,7 +49,7 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
             !http2_is_valid_request_authority(stream.request_scheme(), stream.request_authority()) ||
             !http2_request_path_matches_method_and_scheme(
                 stream.request_known_method(), stream.request_scheme(), stream.request_path()) ||
-            stream.remote_content().allowed_known_length() != nullptr) {
+            !http2_connect_content_length_acceptable(stream)) {
             return header_decode_status::protocol_error;
         }
         // RFC 8441 defines websocket extended CONNECT only for HTTP(S) URI
@@ -56,7 +65,7 @@ header_decode_status http2_connection::decode_header_block(http2_stream_state& s
     } else if (stream.request_known_method() == http_known_method::connect) {
         request_target_view connect_target;
         if (!stream.has_authority() || stream.has_scheme() || stream.has_path() ||
-            stream.remote_content().allowed_known_length() != nullptr ||
+            !http2_connect_content_length_acceptable(stream) ||
             !parse_request_target(
                 http_known_method::connect, stream.request_authority(), connect_target)) {
             return header_decode_status::protocol_error;

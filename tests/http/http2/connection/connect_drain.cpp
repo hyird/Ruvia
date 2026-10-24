@@ -488,3 +488,26 @@ RUVIA_TEST(http2_connected_tunnel_discards_unknown_extension_frames) {
     RUVIA_CHECK(has_frame(take_frames(server), ruvia::http2_frame_type::rst_stream, 1));
     (void)server.release(std::move(head));
 }
+
+// RFC 9110 section 8.6 makes Content-Length on CONNECT only a sender SHOULD NOT
+// and RFC 9113 section 8.5 does not list it as malformed: a declared zero is
+// accepted (as in HTTP/1), while a non-zero length claims unframed content.
+RUVIA_TEST(http2_connect_accepts_zero_content_length_and_resets_nonzero) {
+    for (const std::string_view protocol : {std::string_view{}, std::string_view{"connect-udp"}}) {
+        for (const std::string_view length : {std::string_view{"0"}, std::string_view{"3"}}) {
+            std::pmr::unsynchronized_pool_resource resource;
+            auto server = started_server(&resource);
+            auto wire = opening_wire(&resource);
+            auto block = connect_block(&resource, protocol);
+            ruvia::hpack_encoder::encode_header(block, "content-length", length);
+            append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag, 1, block);
+            RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+            const auto head = take_request_head(server);
+            const auto frames = take_frames(server);
+            const bool accepted = length == "0";
+            RUVIA_CHECK_EQ(head.has_value(), accepted);
+            RUVIA_CHECK_EQ(has_frame(frames, ruvia::http2_frame_type::rst_stream, 1), !accepted);
+            RUVIA_CHECK(!server.connection_error().has_value());
+        }
+    }
+}

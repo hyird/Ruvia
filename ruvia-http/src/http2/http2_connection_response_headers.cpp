@@ -170,14 +170,10 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
         return header_decode_status::protocol_error;
     }
     const auto content_semantics = context_value.content_semantics_;
-    // Ordinary 205 responses have a zero-length content phase (RFC 9110 15.3.6).
-    // HEAD keeps representation metadata, and successful CONNECT carries a tunnel;
-    // neither uses the ordinary response-content length constraint.
-    if (context_value.status_->status() == http_status::reset_content &&
-        content_semantics == http_response_content_semantics::with_content &&
-        !stream.declare_remote_content_length(0)) {
-        return header_decode_status::protocol_error;
-    }
+    // A 205 sender MUST NOT generate content (RFC 9110 15.3.6), but DATA framing
+    // stays unambiguous: Content-Length still binds the DATA sum (RFC 9113 8.1.1;
+    // 205 is not a no-content response under RFC 9110 6.4.1), and any content is
+    // consumed and discarded by the DATA path instead of failing the response.
     if (content_semantics == http_response_content_semantics::without_content &&
         !stream.select_remote_content_metadata_only()) {
         return header_decode_status::protocol_error;
