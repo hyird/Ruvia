@@ -38,6 +38,12 @@ struct connection_scanner_options final {
     worker_memory* trim_when_idle_;
 };
 
+// Product limit: a connection that a timeout asked to end through its drain
+// callback (an HTTP/2 GOAWAY drain, bounded by its own round-trip limit) has
+// this long to do so before the scanner closes its socket, whatever its
+// activity in the meantime.
+inline constexpr std::chrono::milliseconds connection_close_grace{std::chrono::seconds(2)};
+
 // Worker-affine connection timeout owner. Its implementation is allocated once
 // per scanner; entries and checks remain caller-owned intrusive nodes, with no
 // per-connection allocation by the scanner.
@@ -109,8 +115,11 @@ public:
         void read_request_head(phase timeout_phase) noexcept;
         // The scanner asked the connection to end gracefully: it cancelled a
         // request-head read, or invoked a drain callback for a timeout. The
-        // owner closes without waiting for further input; a later timeout of
-        // the same entry closes its socket.
+        // owner closes without waiting for further input. Activity no longer
+        // extends the connection: the scanner closes its socket once the
+        // request's grace passes -- one scan interval for a cancelled read
+        // (covering a cancel the transport lost), connection_close_grace for
+        // a drain callback.
         [[nodiscard]] bool close_requested() const noexcept {
             return close_requested_;
         }
@@ -170,6 +179,8 @@ public:
         const std::int64_t* now_ms_{nullptr};
         std::int64_t last_active_ms_{0};
         std::int64_t phase_started_ms_{0};
+        // Valid while close_requested_: when the scanner closes the socket.
+        std::int64_t close_deadline_ms_{0};
         phase phase_{phase::idle};
         bool reading_request_head_{false};
         bool close_requested_{false};
@@ -204,7 +215,8 @@ public:
     void stop() noexcept;
     void close_all() noexcept;
     // Starts draining: cancels the read of connections waiting for or still
-    // reading an unadmitted HTTP/1 request head (see close_requested()), then
+    // reading an unadmitted HTTP/1 request head (see close_requested(); a
+    // later scan closes the socket of one whose cancel was lost), then
     // notifies registered protocol drain callbacks on all admitted sessions
     // (including multiplexed HTTP/2).
     // From then on enter_long_lived() refuses new upgrades. Admitted requests
@@ -241,9 +253,13 @@ struct connection_scanner::impl_type final {
     [[nodiscard]] static bool active_since(const entry& entry, std::int64_t interval_start) noexcept;
     // Ends a timed-out connection: the first time gracefully when its owner
     // can (a pending request-head read, or a drain callback outside writing),
-    // otherwise by closing its socket.
-    static void expire(entry& entry) noexcept;
-    static void request_close(entry& entry) noexcept;
+    // otherwise -- including once a graceful request's grace has passed -- by
+    // closing its socket.
+    void expire(entry& entry) noexcept;
+    // Cancels the entry's pending read and closes its socket at `deadline_ms`
+    // unless the owner ended the connection first.
+    static void request_close(entry& entry, std::int64_t deadline_ms) noexcept;
+    static void record_close_request(entry& entry, std::int64_t deadline_ms) noexcept;
     struct timer_state_type final {
         explicit timer_state_type(impl_type* owner_value) noexcept
             : owner_(owner_value) {}

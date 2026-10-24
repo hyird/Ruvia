@@ -474,6 +474,93 @@ RUVIA_TEST(http2_client_graceful_drain_sends_final_goaway_at_once) {
     }
 }
 
+// RFC 9113 section 6.8 asks for "at least one round-trip time", not for the PING
+// ACK: the owner's time bound makes the boundary final through finish_drain().
+RUVIA_TEST(http2_server_finish_drain_ends_round_trip_without_ping_ack) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = started_server(&resource);
+    auto wire = opening_wire(&resource);
+    append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 1, get_block(&resource));
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    auto first = take_request_head(server);
+    RUVIA_CHECK(first.has_value());
+    (void)take_frames(server);
+    server.begin_drain();
+    RUVIA_CHECK(goaway_last_stream_ids(take_frames(server)) == std::vector<std::uint32_t>{0x7fffffffU});
+    std::pmr::string in_flight(&resource);
+    append_frame(in_flight, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 3, get_block(&resource));
+    RUVIA_CHECK(server.feed(in_flight) == ruvia::http2_feed_result::accepted);
+    auto second = take_request_head(server);
+    RUVIA_CHECK(second && second->stream_id() == 3);
+    RUVIA_CHECK(!server.drain_final());
+
+    server.finish_drain();
+    RUVIA_CHECK(server.drain_final());
+    RUVIA_CHECK(goaway_last_stream_ids(take_frames(server)) == std::vector<std::uint32_t>{3});
+    server.finish_drain();
+    RUVIA_CHECK(take_frames(server).empty());
+
+    std::pmr::string refused(&resource);
+    append_frame(refused, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 5, get_block(&resource));
+    RUVIA_CHECK(server.feed(refused) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!server.next_event().has_value());
+    RUVIA_CHECK(has_frame(take_frames(server), ruvia::http2_frame_type::rst_stream, 5));
+    RUVIA_CHECK(!server.connection_error().has_value());
+}
+
+// A peer whose input ended can open no stream: finish_drain() from the open state
+// sends the final GOAWAY at once, with no PING round trip.
+RUVIA_TEST(http2_server_finish_drain_without_round_trip_sends_final_goaway) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = started_server(&resource);
+    auto wire = opening_wire(&resource);
+    append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 1, get_block(&resource));
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    auto head = take_request_head(server);
+    RUVIA_CHECK(head.has_value());
+    (void)take_frames(server);
+    server.finish_drain();
+    RUVIA_CHECK(server.draining());
+    RUVIA_CHECK(server.drain_final());
+    const auto frames = take_frames(server);
+    RUVIA_CHECK(goaway_last_stream_ids(frames) == std::vector<std::uint32_t>{1});
+    for (const auto& frame : frames) {
+        RUVIA_CHECK(!frame.is(ruvia::http2_frame_type::ping));
+    }
+}
+
+// RFC 9113 section 6.8: "Receivers of a GOAWAY frame MUST NOT open additional
+// streams on the connection", so a server answering a peer GOAWAY needs no round
+// trip -- neither when the peer goes first nor during a round trip in progress.
+RUVIA_TEST(http2_server_drain_after_peer_goaway_is_final_at_once) {
+    std::pmr::unsynchronized_pool_resource resource;
+    for (const bool round_trip_started : {false, true}) {
+        auto server = started_server(&resource);
+        auto wire = opening_wire(&resource);
+        append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 1, get_block(&resource));
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto head = take_request_head(server);
+        RUVIA_CHECK(head.has_value());
+        (void)take_frames(server);
+        if (round_trip_started) {
+            server.begin_drain();
+            (void)take_frames(server);
+        }
+        std::pmr::string goaway(&resource);
+        append_frame(goaway, ruvia::http2_frame_type::goaway, 0, 0, std::string_view("\0\0\0\0\0\0\0\0", 8));
+        RUVIA_CHECK(server.feed(goaway) == ruvia::http2_feed_result::accepted);
+        while (server.next_event()) {
+        }
+        RUVIA_CHECK(server.drain_final());
+        const auto frames = take_frames(server);
+        RUVIA_CHECK(goaway_last_stream_ids(frames) == std::vector<std::uint32_t>{1});
+        for (const auto& frame : frames) {
+            RUVIA_CHECK(!frame.is(ruvia::http2_frame_type::ping));
+        }
+        RUVIA_CHECK(!server.connection_error().has_value());
+    }
+}
+
 // RFC 8441 section 3: "Receipt of this parameter by a server does not have any
 // impact." The value range and 1->0 ban remain sender rules enforced by clients.
 RUVIA_TEST(http2_server_ignores_enable_connect_protocol_from_client) {

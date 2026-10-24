@@ -1,5 +1,6 @@
 #include "http2/http2_sans_io_session_engine.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -51,6 +52,9 @@ namespace ruvia::detail {
 namespace {
 
 constexpr std::size_t http2_request_arena_stack_bytes = request_arena_initial_bytes;
+// Product limit on a server drain's wait for the PING round trip before the
+// final GOAWAY (also capped at half of server_config::drain_timeout_).
+constexpr std::chrono::milliseconds http2_drain_round_trip_bound{std::chrono::seconds(1)};
 
 request_memory& emplace_http2_request_memory(std::optional<request_memory>& storage,
     worker_memory& memory, std::span<std::byte> initial_buffer) {
@@ -191,22 +195,101 @@ bool http2_sans_io_session_engine::drain_finished() const noexcept {
 }
 
 void http2_sans_io_session_engine::request_drain() noexcept {
-    if (!connection_.draining()) {
+    // The scanner records a timeout's close request before invoking this
+    // callback; a worker drain does not.
+    if (session_.scanner_entry().close_requested()) {
+        timeout_drain_ = true;
+    }
+    begin_drain();
+    finish_drain_if_ready();
+}
+
+void http2_sans_io_session_engine::begin_drain() noexcept {
+    try {
         connection_.begin_drain();
+    } catch (...) {
+        terminate(std::make_error_code(std::errc::not_enough_memory));
+        return;
     }
     wake_writer();
+    arm_drain_timer();
+}
+
+void http2_sans_io_session_engine::arm_drain_timer() noexcept {
+    // A final boundary needs no time bound, unless a timeout's drain must
+    // still end the session.
+    if (drain_timer_.registered() || termination_.terminated() ||
+        (connection_.drain_final() && !timeout_drain_)) {
+        return;
+    }
+    // RFC 9113 §6.8 asks only for "at least one round-trip time" before the
+    // final GOAWAY; nothing requires waiting for the PING ACK. Product limit:
+    // the round trip is bounded by min(1 s, drain_timeout_ / 2), so a final
+    // GOAWAY precedes a stop's forced close.
+    const auto bound = (std::min)(http2_drain_round_trip_bound, session_.options().server_.drain_timeout_ / 2);
+    try {
+        const auto status = session_.services().worker().schedule_timer(drain_timer_,
+            worker_timer_deadline_after(bound), [this](worker_timer_outcome outcome) {
+                // Cancellation is a stopping worker, which closes the connection.
+                if (outcome == worker_timer_outcome::expired) {
+                    drain_timer_expired();
+                }
+            });
+        if (status == worker_timer_schedule_status::worker_stopping) {
+            drain_timer_expired();
+        }
+    } catch (...) {
+        terminate(std::make_error_code(std::errc::not_enough_memory));
+    }
+}
+
+void http2_sans_io_session_engine::drain_timer_expired() noexcept {
+    if (termination_.terminated()) {
+        return;
+    }
+    try {
+        connection_.finish_drain();
+    } catch (...) {
+        terminate(std::make_error_code(std::errc::not_enough_memory));
+        return;
+    }
+    wake_writer();
+    drain_expired_ = timeout_drain_;
     finish_drain_if_ready();
 }
 
 void http2_sans_io_session_engine::finish_drain_if_ready() noexcept {
     // The first GOAWAY of a server drain still admits in-flight streams; only the
-    // final one (after the PING round trip) lets an idle connection close.
-    if (!drain_finished_ && connection_.drain_final() && stream_runtimes_.size() == 0 &&
-        active_handler_tasks_ == 0 && !connection_.wants_write() && !output_write_in_flight_) {
+    // final one (after the round trip or its time bound) lets the connection close.
+    // A write in flight still owns the socket; its completion re-checks.
+    if (drain_finished_ || !connection_.drain_final() || output_write_in_flight_) {
+        return;
+    }
+    if (stream_runtimes_.size() == 0 && active_handler_tasks_ == 0 && !connection_.wants_write()) {
         drain_finished_ = true;
         std::error_code error;
         socket_.cancel(error);
+        return;
     }
+    if (drain_expired_) {
+        // A connection timeout's drain reached its bound with the write side
+        // idle: cancel the remaining streams and end the session now. The
+        // writer still flushes the final GOAWAY before the close alert.
+        drain_finished_ = true;
+        terminate(std::make_error_code(std::errc::timed_out));
+    }
+}
+
+void http2_sans_io_session_engine::peer_input_ended() noexcept {
+    // RFC 9113 §6.8: "Endpoints SHOULD always send a GOAWAY frame before
+    // closing a connection". The session closes either way; a failed
+    // allocation only loses this frame.
+    try {
+        connection_.finish_drain();
+    } catch (...) {
+        return;
+    }
+    wake_writer();
 }
 
 void http2_sans_io_session_engine::set_inactivity_phase() noexcept {
@@ -738,8 +821,7 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
     ++accepted_request_heads_;
     if (!connection_.draining() && options.server_.max_requests_per_connection_.has_value() &&
         accepted_request_heads_ >= *options.server_.max_requests_per_connection_) {
-        connection_.begin_drain();
-        wake_writer();
+        begin_drain();
     }
     const auto expectation_plan =
         message_head.expectation_plan(http_unsupported_expectation_policy::reject);

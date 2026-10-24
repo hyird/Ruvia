@@ -68,7 +68,7 @@ int main() {
 | --- | --- | --- |
 | `worker_count_` | `std::size_t`（默认 `max(1u, hardware_concurrency())`） | 业务 worker 线程数 |
 | `process_signal_handlers_` | `process_signal_handler_policy`（默认 `external_owner`） | 设为 `install` 时自动安装 `SIGINT` / `SIGTERM` 信号处理以触发优雅停机 |
-| `drain_timeout_` | `std::chrono::milliseconds`（默认 `10s`） | 停机排空阶段等待在途请求完成的最大时长。HTTP/2 连接按 RFC 9113 §6.8 两阶段排空：先发 `GOAWAY(2^31-1, NO_ERROR)` 与 `PING`，继续接纳客户端已在途的流；收到 `PING` ACK（或客户端此间新开超过 128 条流）后再发携带最后流 ID 的 `GOAWAY` 并拒绝之后的流 |
+| `drain_timeout_` | `std::chrono::milliseconds`（默认 `10s`） | 停机排空阶段等待在途请求完成的最大时长。HTTP/2 连接按 RFC 9113 §6.8 两阶段排空：先发 `GOAWAY(2^31-1, NO_ERROR)` 与 `PING`，继续接纳客户端已在途的流；收到 `PING` ACK、往返等待达到 `min(1 秒, drain_timeout_ / 2)`（产品上限，不必等 ACK）或客户端此间新开超过 128 条流时，再发携带最后流 ID 的 `GOAWAY` 并拒绝之后的流。客户端已先发 `GOAWAY` 时直接发出最终 `GOAWAY`，不再走 `PING` 往返 |
 | `worker_queue_capacity_` | `std::size_t`（默认 `1024`） | 每个 worker 跨线程任务投递队列容量 |
 | `idle_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `75s`） | 空闲连接超时时间 |
 | `connection_scan_interval_` | `std::chrono::milliseconds`（默认 `1s`） | 连接超时扫描周期 |
@@ -78,7 +78,7 @@ int main() {
 | `body_completion_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `120s`） | 请求体整体完成截止时间 |
 | `write_timeout_` | `std::optional<std::chrono::milliseconds>`（默认 `60s`） | 响应写入超时 |
 | `max_connections_per_worker_` | `std::optional<std::size_t>`（默认 `1024`） | 单个 worker 允许的最大并发连接数 |
-| `max_requests_per_connection_` | `std::optional<std::size_t>`（默认 `1000`） | 单条连接最大处理请求数；HTTP/2 达到上限时按上述两阶段 `GOAWAY` 排空，往返期间在途的流仍被处理（产品上限：最多再接纳 128 条） |
+| `max_requests_per_connection_` | `std::optional<std::size_t>`（默认 `1000`） | 单条连接最大处理请求数；HTTP/2 达到上限时按上述两阶段 `GOAWAY` 排空，往返期间在途的流仍被处理（产品上限：最多再接纳 128 条，往返最长等待同上） |
 | `max_buffered_body_bytes_` | `std::size_t`（默认 `default_max_buffered_body_bytes`） | 缓冲式路由默认允许的最大请求体字节数 |
 | `max_inbound_buffer_bytes_per_worker_` | `std::size_t`（默认 `256 MiB`） | 单 worker 入站缓冲总字节上限 |
 | `max_inbound_buffer_bytes_per_connection_` | `std::size_t`（默认 `64 MiB`） | 单连接入站缓冲字节上限 |
@@ -90,8 +90,9 @@ int main() {
 连接关闭遵循 [RFC 9112 §9.6/§9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6)：
 
 - 服务器主动结束、而对端仍可能发来数据时采用逗留关闭：HTTP/1 发送要求关闭连接的最终响应（`Connection: close`、请求被拒绝、排空中）后，以及 HTTP/2 以 `GOAWAY` 结束会话（排空完成、空闲超时、连接错误）后，TLS 先发送 `close_notify`，再半关闭 TCP 发送方向，读取并丢弃对端剩余输入，直到对端结束输入、累计 2 秒或丢弃 4 MiB 先发生为止，然后关闭 TCP。这样未读输入不会使 TCP 以 RST 结束连接而冲掉最后的响应。2 秒与 4 MiB 是固定的产品上限。
-- 等待请求头时发生空闲超时、请求头超时或排空，以及对端正常结束输入时，TLS 发送 `close_notify` 后关闭。HTTP/2 连接超时（写入阶段除外）先进入 `GOAWAY` 排空；同一连接再次超时则直接关闭。
-- 写超时、读取请求体超时、处理器无读写超过 `idle_timeout_`、传输错误以及 `drain_timeout_` 到期后的强制关闭立即关闭连接，不发送关闭告警。逗留中的连接计入 `active_connections_`，受 `drain_timeout_` 约束。
+- 等待请求头时发生空闲超时、请求头超时或排空，以及对端正常结束输入时，TLS 发送 `close_notify` 后关闭。HTTP/2 对端结束输入（FIN 或 `close_notify`）时先发送最终 `GOAWAY(NO_ERROR)` 再关闭；该连接上仍在处理的流被取消，不再完成其响应。
+- HTTP/2 连接超时（写入阶段除外）先进入 `GOAWAY` 排空，但不再获得第二个完整超时周期：往返等待达到上述 `min(1 秒, drain_timeout_ / 2)` 时发出最终 `GOAWAY`，取消仍未结束的流，并以逗留关闭结束连接（TLS 发送 `close_notify`）。若届时仍有写入未完成（对端不读取），自超时起 2 秒（产品上限）后直接关闭连接，不发送关闭告警。
+- 写超时、HTTP/1 读取请求体超时与处理器无读写超过 `idle_timeout_`、传输错误以及 `drain_timeout_` 到期后的强制关闭立即关闭连接，不发送关闭告警。逗留中的连接计入 `active_connections_`，受 `drain_timeout_` 约束。
 
 #### `ruvia::listen_config` 与 `ruvia::tls_config`
 

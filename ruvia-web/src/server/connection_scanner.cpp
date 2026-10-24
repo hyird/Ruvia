@@ -59,6 +59,11 @@ void connection_scanner::entry::set_phase(phase next_phase) noexcept {
         phase_started_ms_ = *now_ms_;
     }
     phase_ = next_phase;
+    // A head read that completed before its cancel took effect returns the
+    // connection to its phase timeouts; the stale request has no deadline.
+    if (reading_request_head_) {
+        close_requested_ = false;
+    }
     reading_request_head_ = false;
 }
 void connection_scanner::entry::read_request_head(phase timeout_phase) noexcept {
@@ -288,10 +293,13 @@ void connection_scanner::impl_type::close_all() noexcept {
 }
 void connection_scanner::impl_type::drain() noexcept {
     draining_ = true;
+    // The coarse clock may lag by an interval; a lost cancel is closed by the
+    // first scan at least one whole interval after this drain.
+    const auto close_deadline = steady_now_ms() + options_.scan_interval_.count();
     for (auto* current = sentinel_.next_; current != &sentinel_;) {
         auto* const next = current->next_;
         if (current->reading_request_head_) {
-            request_close(*current);
+            request_close(*current, close_deadline);
         } else {
             current->notify_drain();
         }
@@ -375,28 +383,43 @@ bool connection_scanner::impl_type::active_since(const entry& entry_value, std::
 }
 void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
     if (!entry_value.close_requested_) {
+        const auto now = cached_now_ms_;
         if (entry_value.reading_request_head_) {
-            request_close(entry_value);
+            request_close(entry_value, now + options_.scan_interval_.count());
             return;
         }
         // A stalled write cannot carry a graceful end (GOAWAY, close alert).
         if (entry_value.phase_ != phase::writing && entry_value.has_drain_check()) {
             // The callback may retire the entry; record the request first.
-            entry_value.close_requested_ = true;
+            record_close_request(entry_value, now + connection_close_grace.count());
             entry_value.notify_drain();
             return;
         }
     }
     close_socket(*entry_value.socket_);
 }
-void connection_scanner::impl_type::request_close(entry& entry_value) noexcept {
+void connection_scanner::impl_type::request_close(entry& entry_value, std::int64_t deadline_ms) noexcept {
     // The pending read completes with operation_aborted; its owner then ends
-    // the connection with its close alert instead of an abrupt close.
-    entry_value.close_requested_ = true;
+    // the connection with its close alert instead of an abrupt close. A TLS
+    // read can lose the cancel (the ssl operation resumes reading a partial
+    // record), so the deadline closes the socket of one that never returns.
+    record_close_request(entry_value, deadline_ms);
     std::error_code ignored;
     entry_value.socket_->cancel(ignored);
 }
+void connection_scanner::impl_type::record_close_request(entry& entry_value, std::int64_t deadline_ms) noexcept {
+    // Repeated requests (a timeout, then a drain) keep the earliest deadline.
+    if (!entry_value.close_requested_ || deadline_ms < entry_value.close_deadline_ms_) {
+        entry_value.close_deadline_ms_ = deadline_ms;
+    }
+    entry_value.close_requested_ = true;
+}
 bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::int64_t now) const noexcept {
+    // A graceful close request is bounded by its own deadline, which later
+    // activity (the GOAWAY or alert write it asked for) does not extend.
+    if (entry_value.close_requested_) {
+        return now >= entry_value.close_deadline_ms_;
+    }
     // Stamps come from the coarse clock, which lags the activity it records by
     // up to one scan interval. Discounting that lag keeps every timeout from
     // firing before the configured time has really elapsed.

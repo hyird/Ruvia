@@ -222,13 +222,18 @@ public:
 
     // Graceful local drain (RFC 9113 §6.8) without a connection error; established
     // streams keep running. A server advertises GOAWAY(2^31-1, NO_ERROR) followed by a
-    // PING and keeps admitting peer streams; the PING ACK (or a peer opening more than
-    // one concurrency window of streams meanwhile) queues GOAWAY(NO_ERROR) at the last
-    // peer stream id, after which HEADERS above it are refused (RST_STREAM
-    // (REFUSED_STREAM)). A client advertises its final boundary at once. Idempotent.
-    // Receiving a valid peer GOAWAY enters this state through the same path so
-    // shutdown is bilateral.
+    // PING and keeps admitting peer streams; the PING ACK, finish_drain() (the owner's
+    // time bound on that round trip) or a peer opening more than one concurrency window
+    // of streams meanwhile queues GOAWAY(NO_ERROR) at the last peer stream id, after
+    // which HEADERS above it are refused (RST_STREAM(REFUSED_STREAM)). A client
+    // advertises its final boundary at once. Idempotent.
     void begin_drain();
+    // Makes the drain final now: queues GOAWAY(NO_ERROR) at the last peer stream id,
+    // entering the drain without a round trip when none is in progress. A valid peer
+    // GOAWAY takes this path: that peer opens no further streams (RFC 9113 §6.8), so
+    // shutdown is bilateral without waiting for a round trip. No-op once final or
+    // after a connection error.
+    void finish_drain();
     [[nodiscard]] bool draining() const noexcept {
         return local_connection_state_.graceful_drain() != nullptr;
     }
@@ -386,6 +391,8 @@ private:
     // Ends a server drain's round trip: queues the final GOAWAY at the last peer
     // stream id. No-op unless the drain is still awaiting its round trip.
     void finish_drain_round_trip();
+    // Enters the drain at its final boundary from the open state.
+    void begin_final_drain();
     // Unpin when the owner lease ends; the stream is then removed. No-op / safe if
     // the stream is already gone.
     void unpin_stream(std::uint32_t stream_id);

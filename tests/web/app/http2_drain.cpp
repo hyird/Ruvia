@@ -50,6 +50,7 @@ public:
     RUVIA_ROUTES_BEGIN(drain_routes)
     RUVIA_GET("/held", held);
     RUVIA_GET("/forbidden", forbidden);
+    RUVIA_GET("/stalled", stalled);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> held(ruvia::context& context) {
@@ -69,6 +70,18 @@ public:
     ruvia::task<ruvia::http_response> forbidden(ruvia::context& context) {
         observed().forbidden_ran_ = true;
         co_return context.text("must-not-run");
+    }
+    // A response stream that goes quiet after its first chunk; only the end
+    // of its stream ends the sleep in time.
+    ruvia::task<void> stalled(ruvia::context& context) {
+        auto& writer = context.stream_text();
+        co_await writer.write(std::string_view("ready"));
+        try {
+            (void)co_await writer.sleep(std::chrono::seconds(30));
+        } catch (...) {
+            observed().cancelled_ = true;
+            throw;
+        }
     }
 };
 
@@ -206,6 +219,11 @@ std::uint32_t uint32(std::string_view bytes) {
     return value;
 }
 
+void register_start_hook(ruvia::application& app) {
+    static std::once_flag hooks;
+    std::call_once(hooks, [&app] { app.on_start([] { observed().started_.release(); }); });
+}
+
 void check_drain(ruvia::testing::test_context& ruvia_ctx, bool deadline_expires) {
     auto& state = observed();
     state.entered_ = false;
@@ -213,8 +231,7 @@ void check_drain(ruvia::testing::test_context& ruvia_ctx, bool deadline_expires)
     state.cancelled_ = false;
     state.forbidden_ran_ = false;
     auto& app = ruvia::app();
-    static std::once_flag hooks;
-    std::call_once(hooks, [&app] { app.on_start([] { observed().started_.release(); }); });
+    register_start_hook(app);
     asio::io_context io;
     asio::ip::tcp::acceptor reservation(io, {asio::ip::make_address("127.0.0.1"), 0});
     const auto endpoint = reservation.local_endpoint();
@@ -294,6 +311,105 @@ void check_drain(ruvia::testing::test_context& ruvia_ctx, bool deadline_expires)
     RUVIA_CHECK_EQ(state.cancelled_.load(), deadline_expires);
     RUVIA_CHECK(!state.forbidden_ran_);
 }
+
+frame next_of_type(peer& client, ruvia::http2_frame_type type) {
+    frame value;
+    do {
+        value = client.next();
+    } while (value.header_.type_ != static_cast<std::uint8_t>(type) ||
+             (type == ruvia::http2_frame_type::ping && (value.header_.flags_ & 0x1) != 0));
+    return value;
+}
+
+// Serves `config` and opens an HTTP/2 connection (preface and SETTINGS, then
+// `requests`) that never acknowledges the server's PING.
+class silent_peer_run final {
+public:
+    silent_peer_run(ruvia::server_config config, std::string_view requests)
+        : app_(ruvia::app()),
+          endpoint_(reserve_endpoint(io_)),
+          run_(configure(app_, std::move(config), endpoint_)),
+          socket_(io_) {
+        if (!observed().started_.try_acquire_for(3s)) {
+            throw std::runtime_error("HTTP/2 drain app did not start");
+        }
+        socket_.connect(endpoint_);
+        std::string opening(ruvia::http2_client_preface);
+        append_frame(opening, ruvia::http2_frame_type::settings, 0, 0, {});
+        opening.append(requests);
+        asio::write(socket_, asio::buffer(opening));
+    }
+    [[nodiscard]] ruvia::application& app() noexcept {
+        return app_;
+    }
+    [[nodiscard]] asio::ip::tcp::socket& socket() noexcept {
+        return socket_;
+    }
+    void join() {
+        run_.join();
+    }
+
+private:
+    static asio::ip::tcp::endpoint reserve_endpoint(asio::io_context& io) {
+        asio::ip::tcp::acceptor reservation(io, {asio::ip::make_address("127.0.0.1"), 0});
+        const auto endpoint = reservation.local_endpoint();
+        reservation.close();
+        return endpoint;
+    }
+    static ruvia::application& configure(
+        ruvia::application& app, ruvia::server_config config, const asio::ip::tcp::endpoint& endpoint) {
+        register_start_hook(app);
+        app.server(std::move(config));
+        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
+        return app;
+    }
+
+    asio::io_context io_;
+    ruvia::application& app_;
+    asio::ip::tcp::endpoint endpoint_;
+    app_run run_;
+    asio::ip::tcp::socket socket_;
+};
+
+// The GOAWAY(2^31-1) and drain PING a drain starts with.
+void expect_round_trip_start(ruvia::testing::test_context& ruvia_ctx, peer& client) {
+    const auto first = next_of_type(client, ruvia::http2_frame_type::goaway);
+    RUVIA_CHECK_EQ(uint32(first.payload_) & 0x7fffffffU, 0x7fffffffU);
+    (void)next_of_type(client, ruvia::http2_frame_type::ping);
+}
+
+// The final GOAWAY(NO_ERROR) with `last_stream_id`, then the server's end of
+// the connection.
+void expect_final_goaway_and_end(
+    ruvia::testing::test_context& ruvia_ctx, peer& client, std::uint32_t last_stream_id) {
+    const auto last = next_of_type(client, ruvia::http2_frame_type::goaway);
+    RUVIA_CHECK_EQ(uint32(last.payload_) & 0x7fffffffU, last_stream_id);
+    RUVIA_CHECK_EQ(uint32(std::string_view(last.payload_).substr(4)), 0U);
+    await_observation([&client] { return client.ended(); });
+}
+
+void check_idle_timeout_drain(ruvia::testing::test_context& ruvia_ctx, bool stalled_stream) {
+    auto& state = observed();
+    state.entered_ = false;
+    state.release_ = false;
+    state.cancelled_ = false;
+    silent_peer_run run(
+        {.worker_count_ = 1, .idle_timeout_ = 300ms, .connection_scan_interval_ = 5ms},
+        stalled_stream ? request(1, "/stalled") : std::string());
+    peer client(run.socket());
+    expect_round_trip_start(ruvia_ctx, client);
+    // Without the ACK the drain still ends within its round-trip bound
+    // (min(1 s, drain_timeout_ / 2)): a stalled stream is cancelled, and the
+    // final GOAWAY precedes the close.
+    expect_final_goaway_and_end(ruvia_ctx, client, stalled_stream ? 1U : 0U);
+    // Ends the server's lingering close at once.
+    run.socket().close();
+    if (stalled_stream) {
+        await_observation([&state] { return state.cancelled_.load(); });
+    }
+    run.app().stop();
+    run.join();
+}
 }  // namespace http2_drain_test
 
 RUVIA_TEST(http2_app_stop_sends_goaway_refuses_new_streams_and_completes_admitted_request) {
@@ -301,4 +417,47 @@ RUVIA_TEST(http2_app_stop_sends_goaway_refuses_new_streams_and_completes_admitte
 }
 RUVIA_TEST(http2_app_stop_cancels_admitted_request_at_drain_deadline) {
     http2_drain_test::check_drain(ruvia_ctx, true);
+}
+
+// RFC 9113 section 6.8 requires only "at least one round-trip time" before the
+// final GOAWAY: a peer that never acknowledges the drain PING neither withholds
+// the final GOAWAY nor holds stop until drain_timeout_.
+RUVIA_TEST(http2_app_stop_sends_final_goaway_without_ping_ack) {
+    using namespace http2_drain_test;
+    silent_peer_run run({.worker_count_ = 1, .drain_timeout_ = 6s, .connection_scan_interval_ = 5ms}, {});
+    peer client(run.socket());
+    // The server's SETTINGS shows the session runs before stop begins.
+    (void)next_of_type(client, ruvia::http2_frame_type::settings);
+    const auto stop_started = std::chrono::steady_clock::now();
+    run.app().stop();
+    expect_round_trip_start(ruvia_ctx, client);
+    expect_final_goaway_and_end(ruvia_ctx, client, 0);
+    // Ends the server's lingering close at once.
+    run.socket().close();
+    run.join();
+    RUVIA_CHECK(std::chrono::steady_clock::now() - stop_started < 3s);
+}
+
+// An idle-timeout drain is bounded like a stop's: the final GOAWAY and an
+// orderly end follow within the round-trip bound, not a second idle timeout
+// that closes the socket without them.
+RUVIA_TEST(http2_idle_timeout_drain_ends_with_final_goaway) {
+    http2_drain_test::check_idle_timeout_drain(ruvia_ctx, false);
+}
+RUVIA_TEST(http2_idle_timeout_drain_cancels_stalled_stream_after_final_goaway) {
+    http2_drain_test::check_idle_timeout_drain(ruvia_ctx, true);
+}
+
+// RFC 9113 section 6.8: "Endpoints SHOULD always send a GOAWAY frame before
+// closing a connection" -- also when the peer's end of input ends the session.
+RUVIA_TEST(http2_peer_end_of_input_gets_final_goaway_before_close) {
+    using namespace http2_drain_test;
+    silent_peer_run run({.worker_count_ = 1, .connection_scan_interval_ = 5ms}, {});
+    peer client(run.socket());
+    (void)next_of_type(client, ruvia::http2_frame_type::settings);
+    run.socket().shutdown(asio::ip::tcp::socket::shutdown_send);
+    expect_final_goaway_and_end(ruvia_ctx, client, 0);
+    run.socket().close();
+    run.app().stop();
+    run.join();
 }

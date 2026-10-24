@@ -12,6 +12,7 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http2_connection.h"
 
 #include "http2/http2_buffered_response_write.h"
@@ -62,8 +63,15 @@ public:
     [[nodiscard]] bool terminated() const noexcept;
     [[nodiscard]] bool header_block_in_progress() const noexcept;
     [[nodiscard]] std::size_t active_runtime_count() const noexcept;
-    // The drain completed: every stream ended and the final GOAWAY was written.
+    // The drain completed: the final GOAWAY was written and either every stream
+    // ended, or a timeout's drain reached its bound with the write side idle and
+    // the remaining streams were cancelled.
     [[nodiscard]] bool drain_finished() const noexcept;
+    // The peer ended its input (TCP FIN or TLS close_notify): it can open no
+    // further stream, so the final GOAWAY is queued for the writer to flush
+    // before the session ends (RFC 9113 §6.8). In-flight streams are cancelled
+    // with the session; their responses are not completed.
+    void peer_input_ended() noexcept;
     void set_inactivity_phase() noexcept;
     void touch_activity() noexcept;
     void wake_writer() noexcept;
@@ -90,6 +98,9 @@ private:
     [[nodiscard]] bool admit_stream(std::uint32_t stream_id);
     void remove_stream_runtime(std::uint32_t stream_id) noexcept;
     void request_drain() noexcept;
+    void begin_drain() noexcept;
+    void arm_drain_timer() noexcept;
+    void drain_timer_expired() noexcept;
     void finish_drain_if_ready() noexcept;
     void reset_stream_no_throw(std::uint32_t stream_id, http2_error_code error) noexcept;
 
@@ -115,7 +126,14 @@ private:
     bool drain_finished_{};
     // A batch removed from protocol output still belongs to the socket writer.
     bool output_write_in_flight_{};
+    // A connection timeout started (or joined) the drain: its time bound ends
+    // the session instead of only making the GOAWAY boundary final.
+    bool timeout_drain_{};
+    bool drain_expired_{};
     connection_scanner::periodic_check_registration drain_registration_;
+    // Declared last: destroyed (and so unregistered) before the state its
+    // completion touches.
+    worker_timer_registration drain_timer_;
 };
 
 }  // namespace ruvia::detail

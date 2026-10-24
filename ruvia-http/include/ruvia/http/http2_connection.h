@@ -233,13 +233,21 @@ public:
     // expired. An event cannot be released through another connection.
     [[nodiscard]] http2_server_request_release_status release(http2_request_head_event&& request);
     // Graceful drain (RFC 9113 section 6.8). A server first sends GOAWAY(2^31-1,
-    // NO_ERROR) and a PING, and keeps admitting peer streams until the PING ACK;
-    // then it sends GOAWAY(NO_ERROR) with the last peer stream id and refuses later
-    // streams. A peer that opens more than 128 further streams before its ACK gets
-    // the final GOAWAY at once (a product bound on the round trip). A client sends
-    // its final GOAWAY immediately. Idempotent.
+    // NO_ERROR) and a PING, and keeps admitting peer streams until the PING ACK or
+    // finish_drain(); then it sends GOAWAY(NO_ERROR) with the last peer stream id and
+    // refuses later streams. A peer that opens more than 128 further streams before
+    // its ACK gets the final GOAWAY at once (a product bound on the round trip). The
+    // ACK itself is not required: the owner bounds the wait in time with
+    // finish_drain(). A client sends its final GOAWAY immediately. Idempotent.
     void begin_drain();
-    // True from begin_drain() (or a valid peer GOAWAY) on.
+    // Makes the drain final now: sends GOAWAY(NO_ERROR) with the last peer stream id
+    // and refuses later peer streams, entering the drain without the round trip when
+    // none is in progress. For a server whose round-trip wait reached the owner's
+    // time bound, or whose peer can open no further streams (its input ended). A
+    // valid peer GOAWAY does this itself: its sender opens no further streams.
+    // No-op once the drain is final or after a connection error.
+    void finish_drain();
+    // True from begin_drain(), finish_drain() or a valid peer GOAWAY on.
     [[nodiscard]] bool draining() const noexcept;
     // True once the final GOAWAY is queued; no later peer stream will be admitted,
     // so the owner may close after the remaining streams finish.

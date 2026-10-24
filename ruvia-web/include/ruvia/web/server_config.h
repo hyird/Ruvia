@@ -67,7 +67,11 @@ struct server_config final {
     // Graceful stop of a serving app: once stop() closes admission, admitted
     // requests, tunnels and WebSocket close handshakes may finish for up to
     // this long before every remaining connection is closed. Zero closes them
-    // at once.
+    // at once. An HTTP/2 drain (stop, request cap or connection timeout) sends
+    // its final GOAWAY after the PING round trip or min(1 s, half of this
+    // value), whichever comes first (product limit). A drain started by a
+    // connection timeout ends the session at that point, cancelling streams
+    // still open; a write still blocked then is closed 2 s after the timeout.
     std::chrono::milliseconds drain_timeout_{std::chrono::seconds(10)};
     std::size_t worker_queue_capacity_{1024};
     // HTTP connection inactivity: the keep-alive wait for the next request,

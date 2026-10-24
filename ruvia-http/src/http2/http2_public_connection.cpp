@@ -518,6 +518,9 @@ http2_server_request_release_status http2_connection::release(http2_request_head
 void http2_connection::begin_drain() {
     impl_->connection_.begin_drain();
 }
+void http2_connection::finish_drain() {
+    impl_->connection_.finish_drain();
+}
 bool http2_connection::draining() const noexcept {
     return impl_->connection_.draining();
 }

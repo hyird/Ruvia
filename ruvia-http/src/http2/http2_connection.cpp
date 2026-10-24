@@ -171,22 +171,19 @@ void http2_connection::begin_drain() {
     if (local_connection_state_.open() == nullptr) {
         return;
     }
+    if (role_ != http2_role::server) {
+        begin_final_drain();
+        return;
+    }
     // Keep the lifecycle transition and its frames as one externally visible
     // operation. The reservation is made while the state is still open, so a
     // failed allocation leaves begin_drain() retryable.
-    const bool round_trip = role_ == http2_role::server;
-    output_.reserve_segments_additional(round_trip ? 2 : 1);
-    output_.reserve_additional(http2_goaway_encoded_bytes(http2_drain_debug) +
-                               (round_trip ? http2_frame_header_bytes + http2_drain_ping_payload.size() : 0));
-    if (!round_trip) {
-        if (local_connection_state_.begin_graceful_drain(last_stream_id_)) {
-            output_.append_goaway_frame(last_stream_id_, http2_error_code::no_error, http2_drain_debug);
-        }
-        return;
-    }
+    output_.reserve_segments_additional(2);
+    output_.reserve_additional(http2_goaway_encoded_bytes(http2_drain_debug) + http2_frame_header_bytes +
+                               http2_drain_ping_payload.size());
     // A client that ignores the first GOAWAY and withholds the ACK still cannot
     // extend the round trip indefinitely: one concurrency window of further streams
-    // is admitted, then the boundary becomes final.
+    // is admitted, then the boundary becomes final. finish_drain() bounds it in time.
     const auto stream_budget = std::uint32_t{2} * http2_local_settings::max_concurrent_streams;
     const auto round_trip_limit =
         last_stream_id_ > http2_max_stream_id - stream_budget ? http2_max_stream_id : last_stream_id_ + stream_budget;
@@ -195,6 +192,23 @@ void http2_connection::begin_drain() {
     }
     output_.append_goaway_frame(http2_max_stream_id, http2_error_code::no_error, http2_drain_debug);
     output_.append_frame(http2_frame_type::ping, 0, 0, http2_drain_ping_payload);
+}
+
+void http2_connection::finish_drain() {
+    if (local_connection_state_.open() != nullptr) {
+        begin_final_drain();
+        return;
+    }
+    finish_drain_round_trip();
+}
+
+void http2_connection::begin_final_drain() {
+    // Reserve while still open so a failed allocation leaves the transition retryable.
+    output_.reserve_segments_additional(1);
+    output_.reserve_additional(http2_goaway_encoded_bytes(http2_drain_debug));
+    if (local_connection_state_.begin_graceful_drain(last_stream_id_)) {
+        output_.append_goaway_frame(last_stream_id_, http2_error_code::no_error, http2_drain_debug);
+    }
 }
 
 void http2_connection::finish_drain_round_trip() {
@@ -436,9 +450,11 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
 
     // A valid peer GOAWAY is graceful shutdown state, not a local connection error.
     // Send our directional GOAWAY through the same idempotent drain path before
-    // publishing the peer event. begin_drain() reserves its complete output first,
-    // so a throwing resource leaves both lifecycle sides retryable.
-    begin_drain();
+    // publishing the peer event. Its sender opens no further streams (RFC 9113 §6.8),
+    // so a server needs no round trip: the boundary is final at once, also ending
+    // a round trip already in progress. finish_drain() reserves its complete output
+    // first, so a throwing resource leaves both lifecycle sides retryable.
+    finish_drain();
     peer_goaway_ = goaway;
     events_.push_back(http2_event(goaway));
 
