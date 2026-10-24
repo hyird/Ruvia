@@ -251,10 +251,12 @@ private:
     using read_type = task<std::optional<std::pmr::string>> (*)(void*);
     using write_type = task<void> (*)(void*, std::string_view);
     using finish_type = task<void> (*)(void*);
-    using abort_type = void (*)(void*) noexcept;
+    // malformed: the received tunnel data is malformed (RFC 9297 section 3.3).
+    using abort_type = void (*)(void*, bool malformed) noexcept;
     http_tunnel(std::pmr::memory_resource& resource, const worker_handle& worker_value,
         void* target, read_type read, write_type write, finish_type finish_value, abort_type abort) noexcept;
     [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes);
+    void abort_input(bool malformed) noexcept;
     void require_active() const;
     std::pmr::memory_resource& resource_;
     const worker_handle& worker_;

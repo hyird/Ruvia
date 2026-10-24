@@ -79,7 +79,9 @@ public:
         }
         co_return std::error_code{};
     }
-    void abort() noexcept {
+    // HTTP/1.1 has no per-message reset: malformed tunnel data closes the
+    // connection like any other abort.
+    void abort(bool /*malformed*/ = false) noexcept {
         if constexpr (requires { stream_.next_layer(); }) {
             tls_output_->abort();
         } else {

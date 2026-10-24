@@ -338,7 +338,7 @@ RUVIA_TEST(http1_client_request_writer_owns_hop_by_hop_field_contracts) {
 
     for (const std::string_view connection_options :
         {"Host", "close, content-length", "EXPECT, keep-alive", "Cache-Control", "Trailer",
-            "Authorization", "Cookie", "Range"}) {
+            "Authorization", "Cookie", "Range", "Transfer-Encoding", "close, transfer-encoding"}) {
         const ruvia::http_header_view connection("Connection", connection_options);
         http_client_request_view request;
         request.method_ = "POST";

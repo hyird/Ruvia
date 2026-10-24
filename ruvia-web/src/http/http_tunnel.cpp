@@ -109,11 +109,14 @@ task<void> http_tunnel::finish() & {
         &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }
 void http_tunnel::abort() noexcept {
+    abort_input(false);
+}
+void http_tunnel::abort_input(bool malformed) noexcept {
     if (!worker_.is_current()) {
         std::terminate();
     }
     if (operations_.active()) {
-        abort_(target_);
+        abort_(target_, malformed);
     }
 }
 

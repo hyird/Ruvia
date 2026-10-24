@@ -75,8 +75,9 @@ public:
         abort_input(false);
     }
     // The received Capsule Protocol data is malformed, truncated or over the
-    // reader's limit (RFC 9297 section 3.3): an HTTP/2 client tunnel resets
-    // the stream with PROTOCOL_ERROR (RFC 9113 section 8.1.1).
+    // reader's limit (RFC 9297 section 3.3): an HTTP/2 tunnel resets the
+    // stream with PROTOCOL_ERROR (RFC 9113 section 8.1.1); an HTTP/1.1
+    // tunnel closes the connection.
     void abort_malformed() noexcept {
         abort_input(true);
     }
@@ -93,7 +94,7 @@ public:
         }
         closed_ = true;
         if (server_) {
-            server_->abort();
+            server_->abort_input(malformed);
         } else if (client_) {
             if (malformed) {
                 client_->abort_malformed();

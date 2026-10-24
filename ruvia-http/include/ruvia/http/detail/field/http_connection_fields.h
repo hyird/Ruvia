@@ -101,12 +101,15 @@ enum class http_connection_option : std::uint8_t {
     te = 1U << 3
 };
 
+// A sender must not send an option naming a field intended for all recipients
+// of the content (RFC 9110 section 7.6.1), nor one naming a field that frames
+// (Content-Length, Transfer-Encoding) or routes (Host) the message: the
+// recipient list (http_connection_option_names_protected_field) rejects those.
 [[nodiscard]] inline bool http_connection_option_conflicts_with_managed_field(
     std::string_view option) noexcept {
     switch (classify_request_header(option)) {
         case request_header_kind::other:
         case request_header_kind::connection:
-        case request_header_kind::transfer_encoding:
         case request_header_kind::upgrade:
         case request_header_kind::forwarded:
         case request_header_kind::x_forwarded_for:
@@ -123,6 +126,7 @@ enum class http_connection_option : std::uint8_t {
         case request_header_kind::content_encoding:
         case request_header_kind::content_length:
         case request_header_kind::content_type:
+        case request_header_kind::transfer_encoding:
         case request_header_kind::cookie:
         case request_header_kind::expect:
         case request_header_kind::host:
@@ -141,8 +145,7 @@ enum class http_connection_option : std::uint8_t {
             return true;
     }
     const auto known_bit = classify_response_header_name(option);
-    return known_bit != 0 && known_bit != response_header_connection &&
-           known_bit != response_header_transfer_encoding;
+    return known_bit != 0 && known_bit != response_header_connection;
 }
 
 // Who parses a Connection field: its sender, or the recipient of a request or

@@ -122,13 +122,16 @@ public:
                                             : http_stream_end::keep_open);
     }
 
-    void abort() noexcept {
+    // Malformed received data is a stream error of type PROTOCOL_ERROR
+    // (RFC 9113 section 8.1.1); any other abort cancels the stream.
+    void abort(bool malformed = false) noexcept {
         if (aborted_) {
             return;
         }
         aborted_ = true;
         try {
-            (void)connection_.submit_reset(stream_id_, http2_error_code::cancel);
+            (void)connection_.submit_reset(
+                stream_id_, malformed ? http2_error_code::protocol_error : http2_error_code::cancel);
         } catch (...) {
             // abort() is best-effort teardown; callers cannot observe reset
             // serialization failure on this noexcept cleanup path.

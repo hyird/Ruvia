@@ -35,9 +35,9 @@ public:
     [[nodiscard]] http_tunnel& tunnel() noexcept {
         return facade_;
     }
-    void abort() noexcept {
+    void abort(bool malformed = false) noexcept {
         aborted_ = true;
-        transport_.abort();
+        transport_.abort(malformed);
     }
     [[nodiscard]] task<void> finish() {
         if (!ended_) {
@@ -96,8 +96,8 @@ private:
     static task<void> finish_thunk(void* raw) {
         return static_cast<http_tunnel_session*>(raw)->finish();
     }
-    static void abort_thunk(void* raw) noexcept {
-        static_cast<http_tunnel_session*>(raw)->abort();
+    static void abort_thunk(void* raw, bool malformed) noexcept {
+        static_cast<http_tunnel_session*>(raw)->abort(malformed);
     }
     transport_type transport_;
     std::pmr::memory_resource& inbound_;
