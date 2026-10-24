@@ -133,14 +133,14 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 #### 4.1 HTTP/1.0 & HTTP/1.1 状态机
 
 - **服务端解析与序列化**：
-  - `"ruvia/http/http1_server_request_parser.h"`：`http1_server_request_parser::parse_head(buffer, state, offset, resource)` 解析请求行、首部、连接复用计划（`http1_request_connection_plan`）与请求体分帧计划（`http1_request_body_plan`）。
+  - `"ruvia/http/http1_server_request_parser.h"`：`http1_server_request_parse_state::parse_head(buffer, offset, resource)` 解析请求行、首部、连接复用计划（`http1_request_connection_plan`）与请求体分帧计划（`http1_request_body_plan`）。
   - `"ruvia/http/http1_chunked_body_decoder.h"`：`http1_chunked_body_decoder::decode(available)` 增量解码 `chunked` 请求体与 Trailer。
   - `"ruvia/http/http1_server_semantics.h"` & `"ruvia/http/http1_response_head_plan.h"`：提交最终响应头与流式响应头分帧计划。
 - **客户端写出与响应解析**：
   - `"ruvia/http/http1_client_request_writer.h"` & `"ruvia/http/http1_request_content_writer.h"`：生成客户端请求头与流式分块请求体，产出 `http1_client_exchange_state`。
   - `"ruvia/http/http1_client_response_parser.h"` & `"ruvia/http/http1_client_response_body_decoder.h"`：增量解析服务端 `1xx` 临时响应、最终响应头及定长/分块/EOF 定界响应体。
 
-HTTP/1 请求头与响应头解析的字段描述符共用内部存储（`parser/http_header_descriptor_storage.h`）：前 32 项内联，超出后整体迁入传入的 PMR（缺省为默认资源）并按实际字段数增长。内联槽位在解析时不清零，以保持热路径开销。服务端 `parsed_request_header_block` 与客户端 `http1_client_parsed_response_head` 均不按首部字节上限预留线程栈数组，也不增加字段数量限制；64 KiB 首部字节上限仍然生效。服务端请求视图零拷贝借用输入缓冲区，客户端最终响应头拥有字段数据，原始输入可在解析完成后释放。PMR 分配失败以 `std::bad_alloc` 传出且不提交解析状态，释放资源后可用同一缓冲区与偏移重试。调用方须让 PMR 存活至相关请求或响应结果析构。
+HTTP/1 请求头与响应头解析的字段描述符共用内部存储（`parser/http_header_descriptor_storage.h`）：前 32 项内联，超出后整体迁入传入的 PMR（缺省为默认资源）并按实际字段数增长。服务端 `parsed_request_header_block` 与客户端 `http1_client_parsed_response_head` 均不按首部字节上限预留线程栈数组，也不增加字段数量限制；64 KiB 首部字节上限仍然生效。服务端请求视图零拷贝借用输入缓冲区，客户端最终响应头拥有字段数据，原始输入可在解析完成后释放。PMR 分配失败以 `std::bad_alloc` 传出，此时不发布 head_ready 或成功状态；释放资源后可用同一缓冲区与偏移重试，但部分元数据可能残留，不保证回滚。PMR 须存活至其拥有的描述符存储释放：服务端请求为 `http_request::reset()` 或请求对象析构，客户端响应头为 `take_headers()` 返回的向量或响应头析构。
 
 #### 4.2 HTTP/2 与 HPACK 状态机（`"ruvia/http/http2_connection.h"`, `"ruvia/http/hpack.h"`）
 
