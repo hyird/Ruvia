@@ -170,7 +170,9 @@ RUVIA_TEST(ws_subprotocol_offers_require_http_tokens_and_skip_repeats) {
         accepts_request(with_protocols("Sec-WebSocket-Protocol: chat\r\n"
                                        "Sec-WebSocket-Protocol: superchat, chat\r\n")));
     constexpr std::array<std::string_view, 1> supported{"chat"};
-    const auto repeated = parse_request(with_protocols("Sec-WebSocket-Protocol: chat, chat\r\n"));
+    // 请求头借用原始报文，握手完成前必须保持报文存储存活。
+    const auto repeated_wire = with_protocols("Sec-WebSocket-Protocol: chat, chat\r\n");
+    const auto repeated = parse_request(repeated_wire);
     const auto selected = ruvia::make_websocket_server_handshake(repeated, {.supported_subprotocols_ = supported});
     RUVIA_CHECK(selected.subprotocol() == "chat");
 
