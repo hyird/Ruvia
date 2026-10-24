@@ -44,12 +44,15 @@ namespace ruvia::detail {
     return decoded;
 }
 
-// Web static-file path policy: normalize a decoded file path relative to the
-// configured document root and reject every attempt to ascend above it. One
-// forward scan: the canonical prefix ('/'-separated, no empty or dot segment)
-// is borrowed and only the bytes from the first rewrite on ('\\', an empty
-// segment, "." or "..") are rebuilt in `storage`. A NUL cannot occur in a
-// filename and is rejected.
+// Web static-file path policy: validate a decoded file path relative to the
+// configured document root. '/' and '\\' both separate segments; a "." or ".."
+// segment, an empty interior segment, a NUL, or an absolute or drive path is
+// rejected (403) rather than resolved. Requests carrying a dot segment never
+// reach a route, and a decoded parameter could otherwise hide one behind an
+// encoded separator ("sub%2F..%2Fsecret") that no route or path scope saw, so
+// every caller fails closed instead of resolving it. A final separator names
+// the directory itself and is dropped. The input is borrowed when it is
+// already canonical; only a '\\' separator rebuilds it in `storage`.
 [[nodiscard]] inline std::string_view normalize_static_relative_path(
     std::string_view input, std::pmr::string& storage) {
     if (input.empty()) {
@@ -60,67 +63,34 @@ namespace ruvia::detail {
     }
 
     constexpr std::string_view stop_bytes("/\\\0", 3);
+    bool backslash = false;
     std::size_t cursor_value = 0;
     for (;;) {
         const auto stop = input.find_first_of(stop_bytes, cursor_value);
         const auto end = stop == std::string_view::npos ? input.size() : stop;
-        if (stop != std::string_view::npos && input[stop] == '\0') {
-            throw_invalid_static_file_path();
-        }
         const auto segment = input.substr(cursor_value, end - cursor_value);
-        if (segment.empty() && stop != std::string_view::npos) {
+        if (segment == "." || segment == "..") {
             throw_invalid_static_file_path();
         }
-        if (segment.empty() || segment == "." || segment == ".." ||
-            (stop != std::string_view::npos && input[stop] == '\\')) {
-            break;
-        }
-        if (stop == std::string_view::npos) {
-            return input;
-        }
-        cursor_value = stop + 1;
-    }
-
-    // input[0, cursor_value) is canonical and, when non-empty, ends with '/'.
-    storage.clear();
-    storage.reserve(input.size());
-    storage.append(input.data(), cursor_value == 0 ? 0 : cursor_value - 1);
-    while (cursor_value <= input.size()) {
-        const auto stop = input.find_first_of(stop_bytes, cursor_value);
-        const auto end = stop == std::string_view::npos ? input.size() : stop;
-        if (stop != std::string_view::npos && input[stop] == '\0') {
-            throw_invalid_static_file_path();
-        }
-        const auto segment = input.substr(cursor_value, end - cursor_value);
-
-        if (segment.empty() && stop != std::string_view::npos) {
-            throw_invalid_static_file_path();
-        }
-        if (!segment.empty() && segment != ".") {
-            if (segment == "..") {
-                if (storage.empty()) {
-                    throw_invalid_static_file_path();
-                }
-                const auto previous_slash = storage.rfind('/');
-                if (previous_slash == std::pmr::string::npos) {
-                    storage.clear();
-                } else {
-                    storage.erase(previous_slash);
-                }
-            } else {
-                if (!storage.empty()) {
-                    storage.push_back('/');
-                }
-                storage.append(segment.data(), segment.size());
-            }
-        }
-
         if (stop == std::string_view::npos) {
             break;
         }
+        if (input[stop] == '\0' || segment.empty()) {
+            throw_invalid_static_file_path();
+        }
+        backslash = backslash || input[stop] == '\\';
         cursor_value = stop + 1;
     }
 
+    auto canonical = input;
+    if (canonical.back() == '/' || canonical.back() == '\\') {
+        canonical.remove_suffix(1);
+    }
+    if (!backslash) {
+        return canonical;
+    }
+    storage.assign(canonical.data(), canonical.size());
+    std::ranges::replace(storage, '\\', '/');
     return storage;
 }
 

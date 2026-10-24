@@ -1,6 +1,5 @@
 #pragma once
 
-#include <exception>
 #include <stdexcept>
 #include <variant>
 
@@ -14,17 +13,15 @@ namespace detail {
 
 // Raised by a body write on a stream whose committed head already completed
 // the message because the request method/response status suppresses content
-// (an explicit HEAD streaming route, a 304, ...). This is a
-// control signal, not an error: the response head on the wire is complete and
-// correct. It deterministically stops the handler -- including an infinite
-// SSE loop -- at its first body write; dispatch recognizes the type and
-// finishes the stream as a normal head-only success.
-class response_stream_head_only_complete final : public std::exception {
-public:
-    [[nodiscard]] const char* what() const noexcept override {
-        return "response stream completed head-only; the body is suppressed";
-    }
-};
+// (HEAD on a GET stream route, a 304, ...). This is a control signal, not an
+// error: the response head on the wire is complete and correct. It
+// deterministically stops the handler -- including an infinite SSE loop -- at
+// its first body write; dispatch recognizes the type and finishes the stream
+// as a normal head-only success. Like a cancellation signal it deliberately
+// does not derive from std::exception, so handler or middleware code catching
+// `const std::exception&` to convert failures lets it unwind instead of
+// turning a correct head-only response into a connection failure.
+class response_stream_head_only_complete final {};
 
 class response_stream_state final {
 public:

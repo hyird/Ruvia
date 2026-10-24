@@ -35,6 +35,10 @@ struct sleeping_stream_observation final {
     std::atomic<bool> sse_wait_failed_{};
     std::atomic<bool> sse_context_stopped_{};
     std::atomic<bool> sse_wait_finished_{};
+    std::atomic<int> head_loop_writes_{};
+    std::atomic<bool> head_loop_aborted_{};
+    std::atomic<bool> head_loop_sleep_stopped_{};
+    std::atomic<bool> head_loop_finished_{};
 };
 
 const auto sleeping_stream_observed = std::make_shared<sleeping_stream_observation>();
@@ -50,10 +54,32 @@ class sleeping_stream_routes final {
     RUVIA_GET("/http2-quiet-sse", quiet_sse);
     RUVIA_POST("/http2-post-sse", post_sse);
     RUVIA_GET("/http2-paced-sse", paced_sse);
+    RUVIA_GET("/http2-head-loop-sse", head_loop_sse);
     RUVIA_POST("/http2-bounded-buffered", bounded_buffered, ruvia::body_limit<16>);
     RUVIA_POST("/http2-bounded-stream", count_upload, ruvia::stream_body, ruvia::body_limit<16>);
     RUVIA_POST("/http2-bounded-delayed-stream", bounded_delayed_stream, ruvia::stream_body, ruvia::body_limit<16>);
     RUVIA_ROUTES_END
+
+    // Swallows every write failure, like a careless SSE loop: only aborted()
+    // and sleep() can end it.
+    ruvia::task<void> head_loop_sse(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
+        auto writer = context_value.stream_sse();
+        int writes = 0;
+        while (!writer.aborted() && writes < 100) {
+            ++writes;
+            try {
+                co_await writer.write({.data_ = "tick"});
+                // NOLINTNEXTLINE(bugprone-empty-catch)
+            } catch (...) {
+            }
+        }
+        observed.head_loop_writes_ = writes;
+        observed.head_loop_aborted_ = writer.aborted();
+        observed.head_loop_sleep_stopped_ =
+            co_await writer.sleep(std::chrono::seconds(30)) == ruvia::timer_sleep_result::stop_requested;
+        observed.head_loop_finished_ = true;
+    }
 
     ruvia::task<ruvia::http_response> bounded_buffered(ruvia::context& context_value) {
         co_return context_value.text(co_await context_value.req().text());
@@ -553,6 +579,48 @@ RUVIA_TEST(http2_head_falls_back_to_sse_get_route_without_content) {
     RUVIA_CHECK_EQ(status, std::string("200"));
     RUVIA_CHECK(content_type.starts_with("text/event-stream"));
     RUVIA_CHECK(body.empty());
+    client.close();
+    server.finish();
+}
+
+// A completed head-only response can deliver nothing more: an SSE handler that
+// swallows the head-only signal sees aborted() and a stop_requested sleep() at
+// once while the peer keeps the connection open, instead of running until the
+// connection ends.
+RUVIA_TEST(http2_head_only_stream_reports_aborted_and_stops_sleeping) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    std::pmr::unsynchronized_pool_resource resource;
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    asio::write(client, asio::buffer(request_wire(&resource, "HEAD", "/http2-head-loop-sse", {})));
+    client.non_blocking(true);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    bool ended = false;
+    while (!ended) {
+        const auto frame = http2_streaming_test::read_frame(client, deadline);
+        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
+            (frame.header_.flags_ & 0x1) == 0) {
+            std::string ack;
+            append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
+            asio::write(client, asio::buffer(ack));
+            continue;
+        }
+        if (frame.header_.stream_id_ == 1) {
+            RUVIA_CHECK(frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers));
+            ended = (frame.header_.flags_ & 0x1) != 0;
+        }
+    }
+
+    auto& observed = *http2_streaming_test::sleeping_stream_observed;
+    const auto finish_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!observed.head_loop_finished_ && std::chrono::steady_clock::now() < finish_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    RUVIA_CHECK(observed.head_loop_finished_.load());
+    RUVIA_CHECK_EQ(observed.head_loop_writes_.load(), 1);
+    RUVIA_CHECK(observed.head_loop_aborted_.load());
+    RUVIA_CHECK(observed.head_loop_sleep_stopped_.load());
     client.close();
     server.finish();
 }

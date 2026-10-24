@@ -555,11 +555,21 @@ RUVIA_TEST(static_file_takes_decoded_path_and_stays_traversal_safe) {
     RUVIA_CHECK_EQ(serve("my%20report.txt"), ruvia::http_status::not_found);
     RUVIA_CHECK_EQ(serve("sub%2Finner.txt"), ruvia::http_status::not_found);
     RUVIA_CHECK_EQ(serve("sub/inner.txt"), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(serve("sub\\inner.txt"), ruvia::http_status::ok);
 
-    // ".." is clamped at the root (403) however it is reached.
+    // A "." or ".." segment is rejected (403), never resolved: a decoded
+    // parameter can carry one behind an encoded separator that no route or
+    // path scope saw, so even a path that would stay inside the root fails.
     RUVIA_CHECK_EQ(serve("../etc/passwd"), ruvia::http_status::forbidden);
     RUVIA_CHECK_EQ(serve("sub/../../etc"), ruvia::http_status::forbidden);
     RUVIA_CHECK_EQ(serve("sub\\..\\..\\etc"), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(serve("sub/../my report.txt"), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(serve("sub\\..\\my report.txt"), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(serve("./my report.txt"), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(serve("sub/./inner.txt"), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(serve("sub/inner.txt/.."), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(serve("."), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(serve("sub//inner.txt"), ruvia::http_status::forbidden);
 
     // A NUL cannot occur in a filename and is rejected outright.
     RUVIA_CHECK_EQ(serve(std::string_view("my\0report.txt", 13)), ruvia::http_status::forbidden);

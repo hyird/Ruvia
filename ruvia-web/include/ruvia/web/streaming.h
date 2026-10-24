@@ -85,6 +85,12 @@ public:
     /// the complete transport write settles.
     /// HTTP/2 may reuse normal DATA-frame transport storage between successful writes;
     /// oversized write buffers are released after completion.
+    /// A body-suppressed response (HEAD on a GET stream route, 304) ends with
+    /// its head: the first non-empty write commits that head and then throws a
+    /// head-only control signal so the handler stops there. The signal is not
+    /// derived from std::exception, so `catch (const std::exception&)` in a
+    /// handler or middleware lets it pass; code catching `...` must rethrow it.
+    /// From then on aborted() is true and sleep() returns stop_requested.
     task<void> write(std::span<const std::byte> chunk) &;
     task<void> write(std::span<const std::byte>) && = delete;
     task<void> write(std::string_view chunk) &;
@@ -105,8 +111,9 @@ public:
     task<void> writeln(std::string_view) && = delete;
 
     /// Suspends the stream producer. The result is elapsed for a normal
-    /// delay, or stop_requested when the owning worker is shutting down or the
-    /// request's stop token trips. HTTP/2 peer termination is reported as its
+    /// delay, or stop_requested when the owning worker is shutting down, the
+    /// request's stop token trips, or a body-suppressed head already ended the
+    /// response (returned at once). HTTP/2 peer termination is reported as its
     /// transport error.
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &;
     task<timer_sleep_result> sleep(std::chrono::milliseconds) && = delete;
@@ -121,8 +128,10 @@ public:
     [[nodiscard]] stop_token cancel_on_peer_eof() &;
     stop_token cancel_on_peer_eof() && = delete;
 
-    /// Whether the response stream can no longer be delivered. HTTP/2 also
-    /// observes peer reset or connection termination, including while sleeping.
+    /// Whether the response stream can no longer be delivered: a failure was
+    /// observed, or a body-suppressed head (HEAD, 304) already ended the
+    /// response. HTTP/2 also observes peer reset or connection termination,
+    /// including while sleeping.
     /// HTTP/1 默认仅在写失败时观察断开；显式 cancel_on_peer_eof() 还观察读侧终止。
     /// False means no failure has been observed, not that the peer is connected.
     [[nodiscard]] bool aborted() const noexcept {

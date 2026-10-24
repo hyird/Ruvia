@@ -571,8 +571,8 @@ http_response context::static_file(const static_root& root, static_file_response
     // relative_path_ is a decoded file path -- a wildcard capture from
     // req().param("*") is passed as is -- so it is never percent-decoded here:
     // a second decode would turn "%252E%252E" into a ".." no route or path
-    // scope ever saw. normalize_static_relative_path clamps ".." at the root
-    // and rejects absolute paths and NUL, and the lookup is a byte-exact
+    // scope ever saw. normalize_static_relative_path rejects "." and ".."
+    // segments, absolute paths and NUL, and the lookup is a byte-exact
     // index compare that never joins the path onto the filesystem.
     const auto content_type_value = options.content_type_.view();
     std::pmr::string relative_storage(pool());

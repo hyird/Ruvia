@@ -77,9 +77,11 @@ public:
     }
     const http_response_stream_commit_plan* commit_plan() const&& = delete;
 
+    // A completed body-suppressed head (HEAD / 304) can deliver nothing more,
+    // so it reads as aborted and a handler loop polling aborted() ends.
     [[nodiscard]] bool aborted() const noexcept {
-        return state_.aborted() || connection_.stream_aborted(stream_id_) ||
-               stream_signal_.terminated();
+        return state_.aborted() || state_.body_suppressed_complete() ||
+               connection_.stream_aborted(stream_id_) || stream_signal_.terminated();
     }
 
     [[nodiscard]] stop_token cancel_on_peer_eof() {
@@ -171,6 +173,9 @@ public:
     }
 
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
+        if (state_.body_suppressed_complete()) {
+            co_return timer_sleep_result::stop_requested;
+        }
         const auto result = co_await http2_sans_io_sleep_awaiter(
             write_signal_.worker(), stream_signal_.termination(), duration, stop_token_value);
         if (connection_.stream_aborted(stream_id_)) {

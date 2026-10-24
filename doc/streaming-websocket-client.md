@@ -58,8 +58,8 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 | `task<void> write(std::string_view chunk) &` | 写入一段字符串视图 |
 | `task<void> write(std::pmr::string&& chunk) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
 | `task<void> writeln(std::string_view chunk) &` | 写入文本并追加 `\n` |
-| `task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 等待指定时长；请求取消或停机返回 `stop_requested`。HTTP/1 默认不主动检测断开；HTTP/2 流终止抛入站传输异常 |
-| `bool aborted() const noexcept` | 检查客户端连接或流是否已中止 |
+| `task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 等待指定时长；请求取消、停机，或响应已由不带内容的响应头（`HEAD`、`304`）结束时返回 `stop_requested`（后者立即返回）。HTTP/1 默认不主动检测断开；HTTP/2 流终止抛入站传输异常 |
+| `bool aborted() const noexcept` | 检查客户端连接或流是否已中止；不带内容的响应头（`HEAD`、`304`）结束响应后亦为 `true` |
 | `stop_token cancel_on_peer_eof() &` | 显式启用读侧终止取消，返回供业务等待使用的组合 token，语义见下文 |
 | `task<void> end(std::span<const http_header_view> trailers = {}) &` | 正常结束流式响应，可选附带响应 Trailer 字段 |
 
@@ -88,7 +88,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 | --- | --- |
 | `task<void> write(const sse_message& message)` | 格式化并发送一条 SSE 事件（自动处理多行 `data:` 切分与 UTF-8 校验） |
 | `task<timer_sleep_result> sleep(std::chrono::milliseconds duration)` | 挂起等待指定时长 |
-| `bool aborted() const noexcept` | 检查客户端是否已断开 |
+| `bool aborted() const noexcept` | 检查客户端是否已断开；`HEAD` 请求的响应头结束响应后亦为 `true` |
 | `stop_token cancel_on_peer_eof()` | 与 `response_stream_writer` 同名方法相同 |
 | `task<void> end(std::span<const http_header_view> trailers = {})` | 结束 SSE 流 |
 

@@ -5,6 +5,7 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
+#include "router/path_segments.h"
 #include "router/router_impl.h"
 
 namespace ruvia {
@@ -32,6 +33,36 @@ namespace {
     consider(controller_middlewares);
     consider(route_middlewares);
     return limit;
+}
+
+// Whether two route patterns register the same route: segment by segment, a
+// literal matches a literal with the same canonical form (the lookup's
+// equivalence), a parameter matches the same parameter and the wildcard the
+// wildcard. A literal ":id" or "*" can only be spelled encoded ("%3Aid",
+// "%2A"), so it is a distinct route beside the parameter or wildcard.
+[[nodiscard]] bool same_route_pattern(std::string_view left, std::string_view right) noexcept {
+    const auto kind = [](std::string_view segment) noexcept {
+        if (segment == "*") {
+            return 2;
+        }
+        return !segment.empty() && segment.front() == ':' ? 1 : 0;
+    };
+    for (;;) {
+        std::string_view left_segment;
+        std::string_view left_rest;
+        std::string_view right_segment;
+        std::string_view right_rest;
+        const auto has_left = split_path_segment(left, left_segment, left_rest);
+        const auto has_right = split_path_segment(right, right_segment, right_rest);
+        if (!has_left || !has_right) {
+            return has_left == has_right;
+        }
+        if (kind(left_segment) != kind(right_segment) || !uri_paths_equivalent(left_segment, right_segment)) {
+            return false;
+        }
+        left = left_rest;
+        right = right_rest;
+    }
 }
 
 }  // namespace
@@ -93,10 +124,10 @@ void detail::router::register_endpoint(http_known_method method, std::string_vie
             if (registered_tunnel != nullptr && registered_tunnel->protocol() == tunnel->protocol() &&
                 (tunnel->protocol().empty()
                         ? registered.path() == path || http_authorities_equal(path, registered.path(), 0)
-                        : uri_paths_equivalent(registered.path(), path))) {
+                        : same_route_pattern(registered.path(), path))) {
                 throw std::invalid_argument("duplicate CONNECT route registration");
             }
-        } else if (uri_paths_equivalent(registered.path(), path)) {
+        } else if (same_route_pattern(registered.path(), path)) {
             // The canonical form the lookup uses: "/a" and "/%61" are one route.
             throw std::invalid_argument("duplicate route registration");
         }

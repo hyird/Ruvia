@@ -191,6 +191,10 @@ public:
     RUVIA_GET("/equiv/files/caf%C3%A9", guarded, route_shapes_deny);
     RUVIA_GET("/equiv/files/:name", file);
     RUVIA_GET("/equiv/stream", stream);
+    RUVIA_GET("/equiv/colon/%3Aid", guarded, route_shapes_deny);
+    RUVIA_GET("/equiv/colon/:id", user);
+    RUVIA_GET("/equiv/star/%2A", guarded, route_shapes_deny);
+    RUVIA_GET("/equiv/star/*", user);
     RUVIA_METHOD("EXT-A", "/equiv/many", user);
     RUVIA_METHOD("EXT-B", "/equiv/many", user);
     RUVIA_METHOD("EXT-C", "/equiv/many", user);
@@ -442,6 +446,18 @@ RUVIA_TEST(route_shapes_hex_case_does_not_change_the_route) {
         RUVIA_CHECK_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
     }
     RUVIA_CHECK_EQ(body_of(app, "/equiv/files/caf%C3%A8"), std::string("file:caf\xC3\xA8"));
+}
+
+RUVIA_TEST(route_shapes_encoded_colon_or_star_literal_is_not_a_parameter_or_wildcard) {
+    // A literal segment starting with ':' or a literal '*' can only be spelled
+    // encoded ("%3Aid", "%2A"); it is a route of its own beside the parameter
+    // or wildcard sibling, not a duplicate registration of it.
+    ruvia::test_app app;
+    for (const std::string_view path : {"/equiv/colon/%3Aid", "/equiv/colon/%3aid", "/equiv/star/%2A"}) {
+        RUVIA_CHECK_EQ(app.request(ruvia::test_request::get(path)).status(), ruvia::http_status::forbidden);
+    }
+    RUVIA_CHECK_EQ(body_of(app, "/equiv/colon/42"), std::string("user:42"));
+    RUVIA_CHECK_EQ(body_of(app, "/equiv/star/x"), std::string("user:-"));
 }
 
 RUVIA_TEST(route_shapes_allow_names_every_extension_method_of_a_resource) {

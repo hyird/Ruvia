@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstddef>
@@ -87,11 +88,30 @@ public:
 };
 #endif
 
+std::atomic<int> head_loop_writes{0};
+std::atomic<bool> head_loop_aborted{false};
+std::atomic<bool> head_loop_sleep_stopped{false};
+
+// Turns every std::exception from the rest of the chain into a 500, as
+// ordinary error-wrapping middleware does.
+class exception_converting_middleware final {
+public:
+    ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
+        try {
+            co_await next_value();
+        } catch (const std::exception&) {
+            throw ruvia::http_error({.status_ = ruvia::http_status::internal_server_error, .message_ = "converted"});
+        }
+    }
+};
+
 class response_policy_routes final {
     RUVIA_ROUTES_BEGIN(response_policy_routes)
     RUVIA_GET("/policy-stream", stream);
     RUVIA_GET("/policy-trailer-stream", trailer_stream);
     RUVIA_GET("/policy-plain", plain);
+    RUVIA_GET("/policy-head-loop", head_loop);
+    RUVIA_GET("/policy-head-convert", stream, exception_converting_middleware);
     RUVIA_GET_WS("/policy-websocket", websocket);
     RUVIA_CONNECT("policy-target.test:443", tunnel);
     RUVIA_CONNECT("denied-target.test:443", tunnel, connect_denying_middleware);
@@ -103,6 +123,25 @@ class response_policy_routes final {
 
     ruvia::task<void> stream(ruvia::context& context_value) {
         co_await context_value.stream().write("chunk");
+    }
+
+    // Swallows every write failure, like a careless SSE loop: only aborted()
+    // and sleep() can end it.
+    ruvia::task<void> head_loop(ruvia::context& context_value) {
+        auto& output = context_value.stream_text();
+        int writes = 0;
+        while (!output.aborted() && writes < 100) {
+            ++writes;
+            try {
+                co_await output.write("tick");
+                // NOLINTNEXTLINE(bugprone-empty-catch)
+            } catch (...) {
+            }
+        }
+        head_loop_writes.store(writes);
+        head_loop_aborted.store(output.aborted());
+        head_loop_sleep_stopped.store(
+            co_await output.sleep(std::chrono::seconds(10)) == ruvia::timer_sleep_result::stop_requested);
     }
 
     ruvia::task<void> trailer_stream(ruvia::context& context_value) {
@@ -275,6 +314,47 @@ RUVIA_TEST(http1_head_falls_back_to_response_stream_get_routes) {
     const auto websocket_output = websocket.value_or("");
     RUVIA_CHECK(websocket_output.starts_with("HTTP/1.1 405 "));
     RUVIA_CHECK(lower_head(websocket_output).find("\r\nallow: get, options") != std::string::npos);
+}
+
+// A completed head-only response can deliver nothing more: a stream handler
+// that swallows the head-only signal sees aborted() and a stop_requested
+// sleep() at once, so it cannot hold the keep-alive connection and the
+// pipelined GET is answered.
+RUVIA_TEST(http1_head_only_stream_reports_aborted_and_stops_sleeping) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto output = exchange(server.endpoint(),
+        "HEAD /policy-head-loop HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+
+    RUVIA_CHECK(output.has_value());
+    const auto text = output.value_or("");
+    RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(text.find("tick") == std::string::npos);
+    RUVIA_CHECK(text.ends_with("\r\n\r\nplain"));
+    RUVIA_CHECK_EQ(head_loop_writes.load(), 1);
+    RUVIA_CHECK(head_loop_aborted.load());
+    RUVIA_CHECK(head_loop_sleep_stopped.load());
+}
+
+// The head-only signal is not a std::exception: middleware converting every
+// std::exception into a 500 lets it pass, so HEAD on a stream route completes
+// normally and the connection stays usable for the pipelined GET.
+RUVIA_TEST(http1_head_only_signal_passes_std_exception_middleware) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto output = exchange(server.endpoint(),
+        "HEAD /policy-head-convert HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+
+    RUVIA_CHECK(output.has_value());
+    const auto text = output.value_or("");
+    RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(text.find("chunk") == std::string::npos);
+    RUVIA_CHECK(text.find("HTTP/1.1 500 ") == std::string::npos);
+    RUVIA_CHECK(text.ends_with("\r\n\r\nplain"));
 }
 
 // A failed CONNECT closes the connection: bytes the client already sent for

@@ -241,6 +241,7 @@ public:
     RUVIA_GET("/subrequest", subrequest);
     RUVIA_GET("/sub-file", sub_file);
     RUVIA_GET("/sub-static", sub_static);
+    RUVIA_GET("/sub-static/:name", sub_static_named);
     RUVIA_POST("/sub-stream", sub_stream, ruvia::stream_body);
     RUVIA_GET("/sub-checks", sub_checks);
     RUVIA_GET("/sub-refused-file", sub_refused_file);
@@ -452,6 +453,11 @@ private:
 
     ruvia::task<ruvia::http_response> sub_static(ruvia::context& c) {
         co_return c.static_file(*testing_facade_static_root(), {.relative_path_ = "asset.txt"});
+    }
+
+    ruvia::task<ruvia::http_response> sub_static_named(ruvia::context& c) {
+        co_return c.static_file(
+            *testing_facade_static_root(), {.relative_path_ = c.req().param("name").value_or("")});
     }
 
     ruvia::task<ruvia::http_response> sub_stream(ruvia::context& c) {
@@ -1595,6 +1601,17 @@ RUVIA_TEST(testing_facade_reads_file_bodies_and_negotiates_precompressed_static_
     const auto direct_static = app.request(ruvia::test_request::get("/t/sub-static"));
     RUVIA_CHECK_EQ(direct_static.status(), ruvia::http_status::ok);
     RUVIA_CHECK_EQ(direct_static.body(), "plain-asset-body");
+
+    // A named parameter decodes "%2F" and "%5C" inside its one segment, so it
+    // can carry a ".." no route or path scope saw; static_file rejects it
+    // instead of resolving it back inside the root.
+    const auto named_static = app.request(ruvia::test_request::get("/t/sub-static/asset.txt"));
+    RUVIA_CHECK_EQ(named_static.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(named_static.body(), "plain-asset-body");
+    for (const auto* target : {"/t/sub-static/sub%2F..%2Fasset.txt", "/t/sub-static/sub%5C..%5Casset.txt",
+             "/t/sub-static/.%2Fasset.txt"}) {
+        RUVIA_CHECK_EQ(app.request(ruvia::test_request::get(target)).status(), ruvia::http_status::forbidden);
+    }
     testing_facade_static_root().reset();
     fs::remove_all(dir, ignored);
 }

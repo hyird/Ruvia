@@ -759,8 +759,9 @@ public:
 
     // relative_path_ is a decoded file path below the root, such as
     // req().param("*") of a wildcard route; it is never percent-decoded again.
-    // ".." is clamped at the root; an absolute path, a NUL, or an ascent above
-    // the root is 403, and an unindexed name 404.
+    // '/' and '\\' separate segments. A "." or ".." segment, an empty interior
+    // segment, an absolute path, or a NUL is 403 -- rejected, never resolved,
+    // whichever parameter it came from -- and an unindexed name 404.
     [[nodiscard]] http_response static_file(
         const static_root& root, static_file_response_options options) const;
 

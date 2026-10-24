@@ -89,8 +89,10 @@ public:
     }
     const http_response_stream_commit_plan* commit_plan() const&& = delete;
 
+    // A completed body-suppressed head (HEAD / 304) can deliver nothing more,
+    // so it reads as aborted and a handler loop polling aborted() ends.
     [[nodiscard]] bool aborted() const noexcept {
-        return state_.aborted() || peer_aborted();
+        return state_.aborted() || state_.body_suppressed_complete() || peer_aborted();
     }
 
     [[nodiscard]] http1_request_connection_plan connection_plan() const noexcept {
@@ -246,6 +248,9 @@ private:
     }
 
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
+        if (state_.body_suppressed_complete()) {
+            co_return timer_sleep_result::stop_requested;
+        }
         co_return co_await sleep_for(worker_, duration, stop_token_value);
     }
 
