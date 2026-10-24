@@ -292,7 +292,8 @@ void http_client_connection::on_http2_failure(
     }
 }
 
-void http_client_connection::cancel_http2_stream(std::uint64_t request_id, client_abort_reason reason) noexcept {
+void http_client_connection::cancel_http2_stream(
+    std::uint64_t request_id, client_abort_reason reason, http2_error_code error) noexcept {
     const auto match = std::ranges::find_if(
         http2_streams_, [request_id](const http2_stream* stream) { return stream->request_id_ == request_id; });
     if (match == http2_streams_.end()) {
@@ -303,7 +304,7 @@ void http_client_connection::cancel_http2_stream(std::uint64_t request_id, clien
         return;
     }
     stream.error_ = http_client_abort_error(reason);
-    http2_.submit_reset(stream.stream_id_);
+    http2_.submit_reset(stream.stream_id_, error);
     stream.signal_.notify();
     http2_.state_signal().notify();
 }

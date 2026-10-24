@@ -1,6 +1,13 @@
+#include <algorithm>
 #include <array>
+#include <cstddef>
+#include <cstdint>
+#include <span>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include "ruvia/http/http_datagram.h"
 
@@ -119,6 +126,68 @@ RUVIA_TEST(http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_after
     const std::array partial{char(0), char(3), char('a')};
     const auto result_value = truncated.feed_one(partial, true, nullptr, nullptr);
     RUVIA_CHECK(result_value.status_ == ruvia::http_capsule_status::truncated && !result_value.capsule_complete_ && result_value.consumed_bytes_ == partial.size());
+}
+
+// RFC 9297 section 3.2: capsules the reader does not keep are skipped at any
+// length; max_capsule_length_ bounds only kept capsules (for CONNECT-UDP, after
+// the RFC 9298 Context ID shows the datagram is kept).
+RUVIA_TEST(http_capsule_retention_skips_dropped_capsules_beyond_the_length_limit) {
+    std::array<char, 16> header;
+    const auto append_capsule = [&](std::string& wire, std::uint64_t type, std::string_view value) {
+        const auto encoded = ruvia::encode_http_capsule_header(header, type, value.size());
+        wire.append(header.data(), std::get<0>(encoded));
+        wire.append(value);
+    };
+    std::string wire;
+    append_capsule(wire, 0x17, std::string(200, 'u'));
+    append_capsule(wire, 0, std::string("\x03", 1) + std::string(200, 'c'));
+    append_capsule(wire, 0, std::string("\x40\x00", 2) + "two-byte-zero");
+    append_capsule(wire, 0, std::string("\0", 1) + "after");
+    append_capsule(wire, 0, std::string("\x41", 1));
+    for (const std::size_t block : {std::size_t{1}, std::size_t{7}, wire.size()}) {
+        ruvia::http_capsule_decoder decoder({.max_capsule_length_ = 100});
+        capture captured;
+        std::vector<std::string> kept;
+        std::size_t offset{};
+        ruvia::http_capsule_feed_result result_value{};
+        while (offset != wire.size()) {
+            const auto count = std::min(block, wire.size() - offset);
+            result_value = decoder.feed_one(std::span<const char>(wire).subspan(offset, count), offset + count == wire.size(),
+                capsule, &captured, ruvia::http_capsule_retention::udp_payloads);
+            RUVIA_CHECK(result_value.status_ != ruvia::http_capsule_status::limit);
+            offset += result_value.consumed_bytes_;
+            if (result_value.capsule_complete_) {
+                RUVIA_CHECK_EQ(captured.type_, std::uint64_t{0});
+                kept.push_back(std::exchange(captured.body_, {}));
+            }
+        }
+        RUVIA_CHECK(result_value.status_ == ruvia::http_capsule_status::end);
+        // Context ID 0 in either encoding, and a value too short for its
+        // Context ID (left to the reader as malformed), are kept.
+        RUVIA_CHECK(kept == (std::vector<std::string>{std::string("\x40\x00", 2) + "two-byte-zero",
+                                std::string("\0", 1) + "after", std::string("\x41", 1)}));
+        RUVIA_CHECK_EQ(captured.ends_, std::size_t{3});
+    }
+
+    std::string datagrams;
+    append_capsule(datagrams, 0x17, std::string(200, 'u'));
+    append_capsule(datagrams, 0, "\x03kept");
+    ruvia::http_capsule_decoder decoder({.max_capsule_length_ = 100});
+    capture captured;
+    RUVIA_CHECK(decoder.feed(datagrams, true, capsule, &captured, ruvia::http_capsule_retention::datagrams) ==
+                ruvia::http_capsule_status::end);
+    RUVIA_CHECK_EQ(captured.body_, std::string("\x03kept"));
+    RUVIA_CHECK_EQ(captured.ends_, std::size_t{1});
+
+    // Kept capsules over the limit stay terminal: every type for a generic
+    // reader, and a CONNECT-UDP payload once its Context ID is known.
+    for (const auto retention : {ruvia::http_capsule_retention::all, ruvia::http_capsule_retention::udp_payloads}) {
+        std::string oversized;
+        append_capsule(oversized, retention == ruvia::http_capsule_retention::all ? 0x17 : 0,
+            std::string("\0", 1) + std::string(200, 'o'));
+        ruvia::http_capsule_decoder limited({.max_capsule_length_ = 100});
+        RUVIA_CHECK(limited.feed(oversized, false, nullptr, nullptr, retention) == ruvia::http_capsule_status::limit);
+    }
 }
 
 RUVIA_TEST(http_datagram_capsule_channel_frames_opaque_payloads_and_obeys_half_close) {

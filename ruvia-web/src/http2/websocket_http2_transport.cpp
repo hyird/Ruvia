@@ -61,7 +61,10 @@ task<void> websocket_http2_transport::connect() {
         co_await session_.state_signal().wait();
     }
     check_failure();
-    const auto negotiated = config.negotiation_.validate_response(*response_, !eof_);
+    // RFC 8441 section 5: END_STREAM after the 2xx is the server's orderly
+    // close of the tunnel (possibly with its Close frame in the same read);
+    // only END_STREAM on the response HEADERS leaves no WebSocket stream.
+    const auto negotiated = config.negotiation_.validate_response(*response_, !response_stream_ended_);
     if ((negotiated.index() != 0)) {
         throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
             "invalid HTTP/2 WebSocket handshake response");
@@ -88,12 +91,54 @@ void websocket_http2_transport::require_live() const {
     }
 }
 
-void websocket_http2_transport::stop() noexcept {
+bool websocket_http2_transport::stop() noexcept {
+    if (stopped_) {
+        return goaway_pending_;
+    }
     stopped_ = true;
+    if (session_.has_connection() && session_.running() && !session_.failed()) {
+        try {
+            // A client drain queues its final GOAWAY(NO_ERROR) at once.
+            session_.connection().begin_drain();
+            goaway_pending_ = true;
+            session_.wake_writer();
+            // Wakes every waiter: operations observe the owner's abort reason.
+            session_.mark_draining();
+            return true;
+        } catch (...) {
+            // Without the frame there is nothing to flush; close now.
+        }
+    }
     session_.fail({.status_ = client_transport_status::aborted, .abort_ = owner_.abort_reason_});
+    return false;
+}
+
+task<void> websocket_http2_transport::flush_goaway() {
+    // The bound covers a peer that does not read and an unbounded
+    // write_timeout_; a stopping worker cannot arm it and closes at once.
+    const bool armed = owner_.worker_.schedule_timer(goaway_timer_,
+                           worker_timer_deadline_after(websocket_http2_goaway_flush_time),
+                           [this](worker_timer_outcome outcome) noexcept {
+                               if (outcome == worker_timer_outcome::expired) {
+                                   goaway_expired_ = true;
+                                   session_.state_signal().notify();
+                               }
+                           }) == worker_timer_schedule_status::scheduled;
+    while (armed && !goaway_expired_ && !session_.failed() &&
+           (session_.writing() || session_.connection().wants_write())) {
+        co_await session_.state_signal().wait();
+    }
+    goaway_timer_.cancel();
+    goaway_pending_ = false;
+    session_.fail({.status_ = client_transport_status::aborted, .abort_ = owner_.abort_reason_});
+    owner_.transport_.abort(owner_.abort_reason_);
+    owner_.transport_.close();
 }
 
 task<void> websocket_http2_transport::join() {
+    if (goaway_pending_) {
+        co_await flush_goaway();
+    }
     co_await drivers_.join();
     received_credit_.reset();
     std::pmr::string(received_.get_allocator()).swap(received_);
@@ -105,6 +150,7 @@ void websocket_http2_transport::on_http2_event(http2_event& event) {
             throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                 "unexpected HTTP/2 WebSocket response head");
         }
+        response_stream_ended_ = head->stream_ended();
         response_.emplace(std::move(*head).take_head());
     } else if (auto* data = event.tunnel_data()) {
         if (data->stream_id() != stream_id_) {

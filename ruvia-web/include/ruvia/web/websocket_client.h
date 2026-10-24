@@ -56,8 +56,9 @@ struct websocket_client_config final {
     // After a local Close is sent, the maximum time to wait for the peer Close.
     // After the close handshake completes, the maximum time to wait for the
     // server to close the transport first (RFC 6455 section 7.1.1); the client
-    // then closes it itself without failing read() or close(). nullopt disables
-    // both guards.
+    // then closes it itself without failing read() or close(). Each wait has
+    // its own bound, so close() can take up to twice this value. nullopt
+    // disables both guards.
     std::optional<std::chrono::milliseconds> close_handshake_timeout_{5000};
     // Pongs are matched by read(); a pong timeout retires the client only while
     // a read is active, and an expired window restarts when the next read begins.
@@ -185,7 +186,9 @@ public:
     websocket_client_handle handle() const&& = delete;
 
     // Idempotent and callable from any thread. This only requests immediate
-    // transport termination. Graceful RFC 6455 close uses the handle:
+    // transport termination; over HTTP/2 a running session first writes
+    // GOAWAY(NO_ERROR) (RFC 9113 section 6.8), waiting at most 1 s (product
+    // limit), as on every retirement. Graceful RFC 6455 close uses the handle:
     // co_await client.handle().close({...}). Use shutdown() when completion must
     // be awaited.
     void close() noexcept;

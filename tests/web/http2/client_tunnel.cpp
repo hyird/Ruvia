@@ -1,17 +1,23 @@
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include <asio.hpp>
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/timer.h"
+#include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -257,4 +263,118 @@ RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after
     if (failure) {
         std::rethrow_exception(failure);
     }
+}
+
+// RFC 9297 section 3.2: an unknown capsule type and a DATAGRAM with an
+// unknown Context ID (RFC 9298 section 4) are skipped even beyond the reader's
+// max_capsule_length_. A malformed DATAGRAM then fails the tunnel as a
+// malformed message (RFC 9297 section 3.3): RST_STREAM(PROTOCOL_ERROR) per
+// RFC 9113 section 8.1.1, not CANCEL.
+RUVIA_TEST(http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_input_with_protocol_error) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::exception_ptr peer_failure;
+    std::optional<ruvia::http2_error_code> reset_error;
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await peer.async_accept(asio::use_awaitable);
+        std::pmr::monotonic_buffer_resource resource;
+        auto connection = ruvia::http2_connection::server({.resource_ = &resource});
+        std::optional<ruvia::http2_request_head_event> request;
+        std::array<char, 16384> input{};
+        std::pmr::string output(&resource);
+        while (!reset_error) {
+            if (connection.wants_write()) {
+                output.clear();
+                connection.take_output(output);
+                co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
+            }
+            std::size_t count = 0;
+            try {
+                count = co_await socket.async_read_some(asio::buffer(input), asio::use_awaitable);
+            } catch (const std::system_error&) {
+                break;
+            }
+            const auto bytes_value = std::string_view(input.data(), count);
+            for (;;) {
+                const auto fed = connection.feed(bytes_value);
+                RUVIA_CHECK(fed != ruvia::http2_feed_result::protocol_failure);
+                while (auto event = connection.next_event()) {
+                    if (auto* head = event->request_head()) {
+                        ruvia::http_response accepted(&resource);
+                        accepted.status(ruvia::http_status::ok);
+                        accepted.header("capsule-protocol", "?1");
+                        RUVIA_CHECK(connection.submit_connect_response_head(head->stream_id(), accepted) ==
+                                    ruvia::http2_submit_status::accepted);
+                        std::string capsules;
+                        capsules.append("\x17\x40\xc8", 3).append(200, 'u');
+                        capsules.append("\x00\x40\xc9\x03", 4).append(200, 'c');
+                        capsules.append(
+                            "\x00\x06\x00"
+                            "after",
+                            8);
+                        capsules.append("\x00\x00", 2);
+                        RUVIA_CHECK(connection.submit_data(head->stream_id(), capsules, ruvia::http2_end_stream::keep_open) ==
+                                    ruvia::http2_data_submit_status::accepted);
+                        request.emplace(std::move(*head));
+                    } else if (auto* closed = event->stream_closed()) {
+                        if (closed->source() == ruvia::http2_stream_close_source::peer) {
+                            reset_error = closed->error();
+                        }
+                    } else if (auto* data = event->tunnel_data()) {
+                        (void)connection.acknowledge(data->take_credit());
+                    }
+                }
+                if (fed != ruvia::http2_feed_result::events_pending) {
+                    break;
+                }
+            }
+        }
+        request.reset();
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peer_failure = failure; });
+    std::string first;
+    bool malformed_rejected = false;
+    std::exception_ptr failure;
+    auto run = [&]() -> ruvia::task<void> {
+        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = peer.local_endpoint().port(), .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5), .protocol_ = ruvia::http_client_protocol::http2_only});
+        try {
+            auto opened = co_await client.handle().open_udp_tunnel({.target_ = "/.well-known/masque/udp/target.test/53/"});
+            if (!opened.tunnel()) {
+                throw std::runtime_error("CONNECT-UDP rejected");
+            }
+            auto udp = std::move(*opened.tunnel()).udp({.max_capsule_length_ = 100});
+            auto datagram = co_await udp.read();
+            if (datagram) {
+                first.assign(reinterpret_cast<const char*>(datagram->payload().data()), datagram->payload().size());
+            }
+            try {
+                (void)co_await udp.read();
+            } catch (const std::runtime_error&) {
+                malformed_rejected = true;
+            }
+            // The reset is queued with the abort; let the session write it
+            // before shutdown closes the connection.
+            const auto& worker_value = attachment.loop().handle();
+            for (unsigned attempt = 0; !reset_error && attempt != 200; ++attempt) {
+                (void)co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(10));
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    if (peer_failure) {
+        std::rethrow_exception(peer_failure);
+    }
+    RUVIA_CHECK_EQ(first, std::string("after"));
+    RUVIA_CHECK(malformed_rejected);
+    RUVIA_CHECK(reset_error == ruvia::http2_error_code::protocol_error);
 }

@@ -307,8 +307,8 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
                                             ? std::optional<http_client_request_content_signal>(
                                                   http_client_request_content_signal::exchange_complete)
                                             : std::nullopt;
-    const bool body_open = role_ == http2_role::server && !http2_remote_peer_half_closed(stream) &&
-                           stream.tunnel().pending() == nullptr;
+    const bool body_open = !http2_remote_peer_half_closed(stream) &&
+                           (role_ == http2_role::client || stream.tunnel().pending() == nullptr);
     events_.push_back(http2_event(http2_message_head_record{stream.id(), request_content_signal, body_open}));
     if (role_ == http2_role::server && stream.tunnel().pending() != nullptr) {
         // CONNECT has no request content, but that fact alone says nothing about the

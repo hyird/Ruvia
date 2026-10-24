@@ -48,11 +48,12 @@ void websocket_client_state::close_now() noexcept {
     if (abort_reason_ == client_abort_reason::none) {
         abort_reason_ = client_abort_reason::closing;
     }
-    if (http2_) {
-        http2_->stop();
+    // A running HTTP/2 session keeps the transport until join() has flushed
+    // its GOAWAY (bounded); join() then closes it.
+    if (!http2_ || !http2_->stop()) {
+        transport_.abort(abort_reason_);
+        transport_.close();
     }
-    transport_.abort(abort_reason_);
-    transport_.close();
     disarm(connect_timer_);
     disarm(heartbeat_timer_);
     disarm(close_handshake_timer_);

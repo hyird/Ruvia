@@ -151,17 +151,25 @@ public:
         const noexcept {
         return signal_;
     }
+    // The final response HEADERS carried END_STREAM: no content or tunnel DATA
+    // follows this head. Fixed when the head is published; a later frame of the
+    // same input batch that ends the stream (DATA with END_STREAM) never sets it.
+    [[nodiscard]] bool stream_ended() const noexcept {
+        return stream_ended_;
+    }
 
 private:
     friend class http2_event;
     http2_response_head_event(std::uint32_t stream_id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal) noexcept
+        std::optional<http_client_request_content_signal> signal, bool stream_ended) noexcept
         : stream_id_(stream_id),
           head_(std::move(head)),
-          signal_(signal) {}
+          signal_(signal),
+          stream_ended_(stream_ended) {}
     std::uint32_t stream_id_;
     http_client_response_head head_;
     std::optional<http_client_request_content_signal> signal_;
+    bool stream_ended_;
 };
 
 class http2_message_body_chunk_event final {
@@ -422,8 +430,8 @@ private:
             endpoint, id, expectations, content, snapshot));
     }
     [[nodiscard]] static http2_event response_head(std::uint32_t id, http_client_response_head head,
-        std::optional<http_client_request_content_signal> signal) noexcept {
-        return http2_event(http2_response_head_event(id, std::move(head), signal));
+        std::optional<http_client_request_content_signal> signal, bool stream_ended) noexcept {
+        return http2_event(http2_response_head_event(id, std::move(head), signal, stream_ended));
     }
     [[nodiscard]] static http2_event message_body_chunk(detail::http2_connection_owner_endpoint* endpoint,
         std::uint32_t id, std::string_view bytes_value, std::uint32_t credit) noexcept {

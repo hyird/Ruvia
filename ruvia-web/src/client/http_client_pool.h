@@ -91,7 +91,10 @@ public:
     }
 
     // Response-state operations of the public response, tunnel and push owners.
-    void abandon_response(http_client_response_state& state_value) noexcept;
+    // `error` is the HTTP/2 reset code: PROTOCOL_ERROR when the owner found the
+    // received content malformed (RFC 9113 section 8.1.1), CANCEL otherwise.
+    void abandon_response(http_client_response_state& state_value,
+        http2_error_code error = http2_error_code::cancel) noexcept;
     void reprioritize(http_client_response_state& state_value, http_priority priority);
     void release_response_data(http_client_response_state& state_value) noexcept;
     [[nodiscard]] http_client_response_memory_domain& response_memory() noexcept {

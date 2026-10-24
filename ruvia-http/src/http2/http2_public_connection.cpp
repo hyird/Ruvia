@@ -94,8 +94,8 @@ public:
             if (stream == nullptr) {
                 throw std::logic_error("HTTP/2 response event has no stream");
             }
-            return ::ruvia::http2_event::response_head(
-                value.stream_id_, response_head_from_stream(*stream, resource_), value.request_content_signal_);
+            return ::ruvia::http2_event::response_head(value.stream_id_,
+                response_head_from_stream(*stream, resource_), value.request_content_signal_, !value.body_open_);
         }
         if (stream == nullptr) {
             throw std::logic_error("HTTP/2 request event has no stream");

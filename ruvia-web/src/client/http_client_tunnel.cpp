@@ -60,6 +60,18 @@ struct tunnel_output_policy final {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP client tunnel output stopped");
     }
 };
+void abort_tunnel(detail::http_client_response_state* state, http2_error_code error) noexcept {
+    if (state == nullptr || !state->tunnel_ || state->tunnel_->output_.stopped_ || state->pool_ == nullptr) {
+        return;
+    }
+    if (!state->memory_domain().worker().is_current()) {
+        std::terminate();
+    }
+    state->tunnel_->output_.stop();
+    if (!state->complete_ && !state->abandoned_) {
+        state->pool_->abandon_response(*state, error);
+    }
+}
 }  // namespace
 http_client_tunnel::http_client_tunnel(http_client_response response) noexcept
     : response_(std::move(response)) {}
@@ -83,18 +95,10 @@ void http_client_tunnel::release() noexcept {
     response_.release();
 }
 void http_client_tunnel::abort() & noexcept {
-    if (auto* state = response_.state_) {
-        if (!state->tunnel_ || state->tunnel_->output_.stopped_ || state->pool_ == nullptr) {
-            return;
-        }
-        if (!state->memory_domain().worker().is_current()) {
-            std::terminate();
-        }
-        state->tunnel_->output_.stop();
-        if (!state->complete_ && !state->abandoned_) {
-            state->pool_->abandon_response(*state);
-        }
-    }
+    abort_tunnel(response_.state_, http2_error_code::cancel);
+}
+void http_client_tunnel::abort_malformed() & noexcept {
+    abort_tunnel(response_.state_, http2_error_code::protocol_error);
 }
 http_udp_tunnel http_client_tunnel::udp(http_capsule_config config) && {
     return http_udp_tunnel(std::move(*this).datagrams(config));

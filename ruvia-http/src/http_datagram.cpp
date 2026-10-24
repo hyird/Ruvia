@@ -113,13 +113,13 @@ http_capsule_decoder::http_capsule_decoder(http_capsule_config config)
         throw std::invalid_argument("capsule length exceeds varint range");
     }
 }
-http_capsule_status http_capsule_decoder::feed(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value) {
-    return feed_impl(input, fin, callback_value, context_value, false).status_;
+http_capsule_status http_capsule_decoder::feed(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) {
+    return feed_impl(input, fin, callback_value, context_value, false, retention).status_;
 }
-http_capsule_feed_result http_capsule_decoder::feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value) {
-    return feed_impl(input, fin, callback_value, context_value, true);
+http_capsule_feed_result http_capsule_decoder::feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, http_capsule_retention retention) {
+    return feed_impl(input, fin, callback_value, context_value, true, retention);
 }
-http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, bool one) {
+http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> input, bool fin, http_capsule_callback_type callback_value, void* context_value, bool one, http_capsule_retention retention) {
     if (feeding_) {
         throw std::logic_error("recursive capsule feed");
     }
@@ -138,6 +138,10 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
     } guard(feeding_);
     const auto initial_size = input.size();
     bool completed{};
+    const auto limit_reached = [&] {
+        status_ = http_capsule_status::limit;
+        return http_capsule_feed_result{.status_ = status_, .consumed_bytes_ = initial_size - input.size()};
+    };
     try {
         while (!input.empty()) {
             if (!payload_) {
@@ -155,18 +159,60 @@ http_capsule_feed_result http_capsule_decoder::feed_impl(std::span<const char> i
                 if ((length.index() != 0)) {
                     continue;
                 }
-                if (std::get<0>(length).value_ > config_.max_capsule_length_) {
-                    status_ = http_capsule_status::limit;
-                    return {.status_ = status_, .consumed_bytes_ = initial_size - input.size()};
-                }
                 remaining_ = std::get<0>(length).value_;
-                payload_ = remaining_ != 0;
                 header_size_ = 0;
                 type_size_ = 0;
-                if (!payload_) {
+                const bool kept_type = retention == http_capsule_retention::all || type_ == http_datagram_capsule_type;
+                if (!kept_type) {
+                    // RFC 9297 section 3.2: drop and skip over it, at any length.
+                    mode_ = payload_mode::skip;
+                } else if (retention == http_capsule_retention::udp_payloads && remaining_ != 0) {
+                    // RFC 9298 section 4: an unknown Context ID drops the
+                    // datagram, so the limit waits for the Context ID.
+                    mode_ = payload_mode::context_id;
+                    context_id_size_ = 0;
+                } else if (remaining_ > config_.max_capsule_length_) {
+                    return limit_reached();
+                } else {
+                    mode_ = payload_mode::deliver;
+                }
+                payload_ = remaining_ != 0;
+                if (!payload_ && kept_type) {
                     if (callback_value) {
                         callback_value(context_value, {type_, {}, true});
                     }
+                    completed = true;
+                    if (one) {
+                        break;
+                    }
+                }
+            } else if (mode_ == payload_mode::skip) {
+                const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(input.size(), remaining_));
+                input = input.subspan(count);
+                remaining_ -= count;
+                payload_ = remaining_ != 0;
+            } else if (mode_ == payload_mode::context_id) {
+                context_id_[context_id_size_++] = input.front();
+                input = input.subspan(1);
+                --remaining_;
+                const auto context_id = decode_capsule_var_int(std::span<const char>(context_id_).first(context_id_size_));
+                if (context_id.index() != 0 && remaining_ != 0) {
+                    continue;
+                }
+                payload_ = remaining_ != 0;
+                if (context_id.index() == 0 && std::get<0>(context_id).value_ != 0) {
+                    mode_ = payload_mode::skip;
+                    continue;
+                }
+                // Context ID 0, or a value too short to hold its Context ID.
+                if (context_id_size_ + remaining_ > config_.max_capsule_length_) {
+                    return limit_reached();
+                }
+                mode_ = payload_mode::deliver;
+                if (callback_value) {
+                    callback_value(context_value, {type_, std::span<const char>(context_id_).first(context_id_size_), !payload_});
+                }
+                if (!payload_) {
                     completed = true;
                     if (one) {
                         break;

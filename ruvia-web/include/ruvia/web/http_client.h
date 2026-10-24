@@ -296,6 +296,9 @@ private:
     friend class http_capsule_stream;
     explicit http_client_tunnel(http_client_response response) noexcept;
     [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes);
+    // abort() for received content that violates the tunnel's protocol (RFC 9297
+    // section 3.3 capsule error): HTTP/2 resets the stream with PROTOCOL_ERROR.
+    void abort_malformed() & noexcept;
     void release() noexcept;
     http_client_response response_;
 };

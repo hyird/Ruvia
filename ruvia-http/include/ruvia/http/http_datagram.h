@@ -44,28 +44,55 @@ struct http_capsule_feed_result final {
     std::size_t consumed_bytes_{};
     bool capsule_complete_{};
 };
+// max_capsule_length_ bounds the capsules a reader keeps (see
+// http_capsule_retention); dropped capsules are skipped at any length.
 struct http_capsule_config final {
     std::uint64_t max_capsule_length_{16 * 1024 * 1024};
 };
+// Which capsules a reader keeps. RFC 9297 section 3.2: a recipient silently
+// drops a capsule it does not use and skips over it. Dropped capsules produce
+// no callback, are not buffered and are not subject to max_capsule_length_.
+enum class http_capsule_retention : std::uint8_t {
+    // Every capsule: a generic Capsule Protocol reader handles unknown types.
+    all,
+    // DATAGRAM capsules (RFC 9297 section 3.5) only.
+    datagrams,
+    // DATAGRAM capsules carrying RFC 9298 Context ID 0 (UDP payloads); other
+    // Context IDs are unknown and dropped. The Context ID is inspected before
+    // the length limit applies. A DATAGRAM too short for its Context ID is kept
+    // so that the reader rejects it as malformed.
+    udp_payloads,
+};
 
 // RFC 9297 incremental Capsule Protocol framing for HTTP/1 tunnels. Header state is inline; payload
-// fragments borrow feed input only during callbacks. Unknown types must be
-// ignored by the extension consumer. No owned payload or event queue is created.
+// fragments borrow feed input (or, for a kept CONNECT-UDP Context ID, decoder
+// storage) only during callbacks. No owned payload or event queue is created.
+// The retention of a capsule is decided from the feed call that completes its
+// header (and, for udp_payloads, its Context ID).
 class http_capsule_decoder final {
 public:
     explicit http_capsule_decoder(http_capsule_config config = {});
-    [[nodiscard]] http_capsule_status feed(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context);
-    // Stops at the first complete capsule. The unconsumed suffix stays with the
-    // caller; FIN is committed only after all input is consumed. This permits
+    [[nodiscard]] http_capsule_status feed(std::span<const char> input, bool fin, http_capsule_callback_type callback,
+        void* context, http_capsule_retention retention = http_capsule_retention::all);
+    // Stops at the first complete kept capsule. The unconsumed suffix stays with
+    // the caller; FIN is committed only after all input is consumed. This permits
     // pull-based adapters without buffering a queue of complete capsules.
-    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context);
+    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin,
+        http_capsule_callback_type callback, void* context,
+        http_capsule_retention retention = http_capsule_retention::all);
 
 private:
-    [[nodiscard]] http_capsule_feed_result feed_impl(std::span<const char> input, bool fin, http_capsule_callback_type callback, void* context, bool one);
+    enum class payload_mode : std::uint8_t { deliver,
+        skip,
+        context_id };
+    [[nodiscard]] http_capsule_feed_result feed_impl(std::span<const char> input, bool fin,
+        http_capsule_callback_type callback, void* context, bool one, http_capsule_retention retention);
     http_capsule_config config_;
     std::array<char, 16> header_{};
-    std::size_t header_size_{0}, type_size_{0};
+    std::array<char, 8> context_id_{};
+    std::size_t header_size_{0}, type_size_{0}, context_id_size_{0};
     std::uint64_t type_{0}, remaining_{0};
+    payload_mode mode_{payload_mode::deliver};
     bool payload_{false}, feeding_{false};
     http_capsule_status status_{http_capsule_status::need_more_data};
 };

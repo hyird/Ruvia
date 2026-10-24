@@ -25,8 +25,6 @@
 #include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
-enum class capsule_interest : unsigned char { all,
-    datagrams };
 class http_capsule_stream_state final {
 public:
     http_capsule_stream_state(http_tunnel& tunnel, http_capsule_config config)
@@ -74,6 +72,15 @@ public:
         allocator->deallocate(this, sizeof(http_capsule_stream_state), alignof(http_capsule_stream_state));
     }
     void abort() noexcept {
+        abort_input(false);
+    }
+    // The received Capsule Protocol data is malformed, truncated or over the
+    // reader's limit (RFC 9297 section 3.3): an HTTP/2 client tunnel resets
+    // the stream with PROTOCOL_ERROR (RFC 9113 section 8.1.1).
+    void abort_malformed() noexcept {
+        abort_input(true);
+    }
+    void abort_input(bool malformed) noexcept {
         if (closed_) {
             return;
         }
@@ -88,7 +95,11 @@ public:
         if (server_) {
             server_->abort();
         } else if (client_) {
-            client_->abort();
+            if (malformed) {
+                client_->abort_malformed();
+            } else {
+                client_->abort();
+            }
         }
     }
     void close() noexcept {
@@ -108,29 +119,22 @@ public:
         read_scope_.close();
         output_scope_.close();
     }
-    // Parse the currently available input synchronously. Datagram consumers
-    // skip unknown capsule payloads without allocating them or recursively
-    // awaiting a completed child task for each ignored capsule.
-    [[nodiscard]] bool poll_capsule(bool fin, capsule_interest interest) {
-        struct collection {
-            http_capsule_stream_state& state_;
-            capsule_interest interest_;
-        } collection_value{*this, interest};
+    // Parse the currently available input synchronously. Capsules the reader
+    // does not keep are skipped by the decoder without allocating them or
+    // recursively awaiting a completed child task for each ignored capsule.
+    [[nodiscard]] bool poll_capsule(bool fin, http_capsule_retention retention) {
         const auto collect = [](void* raw, http_capsule_event event) {
-            auto& current = *static_cast<collection*>(raw);
-            current.state_.type_ = event.type_;
-            if (current.interest_ == capsule_interest::datagrams && event.type_ != http_datagram_capsule_type) {
-                return;
-            }
+            auto& state = *static_cast<http_capsule_stream_state*>(raw);
+            state.type_ = event.type_;
             if (!event.payload_.empty()) {
-                current.state_.payload_.append(event.payload_.data(), event.payload_.size());
+                state.payload_.append(event.payload_.data(), event.payload_.size());
             }
         };
         const auto bytes_value = std::span<const char>(input_).subspan(offset_);
-        const auto result_value = decoder_.feed_one(bytes_value, fin, collect, &collection_value);
+        const auto result_value = decoder_.feed_one(bytes_value, fin, collect, this, retention);
         offset_ += result_value.consumed_bytes_;
         if (result_value.status_ == http_capsule_status::limit || result_value.status_ == http_capsule_status::truncated) {
-            abort();
+            abort_malformed();
             throw std::runtime_error("invalid or oversized capsule stream");
         }
         if (result_value.status_ == http_capsule_status::end) {

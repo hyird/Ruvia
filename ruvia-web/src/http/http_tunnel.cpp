@@ -215,7 +215,7 @@ task<std::optional<http_capsule>> http_capsule_stream::read_owned(detail::capsul
         if (state_value.offset_ == state_value.input_.size()) {
             fin = !co_await state_value.read_input();
         }
-        if (state_value.poll_capsule(fin, detail::capsule_interest::all)) {
+        if (state_value.poll_capsule(fin, http_capsule_retention::all)) {
             auto payload_value = std::move(state_value.payload_);
             state_value.payload_ = std::pmr::string(state_value.resource_);
             co_return http_capsule(state_value, state_value.type_, std::move(payload_value));
@@ -318,10 +318,10 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
         if (state_value.offset_ == state_value.input_.size()) {
             fin = !co_await state_value.read_input();
         }
-        if (!state_value.poll_capsule(fin, detail::capsule_interest::datagrams)) {
-            continue;
-        }
-        if (state_value.type_ != http_datagram_capsule_type) {
+        // The decoder drops other capsule types and, for CONNECT-UDP, unknown
+        // Context IDs before the length limit applies (RFC 9297 section 3.2).
+        if (!state_value.poll_capsule(
+                fin, udp ? http_capsule_retention::udp_payloads : http_capsule_retention::datagrams)) {
             continue;
         }
         auto& owned = state_value.payload_;
@@ -331,7 +331,7 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(detail::caps
         if (udp) {
             auto decoded = datagrams.receive_udp_datagram(bytes_value);
             if ((decoded.index() != 0)) {
-                state_value.abort();
+                state_value.abort_malformed();
                 throw std::runtime_error("malformed CONNECT-UDP datagram");
             }
             if (!std::get<0>(decoded)) {

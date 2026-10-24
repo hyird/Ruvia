@@ -408,7 +408,7 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
     }
 }
 
-void http_client_pool::abandon_response(http_client_response_state& state_value) noexcept {
+void http_client_pool::abandon_response(http_client_response_state& state_value, http2_error_code error) noexcept {
     if (state_value.abandoned_) {
         return;
     }
@@ -417,7 +417,7 @@ void http_client_pool::abandon_response(http_client_response_state& state_value)
         case http_client_response_transport::http2:
             if (state_value.connection_index_ < connections_.size() && state_value.request_id_ != 0) {
                 connection(state_value.connection_index_)
-                    .cancel_http2_stream(state_value.request_id_, client_abort_reason::cancelled);
+                    .cancel_http2_stream(state_value.request_id_, client_abort_reason::cancelled, error);
             }
             break;
         case http_client_response_transport::unassigned:

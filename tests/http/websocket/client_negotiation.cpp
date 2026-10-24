@@ -154,3 +154,66 @@ RUVIA_TEST(websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields) 
         }
     }
 }
+
+// RFC 8441 section 5: END_STREAM after the 2xx is the server's orderly tunnel
+// close; only END_STREAM on the response HEADERS leaves no WebSocket stream.
+// The fact is fixed by the HEADERS frame even when the DATA that ends the
+// stream arrives in the same feed().
+RUVIA_TEST(websocket_h2_client_response_head_reports_end_stream_only_from_headers) {
+    for (const bool end_on_headers : {false, true}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        auto connection = ruvia::http2_connection::client({.resource_ = &resource});
+        const auto append_frame = [&](std::pmr::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
+                                      std::uint32_t stream_id, std::string_view payload) {
+            std::array<char, ruvia::http2_frame_header_bytes> header{};
+            RUVIA_CHECK(ruvia::encode_http2_frame_header(
+                header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id));
+            wire.append(header.data(), header.size());
+            wire.append(payload);
+        };
+        std::pmr::string settings_wire(&resource);
+        constexpr std::array<char, 6> enable_connect_protocol{0x00, 0x08, 0x00, 0x00, 0x00, 0x01};
+        append_frame(settings_wire, ruvia::http2_frame_type::settings, 0, 0,
+            std::string_view(enable_connect_protocol.data(), enable_connect_protocol.size()));
+        RUVIA_CHECK(connection.feed(settings_wire) == ruvia::http2_feed_result::accepted);
+        while (connection.next_event()) {
+        }
+        ruvia::websocket_client_negotiation negotiation({}, &resource);
+        const auto submitted = negotiation.submit_http2_request(connection, "https", "example.test", "/ws");
+        RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
+        if (!std::holds_alternative<std::uint32_t>(submitted)) {
+            return;
+        }
+        const auto stream_id = std::get<std::uint32_t>(submitted);
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
+        std::pmr::string wire(&resource);
+        append_frame(wire, ruvia::http2_frame_type::headers, end_on_headers ? 0x5 : 0x4, stream_id, block);
+        if (!end_on_headers) {
+            // The server's Close frame (1000, "bye") with END_STREAM.
+            append_frame(wire, ruvia::http2_frame_type::data, 0x1, stream_id, std::string_view("\x88\x05\x03\xe8"
+                                                                                               "bye",
+                                                                                  7));
+        }
+        RUVIA_CHECK(connection.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto event = connection.next_event();
+        const auto* head = event ? event->response_head() : nullptr;
+        RUVIA_CHECK(head != nullptr);
+        if (head == nullptr) {
+            return;
+        }
+        RUVIA_CHECK_EQ(head->stream_ended(), end_on_headers);
+        const auto negotiated = negotiation.validate_response(head->head(), !head->stream_ended());
+        if (end_on_headers) {
+            RUVIA_CHECK(std::holds_alternative<ruvia::websocket_client_negotiation_error>(negotiated) &&
+                        std::get<ruvia::websocket_client_negotiation_error>(negotiated) ==
+                            ruvia::websocket_client_negotiation_error::stream_closed);
+        } else {
+            RUVIA_CHECK(negotiated.index() == 0);
+            auto data = connection.next_event();
+            RUVIA_CHECK(data && data->tunnel_data() != nullptr);
+            auto end = connection.next_event();
+            RUVIA_CHECK(end && end->tunnel_end() != nullptr);
+        }
+    }
+}

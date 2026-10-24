@@ -105,7 +105,8 @@ public:
         const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value);
     void register_http2_stream(http2_stream& stream);
     void remove_http2_stream(http2_stream& stream) noexcept;
-    void cancel_http2_stream(std::uint64_t request_id, client_abort_reason reason) noexcept;
+    void cancel_http2_stream(std::uint64_t request_id, client_abort_reason reason,
+        http2_error_code error = http2_error_code::cancel) noexcept;
     [[nodiscard]] std::uint64_t next_http2_request_id() noexcept;
     void reprioritize(http_client_response_state& state_value, http_priority priority);
     // Wakes the writer to flush WINDOW_UPDATE for released DATA credit.

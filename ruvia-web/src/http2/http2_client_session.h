@@ -190,13 +190,14 @@ public:
         fail(generation_, transport, std::move(failure));
     }
 
-    // Requests a RST_STREAM(CANCEL); allocation failure fails the connection.
-    void submit_reset(std::uint32_t stream_id) noexcept {
+    // Requests a RST_STREAM (CANCEL unless the stream's input was malformed);
+    // allocation failure fails the connection.
+    void submit_reset(std::uint32_t stream_id, http2_error_code error = http2_error_code::cancel) noexcept {
         if (stream_id == 0 || !connection_.has_value() || failed_) {
             return;
         }
         try {
-            (void)connection_->submit_reset(stream_id, http2_error_code::cancel);
+            (void)connection_->submit_reset(stream_id, error);
             write_signal_.notify();
         } catch (...) {
             fail({}, std::current_exception());

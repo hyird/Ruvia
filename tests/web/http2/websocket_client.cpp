@@ -3,10 +3,16 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
+#include <system_error>
+#include <variant>
 #include <vector>
 
 #include <asio/co_spawn.hpp>
@@ -16,6 +22,7 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/websocket_connection.h"
@@ -384,6 +391,148 @@ void exercise_closing_peer(ruvia::testing::test_context& ruvia_ctx, closing_peer
         RUVIA_CHECK(!received_end_stream);
     }
 }
+
+enum class handshake_end { close_on_data,
+    end_on_headers };
+
+// The peer answers the Extended CONNECT in one write: either 200 HEADERS
+// followed by DATA carrying its Close frame and END_STREAM (RFC 8441 section 5
+// orderly close), or 200 HEADERS that themselves carry END_STREAM. It then
+// records everything the client sends until EOF.
+void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_end mode) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::exception_ptr peer_failure;
+    std::string received;
+    bool reached_eof = false;
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await peer.async_accept(asio::use_awaitable);
+        std::pmr::monotonic_buffer_resource resource;
+        auto connection = ruvia::http2_connection::server({.resource_ = &resource});
+        std::optional<ruvia::http2_request_head_event> request;
+        std::array<char, 16384> input{};
+        std::pmr::string output(&resource);
+        for (;;) {
+            if (connection.wants_write()) {
+                output.clear();
+                connection.take_output(output);
+                co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
+            }
+            std::size_t count = 0;
+            try {
+                count = co_await socket.async_read_some(asio::buffer(input), asio::use_awaitable);
+            } catch (const std::system_error&) {
+                reached_eof = true;
+                co_return;
+            }
+            received.append(input.data(), count);
+            if (request) {
+                continue;
+            }
+            const auto bytes_value = std::string_view(input.data(), count);
+            for (;;) {
+                const auto fed = connection.feed(bytes_value);
+                RUVIA_CHECK(fed != ruvia::http2_feed_result::protocol_failure);
+                while (auto event = connection.next_event()) {
+                    auto* head = event->request_head();
+                    if (head == nullptr) {
+                        continue;
+                    }
+                    if (mode == handshake_end::end_on_headers) {
+                        output.clear();
+                        connection.take_output(output);
+                        std::pmr::string block(&resource);
+                        ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
+                        std::array<char, ruvia::http2_frame_header_bytes> header{};
+                        RUVIA_CHECK(ruvia::encode_http2_frame_header(header, static_cast<std::uint32_t>(block.size()),
+                            ruvia::http2_frame_type::headers, 0x5, head->stream_id()));
+                        output.append(header.data(), header.size());
+                        output.append(block);
+                        co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
+                    } else {
+                        const auto built_request = head->build_request(&resource);
+                        const auto validation = ruvia::validate_http2_websocket_handshake(connection, head->stream_id(), built_request);
+                        const auto submitted = connection.submit_websocket_handshake(head->stream_id(), built_request, validation);
+                        RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(submitted));
+                        ruvia::websocket_connection websocket;
+                        RUVIA_CHECK(websocket.submit_close(1000, "bye") == ruvia::websocket_close_submit_status::accepted);
+                        const auto close = websocket.output_plan();
+                        RUVIA_CHECK(connection.submit_data(head->stream_id(), close.bytes(), ruvia::http2_end_stream::end_stream) ==
+                                    ruvia::http2_data_submit_status::accepted);
+                    }
+                    request.emplace(std::move(*head));
+                }
+                if (fed != ruvia::http2_feed_result::events_pending) {
+                    break;
+                }
+            }
+        }
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peer_failure = failure; });
+    bool connected = false;
+    bool closed_by_peer = false;
+    std::optional<ruvia::websocket_client_error::code_type> connect_error;
+    const auto run = [&]() -> ruvia::task<void> {
+        ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
+                                                              .protocol_ = ruvia::websocket_client_protocol::http2,
+                                                              .host_ = "127.0.0.1",
+                                                              .port_ = peer.local_endpoint().port()});
+        std::exception_ptr failure;
+        try {
+            co_await client.connect();
+            connected = true;
+            const auto client_handle = client.handle();
+            closed_by_peer = !(co_await client_handle.read());
+        } catch (const ruvia::websocket_client_error& error) {
+            connect_error = error.code();
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        attachment.stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+    if (peer_failure) {
+        std::rethrow_exception(peer_failure);
+    }
+    if (mode == handshake_end::close_on_data) {
+        RUVIA_CHECK(connected);
+        RUVIA_CHECK(closed_by_peer);
+        RUVIA_CHECK(!connect_error.has_value());
+    } else {
+        RUVIA_CHECK(!connected);
+        RUVIA_CHECK(connect_error == ruvia::websocket_client_error::code_type::handshake_rejected);
+    }
+    // RFC 9113 section 6.8: the retiring client sends GOAWAY(NO_ERROR) before
+    // it closes the connection.
+    RUVIA_CHECK(reached_eof);
+    std::optional<std::uint32_t> goaway_error;
+    RUVIA_CHECK(received.starts_with(ruvia::http2_client_preface));
+    for (std::size_t offset = ruvia::http2_client_preface.size();
+        offset + ruvia::http2_frame_header_bytes <= received.size();) {
+        const auto header_value = ruvia::parse_http2_frame_header(
+            std::span<const char>(received.data() + offset, ruvia::http2_frame_header_bytes));
+        RUVIA_CHECK(header_value.has_value());
+        if (!header_value) {
+            break;
+        }
+        const auto* payload = received.data() + offset + ruvia::http2_frame_header_bytes;
+        if (header_value->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) && header_value->length_ >= 8) {
+            goaway_error = (std::uint32_t(static_cast<unsigned char>(payload[4])) << 24) |
+                           (std::uint32_t(static_cast<unsigned char>(payload[5])) << 16) |
+                           (std::uint32_t(static_cast<unsigned char>(payload[6])) << 8) |
+                           std::uint32_t(static_cast<unsigned char>(payload[7]));
+        }
+        offset += ruvia::http2_frame_header_bytes + header_value->length_;
+    }
+    RUVIA_CHECK(goaway_error == std::uint32_t{0});
+}
 }  // namespace
 
 RUVIA_TEST(http2_websocket_client_drives_flow_control_deflate_and_end_stream) {
@@ -416,4 +565,12 @@ RUVIA_TEST(http2_websocket_protocol_reset_after_buffered_close_remains_an_error)
 
 RUVIA_TEST(http2_websocket_end_stream_without_peer_close_is_not_a_close_handshake) {
     exercise_closing_peer(ruvia_ctx, closing_peer::end_without_close);
+}
+
+RUVIA_TEST(http2_websocket_handshake_accepts_close_and_end_stream_in_the_same_read) {
+    exercise_handshake_end(ruvia_ctx, handshake_end::close_on_data);
+}
+
+RUVIA_TEST(http2_websocket_handshake_rejects_end_stream_on_response_headers_and_sends_goaway) {
+    exercise_handshake_end(ruvia_ctx, handshake_end::end_on_headers);
 }

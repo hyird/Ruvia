@@ -273,6 +273,8 @@ ruvia::task<void> handle_udp(ruvia::context& c) {
 | `ruvia::http_datagram_stream` | `read()`（返回 `std::optional<http_datagram>`）、`send(payload)`、`finish()`、`abort()` |
 | `ruvia::http_udp_tunnel` | `read()`（返回 `std::optional<http_datagram>`，自动剥离/封装 `context_id = 0`）、`send(payload)`、`finish()`、`abort()` |
 
+Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.html#section-3.2)：读取方不使用的 Capsule 被静默丢弃并跳过，不缓冲、不触发回调，也不受 `http_capsule_config::max_capsule_length_` 约束——`datagrams()` 丢弃 `DATAGRAM` 以外的类型，`udp()` 还会丢弃 Context ID 非 0 的 `DATAGRAM`（RFC 9298 §4，长度上限在读出 Context ID 之后才判断）；`capsules()` 保留全部类型，因此上限作用于每个 Capsule。保留的 Capsule 超过上限、流在 Capsule 中途结束或 `DATAGRAM` 格式错误时按畸形消息处理（RFC 9297 §3.3）：读取抛出异常并中止隧道，HTTP/2 客户端隧道以 `RST_STREAM(PROTOCOL_ERROR)` 复位该流（RFC 9113 §8.1.1），HTTP/1.1 关闭连接。
+
 ---
 
 ## 5. 出站 HTTP/1.1 & HTTP/2 客户端（`http_client`）
@@ -391,4 +393,6 @@ co_await client.shutdown();
 | `void close() noexcept` / `void abort() noexcept` | 客户端 `client.close()`（或句柄 `peer.abort()`）请求立即中止连接 |
 | `task<void> shutdown() &` | 关闭并等待底层全部挂起 I/O 安全退役 |
 
-关闭握手完成后，客户端按 [RFC 6455 §7.1.1](https://www.rfc-editor.org/rfc/rfc6455.html#section-7.1.1) 由服务端先关闭底层 TCP 连接（HTTP/2 下为服务端先发送 `END_STREAM`）：客户端继续读取并丢弃 Close 之后的字节，直到对端 EOF，再结束自己的传输。等待时长受 `close_handshake_timeout_` 约束（`nullopt` 表示不设上限）；超时或期间传输出错时客户端自行关闭连接，由于关闭握手已经完成，`read()` / `close()` 仍正常返回，不抛错。
+关闭握手完成后，客户端按 [RFC 6455 §7.1.1](https://www.rfc-editor.org/rfc/rfc6455.html#section-7.1.1) 由服务端先关闭底层 TCP 连接（HTTP/2 下为服务端先发送 `END_STREAM`）：客户端继续读取并丢弃 Close 之后的字节，直到对端 EOF，再结束自己的传输。等待时长受 `close_handshake_timeout_` 约束（`nullopt` 表示不设上限）；超时或期间传输出错时客户端自行关闭连接，由于关闭握手已经完成，`read()` / `close()` 仍正常返回，不抛错。等待对端 Close 与等待传输结束各自受该时限约束，因此 `close()` 最长约为 `close_handshake_timeout_` 的两倍。
+
+HTTP/2 下，只有响应 `HEADERS` 自身携带 `END_STREAM` 的 2xx 才视为握手失败（没有可用的 WebSocket 流）；2xx 之后在 `DATA` 上到达的 `END_STREAM`（即使与服务端 Close 帧在同一次读取中到达）是服务端对隧道的有序关闭（[RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5)），握手成功，`read()` 随后报告该 Close。客户端退役 HTTP/2 连接时（关闭握手完成、超时、取消、`close()` / `abort()` 或握手失败），若会话仍在运行，先发送 `GOAWAY(NO_ERROR)` 并等待其写出后再关闭传输（[RFC 9113 §6.8](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8)）；该等待最长 1 秒（产品限制），对端不读取或 `write_timeout_` 为 `nullopt` 时到时直接关闭。

@@ -20,9 +20,11 @@ namespace ruvia::detail {
 struct http2_message_head_record final {
     std::uint32_t stream_id_{0};
     std::optional<http_client_request_content_signal> request_content_signal_;
-    // Server side: the HEADERS frame left the peer send half open, so message
-    // content events follow this head. Captured when the head is published; the
-    // same input batch may already have delivered that content to the core.
+    // The HEADERS frame left the peer send half open. Server side: message
+    // content events follow this head (a pending CONNECT reads as closed).
+    // Client side: the final response head did not carry END_STREAM. Captured
+    // when the head is published; the same input batch may already have
+    // delivered later frames to the core.
     bool body_open_{false};
 };
 
