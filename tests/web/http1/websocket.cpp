@@ -666,6 +666,61 @@ RUVIA_TEST(http1_websocket_required_subprotocol_refuses_offers_without_one) {
     RUVIA_CHECK(heads[2].find("\r\nSec-WebSocket-Protocol: chat.v1\r\n") != std::string::npos);
 }
 
+// RFC 9110 section 7.8: a server that receives Upgrade together with
+// Expect: 100-continue MUST send 100 (Continue) before 101 (Switching Protocols).
+RUVIA_TEST(http1_websocket_upgrade_with_continue_expectation_sends_100_before_101) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::http_server_fixture server(io);
+    std::exception_ptr failure;
+    std::array<std::string, 2> heads;
+    auto run = [&]() -> ruvia::task<void> {
+        asio::ip::tcp::socket client(io);
+        asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
+        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        try {
+            client.connect(server.endpoint());
+            constexpr std::string_view upgrade =
+                "GET /http1-websocket-required-subprotocol HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n"
+                "Connection: Upgrade\r\n"
+                "Upgrade: websocket\r\n"
+                "Expect: 100-continue\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                "Sec-WebSocket-Protocol: chat.v1\r\n\r\n";
+            const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(upgrade), std::move(handler)); });
+            if (sent.error_code()) {
+                throw std::system_error(sent.error_code());
+            }
+            for (auto& head : heads) {
+                char byte{};
+                while (!head.ends_with("\r\n\r\n")) {
+                    const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
+                    if (read.error_code()) {
+                        throw std::system_error(read.error_code());
+                    }
+                    head.push_back(byte);
+                }
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        ruvia::close_socket(client);
+        (void)watchdog_value.cancel();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    io.run();
+    root.get();
+    server.finish();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    RUVIA_CHECK_EQ(heads[0], "HTTP/1.1 100 Continue\r\n\r\n");
+    RUVIA_CHECK(heads[1].starts_with("HTTP/1.1 101 "));
+}
+
 // A websocket handler failure is reported even when it carries a code an
 // ending inbound connection also produces, while a peer that resets instead of
 // answering the resulting 1011 Close ends the connection normally: exactly one

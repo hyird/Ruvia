@@ -74,6 +74,14 @@ public:
         return http_server_expectation_plan::no_action;
     }
 
+    // RFC 9110 section 7.8: a server that receives both Upgrade and an Expect
+    // field with 100-continue MUST send 100 (Continue) before 101 (Switching
+    // Protocols), even when no content follows the head. Unsupported members
+    // are planned by server_plan() before the upgrade is accepted.
+    [[nodiscard]] bool continue_before_switching_protocols() const noexcept {
+        return has_continue();
+    }
+
 private:
     static constexpr std::uint8_t continue_value = 1U << 0;
     static constexpr std::uint8_t unsupported = 1U << 1;

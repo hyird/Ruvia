@@ -44,7 +44,8 @@ struct http1_websocket_upgrade_commit final {
                                             .resource_ = dispatch_.memory_.resource(),
                                             .deflate_ = websocket_endpoint_.deflate()});
         context_access::commit_upgrade(context_value);
-        if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake); ec) {
+        const bool continue_first = dispatch_.parsed_.body_plan_.expectations().continue_before_switching_protocols();
+        if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake, continue_first); ec) {
             co_return std::nullopt;
         }
         tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
