@@ -102,6 +102,17 @@ public:
     }
 
     task<void> write(std::string_view chunk) {
+        if (state_.body_suppressed_complete()) {
+            // Same discarded write as the HTTP/1 sink: a body-suppressed head
+            // already completed the response (HEAD, 304), so the write succeeds
+            // without sending. The minimal positive tick (a zero duration is
+            // await_ready) still suspends, so a handler that keeps writing in a
+            // loop yields the worker thread instead of hard-spinning the event
+            // loop; termination short-circuits it back to ready.
+            co_await http2_sans_io_sleep_awaiter(write_signal_.worker(), stream_signal_.termination(),
+                std::chrono::steady_clock::duration(1));
+            co_return;
+        }
         throw_if_terminated();
         throw_if_body_failed();
         if (chunk.empty()) {
@@ -109,18 +120,13 @@ public:
         }
         if (!state_.committed()) {
             co_await commit(http_response_trailer_intent::none);
+            if (state_.body_suppressed_complete()) {
+                // The head just ended a body-suppressed response: the chunk is
+                // the body a GET would carry and is discarded.
+                co_return;
+            }
         }
         throw_if_body_failed();
-        if (state_.body_suppressed_complete()) {
-            // Same head-only guard as the HTTP/1 sink: suspend once before the
-            // synchronous response_stream_head_only_complete throw so a handler that
-            // catches it and keeps writing yields the worker thread each pass
-            // rather than hard-spinning the event loop. A zero duration is
-            // await_ready, so the minimal positive tick is what forces the
-            // suspension (termination short-circuits it back to ready).
-            co_await http2_sans_io_sleep_awaiter(write_signal_.worker(), stream_signal_.termination(),
-                std::chrono::steady_clock::duration(1));
-        }
         state_.ensure_body_allowed();
         if (compression_.active()) {
             constexpr std::size_t input_chunk_bytes = http2_data_output_credit_bytes;
@@ -186,6 +192,13 @@ public:
     }
 
     task<void> end(std::span<const http_header_view> trailers) {
+        if (state_.body_suppressed_complete()) {
+            // Trailers are optional metadata (RFC 9110 6.5) that a
+            // body-suppressed response cannot carry: validated like any
+            // trailer section, then discarded.
+            static_cast<void>(validate_http_response_trailers(trailers));
+            co_return;
+        }
         // An empty terminal call is idempotent once our END_STREAM is already
         // committed locally; a later session/stream termination must not turn
         // dispatch cleanup into a transport failure.
@@ -289,6 +302,10 @@ private:
                 state_.mark_aborted();
             }
             throw;
+        }
+        if (state_.body_suppressed_complete()) {
+            // The head ended the response; waits on the peer-EOF token end now.
+            stream_signal_.stop();
         }
     }
 

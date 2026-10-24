@@ -187,8 +187,6 @@ private:
     [[nodiscard]] task<http_response> run_unmatched_chain(context& context, route_handler terminal) const;
     [[nodiscard]] static task<void> contain_failure(
         const route_table& table, context& context, std::exception_ptr exception);
-    [[nodiscard]] static task<void> contain_stream_failure(
-        const route_table& table, context& context, std::exception_ptr exception);
     [[nodiscard]] task<http_response> handle_error(
         context& context, http_error_info error, http_error_handler_ref error_handler) const;
     [[nodiscard]] task<http_response> handle_not_found(

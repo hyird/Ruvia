@@ -11,18 +11,6 @@ class context;
 
 namespace detail {
 
-// Raised by a body write on a stream whose committed head already completed
-// the message because the request method/response status suppresses content
-// (HEAD on a GET stream route, a 304, ...). This is a control signal, not an
-// error: the response head on the wire is complete and correct. It
-// deterministically stops the handler -- including an infinite SSE loop -- at
-// its first body write; dispatch recognizes the type and finishes the stream
-// as a normal head-only success. Like a cancellation signal it deliberately
-// does not derive from std::exception, so handler or middleware code catching
-// `const std::exception&` to convert failures lets it unwind instead of
-// turning a correct head-only response into a connection failure.
-class response_stream_head_only_complete final {};
-
 class response_stream_state final {
 public:
     [[nodiscard]] bool committed() const noexcept {
@@ -39,11 +27,9 @@ public:
     }
 
     // True once a body-suppressed head (HEAD / 304 semantics) has completed the
-    // message: the next body write is the one ensure_body_allowed() answers with
-    // response_stream_head_only_complete. Sinks check this to suspend once before
-    // that synchronous throw, so a handler that catches the control signal and
-    // keeps writing yields the worker thread each pass instead of hard-spinning
-    // the event loop -- other connections on the worker keep being served.
+    // message: a successful response that can deliver nothing more. Sinks
+    // complete body writes, trailers and end() without sending anything,
+    // report aborted(), and answer sleep() with stop_requested.
     [[nodiscard]] bool body_suppressed_complete() const noexcept {
         // An ended stream always holds its commit plan.
         return ended() && commit_plan()->body_plan().body_suppressed();
@@ -146,13 +132,6 @@ public:
             throw std::logic_error("response stream is aborted");
         }
         if (ended()) {
-            // A body-suppressed commit (HEAD/304 semantics) lands in Ended
-            // directly, so the handler's first write arrives here. Writing
-            // the body a GET would have is correct handler behavior, not a
-            // sequencing bug -- signal head-only completion instead.
-            if (commit_plan()->body_plan().body_suppressed()) {
-                throw response_stream_head_only_complete();
-            }
             throw std::logic_error("response stream is already ended");
         }
         if (!std::holds_alternative<body_open_type>(state_)) {

@@ -91,15 +91,17 @@ public:
 std::atomic<int> head_loop_writes{0};
 std::atomic<bool> head_loop_aborted{false};
 std::atomic<bool> head_loop_sleep_stopped{false};
+std::atomic<bool> head_loop_token_stopped{false};
+std::atomic<bool> head_loop_completed{false};
 
-// Turns every std::exception from the rest of the chain into a 500, as
-// ordinary error-wrapping middleware does.
+// Turns every exception from the rest of the chain into a 500, as
+// error-wrapping middleware does.
 class exception_converting_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
         try {
             co_await next_value();
-        } catch (const std::exception&) {
+        } catch (...) {
             throw ruvia::http_error({.status_ = ruvia::http_status::internal_server_error, .message_ = "converted"});
         }
     }
@@ -125,23 +127,24 @@ class response_policy_routes final {
         co_await context_value.stream().write("chunk");
     }
 
-    // Swallows every write failure, like a careless SSE loop: only aborted()
-    // and sleep() can end it.
+    // An SSE-style loop that only aborted() ends. After a HEAD every write
+    // succeeds without sending, and sleep() and the peer-EOF token report the
+    // finished response.
     ruvia::task<void> head_loop(ruvia::context& context_value) {
         auto& output = context_value.stream_text();
         int writes = 0;
         while (!output.aborted() && writes < 100) {
             ++writes;
-            try {
-                co_await output.write("tick");
-                // NOLINTNEXTLINE(bugprone-empty-catch)
-            } catch (...) {
-            }
+            co_await output.write("tick");
         }
+        co_await output.writeln("late");
         head_loop_writes.store(writes);
         head_loop_aborted.store(output.aborted());
+        head_loop_token_stopped.store(output.cancel_on_peer_eof().stop_requested());
         head_loop_sleep_stopped.store(
             co_await output.sleep(std::chrono::seconds(10)) == ruvia::timer_sleep_result::stop_requested);
+        co_await output.end();
+        head_loop_completed.store(true);
     }
 
     ruvia::task<void> trailer_stream(ruvia::context& context_value) {
@@ -316,11 +319,11 @@ RUVIA_TEST(http1_head_falls_back_to_response_stream_get_routes) {
     RUVIA_CHECK(lower_head(websocket_output).find("\r\nallow: get, options") != std::string::npos);
 }
 
-// A completed head-only response can deliver nothing more: a stream handler
-// that swallows the head-only signal sees aborted() and a stop_requested
-// sleep() at once, so it cannot hold the keep-alive connection and the
-// pipelined GET is answered.
-RUVIA_TEST(http1_head_only_stream_reports_aborted_and_stops_sleeping) {
+// A completed head-only response is a success that can deliver nothing more:
+// the handler's writes and end() succeed without sending, aborted(), sleep()
+// and the peer-EOF token report the finished response at once, so the handler
+// cannot hold the keep-alive connection and the pipelined GET is answered.
+RUVIA_TEST(http1_head_only_stream_completes_writes_and_reports_aborted) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto output = exchange(server.endpoint(),
@@ -333,15 +336,18 @@ RUVIA_TEST(http1_head_only_stream_reports_aborted_and_stops_sleeping) {
     RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
     RUVIA_CHECK(text.find("tick") == std::string::npos);
     RUVIA_CHECK(text.ends_with("\r\n\r\nplain"));
+    RUVIA_CHECK(text.find("late") == std::string::npos);
     RUVIA_CHECK_EQ(head_loop_writes.load(), 1);
     RUVIA_CHECK(head_loop_aborted.load());
+    RUVIA_CHECK(head_loop_token_stopped.load());
     RUVIA_CHECK(head_loop_sleep_stopped.load());
+    RUVIA_CHECK(head_loop_completed.load());
 }
 
-// The head-only signal is not a std::exception: middleware converting every
-// std::exception into a 500 lets it pass, so HEAD on a stream route completes
-// normally and the connection stays usable for the pipelined GET.
-RUVIA_TEST(http1_head_only_signal_passes_std_exception_middleware) {
+// Head-only completion raises nothing: middleware converting every exception
+// into a 500 sees a normal success, so HEAD on a stream route completes and
+// the connection stays usable for the pipelined GET.
+RUVIA_TEST(http1_head_only_stream_is_a_success_for_error_converting_middleware) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto output = exchange(server.endpoint(),

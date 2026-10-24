@@ -220,17 +220,4 @@ task<http_response> detail::route_table::finalize_failure(context& context_value
     co_return detail::context_access::release_response(context_value);
 }
 
-task<void> detail::route_table::contain_stream_failure(
-    const route_table& table, context& context_value, std::exception_ptr exception) {
-    // Not a failure: the committed head already completed a body-suppressed
-    // message (HEAD on a streaming route). Let the signal unwind through every
-    // middleware frame so dispatch_stream_route can finish the stream as a
-    // head-only success instead of rendering a buffered error response that
-    // can no longer be sent.
-    if (detail::is_head_only_complete(exception)) {
-        std::rethrow_exception(exception);
-    }
-    co_await contain_failure(table, context_value, exception);
-}
-
 }  // namespace ruvia

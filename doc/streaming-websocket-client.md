@@ -54,7 +54,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `task<void> write(std::span<const std::byte> chunk) &` | 写入一段字节块（HTTP/1.1 自动使用 `Transfer-Encoding: chunked`，HTTP/2 使用 `DATA` 帧） |
+| `task<void> write(std::span<const std::byte> chunk) &` | 写入一段字节块（HTTP/1.1 自动使用 `Transfer-Encoding: chunked`，HTTP/2 使用 `DATA` 帧）；不带内容的响应头（`HEAD`、`304`）结束响应后写入正常完成但不发送任何字节 |
 | `task<void> write(std::string_view chunk) &` | 写入一段字符串视图 |
 | `task<void> write(std::pmr::string&& chunk) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
 | `task<void> writeln(std::string_view chunk) &` | 写入文本并追加 `\n` |

@@ -212,7 +212,7 @@ for (const auto& worker : ruvia::app().workers()) {
 
 | 类别 | 宏名称 | 处理器成员函数签名 | 说明 |
 | --- | --- | --- | --- |
-| 缓冲或流式响应路由 | `RUVIA_GET(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `GET` 路由并自动提供 `HEAD` 回退（返回 `task<http_response>` 时为缓冲响应；返回 `task<void>` 时自动推导为 `c.stream()` / `c.stream_text()` / `c.stream_sse()` 流式响应）。`HEAD` 请求运行同一处理器与中间件，`c.req().method()` 仍为 `"HEAD"`，框架只发送响应头并丢弃响应体（流式处理器在首次写入响应体时由一个控制信号结束；该信号不派生自 `std::exception`，`catch (const std::exception&)` 不会拦截它，`catch (...)` 必须重新抛出；此后 `aborted()` 为 `true`、`sleep()` 立即返回 `stop_requested`），`Allow` 同时列出 `HEAD`；WebSocket 路由不提供 `HEAD` 回退 |
+| 缓冲或流式响应路由 | `RUVIA_GET(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `GET` 路由并自动提供 `HEAD` 回退（返回 `task<http_response>` 时为缓冲响应；返回 `task<void>` 时自动推导为 `c.stream()` / `c.stream_text()` / `c.stream_sse()` 流式响应）。`HEAD` 请求运行同一处理器与中间件，`c.req().method()` 仍为 `"HEAD"`，框架只发送响应头并丢弃响应体（流式处理器首次写入响应体时提交响应头，该写入及之后的 `write()` / `end()` 均正常完成但不发送任何字节，`end()` 的 Trailer 校验后丢弃，不抛异常；此后 `aborted()` 为 `true`、`sleep()` 立即返回 `stop_requested`、`cancel_on_peer_eof()` 的 token 处于停止状态，循环写入的处理器须据此退出），`Allow` 同时列出 `HEAD`；WebSocket 路由不提供 `HEAD` 回退 |
 | 缓冲或流式路由 | `RUVIA_POST(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `POST` 路由（附加 `ruvia::stream_body` 时流式消费请求体；返回 `task<void>` 时流式写出响应/SSE） |
 | 缓冲或流式路由 | `RUVIA_PUT(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `PUT` 路由（可附加 `ruvia::stream_body` 流式消费请求体） |
 | 缓冲或流式路由 | `RUVIA_DELETE(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `DELETE` 路由 |

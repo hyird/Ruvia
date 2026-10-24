@@ -8,8 +8,6 @@
 #include "ruvia/web/detail/callback_ref.h"
 #include "ruvia/web/detail/router/route_handlers.h"
 
-#include "server/http_response_stream_state.h"
-
 namespace ruvia::detail {
 
 class route_table;
@@ -21,7 +19,6 @@ class route_table;
 // The caller owns this object for the whole run; next_state points at it.
 struct middleware_chain final {
     using terminal_type = callback_ref<task<void>(context&)>;
-    // May rethrow control signals that must unwind every frame.
     using failure_type = task<void> (*)(const route_table&, context&, std::exception_ptr);
 
     const route_table* table_{nullptr};
@@ -37,17 +34,5 @@ struct middleware_chain final {
 // error response instead of re-entering the chain, and a next() outliving its
 // frame is ignored.
 [[nodiscard]] task<void> run_chain(const middleware_chain& chain, context& context_value);
-
-// Classification only; the caller still owns and dispatches the exception.
-[[nodiscard]] inline bool is_head_only_complete(const std::exception_ptr& exception) noexcept {
-    try {
-        std::rethrow_exception(exception);
-    } catch (const response_stream_head_only_complete&) {
-        return true;
-        // NOLINTNEXTLINE(bugprone-empty-catch)
-    } catch (...) {
-    }
-    return false;
-}
 
 }  // namespace ruvia::detail

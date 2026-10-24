@@ -38,6 +38,7 @@ struct sleeping_stream_observation final {
     std::atomic<int> head_loop_writes_{};
     std::atomic<bool> head_loop_aborted_{};
     std::atomic<bool> head_loop_sleep_stopped_{};
+    std::atomic<bool> head_loop_token_stopped_{};
     std::atomic<bool> head_loop_finished_{};
 };
 
@@ -60,24 +61,24 @@ class sleeping_stream_routes final {
     RUVIA_POST("/http2-bounded-delayed-stream", bounded_delayed_stream, ruvia::stream_body, ruvia::body_limit<16>);
     RUVIA_ROUTES_END
 
-    // Swallows every write failure, like a careless SSE loop: only aborted()
-    // and sleep() can end it.
+    // An SSE loop that only aborted() ends. After a HEAD every write succeeds
+    // without sending, and sleep() and the peer-EOF token report the finished
+    // response.
     ruvia::task<void> head_loop_sse(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto writer = context_value.stream_sse();
         int writes = 0;
         while (!writer.aborted() && writes < 100) {
             ++writes;
-            try {
-                co_await writer.write({.data_ = "tick"});
-                // NOLINTNEXTLINE(bugprone-empty-catch)
-            } catch (...) {
-            }
+            co_await writer.write({.data_ = "tick"});
         }
+        co_await writer.write({.data_ = "late"});
         observed.head_loop_writes_ = writes;
         observed.head_loop_aborted_ = writer.aborted();
+        observed.head_loop_token_stopped_ = writer.cancel_on_peer_eof().stop_requested();
         observed.head_loop_sleep_stopped_ =
             co_await writer.sleep(std::chrono::seconds(30)) == ruvia::timer_sleep_result::stop_requested;
+        co_await writer.end();
         observed.head_loop_finished_ = true;
     }
 
@@ -583,11 +584,11 @@ RUVIA_TEST(http2_head_falls_back_to_sse_get_route_without_content) {
     server.finish();
 }
 
-// A completed head-only response can deliver nothing more: an SSE handler that
-// swallows the head-only signal sees aborted() and a stop_requested sleep() at
-// once while the peer keeps the connection open, instead of running until the
-// connection ends.
-RUVIA_TEST(http2_head_only_stream_reports_aborted_and_stops_sleeping) {
+// A completed head-only response is a success that can deliver nothing more:
+// the SSE handler's writes and end() succeed without sending, and aborted(),
+// sleep() and the peer-EOF token report it at once while the peer keeps the
+// connection open, instead of the handler running until the connection ends.
+RUVIA_TEST(http2_head_only_stream_completes_writes_and_reports_aborted) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     std::pmr::unsynchronized_pool_resource resource;
@@ -620,6 +621,7 @@ RUVIA_TEST(http2_head_only_stream_reports_aborted_and_stops_sleeping) {
     RUVIA_CHECK(observed.head_loop_finished_.load());
     RUVIA_CHECK_EQ(observed.head_loop_writes_.load(), 1);
     RUVIA_CHECK(observed.head_loop_aborted_.load());
+    RUVIA_CHECK(observed.head_loop_token_stopped_.load());
     RUVIA_CHECK(observed.head_loop_sleep_stopped_.load());
     client.close();
     server.finish();

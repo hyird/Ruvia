@@ -15,6 +15,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/memory/memory_pool.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http1_chunked_framing.h"
@@ -106,6 +107,16 @@ public:
         if (peer_monitor_) {
             return peer_monitor_->token();
         }
+        if (state_.body_suppressed_complete()) {
+            // A body-suppressed head already ended a successful response, so
+            // there is nothing left to wait for: a stopped token, as sleep()
+            // reports stop_requested.
+            if (!head_only_stop_) {
+                head_only_stop_.emplace();
+                head_only_stop_->request_stop();
+            }
+            return head_only_stop_->token();
+        }
         if (state_.ended() || state_.aborted()) {
             throw std::logic_error("peer EOF monitoring cannot start on a finished response stream");
         }
@@ -186,6 +197,15 @@ private:
         });
     }
 
+    // A body write after a body-suppressed head completed the response (HEAD,
+    // 304) succeeds without sending: the body a GET would carry is discarded.
+    // It still suspends for the minimal positive tick (a zero duration is
+    // await_ready), so a handler that keeps writing in a loop yields the
+    // worker thread instead of hard-spinning the event loop.
+    [[nodiscard]] task<timer_sleep_result> yield_discarded_body_write() const {
+        return sleep_for(worker_, std::chrono::steady_clock::duration(1));
+    }
+
     task<void> commit(http_response_trailer_intent trailer_intent) {
         ensure_peer_writable();
         if (state_.committed()) {
@@ -245,6 +265,10 @@ private:
             mark_write_failure(ec);
             throw inbound_transport_error(ec, "failed to write HTTP response stream head");
         }
+        if (peer_monitor_ && state_.body_suppressed_complete()) {
+            // The head ended the response; waits on the peer-EOF token end now.
+            peer_monitor_->request_stop();
+        }
     }
 
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
@@ -255,6 +279,10 @@ private:
     }
 
     task<void> write(std::string_view chunk) {
+        if (state_.body_suppressed_complete()) {
+            static_cast<void>(co_await yield_discarded_body_write());
+            co_return;
+        }
         ensure_peer_writable();
         if (chunk.empty()) {
             co_return;
@@ -262,16 +290,11 @@ private:
         // Only the first chunk needs the asynchronous head-commit path.
         if (!state_.committed()) {
             co_await commit(http_response_trailer_intent::none);
-        }
-        ensure_peer_writable();
-        if (state_.body_suppressed_complete()) {
-            // ensure_body_allowed() is about to throw response_stream_head_only_complete
-            // synchronously for an already body-suppressed head. Suspend once so a
-            // handler that catches the control signal and keeps writing (an SSE
-            // loop answering a HEAD or 304) yields the worker thread instead of
-            // hard-spinning the event loop with no suspension point. The minimal
-            // positive delay is required because a zero duration is await_ready.
-            static_cast<void>(co_await sleep_for(worker_, std::chrono::steady_clock::duration(1)));
+            if (state_.body_suppressed_complete()) {
+                // The head just ended a body-suppressed response (HEAD, 304):
+                // the chunk is the body a GET would carry and is discarded.
+                co_return;
+            }
         }
         ensure_peer_writable();
         state_.ensure_body_allowed();
@@ -332,6 +355,13 @@ private:
     }
 
     task<void> end(std::span<const http_header_view> trailers) {
+        if (state_.body_suppressed_complete()) {
+            // Trailers are optional metadata (RFC 9110 6.5) that a
+            // body-suppressed response cannot carry: validated like any
+            // trailer section, then discarded.
+            static_cast<void>(validate_http_response_trailers(trailers));
+            co_return;
+        }
         ensure_peer_writable();
         if (state_.ended()) {
             if (!trailers.empty()) {
@@ -406,6 +436,8 @@ private:
     http_interim_response_output* interim_output_{};
     std::pmr::memory_resource* inbound_resource_;
     std::optional<http1_peer_eof_monitor<stream_type>> peer_monitor_;
+    // A stopped token for cancel_on_peer_eof() after a body-suppressed head.
+    std::optional<stop_source> head_only_stop_;
 };
 
 }  // namespace ruvia::detail

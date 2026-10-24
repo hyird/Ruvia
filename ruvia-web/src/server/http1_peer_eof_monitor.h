@@ -75,6 +75,12 @@ public:
         cancel();
     }
 
+    // The response ended without the peer (a body-suppressed head): trips the
+    // token so waits observing it end, without marking the peer aborted.
+    void request_stop() noexcept {
+        source_.request_stop();
+    }
+
     void cancel() noexcept {
         // Set before emitting: an already-queued successful completion must
         // retain its bytes but must not schedule another read after teardown.

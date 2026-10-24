@@ -9,7 +9,6 @@
 #include "http/streaming_access.h"
 #include "router/route_context.h"
 #include "router/route_table.h"
-#include "server/http_response_stream_state.h"
 
 // Running a route that streams its response: binding the writer to the context
 // for the handler's lifetime, producing the head the HTTP/1 sink commits, and
@@ -73,7 +72,6 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
             };
             auto chain = route_chain(route);
             chain.terminal_ = callback_access::bind<task<void>(context&)>(terminal);
-            chain.failure_ = &route_table::contain_stream_failure;
             co_await run_chain(chain, context_value);
             if (!detail::context_access::has_response(context_value)) {
                 if (auto context_exception = context_value.exception()) {
@@ -91,16 +89,6 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
     }
 
     if (exception != nullptr) {
-        // Head-only completion is a control signal from the writer, not a
-        // failure: the committed head already ended the message, and the
-        // handler was merely stopped at its first body write. Finish the stream
-        // as a normal head-only success.
-        if (response_stream_output != nullptr &&
-            detail::streaming_access::committed(response_stream_output->writer()) &&
-            detail::is_head_only_complete(exception)) {
-            co_await response_stream_output->writer().end();
-            co_return std::nullopt;
-        }
         if (detail::context_access::output_committed(context_value)) {
             std::rethrow_exception(exception);
         }

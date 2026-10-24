@@ -85,12 +85,15 @@ public:
     /// the complete transport write settles.
     /// HTTP/2 may reuse normal DATA-frame transport storage between successful writes;
     /// oversized write buffers are released after completion.
-    /// A body-suppressed response (HEAD on a GET stream route, 304) ends with
-    /// its head: the first non-empty write commits that head and then throws a
-    /// head-only control signal so the handler stops there. The signal is not
-    /// derived from std::exception, so `catch (const std::exception&)` in a
-    /// handler or middleware lets it pass; code catching `...` must rethrow it.
-    /// From then on aborted() is true and sleep() returns stop_requested.
+    /// A body-suppressed response (HEAD on a GET stream route, 304) is complete
+    /// once its head is sent: the first non-empty write commits that head, and
+    /// it and every later write() / writeln() / end() succeed without sending
+    /// anything (end() still validates and then discards trailers). Each such
+    /// later write suspends briefly instead of returning synchronously.
+    /// Nothing throws, so handlers and middleware see a normal success; from
+    /// then on aborted() is true, sleep() returns stop_requested at once, and
+    /// the cancel_on_peer_eof() token is stopped. A handler that loops must end
+    /// on one of those signals; the discarded writes never stop it.
     task<void> write(std::span<const std::byte> chunk) &;
     task<void> write(std::span<const std::byte>) && = delete;
     task<void> write(std::string_view chunk) &;
@@ -122,6 +125,7 @@ public:
     /// 仅在请求体完整消费后可启用，否则抛出 std::logic_error；不主动读取或丢弃请求体。
     /// 返回与请求取消组合的 token，供订阅、数据库等异步等待使用；sleep() 也观察它。
     /// 不改变 context::stop_token() 或此前复制的 token。HTTP/2 只观察当前流终止。
+    /// 不带内容的响应头（HEAD、304）结束响应后，该 token 即处于停止状态（之后调用也返回已停止的 token）。
     /// 检测由连接 owner 管理，响应结束前取消并等待其完成。后续请求字节完整保留；
     /// 读前探缓冲达到既有请求头上限时暂停检测，不为探测分配无界存储。
     /// 默认不开启；FIN 无法区分关闭整个客户端与仅关闭发送方向。
