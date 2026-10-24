@@ -1,9 +1,10 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -13,8 +14,10 @@
 
 namespace ruvia {
 
-enum class http_content_encode_error : std::uint8_t { encoded_size_exceeded,
-    encoder_failure };
+class http_content_encode_error final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
 
 struct http_content_encode_options final {
     std::size_t max_encoded_bytes_{};
@@ -22,13 +25,15 @@ struct http_content_encode_options final {
 };
 
 // Produces one complete content-coded representation within the exact output
-// cap. Zero permits only a zero-byte encoding.
-[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_http_content(
+// cap. nullopt means only that max_encoded_bytes_ would be exceeded; zero
+// permits only a zero-byte encoding. Codec failures throw
+// http_content_encode_error; allocation exceptions retain their original type.
+[[nodiscard]] std::optional<std::pmr::string> encode_http_content(
     http_content_coding coding, std::string_view input, http_content_encode_options options);
 
 // Applies the listed codings in order. Each intermediate representation is
 // bounded by max_encoded_bytes and released before the next stage completes.
-[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_http_content(
+[[nodiscard]] std::optional<std::pmr::string> encode_http_content(
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_encode_options options);
 
@@ -53,7 +58,7 @@ public:
         return coding_;
     }
 
-    [[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode(
+    [[nodiscard]] std::optional<std::pmr::string> encode(
         std::string_view input, http_content_encode_options options);
 
 private:

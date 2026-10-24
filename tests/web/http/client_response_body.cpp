@@ -528,11 +528,10 @@ private:
     const std::string body(128 * 1024, 'z');
     auto result_value = ruvia::encode_http_content(ruvia::http_content_coding::gzip, body,
         {.max_encoded_bytes_ = body.size()});
-    auto* encoded = std::get_if<std::pmr::string>(&result_value);
-    if (encoded == nullptr) {
+    if (!result_value.has_value()) {
         throw std::runtime_error("could not encode fake HTTP response body");
     }
-    return std::string(encoded->data(), encoded->size());
+    return std::string(result_value->data(), result_value->size());
 }
 
 class http1_chunked_response_peer final {
@@ -1227,9 +1226,11 @@ RUVIA_TEST(http1_transfer_gzip_chunked_streams_before_terminal_chunk_and_bounds_
     const std::string expected(128 * 1024, 'z');
     auto encoded_result = ruvia::encode_http_content(ruvia::http_content_coding::gzip, expected,
         {.max_encoded_bytes_ = expected.size()});
-    auto* encoded = std::get_if<std::pmr::string>(&encoded_result);
-    RUVIA_CHECK(encoded != nullptr);
-    http1_chunked_response_peer peer(io, std::string(encoded->data(), encoded->size()));
+    RUVIA_CHECK(encoded_result.has_value());
+    if (!encoded_result.has_value()) {
+        return;
+    }
+    http1_chunked_response_peer peer(io, std::string(encoded_result->data(), encoded_result->size()));
     auto config = local_http_client_config(peer.port());
     config.max_response_bytes_ = 1024;
     ruvia::http_client client(worker.attachment_.loop(), config);

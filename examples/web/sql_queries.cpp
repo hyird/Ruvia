@@ -65,9 +65,11 @@ void postgres_queries(std::pmr::memory_resource* memory) {
     print_query(claim, ruvia::db_driver::postgresql, memory);
 
     ruvia::db_query ranked(memory);
+    const ruvia::db_expr partitions[]{ranked.column("state")};
+    const ruvia::db_order_term window_order[]{{ranked.column("id")}};
     ranked.select({ranked.column("id"),
                       ranked.alias(ranked.over(ranked.call("row_number"),
-                                       {.partition_by_ = {ranked.column("state")}, .order_by_ = {{ranked.column("id")}}}),
+                                       {.partition_by_ = partitions, .order_by_ = window_order}),
                           "rank")})
         .from("jobs");
     print_query(ranked, ruvia::db_driver::postgresql, memory);

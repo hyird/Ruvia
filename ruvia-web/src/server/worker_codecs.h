@@ -63,7 +63,8 @@ public:
     worker_codecs& operator=(const worker_codecs&) = delete;
 
     // `coding` is a compressing coding; identity has no encoder and throws
-    // std::logic_error.
+    // std::logic_error. The context returns nullopt only for its output budget,
+    // throws on codec failure, and remains reusable after either outcome.
     [[nodiscard]] http_content_encode_context& encoder(http_content_coding coding);
 
     // A fresh incremental encoder for `coding` (a compressing coding; identity

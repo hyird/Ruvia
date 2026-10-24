@@ -15,7 +15,6 @@ using ruvia::decode_http_content;
 using ruvia::encode_http_content;
 using ruvia::http_content_coding;
 using ruvia::http_content_encode_context;
-using ruvia::http_content_encode_error;
 
 namespace {
 
@@ -66,18 +65,16 @@ constexpr std::array compressing_codings{http_content_coding::gzip, http_content
 
 [[nodiscard]] std::string one_shot(http_content_coding coding, std::string_view input, std::size_t cap) {
     const auto result_value = encode_http_content(coding, input, {.max_encoded_bytes_ = cap});
-    const auto* encoded = std::get_if<std::pmr::string>(&result_value);
-    return encoded != nullptr ? std::string(*encoded) : std::string();
+    return result_value.has_value() ? std::string(*result_value) : std::string();
 }
 
 [[nodiscard]] std::optional<std::string> encode_with(http_content_encode_context& context,
     std::string_view input, std::size_t cap, std::pmr::memory_resource* output_resource = nullptr) {
     auto result_value = context.encode(input, {.max_encoded_bytes_ = cap, .resource_ = output_resource});
-    const auto* encoded = std::get_if<std::pmr::string>(&result_value);
-    if (encoded == nullptr) {
+    if (!result_value.has_value()) {
         return std::nullopt;
     }
-    return std::string(*encoded);
+    return std::string(*result_value);
 }
 
 }  // namespace
@@ -122,10 +119,10 @@ RUVIA_TEST(http_content_encode_context_keeps_state_apart_from_output) {
             {
                 auto result_value =
                     context.encode(input, {.max_encoded_bytes_ = input.size(), .resource_ = &output_resource});
-                RUVIA_CHECK(std::holds_alternative<std::pmr::string>(result_value));
+                RUVIA_CHECK(result_value.has_value());
                 RUVIA_CHECK(output_resource.live_bytes() != 0);
-                if (const auto* encoded = std::get_if<std::pmr::string>(&result_value)) {
-                    first.emplace(*encoded);
+                if (result_value.has_value()) {
+                    first.emplace(*result_value);
                 }
             }
             RUVIA_CHECK_EQ(output_resource.live_bytes(), 0U);
@@ -155,10 +152,7 @@ RUVIA_TEST(http_content_encode_context_resets_after_a_failed_encode) {
 
         // Stop mid-stream on the output cap.
         const auto capped = context.encode(failed_input, {.max_encoded_bytes_ = 64});
-        RUVIA_CHECK(std::holds_alternative<http_content_encode_error>(capped));
-        if (const auto* failure = std::get_if<http_content_encode_error>(&capped)) {
-            RUVIA_CHECK(*failure == http_content_encode_error::encoded_size_exceeded);
-        }
+        RUVIA_CHECK(!capped.has_value());
         RUVIA_CHECK(encode_with(context, next_input, next_input.size()) == expected);
 
         // Stop mid-stream on an output allocation failure.
@@ -205,6 +199,39 @@ RUVIA_TEST(http_content_encode_context_identity_follows_the_one_shot_contract) {
     http_content_encode_context context(http_content_coding::identity, &state_resource);
     RUVIA_CHECK(encode_with(context, "plain", 5) == std::optional<std::string>("plain"));
     const auto oversized = context.encode("plain", {.max_encoded_bytes_ = 4});
-    RUVIA_CHECK(std::holds_alternative<http_content_encode_error>(oversized));
+    RUVIA_CHECK(!oversized.has_value());
     RUVIA_CHECK_EQ(state_resource.allocations(), 0U);
+}
+
+RUVIA_TEST(http_content_encode_context_reuses_after_zero_and_exact_budgets) {
+    const auto input = sample_body(8'000, 31);
+    for (const auto coding : compressing_codings) {
+        http_content_encode_context context(coding, std::pmr::new_delete_resource());
+        const auto expected = encode_http_content(coding, input, {.max_encoded_bytes_ = input.size()});
+        RUVIA_CHECK(expected.has_value());
+        if (!expected.has_value()) {
+            continue;
+        }
+        RUVIA_CHECK(!context.encode({}, {.max_encoded_bytes_ = 0}).has_value());
+        RUVIA_CHECK(!context.encode(input, {.max_encoded_bytes_ = 0}).has_value());
+        const auto exact = context.encode(input, {.max_encoded_bytes_ = expected->size()});
+        RUVIA_CHECK(exact.has_value() && *exact == *expected);
+        RUVIA_CHECK(!context.encode(input, {.max_encoded_bytes_ = expected->size() - 1}).has_value());
+        RUVIA_CHECK(encode_with(context, input, input.size()) == std::string(*expected));
+    }
+}
+
+RUVIA_TEST(http_content_encode_context_unknown_coding_throws_without_allocating_state) {
+    counting_resource resource;
+    http_content_encode_context context(static_cast<http_content_coding>(255), &resource);
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        bool threw = false;
+        try {
+            static_cast<void>(context.encode("plain", {.max_encoded_bytes_ = 0}));
+        } catch (const ruvia::http_content_encode_error&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    }
+    RUVIA_CHECK_EQ(resource.allocations(), 0U);
 }

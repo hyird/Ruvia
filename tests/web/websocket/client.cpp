@@ -408,10 +408,11 @@ RUVIA_TEST(websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
 
     bool connected = false;
     const auto run_client = [&]() -> ruvia::task<void> {
+        const ruvia::http_header_view large_headers[]{{"X-Large", large_value}};
         ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
                                                               .host_ = "127.0.0.1",
                                                               .port_ = peer.local_endpoint().port(),
-                                                              .headers_ = {{"X-Large", large_value}}});
+                                                              .headers_ = large_headers});
         std::exception_ptr failure;
         try {
             co_await client.connect();

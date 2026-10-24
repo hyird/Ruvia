@@ -79,7 +79,7 @@ static std::variant<std::pmr::string, http_content_decode_error> decode_zlib_con
     }
 }
 
-std::variant<std::pmr::string, http_content_encode_error> encode_zlib_content(zlib_deflate_stream& deflater,
+std::optional<std::pmr::string> encode_zlib_content(zlib_deflate_stream& deflater,
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
     std::pmr::string output(http_pmr_resource_or_default(output_resource));
     auto& stream = deflater.native();
@@ -98,15 +98,13 @@ std::variant<std::pmr::string, http_content_encode_error> encode_zlib_content(zl
                 const auto status = deflate(&stream, Z_FINISH);
                 if (status != Z_OK && status != Z_STREAM_END) {
                     deflater.rethrow_allocation_failure();
+                    throw http_content_encode_error("zlib encoding failed");
                 }
                 if (status == Z_STREAM_END && stream.avail_out == 1) {
                     return output;
                 }
-                if (status == Z_MEM_ERROR) {
-                    return http_content_encode_error::encoder_failure;
-                }
             }
-            return http_content_encode_error::encoded_size_exceeded;
+            return std::nullopt;
         }
         const auto offset = output.size();
         const auto writable = std::min<std::size_t>(sizeof(buffer), max_encoded_bytes - offset);
@@ -121,24 +119,21 @@ std::variant<std::pmr::string, http_content_encode_error> encode_zlib_content(zl
         if (status == Z_STREAM_END) {
             return output;
         }
-        if (status == Z_MEM_ERROR) {
-            return http_content_encode_error::encoder_failure;
-        }
         if (status != Z_OK || (output.size() == offset && stream.avail_in == before_input)) {
-            return http_content_encode_error::encoder_failure;
+            throw http_content_encode_error("zlib encoding failed or made no progress");
         }
     }
 }
 
 namespace {
 
-[[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode_zlib_content(
+[[nodiscard]] std::optional<std::pmr::string> encode_zlib_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource, int window_bits) {
     auto* const state_resource = http_pmr_resource_or_default(resource);
     zlib_deflate_stream deflater(
         state_resource, Z_DEFAULT_COMPRESSION, window_bits, zlib_default_mem_level, Z_DEFAULT_STRATEGY);
     if (!deflater.initialized()) {
-        return http_content_encode_error::encoder_failure;
+        throw http_content_encode_error("zlib encoder initialization failed");
     }
     return encode_zlib_content(deflater, input, max_encoded_bytes, state_resource);
 }
@@ -155,12 +150,12 @@ std::variant<std::pmr::string, http_content_decode_error> decode_deflate_content
     return decode_zlib_content(input, max_decoded_bytes, resource, zlib_deflate_window_bits, false);
 }
 
-std::variant<std::pmr::string, http_content_encode_error> encode_gzip_content(
+std::optional<std::pmr::string> encode_gzip_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
     return encode_zlib_content(input, max_encoded_bytes, resource, zlib_gzip_window_bits);
 }
 
-std::variant<std::pmr::string, http_content_encode_error> encode_deflate_content(
+std::optional<std::pmr::string> encode_deflate_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
     return encode_zlib_content(input, max_encoded_bytes, resource, zlib_deflate_window_bits);
 }

@@ -344,10 +344,13 @@ std::string_view text = body_bytes.text();
 头文件：`"ruvia/web/websocket_client.h"`。
 参考示例：[examples/web/websocket_client.cpp](../examples/web/websocket_client.cpp)。
 
+`websocket_client_config::headers_` 与 `subprotocols_` 使用 `std::span<const T>`，借用数组以及元素中的文本；独立保存配置时，这些 owner 必须存活到构造入口消费完成。`websocket_client` 在构造返回前复制配置，之后不再依赖这些借用。`std::span` 本身不延长 owner 生命周期，也不防止所有悬垂。
+
 `ruvia::websocket_client` 绑定到指定的 `ruvia::event_loop`，支持通过 `websocket_client_protocol::http1`（HTTP/1.1 Upgrade）或 `websocket_client_protocol::http2`（HTTP/2 Extended CONNECT）发起连接：
 
 ```cpp
 #include "ruvia/web/websocket_client.h"
+#include <array>
 
 inline constexpr std::array<ruvia::borrowed_text, 1> subprotocols{"chat.v1"};
 ruvia::websocket_client_config config{

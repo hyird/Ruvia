@@ -182,7 +182,7 @@ std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
     return http_content_decode_error::unsupported_coding;
 }
 
-std::variant<std::pmr::string, http_content_encode_error> encode_http_content(
+std::optional<std::pmr::string> encode_http_content(
     http_content_coding coding, std::string_view input, http_content_encode_options options) {
     switch (coding) {
         case http_content_coding::brotli:
@@ -195,15 +195,15 @@ std::variant<std::pmr::string, http_content_encode_error> encode_http_content(
             return detail::encode_deflate_content(input, options.max_encoded_bytes_, options.resource_);
         case http_content_coding::identity:
             if (input.size() > options.max_encoded_bytes_) {
-                return http_content_encode_error::encoded_size_exceeded;
+                return std::nullopt;
             }
             return std::pmr::string(
                 input, detail::http_pmr_resource_or_default(options.resource_));
     }
-    return http_content_encode_error::encoder_failure;
+    throw http_content_encode_error("unsupported content coding");
 }
 
-std::variant<std::pmr::string, http_content_encode_error> encode_http_content(
+std::optional<std::pmr::string> encode_http_content(
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_encode_options options) {
     auto* const resource = detail::http_pmr_resource_or_default(options.resource_);
@@ -216,17 +216,16 @@ std::variant<std::pmr::string, http_content_encode_error> encode_http_content(
             continue;
         }
         auto stage = encode_http_content(coding, source_value, options);
-        auto* content = std::get_if<std::pmr::string>(&stage);
-        if (content == nullptr) {
-            return std::get<http_content_encode_error>(stage);
+        if (!stage.has_value()) {
+            return std::nullopt;
         }
-        current = std::move(*content);
+        current = std::move(*stage);
         source_value = current;
         encoded = true;
     }
     if (!encoded) {
         if (input.size() > options.max_encoded_bytes_) {
-            return http_content_encode_error::encoded_size_exceeded;
+            return std::nullopt;
         }
         current.assign(input);
     }

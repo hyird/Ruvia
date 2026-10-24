@@ -29,11 +29,13 @@ struct db_find_order final {
     db_nulls_order nulls_{db_nulls_order::default_value};
 };
 
+// span 及元素中的文本均为借用；repository 调用入口同步复制或导入。
+// 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_find_options final {
-    borrowed_slice<borrowed_text> select_{};
+    std::span<const borrowed_text> select_{};
     db_predicate where_{};
-    borrowed_slice<borrowed_text> relations_{};
-    borrowed_slice<db_find_order> order_{};
+    std::span<const borrowed_text> relations_{};
+    std::span<const db_find_order> order_{};
     std::optional<std::uint64_t> skip_{};
     std::optional<std::uint64_t> take_{};
     std::optional<db_lock_options> lock_{};
@@ -41,14 +43,16 @@ struct db_find_options final {
     bool with_deleted_{false};
 };
 
+// span 及元素中的文本均为借用；upsert 调用入口同步复制或导入。
+// 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_upsert_options final {
-    borrowed_slice<borrowed_text> conflict_paths_{};
-    borrowed_slice<borrowed_text> update_columns_{};
+    std::span<const borrowed_text> conflict_paths_{};
+    std::span<const borrowed_text> update_columns_{};
     bool do_nothing_{false};
     bool any_unique_key_{false};
     bool skip_update_if_no_values_changed_{false};
     db_predicate index_predicate_{};
-    borrowed_slice<db_assignment> update_expressions_{};
+    std::span<const db_assignment> update_expressions_{};
     db_predicate update_where_{};
 };
 

@@ -91,7 +91,7 @@ int main() {
             .listen({.address_ = "0.0.0.0", .http_ = 8083})
             .server({.worker_count_ = 2,
                 .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
-            .compression({})
+            .compression(ruvia::compression_config{})
             .document_root(std::move(document_root))
             .run();
     } catch (...) {

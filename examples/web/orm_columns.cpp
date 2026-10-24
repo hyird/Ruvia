@@ -65,7 +65,8 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     const auto updated = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(updated && updated->get<"total">() == 28, "computed UPDATE value differs");
     input.set<"quantity">(5);
-    co_await items.upsert(input, {.conflict_paths_ = {"id"}});
+    const borrowed_text conflict_paths[]{"id"};
+    co_await items.upsert(input, {.conflict_paths_ = conflict_paths});
     const auto retained = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(retained && retained->get<"total">() == 35, "computed UPSERT value differs");
 

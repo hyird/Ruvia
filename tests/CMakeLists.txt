@@ -88,6 +88,9 @@ if(RUVIA_BUILD_CORE)
         core/worker_resume.cpp
         core/worker_runtime.cpp
         support/test_main.cpp)
+    # 作用域任务的所有权转移必须在关闭可选拷贝消除时同样有效。
+    set_property(SOURCE core/scoped_operation.cpp APPEND PROPERTY COMPILE_OPTIONS
+        "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fno-elide-constructors>")
     ruvia_add_test(ruvia_asio_task ruvia::core SOURCES core/asio_task.cpp)
     ruvia_add_test(ruvia_event_loop_pool ruvia::core SOURCES core/runtime_worker.cpp)
     ruvia_add_test(ruvia_operation_deadline ruvia::core SOURCES core/operation_deadline.cpp)

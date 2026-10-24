@@ -187,21 +187,27 @@ struct db_source_column final {
     borrowed_text name_{};
     db_type_definition type_{};
 };
+// span 及元素中的文本均为借用；调用入口同步复制或导入。
+// 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_source_options final {
     bool lateral_{false};
     bool with_ordinality_{false};
-    borrowed_slice<db_source_column> columns_{};
+    std::span<const db_source_column> columns_{};
 };
+// span 及元素中的文本均为借用；with 入口同步复制或导入。
+// 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_cte_options final {
     bool recursive_{false};
     db_materialization materialization_{db_materialization::default_value};
-    borrowed_slice<borrowed_text> columns_{};
+    std::span<const borrowed_text> columns_{};
 };
+// span 及元素中的文本均为借用；lock/set_lock 入口同步复制或导入。
+// 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_lock_options final {
     db_row_lock mode_{db_row_lock::update};
     bool nowait_{false};
     bool skip_locked_{false};
-    borrowed_slice<borrowed_text> tables_{};
+    std::span<const borrowed_text> tables_{};
 };
 
 class db_query;
@@ -898,9 +904,11 @@ struct db_order_term final {
     db_order_direction direction_{db_order_direction::asc};
     db_nulls_order nulls_{db_nulls_order::default_value};
 };
+// span 及元素中的文本均为借用；over 调用入口同步复制或导入。
+// 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_window_options final {
-    borrowed_slice<db_expr> partition_by_{};
-    borrowed_slice<db_order_term> order_by_{};
+    std::span<const db_expr> partition_by_{};
+    std::span<const db_order_term> order_by_{};
     std::optional<db_window_frame_options> frame_{};
 };
 struct db_case_branch final {
@@ -946,11 +954,13 @@ struct db_assignment final {
     }
 };
 
+// span 及元素中的文本均为借用；on_conflict 调用入口同步复制或导入。
+// 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_conflict_options final {
-    borrowed_slice<borrowed_text> columns_{};
+    std::span<const borrowed_text> columns_{};
     borrowed_text constraint_{};
     db_expression target_where_{};
-    borrowed_slice<db_assignment> update_{};
+    std::span<const db_assignment> update_{};
     db_expression update_where_{};
     bool do_nothing_{false};
     // MariaDB matches any unique key. This explicit mode does not pretend to

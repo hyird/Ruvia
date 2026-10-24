@@ -36,6 +36,8 @@ enum class websocket_scheme : std::uint8_t {
 enum class websocket_client_protocol : std::uint8_t { http1,
     http2 };
 
+// span 及元素中的文本均为借用；websocket_client 构造返回前复制配置。
+// 独立保存 config 时，数组及文本 owner 必须存活到构造入口消费完成。
 struct websocket_client_config final {
     websocket_scheme scheme_{websocket_scheme::wss};
     websocket_client_protocol protocol_{websocket_client_protocol::http1};
@@ -43,8 +45,8 @@ struct websocket_client_config final {
     borrowed_text host_{};
     std::optional<std::uint16_t> port_{};
     borrowed_text target_{"/"};
-    borrowed_slice<http_header_view> headers_{};
-    borrowed_slice<borrowed_text> subprotocols_{};
+    std::span<const http_header_view> headers_{};
+    std::span<const borrowed_text> subprotocols_{};
     websocket_client_deflate_offer deflate_{};
     int compression_level_{6};
     std::size_t max_message_bytes_{default_max_websocket_message_bytes};

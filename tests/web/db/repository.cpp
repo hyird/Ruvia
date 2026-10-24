@@ -79,7 +79,8 @@ RUVIA_TEST(db_repository_projects_computed_dto_and_owns_expression_sources) {
                 {
                     db_query expressions(&source);
                     auto label = expressions.call("concat", {expressions.column("name", "i"), expressions.value(std::string(200, 'x'))});
-                    auto rank = expressions.over(expressions.call("row_number"), {.order_by_ = {{expressions.column("id", "i")}}});
+                    const db_order_term window_order[]{{expressions.column("id", "i")}};
+                    auto rank = expressions.over(expressions.call("row_number"), {.order_by_ = window_order});
                     builder.select({{"id"}, {"label", label}, {"rank", rank}});
                 }
                 RUVIA_CHECK_EQ(source.live_allocations(), std::size_t{0});
@@ -466,7 +467,8 @@ RUVIA_TEST(db_repository_rejects_unbounded_writes_and_missing_primary_key) {
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.update({}, changes); }));
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.delete_by({}); }));
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.remove(changes); }));
-        RUVIA_CHECK(testing::throws_on([&] { (void)repository.find({.order_ = {{"missing"}}}); }));
+        const db_find_order missing_order[]{{"missing"}};
+        RUVIA_CHECK(testing::throws_on([&] { (void)repository.find({.order_ = missing_order}); }));
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.increment({}, "id", 1); }));
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.increment(entity_type::column<"id">() == 1, "name", 1); }));
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.decrement(entity_type::column<"id">() == 1, "missing", 1); }));
@@ -474,7 +476,8 @@ RUVIA_TEST(db_repository_rejects_unbounded_writes_and_missing_primary_key) {
         batch[0].set<"id">(1);
         batch[0].set<"name">("new");
         batch[1].set<"id">(2);
-        RUVIA_CHECK(testing::throws_on([&] { (void)repository.upsert(batch, {.conflict_paths_ = {"id"}}); }));
+        const borrowed_text conflict_paths[]{"id"};
+        RUVIA_CHECK(testing::throws_on([&] { (void)repository.upsert(batch, {.conflict_paths_ = conflict_paths}); }));
         co_return;
     });
 }
@@ -488,7 +491,8 @@ RUVIA_TEST(db_repository_rejects_writes_that_only_target_computed_columns) {
         auto predicate = computed_entity_type::column<"id">() == 1;
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.update(predicate, changes); }));
         RUVIA_CHECK(testing::throws_on([&] { (void)repository.increment(predicate, "name_length", 1); }));
-        RUVIA_CHECK(testing::throws_on([&] { (void)repository.upsert(changes, {.update_columns_ = {"name_length"}}); }));
+        const borrowed_text update_columns[]{"name_length"};
+        RUVIA_CHECK(testing::throws_on([&] { (void)repository.upsert(changes, {.update_columns_ = update_columns}); }));
 
         computed_entity_type input;
         input.set<"id">(1);
@@ -520,10 +524,11 @@ RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_stora
             entity_type input;
             input.set<"id">(1);
             input.set<"name">(std::string(400, 'n'));
+            const borrowed_text conflict_paths[]{"id"};
             for (int i = 0; i < 12; ++i) {
                 if (config.driver_ == db_driver::postgresql) {
                     {
-                        const auto operation = repository.upsert(input, {.conflict_paths_ = {"id"},
+                        const auto operation = repository.upsert(input, {.conflict_paths_ = conflict_paths,
                                                                             .skip_update_if_no_values_changed_ = true,
                                                                             .index_predicate_ = entity_type::column<"name">().is_not_null()});
                     }
@@ -536,7 +541,6 @@ RUVIA_TEST(db_repository_conditional_upsert_owns_options_and_releases_cold_stora
             key_only_type key;
             key.set<"id">(1);
             {
-                const std::array<borrowed_text, 1> conflict_paths{"id"};
                 db_upsert_options options;
                 if (config.driver_ == db_driver::postgresql) {
                     options.conflict_paths_ = conflict_paths;
@@ -584,7 +588,8 @@ RUVIA_TEST(db_repository_builder_orders_entity_fields_and_owns_predicates) {
         RUVIA_CHECK_EQ(after_rejected_order.sql(), sql);
 
         auto locked = repository.query_builder("i");
-        locked.set_lock({.mode_ = db_row_lock::share, .nowait_ = true, .tables_ = {"i"}});
+        const borrowed_text lock_tables[]{"i"};
+        locked.set_lock({.mode_ = db_row_lock::share, .nowait_ = true, .tables_ = lock_tables});
         const auto lock_statement = locked.get_query_and_parameters();
         if (config.driver_ == db_driver::postgresql) {
             RUVIA_CHECK(lock_statement.sql().find("FOR SHARE OF \"i\" NOWAIT") != std::string_view::npos);
@@ -696,17 +701,19 @@ RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules)
                     (void)repository.upsert(input, db_upsert_options{.do_nothing_ = true, .any_unique_key_ = true});
                 }));
                 RUVIA_CHECK(testing::throws_on([&] {
-                    (void)repository.upsert(input, db_upsert_options{.conflict_paths_ = {"id"}});
+                    (void)repository.upsert(input, db_upsert_options{.conflict_paths_ = conflict_paths});
                 }));
                 RUVIA_CHECK(testing::throws_on([&] {
                     (void)repository.upsert(input, db_upsert_options{.any_unique_key_ = true, .skip_update_if_no_values_changed_ = true});
                 }));
             }
             RUVIA_CHECK(testing::throws_on([&] {
-                (void)repository.upsert(input, db_upsert_options{.conflict_paths_ = {"missing"}});
+                const borrowed_text missing_columns[]{"missing"};
+                (void)repository.upsert(input, db_upsert_options{.conflict_paths_ = missing_columns});
             }));
             RUVIA_CHECK(testing::throws_on([&] {
-                (void)repository.upsert(input, db_upsert_options{.update_columns_ = {"missing"}});
+                const borrowed_text missing_columns[]{"missing"};
+                (void)repository.upsert(input, db_upsert_options{.update_columns_ = missing_columns});
             }));
             co_return;
         });
@@ -801,7 +808,8 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
         dev.set<"updated_at">("2026-01-01T00:00:00Z");
 
         auto insert_dev = devices.insert_builder(dev);
-        insert_dev.on_conflict({.conflict_paths_ = {"id"}, .skip_update_if_no_values_changed_ = true}).returning();
+        const borrowed_text conflict_paths[]{"id"};
+        insert_dev.on_conflict({.conflict_paths_ = conflict_paths, .skip_update_if_no_values_changed_ = true}).returning();
         const auto insert_dev_sql = insert_dev.get_query_and_parameters();
         RUVIA_CHECK(insert_dev_sql.sql().find("protocol_address\") VALUES") == std::string_view::npos);
         RUVIA_CHECK(insert_dev_sql.sql().find("DO UPDATE SET \"name\" = excluded.\"name\"") != std::string_view::npos);
@@ -825,12 +833,14 @@ RUVIA_TEST(db_repository_builders_support_typed_joins_assignments_upserts_delete
                 {"updated_at", incoming.column("updated_at", "inc")},
             });
         auto pipeline = devices.insert_builder();
-        pipeline.with("incoming", incoming, {.columns_ = {"id", "name", "revision", "updated_at"}})
+        const borrowed_text cte_columns[]{"id", "name", "revision", "updated_at"};
+        const db_assignment update_expressions[]{trigger_populated_entity::column<"revision">().increment(1)};
+        pipeline.with("incoming", incoming, {.columns_ = cte_columns})
             .insert_from({"id", "name", "revision", "updated_at"}, from_cte)
             .on_conflict({
-                .conflict_paths_ = {"id"},
+                .conflict_paths_ = conflict_paths,
                 .skip_update_if_no_values_changed_ = true,
-                .update_expressions_ = {trigger_populated_entity::column<"revision">().increment(1)},
+                .update_expressions_ = update_expressions,
                 .update_where_ = trigger_populated_entity::column<"revision">() < 100,
             })
             .returning({{"id"}});
@@ -944,7 +954,9 @@ RUVIA_TEST(db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_jo
             "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING \"articles\".\"id\" AS \"id\"");
 
         auto ins_update = repo.insert_builder();
-        ins_update.values(item).on_conflict({.conflict_paths_ = {"id"}, .update_columns_ = {"title", "views"}}).returning({"id"});
+        const borrowed_text conflict_paths[]{"id"};
+        const borrowed_text update_columns[]{"title", "views"};
+        ins_update.values(item).on_conflict({.conflict_paths_ = conflict_paths, .update_columns_ = update_columns}).returning({"id"});
         const auto ins_update_sql = ins_update.get_query_and_parameters();
         RUVIA_CHECK_EQ(ins_update_sql.sql(),
             "INSERT INTO \"articles\" (\"id\", \"title\", \"views\") VALUES ($1, $2, $3) ON CONFLICT (\"id\") DO UPDATE SET \"title\" = excluded.\"title\", \"views\" = excluded.\"views\" RETURNING \"articles\".\"id\" AS \"id\"");

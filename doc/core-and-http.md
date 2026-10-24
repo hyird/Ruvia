@@ -85,7 +85,7 @@ pool.join();
 
 | 头文件 | 核心公开类型 / 函数 | 说明 |
 | --- | --- | --- |
-| `"ruvia/http/borrowed_text.h"` | `class borrowed_text final`、`template <typename T> class borrowed_slice final` | 只读字符串借用视图与只读连续切片视图，防止绑定临时拥有型对象导致的悬垂引用 |
+| `"ruvia/http/borrowed_text.h"` | `class borrowed_text final` | 只读字符串借用视图，拒绝直接绑定临时拥有型字符串，但不延长底层文本生命周期；集合 option 使用 `std::span<const T>` 借用连续存储，调用方必须保持存储有效直到消费入口完成读取或拥有化，`span` 本身不阻止悬垂 |
 | `"ruvia/http/http_io_buffer.h"` | `class http_io_buffer final` | PMR 流式读写缓冲区：`prepare(n)`、`commit(n)`、`append(bytes)`、`view()`、`consume(n)`、`clear_retaining_small()` |
 | `"ruvia/http/http_protocol_version.h"` / `"ruvia/http/http_known_method.h"` | `http_protocol_version`（`http10`, `http11`, `http2`）、`http_scheme`（`http`, `https`）、`http_known_method`、`classify_http_method`、`is_valid_http_method_token` | 协议版本、Scheme 与 HTTP 方法分类及幂等/安全性判断 |
 | `"ruvia/http/http_status.h"` | `class http_status_code final`、`namespace ruvia::http_status`、`http_reason_phrase` | 强类型 HTTP 状态码（`100..599`）与标准状态码常量（`http_status::ok`、`not_found` 等） |
@@ -114,9 +114,13 @@ pool.join();
 | --- | --- | --- |
 | `"ruvia/http/http_request.h"` / `"ruvia/http/http_request_trailers.h"` | `class http_request final`、`make_parsed_http_request`、`class http_request_trailers final` | 请求头与请求体零拷贝视图描述符、大小写不敏感首部/Cookie 查找与请求 Trailer 校验收集 |
 | `"ruvia/http/http_response.h"` / `"ruvia/http/http_interim_response.h"` | `class http_response final`、`class http_response_headers final`、`class http_interim_response_head final`、`plan_buffered_http_response_write` | 最终响应（`200..599`）与临时响应（`1xx`）模型，以及针对 `HEAD` / `204` / `205` / `304` 的响应体写计划 |
-| `"ruvia/http/http_content_coding.h"` / `"ruvia/http/http_content_codec.h"` / `"ruvia/http/http_content_encoder.h"` | `enum class http_content_coding { identity, gzip, deflate, brotli, zstd }`、`encode_http_content`、`decode_http_content`、`class http_content_encoder final` | 单次缓冲与流式增量的 `gzip` / `deflate` / `br` / `zstd` 内容压缩与带解压上限保护的解码器 |
+| `"ruvia/http/http_content_coding.h"` / `"ruvia/http/http_content_codec.h"` / `"ruvia/http/http_content_encoder.h"` | `enum class http_content_coding { identity, gzip, deflate, brotli, zstd }`、`encode_http_content`、`decode_http_content`、`class http_content_encode_context final`、`class http_content_encode_error final`、`class http_content_encoder final` | 单次缓冲、可复用缓冲上下文与流式增量的 `gzip` / `deflate` / `br` / `zstd` 内容压缩，以及带解压上限保护的解码器 |
 | `"ruvia/http/multipart_parser.h"` | `parse_multipart_boundary`、`parse_multipart_body`、`class multipart_parser final` | 一次性与流式增量（`feed` / `poll`）的 `multipart/form-data` 解析器 |
 | `"ruvia/http/sse.h"` | `struct sse_message final`、`format_sse_message` | Server-Sent Events 消息格式化与校验 |
+
+`encode_http_content` 的两个 overload 与 `http_content_encode_context::encode` 统一返回 `std::optional<std::pmr::string>`：有值表示完整编码成功，`std::nullopt` 只表示结果超过 `max_encoded_bytes_`；真实编码器故障抛出 `http_content_encode_error`，分配异常保留原始类型。预算为零只允许零字节表示；多 coding 按声明顺序编码，每个中间表示都受同一预算约束。输出使用 `options.resource_`；可复用上下文的状态使用构造时的资源，该资源必须覆盖上下文寿命，且上下文不可并发使用。成功、超预算或异常后上下文均可继续编码独立表示，不携带上一次的压缩历史。解码 API 和增量编码器保持各自的错误契约。
+
+Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常的“不划算”结果，仍回退 identity；真实故障沿现有失败边界记录并翻译，不作为预算结果忽略。静态根预压缩同样只略过不划算的表示，真实编码异常使构建或刷新失败，不发布不完整的新快照。
 
 ---
 

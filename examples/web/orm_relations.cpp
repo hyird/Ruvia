@@ -136,40 +136,44 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
             department row;
             row.set<"id">(id);
             row.set<"name">(name);
-            co_await departments.upsert(row, {.conflict_paths_ = {"id"}});
+            const borrowed_text conflict_paths[]{"id"};
+            co_await departments.upsert(row, {.conflict_paths_ = conflict_paths});
         }
         for (const auto [id, department_value, name] : {std::tuple{1LL, 1LL, "Alice"}, std::tuple{2LL, 1LL, "Bob"}, std::tuple{3LL, 2LL, "Carol"}}) {
             employee row;
             row.set<"id">(id);
             row.set<"department_id">(department_value);
             row.set<"name">(name);
-            co_await employees.upsert(row, {.conflict_paths_ = {"id"}});
+            const borrowed_text conflict_paths[]{"id"};
+            co_await employees.upsert(row, {.conflict_paths_ = conflict_paths});
         }
         profile profile;
         profile.set<"id">(1);
         profile.set<"display_name">("Demo user");
-        co_await profiles.upsert(profile, {.conflict_paths_ = {"id"}});
+        const borrowed_text conflict_paths[]{"id"};
+        co_await profiles.upsert(profile, {.conflict_paths_ = conflict_paths});
         user user;
         user.set<"id">(1);
         user.set<"profile_id">(1);
         user.set<"login">("demo");
-        co_await users.upsert(user, {.conflict_paths_ = {"id"}});
+        co_await users.upsert(user, {.conflict_paths_ = conflict_paths});
         for (const auto [id, title] : {std::pair{1LL, "Hydraulics"}, std::pair{2LL, "Controls"}}) {
             course course;
             course.set<"id">(id);
             course.set<"title">(title);
-            co_await courses.upsert(course, {.conflict_paths_ = {"id"}});
+            co_await courses.upsert(course, {.conflict_paths_ = conflict_paths});
             student student;
             student.set<"id">(id);
             student.set<"name">("Learner");
-            co_await students.upsert(student, {.conflict_paths_ = {"id"}});
+            co_await students.upsert(student, {.conflict_paths_ = conflict_paths});
         }
         auto memberships = db.handle().repository<student_course>();
+        const borrowed_text membership_conflict_paths[]{"student_id", "course_id"};
         for (const auto [student_id, course_id] : {std::pair{1LL, 1LL}, std::pair{1LL, 2LL}, std::pair{2LL, 2LL}}) {
             student_course membership;
             membership.set<"student_id">(student_id);
             membership.set<"course_id">(course_id);
-            co_await memberships.upsert(membership, {.conflict_paths_ = {"student_id", "course_id"}, .do_nothing_ = true});
+            co_await memberships.upsert(membership, {.conflict_paths_ = membership_conflict_paths, .do_nothing_ = true});
         }
         co_await query_example(db);
         const std::array<borrowed_text, 1> department_relations{"employees"};
@@ -179,7 +183,7 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
         if (department_page.size() != 1 || department_count != 2 || department_page[0].get<"employees">().size() != 2) {
             throw std::runtime_error("one-to-many pagination truncated the employees");
         }
-        auto department_value = co_await departments.find_one({.where_ = department::column<"id">() == 1, .relations_ = {"employees"}});
+        auto department_value = co_await departments.find_one({.where_ = department::column<"id">() == 1, .relations_ = department_relations});
         if (!department_value || department_value->get<"employees">().size() != 2) {
             throw std::runtime_error("findOne did not preserve the complete collection");
         }
@@ -193,8 +197,10 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
         if (co_await next_page.get_count() != 2) {
             throw std::runtime_error("relation count did not count root entities");
         }
-        auto user_rows = co_await users.find({.relations_ = {"profile"}});
-        auto profile_rows = co_await profiles.find({.relations_ = {"user"}});
+        const borrowed_text user_relations[]{"profile"};
+        const borrowed_text profile_relations[]{"user"};
+        auto user_rows = co_await users.find({.relations_ = user_relations});
+        auto profile_rows = co_await profiles.find({.relations_ = profile_relations});
         if (user_rows.size() != 1 || profile_rows.size() != 1 || user_rows[0].get<"profile">().get<"id">() != 1 || profile_rows[0].get<"user">().get<"id">() != 1) {
             throw std::runtime_error("one-to-one owning and inverse mapping failed");
         }
@@ -204,7 +210,8 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
         if (course_rows.size() != 1 || student_count != 2 || course_rows[0].get<"courses">().size() != 2) {
             throw std::runtime_error("many-to-many pagination truncated the courses");
         }
-        auto inverse_courses = co_await courses.find_one({.where_ = course::column<"id">() == 2, .relations_ = {"students"}});
+        const borrowed_text student_relations[]{"students"};
+        auto inverse_courses = co_await courses.find_one({.where_ = course::column<"id">() == 2, .relations_ = student_relations});
         if (!inverse_courses || inverse_courses->get<"students">().size() != 2) {
             throw std::runtime_error("inverse many-to-many mapping failed");
         }

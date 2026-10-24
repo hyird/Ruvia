@@ -492,13 +492,12 @@ RUVIA_TEST(web_request_decodes_content_coding_stacks_in_reverse_order) {
         ruvia::http_content_coding::deflate};
     const std::string plain(8192, 'm');
     auto encoded = ruvia::encode_http_content(codings, plain, {.max_encoded_bytes_ = plain.size()});
-    const auto* encoded_bytes = std::get_if<std::pmr::string>(&encoded);
-    RUVIA_CHECK(encoded_bytes != nullptr);
-    if (encoded_bytes == nullptr) {
+    RUVIA_CHECK(encoded.has_value());
+    if (!encoded.has_value()) {
         return;
     }
     (void)context_request_test::with_context(
-        ruvia::test_request::post("/").header("Content-Encoding", "gzip, deflate").body(*encoded_bytes),
+        ruvia::test_request::post("/").header("Content-Encoding", "gzip, deflate").body(*encoded),
         [&](ruvia::context& context_value) -> ruvia::task<void> {
             const auto body = co_await context_value.req().text();
             RUVIA_CHECK_EQ(body, std::string_view(plain));

@@ -81,7 +81,7 @@ std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
     }
 }
 
-std::variant<std::pmr::string, http_content_encode_error> encode_brotli_content(
+std::optional<std::pmr::string> encode_brotli_content(
     brotli_encoder_stream& encoder, std::string_view input,
     std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
     std::pmr::string output(http_pmr_resource_or_default(output_resource));
@@ -96,12 +96,12 @@ std::variant<std::pmr::string, http_content_encode_error> encode_brotli_content(
             &available_input, &next_input, &available_output, nullptr, nullptr);
         encoder.rethrow_allocation_failure();
         if (compressed != BROTLI_TRUE) {
-            return http_content_encode_error::encoder_failure;
+            throw http_content_encode_error("brotli encoding failed");
         }
         std::size_t produced = 0;
         const auto* bytes_value = BrotliEncoderTakeOutput(state_value, &produced);
         if (output.size() > max_encoded_bytes || produced > max_encoded_bytes - output.size()) {
-            return http_content_encode_error::encoded_size_exceeded;
+            return std::nullopt;
         }
         // The borrowed block expires on the next encoder call. Copy it directly
         // into the result before checking or advancing the encoder state.
@@ -112,17 +112,17 @@ std::variant<std::pmr::string, http_content_encode_error> encode_brotli_content(
             return output;
         }
         if (produced == 0 && available_input == before_input) {
-            return http_content_encode_error::encoder_failure;
+            throw http_content_encode_error("brotli encoder made no progress");
         }
     }
 }
 
-std::variant<std::pmr::string, http_content_encode_error> encode_brotli_content(
+std::optional<std::pmr::string> encode_brotli_content(
     std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
     auto* const state_resource = http_pmr_resource_or_default(resource);
     brotli_encoder_stream encoder(state_resource);
     if (!encoder.initialized()) {
-        return http_content_encode_error::encoder_failure;
+        throw http_content_encode_error("brotli encoder initialization failed");
     }
     return encode_brotli_content(encoder, input, max_encoded_bytes, state_resource);
 }

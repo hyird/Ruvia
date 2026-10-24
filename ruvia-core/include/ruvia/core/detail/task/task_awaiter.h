@@ -30,7 +30,13 @@ template <typename t_type>
 class task_awaiter final {
 public:
     explicit task_awaiter(task<t_type>&& task_value)
-        : task_(take_ready_to_start(std::move(task_value))) {}
+        : task_(take_ready_to_start(std::move(task_value))) {
+        // Enter running only after the final owner has received the cold task;
+        // optional return-value elision must not decide whether a move is legal.
+        if (task_.registration_.scoped()) {
+            task_.registration_.start();
+        }
+    }
 
     [[nodiscard]] bool await_ready() const noexcept {
         return task_.handle_.done();
@@ -54,24 +60,10 @@ public:
         return task_.handle_.promise().result();
     }
 
-    // Scoped owners must release frame-held parameters before publishing
-    // completion. Ordinary task awaiting still retains its frame until this
-    // awaiter is destroyed; only a completed frame may be retired explicitly.
-    void retire_completed_frame() noexcept {
-        if (task_.handle_ != nullptr && !task_.handle_.done()) {
-            std::terminate();
-        }
-        task_.reset();
-    }
-
 private:
     [[nodiscard]] static task<t_type> take_ready_to_start(task<t_type>&& task_value) {
         task_value.prepare_direct_start();
-        task<t_type> moved(std::move(task_value));
-        if (moved.registration_.scoped()) {
-            moved.registration_.start();
-        }
-        return moved;
+        return std::move(task_value);
     }
 
     task<t_type> task_;

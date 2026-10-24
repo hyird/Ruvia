@@ -133,6 +133,8 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 
 `db_query` 可脱离数据库连接独立构建并编译为目标方言的参数化语句（`auto stmt = query.compile(driver, resource);`，再通过 `db.query(stmt.sql(), stmt.params())` 执行）：
 
+`db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `std::span<const T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样借用集合及元素中的文本。请使用具名 `const std::array` 或 C 数组保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。`std::span` 不拥有元素，不延长生命周期，也不能阻止所有悬垂。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
+
 - **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`（Upsert；MariaDB 仅支持 `.any_unique_key_` 的 `ON DUPLICATE KEY UPDATE`，`excluded(col)` 编译为 `VALUES(col)`）、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
 - **表达式**：`column`、`value`、`excluded`、`call`、`coalesce`、`null_if`、`greatest`、`least`、`case_when`、`cast`、`aggregate`、`filter`、`over`（窗口函数）、`exists`、`subquery`。

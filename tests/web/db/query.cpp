@@ -76,7 +76,11 @@ RUVIA_TEST(db_query_nested_ctes_are_owned_and_use_one_parameter_sequence) {
         db_query incoming;
         const std::array row{incoming.value(db_value(7)), incoming.value(db_value("first"))};
         incoming.values(row);
-        query.with("incoming", incoming, {.materialization_ = db_materialization::materialized, .columns_ = {"id", "name"}});
+        std::string column_name = "name";
+        const borrowed_text columns[]{"id", column_name};
+        const db_cte_options options{.materialization_ = db_materialization::materialized, .columns_ = columns};
+        query.with("incoming", incoming, options);
+        column_name.assign("gone");
         incoming.values(row);
     }
     db_query filter;
@@ -354,7 +358,9 @@ RUVIA_TEST(db_query_window_aggregate_filter_and_lateral_source) {
     db_query query;
     auto ts = query.column("ts", "e");
     auto id = query.column("id", "e");
-    auto rank = query.over(query.call("row_number"), {.partition_by_ = {id}, .order_by_ = {{ts, db_order_direction::desc}}});
+    const db_expr partitions[]{id};
+    const db_order_term window_order[]{{ts, db_order_direction::desc}};
+    auto rank = query.over(query.call("row_number"), {.partition_by_ = partitions, .order_by_ = window_order});
     const std::array args{id};
     const std::array order{db_order_term{ts, db_order_direction::asc}};
     auto aggregate = query.filter(query.aggregate("array_agg", args, false, order), query.unary(db_unary_operator::is_not_null, id));
@@ -426,8 +432,8 @@ RUVIA_TEST(db_query_native_functions_and_identifier_quoting_are_dialect_safe) {
     const auto name = query.column("name", "s");
     const auto count = query.aggregate("count", {query.star()});
     const auto sum = query.aggregate("sum", {amount});
-    const auto row_number = query.over(query.call("row_number"),
-        {.order_by_ = {{query.column("id", "s"), db_order_direction::asc}}});
+    const db_order_term window_order[]{{query.column("id", "s"), db_order_direction::asc}};
+    const auto row_number = query.over(query.call("row_number"), {.order_by_ = window_order});
     const auto scalar = query.call("lower", {name});
     query.select({count, sum, row_number, scalar}).from("sales", "s");
 
@@ -526,9 +532,10 @@ RUVIA_TEST(db_query_dml_sources_distinct_and_query_joins_compile) {
 
     db_query function_source;
     const auto function = function_source.call("jsonb_each", {function_source.column("payload")});
+    const db_source_column function_columns[]{{.name_ = "key"}, {.name_ = "value"}};
     function_source.select(function_source.star("kv"))
         .from_function(function, "kv",
-            {.lateral_ = true, .with_ordinality_ = true, .columns_ = {{.name_ = "key"}, {.name_ = "value"}}});
+            {.lateral_ = true, .with_ordinality_ = true, .columns_ = function_columns});
     const auto function_statement = function_source.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK(function_statement.sql().find(
                     "FROM LATERAL \"jsonb_each\"(\"payload\") WITH ORDINALITY AS \"kv\" (\"key\", \"value\")") != std::string_view::npos);
@@ -542,7 +549,9 @@ RUVIA_TEST(db_query_bulk_upsert_conditions_and_returning) {
     const std::array second{query.value(db_value(8)), query.default_value()};
     query.values(first).values(second);
     const auto revision = query.column("revision", "excluded");
-    query.on_conflict({.columns_ = {"id"}, .update_ = {{"revision", revision}}, .update_where_ = query.binary(revision, op_type::greater, query.column("revision", "d"))});
+    const borrowed_text conflict_columns[]{"id"};
+    const db_assignment updates[]{{"revision", revision}};
+    query.on_conflict({.columns_ = conflict_columns, .update_ = updates, .update_where_ = query.binary(revision, op_type::greater, query.column("revision", "d"))});
     const std::array returned{query.column("id")};
     query.returning(returned);
     const auto statement = query.compile(db_driver::postgresql, nullptr);
@@ -557,7 +566,8 @@ RUVIA_TEST(db_query_mariadb_returning_on_insert_and_delete_but_not_update) {
     upsert.insert_into("device", columns);
     const std::array row{upsert.value(db_value(7)), upsert.value(db_value(2))};
     upsert.values(row);
-    upsert.on_conflict({.update_ = {{"revision", upsert.excluded("revision")}}, .any_unique_key_ = true});
+    const db_assignment updates[]{{"revision", upsert.excluded("revision")}};
+    upsert.on_conflict({.update_ = updates, .any_unique_key_ = true});
     const std::array returned{upsert.column("id"), upsert.alias(upsert.column("revision"), "rev")};
     upsert.returning(returned);
     const auto inserted = upsert.compile(db_driver::mariadb, nullptr);
@@ -990,7 +1000,8 @@ RUVIA_TEST(db_query_clause_source_and_join_methods_cover_state_and_dialect_rules
     db_query derived;
     derived.select(derived.column("id")).from("cq_source");
     db_query source_options;
-    source_options.select(source_options.star("d")).from(derived, "d", {.columns_ = {{.name_ = "id"}}});
+    const db_source_column derived_columns[]{{.name_ = "id"}};
+    source_options.select(source_options.star("d")).from(derived, "d", {.columns_ = derived_columns});
     const auto source_statement = source_options.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK(source_statement.sql().find("FROM (SELECT \"id\" FROM \"cq_source\") AS \"d\" (\"id\")") != std::string_view::npos);
     const auto maria_source_statement = source_options.compile(db_driver::mariadb, nullptr);
@@ -998,10 +1009,11 @@ RUVIA_TEST(db_query_clause_source_and_join_methods_cover_state_and_dialect_rules
 
     db_query record_source;
     const auto record_function = record_source.call("jsonb_to_record", {record_source.value(R"({"id":1})")});
+    const db_source_column record_columns[]{{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}},
+        {.name_ = "name", .type_ = {.data_type_ = db_data_type::varchar, .length_ = 8}}};
     record_source.select(record_source.star("r"))
         .from_function(record_function, "r",
-            {.columns_ = {{.name_ = "id", .type_ = {.data_type_ = db_data_type::integer}},
-                 {.name_ = "name", .type_ = {.data_type_ = db_data_type::varchar, .length_ = 8}}}});
+            {.columns_ = record_columns});
     const auto record_statement = record_source.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK(record_statement.sql().find("AS \"r\" (\"id\" INTEGER, \"name\" VARCHAR(8))") != std::string_view::npos);
     RUVIA_CHECK(testing::throws_on([&] { (void)record_source.compile(db_driver::mariadb, nullptr); }));
@@ -1065,7 +1077,8 @@ RUVIA_TEST(db_query_dml_and_conflict_overloads_cover_postgresql_and_mariadb) {
 
     db_query do_nothing;
     do_nothing.insert_into("cq_devices", {"id", "name"}).values({do_nothing.value(1), do_nothing.value("x")});
-    do_nothing.on_conflict({.columns_ = {"id"}, .do_nothing_ = true});
+    const borrowed_text conflict_columns[]{"id"};
+    do_nothing.on_conflict({.columns_ = conflict_columns, .do_nothing_ = true});
     RUVIA_CHECK(compile_sql([&] { return do_nothing.compile(db_driver::postgresql, nullptr); }).find("ON CONFLICT (\"id\") DO NOTHING") != std::string_view::npos);
 
     db_query constraint;
@@ -1076,7 +1089,8 @@ RUVIA_TEST(db_query_dml_and_conflict_overloads_cover_postgresql_and_mariadb) {
     db_query targeted;
     targeted.insert_into("cq_devices", {"id", "name"}).values({targeted.value(1), targeted.value("x")});
     const auto active = targeted.binary(targeted.column("active"), op_type::equal, targeted.value(true));
-    targeted.on_conflict({.columns_ = {"id"}, .target_where_ = active, .update_ = {{"name", targeted.excluded("name")}}, .update_where_ = targeted.binary(targeted.column("name"), op_type::not_equal, targeted.excluded("name"))});
+    const db_assignment targeted_updates[]{{"name", targeted.excluded("name")}};
+    targeted.on_conflict({.columns_ = conflict_columns, .target_where_ = active, .update_ = targeted_updates, .update_where_ = targeted.binary(targeted.column("name"), op_type::not_equal, targeted.excluded("name"))});
     const auto targeted_statement = targeted.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK(targeted_statement.sql().find("ON CONFLICT (\"id\") WHERE (\"active\" = $3) DO UPDATE SET") != std::string_view::npos);
     RUVIA_CHECK(targeted_statement.sql().find("WHERE (\"name\" <> ") != std::string_view::npos);
@@ -1085,14 +1099,15 @@ RUVIA_TEST(db_query_dml_and_conflict_overloads_cover_postgresql_and_mariadb) {
 
     db_query maria_upsert;
     maria_upsert.insert_into("cq_devices", {"id", "name"}).values({maria_upsert.value(1), maria_upsert.value("x")});
-    maria_upsert.on_conflict({.update_ = {{"name", maria_upsert.excluded("name")}}, .any_unique_key_ = true});
+    const db_assignment maria_updates[]{{"name", maria_upsert.excluded("name")}};
+    maria_upsert.on_conflict({.update_ = maria_updates, .any_unique_key_ = true});
     const auto maria_statement = maria_upsert.compile(db_driver::mariadb, nullptr);
     RUVIA_CHECK(maria_statement.sql().find("ON DUPLICATE KEY UPDATE \"name\"") == std::string_view::npos);
     RUVIA_CHECK(maria_statement.sql().find("ON DUPLICATE KEY UPDATE `name` = VALUES(`name`)") != std::string_view::npos);
     RUVIA_CHECK(testing::throws_on([&] { (void)maria_upsert.compile(db_driver::postgresql, nullptr); }));
     db_query invalid_conflict;
     invalid_conflict.insert_into("cq_devices", {"id"}).values({invalid_conflict.value(1)});
-    invalid_conflict.on_conflict({.columns_ = {"id"}, .constraint_ = "other", .do_nothing_ = true});
+    invalid_conflict.on_conflict({.columns_ = conflict_columns, .constraint_ = "other", .do_nothing_ = true});
     RUVIA_CHECK(testing::throws_on([&] { (void)invalid_conflict.compile(db_driver::postgresql, nullptr); }));
 
     db_query update;
@@ -1143,7 +1158,8 @@ RUVIA_TEST(db_query_lock_cte_and_set_operation_enumerations_cover_supported_and_
         }
     }
     db_query scoped_lock;
-    scoped_lock.select(scoped_lock.star("d")).from("cq_devices", "d").lock({.mode_ = db_row_lock::update, .nowait_ = true, .tables_ = {"d"}});
+    const borrowed_text lock_tables[]{"d"};
+    scoped_lock.select(scoped_lock.star("d")).from("cq_devices", "d").lock({.mode_ = db_row_lock::update, .nowait_ = true, .tables_ = lock_tables});
     RUVIA_CHECK(compile_sql([&] { return scoped_lock.compile(db_driver::postgresql, nullptr); }).find("FOR UPDATE OF \"d\" NOWAIT") != std::string_view::npos);
     db_query skip_locked;
     skip_locked.select(skip_locked.star()).from("cq_devices").lock({.skip_locked_ = true});
@@ -1160,7 +1176,8 @@ RUVIA_TEST(db_query_lock_cte_and_set_operation_enumerations_cover_supported_and_
     db_query cte_body;
     cte_body.select(cte_body.value(1)).from("cq_seed");
     db_query recursive;
-    recursive.with("numbers", cte_body, {.recursive_ = true, .materialization_ = db_materialization::not_materialized, .columns_ = {"n"}})
+    const borrowed_text cte_columns[]{"n"};
+    recursive.with("numbers", cte_body, {.recursive_ = true, .materialization_ = db_materialization::not_materialized, .columns_ = cte_columns})
         .select(recursive.column("n"))
         .from("numbers");
     const auto recursive_statement = recursive.compile(db_driver::postgresql, nullptr);
@@ -1768,10 +1785,12 @@ RUVIA_TEST(db_expr_and_db_tuple_compose_without_external_query) {
         alert_entity::column<"device_id">().to_expr().cast(db_data_type::text),
         {alert_entity::column<"observed_at_ms">().to_expr().desc()})
                                   .filter(alert_entity::column<"observed_at_ms">() > 0);
+    const db_expr window_partitions[]{alert_entity::column<"device_id">()};
+    const db_order_term window_order[]{alert_entity::column<"observed_at_ms">().to_expr().asc()};
     const auto windowed = db_expr::call("lag", {alert_entity::column<"observed_at_ms">()})
                               .over({
-                                  .partition_by_ = {alert_entity::column<"device_id">()},
-                                  .order_by_ = {alert_entity::column<"observed_at_ms">().to_expr().asc()},
+                                  .partition_by_ = window_partitions,
+                                  .order_by_ = window_order,
                               });
     const auto bracket_where =
         ((alert_entity::column<"observed_at_ms">() > 100) &&

@@ -106,9 +106,10 @@ task<void> demonstrate(db_client& db) {
 
     db_query expressions;
     auto summary = devices.query_builder("d");
+    const db_order_term summary_order[]{{expressions.column("id", "d")}};
     summary.select({{"id"},
         {"label", expressions.call("upper", {expressions.column("name", "d")})},
-        {"rank", expressions.over(expressions.call("row_number"), {.order_by_ = {{expressions.column("id", "d")}}})}});
+        {"rank", expressions.over(expressions.call("row_number"), {.order_by_ = summary_order})}});
     const auto summaries = co_await summary.get_many<device_summary>();
     for (const auto& item : summaries) {
         std::cout << item.get<"rank">() << ": " << item.get<"label">() << '\n';

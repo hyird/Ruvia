@@ -113,7 +113,7 @@ int main() {
                 },
         });
         if (env_value.get<bool>("RUVIA_GZIP").value_or(false)) {
-            app.compression({});
+            app.compression(ruvia::compression_config{});
         }
         if (env_value.get<bool>("RUVIA_CORS").value_or(false)) {
             app.cors({

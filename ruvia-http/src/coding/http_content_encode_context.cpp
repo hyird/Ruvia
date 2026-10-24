@@ -29,7 +29,7 @@ struct http_content_encode_context::state final {
         return std::visit([](auto& stream) { return stream.reset(); }, stream_);
     }
 
-    [[nodiscard]] std::variant<std::pmr::string, http_content_encode_error> encode(
+    [[nodiscard]] std::optional<std::pmr::string> encode(
         std::string_view input, http_content_encode_options options) {
         if (auto* deflater = std::get_if<detail::zlib_deflate_stream>(&stream_)) {
             return detail::encode_zlib_content(*deflater, input, options.max_encoded_bytes_, options.resource_);
@@ -60,7 +60,7 @@ http_content_encode_context::~http_content_encode_context() {
     detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, state_, resource_);
 }
 
-std::variant<std::pmr::string, http_content_encode_error> http_content_encode_context::encode(
+std::optional<std::pmr::string> http_content_encode_context::encode(
     std::string_view input, http_content_encode_options options) {
     switch (coding_) {
         case http_content_coding::gzip:
@@ -70,7 +70,7 @@ std::variant<std::pmr::string, http_content_encode_error> http_content_encode_co
         case http_content_coding::brotli: {
             detail::brotli_encoder_stream encoder(resource_);
             if (!encoder.initialized()) {
-                return http_content_encode_error::encoder_failure;
+                throw http_content_encode_error("brotli encoder initialization failed");
             }
             return detail::encode_brotli_content(encoder, input, options.max_encoded_bytes_, options.resource_);
         }
@@ -84,7 +84,7 @@ std::variant<std::pmr::string, http_content_encode_error> http_content_encode_co
             detail::http_resolved_pmr_resource_tag{}, resource_, coding_, resource_);
         if (!created->initialized()) {
             detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, created, resource_);
-            return http_content_encode_error::encoder_failure;
+            throw http_content_encode_error("content encoder initialization failed");
         }
         state_ = created;
     }
