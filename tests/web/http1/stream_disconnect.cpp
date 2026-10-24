@@ -137,61 +137,59 @@ bool wait_until(predicate ready, std::chrono::milliseconds timeout = 2s) {
     return ready();
 }
 
-// 非阻塞客户端给每个读取设置独立截止时间，回归失败不会挂住整个测试进程。
+// 异步客户端给每次 I/O 设置独立截止时间，回归失败不会挂住测试进程。
 class peer final {
 public:
     peer(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, bool tls)
-        : context_(asio::ssl::context::tls_client),
+        : io_(io),
+          context_(asio::ssl::context::tls_client),
           stream_(io, context_),
           tls_(tls) {
         context_.set_verify_mode(asio::ssl::verify_none);
         bool connected = false;
         asio::error_code connect_error;
-        io.restart();
         stream_.next_layer().async_connect(endpoint, [&](const asio::error_code& ec) {
             connect_error = ec;
             connected = true;
         });
-        io.run_for(2s);
-        if (!connected) {
-            asio::error_code ignored;
-            stream_.next_layer().close(ignored);
-            io.restart();
-            io.run();
+        if (!wait_for_completion(connected, 2s)) {
             throw std::runtime_error("disconnect test connect timed out");
         }
         if (connect_error) {
             throw std::system_error(connect_error);
         }
-        stream_.next_layer().non_blocking(true);
         if (tls_) {
-            const auto deadline = clock_type::now() + 2s;
-            for (;;) {
-                asio::error_code ec;
-                stream_.handshake(asio::ssl::stream_base::client, ec);
-                if (!ec) {
-                    break;
-                }
-                if (!retry(ec) || clock_type::now() >= deadline) {
-                    throw std::system_error(ec);
-                }
-                std::this_thread::sleep_for(1ms);
+            bool handshaken = false;
+            asio::error_code handshake_error;
+            stream_.async_handshake(asio::ssl::stream_base::client, [&](asio::error_code ec) {
+                handshake_error = ec;
+                handshaken = true;
+            });
+            if (!wait_for_completion(handshaken, 2s)) {
+                throw std::runtime_error("disconnect test TLS handshake timed out");
+            }
+            if (handshake_error) {
+                throw std::system_error(handshake_error);
             }
         }
     }
     void send(std::string_view bytes) {
-        const auto deadline = clock_type::now() + 2s;
-        while (!bytes.empty()) {
-            asio::error_code ec;
-            const auto n = tls_ ? stream_.write_some(asio::buffer(bytes), ec)
-                                : stream_.next_layer().write_some(asio::buffer(bytes), ec);
-            bytes.remove_prefix(n);
-            if (ec && (!retry(ec) || clock_type::now() >= deadline)) {
-                throw std::system_error(ec);
-            }
-            if (ec) {
-                std::this_thread::sleep_for(1ms);
-            }
+        bool written = false;
+        asio::error_code error;
+        const auto complete = [&](asio::error_code ec, std::size_t) {
+            error = ec;
+            written = true;
+        };
+        if (tls_) {
+            asio::async_write(stream_, asio::buffer(bytes), complete);
+        } else {
+            asio::async_write(stream_.next_layer(), asio::buffer(bytes), complete);
+        }
+        if (!wait_for_completion(written, 2s)) {
+            throw std::runtime_error("disconnect test write timed out");
+        }
+        if (error) {
+            throw std::system_error(error);
         }
     }
     std::string read_until(std::string_view marker, std::chrono::milliseconds timeout = 2s) {
@@ -200,17 +198,26 @@ public:
         const auto deadline = clock_type::now() + timeout;
         while (clock_type::now() < deadline) {
             asio::error_code ec;
-            const auto n = tls_ ? stream_.read_some(asio::buffer(bytes), ec)
-                                : stream_.next_layer().read_some(asio::buffer(bytes), ec);
+            std::size_t n = 0;
+            bool read = false;
+            const auto complete = [&](asio::error_code error, std::size_t count) {
+                ec = error;
+                n = count;
+                read = true;
+            };
+            if (tls_) {
+                stream_.async_read_some(asio::buffer(bytes), complete);
+            } else {
+                stream_.next_layer().async_read_some(asio::buffer(bytes), complete);
+            }
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - clock_type::now());
+            const bool completed = wait_for_completion(read, std::max(remaining, 0ms));
             output.append(bytes.data(), n);
             if (!marker.empty() && output.find(marker) != std::string::npos) {
                 return output;
             }
-            if (ec && !retry(ec)) {
+            if (!completed || ec) {
                 return output;
-            }
-            if (ec) {
-                std::this_thread::sleep_for(1ms);
             }
         }
         return output;
@@ -226,13 +233,17 @@ public:
     }
     void close(bool notify = false, bool reset = false) {
         if (notify && tls_) {
-            // 非阻塞 shutdown 会发送 close_notify，但不等待对端的关闭通知。
             asio::error_code ec;
-            stream_.shutdown(ec);
+            bool shutdown = false;
+            stream_.async_shutdown([&](asio::error_code error) {
+                ec = error;
+                shutdown = true;
+            });
+            const bool completed = wait_for_completion(shutdown, 2s);
             if ((SSL_get_shutdown(stream_.native_handle()) & SSL_SENT_SHUTDOWN) == 0) {
                 throw std::runtime_error("TLS close_notify was not sent");
             }
-            if (ec && !retry(ec) && ec != asio::error::eof && ec != asio::ssl::error::stream_truncated) {
+            if (completed && ec && ec != asio::error::eof && ec != asio::ssl::error::stream_truncated) {
                 throw std::system_error(ec);
             }
         }
@@ -244,9 +255,20 @@ public:
     }
 
 private:
-    static bool retry(const asio::error_code& ec) {
-        return ec == asio::error::would_block || ec == asio::error::try_again;
+    bool wait_for_completion(bool& completed, std::chrono::milliseconds timeout) {
+        io_.restart();
+        io_.run_for(timeout);
+        if (completed) {
+            return true;
+        }
+        // 关闭后排完组合操作，回调和借用缓冲都先于本次调用返回而退役。
+        asio::error_code ignored;
+        stream_.next_layer().close(ignored);
+        io_.restart();
+        io_.run();
+        return false;
     }
+    asio::io_context& io_;
     asio::ssl::context context_;
     asio::ssl::stream<asio::ip::tcp::socket> stream_;
     bool tls_;

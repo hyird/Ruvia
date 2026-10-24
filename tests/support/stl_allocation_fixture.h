@@ -16,8 +16,9 @@ inline constexpr bool stl_moves_allocate_debug_metadata = false;
 [[nodiscard]] inline bool should_inject_stl_allocation_failure(std::size_t successful_allocations) noexcept {
     if constexpr (stl_moves_allocate_debug_metadata) {
         return successful_allocations == 0;
+    } else {
+        return true;
     }
-    return true;
 }
 
 }  // namespace ruvia::test
