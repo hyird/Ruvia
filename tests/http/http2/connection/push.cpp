@@ -423,7 +423,7 @@ RUVIA_TEST(http2_push_allocation_failure_preserves_the_parent_and_is_retryable) 
             const auto wire = ruvia::testing::drain_output(server);
             // 调试 STL 的 noexcept 事件移动也分配代理。此时验证首次分配失败
             // 和无故障重试；其他构建继续遍历所有分配失败位置。
-            if (!ruvia::test::stl_moves_allocate_debug_metadata || failure_index == 0) {
+            if (ruvia::test::should_inject_stl_allocation_failure(failure_index)) {
                 resource.fail_after(failure_index);
             }
             bool failed = false;

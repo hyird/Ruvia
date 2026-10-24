@@ -328,9 +328,10 @@ RUVIA_TEST(http_client_many_response_fields_retry_every_allocation_failure_witho
 
     for (std::size_t phase = 0; phase < wires.size(); ++phase) {
         for (std::size_t fail_after = 0; fail_after <= allocation_counts[phase]; ++fail_after) {
-            if (ruvia::test::stl_moves_allocate_debug_metadata &&
-                fail_after != 0 && fail_after != allocation_counts[phase]) {
-                continue;
+            if constexpr (ruvia::test::stl_moves_allocate_debug_metadata) {
+                if (fail_after != 0 && fail_after != allocation_counts[phase]) {
+                    continue;
+                }
             }
             failing_memory_resource memory;
             {
