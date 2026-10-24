@@ -1,3 +1,7 @@
+#include <chrono>
+#include <memory>
+#include <memory_resource>
+
 #include "ruvia/core/memory/pmr_object.h"
 
 #include "server/http_server_options_validation.h"
@@ -10,13 +14,18 @@ validated_http_server_configuration::validated_http_server_configuration(
     : listeners_(process_resource()),
       options_(std::move(options)) {
     listeners_.reserve(listeners.size());
+    // Every listener's key epochs start together, so all workers rotate them
+    // at the same instants.
+    const auto key_origin = std::chrono::steady_clock::now();
     for (const auto& listener : listeners) {
         auto& validated = listeners_.emplace_back(listener.clone(listeners_.get_allocator().resource()));
-        // One ticket key set per TLS listener for this configuration, so TLS
+        // One ticket key ring per TLS listener for this configuration, so TLS
         // resumption does not depend on which worker accepts the connection.
         // Credentials were loaded once by listen(); every worker installs them.
         if (auto* tls = std::get_if<http_server_listener_definition::tls>(&validated.transport_)) {
-            tls->session_ticket_keys_ = tls_session_ticket_keys::generate();
+            tls->session_ticket_keys_ = std::allocate_shared<tls_session_ticket_key_ring>(
+                std::pmr::polymorphic_allocator<tls_session_ticket_key_ring>(listeners_.get_allocator().resource()),
+                key_origin);
         }
     }
 }

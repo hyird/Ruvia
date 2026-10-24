@@ -1,14 +1,17 @@
 #include "server/worker_connections.h"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cerrno>
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -21,11 +24,13 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/socket_base.hpp>
 #include <asio/ssl.hpp>
+#include <openssl/evp.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/socket.h"
+#include "ruvia/core/timer.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/http/http_ascii.h"
 
@@ -38,6 +43,7 @@
 #include "server/http_server_tls_handshake.h"
 #include "server/http_server_tls_identity.h"
 #include "server/windows_accept_domain.h"
+#include "tls/tls_protocol_policy.h"
 #include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
@@ -92,18 +98,73 @@ void configure_listener_address(asio::ip::tcp::acceptor& socket) {
 
 int select_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length,
     const unsigned char* in, unsigned int in_length, void*) noexcept {
+    // Every HTTP version this server speaks over TLS, in preference order;
+    // RFC 7301 §3.2 reserves the alert for offers naming none of them.
     static constexpr unsigned char protocols[] = {
-        2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
+        2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1', 8, 'h', 't', 't', 'p', '/', '1', '.', '0'};
     if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols,
             static_cast<unsigned int>(sizeof(protocols)), in, in_length) == OPENSSL_NPN_NEGOTIATED) {
         return SSL_TLSEXT_ERR_OK;
     }
-    // RFC 7301 §3.2: reject ALPN offers without a supported TCP HTTP protocol.
     return SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 
+// RFC 6066 §3: a TLS 1.2 session never resumes under a server_name other than
+// the one it was established with. Each connection's session ID context names
+// its offered server_name (ASCII case-insensitively), and OpenSSL resumes a
+// TLS 1.2 session -- by ticket or by session ID -- only when the contexts
+// match, so any other name, or none, gets a full handshake. TLS 1.3 binds no
+// server_name to a session; OpenSSL adopts the connection's context for a PSK.
+// Names longer than a context are bound by their SHA-256 digest.
+int bind_session_to_server_name(SSL* ssl, int* alert, void*) noexcept {
+    // Without server_name: one NUL byte, which no host name contains.
+    std::array<unsigned char, SSL_MAX_SID_CTX_LENGTH> context{};
+    std::size_t context_size = 1;
+    const unsigned char* extension = nullptr;
+    std::size_t extension_size = 0;
+    if (SSL_client_hello_get0_ext(ssl, TLSEXT_TYPE_server_name, &extension, &extension_size) == 1) {
+        // One host_name entry, the only shape OpenSSL accepts; it fails any
+        // other shape later in this handshake, so the context is irrelevant.
+        if (extension_size < 5 || static_cast<std::size_t>((extension[0] << 8) | extension[1]) != extension_size - 2 ||
+            extension[2] != TLSEXT_NAMETYPE_host_name) {
+            return SSL_CLIENT_HELLO_SUCCESS;
+        }
+        const auto name_size = static_cast<std::size_t>((extension[3] << 8) | extension[4]);
+        if (name_size != extension_size - 5 || name_size > TLSEXT_MAXLEN_host_name) {
+            return SSL_CLIENT_HELLO_SUCCESS;
+        }
+        std::array<unsigned char, TLSEXT_MAXLEN_host_name> name;
+        for (std::size_t i = 0; i < name_size; ++i) {
+            name[i] = http_ascii_to_lower(extension[5 + i]);
+        }
+        if (name_size == 0) {
+            // An empty name differs from an absent one: two NUL bytes.
+            context_size = 2;
+        } else if (name_size <= context.size()) {
+            std::copy_n(name.begin(), name_size, context.begin());
+            context_size = name_size;
+        } else {
+            unsigned int digest_size = 0;
+            if (EVP_Digest(name.data(), name_size, context.data(), &digest_size, EVP_sha256(), nullptr) != 1 ||
+                digest_size != context.size()) {
+                *alert = SSL_AD_INTERNAL_ERROR;
+                return SSL_CLIENT_HELLO_ERROR;
+            }
+            context_size = digest_size;
+        }
+    }
+    if (SSL_set_session_id_context(ssl, context.data(), static_cast<unsigned int>(context_size)) != 1) {
+        *alert = SSL_AD_INTERNAL_ERROR;
+        return SSL_CLIENT_HELLO_ERROR;
+    }
+    return SSL_CLIENT_HELLO_SUCCESS;
+}
+
 // RFC 6066 SNI: switch the connection to the per-host SSL_CTX when the client's
-// server name matches a configured certificate; otherwise keep the default.
+// server name matches a configured certificate; otherwise keep the default
+// identity. Answering an unrecognized name with the default certificate,
+// rather than RFC 9325 §3.7's unrecognized_name alert, is a product choice
+// documented on tls_config.
 int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
     if (ssl == nullptr || arg == nullptr) {
         return SSL_TLSEXT_ERR_OK;
@@ -218,6 +279,9 @@ void worker_connections::prepare() {
 void worker_connections::open_admission() noexcept {
     drain_.open();
     try {
+        if (std::ranges::any_of(listeners_, [](const auto& configured) { return configured->session_.ticket_keys_.has_value(); })) {
+            tasks_.spawn(rotate_tls_ticket_keys());
+        }
 #if defined(_WIN32)
         windows_accept_->serve(windows_origin_);
 #else
@@ -259,6 +323,38 @@ void worker_connections::retire_tls() noexcept {
         session.tls_context_.reset();
         session.sni_lookup_.clear();
         session.sni_contexts_.clear();
+        session.ticket_keys_.reset();
+    }
+}
+// RFC 9325 §3.4: adopts each TLS listener's next ticket key epoch as it begins.
+// It keeps running while the worker drains and ends when its timers stop, so
+// this worker holds no key past its validity by more than the timer latency.
+// The keys change between handshakes on this thread, never during one.
+task<void> worker_connections::rotate_tls_ticket_keys() {
+    for (;;) {
+        const auto now = std::chrono::steady_clock::now();
+        auto next = std::chrono::steady_clock::time_point::max();
+        for (auto& configured : listeners_) {
+            auto& session = configured->session_;
+            const auto* tls = session.tls();
+            if (tls == nullptr || !session.ticket_keys_.has_value()) {
+                continue;
+            }
+            auto& ring = tls_session_ticket_keys(*tls);
+            if (!ring.copy_to(now, *session.ticket_keys_)) {
+                // This epoch issues no tickets; a later rotation retries.
+                try {
+                    throw std::runtime_error("failed to generate TLS session ticket keys");
+                } catch (...) {
+                    ruvia::report_unhandled_failure("TLS session ticket key rotation", std::current_exception());
+                }
+            }
+            next = std::min(next, ring.next_rotation(now));
+        }
+        if (next == std::chrono::steady_clock::time_point::max() ||
+            co_await sleep_for(worker_, next - now) == timer_sleep_result::stop_requested) {
+            co_return;
+        }
     }
 }
 http_server_stats worker_connections::stats() const noexcept {
@@ -346,23 +442,30 @@ void worker_connections::report_accept_failure(std::exception_ptr failure, bool 
 }
 
 void worker_connections::configure_tls(http_server_session_config& listener_value) {
+    listener_value.tls_context_.reset();
     listener_value.sni_contexts_.clear();
     listener_value.sni_lookup_.clear();
+    listener_value.ticket_keys_.reset();
     const auto* tls = listener_value.tls();
     if (tls == nullptr) {
-        listener_value.tls_context_.reset();
         return;
     }
-    const auto configure = [tls](asio::ssl::context& context_value,
+    auto& ticket_keys = listener_value.ticket_keys_.emplace();
+    if (!tls_session_ticket_keys(*tls).copy_to(std::chrono::steady_clock::now(), ticket_keys)) {
+        throw std::runtime_error("failed to generate TLS session ticket keys");
+    }
+    const auto configure = [tls, &ticket_keys](asio::ssl::context& context_value,
                                const tls_certificate& certificate) {
         context_value.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
                                   asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
                                   asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
-        SSL_CTX_set_options(context_value.native_handle(), SSL_OP_NO_COMPRESSION);
+        apply_tls_protocol_policy(*context_value.native_handle());
+        // RFC 9325 §4.2.1: the server's order decides, whatever the client prefers.
+        SSL_CTX_set_options(context_value.native_handle(), SSL_OP_CIPHER_SERVER_PREFERENCE);
         SSL_CTX_set_alpn_select_cb(context_value.native_handle(), select_alpn_protocol, nullptr);
         configure_http_server_tls_identity(
             context_value.native_handle(), certificate, tls->client_certificates_);
-        install_tls_session_ticket_keys(*context_value.native_handle(), *tls);
+        ticket_keys.install(*context_value.native_handle());
     };
 
     // Per-host SNI certificates first, so the lookup can point at stable storage.
@@ -379,6 +482,9 @@ void worker_connections::configure_tls(http_server_session_config& listener_valu
     listener_value.tls_context_.emplace(asio::ssl::context::tls_server);
     auto& context_value = *listener_value.tls_context_;
     configure(context_value, tls->certificate_);
+    // The client hello callback runs before OpenSSL looks up the offered
+    // session, which the server_name callback would be too late for.
+    SSL_CTX_set_client_hello_cb(context_value.native_handle(), &bind_session_to_server_name, nullptr);
     if (!listener_value.sni_lookup_.empty()) {
         SSL_CTX_set_tlsext_servername_callback(context_value.native_handle(), &select_sni_context);
         SSL_CTX_set_tlsext_servername_arg(context_value.native_handle(), &listener_value.sni_lookup_);

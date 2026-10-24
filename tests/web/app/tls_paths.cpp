@@ -222,6 +222,67 @@ bool refuses_with_no_application_protocol(const alpn_handshake& handshake) {
            ERR_GET_REASON(static_cast<unsigned long>(handshake.error_.value())) == SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL;
 }
 
+// A TLS 1.2 client context that authenticates nothing; tests choose the offer.
+asio::ssl::context tls12_client(const char* cipher_suites = nullptr) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    if (SSL_CTX_set_max_proto_version(client.native_handle(), TLS1_2_VERSION) != 1 ||
+        (cipher_suites != nullptr && SSL_CTX_set_cipher_list(client.native_handle(), cipher_suites) != 1)) {
+        throw std::runtime_error("cannot configure the TLS 1.2 test client");
+    }
+    return client;
+}
+
+// The TLS 1.2 suite the server selects from `offer`, in the client's order of
+// preference; empty when the handshake fails.
+std::string tls12_selected_cipher(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const char* offer) {
+    auto client = tls12_client(offer);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    asio::error_code error;
+    stream.next_layer().connect(endpoint, error);
+    if (!error) {
+        stream.handshake(asio::ssl::stream_base::client, error);
+    }
+    if (error) {
+        return {};
+    }
+    return SSL_get_cipher_name(stream.native_handle());
+}
+
+// Establishes a TLS 1.2 session under server_name `first`, then offers it on a
+// new connection under `second`; true when the server resumed it.
+bool resumes_tls12_session_under(
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const char* first, const char* second) {
+    auto client = tls12_client();
+    std::unique_ptr<SSL_SESSION, decltype(&SSL_SESSION_free)> session(nullptr, SSL_SESSION_free);
+    for (const char* name : {first, second}) {
+        asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+        if (SSL_set_tlsext_host_name(stream.native_handle(), name) != 1 ||
+            (session && SSL_set_session(stream.native_handle(), session.get()) != 1)) {
+            throw std::runtime_error("cannot prepare the TLS 1.2 resumption client");
+        }
+        asio::error_code error;
+        stream.next_layer().connect(endpoint, error);
+        if (!error) {
+            stream.handshake(asio::ssl::stream_base::client, error);
+        }
+        if (error) {
+            throw std::system_error(error, "TLS 1.2 resumption handshake failed");
+        }
+        if (session) {
+            return SSL_session_reused(stream.native_handle()) == 1;
+        }
+        session.reset(SSL_get1_session(stream.native_handle()));
+        if (!session || SSL_SESSION_is_resumable(session.get()) != 1) {
+            throw std::runtime_error("TLS 1.2 session is not resumable");
+        }
+        // A session whose SSL is freed without a local shutdown is marked
+        // unresumable; record a clean local close instead.
+        SSL_set_shutdown(stream.native_handle(), SSL_SENT_SHUTDOWN);
+    }
+    return false;
+}
+
 }  // namespace tls_paths_test
 
 using namespace tls_paths_test;
@@ -230,7 +291,10 @@ using namespace tls_paths_test;
 // and the SNI identity) lives under a path that no ANSI code page can encode.
 // listen() loads them once and cleanses its password copy, so the same
 // listener must still serve HTTPS on a second run without another listen().
-// Each run also negotiates ALPN: http/1.1 when offered, a fatal alert otherwise.
+// Each run also negotiates ALPN: any HTTP version the server speaks when
+// offered (RFC 7301 §3.2), a fatal alert otherwise. TLS 1.2 is limited to
+// ECDHE+AEAD suites in the server's order (RFC 9325 §4.1-4.2.1), and a TLS 1.2
+// session resumes only under its own server_name (RFC 6066 §3).
 RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
     ruvia::test::tls_identity identity("localhost");
     const non_ascii_directory directory;
@@ -296,6 +360,17 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
             RUVIA_CHECK(!negotiated.error_);
             RUVIA_CHECK_EQ(negotiated.selected_, std::string("h2"));
             RUVIA_CHECK(truncated_close_delimited_stream_lacks_close_notify(io, endpoint));
+            RUVIA_CHECK_EQ(negotiate_alpn(io, endpoint, "\x08http/1.0").selected_, std::string("http/1.0"));
+            RUVIA_CHECK_EQ(negotiate_alpn(io, endpoint, "\x08http/1.0\x08http/1.1").selected_, std::string("http/1.1"));
+            RUVIA_CHECK(tls12_selected_cipher(io, endpoint, "AES128-SHA").empty());
+            RUVIA_CHECK_EQ(tls12_selected_cipher(io, endpoint, "AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256"),
+                std::string("ECDHE-RSA-AES128-GCM-SHA256"));
+            RUVIA_CHECK_EQ(tls12_selected_cipher(io, endpoint, "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"),
+                std::string("ECDHE-RSA-AES128-GCM-SHA256"));
+            RUVIA_CHECK(resumes_tls12_session_under(io, endpoint, "localhost", "localhost"));
+            RUVIA_CHECK(resumes_tls12_session_under(io, endpoint, "sni.test", "SNI.test"));
+            RUVIA_CHECK(!resumes_tls12_session_under(io, endpoint, "localhost", "sni.test"));
+            RUVIA_CHECK(!resumes_tls12_session_under(io, endpoint, "localhost", "unknown.test"));
         }
         app.stop();
         runner.join();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
@@ -47,9 +48,9 @@ struct http_server_listener_definition final {
         tls_certificate certificate_;
         std::optional<tls_client_certificate_policy> client_certificates_;
         std::pmr::vector<sni_identity> sni_identities_;
-        // Generated once by server configuration validation and shared
-        // read-only by every worker's TLS contexts.
-        std::optional<tls_session_ticket_keys> session_ticket_keys_;
+        // Created once by server configuration validation and shared by every
+        // worker, which copies its keys into its own TLS contexts' key set.
+        std::shared_ptr<tls_session_ticket_key_ring> session_ticket_keys_;
     };
 
     struct plain_http final {};
@@ -71,15 +72,14 @@ struct http_server_listener_definition final {
     transport_type transport_;
 };
 
-// Every TLS context of a listener uses the configuration's one ticket key set.
-// Only validated configurations carry keys; an unvalidated definition must
-// never reach a serving TLS context.
-inline void install_tls_session_ticket_keys(
-    SSL_CTX& context, const http_server_listener_definition::tls& tls) {
-    if (!tls.session_ticket_keys_.has_value()) {
+// Only validated configurations carry a key ring; an unvalidated definition
+// must never reach a serving TLS context.
+[[nodiscard]] inline tls_session_ticket_key_ring& tls_session_ticket_keys(
+    const http_server_listener_definition::tls& tls) {
+    if (tls.session_ticket_keys_ == nullptr) {
         throw std::logic_error("TLS listener session ticket keys were not generated");
     }
-    tls.session_ticket_keys_->install(context);
+    return *tls.session_ticket_keys_;
 }
 
 using sni_context_store_type = std::pmr::vector<asio::ssl::context>;
@@ -107,6 +107,10 @@ public:
     const http_server_listener_definition::redirect_http_to_https* redirect() const&& = delete;
 
     http_server_listener_definition::transport_type transport_;
+    // This worker's copy of the listener's ticket keys, refreshed on the
+    // worker thread once per key epoch. The TLS contexts below point at it, so
+    // it is declared before them and outlives them.
+    std::optional<tls_session_ticket_key_set> ticket_keys_;
     std::optional<asio::ssl::context> tls_context_;
     sni_context_store_type sni_contexts_;
     sni_context_lookup_type sni_lookup_;

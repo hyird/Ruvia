@@ -299,7 +299,7 @@ ruvia::task<void> handle_udp(ruvia::context& c) {
 | `max_concurrent_http2_streams_per_connection_` | `std::size_t`（默认 `100`） | 单条 HTTP/2 连接并发流上限 |
 | `connect_timeout_` / `write_timeout_` / `request_timeout_` / `acquire_timeout_` | 超时配置 | 连接建立（默认 `5s`）、写入（`30s`）、完整请求（`30s`）与连接池借用等待超时（`5s`） |
 | `max_response_bytes_` | `std::size_t`（默认 `default_max_buffered_body_bytes`） | `read_all()` 默认最大响应体字节数 |
-| `tls_` / `tcp_` | `client_tls_config` / `client_tcp_config` | 客户端 TLS 证书校验（`verify_identity` / `skip_verification`）、CA 文件、mTLS 客户端证书与 TCP `no_delay_` / `keep_alive_` |
+| `tls_` / `tcp_` | `client_tls_config` / `client_tcp_config` | 客户端 TLS 证书校验（`verify_identity` / `skip_verification`）、CA 文件、mTLS 客户端证书与 TCP `no_delay_` / `keep_alive_`。主机名只与证书 DNS 类型 subjectAltName 比对（RFC 9525）：不回退到主题 CN，通配符只能是完整的最左标签；仅 TLS 1.2 / 1.3，TLS 1.2 只提供 ECDHE + AEAD 密码套件，拒绝重协商（WebSocket 与 Redis 客户端相同） |
 | `received_cookies_` | `http_client_received_cookie_policy`（默认 `ignore`） | 设为 `retain_and_send` 时启用客户端 Cookie Jar 自动管理 `Set-Cookie` |
 | `push_` / `advertisements_` | `http_client_push_config` / `http_client_advertisement_config` | 控制是否接收 HTTP/2 Server Push 与 `ORIGIN` / `ALTSVC` 通告 |
 

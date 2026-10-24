@@ -31,6 +31,8 @@
 #include <asio/streambuf.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
@@ -2066,6 +2068,138 @@ RUVIA_TEST(http1_tls_close_delimited_response_requires_close_notify) {
         };
         run_operation(worker, io, operation);
     }
+}
+
+// RFC 9110 §4.3.4 and RFC 9525 §6.3: a DNS name is authenticated only by a
+// DNS-ID subjectAltName. A certificate naming the host only in its subject
+// Common Name, or through a wildcard that is not a whole left-most label,
+// fails the handshake; a whole-label wildcard is accepted.
+RUVIA_TEST(http_client_tls_matches_dns_names_only_against_dns_id_subject_alt_names) {
+    struct identity_case final {
+        const char* common_name_;
+        std::string subject_alt_name_;
+        const char* server_name_;
+        bool accepted_;
+    };
+    const std::array cases{
+        identity_case{"localhost", "", "localhost", false},
+        identity_case{"www.example.com", "DNS:w*.example.com", "www.example.com", false},
+        identity_case{"www.example.com", "DNS:*.example.com", "www.example.com", true},
+    };
+    for (const auto& identity_value : cases) {
+        auto& io = ruvia::test::new_test_io_context();
+        test_worker worker(io);
+        ruvia::test::tls_identity identity(identity_value.common_name_, identity_value.subject_alt_name_);
+        asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+        bool peer_finished = false;
+        bool peer_handshake_completed = false;
+        ruvia::worker_signal peer_done(worker.handle_);
+        const auto serve = [&]() -> asio::awaitable<void> {
+            asio::ssl::stream<asio::ip::tcp::socket> stream(
+                co_await acceptor.async_accept(asio::use_awaitable), identity.context_);
+            std::error_code error;
+            co_await stream.async_handshake(
+                asio::ssl::stream_base::server, asio::redirect_error(asio::use_awaitable, error));
+            if (error) {
+                co_return;
+            }
+            peer_handshake_completed = true;
+            asio::streambuf request;
+            co_await asio::async_read_until(stream, request, "\r\n\r\n", asio::use_awaitable);
+            constexpr std::string_view response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+            co_await asio::async_write(stream, asio::buffer(response), asio::use_awaitable);
+            co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, error));
+        };
+        asio::co_spawn(io, serve(), [&](std::exception_ptr) {
+            peer_finished = true;
+            peer_done.notify();
+        });
+        auto config = local_http_client_config(acceptor.local_endpoint().port());
+        config.scheme_ = ruvia::http_scheme::https;
+        config.tls_.ca_file_ = identity.ca_file_.string();
+        config.tls_.server_name_ = identity_value.server_name_;
+        config.request_timeout_ = std::chrono::seconds(3);
+        ruvia::http_client client(worker.attachment_.loop(), config);
+        auto operation = [&]() -> ruvia::task<void> {
+            const acceptor_closer closer{acceptor};
+            std::optional<ruvia::http_client_error::code_type> failure;
+            try {
+                auto response = co_await client.handle().send({.target_ = "/identity"});
+                RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{200});
+                (void)co_await response.body().read_all();
+            } catch (const ruvia::http_client_error& error) {
+                failure = error.code();
+            }
+            RUVIA_CHECK_EQ(!failure.has_value(), identity_value.accepted_);
+            co_await client.shutdown();
+            while (!peer_finished) {
+                co_await peer_done.wait();
+            }
+            RUVIA_CHECK_EQ(peer_handshake_completed, identity_value.accepted_);
+        };
+        run_operation(worker, io, operation);
+    }
+}
+
+// RFC 9113 §9.2.1: renegotiation is disabled. A TLS 1.2 server's HelloRequest
+// is answered with a no_renegotiation alert, which ends the server's attempt,
+// while the response already sent is still delivered.
+RUVIA_TEST(http_client_tls_refuses_server_initiated_renegotiation) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    ruvia::test::tls_identity identity("localhost");
+    RUVIA_CHECK_EQ(SSL_CTX_set_max_proto_version(identity.context_.native_handle(), TLS1_2_VERSION), 1);
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    bool peer_finished = false;
+    bool renegotiation_refused = false;
+    std::exception_ptr peer_failure;
+    ruvia::worker_signal peer_done(worker.handle_);
+    const auto serve = [&]() -> asio::awaitable<void> {
+        asio::ssl::stream<asio::ip::tcp::socket> stream(
+            co_await acceptor.async_accept(asio::use_awaitable), identity.context_);
+        co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+        asio::streambuf request;
+        co_await asio::async_read_until(stream, request, "\r\n\r\n", asio::use_awaitable);
+        // Sends HelloRequest; the client's reply arrives with later reads.
+        if (SSL_renegotiate(stream.native_handle()) != 1) {
+            throw std::runtime_error("cannot request TLS renegotiation");
+        }
+        co_await stream.async_handshake(asio::ssl::stream_base::server, asio::use_awaitable);
+        constexpr std::string_view response = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+        co_await asio::async_write(stream, asio::buffer(response), asio::use_awaitable);
+        std::array<char, 256> bytes_value{};
+        std::error_code error;
+        while (co_await stream.async_read_some(asio::buffer(bytes_value), asio::redirect_error(asio::use_awaitable, error))) {
+        }
+        renegotiation_refused = error.category() == asio::error::get_ssl_category() &&
+                                ERR_GET_REASON(static_cast<unsigned long>(error.value())) == SSL_R_NO_RENEGOTIATION;
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+        peer_finished = true;
+        peer_done.notify();
+    });
+    auto config = local_http_client_config(acceptor.local_endpoint().port());
+    config.scheme_ = ruvia::http_scheme::https;
+    config.host_ = "localhost";
+    config.tls_.ca_file_ = identity.ca_file_.string();
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    auto operation = [&]() -> ruvia::task<void> {
+        const acceptor_closer closer{acceptor};
+        auto response = co_await client.handle().send({.target_ = "/renegotiate"});
+        const auto bytes_value = co_await response.body().read_all();
+        RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "ok");
+        co_await client.shutdown();
+        while (!peer_finished) {
+            co_await peer_done.wait();
+        }
+        if (peer_failure) {
+            std::rethrow_exception(peer_failure);
+        }
+    };
+    run_operation(worker, io, operation);
+    RUVIA_CHECK(renegotiation_refused);
 }
 
 // A response on a connection that is not reused completes even when trailing

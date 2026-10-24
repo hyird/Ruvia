@@ -98,6 +98,7 @@ private:
 #endif
     void report_accept_failure(std::exception_ptr failure, bool fatal) noexcept;
     void configure_tls(http_server_session_config& session);
+    task<void> rotate_tls_ticket_keys();
     void accept_socket(std::size_t index, tcp_socket_type socket);
     task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection);
     task<void> run_tls_session(http_server_session_config& listener, accepted_connection_lease connection);

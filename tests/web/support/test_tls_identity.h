@@ -21,7 +21,13 @@ namespace ruvia::test {
 
 class tls_identity final {
 public:
+    // A self-signed identity whose subject CN and only DNS subjectAltName are `name`.
     explicit tls_identity(const char* name)
+        : tls_identity(name, std::string("DNS:") + name) {}
+
+    // The subject CN is `common_name`; `subject_alt_name` uses OpenSSL's
+    // configuration syntax (`DNS:w*.example.com`), and empty omits the extension.
+    tls_identity(const char* common_name, const std::string& subject_alt_name)
         : context_(asio::ssl::context::tls_server) {
         std::random_device random;
         for (int attempt_value = 0; attempt_value < 100; ++attempt_value) {
@@ -46,18 +52,21 @@ public:
                 throw std::runtime_error("cannot generate TLS test identity");
             }
             const auto subject = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
-            if (!subject || X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(name), -1, -1, 0) != 1 ||
+            if (!subject || X509_NAME_add_entry_by_txt(subject.get(), "CN", MBSTRING_ASC, reinterpret_cast<const unsigned char*>(common_name), -1, -1, 0) != 1 ||
                 X509_set_subject_name(certificate.get(), subject.get()) != 1 ||
                 X509_set_issuer_name(certificate.get(), subject.get()) != 1) {
                 throw std::runtime_error("cannot name TLS test identity");
             }
-            X509V3_CTX extension_context{};
-            X509V3_set_ctx(&extension_context, certificate.get(), certificate.get(), nullptr, nullptr, 0);
-            const auto san = std::string("DNS:") + name;
-            std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> extension(
-                X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name, san.c_str()), X509_EXTENSION_free);
-            if (!extension || X509_add_ext(certificate.get(), extension.get(), -1) != 1 ||
-                ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0 ||
+            if (!subject_alt_name.empty()) {
+                X509V3_CTX extension_context{};
+                X509V3_set_ctx(&extension_context, certificate.get(), certificate.get(), nullptr, nullptr, 0);
+                std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)> extension(
+                    X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name, subject_alt_name.c_str()), X509_EXTENSION_free);
+                if (!extension || X509_add_ext(certificate.get(), extension.get(), -1) != 1) {
+                    throw std::runtime_error("cannot name TLS test identity");
+                }
+            }
+            if (ruvia::test::sign_tls_certificate(certificate.get(), key.get()) <= 0 ||
                 SSL_CTX_use_certificate(context_.native_handle(), certificate.get()) != 1 ||
                 SSL_CTX_use_PrivateKey(context_.native_handle(), key.get()) != 1) {
                 throw std::runtime_error("cannot sign TLS test identity");

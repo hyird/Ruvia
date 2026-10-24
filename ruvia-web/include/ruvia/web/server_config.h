@@ -138,6 +138,8 @@ struct tls_client_certificate_config final {
     tls_client_certificate_requirement requirement_{tls_client_certificate_requirement::optional};
 };
 
+// An additional identity served when the client's server_name (RFC 6066 SNI)
+// equals host_, compared ASCII case-insensitively.
 struct tls_sni_config final {
     std::string host_{};
     std::filesystem::path certificate_chain_file_{};
@@ -145,6 +147,16 @@ struct tls_sni_config final {
     std::string private_key_password_{};
 };
 
+// One HTTPS listener's identities. The listener negotiates TLS 1.2 or 1.3; its
+// TLS 1.2 suites are ECDHE with AEAD only, chosen by server preference;
+// renegotiation is refused; ALPN selects h2, http/1.1 or http/1.0. A client
+// offering no server_name, or one matching no sni_ entry, is served the
+// primary certificate: a product choice for single-certificate and wildcard
+// deployments, deliberately not RFC 9325 §3.7's unrecognized_name alert, so
+// such clients still complete the handshake. Sessions resume across workers
+// of the listener; TLS 1.2 sessions only under the server_name they were
+// established with. Ticket keys rotate every two hours (the session lifetime)
+// and are destroyed one interval after their last use for new tickets.
 struct tls_config final {
     std::filesystem::path certificate_chain_file_{};
     std::filesystem::path private_key_file_{};

@@ -10,9 +10,12 @@
 #include <system_error>
 
 #include <openssl/ssl.h>
+#include <openssl/x509v3.h>
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
+
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {
@@ -42,6 +45,9 @@ constexpr std::array<unsigned char, 12> negotiated_http_alpn = {
         return X509_VERIFY_PARAM_set1_host(parameters, nullptr, 0) == 1 &&
                X509_VERIFY_PARAM_set1_ip_asc(parameters, host) == 1;
     }
+    // RFC 9110 §4.3.4 / RFC 9525 §6.3: DNS-ID only, never the subject Common
+    // Name, and a wildcard only as the complete left-most label.
+    X509_VERIFY_PARAM_set_hostflags(parameters, X509_CHECK_FLAG_NEVER_CHECK_SUBJECT | X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
     return X509_VERIFY_PARAM_set1_ip(parameters, nullptr, 0) == 1 &&
            X509_VERIFY_PARAM_set1_host(parameters, host, 0) == 1;
 }
@@ -146,10 +152,7 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
     if (config.mode_ != client_tls_mode::verify_identity && config.mode_ != client_tls_mode::skip_verification) {
         throw std::invalid_argument("client TLS context requires TLS to be enabled");
     }
-    if (SSL_CTX_set_min_proto_version(&context_value, TLS1_2_VERSION) != 1 ||
-        SSL_CTX_set_max_proto_version(&context_value, 0) != 1) {
-        throw std::runtime_error("failed to configure client TLS versions");
-    }
+    apply_tls_protocol_policy(context_value);
     const bool verify = config.mode_ == client_tls_mode::verify_identity;
     SSL_CTX_set_verify(&context_value, verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
     if (verify) {
