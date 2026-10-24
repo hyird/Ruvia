@@ -239,6 +239,9 @@ RUVIA_TEST(app_multi_listener_tcp_tls_preserves_connection_worker_and_joins_pend
         configure();
         app_run run(app);
         if (!observed->started_.try_acquire_for(5s)) {
+            // join 在此传播启动失败的原始异常。
+            app.stop();
+            run.join();
             throw std::runtime_error("ownership test app did not start");
         }
         RUVIA_CHECK_EQ(observed->live_.load(), 3U);
