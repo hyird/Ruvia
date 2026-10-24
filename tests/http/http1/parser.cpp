@@ -765,7 +765,7 @@ RUVIA_TEST(http1_parse_connection_options_reject_only_protected_fields) {
         RUVIA_CHECK_EQ(result_value.state_.request_.header("User-Agent").value_or(""), "probe");
     }
     // Options that would strip framing, routing or access fields fail closed.
-    for (const auto option : {"Content-Length", "Host", "Authorization", "Cookie", "Origin"}) {
+    for (const auto option : {"Content-Length", "Transfer-Encoding", "Host", "Authorization", "Cookie", "Origin"}) {
         std::string wire = "GET / HTTP/1.1\r\nHost: x\r\nConnection: ";
         wire.append(option);
         wire.append("\r\n\r\n");

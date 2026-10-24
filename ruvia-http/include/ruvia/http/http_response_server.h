@@ -67,7 +67,9 @@ http_response_trailer_section validate_http_response_trailers(headers_type&&) = 
 
 // Visit normalized response trailer fields from a received HTTP/1 trailer
 // block: the bytes between the terminal zero-size chunk and the empty line that
-// ends the trailer section (a final CRLF after the last field is accepted).
+// ends the trailer section (a final CRLF after the last field is accepted),
+// already free of obs-fold as http1_client_response_body_decoder publishes it
+// (RFC 9112 section 5.2); a fold left in `block` is malformed.
 // Values are exposed with optional whitespace stripped and borrow `block`.
 // Fields not permitted in response trailers (RFC 9110 section 6.5.1) are
 // discarded without reaching the visitor (RFC 9112 section 7.1.2). Returns false

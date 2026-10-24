@@ -95,7 +95,11 @@ namespace {
 
 [[nodiscard]] http1_close_policy response_persistence(
     const http1_client_parsed_response_head& response) noexcept {
-    if (response.connection_options_.close()) {
+    // RFC 9112 section 6.1: an HTTP/1.0 message carrying Transfer-Encoding
+    // has faulty framing and the connection closes after it, even when the
+    // response ends at its header section and the field is otherwise ignored.
+    if (response.connection_options_.close() ||
+        (response.protocol_version_ == http_protocol_version::http10 && response.saw_transfer_encoding_)) {
         return http1_close_policy::close_after_response;
     }
     if (response.protocol_version_ == http_protocol_version::http11 ||

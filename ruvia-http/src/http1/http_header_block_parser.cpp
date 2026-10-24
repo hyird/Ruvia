@@ -103,7 +103,7 @@ namespace {
             }
             break;
         case request_header_kind::connection:
-            if (block.connection_options_.parse_field(value, http_field_list_role::recipient) !=
+            if (block.connection_options_.parse_field(value, http_connection_field_role::request_recipient) !=
                 http_field_list_parse_status::ok) {
                 return http_parse_error::invalid_connection;
             }

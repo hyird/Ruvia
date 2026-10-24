@@ -60,7 +60,7 @@ inline constexpr std::string_view content_length_name = "Content-Length";
     http_upgrade_protocols& upgrade_protocols) noexcept {
     switch (classify_response_field(name, known_bit)) {
         case request_header_kind::connection:
-            return connection_options.parse_field(value, http_field_list_role::sender) == http_field_list_parse_status::ok;
+            return connection_options.parse_field(value, http_connection_field_role::sender) == http_field_list_parse_status::ok;
         case request_header_kind::trailer:
             return trailer_header_allowed || http_trim_ows(value).empty();
         case request_header_kind::upgrade:

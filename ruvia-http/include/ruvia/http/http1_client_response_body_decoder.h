@@ -4,6 +4,7 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -165,8 +166,12 @@ public:
     http1_client_response_body_decoder& operator=(http1_client_response_body_decoder&&) = delete;
 
     // Output borrows available without transfer coding and scratch otherwise;
-    // trailers borrow available. Consume views before changing either storage
-    // or making the next call. Erase exactly consumed_bytes() from available.
+    // trailers borrow available, or decoder-owned storage when the received
+    // section carried obs-fold: RFC 9112 section 5.2 makes a user agent replace
+    // each obs-fold with SP, so the published block is already unfolded (one
+    // allocation from `resource`, only for a folded section). Consume views
+    // before changing either storage or making the next call. Erase exactly
+    // consumed_bytes() from available.
     // After finish_input(), decode() continues with the same EOF state: it can
     // drain buffered input/output, but missing body bytes are an incomplete_body
     // failure rather than a request for more input. Terminal results replay
@@ -225,6 +230,8 @@ private:
     bool discard_content_{false};
     bool eof_{false};
     bool trailers_reported_{false};
+    // Owns the unfolded copy of a trailer section that carried obs-fold.
+    std::pmr::string unfolded_trailers_;
     transfer_phase_type transfer_phase_{transfer_phase_type::needs_framed_input};
 };
 

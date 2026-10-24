@@ -176,21 +176,38 @@ inline constexpr auto network_authentication_required = http_status_code::from_v
 
 // A status code received by a client. RFC 9110 section 15 makes a three-digit
 // code outside 100..599 invalid for senders, but a client that receives one
-// SHOULD process the response as if it had a 5xx status. An unrecognized code
-// is processed as the x00 code of its class, so status() is 500 for a received
-// 600..999 while value() keeps the code as received; for 100..599 both agree.
+// SHOULD process the response as if it had a 5xx status, so status() is 500
+// for a received 000..099 or 600..999 while value() keeps the code as
+// received; for 100..599 both agree.
 class http_received_status final {
 public:
-    // Accepts every three-digit code 100..999; anything else is malformed.
+    // Accepts every three-digit code 000..999; anything else is malformed.
     [[nodiscard]] static constexpr std::optional<http_received_status> try_from_value(
         std::uint16_t value) noexcept {
         if (const auto status = http_status_code::try_from_value(value)) {
             return http_received_status(*status, value);
         }
-        if (value >= 600 && value <= 999) {
+        if (value <= 999) {
             return http_received_status(http_status::internal_server_error, value);
         }
         return std::nullopt;
+    }
+
+    // Parses the received status-code = 3DIGIT of an HTTP/1 status line or an
+    // HTTP/2 :status value: exactly three ASCII digits, no sign or spaces.
+    [[nodiscard]] static constexpr std::optional<http_received_status> try_parse(
+        std::string_view digits) noexcept {
+        if (digits.size() != 3) {
+            return std::nullopt;
+        }
+        std::uint16_t value = 0;
+        for (const char digit : digits) {
+            if (digit < '0' || digit > '9') {
+                return std::nullopt;
+            }
+            value = static_cast<std::uint16_t>(value * 10 + (digit - '0'));
+        }
+        return try_from_value(value);
     }
 
     constexpr http_received_status(http_status_code status) noexcept

@@ -55,7 +55,7 @@ struct http1_interim_header_facts final {
         }
         switch (kind) {
             case detail::request_header_kind::connection:
-                if (facts.connection_options_.parse_field(value, detail::http_field_list_role::sender) !=
+                if (facts.connection_options_.parse_field(value, detail::http_connection_field_role::sender) !=
                     detail::http_field_list_parse_status::ok) {
                     error = http1_interim_response_prepare_error::invalid_connection;
                     return false;

@@ -19,6 +19,7 @@
 #include "http/tls_tunnel_output.h"
 #include "server/http1_route_dispatch.h"
 #include "server/http1_session_request_completion.h"
+#include "server/http1_upgrade_response_head.h"
 #include "server/http_request_admission.h"
 #include "server/http_server_response_state.h"
 #include "server/http_upgrade_route.h"
@@ -60,11 +61,10 @@ struct http1_tunnel_upgrade_commit final {
             std::pmr::polymorphic_allocator<char>(dispatch_.memory_.resource()));
         append_http1_response_head(head_response, head, plan);
         context_access::commit_upgrade(context_value);
-        const auto written = co_await async_asio<std::size_t>([this, &head](auto handler) {
-            asio::async_write(dispatch_.stream_, asio::buffer(head.view()), std::move(handler));
-        });
-        if (written.error_code()) {
-            throw inbound_transport_error(written.error_code(), "CONNECT head write");
+        if (const auto ec = co_await write_http1_upgrade_response_head(dispatch_.stream_,
+                dispatch_.parsed_.body_plan_.expectations(), head_response.status(), head.view());
+            ec) {
+            throw inbound_transport_error(ec, "CONNECT head write");
         }
         tail_.record_access(dispatch_.options_.access_log_, head_response.status());
         if constexpr (requires { dispatch_.stream_.next_layer(); }) {

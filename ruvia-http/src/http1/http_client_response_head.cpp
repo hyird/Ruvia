@@ -1,7 +1,5 @@
 #include "ruvia/http/http_client_response_head.h"
 
-#include <charconv>
-#include <system_error>
 #include <variant>
 
 #include "ruvia/http/detail/coding/http_response_content_semantics.h"
@@ -35,14 +33,9 @@ namespace {
         return http1_client_response_parse_error::invalid_status_code;
     }
 
-    int status_code = 0;
-    const auto code = status_line.substr(separator + 1, 3);
-    const auto [end, ec] = std::from_chars(code.data(), code.data() + code.size(), status_code);
-    if (ec != std::errc{} || end != code.data() + code.size()) {
-        return http1_client_response_parse_error::invalid_status_code;
-    }
-    // RFC 9110 section 15: a received 600..999 is processed as a 5xx response.
-    const auto parsed_status = http_received_status::try_from_value(static_cast<std::uint16_t>(status_code));
+    // RFC 9110 section 15: a received 000..099 or 600..999 is processed as a
+    // 5xx response.
+    const auto parsed_status = http_received_status::try_parse(status_line.substr(separator + 1, 3));
     if (!parsed_status) {
         return http1_client_response_parse_error::invalid_status_code;
     }
@@ -130,7 +123,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                 }
                 break;
             case request_header_kind::connection:
-                if (output.connection_options_.parse_field(value, http_field_list_role::recipient) !=
+                if (output.connection_options_.parse_field(value, http_connection_field_role::response_recipient) !=
                     http_field_list_parse_status::ok) {
                     return http1_client_response_parse_error::invalid_connection;
                 }

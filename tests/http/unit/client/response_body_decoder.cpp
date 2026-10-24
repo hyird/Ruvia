@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ruvia/http/http1_client_response_body_decoder.h"
+#include "ruvia/http/http_response_server.h"
 
 #include "content_decoding_fixture.h"
 #include "http_client_response_fixture.h"
@@ -119,6 +120,32 @@ RUVIA_TEST(http1_response_body_decoder_chunked_trailers_and_tail) {
     auto complete_value = decoder.decode("TAIL", scratch);
     RUVIA_CHECK(complete_value.complete() != nullptr);
     RUVIA_CHECK_EQ(complete_value.consumed_bytes(), std::size_t{0});
+}
+
+// RFC 9112 section 5.2: a user agent replaces each obs-fold received in a
+// response with SP before interpreting the value; a folded trailer is not
+// broken framing.
+RUVIA_TEST(http1_response_body_decoder_unfolds_obs_fold_in_trailers) {
+    const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
+    allocation_counter resource;
+    ruvia::http1_client_response_body_decoder decoder(head.plan(), &resource);
+    std::array<char, 8> scratch{};
+    constexpr std::string_view wire = "0\r\nX-T: a\r\n \t b\r\nX-U: c\r\n\r\nTAIL";
+    const auto trailer = decoder.decode(wire, scratch);
+    RUVIA_CHECK(trailer.trailers() != nullptr);
+    if (const auto* trailers = trailer.trailers()) {
+        RUVIA_CHECK_EQ(trailers->bytes(), "X-T: a b\r\nX-U: c");
+        RUVIA_CHECK_EQ(trailers->consumed_bytes(), wire.size() - 4);
+        std::string visited;
+        RUVIA_CHECK(ruvia::visit_http_response_trailers(trailers->bytes(), [&](std::string_view name, std::string_view value) {
+            visited.append(name).append("=").append(value).append(";");
+            return true;
+        }));
+        RUVIA_CHECK_EQ(visited, "X-T=a b;X-U=c;");
+    }
+    RUVIA_CHECK_EQ(resource.allocations(), std::size_t{1});
+    const auto complete_value = decoder.decode("TAIL", scratch);
+    RUVIA_CHECK(complete_value.complete() != nullptr);
 }
 
 RUVIA_TEST(http1_response_body_decoder_close_delimited_completes_only_at_eof) {

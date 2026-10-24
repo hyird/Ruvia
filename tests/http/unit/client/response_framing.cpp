@@ -777,17 +777,24 @@ RUVIA_TEST(http_client_205_owns_zero_content_framing) {
     RUVIA_CHECK(!connect.plan().discards_content());
 }
 
-// RFC 9110 section 15: a received 600..999 is processed as a 5xx response.
+// RFC 9110 section 15: a received 000..099 or 600..999 is processed as a 5xx
+// response; the status-code is still exactly three digits.
 RUVIA_TEST(http_client_processes_out_of_range_status_as_server_error) {
-    for (const std::string_view line : {"HTTP/1.1 600 Odd", "HTTP/1.1 999 "}) {
+    for (const auto& [line, value] : {std::pair{std::string_view("HTTP/1.1 600 Odd"), 600},
+             std::pair{std::string_view("HTTP/1.1 999 "), 999}, std::pair{std::string_view("HTTP/1.1 099 Low"), 99},
+             std::pair{std::string_view("HTTP/1.1 000 "), 0}}) {
         std::string response(line);
         response.append("\r\nContent-Length: 2");
         const auto head = parse_head("GET", response);
         RUVIA_CHECK(head.head().status() == ruvia::http_status::internal_server_error);
-        RUVIA_CHECK_EQ(head.head().received_status().value(), line == "HTTP/1.1 600 Odd" ? 600 : 999);
+        RUVIA_CHECK_EQ(head.head().received_status().value(), value);
         RUVIA_CHECK_EQ(require_known_length(head.plan()).content_length(), std::size_t{2});
     }
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.1 099 Low\r\nContent-Length: 0"));
+    for (const std::string_view line : {"HTTP/1.1 -00 Signed", "HTTP/1.1 +99 Signed", "HTTP/1.1 0x1 Hex"}) {
+        std::string response(line);
+        response.append("\r\nContent-Length: 0");
+        RUVIA_CHECK(parse_fails("GET", response));
+    }
 }
 
 // RFC 9112 section 6.3 rule 1 precedes rule 5: HEAD and 304 responses end at
@@ -880,11 +887,19 @@ RUVIA_TEST(http_client_http10_transfer_encoding_is_faulty_framing_only_with_cont
     RUVIA_CHECK(parse_fails("GET", "HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked"));
     // RFC 9112 section 6.3 rule 1: HEAD, 204 and 304 responses end at the
     // header section regardless of framing fields, so the HTTP/1.0 version
-    // check does not apply to them.
-    const auto head = parse_head("HEAD", "HTTP/1.0 200 OK\r\nTransfer-Encoding: gzip");
-    RUVIA_CHECK(head.plan().without_content() != nullptr);
-    const auto not_modified = parse_head("GET", "HTTP/1.0 304 Not Modified\r\nTransfer-Encoding: chunked");
-    RUVIA_CHECK(not_modified.plan().without_content() != nullptr);
+    // check does not apply to them. RFC 9112 section 6.1 still treats the
+    // HTTP/1.0 message as faulty: the connection closes after it, whatever
+    // keep-alive it requests.
+    for (const auto& [method, response] : {
+             std::pair{"HEAD", "HTTP/1.0 200 OK\r\nTransfer-Encoding: gzip\r\nConnection: keep-alive"},
+             std::pair{"GET", "HTTP/1.0 304 Not Modified\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive"},
+             std::pair{"GET", "HTTP/1.0 204 No Content\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive"},
+         }) {
+        const auto head = parse_head(method, response);
+        RUVIA_CHECK(require_without_content(head.plan()).persistence() == http1_close_policy::close_after_response);
+    }
+    const auto keep_alive = parse_head("GET", "HTTP/1.0 304 Not Modified\r\nConnection: keep-alive");
+    RUVIA_CHECK(require_without_content(keep_alive.plan()).persistence() == http1_close_policy::allow_reuse);
 }
 
 RUVIA_TEST(http_client_head_method_is_case_sensitive) {

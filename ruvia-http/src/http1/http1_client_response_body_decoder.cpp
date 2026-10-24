@@ -5,6 +5,10 @@
 #include <stdexcept>
 #include <type_traits>
 
+#include "ruvia/http/detail/util/pmr_resource.h"
+
+#include "parser/field_line_folding.h"
+
 namespace ruvia {
 
 std::string_view http1_client_response_body_error_message(http1_client_response_body_error error) noexcept {
@@ -20,7 +24,8 @@ std::string_view http1_client_response_body_error_message(http1_client_response_
 }
 
 http1_client_response_body_decoder::http1_client_response_body_decoder(
-    http1_client_response_plan plan, std::pmr::memory_resource* resource) {
+    http1_client_response_plan plan, std::pmr::memory_resource* resource)
+    : unfolded_trailers_(detail::http_pmr_resource_or_default(resource)) {
     if (resource == nullptr) {
         throw std::invalid_argument("HTTP/1 response body decoder requires a memory resource");
     }
@@ -50,7 +55,7 @@ http1_client_response_body_decoder::http1_client_response_body_decoder(
         framing_ = framing_type::chunked;
         persistence_ = chunked->persistence();
         configure_coding(chunked->transfer_codings());
-        chunked_.emplace();
+        chunked_.emplace(http1_chunked_body_decoder_config{.obs_fold_ = http1_trailer_obs_fold::accept});
     } else if (const auto* close = plan.close_delimited()) {
         framing_ = framing_type::close_delimited;
         configure_coding(close->transfer_codings());
@@ -375,6 +380,13 @@ http1_client_response_body_decoder::result_type http1_client_response_body_decod
 
 http1_client_response_body_decoder::result_type http1_client_response_body_decoder::validated_trailers(
     std::size_t consumed, std::string_view bytes_value) {
+    // The chunk decoder validated any obs-fold as its unfolding; publish that
+    // unfolding so consumers never see a fold (RFC 9112 section 5.2).
+    if (const auto first_fold = detail::find_field_line_fold(bytes_value); first_fold != std::string_view::npos) {
+        detail::copy_unfolded_field_lines(
+            bytes_value, first_fold, detail::field_line_folding_policy::http, unfolded_trailers_);
+        bytes_value = unfolded_trailers_;
+    }
     return result_type(validated_trailers_view_type(consumed, bytes_value));
 }
 

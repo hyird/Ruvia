@@ -37,7 +37,7 @@ bool analyze_header(http_header_view header, detail::request_header_kind kind,
             return false;
     }
     if (kind == detail::request_header_kind::connection) {
-        if (facts.connection_options_.parse_field(value, detail::http_field_list_role::sender) !=
+        if (facts.connection_options_.parse_field(value, detail::http_connection_field_role::sender) !=
             detail::http_field_list_parse_status::ok) {
             error = http1_client_request_prepare_error::invalid_connection;
             return false;

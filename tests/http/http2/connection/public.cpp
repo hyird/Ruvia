@@ -2332,22 +2332,26 @@ RUVIA_TEST(http2_public_client_discards_response_trailers_not_permitted_as_trail
     }
 }
 
-// RFC 9110 section 15: a received :status 600..999 is processed as 5xx.
+// RFC 9110 section 15: a received :status 000..099 or 600..999 is processed as
+// 5xx.
 RUVIA_TEST(http2_public_client_processes_out_of_range_status_as_server_error) {
-    std::pmr::monotonic_buffer_resource resource;
-    auto client = prepared_client(&resource);
-    std::pmr::string wire(&resource);
-    append_peer_settings(wire);
-    append_response(wire, &resource, 1, "600");
-    RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
-    auto head_event = client.next_event();
-    RUVIA_CHECK(head_event && head_event->response_head() != nullptr);
-    if (head_event && head_event->response_head() != nullptr) {
-        const auto head = std::move(*head_event->response_head()).take_head();
-        RUVIA_CHECK(head.status() == ruvia::http_status::internal_server_error);
-        RUVIA_CHECK_EQ(head.received_status().value(), 600);
+    for (const auto& [status, value] : {std::pair{std::string_view("600"), 600},
+             std::pair{std::string_view("099"), 99}, std::pair{std::string_view("000"), 0}}) {
+        std::pmr::monotonic_buffer_resource resource;
+        auto client = prepared_client(&resource);
+        std::pmr::string wire(&resource);
+        append_peer_settings(wire);
+        append_response(wire, &resource, 1, status);
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto head_event = client.next_event();
+        RUVIA_CHECK(head_event && head_event->response_head() != nullptr);
+        if (head_event && head_event->response_head() != nullptr) {
+            const auto head = std::move(*head_event->response_head()).take_head();
+            RUVIA_CHECK(head.status() == ruvia::http_status::internal_server_error);
+            RUVIA_CHECK_EQ(head.received_status().value(), value);
+        }
+        RUVIA_CHECK(!client.connection_error());
     }
-    RUVIA_CHECK(!client.connection_error());
 }
 
 RUVIA_TEST(http2_public_single_and_fragmented_request_fields_are_owned_and_keep_hpack_indexes) {

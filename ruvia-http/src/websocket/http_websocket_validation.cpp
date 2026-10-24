@@ -96,7 +96,7 @@ websocket_handshake_validation_result validate_websocket_handshake(const http_re
         const auto& header_value = headers[i];
         if (kind == detail::request_header_kind::connection) {
             if (connection_options.parse_field(
-                    header_value.value(), detail::http_field_list_role::recipient) !=
+                    header_value.value(), detail::http_connection_field_role::request_recipient) !=
                 detail::http_field_list_parse_status::ok) {
                 return websocket_handshake_validation_result::make_invalid_request();
             }

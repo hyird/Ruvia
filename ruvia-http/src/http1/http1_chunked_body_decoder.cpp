@@ -10,6 +10,65 @@
 #include "ruvia/http/http_limits.h"
 
 namespace ruvia {
+namespace {
+
+// Validates a trailer block that may carry obs-fold exactly as
+// visit_http1_trailer_block validates its HTTP unfolding: each obs-fold
+// together with its adjacent OWS becomes one SP and the value is OWS-trimmed
+// (RFC 9112 section 5.2), so only the unfolded sizes are needed, not storage.
+[[nodiscard]] bool folded_trailers_valid(std::string_view block) noexcept {
+    if (block.size() > max_http_header_bytes) {
+        return false;
+    }
+    auto budget = http_trailer_section_budget();
+    const auto line_at = [block](std::size_t begin, std::size_t end) {
+        return end == std::string_view::npos ? block.substr(begin) : block.substr(begin, end - begin);
+    };
+    std::size_t cursor_value = 0;
+    while (cursor_value < block.size()) {
+        auto line_end = block.find("\r\n", cursor_value);
+        const auto line = line_at(cursor_value, line_end);
+        const auto colon = http_token_prefix_size(line);
+        if (colon == 0 || colon == line.size() || line[colon] != ':') {
+            return false;
+        }
+        // Unfolded value size: the pieces from the first to the last non-empty
+        // one, each fold between them counting as one SP.
+        std::size_t value_bytes = 0;
+        std::size_t pending_separators = 0;
+        bool started = false;
+        auto piece = line.substr(colon + 1);
+        for (;;) {
+            piece = http_trim_ows(piece);
+            if (!is_valid_http_field_value_bytes(piece)) {
+                return false;
+            }
+            if (!piece.empty()) {
+                value_bytes += (started ? pending_separators : 0) + piece.size();
+                started = true;
+                pending_separators = 0;
+            }
+            if (line_end == std::string_view::npos || line_end + 2 >= block.size() ||
+                !is_http_ows_char(block[line_end + 2])) {
+                break;
+            }
+            ++pending_separators;
+            const auto piece_begin = line_end + 2;
+            line_end = block.find("\r\n", piece_begin);
+            piece = line_at(piece_begin, line_end);
+        }
+        if (!budget.add_field(colon, value_bytes)) {
+            return false;
+        }
+        if (line_end == std::string_view::npos) {
+            break;
+        }
+        cursor_value = line_end + 2;
+    }
+    return true;
+}
+
+}  // namespace
 
 http1_chunk_decode_result http1_chunk_decode_result::make_need_more(std::size_t consumed_bytes) noexcept {
     return http1_chunk_decode_result(http1_chunk_decode_need_more(consumed_bytes));
@@ -31,7 +90,8 @@ http1_chunk_decode_result http1_chunk_decode_result::make_failure(
 }
 
 http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder_config config)
-    : body_limit_(config.body_limit_) {}
+    : body_limit_(config.body_limit_),
+      obs_fold_(config.obs_fold_) {}
 
 http1_chunked_body_decoder::~http1_chunked_body_decoder() = default;
 http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder&&) noexcept = default;
@@ -164,10 +224,13 @@ bool http1_chunked_body_decoder::consume_delimiter(std::string_view available, s
     return true;
 }
 
-bool http1_chunked_body_decoder::trailers_valid(std::string_view trailers) noexcept {
+bool http1_chunked_body_decoder::trailers_valid(std::string_view trailers) const noexcept {
     // Received fields that were not permitted as trailers are discarded by the
     // consumers, never merged (RFC 9112 section 7.1.2), so framing validity
     // depends only on field syntax and the section budget.
+    if (obs_fold_ == http1_trailer_obs_fold::accept) {
+        return folded_trailers_valid(trailers);
+    }
     const auto discard_none = [](std::string_view) noexcept { return false; };
     const auto accept = [](std::string_view, std::string_view) noexcept { return true; };
     auto budget = http_trailer_section_budget();

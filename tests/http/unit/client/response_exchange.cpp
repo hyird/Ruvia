@@ -526,7 +526,8 @@ RUVIA_TEST(http_client_connection_fields_use_recipient_list_semantics) {
 }
 
 RUVIA_TEST(http_client_rejects_only_protected_connection_options) {
-    for (const std::string_view option : {"Content-Length", "Set-Cookie", "Authorization", "Cookie", "Host"}) {
+    // Only fields that change how a response is processed are protected.
+    for (const std::string_view option : {"Content-Length", "Transfer-Encoding", "Set-Cookie"}) {
         std::string response = "HTTP/1.1 200 OK\r\nConnection: ";
         response.append(option);
         response.append("\r\nContent-Length: 0");
@@ -535,8 +536,10 @@ RUVIA_TEST(http_client_rejects_only_protected_connection_options) {
     }
 
     // RFC 9110 section 7.6.1 forbids only sending these options; the named
-    // end-to-end fields neither frame, route nor authorize the response.
-    for (const std::string_view option : {"X-Hop", "DATE", "Range", "Cache-Control"}) {
+    // end-to-end fields neither frame nor change the response, and the
+    // request-only fields cannot affect how a response is processed.
+    for (const std::string_view option :
+        {"X-Hop", "DATE", "Range", "Cache-Control", "Host", "Authorization", "Origin", "Cookie"}) {
         std::string response = "HTTP/1.1 200 OK\r\nConnection: ";
         response.append(option);
         response.append("\r\nX-Hop: local\r\nContent-Length: 0");

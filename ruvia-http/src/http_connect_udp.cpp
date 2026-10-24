@@ -30,9 +30,8 @@ struct handshake_fields {
     bool upgrade_{false}, connection_{false}, connection_field_{false}, host_{false}, forbidden_{false};
 };
 template <typename header_type>
-std::variant<handshake_fields, http_connect_udp_error> fields(
-    std::span<const header_type> headers,
-    http_connect_udp_error syntax_error = http_connect_udp_error::invalid_request) noexcept {
+std::variant<handshake_fields, http_connect_udp_error> fields(std::span<const header_type> headers,
+    detail::http_connection_field_role connection_role, http_connect_udp_error syntax_error) noexcept {
     handshake_fields found;
     for (const auto& field : headers) {
         if (!is_valid_http_header_name(field.name()) || !is_valid_http_header_value(field.value())) {
@@ -53,7 +52,7 @@ std::variant<handshake_fields, http_connect_udp_error> fields(
         } else if (http_ascii_equals_ignore_case(field.name(), "connection")) {
             found.connection_field_ = true;
             detail::http_connection_options options;
-            if (options.parse_field(field.value(), detail::http_field_list_role::recipient) != detail::http_field_list_parse_status::ok) {
+            if (options.parse_field(field.value(), connection_role) != detail::http_field_list_parse_status::ok) {
                 return syntax_error;
             }
             found.connection_ = found.connection_ || options.contains(detail::http_connection_option::upgrade);
@@ -75,7 +74,8 @@ std::optional<http_connect_udp_error> validate_connect_udp_response(
         return http_connect_udp_error::invalid_response;
     }
     const bool extended_connect = version != http_protocol_version::http11;
-    const auto parsed_value = fields(headers, http_connect_udp_error::invalid_response);
+    const auto parsed_value =
+        fields(headers, detail::http_connection_field_role::response_recipient, http_connect_udp_error::invalid_response);
     if (parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
@@ -137,7 +137,8 @@ std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_
     if (!authority || authority->empty() || !is_valid_http_origin_form_target(request.path_)) {
         return http_connect_udp_error::invalid_request;
     }
-    const auto parsed_value = fields(request.headers_);
+    const auto parsed_value =
+        fields(request.headers_, detail::http_connection_field_role::request_recipient, http_connect_udp_error::invalid_request);
     if (parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
@@ -195,7 +196,7 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
     // The response's own fields go through the one CONNECT-UDP handshake walk;
     // the protocol, not the application, generates the Upgrade pair.
     const auto parsed_value = fields(std::span(response.headers().begin(), response.headers().size()),
-        http_connect_udp_error::invalid_response);
+        detail::http_connection_field_role::response_recipient, http_connect_udp_error::invalid_response);
     if (parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }

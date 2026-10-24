@@ -129,8 +129,21 @@ private:
     value_type value_;
 };
 
+// How a received trailer section treats obs-fold (RFC 9112 section 5.2). A
+// server may reject a request carrying it (the default); a user agent must
+// replace each obs-fold in a response with SP before interpreting the value,
+// so a response decoder accepts it. An accepted fold is validated, against the
+// field syntax and the section budget, as its HTTP unfolding: the obs-fold and
+// adjacent OWS become one SP. The published trailer block keeps the received
+// bytes; its consumer unfolds them (http1_client_response_body_decoder does).
+enum class http1_trailer_obs_fold : std::uint8_t {
+    reject,
+    accept,
+};
+
 struct http1_chunked_body_decoder_config final {
     protocol_byte_limit body_limit_{protocol_byte_limit::unlimited()};
+    http1_trailer_obs_fold obs_fold_{http1_trailer_obs_fold::reject};
 };
 
 // Incremental sans-I/O HTTP/1 chunk framing decoder. Payload and trailer views
@@ -147,8 +160,9 @@ struct http1_chunked_body_decoder_config final {
 // invalid_framing.
 // Trailer sections must also fit the http_field_section_budget byte rule
 // (name.size() + value.size() + 4 per field, plus 2 for the terminating empty
-// line; see http_trailer_section_budget()). The complete view publishes the raw
-// trailer block; fields a sender was not permitted to generate as trailers are
+// line; see http_trailer_section_budget()). obs-fold in the trailer section
+// follows http1_chunked_body_decoder_config::obs_fold_. The complete view
+// publishes the raw trailer block; fields a sender was not permitted to generate as trailers are
 // not framing errors and are discarded by the block's consumers
 // (http_request_trailers::append_http1, visit_http_response_trailers).
 class http1_chunked_body_decoder final {
@@ -178,9 +192,10 @@ private:
 
     [[nodiscard]] http1_chunk_decode_result fail(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
     [[nodiscard]] bool consume_delimiter(std::string_view available, std::size_t& cursor) noexcept;
-    [[nodiscard]] static bool trailers_valid(std::string_view trailers) noexcept;
+    [[nodiscard]] bool trailers_valid(std::string_view trailers) const noexcept;
 
     protocol_byte_limit body_limit_;
+    http1_trailer_obs_fold obs_fold_;
     // A failed decoder keeps reporting its error without consuming input.
     std::variant<progress, http1_chunk_decode_error> state_{progress::size_line};
     // Bytes of the pending size line or trailer section already scanned for LF.

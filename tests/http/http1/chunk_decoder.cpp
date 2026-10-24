@@ -353,6 +353,36 @@ RUVIA_TEST(chunked_body_decoder_completes_with_fields_not_permitted_as_trailers)
     }
 }
 
+// RFC 9112 section 5.2: a server may reject obs-fold (the request default),
+// a user agent replaces it with SP, so the response policy validates the
+// unfolding and publishes the received bytes for its consumer to unfold.
+RUVIA_TEST(chunked_body_decoder_trailer_obs_fold_follows_the_configured_policy) {
+    constexpr std::string_view folded = "0\r\nX-T: a\r\n \t b\r\n\t\r\n c\r\nX-U: d\r\n\r\nNEXT";
+    http1_chunked_body_decoder request;
+    const auto rejected = request.decode(folded);
+    RUVIA_CHECK(rejected.failure() != nullptr);
+    if (const auto* failure = rejected.failure()) {
+        RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::invalid_framing);
+    }
+
+    http1_chunked_body_decoder response({.obs_fold_ = ruvia::http1_trailer_obs_fold::accept});
+    const auto accepted = response.decode(folded);
+    RUVIA_CHECK(accepted.complete() != nullptr);
+    if (const auto* complete = accepted.complete()) {
+        RUVIA_CHECK_EQ(complete->trailers(), "X-T: a\r\n \t b\r\n\t\r\n c\r\nX-U: d");
+        RUVIA_CHECK_EQ(complete->consumed_bytes(), folded.size() - 4);
+    }
+
+    // A fold is a continuation, never a field line of its own, and its bytes
+    // are still field-value bytes.
+    for (const std::string_view invalid : {std::string_view("0\r\n x: a\r\n\r\n"),
+             std::string_view("0\r\nX-T: a\r\n b\x01\r\n\r\n"), std::string_view("0\r\nX-T: a\r\nbad\r\n\r\n")}) {
+        http1_chunked_body_decoder decoder({.obs_fold_ = ruvia::http1_trailer_obs_fold::accept});
+        const auto result_value = decoder.decode(invalid);
+        RUVIA_CHECK(result_value.failure() != nullptr);
+    }
+}
+
 RUVIA_TEST(chunked_body_decoder_validates_config_quota_and_neutral_errors) {
     http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::unlimited()});
     constexpr std::string_view wire = "3\r\nabc\r\n0\r\n\r\n";

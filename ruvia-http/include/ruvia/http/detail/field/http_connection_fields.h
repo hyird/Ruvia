@@ -145,21 +145,37 @@ enum class http_connection_option : std::uint8_t {
            known_bit != response_header_transfer_encoding;
 }
 
+// Who parses a Connection field: its sender, or the recipient of a request or
+// of a response, whose protected lists differ.
+enum class http_connection_field_role : std::uint8_t {
+    sender,
+    request_recipient,
+    response_recipient,
+};
+
 // The received options a recipient still refuses. RFC 9110 section 7.6.1
 // forbids only sending an option that names an end-to-end field, but an
 // intermediary removes every named field, so an option naming a field that
-// frames the message (Content-Length), routes it (Host) or carries access
-// credentials, state or provenance (Authorization, Cookie, Set-Cookie, Origin)
-// leaves the message boundary, target or access decision ambiguous and fails
-// closed. Any other named field is kept and the option ignored.
-[[nodiscard]] inline bool http_connection_option_names_protected_field(std::string_view option) noexcept {
+// changes how the recipient processes the message leaves that processing
+// ambiguous and fails closed:
+// - every message: the framing fields Content-Length and Transfer-Encoding,
+//   and Set-Cookie (state);
+// - a request also: Host (routing) and Authorization, Cookie, Origin (access
+//   credentials, state, provenance).
+// Request-only fields cannot change how a response is processed, so a
+// response naming them is valid. Any other named field is kept and the option
+// ignored.
+[[nodiscard]] inline bool http_connection_option_names_protected_field(
+    std::string_view option, http_connection_field_role recipient) noexcept {
     switch (classify_request_header(option)) {
         case request_header_kind::content_length:
+        case request_header_kind::transfer_encoding:
+            return true;
         case request_header_kind::host:
         case request_header_kind::authorization:
         case request_header_kind::cookie:
         case request_header_kind::origin:
-            return true;
+            return recipient == http_connection_field_role::request_recipient;
         default:
             return classify_response_header_name(option) == response_header_set_cookie;
     }
@@ -171,11 +187,12 @@ enum class http_connection_option : std::uint8_t {
 // not name a field the protocol layer manages: a hop-by-hop declaration must
 // not strip framing or end-to-end metadata from the message. A recipient
 // rejects only options naming a protected field (see
-// http_connection_option_names_protected_field).
+// http_connection_option_names_protected_field). Empty list members are
+// malformed for a sender and ignored by a recipient (RFC 9110 section 5.6.1).
 class http_connection_options final {
 public:
     [[nodiscard]] http_field_list_parse_status parse_field(
-        std::string_view field_value, http_field_list_role role) noexcept {
+        std::string_view field_value, http_connection_field_role role) noexcept {
         auto parsed_bits = state_;
         std::size_t start = 0;
         while (start <= field_value.size()) {
@@ -187,15 +204,16 @@ public:
                 // and cannot be safely extended by a later generated option;
                 // the strict writer contract therefore rejects it as well as
                 // leading, trailing, and interior empty members.
-                if (role == http_field_list_role::sender) {
+                if (role == http_connection_field_role::sender) {
                     return http_field_list_parse_status::malformed;
                 }
             } else {
                 if (!is_valid_http_header_name(option)) {
                     return http_field_list_parse_status::malformed;
                 }
-                if (role == http_field_list_role::sender ? http_connection_option_conflicts_with_managed_field(option)
-                                                         : http_connection_option_names_protected_field(option)) {
+                if (role == http_connection_field_role::sender
+                        ? http_connection_option_conflicts_with_managed_field(option)
+                        : http_connection_option_names_protected_field(option, role)) {
                     return http_field_list_parse_status::rejected;
                 }
                 if (http_ascii_equals_ignore_case(option, "close")) {

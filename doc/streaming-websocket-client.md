@@ -12,6 +12,8 @@
 
 在 `RUVIA_POST`、`RUVIA_PUT` 或 `RUVIA_PATCH` 路由宏中附加 `ruvia::stream_body` 策略即可注册流式请求体路由。此类路由不会预先缓冲整个请求体，而是由处理器按块拉取。
 
+> **内容编码**：`stream_body` 路由只移除传输编码（`Transfer-Encoding`，如 `chunked`、`gzip`），不解码请求的 `Content-Encoding`。无论请求声明何种内容编码（包括 `gzip` 等已知编码与 `xyz` 等未知编码），处理器读到的都是编码后的原始字节，框架既不解码也不回 `415`；需要时由处理器自行检查 `Content-Encoding` 并解码或拒绝。缓冲路由则会解码受支持的内容编码，对不支持的编码回 `415`（附 `Accept-Encoding`）、对损坏的编码数据回 `400`。RFC 9110 §8.4 中以 `415` 拒绝不可接受的内容编码是 MAY，两种行为均符合规范。
+
 #### `ruvia::body_reader`（通过 `c.req().body_reader()` 获取）
 
 | 方法签名 | 说明 |

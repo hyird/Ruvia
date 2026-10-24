@@ -72,7 +72,7 @@ private:
     for (const auto& header : response.headers()) {
         switch (classify_request_header(header.name())) {
             case request_header_kind::connection:
-                if (connection_options.parse_field(header.value(), http_field_list_role::sender) !=
+                if (connection_options.parse_field(header.value(), http_connection_field_role::sender) !=
                     http_field_list_parse_status::ok) {
                     return http1_final_response_control_plan_error::invalid_connection_field;
                 }

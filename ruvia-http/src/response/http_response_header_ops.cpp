@@ -38,7 +38,7 @@ namespace {
     switch (kind) {
         case detail::request_header_kind::connection: {
             detail::http_connection_options options;
-            if (options.parse_field(value, detail::http_field_list_role::sender) !=
+            if (options.parse_field(value, detail::http_connection_field_role::sender) !=
                 detail::http_field_list_parse_status::ok) {
                 throw std::invalid_argument("invalid HTTP Connection header");
             }

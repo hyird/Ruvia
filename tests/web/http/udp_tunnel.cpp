@@ -324,3 +324,27 @@ RUVIA_TEST(http_client_open_tunnel_connect_udp_requires_capsule_protocol_true) {
         std::rethrow_exception(failure);
     }
 }
+
+// RFC 9110 section 7.8: Upgrade together with Expect: 100-continue gets a
+// 100 (Continue) before the 101 (Switching Protocols), for a CONNECT-UDP
+// upgrade exactly as for a WebSocket one, even though no content follows.
+RUVIA_TEST(http1_udp_tunnel_upgrade_with_continue_expectation_sends_100_before_101) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    constexpr std::string_view request =
+        "GET /udp-tunnel/target.test/53 HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade, close\r\n"
+        "Upgrade: connect-udp\r\nCapsule-Protocol: ?1\r\nExpect: 100-continue\r\n\r\n";
+    asio::write(client, asio::buffer(request));
+    std::string response;
+    std::array<char, 1024> input{};
+    std::error_code ec;
+    while (!ec) {
+        const auto read = client.read_some(asio::buffer(input), ec);
+        response.append(input.data(), read);
+    }
+    RUVIA_CHECK(response.starts_with("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 101 "));
+    client.close();
+    server.finish();
+}

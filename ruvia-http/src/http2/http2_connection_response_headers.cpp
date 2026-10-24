@@ -1,4 +1,3 @@
-#include <charconv>
 #include <cstdint>
 #include <memory_resource>
 #include <string_view>
@@ -55,14 +54,9 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
         if (name != ":status" || context_value->status_ || context_value->saw_regular_) {
             return false;
         }
-        int parsed_status = 0;
-        const auto [ptr, ec] =
-            std::from_chars(value.data(), value.data() + value.size(), parsed_status);
-        if (value.size() != 3 || ec != std::errc{} || ptr != value.data() + value.size()) {
-            return false;
-        }
-        // RFC 9110 section 15: a received 600..999 is processed as a 5xx response.
-        const auto status = http_received_status::try_from_value(static_cast<std::uint16_t>(parsed_status));
+        // RFC 9110 section 15: a received 000..099 or 600..999 is processed as
+        // a 5xx response.
+        const auto status = http_received_status::try_parse(value);
         if (!status || status->status() == http_status::switching_protocols) {
             return false;
         }
