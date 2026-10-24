@@ -62,7 +62,8 @@ public:
     [[nodiscard]] bool terminated() const noexcept;
     [[nodiscard]] bool header_block_in_progress() const noexcept;
     [[nodiscard]] std::size_t active_runtime_count() const noexcept;
-    [[nodiscard]] bool worker_running() const noexcept;
+    // The drain completed: every stream ended and the final GOAWAY was written.
+    [[nodiscard]] bool drain_finished() const noexcept;
     void set_inactivity_phase() noexcept;
     void touch_activity() noexcept;
     void wake_writer() noexcept;

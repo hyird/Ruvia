@@ -14,37 +14,40 @@
 namespace ruvia::detail {
 
 // How a TCP connection session ended, which decides how its socket closes.
+// A stopping worker closes every connection immediately, whatever its mode.
 enum class http_connection_close : std::uint8_t {
-    // Failure, timeout, worker stop, or a vanished peer: close immediately.
+    // Transport failure, a stalled transfer, or a vanished peer: close at once.
     abort,
-    // The peer ended its input cleanly (FIN or TLS close_notify). TLS answers
-    // with its own close_notify (RFC 9846 §6.1).
-    peer_finished,
-    // The final response is complete. Plain TCP half-closes its send side,
-    // TLS sends close_notify, and the owner closes without draining peer input.
-    after_response,
+    // No further peer input is expected: the peer ended its input (FIN or TLS
+    // close_notify), or this side ended a wait for a request head (timeout or
+    // drain). TLS sends close_notify first (RFC 9112 §9.8, RFC 9846 §6.1).
+    notify,
+    // This side ended the connection while peer input may still arrive: after
+    // the final HTTP/1 response, or after HTTP/2 GOAWAY. Lingering close
+    // (RFC 9112 §9.6): TLS close_notify, TCP send shutdown, then peer input is
+    // read and discarded until its end, a deadline or a byte budget, so unread
+    // input cannot make TCP reset the connection and destroy the last response.
+    linger,
 };
 
-// Session ownership and its count lease may outlive the transport. Finish a
-// completed plain response before caller-side logging or frame retirement;
-// the session fallback is harmless when its writer already closed TCP.
-inline void close_plain_http_connection(asio::ip::tcp::socket& socket, bool send_shutdown) noexcept {
-    if (!socket.is_open()) {
-        return;
-    }
+// Half-closes plain TCP after the final response. The session's close still
+// lingers and closes the socket.
+inline void shutdown_http_connection_send(asio::ip::tcp::socket& socket) noexcept {
     std::error_code ignored;
-    if (send_shutdown) {
-        socket.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
-    }
-    socket.close(ignored);
+    socket.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
 }
 
-// Flush TLS close_notify for a non-aborted session without waiting for the
-// peer's alert or draining input. A fixed deadline, write timeout and worker
-// scanner bound the attempt. The caller closes TCP after completion and must
-// not start this operation once the worker is stopping.
-// The returned task borrows the stream, scanner and worker until completion.
+// The lingering close of a plain connection, short of the final TCP close.
+// The caller closes TCP after completion and must not start this operation
+// once the worker is stopping; scanner close_all, a fixed deadline and the
+// worker scanner bound it. The task borrows its arguments until completion.
+[[nodiscard]] task<void> linger_http_connection(
+    asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_handle& worker_value);
+
+// Sends TLS close_notify for a non-aborted session without waiting for the
+// peer's alert, then lingers like linger_http_connection() when `mode` is
+// http_connection_close::linger. Same bounds and caller duties as above.
 [[nodiscard]] task<void> close_http_connection_gracefully(server_tls_stream& stream,
-    connection_scanner& scanner, const worker_handle& worker_value);
+    http_connection_close mode, connection_scanner& scanner, const worker_handle& worker_value);
 
 }  // namespace ruvia::detail

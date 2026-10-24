@@ -303,6 +303,8 @@ ruvia::task<void> handle_udp(ruvia::context& c) {
 | `received_cookies_` | `http_client_received_cookie_policy`（默认 `ignore`） | 设为 `retain_and_send` 时启用客户端 Cookie Jar 自动管理 `Set-Cookie` |
 | `push_` / `advertisements_` | `http_client_push_config` / `http_client_advertisement_config` | 控制是否接收 HTTP/2 Server Push 与 `ORIGIN` / `ALTSVC` 通告 |
 
+TLS 连接关闭时（响应要求关闭、`shutdown()` 退役空闲连接或 HTTP/2 会话、WebSocket 与 Redis 客户端关闭），客户端先以一次非阻塞写发送 `close_notify`（[RFC 9112 §9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.8)），不等待对端告警；仍有写入在途、写入失败或发生 TLS 错误后的关闭不发送告警，`CONNECT` 隧道由隧道自身负责 TLS 关闭。
+
 ### 5.3 发送请求、读取响应与流式代理
 
 ```cpp

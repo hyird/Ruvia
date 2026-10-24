@@ -186,8 +186,8 @@ std::size_t http2_sans_io_session_engine::active_runtime_count() const noexcept 
     return stream_runtimes_.size();
 }
 
-bool http2_sans_io_session_engine::worker_running() const noexcept {
-    return session_.worker_running();
+bool http2_sans_io_session_engine::drain_finished() const noexcept {
+    return drain_finished_;
 }
 
 void http2_sans_io_session_engine::request_drain() noexcept {

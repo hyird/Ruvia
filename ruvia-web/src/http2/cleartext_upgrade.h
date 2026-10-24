@@ -21,14 +21,13 @@
 #include "server/http_connection_close.h"
 #include "server/http_connection_state.h"
 #include "server/http_server_options.h"
-#include "server/http_server_worker_state.h"
 
 namespace ruvia::detail {
 
 // What starting an HTTP/2 server session takes from the connection that hands
 // it over: the stream to speak on, the socket underneath it, the worker's
-// memory and scanner entry, and the routes, options, services and worker state
-// every request on the session will be served with.
+// memory and scanner entry, and the routes, options and services every
+// request on the session will be served with.
 template <typename stream_type>
 struct http2_server_session_setup final {
     stream_type& stream_;
@@ -38,13 +37,15 @@ struct http2_server_session_setup final {
     const http_server_options& options_;
     connection_scanner::entry& scanner_entry_;
     context_services services_;
-    const http_server_worker_state& worker_state_;
 };
 
 enum class cleartext_http2_dispatch_result : std::uint8_t {
     continue_http1,
     continue_read_loop,
+    // The connection ends; close it at once.
     session_finished,
+    // The HTTP/2 session ended after its GOAWAY; close it lingering.
+    session_lingering,
 };
 
 // The client preface must be the first bytes of the connection (RFC 9113
@@ -66,8 +67,7 @@ task<http_connection_close> run_http2_server_session(
     http2_server_session_setup<stream_type> setup, std::string_view initial_bytes = {}) {
     (void)setup.socket_;  // the sans-I/O session needs only the (possibly TLS) setup.stream
     co_return co_await run_http2_sans_io_session(setup.stream_, setup.routes_, setup.memory_,
-        http2_sans_io_session_context(
-            std::move(setup.services_), setup.options_, setup.scanner_entry_, setup.worker_state_),
+        http2_sans_io_session_context(std::move(setup.services_), setup.options_, setup.scanner_entry_),
         initial_bytes);
 }
 
@@ -80,10 +80,9 @@ task<cleartext_http2_dispatch_result> dispatch_cleartext_http2_preface(
         case http2_cleartext_preface_probe::http1:
             co_return cleartext_http2_dispatch_result::continue_http1;
         case http2_cleartext_preface_probe::complete_preface:
-            // Cleartext TCP has no close alert; an HTTP/2 session never ends
-            // with a server-initiated close after a response.
-            (void)co_await run_http2_server_session(setup, current);
-            co_return cleartext_http2_dispatch_result::session_finished;
+            co_return co_await run_http2_server_session(setup, current) == http_connection_close::linger
+                ? cleartext_http2_dispatch_result::session_lingering
+                : cleartext_http2_dispatch_result::session_finished;
         case http2_cleartext_preface_probe::need_more_preface: {
             setup.scanner_entry_.read_request_head(connection_scanner::phase::reading_initial);
             const auto space = read_buffer.prepare_read();

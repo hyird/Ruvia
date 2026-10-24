@@ -72,8 +72,9 @@ public:
 
     // Begins writing the output followed by `body`, which stays borrowed until
     // complete(). Returns true when the write already settled.
-    // A final plain response closes TCP here only after every byte was accepted,
-    // so its Linux send hint is flushed before any logging or frame cleanup.
+    // A final plain response half-closes TCP here only after every byte was
+    // accepted, so its Linux send hint is flushed before any logging or frame
+    // cleanup; the session's lingering close then waits for the peer's end.
     // A partial write falls back to ordinary async_write without that hint.
     // MSVC 19.51 can lose a required coroutine tail call when this synchronous
     // path is inlined into its caller.
@@ -94,7 +95,7 @@ public:
                                              std::array<asio::const_buffer, 2>{asio::buffer(output), asio::buffer(body)},
                                              output.size() + body.size(), flags, written_.error_, written_.bytes_);
             if (completed && !written_.error_ && finish_connection) {
-                close_plain_http_connection(*stream_, true);
+                shutdown_http_connection_send(*stream_);
             }
             return completed;
         } else {

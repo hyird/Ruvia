@@ -54,9 +54,34 @@ void client_tcp_transport::close() noexcept {
     write_.timer_.cancel();
     write_.deadline_.reset();
     resolver_.cancel();
+    send_close_notify();
     std::error_code ignored;
     (void)stream_.lowest_layer().cancel(ignored);
     (void)stream_.lowest_layer().close(ignored);
+}
+
+void client_tcp_transport::send_close_notify() noexcept {
+    if (!tls_close_ready_ || writing_) {
+        return;
+    }
+    tls_close_ready_ = false;
+    auto& socket = stream_.next_layer();
+    SSL* const native = stream_.native_handle();
+    if (!socket.is_open() || SSL_is_init_finished(native) != 1 ||
+        (SSL_get_shutdown(native) & SSL_SENT_SHUTDOWN) != 0) {
+        return;
+    }
+    std::error_code error;
+    (void)socket.non_blocking(true, error);
+    if (error) {
+        return;
+    }
+    // Send our alert without waiting for the peer's: recording its alert as
+    // received makes SSL_shutdown complete after the one write. The engine is
+    // never read again; a full socket buffer fails the write and the close
+    // proceeds without the alert.
+    SSL_set_shutdown(native, SSL_get_shutdown(native) | SSL_RECEIVED_SHUTDOWN);
+    (void)stream_.shutdown(error);
 }
 
 // An idle pooled connection is reusable only while the peer has sent nothing:
@@ -145,6 +170,7 @@ client_transport_result client_tcp_transport::finish(lane_deadline& lane, const 
 }
 
 task<client_transport_result> client_tcp_transport::connect(const operation_timeout& timeout) {
+    tls_close_ready_ = false;
     if (tls_started_) {
         // Closing a socket leaves Asio's encrypted input cursor and BIO pair
         // alive. Swap through a fresh stream so the retired SSL engine is
@@ -192,7 +218,9 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     const auto handshake = co_await async_asio([this](auto handler) mutable {
         stream_.async_handshake(asio::ssl::stream_base::client, std::move(handler));
     });
-    co_return finish(read_, timeout, handshake.error_code(), 0, client_transport_status::tls_failed);
+    auto result_value = finish(read_, timeout, handshake.error_code(), 0, client_transport_status::tls_failed);
+    tls_close_ready_ = result_value.ok();
+    co_return result_value;
 }
 
 std::string_view client_tcp_transport::alpn() noexcept {
@@ -211,6 +239,10 @@ task<client_transport_result> client_tcp_transport::read_some(std::span<char> by
                                 : co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
                                       stream_.next_layer().async_read_some(buffer, std::move(handler));
                                   });
+    // After a TLS failure the engine owes the peer no further records.
+    if (is_tls_error(completion.error_code())) {
+        tls_close_ready_ = false;
+    }
     auto result_value = finish(read_, timeout, completion.error_code(),
         completion.error_code() ? 0 : completion.result(), client_transport_status::io_failed);
     if (result_value.ok() && result_value.bytes_ == 0) {
@@ -231,6 +263,7 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
     if (!arm(write_, timeout)) {
         co_return aborted();
     }
+    writing_ = true;
     const auto completion = secure()
                                 ? co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
                                       asio::async_write(stream_, buffers, std::move(handler));
@@ -238,6 +271,12 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
                                 : co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
                                       asio::async_write(stream_.next_layer(), buffers, std::move(handler));
                                   });
+    writing_ = false;
+    // A failed write may have left a record half sent; an alert after it
+    // would only corrupt the stream further.
+    if (completion.error_code()) {
+        tls_close_ready_ = false;
+    }
     auto result_value = finish(write_, timeout, completion.error_code(),
         completion.error_code() ? 0 : completion.result(), client_transport_status::io_failed);
     if (result_value.status_ == client_transport_status::eof) {

@@ -87,6 +87,12 @@ int main() {
 | `memory_pool_` | `memory_pool_config` | 请求 Arena 初始字节数（`request_initial_buffer_bytes_`）与 worker 保留块上限（`retained_block_bytes_`） |
 | `http_client_result_budget_` | `http_client_result_budget_config` | 出站 HTTP 客户端保留字节预算 |
 
+连接关闭遵循 [RFC 9112 §9.6/§9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6)：
+
+- 服务器主动结束、而对端仍可能发来数据时采用逗留关闭：HTTP/1 发送要求关闭连接的最终响应（`Connection: close`、请求被拒绝、排空中）后，以及 HTTP/2 以 `GOAWAY` 结束会话（排空完成、空闲超时、连接错误）后，TLS 先发送 `close_notify`，再半关闭 TCP 发送方向，读取并丢弃对端剩余输入，直到对端结束输入、累计 2 秒或丢弃 4 MiB 先发生为止，然后关闭 TCP。这样未读输入不会使 TCP 以 RST 结束连接而冲掉最后的响应。2 秒与 4 MiB 是固定的产品上限。
+- 等待请求头时发生空闲超时、请求头超时或排空，以及对端正常结束输入时，TLS 发送 `close_notify` 后关闭。HTTP/2 连接超时（写入阶段除外）先进入 `GOAWAY` 排空；同一连接再次超时则直接关闭。
+- 写超时、读取请求体超时、处理器无读写超过 `idle_timeout_`、传输错误以及 `drain_timeout_` 到期后的强制关闭立即关闭连接，不发送关闭告警。逗留中的连接计入 `active_connections_`，受 `drain_timeout_` 约束。
+
 #### `ruvia::listen_config` 与 `ruvia::tls_config`
 
 ```cpp

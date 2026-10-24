@@ -46,10 +46,15 @@ enum class process_signal_handler_policy : std::uint8_t {
 // this aggregate atomically, validates it as one unit, and publishes the same
 // normalized values to every worker. Optional fields disable only the policy
 // they name; optional application capabilities remain separate config-or-null calls.
-// A final response that closes HTTP/1 is followed by send-side shutdown (TLS:
-// close_notify) and TCP close, without draining peer input. Unread or late peer
-// data can therefore cause a reset that prevents receipt of the final response
-// (RFC 9112 §9.6); the server does not wait for the peer's FIN.
+// A final response that closes HTTP/1, and an HTTP/2 session that ends with
+// GOAWAY, close lingering (RFC 9112 §9.6): TLS sends close_notify, TCP shuts
+// down its send side, and peer input is read and discarded until the peer ends
+// it, for at most 2 s and 4 MiB (fixed product limits), before TCP closes.
+// Unread peer input therefore cannot reset the connection ahead of the final
+// response; a lingering connection still counts as active and is closed by
+// a worker stop. Idle, request-head timeout and drain closes of a connection
+// awaiting a request send TLS close_notify (RFC 9112 §9.8); write timeouts,
+// transport errors and forced stops close immediately.
 // On Linux, a final buffered plain response may share its last TCP segment with
 // FIN. Reusable, streamed and TLS output do not use this send hint.
 // TCP may close before the session task is reclaimed. Worker shutdown still

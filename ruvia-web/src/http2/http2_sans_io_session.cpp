@@ -155,11 +155,20 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
     if (finish_failure != nullptr) {
         std::rethrow_exception(finish_failure);
     }
-    // A clean peer end (FIN, or TLS close_notify) earns this side's close
-    // alert; protocol failures, transport errors and worker stop do not.
-    co_return reader_terminal_error == asio::error::eof&& engine.worker_running()
-        ? http_connection_close::peer_finished
-        : http_connection_close::abort;
+    // A failed write leaves nothing to end gracefully. A clean peer end (FIN,
+    // or TLS close_notify) earns this side's close alert. A completed drain
+    // (worker drain or idle timeout) or a connection error ended the session
+    // with GOAWAY while peer frames may still arrive: close lingering
+    // (RFC 9113 §9.1, RFC 9112 §9.6). Transport errors close at once, and so
+    // does a stopping worker, whatever this mode.
+    if (engine.write_failed()) {
+        co_return http_connection_close::abort;
+    }
+    if (reader_terminal_error == asio::error::eof) {
+        co_return http_connection_close::notify;
+    }
+    co_return engine.drain_finished() || engine.connection_failed() ? http_connection_close::linger
+                                                                    : http_connection_close::abort;
 }
 
 }  // namespace

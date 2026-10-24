@@ -124,6 +124,11 @@ public:
     // except during connect: Asio's multi-endpoint connect moves on to the next
     // endpoint after a cancelled attempt and stops only on a closed socket.
     void abort(client_abort_reason reason) noexcept;
+    // Closes the connection. An established TLS connection with no write in
+    // flight and intact output first sends close_notify (RFC 9112 §9.8,
+    // RFC 9846 §6.1) with one non-blocking write: a peer that is not reading
+    // does not delay the close, it only misses the alert. A pending read does
+    // not hold the alert back; the close cancels it.
     void close() noexcept;
     // Bounded non-blocking check of a connected, idle transport that never
     // runs the TLS engine. An HTTP/1 peer sends nothing between exchanges, so
@@ -131,8 +136,10 @@ public:
     // (FIN, TLS close_notify, post-handshake records or an unsolicited response).
     [[nodiscard]] bool idle_open() noexcept;
 
-    // Raw stream for the CONNECT tunnel adapter, which owns TLS shutdown.
+    // Raw stream for the CONNECT tunnel adapter, which owns TLS shutdown: the
+    // transport no longer sends close_notify for this connection.
     [[nodiscard]] asio::ssl::stream<asio::ip::tcp::socket>& stream() noexcept {
+        tls_close_ready_ = false;
         return stream_;
     }
 
@@ -144,6 +151,7 @@ private:
 
     template <typename buffers_type>
     [[nodiscard]] task<client_transport_result> write_buffers(buffers_type buffers, const operation_timeout& timeout);
+    void send_close_notify() noexcept;
     [[nodiscard]] bool arm(lane_deadline& lane, const operation_timeout& timeout);
     [[nodiscard]] bool clear(lane_deadline& lane) noexcept;
     [[nodiscard]] client_transport_result finish(lane_deadline& lane, const operation_timeout& timeout,
@@ -161,6 +169,11 @@ private:
     client_abort_reason abort_reason_{client_abort_reason::none};
     bool tls_started_{false};
     bool connecting_{false};
+    // The TLS connection is established and every record this side started
+    // was written whole, so a close may append close_notify.
+    bool tls_close_ready_{false};
+    // A write is in flight: the engine's output belongs to it.
+    bool writing_{false};
 };
 
 }  // namespace ruvia::detail

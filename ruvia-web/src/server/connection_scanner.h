@@ -104,8 +104,16 @@ public:
         void set_phase(phase next_phase) noexcept;
         // Reads the head of the connection's next request, timed by
         // `timeout_phase`. No request is admitted until a later set_phase(), so
-        // draining closes the connection meanwhile; touch() keeps the read open.
+        // draining ends the connection meanwhile; touch() keeps the read open.
+        // A timeout or drain cancels the read and sets close_requested().
         void read_request_head(phase timeout_phase) noexcept;
+        // The scanner asked the connection to end gracefully: it cancelled a
+        // request-head read, or invoked a drain callback for a timeout. The
+        // owner closes without waiting for further input; a later timeout of
+        // the same entry closes its socket.
+        [[nodiscard]] bool close_requested() const noexcept {
+            return close_requested_;
+        }
 
         // Hands the entry back, when it ends, to the phase it had when it
         // began: same phase, same phase start and request-head state, with
@@ -141,7 +149,8 @@ public:
         [[nodiscard]] bool enter_long_lived() noexcept;
         [[nodiscard]] std::int64_t last_active_ms() const noexcept;
         // `drain` is optional: a long-lived connection uses it to end itself
-        // gracefully once draining starts.
+        // gracefully once draining starts. A connection whose read or idle
+        // phase times out is asked the same way once, instead of being closed.
         void register_periodic_check(periodic_check_registration& registration, void* target,
             periodic_check_type tick, drain_check_type drain = nullptr) noexcept;
 
@@ -163,6 +172,7 @@ public:
         std::int64_t phase_started_ms_{0};
         phase phase_{phase::idle};
         bool reading_request_head_{false};
+        bool close_requested_{false};
         periodic_check_registration* periodic_checks_{nullptr};
         periodic_check_registration* periodic_scan_next_{nullptr};
     };
@@ -193,9 +203,10 @@ public:
     void start();
     void stop() noexcept;
     void close_all() noexcept;
-    // Starts draining: closes connections waiting for or still reading an
-    // unadmitted HTTP/1 request head, then notifies registered protocol drain
-    // callbacks on all admitted sessions (including multiplexed HTTP/2).
+    // Starts draining: cancels the read of connections waiting for or still
+    // reading an unadmitted HTTP/1 request head (see close_requested()), then
+    // notifies registered protocol drain callbacks on all admitted sessions
+    // (including multiplexed HTTP/2).
     // From then on enter_long_lived() refuses new upgrades. Admitted requests
     // and connections without a callback may finish until the worker stops.
     void drain() noexcept;
@@ -228,6 +239,11 @@ struct connection_scanner::impl_type final {
     [[nodiscard]] bool scan(std::int64_t interval_start) noexcept;
     [[nodiscard]] bool is_timed_out(const entry& entry, std::int64_t now) const noexcept;
     [[nodiscard]] static bool active_since(const entry& entry, std::int64_t interval_start) noexcept;
+    // Ends a timed-out connection: the first time gracefully when its owner
+    // can (a pending request-head read, or a drain callback outside writing),
+    // otherwise by closing its socket.
+    static void expire(entry& entry) noexcept;
+    static void request_close(entry& entry) noexcept;
     struct timer_state_type final {
         explicit timer_state_type(impl_type* owner_value) noexcept
             : owner_(owner_value) {}

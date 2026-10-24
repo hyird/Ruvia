@@ -613,8 +613,9 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         }
         if (outcome == startup_outcome::serve) {
             RUVIA_CHECK(read_response(socket).find("initialized") != std::string::npos);
-            // The peer deliberately keeps its send side open. Completing a
-            // final response must release server capacity without waiting for FIN.
+            // A final response lingers only until the peer ends its input
+            // (RFC 9112 §9.6); the peer's close then releases server capacity.
+            socket.close();
             const auto close_deadline = std::chrono::steady_clock::now() + 1s;
             while (app.http_stats().active_connections_ != 0 &&
                    std::chrono::steady_clock::now() < close_deadline) {

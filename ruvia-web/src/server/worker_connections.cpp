@@ -504,8 +504,13 @@ task<void> worker_connections::run_session(
         resolve_remote_endpoint(socket, remote_address, remote_port);
         const auto close_mode = co_await run_stream(listener_value, socket, socket,
             capabilities_.make_context_services(stop_token_).with_plain_transport(remote_address, remote_port));
-        close_plain_http_connection(socket,
-            close_mode == http_connection_close::after_response && !stop_token_.stop_requested());
+        // Plain TCP has no close alert: only a lingering close differs from an
+        // immediate one. A worker stop closes at once; scanner close_all
+        // reaches a lingering close that is already running.
+        if (close_mode == http_connection_close::linger && !stop_token_.stop_requested()) {
+            co_await linger_http_connection(socket, scanner_, worker_);
+        }
+        ruvia::close_socket(socket);
     } catch (...) {
         report_session_failure(socket, remote_address, std::current_exception());
     }
@@ -553,7 +558,7 @@ task<void> worker_connections::run_tls_session(
         // A worker stop keeps the immediate close; scanner close_all reaches a
         // graceful close that is already running.
         if (close_mode != http_connection_close::abort && !stop_token_.stop_requested()) {
-            co_await close_http_connection_gracefully(tls_stream, scanner_, worker_);
+            co_await close_http_connection_gracefully(tls_stream, close_mode, scanner_, worker_);
         }
         ruvia::close_socket(socket);
     } catch (...) {
@@ -567,7 +572,7 @@ task<http_connection_close> worker_connections::run_http2(stream_type& stream, t
     connection_scanner::entry scanner_entry;
     connection_scanner::guard scanner_guard(scanner_, scanner_entry, socket);
     co_return co_await run_http2_server_session(http2_server_session_setup<stream_type>{
-        .stream_ = stream, .socket_ = socket, .memory_ = memory_, .routes_ = routes_, .options_ = options_, .scanner_entry_ = scanner_entry, .services_ = services, .worker_state_ = state_});
+        .stream_ = stream, .socket_ = socket, .memory_ = memory_, .routes_ = routes_, .options_ = options_, .scanner_entry_ = scanner_entry, .services_ = services});
 }
 
 void worker_connections::report_session_failure(

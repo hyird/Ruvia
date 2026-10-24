@@ -64,6 +64,7 @@ void connection_scanner::entry::set_phase(phase next_phase) noexcept {
 void connection_scanner::entry::read_request_head(phase timeout_phase) noexcept {
     set_phase(timeout_phase);
     reading_request_head_ = now_ms_ != nullptr;
+    close_requested_ = false;
 }
 connection_scanner::entry::phase_scope::~phase_scope() {
     if (entry_.now_ms_ == nullptr) {
@@ -253,6 +254,7 @@ void connection_scanner::impl_type::register_entry(entry& entry_value, asio::ip:
     entry_value.touch();
     entry_value.phase_started_ms_ = cached_now_ms_;
     entry_value.phase_ = phase::idle;
+    entry_value.close_requested_ = false;
     entry_value.next_ = sentinel_.next_;
     entry_value.prev_ = &sentinel_;
     sentinel_.next_->prev_ = &entry_value;
@@ -289,7 +291,7 @@ void connection_scanner::impl_type::drain() noexcept {
     for (auto* current = sentinel_.next_; current != &sentinel_;) {
         auto* const next = current->next_;
         if (current->reading_request_head_) {
-            close_socket(*current->socket_);
+            request_close(*current);
         } else {
             current->notify_drain();
         }
@@ -357,7 +359,7 @@ bool connection_scanner::impl_type::scan(std::int64_t interval_start) noexcept {
             registration->tick_(registration->target_, now);
         }
         if (scan_current_ != nullptr && is_timed_out(*scan_current_, now)) {
-            close_socket(*scan_current_->socket_);
+            expire(*scan_current_);
         }
         scan_current_ = nullptr;
     }
@@ -370,6 +372,29 @@ bool connection_scanner::impl_type::active_since(const entry& entry_value, std::
     // (a handshake, an admitted request, a response) is an exchange.
     return entry_value.last_active_ms_ >= interval_start ||
            (!entry_value.reading_request_head_ && entry_value.phase_ != phase::long_lived);
+}
+void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
+    if (!entry_value.close_requested_) {
+        if (entry_value.reading_request_head_) {
+            request_close(entry_value);
+            return;
+        }
+        // A stalled write cannot carry a graceful end (GOAWAY, close alert).
+        if (entry_value.phase_ != phase::writing && entry_value.has_drain_check()) {
+            // The callback may retire the entry; record the request first.
+            entry_value.close_requested_ = true;
+            entry_value.notify_drain();
+            return;
+        }
+    }
+    close_socket(*entry_value.socket_);
+}
+void connection_scanner::impl_type::request_close(entry& entry_value) noexcept {
+    // The pending read completes with operation_aborted; its owner then ends
+    // the connection with its close alert instead of an abrupt close.
+    entry_value.close_requested_ = true;
+    std::error_code ignored;
+    entry_value.socket_->cancel(ignored);
 }
 bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::int64_t now) const noexcept {
     // Stamps come from the coarse clock, which lags the activity it records by
