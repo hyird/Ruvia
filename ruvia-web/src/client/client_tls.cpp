@@ -170,18 +170,17 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
     config.certificate_->install(context_value);
 }
 
-client_tls_setup_error prepare_client_tls_stream(asio::ssl::stream<asio::ip::tcp::socket>& stream,
-    std::string_view host, client_tls_mode mode, client_alpn alpn) {
-    if (SSL_clear(stream.native_handle()) != 1) {
+client_tls_setup_error prepare_client_tls_stream(
+    SSL& ssl, std::string_view host, client_tls_mode mode, client_alpn alpn) {
+    if (SSL_clear(&ssl) != 1) {
         return client_tls_setup_error::reset_failed;
     }
-    if (const auto prepared = prepare_client_tls_session(*stream.native_handle(), host, mode);
+    if (const auto prepared = prepare_client_tls_session(ssl, host, mode);
         prepared != client_tls_setup_error::none) {
         return prepared;
     }
     const auto protocols = client_alpn_bytes(alpn);
-    if (SSL_set_alpn_protos(stream.native_handle(), protocols.data(),
-            static_cast<unsigned int>(protocols.size())) != 0) {
+    if (SSL_set_alpn_protos(&ssl, protocols.data(), static_cast<unsigned int>(protocols.size())) != 0) {
         return client_tls_setup_error::alpn_failed;
     }
     return client_tls_setup_error::none;

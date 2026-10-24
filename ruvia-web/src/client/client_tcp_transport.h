@@ -19,6 +19,7 @@
 
 #include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
+#include "client/client_tls_socket.h"
 
 namespace ruvia::detail {
 
@@ -76,7 +77,9 @@ struct client_tcp_endpoint final {
 // Redis clients. Protocol-neutral: callers map results onto their error
 // types. One worker owns the socket; the read lane (resolve, connect, TLS
 // handshake, reads) and the write lane have independent deadlines so a
-// full-duplex exchange can bound its upload separately. Address-stable.
+// full-duplex exchange can bound its upload separately. A connected socket
+// stays in non-blocking mode: every operation on it is asynchronous or a
+// bounded probe. Address-stable.
 class client_tcp_transport final {
 public:
     client_tcp_transport(asio::io_context& io, asio::ssl::context& tls, const worker_handle& worker_value,
@@ -124,11 +127,14 @@ public:
     // except during connect: Asio's multi-endpoint connect moves on to the next
     // endpoint after a cancelled attempt and stops only on a closed socket.
     void abort(client_abort_reason reason) noexcept;
-    // Closes the connection. An established TLS connection with no write in
-    // flight and intact output first sends close_notify (RFC 9112 §9.8,
-    // RFC 9846 §6.1) with one non-blocking write: a peer that is not reading
-    // does not delay the close, it only misses the alert. A pending read does
-    // not hold the alert back; the close cancels it.
+    // Closes the connection at once. An established TLS connection first
+    // sends close_notify (RFC 9112 §9.8, RFC 9846 §6.1) with one non-blocking
+    // write when the alert can follow every record already sent whole: no
+    // record write, from a write or from a read answering a post-handshake
+    // message, still waits for the socket or ended inside a record, and none
+    // failed or was cancelled. A peer that is not reading does not delay the
+    // close, it only misses the alert. A pending read does not hold the alert
+    // back; the close cancels it.
     void close() noexcept;
     // Bounded non-blocking check of a connected, idle transport that never
     // runs the TLS engine. An HTTP/1 peer sends nothing between exchanges, so
@@ -138,7 +144,7 @@ public:
 
     // Raw stream for the CONNECT tunnel adapter, which owns TLS shutdown: the
     // transport no longer sends close_notify for this connection.
-    [[nodiscard]] asio::ssl::stream<asio::ip::tcp::socket>& stream() noexcept {
+    [[nodiscard]] asio::ssl::stream<client_tls_socket>& stream() noexcept {
         tls_close_ready_ = false;
         return stream_;
     }
@@ -163,17 +169,15 @@ private:
     client_tcp_endpoint endpoint_;
     client_wire_counters& counters_;
     asio::ip::tcp::resolver resolver_;
-    asio::ssl::stream<asio::ip::tcp::socket> stream_;
+    asio::ssl::stream<client_tls_socket> stream_;
     lane_deadline read_;
     lane_deadline write_;
     client_abort_reason abort_reason_{client_abort_reason::none};
     bool tls_started_{false};
     bool connecting_{false};
-    // The TLS connection is established and every record this side started
-    // was written whole, so a close may append close_notify.
+    // The TLS connection is established and has not failed, so a close may
+    // append close_notify once its socket layer holds whole records only.
     bool tls_close_ready_{false};
-    // A write is in flight: the engine's output belongs to it.
-    bool writing_{false};
 };
 
 }  // namespace ruvia::detail

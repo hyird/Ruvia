@@ -29,7 +29,7 @@ client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::cont
       endpoint_(endpoint),
       counters_(counters),
       resolver_(io),
-      stream_(io, tls) {}
+      stream_(io.get_executor(), tls) {}
 
 client_tcp_transport::~client_tcp_transport() = default;
 
@@ -61,26 +61,32 @@ void client_tcp_transport::close() noexcept {
 }
 
 void client_tcp_transport::send_close_notify() noexcept {
-    if (!tls_close_ready_ || writing_) {
+    if (!tls_close_ready_) {
         return;
     }
     tls_close_ready_ = false;
-    auto& socket = stream_.next_layer();
+    auto& layer = stream_.next_layer();
+    auto& socket = layer.socket();
     SSL* const native = stream_.native_handle();
-    if (!socket.is_open() || SSL_is_init_finished(native) != 1 ||
+    // One worker runs every engine call, so the engine orders the alert after
+    // the records of the pending read and write. On the socket it must follow
+    // them whole too: while a record write waits for the socket or ended
+    // inside a record (from a write, or from a read answering a post-handshake
+    // message) the alert would land inside that record, and after a failed or
+    // cancelled write it would follow a cut or lost one, so the close goes
+    // without the alert. A post-handshake message still being read keeps the
+    // engine in init.
+    if (!layer.records_whole() || !socket.is_open() || SSL_is_init_finished(native) != 1 ||
         (SSL_get_shutdown(native) & SSL_SENT_SHUTDOWN) != 0) {
         return;
     }
-    std::error_code error;
-    (void)socket.non_blocking(true, error);
-    if (error) {
-        return;
-    }
     // Send our alert without waiting for the peer's: recording its alert as
-    // received makes SSL_shutdown complete after the one write. The engine is
-    // never read again; a full socket buffer fails the write and the close
-    // proceeds without the alert.
+    // received makes SSL_shutdown complete after the one write on the
+    // non-blocking socket, which first flushes engine output an operation
+    // left unsent. The engine is never read again; a full socket buffer fails
+    // the write and the close proceeds without the alert.
     SSL_set_shutdown(native, SSL_get_shutdown(native) | SSL_RECEIVED_SHUTDOWN);
+    std::error_code error;
     (void)stream_.shutdown(error);
 }
 
@@ -98,7 +104,7 @@ void client_tcp_transport::send_close_notify() noexcept {
 // costs one reconnect. Raw bytes Asio holds in its own input buffer stay
 // invisible here, like a close racing the probe: the response read reports them.
 bool client_tcp_transport::idle_open() noexcept {
-    auto& socket = stream_.next_layer();
+    auto& socket = stream_.next_layer().socket();
     if (!socket.is_open()) {
         return false;
     }
@@ -109,14 +115,8 @@ bool client_tcp_transport::idle_open() noexcept {
         }
     }
     std::error_code error;
-    (void)socket.non_blocking(true, error);
-    if (error) {
-        return false;
-    }
     char byte{};
     (void)socket.receive(asio::buffer(&byte, 1), asio::socket_base::message_peek, error);
-    std::error_code ignored;
-    (void)socket.non_blocking(false, ignored);
     return error == asio::error::would_block;
 }
 
@@ -174,8 +174,9 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     if (tls_started_) {
         // Closing a socket leaves Asio's encrypted input cursor and BIO pair
         // alive. Swap through a fresh stream so the retired SSL engine is
-        // destroyed without overwriting its native owner.
-        asio::ssl::stream<asio::ip::tcp::socket> fresh(stream_.get_executor(), tls_);
+        // destroyed without overwriting its native owner, and the socket
+        // layer's record accounting starts over.
+        asio::ssl::stream<client_tls_socket> fresh(stream_.get_executor(), tls_);
         std::swap(stream_, fresh);
         tls_started_ = false;
     }
@@ -203,13 +204,17 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
         timeout.expired()) {
         co_return finish(read_, timeout, connected.error_code(), 0, client_transport_status::connect_failed);
     }
-    apply_tcp_socket_policies(stream_.next_layer(), endpoint_.tcp_.no_delay_, endpoint_.tcp_.keep_alive_);
-    if (!secure()) {
-        co_return finish(read_, timeout, {}, 0, client_transport_status::connect_failed);
+    apply_tcp_socket_policies(stream_.next_layer().socket(), endpoint_.tcp_.no_delay_, endpoint_.tcp_.keep_alive_);
+    // Every socket operation is asynchronous or a bounded probe, and the TLS
+    // socket layer writes records directly.
+    std::error_code mode_error;
+    (void)stream_.next_layer().socket().non_blocking(true, mode_error);
+    if (mode_error || !secure()) {
+        co_return finish(read_, timeout, mode_error, 0, client_transport_status::connect_failed);
     }
     tls_started_ = true;
-    if (const auto prepared = prepare_client_tls_stream(
-            stream_, endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.tls_->mode_, endpoint_.alpn_);
+    if (const auto prepared = prepare_client_tls_stream(*stream_.native_handle(),
+            endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.tls_->mode_, endpoint_.alpn_);
         prepared != client_tls_setup_error::none) {
         (void)clear(read_);
         co_return client_transport_result{.status_ = client_transport_status::tls_failed,
@@ -237,7 +242,7 @@ task<client_transport_result> client_tcp_transport::read_some(std::span<char> by
                                       stream_.async_read_some(buffer, std::move(handler));
                                   })
                                 : co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
-                                      stream_.next_layer().async_read_some(buffer, std::move(handler));
+                                      stream_.next_layer().socket().async_read_some(buffer, std::move(handler));
                                   });
     // After a TLS failure the engine owes the peer no further records.
     if (is_tls_error(completion.error_code())) {
@@ -263,20 +268,13 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
     if (!arm(write_, timeout)) {
         co_return aborted();
     }
-    writing_ = true;
     const auto completion = secure()
                                 ? co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
                                       asio::async_write(stream_, buffers, std::move(handler));
                                   })
                                 : co_await async_asio<std::size_t>([this, buffers](auto handler) mutable {
-                                      asio::async_write(stream_.next_layer(), buffers, std::move(handler));
+                                      asio::async_write(stream_.next_layer().socket(), buffers, std::move(handler));
                                   });
-    writing_ = false;
-    // A failed write may have left a record half sent; an alert after it
-    // would only corrupt the stream further.
-    if (completion.error_code()) {
-        tls_close_ready_ = false;
-    }
     auto result_value = finish(write_, timeout, completion.error_code(),
         completion.error_code() ? 0 : completion.result(), client_transport_status::io_failed);
     if (result_value.status_ == client_transport_status::eof) {

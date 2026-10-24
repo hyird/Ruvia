@@ -501,7 +501,7 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
                 http_socket_tunnel_transport transport(stream, tls);
                 error = co_await transport.write_bytes(bytes_value, ending);
             } else {
-                http_socket_tunnel_transport transport(stream.next_layer(), nullptr);
+                http_socket_tunnel_transport transport(stream.next_layer().socket(), nullptr);
                 error = co_await transport.write_bytes(bytes_value, ending);
             }
             write_timer.cancel();
@@ -538,7 +538,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
     worker_timer_registration lifetime_timer;
     std::optional<tls_tunnel_output> tls;
     if (secure) {
-        tls.emplace(*stream.native_handle(), stream.next_layer(), pool_.worker(), *pool_.resource());
+        tls.emplace(*stream.native_handle(), stream.next_layer().socket(), pool_.worker(), *pool_.resource());
         tls->start();
     }
     std::exception_ptr writer_failure;
