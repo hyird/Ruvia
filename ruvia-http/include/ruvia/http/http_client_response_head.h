@@ -34,7 +34,7 @@ class http_client_response_head final {
 public:
     http_client_response_head(const http_client_response_head&) = delete;
     http_client_response_head& operator=(const http_client_response_head&) = delete;
-    // Moving transfers fields without allocation. The source retains its
+    // Moving transfers the owned field storage. The source retains its
     // status and version and exposes empty fields.
     http_client_response_head(http_client_response_head&&) noexcept = default;
     http_client_response_head& operator=(http_client_response_head&&) = delete;
@@ -61,6 +61,8 @@ public:
     // metadata but needs to extend the fields' lifetime independently.
     // Repeated extraction, including after moving the head, returns an empty
     // vector in the original PMR resource, which must still be alive.
+    // Checked STL builds may allocate iterator metadata. If that allocation
+    // fails, the head retains its fields and the exception propagates.
     [[nodiscard]] std::pmr::vector<http_header> take_headers() && {
         return std::pmr::vector<http_header>(std::move(headers_), headers_.get_allocator());
     }
