@@ -324,10 +324,14 @@ struct file_validators final {
 // holds them. Content-Encoding stays: it names the coding of the bytes this
 // message carries, and the response coding policy reads it to keep a
 // precompressed variant acceptable to a client that refuses identity.
+// RFC 9110 15.5.17: a 416 has no content, so Content-Type and Content-Encoding
+// would describe bytes that are not sent; it keeps Content-Range and the
+// validator and cache fields.
 enum class file_header_set : std::uint8_t {
     full,
     if_range_partial,
     not_modified,
+    range_unsatisfied,
 };
 
 [[nodiscard]] std::string_view file_media_type(const file_response_source& source_value) {
@@ -338,6 +342,8 @@ enum class file_header_set : std::uint8_t {
 void add_file_headers(http_response& response, const file_response_source& source_value,
     const file_validators& validators, file_header_set header_set = file_header_set::full) {
     const bool full = header_set == file_header_set::full;
+    const bool carries_content =
+        header_set == file_header_set::full || header_set == file_header_set::if_range_partial;
     response.reserve_headers(file_response_header_reserve);
     if (full) {
         response.header("Content-Type", file_media_type(source_value));
@@ -347,7 +353,7 @@ void add_file_headers(http_response& response, const file_response_source& sourc
     }
     // A precompressed variant carries the original Content-Type with the
     // encoding declared here.
-    if (header_set != file_header_set::not_modified && source_value.content_coding_ != http_content_coding::identity) {
+    if (carries_content && source_value.content_coding_ != http_content_coding::identity) {
         response.header("Content-Encoding", http_content_coding_token(source_value.content_coding_));
     }
     if (header_set != file_header_set::not_modified &&
@@ -356,7 +362,7 @@ void add_file_headers(http_response& response, const file_response_source& sourc
     }
     if (source_value.response_validators_ == static_response_validator_policy::emit) {
         response.header("ETag", validators.etag_);
-        if (full && !validators.last_modified_.empty()) {
+        if ((full || header_set == file_header_set::range_unsatisfied) && !validators.last_modified_.empty()) {
             response.header("Last-Modified", validators.last_modified_);
         }
     }
@@ -488,7 +494,7 @@ void validate_indexed_file_for_bodyless_response(
         validate_indexed_file_for_bodyless_response(source_value, indexed_file_validated);
         http_response response(context_value.arena());
         response.content_range_unsatisfied(source_value.size_);
-        add_file_headers(response, source_value, validators);
+        add_file_headers(response, source_value, validators, file_header_set::range_unsatisfied);
         apply_file_response_state(context_value, source_value, response, plan.status());
         return response;
     }

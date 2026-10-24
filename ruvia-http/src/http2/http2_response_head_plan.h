@@ -100,6 +100,12 @@ using http2_response_head_plan_result_type =
     if (!write_plan.matches_response(response)) {
         return http2_response_head_plan_error::response_representation_mismatch;
     }
+    // An empty suppressed HEAD body describes the GET representation only
+    // through its declared Content-Length, if any (RFC 9110 section 8.6).
+    if (body_plan.body_suppressed() && body_plan.status_allows_body() &&
+        body_plan.explicit_content_length_allowed() && write_plan.content_length() == 0) {
+        return http2_response_head_plan::preserve_explicit(body_plan, response);
+    }
     if (body_plan.auto_content_length_allowed()) {
         return http2_response_head_plan::canonical(
             body_plan, body_plan.status_allows_body() ? write_plan.content_length() : 0);

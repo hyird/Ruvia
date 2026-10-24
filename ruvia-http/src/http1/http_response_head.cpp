@@ -146,20 +146,21 @@ void append_response_head(
         throw std::invalid_argument("HTTP/1.0 response cannot use chunked Transfer-Encoding");
     }
     const bool emit_chunked_transfer_encoding = chunked_payload_plan;
-    const bool auto_content_length_owned_by_writer =
-        body_plan.auto_content_length_allowed() && !emit_chunked_transfer_encoding &&
-        (buffered != nullptr || !body_plan.status_allows_body());
-    const bool explicit_content_length_allowed =
-        body_plan.explicit_content_length_allowed() && !emit_chunked_transfer_encoding &&
-        !auto_content_length_owned_by_writer &&
-        (plan.close_delimited_stream() == nullptr || body_plan.body_suppressed());
     // A HEAD handler may describe the GET representation without producing it.
     // Its empty suppressed body then has no length of its own, so the declared
-    // Content-Length is the only truthful value (RFC 9110 section 8.6).
+    // Content-Length is the only truthful value, and without one the field is
+    // omitted rather than claiming an empty GET (RFC 9110 section 8.6).
     const bool suppressed_empty_buffered_body = buffered != nullptr && body_plan.body_suppressed() &&
                                                 body_plan.status_allows_body() &&
                                                 body_plan.explicit_content_length_allowed() &&
                                                 buffered->content_length() == 0;
+    const bool auto_content_length_owned_by_writer =
+        body_plan.auto_content_length_allowed() && !emit_chunked_transfer_encoding &&
+        !suppressed_empty_buffered_body && (buffered != nullptr || !body_plan.status_allows_body());
+    const bool explicit_content_length_allowed =
+        body_plan.explicit_content_length_allowed() && !emit_chunked_transfer_encoding &&
+        !auto_content_length_owned_by_writer &&
+        (plan.close_delimited_stream() == nullptr || body_plan.body_suppressed());
     const auto known_bits = response_known_header_bits(response);
     const auto declared_content_length =
         (explicit_content_length_allowed || suppressed_empty_buffered_body) &&

@@ -10,7 +10,6 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
-#include "http_connect_udp_send.h"
 #include "parser/http_uri_grammar.h"
 #include "request/http_request_access.h"
 
@@ -164,7 +163,7 @@ std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_
 std::optional<http_connect_udp_error> validate_http_connect_udp_request(http_connect_udp_request_view request) noexcept {
     return validate_request(request, false);
 }
-std::optional<http_connect_udp_error> detail::validate_http_connect_udp_request_to_send(
+std::optional<http_connect_udp_error> validate_http_connect_udp_request_to_send(
     http_connect_udp_request_view request) noexcept {
     return validate_request(request, true);
 }

@@ -448,6 +448,9 @@ public:
         const http_client_request_view& request) const;
     [[nodiscard]] task<http_client_exchange> open_request(
         const http_client_request_view& head, http_client_upload_config upload = {}) const;
+    // CONNECT (empty protocol_) or Extended CONNECT. protocol_ "connect-udp"
+    // requires exactly one caller-supplied Capsule-Protocol: ?1 field on every
+    // HTTP version (RFC 9297 3.4); otherwise std::invalid_argument.
     [[nodiscard]] task<http_client_tunnel_result> open_tunnel(const http_client_tunnel_request_view& request, http_client_tunnel_config config = {}) const;
     // Negotiates RFC 9298 and returns an accepted tunnel or ordinary rejection.
     // The proxy authority comes from this registered origin. Capsule-Protocol

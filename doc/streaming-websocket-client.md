@@ -340,7 +340,7 @@ std::string_view text = body_bytes.text();
   auto response = co_await exchange.response();
   ```
 - **出站 `CONNECT` 与 `CONNECT-UDP` 隧道**：
-  - `co_await client.open_tunnel({.authority_ = "example.com:443"})`：返回 `http_client_tunnel_result`。成功时 `result.tunnel()` 非空，支持 `read()`、`write(...)`、`finish()`；非 2xx 时 `result.response()` 提供错误响应。
+  - `co_await client.open_tunnel({.authority_ = "example.com:443"})`：返回 `http_client_tunnel_result`。成功时 `result.tunnel()` 非空，支持 `read()`、`write(...)`、`finish()`；非 2xx 时 `result.response()` 提供错误响应。`.protocol_ = "connect-udp"` 时请求必须恰好带一个 `Capsule-Protocol: ?1`（HTTP/1.1 与 HTTP/2 相同，否则抛出 `std::invalid_argument`）；`open_udp_tunnel` 会自动添加该字段。
   - `co_await client.open_udp_tunnel({.target_ = "/.well-known/masque/udp/192.0.2.1/53/"})`：通过 `std::move(*opened.tunnel()).udp()` 获取 `http_udp_tunnel` 收发 UDP 数据报。
 
 ---

@@ -1,6 +1,8 @@
 #include "server/http_response_compression.h"
 
+#include <charconv>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <optional>
@@ -92,6 +94,42 @@ namespace {
     return parser.finish();
 }
 
+// The single decimal Content-Length a HEAD handler declared, or nullopt.
+[[nodiscard]] std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept {
+    const auto value = http_trim_ows(response.header("Content-Length").value_or(std::string_view{}));
+    std::uint64_t length = 0;
+    const auto* end = value.data() + value.size();
+    const auto [ptr, ec] = std::from_chars(value.data(), end, length);
+    if (value.empty() || ec != std::errc{} || ptr != end) {
+        return std::nullopt;
+    }
+    return length;
+}
+
+// An empty HEAD body is a HEAD handler describing the GET representation
+// without producing it. Encoding those zero bytes would publish the coded
+// length of nothing (RFC 9110 §8.6). Apply the coding GET would select, sized
+// by the declared Content-Length, and drop that length: the coded size is
+// unknown and §8.6 allows omitting it.
+[[nodiscard]] http_buffered_compression_step apply_head_content_encoding(
+    const http_response_coding_selection& selection, http_response& response, const compression_config& options) {
+    const auto declared = declared_content_length(response);
+    const bool encode = declared.has_value()
+                            ? !((*declared < options.min_bytes_ && selection.identity_accepted()) ||
+                                  *declared > options.max_bytes_)
+                            : !selection.identity_accepted();
+    if (!encode) {
+        return {http_response_compression_status::not_applicable, false};
+    }
+    try {
+        response.apply_content_encoding(http_content_coding_token(selection.coding()));
+    } catch (...) {
+        ruvia::report_unhandled_failure("response compression", std::current_exception());
+        return {http_response_compression_status::failed, false};
+    }
+    return {http_response_compression_status::compressed, false};
+}
+
 }  // namespace
 
 http_response_compression_decision prepare_response_compression(
@@ -139,6 +177,10 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     const auto decision = prepare_response_compression(selection, request_method, response,
         http_response_compression_source::buffered,
         http_response_coding_availability::identity_and_compression);
+    if (decision == http_response_compression_decision::encode && request_method == http_known_method::head &&
+        body.empty()) {
+        return apply_head_content_encoding(selection, response, options);
+    }
     // min_bytes_ only says when encoding stops paying off; a client that
     // refuses identity is served a coding at any size instead of a 406.
     if (decision != http_response_compression_decision::encode ||

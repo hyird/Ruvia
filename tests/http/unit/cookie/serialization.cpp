@@ -24,7 +24,7 @@ RUVIA_TEST(cookie_plan_serialization_emits_fields_without_attributes) {
 }
 
 RUVIA_TEST(cookie_plan_serialization_formats_exact_max_age_widths_and_prefixed_fields) {
-    constexpr std::int64_t ages[]{0, 1, 9, 10, 99, 100, 999, 1000, ruvia::max_cookie_age_seconds};
+    constexpr std::int64_t ages[]{1, 9, 10, 99, 100, 999, 1000, ruvia::max_cookie_age_seconds};
     for (const auto age : ages) {
         const ruvia::cookie_options options{
             .path_ = "/", .max_age_ = std::chrono::seconds{age}, .prefix_ = ruvia::cookie_prefix::host, .secure_ = ruvia::cookie_attribute_policy::emit};
@@ -42,4 +42,15 @@ RUVIA_TEST(cookie_plan_serialization_formats_exact_max_age_widths_and_prefixed_f
             RUVIA_CHECK(parsed_value->path().data() == wire.data() + wire.find('/'));
         }
     }
+}
+
+RUVIA_TEST(cookie_plan_serialization_writes_zero_max_age_as_deletion_expires) {
+    // max-age-av = "Max-Age=" non-zero-digit *DIGIT (RFC 6265 section 4.1.1).
+    const ruvia::cookie_options options{.path_ = "/",
+        .expires_ = std::chrono::system_clock::time_point{std::chrono::hours{24 * 365 * 40}},
+        .max_age_ = std::chrono::seconds{0}};
+    const ruvia::set_cookie_plan plan("sid", "", options);
+    std::string wire(plan.size(), '\0');
+    plan.write(wire.data());
+    RUVIA_CHECK_EQ(wire, "sid=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
 }

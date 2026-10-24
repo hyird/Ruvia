@@ -458,3 +458,17 @@ RUVIA_TEST(context_json_serializes_response_model_with_json_content_type) {
         co_return;
     });
 }
+
+RUVIA_TEST(context_redirect_rejects_backslash_inside_authority) {
+    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+        // Browsers end the host at '\'; "%5C" would send them to evil.example.
+        RUVIA_CHECK(throws_on([&] { (void)context.redirect({.location_ = "http://good.example\\@evil.example/"}); }));
+        RUVIA_CHECK(throws_on([&] { (void)context.redirect({.location_ = "//good.example\\@evil.example/"}); }));
+        // Outside the authority the backslash is encoded, which only narrows it.
+        const auto relative = context.redirect({.location_ = "/\\evil.example"});
+        RUVIA_CHECK_EQ(relative.header("Location"), std::string_view("/%5Cevil.example"));
+        const auto in_path = context.redirect({.location_ = "https://good.example/a\\b"});
+        RUVIA_CHECK_EQ(in_path.header("Location"), std::string_view("https://good.example/a%5Cb"));
+        co_return;
+    });
+}

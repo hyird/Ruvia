@@ -24,12 +24,16 @@ set_cookie_plan::set_cookie_plan(
       prefix_text_(options.prefix_ ? detail::cookie_prefix_text(*options.prefix_) : std::string_view{}),
       priority_text_(options.priority_ ? detail::cookie_priority_token(*options.priority_) : std::string_view{}),
       same_site_text_(options.same_site_ ? detail::cookie_same_site_token(*options.same_site_) : std::string_view{}),
-      has_max_age_(options.max_age_.has_value()),
+      // max-age-av starts with a non-zero digit (RFC 6265 section 4.1.1);
+      // an immediate expiry is written as the past deletion Expires instead.
+      has_max_age_(options.max_age_.has_value() && options.max_age_->count() != 0),
       http_only_(detail::cookie_attribute_emitted(options.http_only_)),
       secure_(detail::cookie_attribute_emitted(options.secure_)),
       partitioned_(detail::cookie_attribute_emitted(options.partitioned_)) {
-    if (options.expires_.has_value()) {
-        const auto seconds = std::chrono::floor<std::chrono::seconds>(options.expires_->time_since_epoch()).count();
+    const bool expire_now = options.max_age_.has_value() && options.max_age_->count() == 0;
+    if (expire_now || options.expires_.has_value()) {
+        const auto expires = expire_now ? cookie_deletion_expires : *options.expires_;
+        const auto seconds = std::chrono::floor<std::chrono::seconds>(expires.time_since_epoch()).count();
         if (!std::in_range<std::time_t>(seconds)) {
             throw std::invalid_argument("cookie Expires is not representable");
         }

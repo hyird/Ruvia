@@ -26,6 +26,31 @@ namespace {
            status_code == http_status::permanent_redirect;
 }
 
+// RFC 3986 section 3.2 authority of an absolute or network-path reference:
+// it follows "//" and ends at the first "/", "?" or "#". Browsers treat "\" as
+// a path separator for http(s) (WHATWG URL), so a percent-encoded "\" inside
+// the authority would move the host the browser contacts, e.g.
+// "http://good.example\@evil.example/".
+[[nodiscard]] bool redirect_authority_contains_backslash(std::string_view location) noexcept {
+    std::size_t start = 0;
+    if (!location.starts_with("//")) {
+        const auto colon = location.find(':');
+        if (colon == std::string_view::npos || colon == 0 || location.substr(colon + 1, 2) != "//") {
+            return false;
+        }
+        for (std::size_t index = 0; index < colon; ++index) {
+            const char ch = location[index];
+            const bool alpha = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+            if (!alpha && (index == 0 || !((ch >= '0' && ch <= '9') || ch == '+' || ch == '-' || ch == '.'))) {
+                return false;
+            }
+        }
+        start = colon + 1;
+    }
+    const auto authority = location.substr(start + 2);
+    return authority.substr(0, authority.find_first_of("/?#")).find('\\') != std::string_view::npos;
+}
+
 }  // namespace
 
 http_response context::redirect(redirect_response_options options) const {
@@ -36,6 +61,9 @@ http_response context::redirect(redirect_response_options options) const {
     }
     if (redirect_location_contains_line_break(location)) {
         throw std::invalid_argument("redirect location must not contain CR or LF");
+    }
+    if (redirect_authority_contains_backslash(location)) {
+        throw std::invalid_argument("redirect location authority must not contain a backslash");
     }
     http_response response(arena());
     apply_response_state(response, status_code);

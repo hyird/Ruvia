@@ -71,6 +71,10 @@ class response_compression_routes final {
     RUVIA_GET("/compression-file", file);
     RUVIA_GET("/compression-static", static_file);
     RUVIA_GET("/compression-coded-static", coded_static_file);
+    RUVIA_GET("/compression-head", small);
+    RUVIA_HEAD("/compression-head", head_declared);
+    RUVIA_GET("/compression-head-bare", small);
+    RUVIA_HEAD("/compression-head-bare", head_bare);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> small(ruvia::context& context_value) {
@@ -81,6 +85,13 @@ class response_compression_routes final {
         co_return context_value.text(std::string_view(large_body));
     }
 
+    ruvia::task<ruvia::http_response> head_declared(ruvia::context& context_value) {
+        context_value.header("Content-Length", std::to_string(small_body.size()));
+        co_return context_value.text("");
+    }
+    ruvia::task<ruvia::http_response> head_bare(ruvia::context& context_value) {
+        co_return context_value.text("");
+    }
     ruvia::task<ruvia::http_response> tiny(ruvia::context& context_value) {
         co_return context_value.text("hello");
     }
@@ -160,6 +171,11 @@ class response_compression_routes final {
 [[nodiscard]] std::string_view response_body(std::string_view response) {
     const auto separator = response.find("\r\n\r\n");
     return separator == std::string_view::npos ? std::string_view{} : response.substr(separator + 4);
+}
+
+[[nodiscard]] std::string head_request(std::string_view target, std::string_view fields) {
+    return "HEAD " + std::string(target) + " HTTP/1.1\r\nHost: localhost\r\n" + std::string(fields) +
+           "Connection: close\r\n\r\n";
 }
 
 [[nodiscard]] std::string get_request(std::string_view target, std::string_view fields) {
@@ -333,6 +349,22 @@ RUVIA_TEST(http1_precompressed_variant_answers_multiple_ranges_in_full) {
     RUVIA_CHECK(has_field(single_fields, "content-range: bytes 0-1/" + std::to_string(sidecar.size())));
     RUVIA_CHECK(response_body(single) == "gz");
 
+    // RFC 9110 §15.5.17: the empty 416 does not describe coded or typed content.
+    for (const std::string_view coding : {"gzip", "gzip, identity;q=0"}) {
+        const auto unsatisfied = fetch_response(server.endpoint(),
+            get_request("/compression-coded-static",
+                "Accept-Encoding: " + std::string(coding) + "\r\nRange: bytes=100-200\r\n"))
+                                     .value_or("");
+        RUVIA_CHECK(unsatisfied.starts_with("HTTP/1.1 416 "));
+        const auto unsatisfied_fields = head_fields(unsatisfied);
+        RUVIA_CHECK(!has_field(unsatisfied_fields, "content-encoding:"));
+        RUVIA_CHECK(!has_field(unsatisfied_fields, "content-type:"));
+        RUVIA_CHECK(has_field(unsatisfied_fields, "content-range: bytes */" + std::to_string(sidecar.size())));
+        RUVIA_CHECK(has_field(unsatisfied_fields, "accept-ranges: bytes"));
+        RUVIA_CHECK(has_field(unsatisfied_fields, "etag:"));
+        RUVIA_CHECK(has_field(unsatisfied_fields, "vary: accept-encoding"));
+    }
+
     // The identity representation still answers several ranges with multipart.
     const auto identity = fetch_response(server.endpoint(),
         get_request("/compression-coded-static", "Accept-Encoding: identity\r\nRange: bytes=0-1,4-5\r\n"))
@@ -343,4 +375,41 @@ RUVIA_TEST(http1_precompressed_variant_answers_multiple_ranges_in_full) {
     server.finish();
     coded_root.reset();
     fs::remove_all(dir, ignored);
+}
+
+// RFC 9110 §8.6: a HEAD response's Content-Length equals the GET content length
+// or is absent. An explicit HEAD route that only declares the GET length must
+// get GET's coding without the encoded length of its own empty body.
+RUVIA_TEST(http1_explicit_head_route_matches_get_coding_without_false_length) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    for (const std::string_view fields : {"Accept-Encoding: gzip\r\n", "Accept-Encoding: gzip, identity;q=0\r\n"}) {
+        const auto get = fetch_response(server.endpoint(), get_request("/compression-head", fields)).value_or("");
+        RUVIA_CHECK(has_field(head_fields(get), "content-encoding: gzip"));
+        const auto head = fetch_response(server.endpoint(), head_request("/compression-head", fields)).value_or("");
+        RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
+        const auto head_line_fields = head_fields(head);
+        RUVIA_CHECK(has_field(head_line_fields, "content-encoding: gzip"));
+        RUVIA_CHECK(!has_field(head_line_fields, "content-length:"));
+        RUVIA_CHECK(response_body(head).empty());
+    }
+    // Without a declared length, identity stays and no length is claimed.
+    const auto bare =
+        fetch_response(server.endpoint(), head_request("/compression-head-bare", "Accept-Encoding: gzip\r\n"))
+            .value_or("");
+    RUVIA_CHECK(bare.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(!has_field(head_fields(bare), "content-encoding:"));
+    RUVIA_CHECK(!has_field(head_fields(bare), "content-length:"));
+    const auto refused = fetch_response(server.endpoint(),
+        head_request("/compression-head-bare", "Accept-Encoding: gzip, identity;q=0\r\n"))
+                             .value_or("");
+    RUVIA_CHECK(refused.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(has_field(head_fields(refused), "content-encoding: gzip"));
+    RUVIA_CHECK(!has_field(head_fields(refused), "content-length:"));
+    // Identity accepted with an identity GET keeps the declared length.
+    const auto identity =
+        fetch_response(server.endpoint(), head_request("/compression-head", "Accept-Encoding: identity\r\n"))
+            .value_or("");
+    RUVIA_CHECK(has_field(head_fields(identity), "content-length: " + std::to_string(small_body.size())));
+    server.finish();
 }

@@ -97,6 +97,11 @@ enum class http_response_compression_status : std::uint8_t {
     if (!plan_http_response_body(request_method, response.status()).status_allows_body()) {
         return false;
     }
+    // An empty 416 carries no content and so no coding to negotiate; its
+    // Content-Range describes the selected representation (RFC 9110 15.5.17).
+    if (response.status() == http_status::range_not_satisfiable && response.body_bytes().empty()) {
+        return false;
+    }
     if (response.header("Content-Encoding").has_value()) {
         // Custom and malformed application-managed coding stacks remain the
         // application's responsibility; every fully known stack is negotiated

@@ -128,7 +128,7 @@ ruvia::app().listen({
 
 #### 压缩、CORS 与可信代理配置
 
-- `compression_config`：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。`min_bytes_` 只是“压缩是否划算”的阈值：请求以 `identity;q=0` 等方式拒绝 identity 时，小于该值的缓冲响应同样压缩（且不要求结果小于原文），而不是回 `406`。响应已带 `Content-Encoding`、`Content-Range`、`Cache-Control: no-transform` 或完整性字段 `Content-Digest` / `Repr-Digest` / `Content-MD5` 时保持原表示不压缩（RFC 9530：摘要随内容编码而变）。
+- `compression_config`：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。`min_bytes_` 只是“压缩是否划算”的阈值：请求以 `identity;q=0` 等方式拒绝 identity 时，小于该值的缓冲响应同样压缩（且不要求结果小于原文），而不是回 `406`。响应已带 `Content-Encoding`、`Content-Range`、`Cache-Control: no-transform` 或完整性字段 `Content-Digest` / `Repr-Digest` / `Content-MD5` 时保持原表示不压缩（RFC 9530：摘要随内容编码而变）。显式 `HEAD` 路由返回空响应体时不压缩该空体：按其声明的 `Content-Length`（无声明时仅在拒绝 identity 时）决定是否加 `Content-Encoding`，加上时去掉 `Content-Length`（编码后长度未知，RFC 9110 §8.6 允许省略）；未声明 `Content-Length` 的空 `HEAD` 响应不再发送 `Content-Length: 0`。
 - `cors_config`：
   - `origin_`：`cors_origin_config{.mode_ = cors_origin_mode::any | exact | credentialed_exact, .value_ = "..."}`
   - `request_headers_`：`cors_request_headers_config{.mode_ = cors_request_headers_mode::reflect | fixed, .names_ = {...}}`
@@ -288,10 +288,10 @@ ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
 | --- | --- |
 | `void status(http_status_code code)` | 设置最终响应状态码（`200..599`） |
 | `void header(name, value, options = {})` / `void remove_header(name)` | 设置（默认 `replace`，可指定 `http_response_header_mode::append`）或移除响应头 |
-| `void set_cookie(set_cookie_options)` / `set_signed_cookie(set_signed_cookie_options)` / `delete_cookie(delete_cookie_options)` | 设置普通 Cookie、HMAC 签名 Cookie 或使指定 Cookie 立即过期（发送过去的 `Expires` 日期，不使用 `Max-Age=0`） |
+| `void set_cookie(set_cookie_options)` / `set_signed_cookie(set_signed_cookie_options)` / `delete_cookie(delete_cookie_options)` | 设置普通 Cookie、HMAC 签名 Cookie 或使指定 Cookie 立即过期（发送过去的 `Expires` 日期，不使用 `Max-Age=0`）。`max_age_ = 0s` 同样写成过去的 `Expires`（RFC 6265 §4.1.1 的 `max-age-av` 以非零数字开头），并覆盖同时设置的 `expires_` |
 | `http_response text(...)` / `html(...)` / `body(...)` | 构造 `text/plain; charset=utf-8`、`text/html; charset=utf-8` 或原始响应体（支持字符串字面量、`std::string_view`、`std::pmr::string&&`、`std::span<const std::byte>`、`ruvia::static_text`） |
 | `template <typename T> http_response json(const T& model) const` | 将 `RUVIA_MODEL` 实例序列化为 `application/json` 响应 |
-| `http_response redirect(redirect_response_options options) const` | 构造重定向响应（默认 `302 Found`，可通过 `.status_` 指定 `301`/`307`/`308` 等） |
+| `http_response redirect(redirect_response_options options) const` | 构造重定向响应（默认 `302 Found`，可通过 `.status_` 指定 `301`/`307`/`308` 等）。绝对或 `//` 开头的 Location 若在 authority 内（`//` 之后、首个 `/`、`?`、`#` 之前）含 `\` 则抛出 `std::invalid_argument`：浏览器把 `\` 当作路径分隔符，编码为 `%5C` 会改变实际访问的主机 |
 | `http_response file(file_response_options options) const` | 发送磁盘文件响应（支持自动 Range 与条件请求处理） |
 | `http_response static_file(const static_root& root, static_file_response_options options) const` | 从预构建的 `static_root` 快照发送静态文件响应 |
 | `http_response error(http_error_info_options options) const` | 构造标准 JSON 错误响应 |

@@ -434,12 +434,12 @@ task<http_client_tunnel_result> http_client_handle::open_tunnel(const http_clien
         (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority_host(borrowed_text(head.authority_)) || head.authority_.empty()))) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }
-    if (head.protocol_ == "connect-udp" && validate_http_connect_udp_request({.version_ = http_protocol_version::http2,
-                                                                                 .method_ = "CONNECT",
-                                                                                 .scheme_ = scheme() == http_scheme::https ? "https" : "http",
-                                                                                 .authority_ = head.authority_,
-                                                                                 .path_ = head.target_,
-                                                                                 .headers_ = head.headers_})
+    if (head.protocol_ == "connect-udp" && validate_http_connect_udp_request_to_send({.version_ = http_protocol_version::http2,
+                                                                                         .method_ = "CONNECT",
+                                                                                         .scheme_ = scheme() == http_scheme::https ? "https" : "http",
+                                                                                         .authority_ = head.authority_,
+                                                                                         .path_ = head.target_,
+                                                                                         .headers_ = head.headers_})
                                                .has_value()) {
         throw std::invalid_argument("invalid CONNECT-UDP request head");
     }

@@ -114,6 +114,8 @@ struct cookie_options final {
     std::optional<cookie_priority> priority_{};
     // UTC, rounded down to whole seconds; year >= 1601. Lifetime caps belong to user agents.
     std::optional<std::chrono::system_clock::time_point> expires_{};
+    // Zero means expire now: written as Expires=cookie_deletion_expires (replacing
+    // expires_), since max-age-av requires a non-zero first digit (RFC 6265 4.1.1).
     std::optional<std::chrono::seconds> max_age_{};
     std::optional<cookie_prefix> prefix_{};
     cookie_attribute_policy http_only_{cookie_attribute_policy::omit};

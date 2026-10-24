@@ -244,3 +244,18 @@ RUVIA_TEST(http_connect_udp_rejects_statuses_that_cannot_start_capsule_protocol)
         RUVIA_CHECK(ruvia::prepare_http_connect_udp_response(std::move(response), ruvia::http_protocol_version::http2).index() != 0);
     }
 }
+
+RUVIA_TEST(http_connect_udp_sender_requires_exactly_one_capsule_protocol_true) {
+    const auto check = [](std::span<const ruvia::http_header_view> fields) {
+        return ruvia::validate_http_connect_udp_request_to_send({.version_ = ruvia::http_protocol_version::http2,
+            .method_ = "CONNECT",
+            .authority_ = "example.test",
+            .path_ = "/proxy",
+            .headers_ = fields});
+    };
+    RUVIA_CHECK(check({}).has_value());
+    const std::array false_value{ruvia::http_header_view{"Capsule-Protocol", "?0"}};
+    RUVIA_CHECK(check(false_value).has_value());
+    const std::array true_value{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
+    RUVIA_CHECK(!check(true_value).has_value());
+}

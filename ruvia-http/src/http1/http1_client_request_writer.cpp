@@ -16,7 +16,6 @@
 #include "client/http1_client_request_headers.h"
 #include "client/http_origin_view.h"
 #include "field/http_expect_token.h"
-#include "http_connect_udp_send.h"
 #include "parser/http_request_target.h"
 #include "util/http_wire_sink.h"
 
@@ -283,13 +282,13 @@ struct request_head_write_plan final {
             http1_client_request_prepare_error::header_too_large);
     }
     if (!connect_udp_headers.empty() &&
-        detail::validate_http_connect_udp_request_to_send({
-                                                              .version_ = http_protocol_version::http11,
-                                                              .method_ = "GET",
-                                                              .authority_ = origin.host(),
-                                                              .path_ = target,
-                                                              .headers_ = connect_udp_headers,
-                                                          })
+        validate_http_connect_udp_request_to_send({
+                                                      .version_ = http_protocol_version::http11,
+                                                      .method_ = "GET",
+                                                      .authority_ = origin.host(),
+                                                      .path_ = target,
+                                                      .headers_ = connect_udp_headers,
+                                                  })
             .has_value()) {
         return detail::http1_client_request_prepare_result_access::failure(
             http1_client_request_prepare_error::invalid_header);

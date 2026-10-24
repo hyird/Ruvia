@@ -410,7 +410,9 @@ private:
 };
 struct redirect_response_options final {
     // URI reference: preserves existing %HH escapes and the first '#' separator;
-    // subsequent '#' bytes are encoded as %23. CR and LF are rejected.
+    // subsequent '#' bytes are encoded as %23. CR and LF are rejected, as is a
+    // '\' inside the authority of an absolute or "//" reference (browsers read
+    // it as a path separator, so encoding it would change the target host).
     borrowed_text location_{};
     http_status_code status_{http_status::found};
 };

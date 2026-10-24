@@ -1,8 +1,10 @@
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <exception>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -278,4 +280,47 @@ RUVIA_TEST(http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
     RUVIA_CHECK(exchange("/udp-tunnel/target.test/53").starts_with("HTTP/1.1 101 "));
     RUVIA_CHECK(udp_observation->dynamic_invoked_);
     server.finish();
+}
+
+// RFC 9297 section 3.4: a Ruvia CONNECT-UDP sender always sends exactly one
+// Capsule-Protocol: ?1, on HTTP/2 Extended CONNECT as on HTTP/1.1.
+RUVIA_TEST(http_client_open_tunnel_connect_udp_requires_capsule_protocol_true) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    std::exception_ptr failure;
+    auto run = [&]() -> ruvia::task<void> {
+        try {
+            ruvia::http_client client(
+                attachment.loop(), {.scheme_ = ruvia::http_scheme::http, .host_ = "127.0.0.1", .port_ = 9});
+            const auto rejected = [&](std::span<const ruvia::http_header_view> fields) {
+                try {
+                    (void)client.handle().open_tunnel({.authority_ = "127.0.0.1:9",
+                        .protocol_ = "connect-udp",
+                        .target_ = "/.well-known/masque/udp/target.test/53/",
+                        .headers_ = fields});
+                } catch (const std::invalid_argument&) {
+                    return true;
+                }
+                return false;
+            };
+            RUVIA_CHECK(rejected({}));
+            const std::array false_value{ruvia::http_header_view{"Capsule-Protocol", "?0"}};
+            RUVIA_CHECK(rejected(false_value));
+            const std::array duplicate{
+                ruvia::http_header_view{"Capsule-Protocol", "?1"}, ruvia::http_header_view{"Capsule-Protocol", "?1"}};
+            RUVIA_CHECK(rejected(duplicate));
+            const std::array accepted{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
+            RUVIA_CHECK(!rejected(accepted));
+            co_await client.shutdown();
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        attachment.stop();
+    };
+    auto done = attachment.loop().start(run());
+    attachment.run();
+    done.get();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
 }
