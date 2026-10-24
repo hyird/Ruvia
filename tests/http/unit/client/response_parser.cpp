@@ -1,7 +1,10 @@
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -14,6 +17,63 @@ namespace {
 
 constexpr std::string_view retained_head = "HTTP/1.1 200 OK\r\nX-Test: kept\r\nContent-Length: 0";
 constexpr std::string_view replacement_head = "HTTP/1.1 200 OK\r\nX-Test: replacement\r\nContent-Length: 0";
+constexpr std::size_t repeated_field_count = 160;
+
+std::string repeated_response_wire(std::string_view status_line, std::string_view trailing_fields) {
+    std::string wire(status_line);
+    wire.append("\r\n");
+    for (std::size_t index = 0; index < repeated_field_count; ++index) {
+        wire.append("X-Repeat: value-");
+        wire.append(std::to_string(index));
+        wire.append("\r\n");
+    }
+    wire.append(trailing_fields);
+    wire.append("\r\n");
+    return wire;
+}
+
+void check_repeated_response_fields(ruvia::testing::test_context& ruvia_ctx,
+    const http_client_response_head& head, std::size_t expected_count) {
+    const auto fields = head.headers();
+    RUVIA_CHECK_EQ(fields.size(), expected_count);
+    if (fields.size() < repeated_field_count) {
+        return;
+    }
+    for (std::size_t index = 0; index < repeated_field_count; ++index) {
+        RUVIA_CHECK_EQ(fields[index].name(), std::string_view("X-Repeat"));
+        RUVIA_CHECK_EQ(fields[index].value(), "value-" + std::to_string(index));
+    }
+}
+
+void check_many_field_response(ruvia::testing::test_context& ruvia_ctx,
+    const http1_client_response_parse_result& result, std::size_t consumed_bytes,
+    bool informational) {
+    const auto* parsed = result.parsed();
+    RUVIA_CHECK(parsed != nullptr);
+    if (parsed == nullptr) {
+        return;
+    }
+    RUVIA_CHECK_EQ(parsed->consumed_bytes(), consumed_bytes);
+    RUVIA_CHECK(parsed->head().protocol_version() == http_protocol_version::http11);
+    check_repeated_response_fields(ruvia_ctx, parsed->head(),
+        repeated_field_count + (informational ? 0 : 1));
+    if (informational) {
+        RUVIA_CHECK(parsed->head().status() == ruvia::http_status::continue_value);
+        RUVIA_CHECK(parsed->plan().informational() != nullptr);
+        RUVIA_CHECK(parsed->plan().request_content_signal() ==
+                    http_client_request_content_signal::continue_value);
+        return;
+    }
+    RUVIA_CHECK(parsed->head().status() == ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(require_known_length(parsed->plan()).content_length(), std::size_t{3});
+    RUVIA_CHECK(require_known_length(parsed->plan()).persistence() == http1_close_policy::allow_reuse);
+    RUVIA_CHECK(!parsed->plan().request_content_signal());
+    const auto fields = parsed->head().headers();
+    if (fields.size() == repeated_field_count + 1) {
+        RUVIA_CHECK_EQ(fields.back().name(), std::string_view("Content-Length"));
+        RUVIA_CHECK_EQ(fields.back().value(), std::string_view("3"));
+    }
+}
 
 void check_response_head(ruvia::testing::test_context& ruvia_ctx,
     const http_client_response_head& head, std::string_view value) {
@@ -169,6 +229,139 @@ RUVIA_TEST(http_client_response_head_move_preserves_fields_and_supports_source_r
         check_response_head(ruvia_ctx, retained, "kept");
     }
     RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http_client_many_response_fields_survive_result_move_and_wire_destruction) {
+    failing_memory_resource memory;
+    {
+        std::optional<http1_client_response_parse_result> retained;
+        std::size_t consumed_bytes = 0;
+        {
+            auto wire = repeated_response_wire("HTTP/1.1 200 OK", "Content-Length: 3\r\n");
+            consumed_bytes = wire.size();
+            wire.append("abcNEXT");
+            auto source = parse_wire("GET", wire, http1_close_policy::allow_reuse, {}, &memory);
+            retained.emplace(std::move(source));
+            wire.assign(wire.size(), 'x');
+        }
+        check_many_field_response(ruvia_ctx, *retained, consumed_bytes, false);
+    }
+    RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+}
+
+RUVIA_TEST(http_client_upgrade_after_many_response_fields_validates_offered_protocol) {
+    const ruvia::http_header_view offered[] = {
+        {"Connection", "Upgrade"},
+        {"Upgrade", "websocket, IRC/6.9"},
+    };
+    const auto wire = repeated_response_wire("HTTP/1.1 101 Switching Protocols",
+        "Connection: Upgrade\r\nUpgrade: irc/6.9\r\n");
+    const auto accepted = parse_wire("GET", wire, http1_close_policy::allow_reuse, offered);
+    RUVIA_CHECK(accepted.parsed() != nullptr);
+    if (const auto* parsed = accepted.parsed()) {
+        RUVIA_CHECK(parsed->head().status() == ruvia::http_status::switching_protocols);
+        RUVIA_CHECK_EQ(parsed->consumed_bytes(), wire.size());
+        RUVIA_CHECK(parsed->plan().protocol_upgrade() != nullptr);
+        RUVIA_CHECK_EQ(active_plan_alternative_count(parsed->plan()), std::size_t{1});
+        check_repeated_response_fields(ruvia_ctx, parsed->head(), repeated_field_count + 2);
+        const auto fields = parsed->head().headers();
+        if (fields.size() == repeated_field_count + 2) {
+            RUVIA_CHECK_EQ(fields[repeated_field_count].name(), std::string_view("Connection"));
+            RUVIA_CHECK_EQ(fields[repeated_field_count].value(), std::string_view("Upgrade"));
+            RUVIA_CHECK_EQ(fields.back().name(), std::string_view("Upgrade"));
+            RUVIA_CHECK_EQ(fields.back().value(), std::string_view("irc/6.9"));
+        }
+    }
+    const auto unoffered_wire = repeated_response_wire("HTTP/1.1 101 Switching Protocols",
+        "Connection: Upgrade\r\nUpgrade: IRC/6.10\r\n");
+    const auto unoffered = parse_wire("GET", unoffered_wire, http1_close_policy::allow_reuse, offered);
+    RUVIA_CHECK(unoffered.failure() != nullptr);
+    if (unoffered.failure() != nullptr) {
+        RUVIA_CHECK(*unoffered.failure() == http1_client_response_parse_error::invalid_protocol_switch);
+    }
+    const auto unsolicited = parse_wire("GET", wire);
+    RUVIA_CHECK(unsolicited.failure() != nullptr);
+    if (unsolicited.failure() != nullptr) {
+        RUVIA_CHECK(*unsolicited.failure() == http1_client_response_parse_error::invalid_protocol_switch);
+    }
+}
+
+RUVIA_TEST(http_client_many_response_fields_retry_every_allocation_failure_without_phase_commit) {
+    const std::array<std::string, 2> wires{
+        repeated_response_wire("HTTP/1.1 100 Continue", ""),
+        repeated_response_wire("HTTP/1.1 200 OK", "Content-Length: 3\r\n")};
+    ruvia::http_client_request_view request;
+    request.method_ = "POST";
+    request.content_ = ruvia::http_client_request_content_view::bytes("payload");
+    std::array<char, 512> request_head;
+    const auto prepared = ruvia::http1_client_request_writer().prepare(
+        ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
+        http1_client_request_wire_policy{
+            .expectation_ = ruvia::http_client_request_expectation::continue_value});
+    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(prepared_req != nullptr);
+    if (prepared_req == nullptr) {
+        return;
+    }
+
+    counting_memory_resource counting;
+    std::array<std::size_t, 2> allocation_counts{};
+    {
+        http1_client_response_parser parser(prepared_req->exchange_state(), &counting);
+        for (std::size_t phase = 0; phase < wires.size(); ++phase) {
+            const auto before = counting.allocation_count();
+            const auto parsed = parser.parse(wires[phase]);
+            check_many_field_response(ruvia_ctx, parsed, wires[phase].size(), phase == 0);
+            allocation_counts[phase] = counting.allocation_count() - before;
+            RUVIA_CHECK(allocation_counts[phase] > 0);
+        }
+    }
+
+    for (std::size_t phase = 0; phase < wires.size(); ++phase) {
+        for (std::size_t fail_after = 0; fail_after <= allocation_counts[phase]; ++fail_after) {
+            failing_memory_resource memory;
+            {
+                http1_client_response_parser parser(prepared_req->exchange_state(), &memory);
+                if (phase == 1) {
+                    const auto interim = parser.parse(wires[0]);
+                    check_many_field_response(ruvia_ctx, interim, wires[0].size(), true);
+                }
+                RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+                memory.fail_after(fail_after);
+                bool allocation_failed = false;
+                try {
+                    const auto parsed = parser.parse(wires[phase]);
+                    check_many_field_response(ruvia_ctx, parsed, wires[phase].size(), phase == 0);
+                } catch (const std::bad_alloc&) {
+                    allocation_failed = true;
+                }
+                memory.allow_allocations();
+                RUVIA_CHECK(allocation_failed == (fail_after < allocation_counts[phase]));
+                RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+                if (allocation_failed) {
+                    const auto retried = parser.parse(wires[phase]);
+                    check_many_field_response(ruvia_ctx, retried, wires[phase].size(), phase == 0);
+                }
+                RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+                if (phase == 0) {
+                    {
+                        const auto repeated = parser.parse(wires[0]);
+                        RUVIA_CHECK(repeated.parsed() != nullptr);
+                        if (const auto* parsed = repeated.parsed()) {
+                            RUVIA_CHECK(parsed->plan().informational() != nullptr);
+                            RUVIA_CHECK(!parsed->plan().request_content_signal());
+                            check_repeated_response_fields(ruvia_ctx, parsed->head(), repeated_field_count);
+                        }
+                    }
+                    const auto final_response = parser.parse(wires[1]);
+                    check_many_field_response(ruvia_ctx, final_response, wires[1].size(), false);
+                }
+                RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+                RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)parser.parse(wires[1]); }));
+            }
+            RUVIA_CHECK_EQ(memory.live_allocations(), std::size_t{0});
+        }
+    }
 }
 
 RUVIA_TEST(http_client_response_parser_handles_deterministic_arbitrary_bytes) {

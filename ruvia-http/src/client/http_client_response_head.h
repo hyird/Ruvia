@@ -2,15 +2,16 @@
 
 #include <array>
 #include <cstddef>
+#include <memory_resource>
+#include <span>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_client_exchange_state.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_status.h"
 
@@ -28,16 +29,14 @@ struct http1_client_parsed_status_line final {
     http_protocol_version protocol_version_;
 };
 
-inline constexpr std::size_t max_http1_wire_header_fields =
-    max_http_header_bytes / http_field_line_overhead;
-
 struct http1_client_parsed_response_head final {
-    explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line) noexcept
-        : status_code_(status_line.status_code_),
-          protocol_version_(status_line.protocol_version_) {}
+    explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line,
+        std::pmr::memory_resource* resource) noexcept;
 
-    std::array<http_header_view, max_http1_wire_header_fields> headers_;
-    std::size_t header_count_{0};
+    void append_header(http_header_view header_value);
+    [[nodiscard]] std::span<const http_header_view> headers() const& noexcept;
+    std::span<const http_header_view> headers() const&& = delete;
+
     http_status_code status_code_;
     http_protocol_version protocol_version_;
     bool content_length_field_present_{false};
@@ -46,6 +45,15 @@ struct http1_client_parsed_response_head final {
     http_upgrade_protocols upgrade_protocols_;
     http_content_length_state content_length_;
     http_transfer_encoding_state transfer_encoding_;
+
+private:
+    static constexpr std::size_t inline_capacity = 32;
+
+    // Descriptors borrow field bytes, never each other or this object's table.
+    // Once spilled, the vector holds the complete ordered field sequence.
+    std::array<http_header_view, inline_capacity> inline_headers_;
+    std::size_t inline_header_count_{0};
+    std::pmr::vector<http_header_view> overflow_headers_;
 };
 
 using http1_client_status_line_parse_result_type =
@@ -57,7 +65,8 @@ using http1_client_response_planning_result_type =
 
 // Parse the status line and header fields of one complete head section.
 [[nodiscard]] http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
-    std::string_view head_section, const http1_client_exchange_state& exchange_state);
+    std::string_view head_section, const http1_client_exchange_state& exchange_state,
+    std::pmr::memory_resource* resource);
 
 // Decide the response plan a parsed head implies for this request.
 [[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(

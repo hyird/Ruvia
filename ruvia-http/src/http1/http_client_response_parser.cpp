@@ -132,7 +132,7 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
             head_section = *unfolded_head;
         }
     }
-    auto parsed_head = detail::parse_http1_client_response_head_fields(head_section, exchange_state_);
+    auto parsed_head = detail::parse_http1_client_response_head_fields(head_section, exchange_state_, resource_);
     if ((parsed_head.index() != 0)) {
         return fail(std::get<1>(parsed_head));
     }
@@ -153,11 +153,11 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     // they are copied below; neither failure nor allocation commits the exchange.
     auto head = detail::http_client_response_head_access::make(
         parsed_value.status_code_, parsed_value.protocol_version_, resource_);
-    if (parsed_value.header_count_ != 0) {
+    const auto parsed_headers = parsed_value.headers();
+    if (!parsed_headers.empty()) {
         auto& headers = detail::http_client_response_head_access::headers(head);
-        headers.reserve(parsed_value.header_count_);
-        for (std::size_t i = 0; i < parsed_value.header_count_; ++i) {
-            const auto& header_value = parsed_value.headers_[i];
+        headers.reserve(parsed_headers.size());
+        for (const auto& header_value : parsed_headers) {
             headers.emplace_back(header_value.name(), header_value.value(), resource_);
         }
     }

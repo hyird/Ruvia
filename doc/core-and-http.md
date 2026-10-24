@@ -140,6 +140,8 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
   - `"ruvia/http/http1_client_request_writer.h"` & `"ruvia/http/http1_request_content_writer.h"`：生成客户端请求头与流式分块请求体，产出 `http1_client_exchange_state`。
   - `"ruvia/http/http1_client_response_parser.h"` & `"ruvia/http/http1_client_response_body_decoder.h"`：增量解析服务端 `1xx` 临时响应、最终响应头及定长/分块/EOF 定界响应体。
 
+响应头解析的临时字段描述符采用有界内联存储，超出后按实际字段数使用传入的 PMR；不按首部字节上限预留线程栈数组，也不增加字段数量限制。最终响应头拥有字段数据，原始输入可在解析完成后释放。分配失败正常抛出且不提交交换状态；释放资源后可用同一响应前缀重试。调用方须让 PMR 存活至相关响应结果析构。
+
 #### 4.2 HTTP/2 与 HPACK 状态机（`"ruvia/http/http2_connection.h"`, `"ruvia/http/hpack.h"`）
 
 `ruvia::http2_connection` 实现了符合 RFC 9113 / RFC 7541 / RFC 8441 的完整客户端与服务端 Sans-I/O HTTP/2 连接状态机：

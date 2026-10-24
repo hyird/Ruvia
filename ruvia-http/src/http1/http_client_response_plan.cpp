@@ -54,8 +54,7 @@ namespace {
     }
 
     http_upgrade_protocols selected_protocols;
-    for (std::size_t i = 0; i < response.header_count_; ++i) {
-        const auto& header_value = response.headers_[i];
+    for (const auto& header_value : response.headers()) {
         if (!http_ascii_equals_ignore_case(header_value.name(), "Upgrade")) {
             continue;
         }

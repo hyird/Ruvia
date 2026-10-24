@@ -241,10 +241,11 @@ private:
 
 static_assert(std::is_nothrow_move_constructible_v<http1_client_response_plan>);
 
-// Protocol failures are typed and allocation-free. Resource exhaustion can
-// still throw while materializing a successful owning response. Exchange
-// termination is NOT a parse error: parsing after the exchange completed or
-// failed throws std::logic_error.
+// Protocol failures use typed values whose representation does not allocate.
+// Resource exhaustion can throw while unfolding fields, storing temporary
+// descriptors, or materializing an owning response. Exchange termination is
+// NOT a parse error: parsing after the exchange completed or failed throws
+// std::logic_error.
 enum class http1_client_response_parse_error : std::uint8_t {
     header_too_large,
     invalid_status_line,
@@ -368,8 +369,10 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_r
 // responses advance the same
 // exchange until a final response, CONNECT tunnel, or protocol switch completes
 // it. Header validation is transactional and owning response allocation occurs
-// only after protocol validation succeeds. Response obs-fold is replaced with
-// spaces before field validation; its temporary storage uses the same PMR.
+// only after protocol validation succeeds. Temporary field descriptors use
+// bounded inline storage and spill to the supplied PMR as needed. Response
+// obs-fold is replaced with spaces before field validation; its temporary
+// storage uses the same PMR.
 // Auxiliary fields do not select framing: initial Trailer values are opaque
 // declaration metadata subject to ordinary field-byte and size limits, not
 // trailer-name/list validation, and are accepted without chunked framing.
@@ -409,6 +412,8 @@ public:
 
     // After need_more, append to the same logical prefix; after a parsed head,
     // remove consumed_bytes before supplying the following response.
+    // Allocation failures propagate without completing or failing the exchange;
+    // after reclaiming resources, retry with the same response prefix.
     [[nodiscard]] http1_client_response_parse_result parse(std::string_view buffer);
 
 private:
