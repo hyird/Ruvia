@@ -54,7 +54,10 @@ struct websocket_client_config final {
     std::optional<std::chrono::milliseconds> read_timeout_{};
     std::optional<std::chrono::milliseconds> write_timeout_{30000};
     // After a local Close is sent, the maximum time to wait for the peer Close.
-    // nullopt disables this guard.
+    // After the close handshake completes, the maximum time to wait for the
+    // server to close the transport first (RFC 6455 section 7.1.1); the client
+    // then closes it itself without failing read() or close(). nullopt disables
+    // both guards.
     std::optional<std::chrono::milliseconds> close_handshake_timeout_{5000};
     // Pongs are matched by read(); a pong timeout retires the client only while
     // a read is active, and an expired window restarts when the next read begins.

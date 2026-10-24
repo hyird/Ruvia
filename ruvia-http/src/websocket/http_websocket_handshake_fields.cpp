@@ -71,7 +71,7 @@ namespace {
             continue;
         }
         present = true;
-        if (!protocols.append_list(headers[i].value())) {
+        if (!protocols.append_offered_list(headers[i].value())) {
             return false;
         }
     }
@@ -220,7 +220,8 @@ bool websocket_request_header_validator::observe_header(
         }
     } else if (kind == request_header_kind::sec_websocket_protocol) {
         protocols_present_ = true;
-        if (valid_ && !protocols_.append_list(value)) {
+        if (valid_ && !(role_ == http_field_list_role::recipient ? protocols_.append_offered_list(value)
+                                                                 : protocols_.append_list(value))) {
             valid_ = false;
         }
     } else if (kind == request_header_kind::sec_websocket_extensions) {

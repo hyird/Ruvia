@@ -137,10 +137,19 @@ RUVIA_TEST(ws_public_subprotocol_set_validates_unique_tokens) {
     RUVIA_CHECK(protocols.contains("chat"));
     RUVIA_CHECK(protocols.contains("superchat"));
     RUVIA_CHECK(!protocols.append("chat"));
+    RUVIA_CHECK(!protocols.append_list("other, chat"));
     RUVIA_CHECK(!protocols.append("bad token"));
+
+    // A received offer skips repeats instead of failing (RFC 6455 4.2.1).
+    ruvia::websocket_subprotocol_set offered;
+    RUVIA_CHECK(offered.append_offered_list("chat, chat"));
+    RUVIA_CHECK(offered.append_offered_list("superchat, chat"));
+    RUVIA_CHECK(offered.contains("chat"));
+    RUVIA_CHECK(offered.contains("superchat"));
+    RUVIA_CHECK(!offered.append_offered_list("chat, bad token"));
 }
 
-RUVIA_TEST(ws_subprotocol_offers_require_unique_http_tokens) {
+RUVIA_TEST(ws_subprotocol_offers_require_http_tokens_and_skip_repeats) {
     const auto with_protocols = [](std::string_view fields_value) {
         std::string request(valid_handshake());
         request.insert(request.size() - 2, fields_value);
@@ -154,10 +163,16 @@ RUVIA_TEST(ws_subprotocol_offers_require_unique_http_tokens) {
     RUVIA_CHECK(rejects_request(with_protocols("Sec-WebSocket-Protocol: bad token\r\n")));
     RUVIA_CHECK(rejects_request(with_protocols("Sec-WebSocket-Protocol: \"chat\"\r\n")));
     RUVIA_CHECK(rejects_request(with_protocols("Sec-WebSocket-Protocol: , ,\r\n")));
-    RUVIA_CHECK(rejects_request(with_protocols("Sec-WebSocket-Protocol: chat, chat\r\n")));
+    // Uniqueness binds the sending client (RFC 6455 section 4.1 item 10); the
+    // server's checks (section 4.2.1) have no rule for a repeated offer.
+    RUVIA_CHECK(accepts_request(with_protocols("Sec-WebSocket-Protocol: chat, chat\r\n")));
     RUVIA_CHECK(
-        rejects_request(with_protocols("Sec-WebSocket-Protocol: chat\r\n"
+        accepts_request(with_protocols("Sec-WebSocket-Protocol: chat\r\n"
                                        "Sec-WebSocket-Protocol: superchat, chat\r\n")));
+    constexpr std::array<std::string_view, 1> supported{"chat"};
+    const auto repeated = parse_request(with_protocols("Sec-WebSocket-Protocol: chat, chat\r\n"));
+    const auto selected = ruvia::make_websocket_server_handshake(repeated, {.supported_subprotocols_ = supported});
+    RUVIA_CHECK(selected.subprotocol() == "chat");
 
     std::string too_many = "Sec-WebSocket-Protocol: ";
     for (std::size_t i = 0; i <= ruvia::max_websocket_subprotocols; ++i) {

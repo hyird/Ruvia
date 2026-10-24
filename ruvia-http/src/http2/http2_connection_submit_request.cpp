@@ -36,7 +36,7 @@ namespace {
     std::uint16_t default_port, std::span<const http_header_view> headers, bool allow_host,
     bool allow_trailers, http_header_section_size& section_size, request_field_state& fields,
     bool websocket_connect = false) noexcept {
-    websocket_request_header_validator websocket_headers;
+    websocket_request_header_validator websocket_headers(http_field_list_role::sender);
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto& header = headers[i];
         if (!http2_is_valid_outbound_regular_header(header.name(), header.value()) ||

@@ -21,8 +21,14 @@ namespace detail {
 [[nodiscard]] std::string_view choose_websocket_subprotocol(
     const http_request& request, std::span<const std::string_view> supported) noexcept;
 
+// Request-side Sec-WebSocket-* field checks. A recipient (server) skips a
+// repeated offered subprotocol; a sender (client) must offer unique ones
+// (RFC 6455 section 4.1).
 class websocket_request_header_validator final {
 public:
+    explicit websocket_request_header_validator(http_field_list_role role) noexcept
+        : role_(role) {}
+
     [[nodiscard]] bool observe_header(request_header_kind kind, std::string_view value) noexcept;
     [[nodiscard]] bool offers_valid() const noexcept;
     [[nodiscard]] bool client_offers_valid() const noexcept;
@@ -31,6 +37,7 @@ public:
 
 private:
     websocket_subprotocol_set protocols_{};
+    http_field_list_role role_;
     std::string_view version_{};
     std::size_t version_count_{0};
     bool valid_{true};

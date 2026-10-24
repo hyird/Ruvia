@@ -511,15 +511,61 @@ RUVIA_TEST(ws_public_client_fragmented_message_with_ping_and_close) {
     RUVIA_CHECK(connection.feed(close) == websocket_feed_status::accepted);
     const auto closed = connection.next_event();
     RUVIA_CHECK(closed && closed->close() && closed->close()->close_code() == 1000);
-    RUVIA_CHECK(connection.output_plan().disposition() == websocket_transport_disposition::end_transport);
+    // RFC 6455 section 7.1.1: the server closes the transport first, so the
+    // client flushes its echo and keeps the transport open until server EOF.
+    RUVIA_CHECK(connection.output_plan().disposition() == websocket_transport_disposition::keep_open);
     const auto response = drain(connection);
+    RUVIA_CHECK(connection.output_plan().disposition() == websocket_transport_disposition::keep_open);
+    RUVIA_CHECK(connection.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof);
     RUVIA_CHECK(server.feed(response) == websocket_feed_status::accepted);
     const auto acknowledged = server.next_event();
     RUVIA_CHECK(acknowledged && acknowledged->close());
+    // Bytes after the close handshake are discarded while waiting.
+    RUVIA_CHECK(connection.feed("x") == websocket_feed_status::accepted);
+    RUVIA_CHECK(!connection.next_event());
+    RUVIA_CHECK(connection.submit_frame(websocket_opcode::text, "late") == websocket_frame_submit_status::not_open);
+    connection.notify_transport_eof();
+    const auto end = connection.next_event();
+    RUVIA_CHECK(end && end->transport_end());
+    RUVIA_CHECK(connection.output_plan().disposition() == websocket_transport_disposition::end_transport);
     connection.commit_transport_end();
     RUVIA_CHECK(connection.feed("x") == websocket_feed_status::inactive);
     RUVIA_CHECK_EQ(source.calls_, 2U);
     RUVIA_CHECK(pong.substr(2, 4) != response.substr(2, 4));
+}
+
+RUVIA_TEST(ws_public_client_waits_for_server_eof_after_initiating_close) {
+    mask_source source;
+    http_io_buffer input;
+    websocket_connection connection(input, {.role_ = websocket_connection_role::client,
+                                               .mask_key_generator_ = &mask_source::generate,
+                                               .mask_key_context_ = &source});
+    websocket_connection server;
+    RUVIA_CHECK(connection.submit_close(1000, "done") == websocket_close_submit_status::accepted);
+    const auto request_bytes = drain(connection);
+    RUVIA_CHECK(server.feed(request_bytes) == websocket_feed_status::accepted);
+    const auto request = server.next_event();
+    RUVIA_CHECK(request && request->close());
+    const auto reply = drain(server);
+    RUVIA_CHECK(server.output_plan().disposition() == websocket_transport_disposition::end_transport);
+
+    // The server's Close reply, then bytes the client must ignore.
+    input.append(reply);
+    input.append(std::string_view("\x81\x01x", 3));
+    const auto closed = connection.next_event();
+    RUVIA_CHECK(closed && closed->close() && closed->close()->close_code() == 1000);
+    const auto waiting = connection.output_plan();
+    RUVIA_CHECK(waiting.bytes().empty());
+    RUVIA_CHECK(waiting.disposition() == websocket_transport_disposition::keep_open);
+    RUVIA_CHECK(connection.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof);
+    RUVIA_CHECK(!connection.next_event());
+    RUVIA_CHECK_EQ(input.size(), std::size_t{0});
+    connection.notify_transport_eof();
+    const auto end = connection.next_event();
+    RUVIA_CHECK(end && end->transport_end());
+    RUVIA_CHECK(connection.output_plan().disposition() == websocket_transport_disposition::end_transport);
+    connection.commit_transport_end();
+    RUVIA_CHECK(connection.liveness_mode() == websocket_liveness_mode::inactive);
 }
 
 RUVIA_TEST(ws_public_fragmented_messages_reuse_reassembly_scratch) {

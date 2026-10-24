@@ -84,7 +84,7 @@ websocket_handshake_validation_result validate_websocket_handshake(const http_re
 
     detail::http_connection_options connection_options;
     detail::http_upgrade_protocols upgrade_protocols;
-    detail::websocket_request_header_validator websocket_headers;
+    detail::websocket_request_header_validator websocket_headers(detail::http_field_list_role::recipient);
     std::string_view key;
     std::size_t key_count = 0;
     bool websocket_upgrade = false;

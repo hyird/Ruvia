@@ -45,9 +45,14 @@ struct websocket_connection_options final {
 
 // Sans-I/O RFC 6455 driver for an already upgraded connection. The role fixes
 // inbound mask validation and outbound masking, including automatic Pong/Close.
-// Event views remain valid until the next feed() or next_event(). Output bytes
-// remain valid until next_event(), submit_frame(), submit_close(), consume_output(),
-// or destruction. feed(), EOF and abort do not invalidate an in-flight write.
+// After the close handshake a server plans end_transport once its output is
+// flushed; a client keeps the transport open (liveness awaiting_peer_eof, which
+// feed() and next_event() answer by discarding input) until
+// notify_transport_eof(), because the server closes first (RFC 6455 section
+// 7.1.1). Event views remain valid until the next feed() or next_event().
+// Output bytes remain valid until next_event(), submit_frame(), submit_close(),
+// consume_output(), or destruction. feed(), EOF and abort do not invalidate an
+// in-flight write.
 class websocket_connection final {
 public:
     explicit websocket_connection(websocket_connection_options options = {});

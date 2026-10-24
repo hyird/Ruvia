@@ -156,6 +156,8 @@ ruvia::task<void> stream_subscription(
 
 Ruvia WebSocket 服务端同时支持 **HTTP/1.1 `Upgrade: websocket`** 与 **HTTP/2 Extended `CONNECT`（RFC 8441，`:protocol = websocket`）**，路由代码完全统一。
 
+握手校验遵循接收方规则：HTTP/2 Extended CONNECT 中出现的 `Sec-WebSocket-Key` / `Sec-WebSocket-Accept` 已被 `:protocol` 取代，按 [RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5) 不做处理（既不校验也不拒绝）；`Sec-WebSocket-Protocol` 提议中的重复子协议会被跳过（唯一性是 RFC 6455 §4.1 对发送方客户端的要求）。
+
 ### 3.1 路由注册与配置
 
 ```cpp
@@ -380,9 +382,11 @@ co_await client.shutdown();
 | --- | --- |
 | `task<void> connect() &` | 建立底层 TCP/TLS 连接并完成 WebSocket 握手（失败抛 `websocket_client_error`） |
 | `websocket_client_handle with_options(operation_options options) const` | 绑定单次操作的 `timeout_` 与 `stop_token_` |
-| `task<std::optional<websocket_message>> read()` | 读取下一条消息；对端关闭时返回 `std::nullopt` |
+| `task<std::optional<websocket_message>> read()` | 读取下一条消息；收到对端 Close 时回显 Close 并等待服务端先关闭传输后返回 `std::nullopt` |
 | `task<void> text(payload, options = {})` / `binary(payload, options = {})` | 发送文本或二进制消息 |
 | `task<void> ping(payload = {})` / `pong(payload)` | 发送 `Ping` 或 `Pong` 控制帧 |
-| `task<void> close(websocket_close_options options = {})` | 句柄方法：发起优雅关闭握手 |
+| `task<void> close(websocket_close_options options = {})` | 句柄方法：发起优雅关闭握手，收到对端 Close 并等待服务端先关闭传输后完成 |
 | `void close() noexcept` / `void abort() noexcept` | 客户端 `client.close()`（或句柄 `peer.abort()`）请求立即中止连接 |
 | `task<void> shutdown() &` | 关闭并等待底层全部挂起 I/O 安全退役 |
+
+关闭握手完成后，客户端按 [RFC 6455 §7.1.1](https://www.rfc-editor.org/rfc/rfc6455.html#section-7.1.1) 由服务端先关闭底层 TCP 连接（HTTP/2 下为服务端先发送 `END_STREAM`）：客户端继续读取并丢弃 Close 之后的字节，直到对端 EOF，再结束自己的传输。等待时长受 `close_handshake_timeout_` 约束（`nullopt` 表示不设上限）；超时或期间传输出错时客户端自行关闭连接，由于关闭握手已经完成，`read()` / `close()` 仍正常返回，不抛错。

@@ -32,6 +32,8 @@ inline constexpr std::size_t max_websocket_subprotocols = 64;
 // a handshake offering more is rejected as invalid rather than truncated.
 class websocket_subprotocol_set final {
 public:
+    // Strict: every protocol must be a new token (configuration and the
+    // offers a client sends, which RFC 6455 section 4.1 requires to be unique).
     [[nodiscard]] bool append(std::string_view protocol) noexcept {
         if (!is_valid_http_header_name(protocol) || size_ == protocols_.size() || contains(protocol)) {
             return false;
@@ -40,19 +42,16 @@ public:
         return true;
     }
 
+    // Strict list form of append(); empty list elements are ignored.
     [[nodiscard]] bool append_list(std::string_view value) noexcept {
-        while (true) {
-            const auto comma = value.find(',');
-            const auto protocol = http_trim_ows(
-                comma == std::string_view::npos ? value : value.substr(0, comma));
-            if (!protocol.empty() && !append(protocol)) {
-                return false;
-            }
-            if (comma == std::string_view::npos) {
-                return true;
-            }
-            value.remove_prefix(comma + 1);
-        }
+        return append_elements(value, false);
+    }
+
+    // A received Sec-WebSocket-Protocol offer. Uniqueness binds the sending
+    // client only (RFC 6455 section 4.1); a server receiving a repeated
+    // protocol skips it (section 4.2.1 imposes no recipient check).
+    [[nodiscard]] bool append_offered_list(std::string_view value) noexcept {
+        return append_elements(value, true);
     }
 
     [[nodiscard]] bool contains(std::string_view protocol) const noexcept {
@@ -68,6 +67,21 @@ public:
     }
 
 private:
+    [[nodiscard]] bool append_elements(std::string_view value, bool skip_duplicates) noexcept {
+        while (true) {
+            const auto comma = value.find(',');
+            const auto protocol = http_trim_ows(
+                comma == std::string_view::npos ? value : value.substr(0, comma));
+            if (!protocol.empty() && !(skip_duplicates && contains(protocol)) && !append(protocol)) {
+                return false;
+            }
+            if (comma == std::string_view::npos) {
+                return true;
+            }
+            value.remove_prefix(comma + 1);
+        }
+    }
+
     std::array<std::string_view, max_websocket_subprotocols> protocols_{};
     std::size_t size_{0};
 };

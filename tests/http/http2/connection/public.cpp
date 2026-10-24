@@ -3990,6 +3990,58 @@ RUVIA_TEST(http2_public_websocket_handshake_validates_required_subprotocols_and_
     RUVIA_CHECK(server.release(std::move(*head3)) == ruvia::http2_server_request_release_status::released);
 }
 
+RUVIA_TEST(http2_public_websocket_handshake_ignores_rfc6455_key_exchange_fields) {
+    // RFC 8441 section 5: :protocol supersedes Sec-WebSocket-Key/-Accept, which
+    // a recipient does not process; it neither validates nor rejects them.
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    (void)ruvia::testing::drain_output(server);
+
+    std::pmr::string wire(ruvia::http2_client_preface, &resource);
+    append_peer_settings(wire);
+    constexpr std::array<std::pair<std::string_view, std::string_view>, 3> extra{{
+        {"sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="},
+        {"sec-websocket-accept", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="},
+        {"sec-websocket-protocol", "chat, chat"},
+    }};
+    std::uint32_t stream_id = 1;
+    for (const auto& [name, value] : extra) {
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "CONNECT");
+        ruvia::hpack_encoder::encode_header(block, ":protocol", "websocket");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/ws");
+        ruvia::hpack_encoder::encode_header(block, "sec-websocket-version", "13");
+        ruvia::hpack_encoder::encode_header(block, name, value);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x4, stream_id, block);
+        stream_id += 2;
+    }
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+
+    constexpr std::array<std::string_view, 1> supported{"chat"};
+    for (std::size_t i = 0; i < extra.size(); ++i) {
+        auto event = server.next_event();
+        auto* head = event ? event->request_head() : nullptr;
+        RUVIA_CHECK(head != nullptr);
+        if (head == nullptr) {
+            return;
+        }
+        const auto id = head->stream_id();
+        const auto request = head->build_request(&resource);
+        const auto validation = ruvia::validate_http2_websocket_handshake(server, id, request,
+            {.supported_subprotocols_ = supported, .require_subprotocol_ = i == 2});
+        RUVIA_CHECK(validation.accepted() != nullptr);
+        const auto submitted =
+            server.submit_websocket_handshake(id, request, validation, {.supported_subprotocols_ = supported});
+        RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(submitted));
+        if (const auto* negotiation = std::get_if<ruvia::http2_websocket_negotiation>(&submitted)) {
+            RUVIA_CHECK_EQ(negotiation->subprotocol(), std::string_view(i == 2 ? "chat" : ""));
+        }
+        RUVIA_CHECK(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);
+    }
+}
+
 RUVIA_TEST(http2_public_outbound_request_headers_and_trailers_lowercase_standard_tokens) {
     std::pmr::unsynchronized_pool_resource resource;
     auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});

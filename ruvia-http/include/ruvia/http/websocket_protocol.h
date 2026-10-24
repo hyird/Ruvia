@@ -10,8 +10,14 @@
 
 namespace ruvia {
 
+// awaiting_peer_eof: a client completed the close handshake and, per RFC 6455
+// section 7.1.1, leaves closing the transport to the server. Its driver keeps
+// reading (next_event() discards input) until notify_transport_eof(), which
+// leads to the transport-end plan; if no EOF arrives within a reasonable time
+// the client may close first, through abort().
 enum class websocket_liveness_mode : std::uint8_t { open,
     awaiting_peer_close,
+    awaiting_peer_eof,
     inactive };
 
 enum class websocket_opcode : std::uint8_t {

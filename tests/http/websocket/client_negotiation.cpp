@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <string>
@@ -9,7 +10,10 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/hpack.h"
 #include "ruvia/http/http1_client_response_parser.h"
+#include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 
 #include "test_harness.h"
@@ -103,4 +107,50 @@ RUVIA_TEST(websocket_h1_client_handshake_negotiates_deflate) {
     auto accepted = client.validate_response(*response.parsed());
     RUVIA_CHECK((accepted.index() == 0));
     RUVIA_CHECK(std::get<0>(accepted).compression_.enabled_);
+}
+
+RUVIA_TEST(websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields) {
+    // RFC 8441 section 5: :protocol supersedes Sec-WebSocket-Accept, which an
+    // Extended CONNECT client does not process.
+    for (const auto& [name, value] : std::array<std::pair<std::string_view, std::string_view>, 2>{{
+             {"sec-websocket-accept", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="},
+             {"sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="},
+         }}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        auto connection = ruvia::http2_connection::client({.resource_ = &resource});
+        const auto append_frame = [&](std::pmr::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
+                                      std::uint32_t stream_id, std::string_view payload) {
+            std::array<char, ruvia::http2_frame_header_bytes> header{};
+            RUVIA_CHECK(ruvia::encode_http2_frame_header(
+                header, static_cast<std::uint32_t>(payload.size()), type, flags, stream_id));
+            wire.append(header.data(), header.size());
+            wire.append(payload);
+        };
+        std::pmr::string settings_wire(&resource);
+        constexpr std::array<char, 6> enable_connect_protocol{0x00, 0x08, 0x00, 0x00, 0x00, 0x01};
+        append_frame(settings_wire, ruvia::http2_frame_type::settings, 0, 0,
+            std::string_view(enable_connect_protocol.data(), enable_connect_protocol.size()));
+        RUVIA_CHECK(connection.feed(settings_wire) == ruvia::http2_feed_result::accepted);
+        while (connection.next_event()) {
+        }
+
+        ruvia::websocket_client_negotiation negotiation({}, &resource);
+        const auto submitted = negotiation.submit_http2_request(connection, "https", "example.test", "/ws");
+        RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
+        if (!std::holds_alternative<std::uint32_t>(submitted)) {
+            return;
+        }
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
+        ruvia::hpack_encoder::encode_header(block, name, value);
+        std::pmr::string wire(&resource);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x4, std::get<std::uint32_t>(submitted), block);
+        RUVIA_CHECK(connection.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto event = connection.next_event();
+        const auto* head = event ? event->response_head() : nullptr;
+        RUVIA_CHECK(head != nullptr);
+        if (head != nullptr) {
+            RUVIA_CHECK(negotiation.validate_response(head->head(), true).index() == 0);
+        }
+    }
 }

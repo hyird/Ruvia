@@ -42,6 +42,11 @@ public:
         // queued output still needs to be flushed before transport end. It may
         // be a Pong queued for an earlier Ping, not another Close.
         final_output_queued,
+        // Client only (RFC 6455 section 7.1.1): the close handshake is complete
+        // and the final output is still queued; once flushed, the server is
+        // expected to close the transport first.
+        handshake_output_queued,
+        awaiting_peer_eof,
         transport_end_ready,
         closed,
     };
@@ -130,6 +135,9 @@ public:
             case close_phase_type::local_close_queued:
             case close_phase_type::awaiting_peer_close:
                 return websocket_liveness_mode::awaiting_peer_close;
+            case close_phase_type::handshake_output_queued:
+            case close_phase_type::awaiting_peer_eof:
+                return websocket_liveness_mode::awaiting_peer_eof;
             case close_phase_type::final_output_queued:
             case close_phase_type::transport_end_ready:
             case close_phase_type::closed:
@@ -203,14 +211,27 @@ public:
         }
     }
 
-    void receive_peer_close() noexcept {
-        if (close_phase_ == close_phase_type::local_close_queued) {
-            close_phase_ = close_phase_type::final_output_queued;
-        } else if (close_phase_ == close_phase_type::awaiting_peer_close) {
-            close_phase_ = out_offset_ < out_buffer_.size() || !borrowed_output_.empty()
-                               ? close_phase_type::final_output_queued
-                               : close_phase_type::transport_end_ready;
+    // Both Close frames have been exchanged once the queued output (which may
+    // end with a Close echo) is flushed. A server then ends the transport; a
+    // client waits for the server to do so.
+    [[nodiscard]] close_phase_type handshake_complete_phase() const noexcept {
+        const bool output_queued = out_offset_ < out_buffer_.size() || !borrowed_output_.empty();
+        if (role_ == websocket_connection_role::client) {
+            return output_queued ? close_phase_type::handshake_output_queued : close_phase_type::awaiting_peer_eof;
         }
+        return output_queued ? close_phase_type::final_output_queued : close_phase_type::transport_end_ready;
+    }
+
+    void receive_peer_close() noexcept {
+        if (close_phase_ == close_phase_type::local_close_queued ||
+            close_phase_ == close_phase_type::awaiting_peer_close) {
+            close_phase_ = handshake_complete_phase();
+        }
+    }
+
+    void discard_input() noexcept {
+        pending_consume_ = 0;
+        input_->consume(input_->size());
     }
 
     [[nodiscard]] websocket_frame_submit_status submit_frame(
@@ -333,8 +354,14 @@ websocket_connection::websocket_connection(websocket_connection&&) noexcept = de
 websocket_connection& websocket_connection::operator=(websocket_connection&&) noexcept = default;
 
 websocket_feed_status websocket_connection::feed(std::string_view input) {
-    if (impl_->liveness_mode() == websocket_liveness_mode::inactive) {
+    const auto liveness = impl_->liveness_mode();
+    if (liveness == websocket_liveness_mode::inactive) {
         return websocket_feed_status::inactive;
+    }
+    if (liveness == websocket_liveness_mode::awaiting_peer_eof) {
+        // Bytes after the close handshake carry nothing; the client keeps
+        // reading only to observe the server's EOF.
+        return websocket_feed_status::accepted;
     }
     if (impl_->input_->size() > impl_->max_buffered_input_bytes_ ||
         input.size() > impl_->max_buffered_input_bytes_ - impl_->input_->size()) {
@@ -364,6 +391,14 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             impl_->close_phase_ == close_phase_type::transport_end_ready ||
             impl_->close_phase_ == close_phase_type::closed) {
             return websocket_event::make_transport_end();
+        }
+        if (impl_->close_phase_ == close_phase_type::handshake_output_queued) {
+            // Queued output may still borrow input bytes: drop them once flushed.
+            return std::nullopt;
+        }
+        if (impl_->close_phase_ == close_phase_type::awaiting_peer_eof) {
+            impl_->discard_input();
+            return std::nullopt;
         }
 
         const auto protocol_failure_event = [this](detail::websocket_protocol_failure failure) {
@@ -412,7 +447,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
                 const auto reason = payload_value.size() > 2 ? payload_value.substr(2) : std::string_view{};
                 if (impl_->close_phase_ == close_phase_type::open) {
                     impl_->append_frame(websocket_opcode::close, payload_value);
-                    impl_->close_phase_ = close_phase_type::final_output_queued;
+                    impl_->close_phase_ = impl_->handshake_complete_phase();
                 } else {
                     impl_->receive_peer_close();
                 }
@@ -519,6 +554,8 @@ websocket_output_consume_status websocket_connection::consume_output(std::size_t
         impl_->close_phase_ = close_phase_type::awaiting_peer_close;
     } else if (impl_->close_phase_ == close_phase_type::final_output_queued) {
         impl_->close_phase_ = close_phase_type::transport_end_ready;
+    } else if (impl_->close_phase_ == close_phase_type::handshake_output_queued) {
+        impl_->close_phase_ = close_phase_type::awaiting_peer_eof;
     }
     return websocket_output_consume_status::drained;
 }

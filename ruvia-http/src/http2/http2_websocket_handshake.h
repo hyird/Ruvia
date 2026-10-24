@@ -9,7 +9,6 @@
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/hpack.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
 
@@ -38,14 +37,13 @@ namespace ruvia::detail {
         return websocket_handshake_validation_result::make_invalid_request();
     }
 
-    websocket_request_header_validator validator;
+    // RFC 8441 section 5: :protocol supersedes the RFC 6455 key exchange, so
+    // Sec-WebSocket-Key and Sec-WebSocket-Accept are not processed here.
+    websocket_request_header_validator validator(http_field_list_role::recipient);
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
         const auto kind = static_cast<request_header_kind>(http_request_access::header_kind(request, i));
-        if (kind == request_header_kind::sec_websocket_key ||
-            (kind == request_header_kind::other &&
-                http_ascii_equals_ignore_case(headers[i].name(), "sec-websocket-accept")) ||
-            !validator.observe_header(kind, headers[i].value())) {
+        if (!validator.observe_header(kind, headers[i].value())) {
             return websocket_handshake_validation_result::make_invalid_request();
         }
     }

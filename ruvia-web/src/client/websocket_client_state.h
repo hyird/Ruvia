@@ -177,6 +177,10 @@ private:
     [[nodiscard]] task<void> throw_protocol_error_after_flush(std::string_view message);
     [[nodiscard]] task<websocket_event> poll_protocol_event(
         std::optional<std::chrono::milliseconds> read_timeout, std::string_view protocol_error_message);
+    // RFC 6455 section 7.1.1: after a completed close handshake the server
+    // closes the transport first. Waits for its EOF, bounded by
+    // close_handshake_timeout_, then ends the transport; no-op otherwise.
+    [[nodiscard]] task<void> await_peer_transport_end();
     [[nodiscard]] task<std::size_t> read_transport(std::span<char> output,
         std::optional<std::chrono::milliseconds> configured_timeout);
     [[nodiscard]] task<void> write_transport(std::string_view bytes);

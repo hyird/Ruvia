@@ -112,7 +112,9 @@ task<void> websocket_client_state::run_close(websocket_close_options options, st
         const auto event = co_await poll_protocol_event(
             std::nullopt, "WebSocket peer violated the protocol during close handshake");
         if (event.close() != nullptr || event.transport_end() != nullptr) {
-            // The close handshake is complete: retire the connection.
+            // The close handshake is complete: once the server has ended the
+            // transport (or failed to in time), retire the connection.
+            co_await await_peer_transport_end();
             retire(client_abort_reason::closing);
             co_return;
         }

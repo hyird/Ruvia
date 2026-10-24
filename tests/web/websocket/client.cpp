@@ -200,6 +200,99 @@ void check_peer_exchange(ruvia::testing::test_context& ruvia_ctx, bool reply_clo
     }
 }
 
+// RFC 6455 section 7.1.1: after the close handshake the server closes the
+// TCP connection first; the client waits for that, bounded by
+// close_handshake_timeout_, and only then closes without failing.
+void check_server_closes_first(ruvia::testing::test_context& ruvia_ctx, bool client_initiates, bool server_closes) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::exception_ptr peer_failure;
+    bool server_closed = false;
+    bool client_eof = false;
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await peer.async_accept(asio::use_awaitable);
+        std::string request;
+        co_await asio::async_read_until(socket, asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
+        std::string response = make_server_handshake_response(request);
+        const std::array<unsigned char, 4> close{0x88, 2, 3, 0xe8};
+        if (!client_initiates) {
+            response.append(reinterpret_cast<const char*>(close.data()), close.size());
+        }
+        co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+        std::array<unsigned char, 2> header_value{};
+        co_await asio::async_read(socket, asio::buffer(header_value), asio::use_awaitable);
+        std::array<unsigned char, 129> close_payload{};
+        co_await asio::async_read(
+            socket, asio::buffer(close_payload.data(), 4 + (header_value[1] & 0x7f)), asio::use_awaitable);
+        std::string after_close;
+        if (client_initiates) {
+            after_close.append(reinterpret_cast<const char*>(close.data()), close.size());
+        }
+        // Data after Close is ignored by the client.
+        after_close.append("\x81\x01x", 3);
+        co_await asio::async_write(socket, asio::buffer(after_close), asio::use_awaitable);
+        asio::steady_timer delay(io, std::chrono::milliseconds(50));
+        co_await delay.async_wait(asio::use_awaitable);
+        if (server_closes) {
+            server_closed = true;
+            // Fails if the client already closed; the order check below reports that.
+            std::error_code ignored;
+            socket.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
+        }
+        std::array<char, 64> sink{};
+        std::error_code error;
+        while (!error) {
+            (void)co_await socket.async_read_some(asio::buffer(sink), asio::redirect_error(asio::use_awaitable, error));
+        }
+        client_eof = true;
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) { peer_failure = failure; });
+    bool completed = false;
+    bool completed_after_server_close = false;
+    const auto run_client = [&]() -> ruvia::task<void> {
+        ruvia::websocket_client client(attachment.loop(),
+            {.scheme_ = ruvia::websocket_scheme::ws,
+                .host_ = "127.0.0.1",
+                .port_ = peer.local_endpoint().port(),
+                .close_handshake_timeout_ = server_closes ? std::chrono::milliseconds(10000)
+                                                          : std::chrono::milliseconds(100)});
+        std::exception_ptr failure;
+        try {
+            co_await client.connect();
+            if (client_initiates) {
+                co_await client.handle().close({});
+            } else {
+                const auto message = co_await client.handle().read();
+                RUVIA_CHECK(!message.has_value());
+            }
+            completed = true;
+            completed_after_server_close = server_closed;
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        // Let the peer observe the client's end of the connection.
+        for (int i = 0; i < 500 && failure == nullptr && !client_eof && peer_failure == nullptr; ++i) {
+            (void)co_await ruvia::sleep_for(client.worker(), std::chrono::milliseconds(10));
+        }
+        peer.close();
+        attachment.stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = attachment.loop().start(run_client());
+    attachment.run();
+    root.get();
+    if (peer_failure) {
+        std::rethrow_exception(peer_failure);
+    }
+    RUVIA_CHECK(completed);
+    RUVIA_CHECK(client_eof);
+    RUVIA_CHECK_EQ(completed_after_server_close, server_closes);
+}
+
 }  // namespace
 
 RUVIA_TEST(websocket_client_negotiates_deflate_and_can_skip_individual_messages) {
@@ -705,6 +798,13 @@ RUVIA_TEST(websocket_client_close_requires_peer_close) {
 
 RUVIA_TEST(websocket_client_read_rejects_eof_during_incomplete_frame) {
     check_peer_exchange(ruvia_ctx, false, true);
+}
+
+RUVIA_TEST(websocket_client_lets_the_server_close_the_connection_first) {
+    for (const bool client_initiates : {false, true}) {
+        check_server_closes_first(ruvia_ctx, client_initiates, true);
+        check_server_closes_first(ruvia_ctx, client_initiates, false);
+    }
 }
 
 RUVIA_TEST(websocket_client_reads_frame_above_default_message_limit) {

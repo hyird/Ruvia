@@ -38,6 +38,7 @@ task<std::optional<websocket_message>> websocket_client_state::run_read(operatio
             continue;
         }
         if (event.close() != nullptr || event.transport_end() != nullptr) {
+            co_await await_peer_transport_end();
             co_return std::nullopt;
         }
     }
@@ -84,6 +85,35 @@ task<websocket_event> websocket_client_state::poll_protocol_event(
         }
         co_return *event;
     }
+}
+
+task<void> websocket_client_state::await_peer_transport_end() {
+    if (require_protocol().liveness_mode() != websocket_liveness_mode::awaiting_peer_eof) {
+        co_return;
+    }
+    // Section 7.1.1 lets the client close first when the server does not
+    // within a reasonable time. Either way the close handshake has completed,
+    // so neither that timeout nor a failing transport fails the operation.
+    arm(close_handshake_timer_, config_.close_handshake_timeout_, client_abort_reason::closing);
+    try {
+        for (;;) {
+            // Discards whatever the server sent after its Close.
+            (void)require_protocol().next_event();
+            const auto count = co_await read_transport(input_.prepare(websocket_client_transport_buffer_bytes), std::nullopt);
+            if (count == 0) {
+                break;
+            }
+            input_.commit(count);
+        }
+    } catch (const websocket_client_error&) {
+        retire(client_abort_reason::closing);
+        co_return;
+    }
+    require_protocol().notify_transport_eof();
+    co_await wait_for_write_idle(write_wait_type::reader);
+    write_guard_type write_guard(*this, write_phase_type::application);
+    // Plans end_transport: finishes an HTTP/2 stream and retires the client.
+    co_await flush_output();
 }
 
 task<std::size_t> websocket_client_state::read_transport(
