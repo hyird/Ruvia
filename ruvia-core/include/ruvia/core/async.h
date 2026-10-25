@@ -12,20 +12,30 @@
 
 namespace ruvia {
 
-// Adapts a lazy task for an Asio operation owner such as co_spawn. The returned
-// awaitable retains the task until completion; the caller still owns the
-// completion token and must wait for it before tearing down the executor.
+namespace detail {
+
 template <typename t_type>
-    requires detail::asio_task_result<t_type>
-[[nodiscard]] asio::awaitable<t_type> as_awaitable(task<t_type> task_value) {
-    auto result_value = co_await detail::async_start_task(std::move(task_value), asio::use_awaitable);
+    requires asio_task_result<t_type> && (!std::is_void_v<t_type>)
+[[nodiscard]] asio::awaitable<t_type> await_non_void_task(task<t_type> task_value) {
+    auto result_value = co_await async_start_task(std::move(task_value), asio::use_awaitable);
     if (result_value.index() == 1) {
         std::rethrow_exception(std::get<1>(result_value));
     }
+    co_return std::move(std::get<0>(result_value));
+}
+
+}  // namespace detail
+
+// Adapts a lazy task for an Asio operation owner such as co_spawn. Void tasks
+// complete with std::exception_ptr (an Asio disposition), so use_awaitable
+// produces the awaitable<void> directly without a wrapper coroutine frame.
+template <typename t_type>
+    requires detail::asio_task_result<t_type>
+[[nodiscard]] asio::awaitable<t_type> as_awaitable(task<t_type> task_value) {
     if constexpr (std::is_void_v<t_type>) {
-        co_return;
+        return detail::async_start_task(std::move(task_value), asio::use_awaitable);
     } else {
-        co_return std::move(std::get<0>(result_value));
+        return detail::await_non_void_task(std::move(task_value));
     }
 }
 

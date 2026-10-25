@@ -187,7 +187,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
                                             : connection_scanner::phase::reading_initial);
         auto idle_completion = co_await ruvia::async_asio<std::size_t>(
             [&stream, &idle_read_buffer](auto handler) mutable {
-                stream.async_read_some(asio::buffer(idle_read_buffer.data(), idle_read_buffer.size()), std::move(handler));
+                stream.async_read_some(asio::buffer(idle_read_buffer), std::move(handler));
             });
         const auto idle_ec = idle_completion.error_code();
         // A clean peer end, timeout or drain is answered as in the request read loop.
@@ -521,7 +521,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
             }
 
             auto read_completion = co_await ruvia::async_asio<std::size_t>([&stream, read_space](auto handler) mutable {
-                stream.async_read_some(asio::buffer(read_space.data(), read_space.size()), std::move(handler));
+                stream.async_read_some(asio::buffer(read_space), std::move(handler));
             });
             const auto ec = read_completion.error_code();
             const auto bytes_read = read_completion.result();

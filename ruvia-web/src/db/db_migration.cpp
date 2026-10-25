@@ -385,7 +385,9 @@ task<db_migration_report> stop_migration_loop_when_done(
 [[nodiscard]] db_migration_report run_migrations(detail::db_config_storage config,
     std::span<const db_migration> migrations, db_migrator_options_storage options,
     std::pmr::memory_resource* resource) {
-    asio::io_context io_context(1);
+    asio::io_context io_context(std::allocator_arg,
+        std::pmr::polymorphic_allocator<std::byte>(pmr_resource_or_default(resource)),
+        asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
     auto attachment = attach_event_loop(io_context);
     const auto loop = attachment.loop();
     const auto worker_value = loop.handle();

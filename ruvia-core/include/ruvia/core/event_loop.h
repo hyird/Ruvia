@@ -165,10 +165,14 @@ public:
             }
             void operator()(detail::task_completion_result<t_type>&& result_value) noexcept {
                 try {
-                    if (result_value.index() == 1) {
+                    if constexpr (std::is_void_v<t_type>) {
+                        if (result_value != nullptr) {
+                            completion_->stage_failure(std::move(result_value));
+                        } else {
+                            completion_->stage_value();
+                        }
+                    } else if (result_value.index() == 1) {
                         completion_->stage_failure(std::get<1>(result_value));
-                    } else if constexpr (std::is_void_v<t_type>) {
-                        completion_->stage_value();
                     } else {
                         completion_->stage_value(std::move(std::get<0>(result_value)));
                     }

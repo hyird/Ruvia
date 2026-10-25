@@ -112,7 +112,7 @@ task<bool> server_websocket_connection<stream_type>::read_more() {
         }
         const auto read_space = buffer_.prepare(read_bytes);
         auto read_completion = co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
-            stream_.async_read_some(asio::buffer(read_space.data(), read_space.size()), std::move(handler));
+            stream_.async_read_some(asio::buffer(read_space), std::move(handler));
         });
         const auto ec = read_completion.error_code();
         const auto bytes_read = read_completion.result();

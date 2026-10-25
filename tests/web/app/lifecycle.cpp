@@ -250,7 +250,7 @@ bool read_to_end(asio::ip::tcp::socket& socket, std::string& received, std::chro
 }
 
 void send(asio::ip::tcp::socket& socket, std::string_view bytes) {
-    asio::write(socket, asio::buffer(bytes.data(), bytes.size()));
+    asio::write(socket, asio::buffer(bytes));
 }
 
 void send_websocket_upgrade(asio::ip::tcp::socket& socket, std::string_view path) {

@@ -200,7 +200,7 @@ private:
         std::size_t slot, std::uint64_t generation) noexcept;
 
     asio::io_context& io_context_;
-    std::unique_ptr<asio::steady_timer> timer_;
+    std::unique_ptr<asio::steady_timer, pmr_object_deleter<asio::steady_timer>> timer_;
     std::size_t capacity_;
     std::pmr::vector<node_type> nodes_;
     mutable std::mutex mutex_;

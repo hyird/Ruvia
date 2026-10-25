@@ -272,7 +272,7 @@ int main(int argc, char** argv) {
             (void)ruvia::db_migrator::migrate(ruvia::examples::config(), changes);
         }
         if (execute) {
-            asio::io_context context_value(1);
+            asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
             auto attachment = ruvia::attach_event_loop(context_value);
             auto settings = ruvia::examples::config();
             ruvia::db_client db(attachment.loop(), settings);

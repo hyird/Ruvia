@@ -8,6 +8,8 @@
 #include <thread>
 #include <utility>
 
+#include <asio/config.hpp>
+
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_group.h"
@@ -61,9 +63,10 @@ public:
         aborted };
 
     explicit impl_type(worker_runtime_options options)
-        : io_context_(options.io_policy_ == worker_io_policy::single_owner
-                          ? ASIO_CONCURRENCY_HINT_UNSAFE_IO
-                          : ASIO_CONCURRENCY_HINT_DEFAULT),
+        : io_context_(std::allocator_arg, std::pmr::polymorphic_allocator<std::byte>(process_resource()),
+              asio::config_from_concurrency_hint(options.io_policy_ == worker_io_policy::single_owner
+                                                     ? ASIO_CONCURRENCY_HINT_UNSAFE_IO
+                                                     : ASIO_CONCURRENCY_HINT_DEFAULT)),
           context_(io_context_, options.queue_capacity_),
           stop_(context_) {}
 

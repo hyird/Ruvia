@@ -50,7 +50,7 @@ worker_id_type next_worker_dispatcher_id() noexcept {
 
 worker_dispatcher::worker_dispatcher(asio::io_context& io_context, std::size_t capacity)
     : io_context_(io_context),
-      timer_(std::make_unique<asio::steady_timer>(io_context)),
+      timer_(make_pmr_object<asio::steady_timer>(process_resource(), io_context)),
       capacity_(checked_queue_capacity(capacity)),
       nodes_(process_resource()),
       worker_id_(next_worker_dispatcher_id()),
@@ -384,7 +384,8 @@ void worker_dispatcher::close() noexcept {
 
 void worker_dispatcher::detach_context() noexcept {
     std::pmr::vector<timer_entry> abandoned_timers(timers_.get_allocator());
-    std::unique_ptr<asio::steady_timer> detached_timer;
+    std::unique_ptr<asio::steady_timer, pmr_object_deleter<asio::steady_timer>> detached_timer{
+        nullptr, pmr_object_deleter<asio::steady_timer>{process_resource()}};
     {
         std::lock_guard lock(mutex_);
         if (!context_attached_) {

@@ -13,6 +13,7 @@
 #include <asio/associated_executor.hpp>
 #include <asio/async_result.hpp>
 #include <asio/bind_allocator.hpp>
+#include <asio/disposition.hpp>
 #include <asio/post.hpp>
 
 #include "ruvia/core/detail/suspend_race_state.h"
@@ -20,9 +21,12 @@
 
 namespace ruvia::detail {
 
+// Void tasks complete with std::exception_ptr, which satisfies Asio's
+// disposition concept directly; value-returning tasks keep an rvalue-reference
+// variant so over-aligned results are never passed by value on MSVC.
 template <typename t_type>
-using task_completion_result =
-    std::variant<std::conditional_t<std::is_void_v<t_type>, std::monostate, t_type>, std::exception_ptr>;
+using task_completion_result = std::conditional_t<std::is_void_v<t_type>, std::exception_ptr,
+    std::variant<t_type, std::exception_ptr>>;
 template <typename t_type, typename handler_type>
 class task_completion_state final {
 public:
@@ -89,13 +93,17 @@ private:
             try {
                 if constexpr (std::is_void_v<t_type>) {
                     owner_value->task_.handle_.promise().result();
-                    return task_completion_result<t_type>(std::in_place_index<0>, std::monostate{});
+                    return {};
                 } else {
                     return task_completion_result<t_type>(
                         std::in_place_index<0>, owner_value->task_.handle_.promise().result());
                 }
             } catch (...) {
-                return task_completion_result<t_type>(std::in_place_index<1>, std::current_exception());
+                if constexpr (std::is_void_v<t_type>) {
+                    return std::current_exception();
+                } else {
+                    return task_completion_result<t_type>(std::in_place_index<1>, std::current_exception());
+                }
             }
         }();
         owner_value->task_.finish_direct_completion();
@@ -112,9 +120,11 @@ template <typename t_type, typename completion_token_type>
     requires asio_task_result<t_type>
 inline auto async_start_task(task<t_type>&& pending_task, completion_token_type&& token) {
     pending_task.prepare_direct_start();
-    // MSVC cannot pass over-aligned results by value. Delivery owns the result
-    // until the handler returns, so its completion argument can be an rvalue reference.
-    return asio::async_initiate<completion_token_type, void(task_completion_result<t_type>&&)>(
+    // Void tasks use Asio's native std::exception_ptr disposition signature;
+    // value tasks pass an rvalue reference so MSVC never copies over-aligned results.
+    using completion_signature_type =
+        std::conditional_t<std::is_void_v<t_type>, void(std::exception_ptr), void(task_completion_result<t_type>&&)>;
+    return asio::async_initiate<completion_token_type, completion_signature_type>(
         [](auto&& handler, task<t_type> task_value) {
             using handler_type = std::decay_t<decltype(handler)>;
             auto* state_value = task_completion_state<t_type, handler_type>::create(

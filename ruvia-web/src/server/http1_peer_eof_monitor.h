@@ -139,7 +139,7 @@ private:
                 // engine before honoring read cancellation; it remains there
                 // for the session's next read after this task has joined.
                 const auto completion = co_await async_asio<std::size_t>([this, space](auto handler) mutable {
-                    stream_.async_read_some(asio::buffer(space.data(), space.size()),
+                    stream_.async_read_some(asio::buffer(space),
                         asio::bind_cancellation_slot(cancellation_.slot(), std::move(handler)));
                 });
                 // A terminal cancellation can race a successful read. Preserve

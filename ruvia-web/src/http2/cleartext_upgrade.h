@@ -88,9 +88,7 @@ task<cleartext_http2_dispatch_result> dispatch_cleartext_http2_preface(
             const auto space = read_buffer.prepare_read();
             auto read_completion = co_await ruvia::async_asio<std::size_t>(
                 [&setup, space](auto handler) mutable {
-                    setup.stream_.async_read_some(
-                        asio::buffer(space.data(), space.size()),
-                        std::move(handler));
+                    setup.stream_.async_read_some(asio::buffer(space), std::move(handler));
                 });
             const auto ec = read_completion.error_code();
             const auto bytes_read = read_completion.result();

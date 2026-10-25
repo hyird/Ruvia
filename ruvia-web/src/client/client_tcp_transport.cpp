@@ -236,7 +236,7 @@ task<client_transport_result> client_tcp_transport::read_some(std::span<char> by
     if (abort_reason_ != client_abort_reason::none || !arm(read_, timeout)) {
         co_return aborted();
     }
-    const auto buffer = asio::buffer(bytes_value.data(), bytes_value.size());
+    const auto buffer = asio::buffer(bytes_value);
     const auto completion = secure()
                                 ? co_await async_asio<std::size_t>([this, buffer](auto handler) mutable {
                                       stream_.async_read_some(buffer, std::move(handler));

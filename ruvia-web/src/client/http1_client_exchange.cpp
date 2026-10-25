@@ -51,7 +51,7 @@ constexpr std::size_t response_read_chunk_bytes = 16384;
 // One contiguous write() part. A temporary argument outlives the write: it is
 // destroyed only at the end of the full-expression that awaits it.
 [[nodiscard]] std::array<asio::const_buffer, 1> single_part(std::string_view bytes) noexcept {
-    return {asio::buffer(bytes.data(), bytes.size())};
+    return {asio::buffer(bytes)};
 }
 
 [[noreturn]] void throw_body_timeout() {
@@ -645,8 +645,8 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                 const auto& planned = std::get<0>(chunk);
                 // The write lane has its own deadline, so the concurrent
                 // response reader keeps its read deadline.
-                const std::array<asio::const_buffer, 3> parts{asio::buffer(planned.prefix().data(), planned.prefix().size()),
-                    asio::buffer(planned.payload_.data(), planned.payload_.size()), asio::buffer(planned.suffix_)};
+                const std::array<asio::const_buffer, 3> parts{asio::buffer(planned.prefix()),
+                    asio::buffer(planned.payload_), asio::buffer(planned.suffix_)};
                 co_await write(parts, timeout);
                 writer.commit_chunk();
                 upload.output_.acknowledge_chunk();

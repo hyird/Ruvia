@@ -241,7 +241,7 @@ task<void> stream_body_reader<stream_type>::read_more() {
     scanner_entry_.set_phase(connection_scanner::phase::reading_payload);
     auto read_completion =
         co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
-            stream_.async_read_some(asio::buffer(read_space.data(), read_space.size()), std::move(handler));
+            stream_.async_read_some(asio::buffer(read_space), std::move(handler));
         });
     const auto ec = read_completion.error_code();
     const auto bytes_read = read_completion.result();

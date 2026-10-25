@@ -40,7 +40,7 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
             bool write_done = false;
             if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
                 write_done = try_plain_tcp_sync_write(stream,
-                    asio::buffer(write_scratch.data(), write_scratch.size()), write_scratch.size(),
+                    asio::buffer(write_scratch), write_scratch.size(),
                     0, write_error, written_bytes);
             }
             if (!write_done) {
@@ -104,8 +104,7 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
                 engine.set_inactivity_phase();
                 auto read_completion =
                     co_await ruvia::async_asio<std::size_t>([&stream, &read_buffer](auto handler) mutable {
-                        stream.async_read_some(
-                            asio::buffer(read_buffer.data(), read_buffer.size()), std::move(handler));
+                        stream.async_read_some(asio::buffer(read_buffer), std::move(handler));
                     });
                 const auto error = read_completion.error_code();
                 const auto bytes_read = read_completion.result();

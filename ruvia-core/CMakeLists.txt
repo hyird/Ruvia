@@ -19,7 +19,7 @@ else()
     endif()
     target_link_libraries(ruvia-core PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,mimalloc-static>")
 endif()
-target_compile_definitions(ruvia-core PUBLIC ASIO_STANDALONE)
+target_compile_definitions(ruvia-core PUBLIC ASIO_STANDALONE ASIO_NO_DEPRECATED)
 
 ruvia_install_target(ruvia-core core)
 

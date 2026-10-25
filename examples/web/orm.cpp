@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
             (void)db_migrator::migrate(settings, changes);
         }
         if (execute) {
-            asio::io_context context_value(1);
+            asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
             auto attachment = attach_event_loop(context_value);
             auto root = attachment.loop().start(run(settings, attachment));
             attachment.run();

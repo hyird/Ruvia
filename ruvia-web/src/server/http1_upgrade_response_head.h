@@ -42,8 +42,7 @@ template <typename stream_type>
         }
         continue_head = prepared_head->head();
     }
-    const std::array<asio::const_buffer, 2> buffers{
-        asio::buffer(continue_head.data(), continue_head.size()), asio::buffer(head.data(), head.size())};
+    const std::array<asio::const_buffer, 2> buffers{asio::buffer(continue_head), asio::buffer(head)};
     const auto written = co_await ruvia::async_asio<std::size_t>([&stream, &buffers](auto handler) {
         asio::async_write(stream, buffers, std::move(handler));
     });

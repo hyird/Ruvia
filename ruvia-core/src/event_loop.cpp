@@ -216,9 +216,9 @@ private:
         try {
             async_start_task(std::move(*task),
                 asio::bind_executor(executor_,
-                    [self = std::move(self)](task_completion_result<void> result_value) mutable {
-                        if (result_value.index() == 1) {
-                            self->report(std::get<1>(result_value));
+                    [self = std::move(self)](std::exception_ptr failure) mutable {
+                        if (failure != nullptr) {
+                            self->report(std::move(failure));
                         }
                         auto active_loop = std::move(self->active_loop_);
                         active_loop->retirement_.finish();
