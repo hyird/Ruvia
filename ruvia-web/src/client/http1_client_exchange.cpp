@@ -411,11 +411,6 @@ std::optional<http1_parsed_client_response_head> http1_client_exchange::take_fin
             state_value.upload_->output_.notify_data();
         }
         read_buffer.consume(parsed_value->consumed_bytes());
-        if (informational->persistence() == http1_close_policy::close_after_response) {
-            connection_.close();
-            throw http_client_error(http_client_error::code_type::protocol_error,
-                "upstream closed the HTTP exchange after an informational response");
-        }
     }
 }
 

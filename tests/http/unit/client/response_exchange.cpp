@@ -133,7 +133,7 @@ RUVIA_TEST(http_client_expect_continue_is_one_stateful_exchange_contract) {
                 http1_client_request_content_completion_status::exchange_terminal);
 }
 
-RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
+RUVIA_TEST(http_client_closing_informational_response_keeps_exchange_open) {
     ruvia::http_client_request_view get_request;
     get_request.method_ = "GET";
     std::array<char, 512> get_head;
@@ -153,11 +153,18 @@ RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
         const auto* const informational = early_hints.parsed()->plan().informational();
         RUVIA_CHECK(informational != nullptr);
         if (informational != nullptr) {
-            RUVIA_CHECK(informational->persistence() == http1_close_policy::close_after_response);
+            RUVIA_CHECK(informational->persistence() == http1_close_policy::allow_reuse);
         }
     }
-    RUVIA_CHECK(ruvia::testing::throws_on(
-        [&] { (void)get_parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"); }));
+    // RFC 9110 Section 15.2: any number of 1xx responses precede the final
+    // response, whose own persistence decides the connection. A close option on
+    // the 1xx is metadata only.
+    const auto final_response = get_parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+    RUVIA_CHECK(final_response.parsed() != nullptr);
+    if (final_response.parsed() != nullptr) {
+        RUVIA_CHECK(require_known_length(final_response.parsed()->plan()).persistence() ==
+                    http1_close_policy::allow_reuse);
+    }
 
     ruvia::http_client_request_view post_request;
     post_request.method_ = "POST";
@@ -179,7 +186,7 @@ RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
     RUVIA_CHECK(closing_continue.parsed() != nullptr);
     if (closing_continue.parsed() != nullptr) {
         RUVIA_CHECK(closing_continue.parsed()->plan().request_content_signal() ==
-                    http_client_request_content_signal::exchange_complete);
+                    http_client_request_content_signal::continue_value);
     }
 
     http1_client_response_parser closing_hints_parser(post_prepared_req->exchange_state());
@@ -187,8 +194,7 @@ RUVIA_TEST(http_client_closing_informational_response_ends_exchange) {
         closing_hints_parser.parse("HTTP/1.1 103 Early Hints\r\nConnection: close\r\n\r\n");
     RUVIA_CHECK(closing_hints.parsed() != nullptr);
     if (closing_hints.parsed() != nullptr) {
-        RUVIA_CHECK(closing_hints.parsed()->plan().request_content_signal() ==
-                    http_client_request_content_signal::exchange_complete);
+        RUVIA_CHECK(!closing_hints.parsed()->plan().request_content_signal());
     }
 
     std::array<char, 512> request_close_head;
@@ -291,7 +297,7 @@ RUVIA_TEST(http_client_timeout_released_content_follows_final_response_persisten
     }
 }
 
-RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
+RUVIA_TEST(http_client_upgrade_accepts_omitted_continue_after_content_complete) {
     const ruvia::http_header_view upgrade_headers[] = {
         {"Connection", "Upgrade"},
         {"Upgrade", "websocket"},
@@ -323,9 +329,9 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     }
     RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)rejected_parser.parse(switching); }));
 
-    // RFC 9110 section 7.8 still requires the server to acknowledge Expect
-    // with 100 before 101, even when the client released and completed content
-    // after its own finite wait expired.
+    // RFC 9110 Section 10.1.1 lets the server omit 100 once it has received
+    // some or all of the content, so a 101 after the client finished writing
+    // the body is a valid switch.
     std::array<char, 512> completed_without_continue_head;
     const auto completed_without_continue_prepared = ruvia::http1_client_request_writer().prepare(
         ruvia::http_origin_view::https({.host_ = "example.test"}), request,
@@ -344,10 +350,9 @@ RUVIA_TEST(http_client_upgrade_after_expect_requires_prior_continue) {
     RUVIA_CHECK(completed_without_continue_parser.complete_request_content() ==
                 http1_client_request_content_completion_status::completed);
     const auto completed_without_continue = completed_without_continue_parser.parse(switching);
-    RUVIA_CHECK(completed_without_continue.failure() != nullptr);
-    if (completed_without_continue.failure() != nullptr) {
-        RUVIA_CHECK(*completed_without_continue.failure() ==
-                    http1_client_response_parse_error::invalid_protocol_switch);
+    RUVIA_CHECK(completed_without_continue.parsed() != nullptr);
+    if (completed_without_continue.parsed() != nullptr) {
+        RUVIA_CHECK(completed_without_continue.parsed()->plan().protocol_upgrade() != nullptr);
     }
 
     std::array<char, 512> late_continue_head;

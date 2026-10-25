@@ -637,7 +637,8 @@ RUVIA_TEST(http_client_informational_auxiliary_fields_preserve_the_final_respons
         const auto closing = parse_head("GET", head);
         RUVIA_CHECK(closing.plan().informational() != nullptr);
         if (const auto* informational = closing.plan().informational()) {
-            RUVIA_CHECK(informational->persistence() == http1_close_policy::close_after_response);
+            // A 1xx cannot close the connection; its final response decides.
+            RUVIA_CHECK(informational->persistence() == http1_close_policy::allow_reuse);
         }
     }
 }

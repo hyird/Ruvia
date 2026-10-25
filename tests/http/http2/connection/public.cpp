@@ -4477,3 +4477,18 @@ RUVIA_TEST(http2_public_submit_reset_protocol_error_after_both_halves_end_stream
         (void)server.release(std::move(*sreq));
     }
 }
+
+RUVIA_TEST(http2_public_asterisk_form_request_never_generates_authority) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    (void)ruvia::testing::drain_output(client);
+    const auto rejected = client.submit_request_head(ruvia::http2_regular_request_head_view{
+        .method_ = "OPTIONS", .authority_ = "example.test", .target_ = "*"});
+    RUVIA_CHECK(std::holds_alternative<ruvia::http2_request_head_submit_error>(rejected) &&
+                std::get<ruvia::http2_request_head_submit_error>(rejected) ==
+                    ruvia::http2_request_head_submit_error::invalid_message);
+    RUVIA_CHECK(!client.wants_write());
+    const auto accepted = client.submit_request_head(
+        ruvia::http2_regular_request_head_view{.method_ = "OPTIONS", .target_ = "*"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(accepted));
+}

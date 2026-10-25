@@ -143,10 +143,6 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
         return fail(std::get<1>(planning));
     }
     auto plan = std::move(std::get<0>(planning));
-    const auto* const informational_plan = plan.informational();
-    const bool informational = informational_plan != nullptr;
-    const bool closing_informational =
-        informational && informational_plan->persistence() == http1_close_policy::close_after_response;
 
     // No owning response head is observable until the entire head and framing
     // plan have validated. Field views borrow the input or unfolded_head until
@@ -164,11 +160,10 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
 
     auto result_value = detail::http1_client_response_parse_result_access::parsed(
         std::move(head), std::move(plan), header_bytes);
-    if (parsed_value.status_code_ == http_status::continue_value && !closing_informational) {
+    if (parsed_value.status_code_ == http_status::continue_value) {
         request_content_phase_ = receive_continue(request_content_phase_);
     }
-    if (closing_informational || parsed_value.status_code_ == http_status::switching_protocols ||
-        parsed_value.status_code_.is_final()) {
+    if (parsed_value.status_code_ == http_status::switching_protocols || parsed_value.status_code_.is_final()) {
         phase_ = phase_type::complete;
     }
     return result_value;

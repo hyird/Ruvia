@@ -41,6 +41,7 @@ namespace {
     http1_client_request_content_phase request_content_phase) noexcept {
     const bool request_content_allows_switch =
         request_content_phase == http1_client_request_content_phase::content_complete ||
+        request_content_phase == http1_client_request_content_phase::content_complete_awaiting_continue ||
         request_content_phase == http1_client_request_content_phase::continue_received_content_complete;
     if (http1_client_exchange_state_access::close_policy(exchange_state) ==
             http1_close_policy::close_after_response ||
@@ -199,10 +200,11 @@ http1_client_response_planning_result_type plan_http1_client_response(
         return http1_client_response_plan_access::protocol_upgrade();
     }
     if (content_semantics == http_response_content_semantics::informational) {
-        const auto persistence = response_persistence(response);
-        return http1_client_response_plan_access::informational(
-            persistence, request_content_signal(request_content_phase, response.status_code_,
-                             persistence == http1_close_policy::close_after_response));
+        // A 1xx never ends the exchange or cancels request content, so it cannot
+        // close the connection either; the final response alone decides that
+        // (RFC 9110 Section 15.2).
+        return http1_client_response_plan_access::informational(http1_close_policy::allow_reuse,
+            request_content_signal(request_content_phase, response.status_code_, false));
     }
     if (content_semantics == http_response_content_semantics::connect_tunnel) {
         return http1_client_response_plan_access::connect_tunnel();

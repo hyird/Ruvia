@@ -412,7 +412,10 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
         return false;
     }
 
-    std::array<std::uint32_t, http2_local_settings::max_concurrent_streams> unprocessed_stream_ids{};
+    // A GOAWAY boundary can cover more live streams than the concurrency budget:
+    // reserved push promises do not occupy a concurrency slot (RFC 9113 Sections
+    // 5.1.2 and 8.4.2) yet remain open and must be closed here.
+    std::array<std::uint32_t, http2_stream_table::max_streams> unprocessed_stream_ids{};
     std::size_t unprocessed_count = 0;
     if (role_ == http2_role::client) {
         bool response_started_above_last = false;

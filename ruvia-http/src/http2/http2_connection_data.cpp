@@ -143,6 +143,7 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
         const bool early_tunnel_data = pending_connect_control && !data.empty();
         if (early_tunnel_data) {
             reserve_events(1);
+            (void)stream->mark_remote_connect_tunnel_data();
         } else {
             reserve_consumed_data_credit(end_stream ? nullptr : stream, static_cast<std::uint32_t>(flow_bytes));
         }
@@ -160,7 +161,7 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
             return true;
         }
         const bool remote_finished = pending_connect_control
-                                         ? stream->finish_remote_pending_connect(early_tunnel_data)
+                                         ? stream->finish_remote_pending_connect()
                                          : stream->finish_remote_rejected_connect();
         if (!remote_finished) {
             // The selected remote alternative is exclusive and the transition is

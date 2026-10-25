@@ -10,7 +10,6 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
-#include "coding/http_content_length.h"
 #include "parser/http_uri_grammar.h"
 #include "request/http_request_access.h"
 
@@ -59,7 +58,6 @@ std::variant<handshake_fields, http_connect_udp_error> fields(std::span<const he
     handshake_fields found;
     detail::http_connection_options connection_options;
     detail::http_upgrade_protocols upgrade_protocols;
-    detail::http_content_length_state content_length;
     bool connect_udp_offered = false;
     for (const auto& field : headers) {
         if (!is_valid_http_header_name(field.name()) || !is_valid_http_header_value(field.value())) {
@@ -111,16 +109,11 @@ std::variant<handshake_fields, http_connect_udp_error> fields(std::span<const he
             }
             found.host_ = true;
             found.host_value_ = trimmed_host;
-        } else if (http_ascii_equals_ignore_case(field.name(), "content-length")) {
-            if (role == handshake_message_role::request_recipient) {
-                if (content_length.parse_field(field.value()) != detail::http_content_length_parse_status::ok ||
-                    *content_length.value() != 0) {
-                    return syntax_error;
-                }
-            } else {
-                found.forbidden_ = true;
-            }
         } else if (detail::http_field_name_in(field.name(), detail::http_connect_forbidden_fields)) {
+            // RFC 9297 Section 3.2: the Capsule Protocol MUST NOT be used with
+            // messages carrying Content-Length, Content-Type, or Transfer-Encoding
+            // (the list also covers Content-Encoding and Trailer); a receiver that
+            // observes one treats the message as malformed.
             found.forbidden_ = true;
         }
     }

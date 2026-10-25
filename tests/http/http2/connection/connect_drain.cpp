@@ -698,6 +698,39 @@ RUVIA_TEST(http2_websocket_connect_accepts_zero_content_length_and_early_data_wi
             (void)server.release(std::move(*head));
         }
     }
+    {
+        // The same early data split across a data frame and an empty
+        // DATA(END_STREAM) must reach the same handshake verdict.
+        auto server = started_server(&resource);
+        auto wire = opening_wire(&resource);
+        auto block = connect_block(&resource, "websocket");
+        append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag, 1, block);
+        append_frame(wire, ruvia::http2_frame_type::data, 0, 1,
+            std::string_view("\x88\x82\x00\x00\x00\x00\x03\xe8", 8));
+        append_frame(wire, ruvia::http2_frame_type::data, end_stream_flag, 1, std::string_view{});
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        std::optional<ruvia::http2_request_head_event> head;
+        bool saw_data = false;
+        while (auto ev = server.next_event()) {
+            if (auto* rh = ev->request_head()) {
+                head.emplace(std::move(*rh));
+            } else if (ev->tunnel_data()) {
+                saw_data = true;
+            }
+        }
+        RUVIA_CHECK(head.has_value());
+        RUVIA_CHECK(saw_data);
+        if (head) {
+            const auto req = head->build_request(&resource);
+            const auto val = ruvia::validate_http2_websocket_handshake(server, 1, req);
+            RUVIA_CHECK(val.accepted() != nullptr);
+            const auto sub = server.submit_websocket_handshake(1, req, val);
+            RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(sub));
+            auto end_ev = server.next_event();
+            RUVIA_CHECK(end_ev && end_ev->tunnel_end() != nullptr);
+            (void)server.release(std::move(*head));
+        }
+    }
 }
 
 // Refused streams must still validate mandatory pseudo-headers and framing,

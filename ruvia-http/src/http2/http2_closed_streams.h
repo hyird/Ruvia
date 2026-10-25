@@ -45,6 +45,16 @@ public:
         return std::nullopt;
     }
 
+    [[nodiscard]] bool local_reset_sent(std::uint32_t stream_id) const noexcept {
+        for (std::size_t i = 0; i < size_; ++i) {
+            const auto& record = records_[i];
+            if (record.id_ == stream_id) {
+                return record.source_ == http2_stream_close_source::local && record.reset_sent_;
+            }
+        }
+        return false;
+    }
+
     [[nodiscard]] bool claim_late_local_reset(std::uint32_t stream_id) noexcept {
         for (std::size_t i = 0; i < size_; ++i) {
             auto& record = records_[i];

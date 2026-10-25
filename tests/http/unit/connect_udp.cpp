@@ -365,21 +365,21 @@ RUVIA_TEST(http_connect_udp_sender_and_recipient_field_validation) {
         ruvia::http_protocol_version::http11, 101, empty_elem_resp)
             .has_value());
 
-    // Recipient allows Content-Length: 0 on requests, rejects non-zero Content-Length on requests,
-    // and rejects Content-Length on 2xx responses (RFC 9297 3.2).
+    // RFC 9297 3.2: a Capsule Protocol message that carries Content-Length is
+    // malformed regardless of its value.
     const std::array cl0_req{
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
         ruvia::http_header_view{"Content-Length", "0"},
     };
-    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request({
-                                                              .version_ = ruvia::http_protocol_version::http2,
-                                                              .method_ = "CONNECT",
-                                                              .protocol_ = "connect-udp",
-                                                              .scheme_ = "https",
-                                                              .authority_ = "example.test",
-                                                              .path_ = "/proxy",
-                                                              .headers_ = cl0_req,
-                                                          })
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request({
+                                                             .version_ = ruvia::http_protocol_version::http2,
+                                                             .method_ = "CONNECT",
+                                                             .protocol_ = "connect-udp",
+                                                             .scheme_ = "https",
+                                                             .authority_ = "example.test",
+                                                             .path_ = "/proxy",
+                                                             .headers_ = cl0_req,
+                                                         })
             .has_value());
     const std::array cl5_req{
         ruvia::http_header_view{"Capsule-Protocol", "?1"},

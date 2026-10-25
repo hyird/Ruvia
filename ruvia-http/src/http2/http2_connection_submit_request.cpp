@@ -83,6 +83,11 @@ namespace {
         (!authority.has_value() && http2_regular_request_requires_authority(scheme, path))) {
         return false;
     }
+    // An asterisk-form request target carries no authority information, so a direct
+    // HTTP/2 sender MUST NOT generate :authority for it (RFC 9113 Section 8.3.1).
+    if (path == "*" && authority.has_value()) {
+        return false;
+    }
     http_header_section_size section_size;
     bool expect_continue = false;
     switch (expectation) {

@@ -19,6 +19,11 @@ namespace ruvia::detail {
 
 class http2_stream_table final {
 public:
+    // Hard upper bound on live stream records. Reserved push promises do not hold a
+    // concurrency slot, so this can exceed SETTINGS_MAX_CONCURRENT_STREAMS.
+    static constexpr std::size_t max_streams =
+        static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 4;
+
     explicit http2_stream_table(std::pmr::memory_resource* resource)
         : resource_(http_pmr_resource_or_default(resource)),
           overflow_(std::size_t{0}, resource_) {}
@@ -69,7 +74,7 @@ public:
         if (auto* existing = find(stream_id); existing != nullptr) {
             return existing;
         }
-        if (size_ >= static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 4) {
+        if (size_ >= max_streams) {
             return nullptr;
         }
         for (auto& slot : inline_) {

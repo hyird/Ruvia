@@ -35,10 +35,21 @@ private:
 // A server decoded CONNECT without END_STREAM and has not accepted or rejected it.
 // DATA is forbidden until that decision selects tunnel or rejection semantics.
 class http2_remote_connect_pending final {
+public:
+    [[nodiscard]] constexpr bool saw_tunnel_data() const noexcept {
+        return saw_tunnel_data_;
+    }
+
 private:
     friend class http2_remote_receive_state;
 
     constexpr http2_remote_connect_pending() noexcept = default;
+
+    constexpr void mark_tunnel_data() noexcept {
+        saw_tunnel_data_ = true;
+    }
+
+    bool saw_tunnel_data_{false};
 };
 
 // A server decoded CONNECT and then observed END_STREAM on its HEADERS or on a
@@ -191,11 +202,24 @@ private:
         return true;
     }
 
-    [[nodiscard]] bool finish_pending_connect(bool had_tunnel_data) noexcept {
-        if (connect_pending() == nullptr) {
+    // RFC 8441 section 5 / RFC 6455 section 4.1: whether the peer half-closed
+    // without ever sending tunnel data depends on the whole pending phase, not
+    // on how the octets were split across DATA frames.
+    [[nodiscard]] bool mark_connect_tunnel_data() noexcept {
+        auto* pending = std::get_if<http2_remote_connect_pending>(&state_);
+        if (pending == nullptr) {
             return false;
         }
-        state_ = state_type(http2_remote_connect_pending_end_stream(!had_tunnel_data));
+        pending->mark_tunnel_data();
+        return true;
+    }
+
+    [[nodiscard]] bool finish_pending_connect() noexcept {
+        auto* pending = std::get_if<http2_remote_connect_pending>(&state_);
+        if (pending == nullptr) {
+            return false;
+        }
+        state_ = state_type(http2_remote_connect_pending_end_stream(!pending->saw_tunnel_data()));
         return true;
     }
 

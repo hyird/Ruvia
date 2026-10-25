@@ -331,7 +331,7 @@ RUVIA_TEST(response_stream_head_transfer_coded_chunked_body_survives_peer_monito
         if (deflateInit2(&zs, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
             throw std::runtime_error("deflateInit2 failed");
         }
-        std::string out(deflateBound(&zs, input.size()) + 64, '\0');
+        std::string out(deflateBound(&zs, static_cast<uLong>(input.size())) + 64, '\0');
         zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
         zs.avail_in = static_cast<uInt>(input.size());
         zs.next_out = reinterpret_cast<Bytef*>(out.data());

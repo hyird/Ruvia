@@ -134,11 +134,7 @@ task<void> websocket_client_state::perform_handshake() {
             throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
                 "upstream rejected the WebSocket upgrade");
         }
-        if (const auto* informational = parsed_value->plan().informational()) {
-            if (informational->persistence() == http1_close_policy::close_after_response) {
-                throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
-                    "upstream closed the HTTP exchange before the WebSocket upgrade");
-            }
+        if (parsed_value->plan().informational() != nullptr) {
             input_.consume(parsed_value->consumed_bytes());
             continue;
         }

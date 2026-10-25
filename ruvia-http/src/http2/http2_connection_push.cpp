@@ -15,9 +15,15 @@ bool http2_connection::process_push_promise(const http2_frame_header& header_val
         return false;
     }
     const auto* parent_value = find_stream(header_value.stream_id_);
-    const bool canceled_parent = parent_value ? parent_value->is_aborted() &&
-                                                    parent_value->local_send().aborted()->source() == http2_stream_close_source::local
-                                              : closed_streams_.source(header_value.stream_id_) == http2_stream_close_source::local;
+    // RFC 9113 section 6.6: a PUSH_PROMISE on a stream that is neither open nor
+    // half-closed (local) is a connection error, except when this endpoint sent
+    // RST_STREAM on it. A normally completed stream was never reset, so only the
+    // recorded reset flag grants the exception.
+    const bool canceled_parent = parent_value != nullptr
+                                     ? parent_value->is_aborted() &&
+                                           parent_value->local_send().aborted()->source() ==
+                                               http2_stream_close_source::local
+                                     : closed_streams_.local_reset_sent(header_value.stream_id_);
     if ((parent_value != nullptr && parent_value->tunnel().not_connect() == nullptr) ||
         (!canceled_parent && (!parent_value || http2_remote_peer_half_closed(*parent_value)))) {
         append_goaway(http2_error_code::protocol_error, "PUSH_PROMISE on closed or idle stream");

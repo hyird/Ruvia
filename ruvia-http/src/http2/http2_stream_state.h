@@ -253,11 +253,18 @@ public:
         return lifecycle_.finish_remote_content();
     }
 
-    [[nodiscard]] bool finish_remote_pending_connect(bool had_tunnel_data) noexcept {
+    [[nodiscard]] bool mark_remote_connect_tunnel_data() noexcept {
         if (tunnel_state_.pending() == nullptr) {
             return false;
         }
-        return lifecycle_.finish_remote_pending_connect(had_tunnel_data);
+        return lifecycle_.mark_remote_connect_tunnel_data();
+    }
+
+    [[nodiscard]] bool finish_remote_pending_connect() noexcept {
+        if (tunnel_state_.pending() == nullptr) {
+            return false;
+        }
+        return lifecycle_.finish_remote_pending_connect();
     }
 
     [[nodiscard]] bool finish_remote_tunnel() noexcept {

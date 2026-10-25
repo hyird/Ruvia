@@ -102,8 +102,12 @@ private:
         return remote_receive_.finish_content();
     }
 
-    [[nodiscard]] bool finish_remote_pending_connect(bool had_tunnel_data) noexcept {
-        return remote_receive_.finish_pending_connect(had_tunnel_data);
+    [[nodiscard]] bool mark_remote_connect_tunnel_data() noexcept {
+        return remote_receive_.mark_connect_tunnel_data();
+    }
+
+    [[nodiscard]] bool finish_remote_pending_connect() noexcept {
+        return remote_receive_.finish_pending_connect();
     }
 
     [[nodiscard]] bool finish_remote_tunnel() noexcept {
