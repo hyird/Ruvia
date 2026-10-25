@@ -9,12 +9,22 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/http/url_encoding.h"
 
 #include "parser/http_uri_grammar.h"
 #include "request/http_request_access.h"
 
 namespace ruvia {
 namespace {
+
+[[nodiscard]] http_target_origin classify_reg_name(std::string_view host, bool decoded) noexcept {
+    if (const auto address = detail::parse_ipv4_address(host)) {
+        return http_target_origin::ip_address(http_target_host_kind::ipv4, *address);
+    }
+    // An absolute domain name names the same host as its relative spelling.
+    const auto name = host.size() > 1 && host.back() == '.' ? host.substr(0, host.size() - 1) : host;
+    return decoded ? http_target_origin::decoded_dns_name(name) : http_target_origin::dns_name(name);
+}
 
 [[nodiscard]] http_target_origin certificate_check(std::string_view authority) noexcept {
     // The parsers admitted only valid Host syntax; anything else here is a
@@ -37,12 +47,36 @@ namespace {
         }
         return http_target_origin::ip_address(http_target_host_kind::ipv6, address);
     }
-    if (const auto address = detail::parse_ipv4_address(host)) {
-        return http_target_origin::ip_address(http_target_host_kind::ipv4, *address);
+    if (host.find('%') == std::string_view::npos) {
+        return classify_reg_name(host, false);
     }
-    // An absolute domain name names the same host as its relative spelling.
-    const auto name = host.size() > 1 && host.back() == '.' ? host.substr(0, host.size() - 1) : host;
-    return http_target_origin::dns_name(name);
+    // RFC 3986 §3.2.2 / §6.2.2.2 and RFC 9110 §4.2.3: percent-encoded
+    // unreserved octets in reg-name are equivalent to their decoded characters.
+    std::array<char, http_target_origin::max_dns_name_size + 1> decoded{};
+    std::size_t size = 0;
+    bool decoded_any = false;
+    for (std::size_t i = 0; i < host.size();) {
+        if (host[i] == '%') {
+            if (const auto byte = http_try_decode_percent_byte(host, i);
+                byte.has_value() && detail::is_unreserved_byte(*byte)) {
+                if (size == decoded.size()) {
+                    return http_target_origin::misdirected();
+                }
+                decoded[size++] = static_cast<char>(*byte);
+                i += 3;
+                decoded_any = true;
+                continue;
+            }
+        }
+        if (size == decoded.size()) {
+            return http_target_origin::misdirected();
+        }
+        decoded[size++] = host[i++];
+    }
+    if (!decoded_any) {
+        return classify_reg_name(host, false);
+    }
+    return classify_reg_name(std::string_view(decoded.data(), size), true);
 }
 
 }  // namespace

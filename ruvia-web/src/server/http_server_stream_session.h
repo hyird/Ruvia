@@ -406,7 +406,9 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                                           : co_await dispatch_http_websocket_route(
                                                 route_dispatch, admission->tail(), *resolved, pending);
                     if (!completion) {
-                        co_return http_connection_close::abort;
+                        co_return endpoint_kind == http_request_endpoint::websocket&& stream.lowest_layer().is_open()
+                            ? http_connection_close::linger
+                            : http_connection_close::abort;
                     }
                     request_completion.emplace(std::move(*completion));
                     break;

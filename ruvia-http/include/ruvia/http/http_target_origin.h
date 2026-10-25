@@ -43,6 +43,8 @@ enum class http_target_host_kind : std::uint8_t {
 // Meaningful host data only for verify_certificate.
 class http_target_origin final {
 public:
+    static constexpr std::size_t max_dns_name_size = 253;
+
     [[nodiscard]] constexpr http_target_origin_action action() const noexcept {
         return action_;
     }
@@ -51,10 +53,10 @@ public:
         return host_kind_;
     }
 
-    // dns_name: the host text, borrowed from the request, as received (any
-    // letter case, percent-encoding not decoded). ipv4/ipv6: empty.
+    // dns_name: the host text (percent-encoded unreserved octets decoded, a
+    // single trailing dot stripped, letter case preserved). ipv4/ipv6: empty.
     [[nodiscard]] constexpr std::string_view host() const noexcept {
-        return host_;
+        return decoded_host_size_ != 0 ? std::string_view(decoded_host_.data(), decoded_host_size_) : host_;
     }
 
     // ipv4/ipv6: the address in network byte order (4 or 16 bytes).
@@ -77,6 +79,18 @@ public:
         return origin;
     }
 
+    [[nodiscard]] static constexpr http_target_origin decoded_dns_name(std::string_view host) noexcept {
+        if (host.size() > max_dns_name_size) {
+            return misdirected();
+        }
+        http_target_origin origin(http_target_origin_action::verify_certificate);
+        origin.decoded_host_size_ = static_cast<std::uint8_t>(host.size());
+        for (std::size_t i = 0; i < host.size(); ++i) {
+            origin.decoded_host_[i] = host[i];
+        }
+        return origin;
+    }
+
     [[nodiscard]] static constexpr http_target_origin ip_address(
         http_target_host_kind kind, std::span<const std::uint8_t> address) noexcept {
         http_target_origin origin(http_target_origin_action::verify_certificate);
@@ -93,7 +107,9 @@ private:
         : action_(action) {}
 
     std::string_view host_;
+    std::array<char, max_dns_name_size> decoded_host_{};
     std::array<std::uint8_t, 16> address_{};
+    std::uint8_t decoded_host_size_{0};
     std::uint8_t address_size_{0};
     http_target_origin_action action_;
     http_target_host_kind host_kind_{http_target_host_kind::dns_name};

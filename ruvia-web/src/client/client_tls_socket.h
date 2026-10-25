@@ -17,14 +17,16 @@ namespace ruvia::detail {
 
 class client_tls_socket;
 
-// Completion of a socket write in flight: one that waits for the reactor or
-// ended inside a record. Retires it from its socket before the stream continues.
+// Completion of a socket write in flight: one that waits for the reactor,
+// ended inside a record, or finished synchronously and must still observe a
+// cancel() before the stream continues.
 template <typename handler_type>
 class client_tls_write_handler final {
 public:
-    client_tls_write_handler(handler_type&& handler, client_tls_socket& socket)
+    client_tls_write_handler(handler_type&& handler, client_tls_socket& socket, bool counted)
         : handler_(std::move(handler)),
-          socket_(&socket) {}
+          socket_(&socket),
+          counted_(counted) {}
 
     void operator()(const std::error_code& error, std::size_t bytes);
 
@@ -33,6 +35,7 @@ public:
 
 private:
     client_tls_socket* socket_;
+    bool counted_;
 };
 
 // The TCP layer under the client's TLS stream. Every TLS record reaches the
@@ -47,7 +50,10 @@ private:
 class client_tls_socket final {
 public:
     using executor_type = asio::ip::tcp::socket::executor_type;
-    using lowest_layer_type = asio::ip::tcp::socket::lowest_layer_type;
+    using lowest_layer_type = client_tls_socket;
+    using native_handle_type = asio::ip::tcp::socket::native_handle_type;
+    using protocol_type = asio::ip::tcp;
+    using endpoint_type = asio::ip::tcp::endpoint;
 
     explicit client_tls_socket(const executor_type& executor)
         : socket_(executor) {}
@@ -56,10 +62,10 @@ public:
         return socket_.get_executor();
     }
     [[nodiscard]] lowest_layer_type& lowest_layer() noexcept {
-        return socket_.lowest_layer();
+        return *this;
     }
     [[nodiscard]] const lowest_layer_type& lowest_layer() const noexcept {
-        return socket_.lowest_layer();
+        return *this;
     }
     // The raw socket, for plaintext connections, socket options and the
     // CONNECT tunnel, which writes its own TLS records.
@@ -70,6 +76,62 @@ public:
     // sequence: no write is pending or partly done, and none failed.
     [[nodiscard]] bool records_whole() const noexcept {
         return writes_ == 0 && !write_failed_;
+    }
+    [[nodiscard]] bool is_open() const noexcept {
+        return socket_.is_open();
+    }
+    [[nodiscard]] native_handle_type native_handle() {
+        return socket_.native_handle();
+    }
+    void open(const protocol_type& protocol = asio::ip::tcp::v4()) {
+        reset();
+        socket_.open(protocol);
+    }
+    void open(const protocol_type& protocol, std::error_code& error) noexcept {
+        reset();
+        (void)socket_.open(protocol, error);
+    }
+    void connect(const endpoint_type& endpoint) {
+        reset();
+        socket_.connect(endpoint);
+    }
+    void connect(const endpoint_type& endpoint, std::error_code& error) noexcept {
+        reset();
+        (void)socket_.connect(endpoint, error);
+    }
+    void cancel() {
+        std::error_code error;
+        cancel(error);
+        if (error) {
+            throw std::system_error(error);
+        }
+    }
+    void cancel(std::error_code& error) noexcept {
+        cancelled_ = true;
+        if (writes_ != 0) {
+            write_failed_ = true;
+        }
+        (void)socket_.cancel(error);
+    }
+    void close() {
+        std::error_code error;
+        close(error);
+        if (error) {
+            throw std::system_error(error);
+        }
+    }
+    void close(std::error_code& error) noexcept {
+        cancelled_ = true;
+        if (writes_ != 0) {
+            write_failed_ = true;
+        }
+        std::error_code ignored;
+        (void)socket_.cancel(ignored);
+        (void)socket_.close(error);
+    }
+    void reset() noexcept {
+        cancelled_ = false;
+        write_failed_ = false;
     }
 
     template <typename buffers_type>
@@ -82,11 +144,22 @@ public:
     }
     template <typename buffers_type, typename handler_type>
     void async_read_some(const buffers_type& buffers, handler_type&& handler) {
+        if (cancelled_) {
+            asio::post(socket_.get_executor(),
+                asio::append(std::forward<handler_type>(handler), asio::error::operation_aborted, std::size_t{0}));
+            return;
+        }
         socket_.async_read_some(buffers, std::forward<handler_type>(handler));
     }
     template <typename buffers_type, typename handler_type>
     void async_write_some(const buffers_type& buffers, handler_type&& handler) {
         using completion_type = client_tls_write_handler<std::decay_t<handler_type>>;
+        if (cancelled_) {
+            write_failed_ = true;
+            asio::post(socket_.get_executor(),
+                asio::append(std::forward<handler_type>(handler), asio::error::operation_aborted, std::size_t{0}));
+            return;
+        }
         // Like Asio's own speculative write, but its outcome stays visible:
         // only a write that waits for the reactor or ends inside a record is
         // in flight. Queued writes keep their order, so a direct write runs
@@ -98,18 +171,20 @@ public:
                 error != asio::error::interrupted) {
                 if (error) {
                     write_failed_ = true;
-                } else if (written != asio::buffer_size(buffers)) {
-                    ++writes_;
-                    asio::post(socket_.get_executor(),
-                        asio::append(completion_type(std::forward<handler_type>(handler), *this), error, written));
+                    asio::post(socket_.get_executor(), asio::append(std::forward<handler_type>(handler), error, written));
                     return;
                 }
-                asio::post(socket_.get_executor(), asio::append(std::forward<handler_type>(handler), error, written));
+                const bool partial = written != asio::buffer_size(buffers);
+                if (partial) {
+                    ++writes_;
+                }
+                asio::post(socket_.get_executor(),
+                    asio::append(completion_type(std::forward<handler_type>(handler), *this, partial), error, written));
                 return;
             }
         }
         ++writes_;
-        socket_.async_write_some(buffers, completion_type(std::forward<handler_type>(handler), *this));
+        socket_.async_write_some(buffers, completion_type(std::forward<handler_type>(handler), *this, true));
     }
 
 private:
@@ -121,11 +196,19 @@ private:
     // A failed or cancelled write may leave a record partly sent, or records
     // unsent whose sequence numbers a later record would skip.
     bool write_failed_{false};
+    bool cancelled_{false};
 };
 
 template <typename handler_type>
 void client_tls_write_handler<handler_type>::operator()(const std::error_code& error, std::size_t bytes) {
-    --socket_->writes_;
+    if (counted_) {
+        --socket_->writes_;
+    }
+    if (socket_->cancelled_) {
+        socket_->write_failed_ = true;
+        std::move(handler_)(asio::error::operation_aborted, 0);
+        return;
+    }
     if (error) {
         socket_->write_failed_ = true;
     }

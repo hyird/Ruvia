@@ -60,6 +60,23 @@ RUVIA_TEST(target_origin_decision_follows_scheme_transport_and_gateway_trust) {
     RUVIA_CHECK(asterisk.action() == http_target_origin_action::verify_certificate);
     RUVIA_CHECK(asterisk.host() == "a.example");
 
+    // RFC 3986 §3.2.2 / §6.2.2.2 and RFC 9110 §4.2.3: percent-encoded
+    // unreserved octets in reg-name are decoded before host classification.
+    const auto encoded_dns = decide("GET", "/x", "%6Cocalhost%2E:8443", secured);
+    RUVIA_CHECK(encoded_dns.action() == http_target_origin_action::verify_certificate);
+    RUVIA_CHECK(encoded_dns.host_kind() == http_target_host_kind::dns_name);
+    RUVIA_CHECK(encoded_dns.host() == "localhost");
+
+    const auto encoded_abs = decide("GET", "https://%6Cocalhost/x", "localhost", secured);
+    RUVIA_CHECK(encoded_abs.action() == http_target_origin_action::verify_certificate);
+    RUVIA_CHECK(encoded_abs.host_kind() == http_target_host_kind::dns_name);
+    RUVIA_CHECK(encoded_abs.host() == "localhost");
+
+    const auto encoded_ipv4 = decide("GET", "/x", "192.0.2.%37:443", secured);
+    RUVIA_CHECK(encoded_ipv4.action() == http_target_origin_action::verify_certificate);
+    RUVIA_CHECK(encoded_ipv4.host_kind() == http_target_host_kind::ipv4);
+    RUVIA_CHECK(std::ranges::equal(encoded_ipv4.address(), std::array<std::uint8_t, 4>{192, 0, 2, 7}));
+
     const auto ipv4 = decide("GET", "/x", "192.0.2.7:443", secured);
     RUVIA_CHECK(ipv4.action() == http_target_origin_action::verify_certificate);
     RUVIA_CHECK(ipv4.host_kind() == http_target_host_kind::ipv4);

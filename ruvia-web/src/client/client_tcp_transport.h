@@ -178,6 +178,9 @@ private:
     // The TLS connection is established and has not failed, so a close may
     // append close_notify once its socket layer holds whole records only.
     bool tls_close_ready_{false};
+    // A composed write_buffers call is in flight: it may span multiple TLS
+    // records across posted speculative completions.
+    bool writing_{false};
 };
 
 }  // namespace ruvia::detail
