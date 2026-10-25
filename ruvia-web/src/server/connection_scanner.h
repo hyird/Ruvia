@@ -90,12 +90,11 @@ public:
         drain_check_type drain_{nullptr};
     };
 
-    // Connection-owned node. touch()/set_phase() use the scanner's
-    // cached coarse time, not a per-request clock read; the scanner advances it
-    // on every tick and discounts its one-interval lag before timing out.
+    // Connection-owned node. touch()/set_phase() sample monotonic activity time;
+    // the scanner samples its comparison clock once per tick. Delayed scans
+    // never backdate activity or shorten configured timeouts.
     // Destruction detaches the entry and its checks, including during a periodic
-    // callback. Destroying the scanner detaches its entries before releasing
-    // its timestamp storage.
+    // callback. Destroying the scanner detaches its entries and checks.
     class entry final {
     public:
         entry() noexcept = default;
@@ -176,7 +175,6 @@ public:
         connection_scanner* scanner_{nullptr};
         entry* prev_{nullptr};
         entry* next_{nullptr};
-        const std::int64_t* now_ms_{nullptr};
         std::int64_t last_active_ms_{0};
         std::int64_t phase_started_ms_{0};
         // Valid while close_requested_: when the scanner closes the socket.

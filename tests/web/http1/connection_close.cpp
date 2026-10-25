@@ -113,9 +113,10 @@ void idle_tls_connection_ends_with_close_notify(
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     const auto stream = connect_tls(io, client, endpoint);
+    // 服务端可在发送返回前开始空闲计时，所以先记录请求发送的起点。
+    const auto started = std::chrono::steady_clock::now();
     asio::write(*stream, asio::buffer(std::string_view("GET /close/item HTTP/1.1\r\nHost: localhost\r\n\r\n")));
     std::string response;
-    const auto started = std::chrono::steady_clock::now();
     const auto end = read_to_end(*stream, response);
     RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
     RUVIA_CHECK(response.ends_with("item"));

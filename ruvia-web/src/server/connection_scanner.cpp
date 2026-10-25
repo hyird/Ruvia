@@ -31,6 +31,13 @@ void validate_scanner_timeout(const std::optional<std::chrono::milliseconds>& ti
     return timeout.has_value() && inactive_ms >= timeout->count();
 }
 
+[[nodiscard]] std::int64_t activity_now_ms() noexcept {
+    // 向上取整活动时间，避免毫秒截断让超时提前；扫描时钟仍向下取整。
+    return std::chrono::ceil<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 }  // namespace
 
 connection_scanner::periodic_check_registration::~periodic_check_registration() noexcept {
@@ -46,17 +53,17 @@ connection_scanner::entry::~entry() noexcept {
     detach_periodic_checks();
 }
 void connection_scanner::entry::touch() noexcept {
-    if (now_ms_ != nullptr) {
-        last_active_ms_ = *now_ms_;
+    if (scanner_ != nullptr) {
+        last_active_ms_ = activity_now_ms();
     }
 }
 void connection_scanner::entry::set_phase(phase next_phase) noexcept {
-    if (now_ms_ == nullptr) {
+    if (scanner_ == nullptr) {
         return;
     }
-    last_active_ms_ = *now_ms_;
+    touch();
     if (phase_ != next_phase) {
-        phase_started_ms_ = *now_ms_;
+        phase_started_ms_ = last_active_ms_;
     }
     phase_ = next_phase;
     // A head read that completed before its cancel took effect returns the
@@ -68,14 +75,14 @@ void connection_scanner::entry::set_phase(phase next_phase) noexcept {
 }
 void connection_scanner::entry::read_request_head(phase timeout_phase) noexcept {
     set_phase(timeout_phase);
-    reading_request_head_ = now_ms_ != nullptr;
+    reading_request_head_ = scanner_ != nullptr;
     close_requested_ = false;
 }
 connection_scanner::entry::phase_scope::~phase_scope() {
-    if (entry_.now_ms_ == nullptr) {
+    if (entry_.scanner_ == nullptr) {
         return;
     }
-    entry_.last_active_ms_ = *entry_.now_ms_;
+    entry_.touch();
     entry_.phase_started_ms_ = phase_started_ms_;
     entry_.phase_ = phase_;
     entry_.reading_request_head_ = reading_request_head_;
@@ -255,9 +262,8 @@ void connection_scanner::impl_type::register_entry(entry& entry_value, asio::ip:
     }
     entry_value.socket_ = &socket;
     entry_value.scanner_ = owner_;
-    entry_value.now_ms_ = &cached_now_ms_;
     entry_value.touch();
-    entry_value.phase_started_ms_ = cached_now_ms_;
+    entry_value.phase_started_ms_ = entry_value.last_active_ms_;
     entry_value.phase_ = phase::idle;
     entry_value.close_requested_ = false;
     entry_value.next_ = sentinel_.next_;
@@ -282,7 +288,6 @@ void connection_scanner::impl_type::unregister_entry(entry& entry_value) noexcep
     entry_value.next_->prev_ = entry_value.prev_;
     entry_value.prev_ = entry_value.next_ = nullptr;
     entry_value.socket_ = nullptr;
-    entry_value.now_ms_ = nullptr;
     entry_value.detach_periodic_checks();
     entry_value.scanner_ = nullptr;
 }
@@ -325,10 +330,7 @@ void connection_scanner::impl_type::schedule() {
         // Expiry has consumed this timer. Release its token before callbacks,
         // which may stop, restart, or destroy the scanner.
         scanner->timer_.cancel();
-        // Every tick advances the coarse clock, even without timeouts or
-        // checks: an entry registered later must not be stamped with a stale time.
-        // Activity during the interval that just ended was stamped with the
-        // previous tick's time.
+        // 每轮采样一次比较时钟，供超时、协议检查和跨轮空闲判断共用。
         const auto interval_start = scanner->cached_now_ms_;
         scanner->cached_now_ms_ = steady_now_ms();
         scanner->scanning_ = true;
@@ -420,12 +422,9 @@ bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::
     if (entry_value.close_requested_) {
         return now >= entry_value.close_deadline_ms_;
     }
-    // Stamps come from the coarse clock, which lags the activity it records by
-    // up to one scan interval. Discounting that lag keeps every timeout from
-    // firing before the configured time has really elapsed.
-    const auto resolution_ms = options_.scan_interval_.count();
-    const auto inactive_ms = now - entry_value.last_active_ms_ - resolution_ms;
-    const auto phase_elapsed_ms = now - entry_value.phase_started_ms_ - resolution_ms;
+    // 活动时间独立采样，不能把配置的扫描间隔当成调度延迟的上界。
+    const auto inactive_ms = now - entry_value.last_active_ms_;
+    const auto phase_elapsed_ms = now - entry_value.phase_started_ms_;
     switch (entry_value.phase_) {
         case phase::reading_initial:
             return timeout_expired(options_.initial_read_timeout_, inactive_ms) ||
