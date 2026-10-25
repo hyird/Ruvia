@@ -51,6 +51,7 @@ struct test_app::impl_type final {
     // The defaults a server starts from: no listener-specific policy applies.
     detail::http_server_options options_{};
     event_loop_pool event_loop_pool_{{.loop_count_ = 1}};
+    std::optional<blocking_pool> blocking_pool_;
     event_loop event_loop_{event_loop_pool_.loop(0)};
     worker_handle worker_{event_loop_.handle()};
     stop_source stop_source_;
@@ -72,8 +73,14 @@ struct test_app::impl_type final {
                 std::terminate();
             }
         }
+        if (blocking_pool_) {
+            blocking_pool_->stop();
+        }
         event_loop_pool_.stop();
         event_loop_pool_.join();
+        if (blocking_pool_) {
+            blocking_pool_->join();
+        }
     }
 
     void require_configurable() const {
@@ -116,6 +123,8 @@ struct test_app::impl_type final {
                         options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
                     .precompressed_static_files_ = options_.compression_.has_value(),
                 });
+            blocking_pool_.emplace(blocking_pool_options{.thread_count_ = 1});
+            options_.blocking_pool_ = &*blocking_pool_;
             event_loop_pool_.start();
             event_loop_.start(capabilities_->start()).get();
             lifecycle_ = lifecycle_type::ready;
@@ -201,7 +210,7 @@ struct test_app::impl_type final {
         if (!prepared.write_plan_.body_suppressed()) {
             if (response.file_body() || response.has_multipart_file_body()) {
                 detail::response_file_source source(response,
-                    {.pool_ = nullptr,
+                    {.pool_ = options_.blocking_pool_,
                         .worker_ = worker_,
                         .stop_ = stop_token_,
                         .resource_ = request_memory_value.resource()});
