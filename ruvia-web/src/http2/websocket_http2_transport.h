@@ -41,6 +41,10 @@ public:
     [[nodiscard]] task<std::size_t> read(std::span<char> output);
     [[nodiscard]] task<void> write(std::string_view bytes);
     [[nodiscard]] task<void> finish();
+    void end_peer_read() noexcept {
+        eof_ = true;
+        session_.state_signal().notify();
+    }
     // Retires the connection for the owner's abort reason. A running session
     // first queues GOAWAY(NO_ERROR) (RFC 9113 section 6.8) and returns true:
     // the transport then stays open until join() has flushed it, for at most

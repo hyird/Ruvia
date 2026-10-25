@@ -94,8 +94,21 @@ task<void> websocket_client_state::await_peer_transport_end() {
     // Section 7.1.1 lets the client close first when the server does not
     // within a reasonable time. Either way the close handshake has completed,
     // so neither that timeout nor a failing transport fails the operation.
-    arm(close_handshake_timer_, config_.close_handshake_timeout_, client_abort_reason::closing);
-    bool read_failed = false;
+    disarm(close_handshake_timer_);
+    if (config_.close_handshake_timeout_.has_value()) {
+        (void)worker_.schedule_timer(close_handshake_timer_,
+            worker_timer_deadline_after(*config_.close_handshake_timeout_),
+            [this](worker_timer_outcome outcome) noexcept {
+                if (outcome != worker_timer_outcome::expired) {
+                    return;
+                }
+                if (http2_) {
+                    http2_->end_peer_read();
+                } else {
+                    transport_.abort(client_abort_reason::closing);
+                }
+            });
+    }
     try {
         for (;;) {
             // Discards whatever the server sent after its Close.
@@ -107,26 +120,28 @@ task<void> websocket_client_state::await_peer_transport_end() {
             input_.commit(count);
         }
     } catch (const websocket_client_error&) {
-        read_failed = true;
-    }
-    if (read_failed) {
-        if (http2_ && abort_reason_ == client_abort_reason::closing) {
-            abort_reason_ = client_abort_reason::none;
-            try {
-                co_await wait_for_write_idle(write_wait_type::reader);
-                write_guard_type write_guard(*this, write_phase_type::application);
-                co_await http2_->finish();
-            } catch (const websocket_client_error&) {
-            }
+        disarm(close_handshake_timer_);
+        if (abort_reason_ == client_abort_reason::cancelled ||
+            abort_reason_ == client_abort_reason::timeout) {
+            throw;
         }
         retire(client_abort_reason::closing);
         co_return;
     }
     require_protocol().notify_transport_eof();
-    co_await wait_for_write_idle(write_wait_type::reader);
-    write_guard_type write_guard(*this, write_phase_type::application);
-    // Plans end_transport: finishes an HTTP/2 stream and retires the client.
-    co_await flush_output();
+    arm(close_handshake_timer_, config_.close_handshake_timeout_, client_abort_reason::closing);
+    try {
+        co_await wait_for_write_idle(write_wait_type::reader);
+        write_guard_type write_guard(*this, write_phase_type::application);
+        // Plans end_transport: finishes an HTTP/2 stream and retires the client.
+        co_await flush_output();
+    } catch (const websocket_client_error&) {
+        if (abort_reason_ == client_abort_reason::cancelled ||
+            abort_reason_ == client_abort_reason::timeout) {
+            throw;
+        }
+        retire(client_abort_reason::closing);
+    }
 }
 
 task<std::size_t> websocket_client_state::read_transport(

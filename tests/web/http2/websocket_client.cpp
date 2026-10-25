@@ -521,6 +521,7 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
     RUVIA_CHECK(reached_eof);
     std::optional<std::uint32_t> goaway_error;
     bool saw_stream_end_stream = false;
+    bool saw_end_stream_before_goaway = false;
     RUVIA_CHECK(received.starts_with(ruvia::http2_client_preface));
     for (std::size_t offset = ruvia::http2_client_preface.size();
         offset + ruvia::http2_frame_header_bytes <= received.size();) {
@@ -535,6 +536,7 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
             header_value->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) &&
             (header_value->flags_ & 0x1U) != 0) {
             saw_stream_end_stream = true;
+            saw_end_stream_before_goaway = !goaway_error.has_value();
         }
         if (header_value->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) && header_value->length_ >= 8) {
             goaway_error = (std::uint32_t(static_cast<unsigned char>(payload[4])) << 24) |
@@ -547,6 +549,7 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
     RUVIA_CHECK(goaway_error == std::uint32_t{0});
     if (mode != handshake_end::end_on_headers) {
         RUVIA_CHECK(saw_stream_end_stream);
+        RUVIA_CHECK(saw_end_stream_before_goaway);
     }
 }
 }  // namespace

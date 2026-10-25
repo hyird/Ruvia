@@ -78,8 +78,7 @@ std::variant<websocket_client_negotiation_result_view, error_type> validate(cons
                 return error_type::extensions;
             }
             result.compression_ = *negotiation;
-        } else if (extended && (kind == detail::request_header_kind::upgrade ||
-                                   kind == detail::request_header_kind::connection)) {
+        } else if (extended && detail::is_forbidden_http_binary_response_field(n)) {
             // Connection-specific fields are malformed in HTTP/2 (RFC 9113
             // section 8.2.2). Sec-WebSocket-Accept is superseded by :protocol
             // and therefore not processed (RFC 8441 section 5).

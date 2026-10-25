@@ -234,6 +234,14 @@ RUVIA_TEST(requests_the_connection_cannot_carry_are_answered_421) {
                 "HTTP/1.1 200 OK");
             RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "localhost%2E%2E")),
                 "HTTP/1.1 421 Misdirected Request");
+            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", ".wild.test")),
+                "HTTP/1.1 421 Misdirected Request");
+            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "%2Ewild.test")),
+                "HTTP/1.1 421 Misdirected Request");
+            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "*.wild.test")),
+                "HTTP/1.1 421 Misdirected Request");
+            RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, nullptr, get("/origin", "127.0.0.1.")),
+                "HTTP/1.1 421 Misdirected Request");
             // Names it does not cover, whatever SNI was offered.
             RUVIA_CHECK_EQ(https_exchange(io, https_endpoint, "localhost", get("/origin", "attacker.example")),
                 "HTTP/1.1 421 Misdirected Request");

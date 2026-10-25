@@ -3,6 +3,7 @@
 #include <variant>
 
 #include "ruvia/http/http1_client_request_writer.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_response_server.h"
@@ -398,4 +399,43 @@ RUVIA_TEST(http_connect_udp_sender_and_recipient_field_validation) {
     RUVIA_CHECK(ruvia::validate_http_connect_udp_response(
         ruvia::http_protocol_version::http2, 200, cl0_req)
             .has_value());
+
+    // RFC 9110 7.8: Upgrade is ignored on HTTP/1.0 requests.
+    ruvia::http1_server_request_parse_state h10_parser;
+    constexpr std::string_view raw_h10 =
+        "GET /.well-known/masque/udp/192.0.2.1/443/ HTTP/1.0\r\n"
+        "Host: example.test\r\n"
+        "Upgrade: connect-udp\r\n\r\n";
+    h10_parser.parse_head(raw_h10, 0, std::pmr::get_default_resource());
+    RUVIA_CHECK(h10_parser.head_ready() != nullptr);
+    RUVIA_CHECK(!ruvia::is_http_connect_udp_upgrade_request(h10_parser.request_));
+
+    // RFC 9113 8.2.2: TE: trailers is allowed on HTTP/2 requests, while other TE
+    // values and TE on responses are forbidden.
+    const std::array h2_te_trailers{
+        ruvia::http_header_view{"Capsule-Protocol", "?1"},
+        ruvia::http_header_view{"te", "trailers"},
+    };
+    const ruvia::http_connect_udp_request_view h2_te_req{
+        .version_ = ruvia::http_protocol_version::http2,
+        .method_ = "CONNECT",
+        .protocol_ = "connect-udp",
+        .scheme_ = "https",
+        .authority_ = "example.test",
+        .path_ = "/.well-known/masque/udp/192.0.2.1/443/",
+        .headers_ = h2_te_trailers,
+    };
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request(h2_te_req).has_value());
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request_to_send(h2_te_req).has_value());
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_response(
+        ruvia::http_protocol_version::http2, 200, h2_te_trailers)
+            .has_value());
+    const std::array h2_te_gzip{
+        ruvia::http_header_view{"Capsule-Protocol", "?1"},
+        ruvia::http_header_view{"te", "gzip"},
+    };
+    auto h2_bad_te_req = h2_te_req;
+    h2_bad_te_req.headers_ = h2_te_gzip;
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request(h2_bad_te_req).has_value());
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request_to_send(h2_bad_te_req).has_value());
 }

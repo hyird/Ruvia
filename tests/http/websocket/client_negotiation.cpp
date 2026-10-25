@@ -11,9 +11,11 @@
 #include <vector>
 
 #include "ruvia/http/hpack.h"
+#include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 
 #include "test_harness.h"
@@ -151,6 +153,34 @@ RUVIA_TEST(websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields) 
         RUVIA_CHECK(head != nullptr);
         if (head != nullptr) {
             RUVIA_CHECK(negotiation.validate_response(head->head(), true).index() == 0);
+        }
+    }
+
+    // RFC 9113 section 8.2.2: connection-specific header fields in HTTP/2
+    // responses are rejected as forbidden_field.
+    ruvia::websocket_client_negotiation ws_neg({});
+    for (const auto& [name, value] : std::array<std::pair<std::string_view, std::string_view>, 6>{{
+             {"connection", "keep-alive"},
+             {"upgrade", "websocket"},
+             {"keep-alive", "timeout=5"},
+             {"proxy-connection", "keep-alive"},
+             {"transfer-encoding", "chunked"},
+             {"te", "trailers"},
+         }}) {
+        ruvia::http1_client_request_writer writer;
+        std::array<char, 512> req_buf{};
+        auto prep = writer.prepare(
+            ruvia::http_origin_view::https({.host_ = "example.test"}), {.method_ = "GET", .target_ = "/ws"}, req_buf);
+        ruvia::http1_client_response_parser resp_parser(
+            std::move(std::get<ruvia::prepared_http1_client_request>(prep)).take_exchange_state());
+        const std::string wire = "HTTP/1.1 200 OK\r\n" + std::string(name) + ": " + std::string(value) + "\r\n\r\n";
+        const auto parsed = resp_parser.parse(wire);
+        RUVIA_CHECK(parsed.parsed() != nullptr);
+        if (parsed.parsed() != nullptr) {
+            const auto res = ws_neg.validate_response(parsed.parsed()->head(), true);
+            RUVIA_CHECK(std::holds_alternative<ruvia::websocket_client_negotiation_error>(res) &&
+                        std::get<ruvia::websocket_client_negotiation_error>(res) ==
+                            ruvia::websocket_client_negotiation_error::forbidden_field);
         }
     }
 }

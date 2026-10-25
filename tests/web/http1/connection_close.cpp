@@ -55,6 +55,7 @@ class connection_close_routes final {
     RUVIA_GET("/close/item", item);
     RUVIA_POST("/close/large", large);
     RUVIA_GET_WS("/close/ws", ws_close);
+    RUVIA_GET_WS("/close/ws-read", ws_read);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> item(ruvia::context& c) {
@@ -68,6 +69,11 @@ class connection_close_routes final {
 
     ruvia::task<void> ws_close(ruvia::context& c) {
         (void)c;
+        co_return;
+    }
+
+    ruvia::task<void> ws_read(ruvia::context& c) {
+        (void)co_await c.websocket().read();
         co_return;
     }
 };
@@ -230,6 +236,46 @@ void wss_clean_close_handshake_sends_close_notify(
         received.append(buffer.data(), count);
     }
     RUVIA_CHECK(error == asio::error::eof);
+}
+
+// RFC 9846 §6.1 / RFC 6455 §7.1.7: when a wss:// peer truncates TLS / drops TCP
+// mid-frame without sending a WebSocket Close frame or close_notify, the server
+// aborts the connection without sending a clean TLS close_notify.
+void wss_truncated_peer_eof_omits_close_notify(
+    ruvia::testing::test_context& ruvia_ctx, asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    const auto stream = connect_tls(io, client, endpoint);
+    constexpr std::string_view upgrade =
+        "GET /close/ws-read HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    asio::write(*stream, asio::buffer(upgrade));
+
+    std::string head;
+    std::array<char, 1024> buffer{};
+    std::error_code error;
+    while (head.find("\r\n\r\n") == std::string::npos && !error) {
+        const auto count = stream->read_some(asio::buffer(buffer), error);
+        head.append(buffer.data(), count);
+    }
+    RUVIA_CHECK(!error);
+    constexpr std::array<char, 1> partial_ws_frame{'\x81'};
+    asio::write(*stream, asio::buffer(partial_ws_frame), error);
+    RUVIA_CHECK(!error);
+    stream->next_layer().shutdown(asio::ip::tcp::socket::shutdown_send, error);
+    RUVIA_CHECK(!error);
+
+    std::string rest;
+    while (!error) {
+        const auto count = stream->read_some(asio::buffer(buffer), error);
+        rest.append(buffer.data(), count);
+    }
+    RUVIA_CHECK(rest.empty());
+    RUVIA_CHECK(error == asio::ssl::error::stream_truncated);
 }
 
 // RFC 9112 §9.8 / RFC 9846 §6.1: cancelling a multi-record HTTPS request write
@@ -464,6 +510,7 @@ RUVIA_TEST(server_closes_connections_gracefully) {
         idle_tls_connection_ends_with_close_notify(ruvia_ctx, io, tls_endpoint);
         idle_http2_connection_sends_goaway_then_close_notify(ruvia_ctx, io, tls_endpoint);
         wss_clean_close_handshake_sends_close_notify(ruvia_ctx, io, tls_endpoint);
+        wss_truncated_peer_eof_omits_close_notify(ruvia_ctx, io, tls_endpoint);
         client_cancelled_multi_record_tls_write_omits_close_notify(ruvia_ctx, identity);
         client_tls_write_timeout_during_speculative_post_does_not_hang(ruvia_ctx, identity);
 

@@ -279,6 +279,22 @@ RUVIA_TEST(http1_udp_tunnel_upgrade_routes_only_normalized_tunnel_paths) {
     RUVIA_CHECK(sibling.ends_with("\r\n\r\nsibling"));
     RUVIA_CHECK(exchange("/udp-tunnel/target.test/53").starts_with("HTTP/1.1 101 "));
     RUVIA_CHECK(udp_observation->dynamic_invoked_);
+    {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        constexpr std::string_view h10_request =
+            "GET /udp-tunnel/target.test/53 HTTP/1.0\r\nHost: localhost\r\n"
+            "Connection: Upgrade, close\r\nUpgrade: connect-udp\r\nCapsule-Protocol: ?1\r\n\r\n";
+        asio::write(client, asio::buffer(h10_request));
+        std::string response;
+        std::array<char, 1024> input{};
+        std::error_code ec;
+        while (!ec) {
+            const auto read = client.read_some(asio::buffer(input), ec);
+            response.append(input.data(), read);
+        }
+        RUVIA_CHECK(response.starts_with("HTTP/1.1 404 "));
+    }
     server.finish();
 }
 

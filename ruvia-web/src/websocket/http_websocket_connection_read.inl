@@ -49,6 +49,7 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                         // transport end.
                         protocol_.notify_transport_eof();
                         co_await flush_protocol_output_exclusive();
+                        close_stream();
                         co_return std::nullopt;
                     }
                     scanner_entry_.touch();

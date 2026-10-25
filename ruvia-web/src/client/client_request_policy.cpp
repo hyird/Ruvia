@@ -104,6 +104,7 @@ std::optional<client_received_cookie> accept_set_cookie(const http_set_cookie_vi
     const bool secure = parsed.has(http_set_cookie_attribute::secure);
     if ((secure && config.scheme_ != http_scheme::https) || !cookie_domain_matches(config.host_, parsed.domain()) ||
         (parsed.has(http_set_cookie_attribute::same_site_none) && !secure) ||
+        (parsed.has(http_set_cookie_attribute::partitioned) && !secure) ||
         !satisfies_name_prefix(parsed, secure)) {
         return std::nullopt;
     }

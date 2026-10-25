@@ -868,7 +868,8 @@ RUVIA_TEST(http_client_jar_follows_user_agent_set_cookie_algorithm) {
          "Set-Cookie: nameless\r\nSet-Cookie: =emptyname\r\n"
          "Set-Cookie: f=hello world\r\nSet-Cookie: h=1; Domain=.\r\n"
          "Set-Cookie: p=2; Path=/caf\xc3\xa9\r\nSet-Cookie: q=3; Path=relative\r\n"
-         "Set-Cookie: d=4; Domain=127.0.0.1; Domain=\r\n\r\n",
+         "Set-Cookie: d=4; Domain=127.0.0.1; Domain=\r\n"
+         "Set-Cookie: part=insecure; Path=/; Partitioned\r\n\r\n",
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
     auto config = local_http_client_config(peer.port());
     config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
@@ -892,6 +893,7 @@ RUVIA_TEST(http_client_jar_follows_user_agent_set_cookie_algorithm) {
             RUVIA_CHECK(check.find("d=4") != std::string::npos);
             // Path=/café is stored as given and does not match "/check".
             RUVIA_CHECK(check.find("p=2") == std::string::npos);
+            RUVIA_CHECK(check.find("part=insecure") == std::string::npos);
         }
         co_await client.shutdown();
     };

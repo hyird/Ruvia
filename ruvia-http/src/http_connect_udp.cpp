@@ -10,6 +10,7 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
+#include "field/http_te_fields.h"
 #include "parser/http_uri_grammar.h"
 #include "request/http_request_access.h"
 
@@ -63,8 +64,14 @@ std::variant<handshake_fields, http_connect_udp_error> fields(std::span<const he
         if (!is_valid_http_header_name(field.name()) || !is_valid_http_header_value(field.value())) {
             return syntax_error;
         }
-        if (detail::is_forbidden_http_binary_response_field(field.name())) {
+        if (detail::is_forbidden_http_binary_connection_field(field.name())) {
             found.http2_forbidden_ = true;
+        } else if (http_ascii_equals_ignore_case(field.name(), "te")) {
+            if (role == handshake_message_role::response_recipient ||
+                role == handshake_message_role::response_sender ||
+                !detail::is_valid_binary_http_te_field_value(field.value(), list_role)) {
+                found.http2_forbidden_ = true;
+            }
         }
         if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
             // RFC 9297 section 3.4: recipients handle a non-Boolean value as if the
@@ -248,7 +255,8 @@ std::optional<http_connect_udp_error> validate_http_connect_udp_response(
     return validate_connect_udp_response(version, status, headers);
 }
 bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept {
-    if (request.known_method() != http_known_method::get ||
+    if (request.protocol_version() != http_protocol_version::http11 ||
+        request.known_method() != http_known_method::get ||
         !detail::request_has_known_header(request, detail::request_header_kind::upgrade)) {
         return false;
     }

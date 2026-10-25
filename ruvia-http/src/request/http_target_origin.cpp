@@ -17,12 +17,42 @@
 namespace ruvia {
 namespace {
 
+[[nodiscard]] bool is_valid_dns_domain_name(std::string_view name) noexcept {
+    if (name.empty() || name.size() > http_target_origin::max_dns_name_size) {
+        return false;
+    }
+    std::size_t label_length = 0;
+    bool label_ends_with_alnum = false;
+    for (const char c : name) {
+        const auto byte = static_cast<unsigned char>(c);
+        const bool alnum = (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+                           (byte >= '0' && byte <= '9');
+        if (c == '.') {
+            if (label_length == 0 || !label_ends_with_alnum) {
+                return false;
+            }
+            label_length = 0;
+            label_ends_with_alnum = false;
+            continue;
+        }
+        if ((!alnum && c != '-') || label_length == 63 || (label_length == 0 && !alnum)) {
+            return false;
+        }
+        ++label_length;
+        label_ends_with_alnum = alnum;
+    }
+    return label_length != 0 && label_ends_with_alnum;
+}
+
 [[nodiscard]] http_target_origin classify_reg_name(std::string_view host, bool decoded) noexcept {
     if (const auto address = detail::parse_ipv4_address(host)) {
         return http_target_origin::ip_address(http_target_host_kind::ipv4, *address);
     }
     // An absolute domain name names the same host as its relative spelling.
     const auto name = host.size() > 1 && host.back() == '.' ? host.substr(0, host.size() - 1) : host;
+    if (!is_valid_dns_domain_name(name) || detail::parse_ipv4_address(name).has_value()) {
+        return http_target_origin::misdirected();
+    }
     return decoded ? http_target_origin::decoded_dns_name(name) : http_target_origin::dns_name(name);
 }
 

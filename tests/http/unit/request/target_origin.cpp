@@ -92,4 +92,17 @@ RUVIA_TEST(target_origin_decision_follows_scheme_transport_and_gateway_trust) {
 
     // No certificate identifies an IPvFuture host.
     RUVIA_CHECK(decide("GET", "/x", "[v1.x]", secured).action() == http_target_origin_action::misdirected);
+
+    // RFC 1034/1123 and RFC 9525 §6.2: leading dots, wildcards, multi-dot
+    // suffixes, invalid LDH labels, and trailing-dot IPv4 literals are not
+    // valid DNS reference identifiers.
+    RUVIA_CHECK(decide("GET", "/x", ".example.com", secured).action() == http_target_origin_action::misdirected);
+    RUVIA_CHECK(decide("GET", "/x", "%2Eexample.com", secured).action() == http_target_origin_action::misdirected);
+    RUVIA_CHECK(decide("GET", "/x", "*.wild.test", secured).action() == http_target_origin_action::misdirected);
+    RUVIA_CHECK(decide("GET", "/x", "Example.COM..", secured).action() == http_target_origin_action::misdirected);
+    RUVIA_CHECK(decide("GET", "/x", "example..com", secured).action() == http_target_origin_action::misdirected);
+    RUVIA_CHECK(decide("GET", "/x", "-example.com", secured).action() == http_target_origin_action::misdirected);
+    RUVIA_CHECK(decide("GET", "/x", "example-.com", secured).action() == http_target_origin_action::misdirected);
+    RUVIA_CHECK(decide("GET", "/x", "192.0.2.7.", secured).action() == http_target_origin_action::misdirected);
+    RUVIA_CHECK(decide("GET", "/x", "192.0.2.7%2E", secured).action() == http_target_origin_action::misdirected);
 }
