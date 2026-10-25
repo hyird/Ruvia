@@ -39,8 +39,9 @@ public:
     // bit below prevents it from becoming a silent identity fallback for a
     // response that actually has a body.
     [[nodiscard]] static http_response_coding_policy no_acceptable_coding() noexcept {
-        http_response_coding_qualities absent_header;
-        const auto fallback = http_response_coding_selection::select(absent_header);
+        http_response_coding_qualities empty_header;
+        empty_header.field_present_ = true;
+        const auto fallback = http_response_coding_selection::select(empty_header);
         if (!fallback.has_value()) {
             std::terminate();
         }
@@ -81,14 +82,8 @@ private:
     if (selection == nullptr) {
         return false;
     }
-    if (policy.negotiation_failed()) {
-        // The policy carries the client's empty acceptable set. Only a
-        // response status that permits content can violate it; 204/205/304
-        // are representation-free and must not be rejected before the
-        // handler's final status is known.
-        return plan_http_response_body(request.known_method(), response.status()).status_allows_body();
-    }
-    return http_response_coding_fallback_forbidden(*selection, request.known_method(), response);
+    return http_response_coding_fallback_forbidden(
+        *selection, request.known_method(), response, policy.negotiation_failed(), &request);
 }
 
 [[nodiscard]] inline std::optional<http_error_info> http_buffered_response_preparation_error(

@@ -8,6 +8,7 @@
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/web/error.h"
@@ -58,42 +59,59 @@ enum class http_response_compression_status : std::uint8_t {
         .message_ = "no acceptable response content coding"};
 }
 
-// Response negotiation inspects every known coding in application-supplied
+[[nodiscard]] inline bool http_response_custom_coding_accepted(
+    const http_request* request, std::string_view coding) noexcept {
+    if (request == nullptr || !request->header("Accept-Encoding").has_value()) {
+        return true;
+    }
+    http_accepted_encoding_quality quality;
+    for (const auto& header : request->headers()) {
+        if (http_ascii_equals_ignore_case(header.name(), "Accept-Encoding")) {
+            quality.update(header.value(), coding);
+        }
+    }
+    return quality.accepts(false);
+}
+
+// Response negotiation inspects every coding in application-supplied
 // stacks: a client that accepts gzip but rejects br cannot be sent `gzip, br`.
 [[nodiscard]] inline bool http_known_response_content_encoding_stack_accepted(
-    const http_response_coding_selection& selection, const http_response& response) noexcept {
-    bool saw_known_coding = false;
-    bool saw_unknown_coding = false;
+    const http_response_coding_selection& selection, const http_response& response,
+    bool negotiation_failed = false, const http_request* request = nullptr) noexcept {
+    bool saw_coding = false;
     bool accepted = true;
     for (const auto& header : response.headers()) {
         if (!http_ascii_equals_ignore_case(header.name(), "Content-Encoding")) {
             continue;
         }
         http_visit_comma_separated_quoted_field_items(header.value(), [&](std::string_view item) noexcept {
-            if (const auto coding = http_content_coding_from_token(item)) {
-                saw_known_coding = true;
-                accepted = accepted && selection.accepts(*coding);
-            } else {
-                // A custom coding (or malformed sender-side list member) is
-                // outside the framework's decoder/registry. Leave that full
-                // stack under application ownership instead of guessing.
-                saw_unknown_coding = true;
-                return false;
+            if (item.empty()) {
+                return true;
             }
-            return true;
+            saw_coding = true;
+            if (const auto coding = http_content_coding_from_token(item)) {
+                accepted = accepted && !negotiation_failed && selection.accepts(*coding);
+            } else {
+                accepted = accepted && http_response_custom_coding_accepted(request, item);
+            }
+            return accepted;
         });
+        if (!accepted) {
+            break;
+        }
     }
-    return !saw_known_coding || saw_unknown_coding || accepted;
+    return !saw_coding || accepted;
 }
 
 // Return true when the response cannot satisfy the client's coding policy:
 // either a framework-selected coding fell back to forbidden identity, or a
-// handler supplied a known pre-encoded representation the client excluded.
+// handler supplied a pre-encoded representation the client excluded.
 // Bodyless statuses are representation-free and therefore never need a
 // content-coding fallback.
 [[nodiscard]] inline bool http_response_coding_fallback_forbidden(
     const http_response_coding_selection& selection, http_known_method request_method,
-    const http_response& response) noexcept {
+    const http_response& response, bool negotiation_failed = false,
+    const http_request* request = nullptr) noexcept {
     if (!plan_http_response_body(request_method, response.status()).status_allows_body()) {
         return false;
     }
@@ -103,10 +121,11 @@ enum class http_response_compression_status : std::uint8_t {
         return false;
     }
     if (response.header("Content-Encoding").has_value()) {
-        // Custom and malformed application-managed coding stacks remain the
-        // application's responsibility; every fully known stack is negotiated
-        // member by member without allocating in this noexcept decision.
-        return !http_known_response_content_encoding_stack_accepted(selection, response);
+        return !http_known_response_content_encoding_stack_accepted(
+            selection, response, negotiation_failed, request);
+    }
+    if (negotiation_failed) {
+        return true;
     }
     if (selection.coding() == http_content_coding::identity || selection.identity_accepted()) {
         return false;

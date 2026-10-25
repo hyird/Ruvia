@@ -19,6 +19,7 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -75,6 +76,17 @@ class response_compression_routes final {
     RUVIA_HEAD("/compression-head", head_declared);
     RUVIA_GET("/compression-head-bare", small);
     RUVIA_HEAD("/compression-head-bare", head_bare);
+    RUVIA_GET("/compression-empty-get", empty_get);
+    RUVIA_GET("/compression-redirect", redirect_get);
+    RUVIA_GET("/compression-zero-file", zero_file);
+    RUVIA_GET("/compression-zero-static", zero_static_file);
+    RUVIA_GET("/compression-head-comma", small);
+    RUVIA_HEAD("/compression-head-comma", head_comma_declared);
+    RUVIA_GET("/compression-head-zero", empty_get);
+    RUVIA_HEAD("/compression-head-zero", head_zero_declared);
+    RUVIA_GET("/compression-custom-coding", custom_coding);
+    RUVIA_GET("/compression-mixed-rejected", mixed_rejected_coding);
+    RUVIA_POST("/compression-echo-decoded", echo_decoded);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> small(ruvia::context& context_value) {
@@ -91,6 +103,47 @@ class response_compression_routes final {
     }
     ruvia::task<ruvia::http_response> head_bare(ruvia::context& context_value) {
         co_return context_value.text("");
+    }
+    ruvia::task<ruvia::http_response> empty_get(ruvia::context& context_value) {
+        context_value.header("ETag", "\"empty-v1\"");
+        co_return context_value.text("");
+    }
+    ruvia::task<ruvia::http_response> redirect_get(ruvia::context& context_value) {
+        co_return context_value.redirect({.location_ = "/compression-small"});
+    }
+    ruvia::task<ruvia::http_response> zero_file(ruvia::context& context_value) {
+        const auto path = file_dir() / "zero.txt";
+        co_return context_value.file({.path_ = path});
+    }
+    ruvia::task<ruvia::http_response> zero_static_file(ruvia::context& context_value) {
+        co_return context_value.static_file(*resident_root, {.relative_path_ = "zero.txt"});
+    }
+    ruvia::task<ruvia::http_response> head_comma_declared(ruvia::context& context_value) {
+        const auto len = std::to_string(small_body.size());
+        context_value.header("Content-Length", len + ", " + len);
+        co_return context_value.text("");
+    }
+    ruvia::task<ruvia::http_response> head_zero_declared(ruvia::context& context_value) {
+        context_value.header("ETag", "\"empty-v1\"");
+        context_value.header("Content-Length", "0");
+        co_return context_value.text("");
+    }
+    ruvia::task<ruvia::http_response> custom_coding(ruvia::context& context_value) {
+        auto resp = context_value.text("custom-encoded-payload");
+        if (ruvia::http_accepts_encoding(
+                context_value.req().header("Accept-Encoding").value_or(""), "x-custom")) {
+            resp.header("Content-Encoding", "x-custom");
+        }
+        co_return resp;
+    }
+    ruvia::task<ruvia::http_response> mixed_rejected_coding(ruvia::context& context_value) {
+        auto resp = context_value.text("mixed-encoded-payload");
+        resp.header("Content-Encoding", "br, x-custom");
+        co_return resp;
+    }
+    ruvia::task<ruvia::http_response> echo_decoded(ruvia::context& context_value) {
+        const auto body = co_await context_value.req().text();
+        co_return context_value.text(body);
     }
     ruvia::task<ruvia::http_response> tiny(ruvia::context& context_value) {
         co_return context_value.text("hello");
@@ -412,4 +465,107 @@ RUVIA_TEST(http1_explicit_head_route_matches_get_coding_without_false_length) {
             .value_or("");
     RUVIA_CHECK(has_field(head_fields(identity), "content-length: " + std::to_string(small_body.size())));
     server.finish();
+}
+
+RUVIA_TEST(http1_head_fallback_on_empty_get_files_and_redirects_matches_get_headers) {
+    namespace fs = std::filesystem;
+    std::error_code ignored;
+    fs::remove_all(file_dir(), ignored);
+    fs::create_directories(file_dir());
+    {
+        std::ofstream(file_dir() / "zero.txt", std::ios::binary);
+        std::ofstream(file_dir() / "file.txt", std::ios::binary) << small_body;
+    }
+    resident_root = std::make_unique<ruvia::static_root>(file_dir(),
+        ruvia::static_root_options{
+            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
+            .resident_max_bytes_ = 16 * 1024,
+            .resident_budget_bytes_ = 16 * 1024,
+        });
+
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+
+    // 1. HEAD fallback on 0-byte GET route matches GET under both identity and refused identity.
+    for (const std::string_view fields :
+        {std::string_view("Accept-Encoding: identity\r\n"),
+            std::string_view("Accept-Encoding: gzip, identity;q=0\r\n")}) {
+        const auto get = fetch_response(server.endpoint(), get_request("/compression-empty-get", fields)).value_or("");
+        const auto head = fetch_response(server.endpoint(), head_request("/compression-empty-get", fields)).value_or("");
+        RUVIA_CHECK(get.starts_with("HTTP/1.1 200 "));
+        RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
+        RUVIA_CHECK(head_fields(get) == head_fields(head));
+        RUVIA_CHECK(response_body(head).empty());
+    }
+
+    // 2. 0-byte file, 0-byte static_file, and redirect emit Content-Length: 0 on both GET and HEAD.
+    for (const std::string_view path :
+        {std::string_view("/compression-zero-file"), std::string_view("/compression-zero-static"),
+            std::string_view("/compression-redirect")}) {
+        const auto get = fetch_response(server.endpoint(), get_request(path, "")).value_or("");
+        const auto head = fetch_response(server.endpoint(), head_request(path, "")).value_or("");
+        RUVIA_CHECK(head_fields(get) == head_fields(head));
+        RUVIA_CHECK(has_field(head_fields(head), "content-length: 0"));
+        RUVIA_CHECK(response_body(head).empty());
+    }
+
+    // 3. Explicit HEAD route with comma-separated identical Content-Length ("3000, 3000").
+    const auto comma_head = fetch_response(
+        server.endpoint(), head_request("/compression-head-comma", "Accept-Encoding: gzip\r\n"))
+                                .value_or("");
+    RUVIA_CHECK(comma_head.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(has_field(head_fields(comma_head), "content-encoding: gzip"));
+    RUVIA_CHECK(!has_field(head_fields(comma_head), "content-length:"));
+
+    // 4. Explicit HEAD route with Content-Length: 0 keeps Content-Length: 0 when identity is accepted.
+    const auto zero_declared_get = fetch_response(
+        server.endpoint(), get_request("/compression-head-zero", "Accept-Encoding: gzip\r\n"))
+                                       .value_or("");
+    const auto zero_declared_head = fetch_response(
+        server.endpoint(), head_request("/compression-head-zero", "Accept-Encoding: gzip\r\n"))
+                                        .value_or("");
+    RUVIA_CHECK(head_fields(zero_declared_get) == head_fields(zero_declared_head));
+    RUVIA_CHECK(has_field(head_fields(zero_declared_head), "content-length: 0"));
+
+    // 5. Custom Content-Encoding negotiation and mixed rejected coding stacks.
+    const auto custom_ok = fetch_response(server.endpoint(),
+        get_request("/compression-custom-coding", "Accept-Encoding: x-custom, identity;q=0\r\n"))
+                               .value_or("");
+    RUVIA_CHECK(custom_ok.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(has_field(head_fields(custom_ok), "content-encoding: x-custom"));
+
+    const auto mixed_rejected = fetch_response(
+        server.endpoint(), get_request("/compression-mixed-rejected", "Accept-Encoding: br;q=0\r\n"))
+                                    .value_or("");
+    RUVIA_CHECK(mixed_rejected.starts_with("HTTP/1.1 406 "));
+
+    const auto range_416_custom = fetch_response(server.endpoint(),
+        get_request("/compression-file",
+            "Range: bytes=10000-20000\r\nAccept-Encoding: x-custom, identity;q=0\r\n"))
+                                      .value_or("");
+    RUVIA_CHECK(range_416_custom.starts_with("HTTP/1.1 416 "));
+
+    // 6. Request Content-Encoding with >8 identity tokens does not fail with 415.
+    const auto id9 = fetch_response(server.endpoint(),
+        "POST /compression-echo-decoded HTTP/1.1\r\nHost: localhost\r\n"
+        "Content-Encoding: identity, identity, identity, identity, identity, identity, identity, identity, identity\r\n"
+        "Content-Length: 5\r\nConnection: close\r\n\r\nhello")
+                         .value_or("");
+    RUVIA_CHECK(id9.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(response_body(id9) == "hello");
+
+    const auto gz_hello = *ruvia::encode_http_content(
+        ruvia::http_content_coding::gzip, "hello", {.max_encoded_bytes_ = 1024});
+    const auto id8_gz = fetch_response(server.endpoint(),
+        "POST /compression-echo-decoded HTTP/1.1\r\nHost: localhost\r\n"
+        "Content-Encoding: identity, identity, identity, identity, identity, identity, identity, identity, gzip\r\n"
+        "Content-Length: " +
+            std::to_string(gz_hello.size()) + "\r\nConnection: close\r\n\r\n" + std::string(gz_hello))
+                            .value_or("");
+    RUVIA_CHECK(id8_gz.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(response_body(id8_gz) == "hello");
+
+    server.finish();
+    resident_root.reset();
+    fs::remove_all(file_dir(), ignored);
 }

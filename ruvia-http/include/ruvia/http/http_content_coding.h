@@ -59,9 +59,20 @@ inline constexpr std::size_t max_content_codings = 8;
 
 class http_unsupported_content_coding final {
 public:
+    constexpr http_unsupported_content_coding() noexcept = default;
+    explicit constexpr http_unsupported_content_coding(bool depth_exceeded) noexcept
+        : depth_exceeded_(depth_exceeded) {}
+
     [[nodiscard]] static constexpr http_status_code status() noexcept {
         return http_status::unsupported_media_type;
     }
+
+    [[nodiscard]] constexpr bool depth_exceeded() const noexcept {
+        return depth_exceeded_;
+    }
+
+private:
+    bool depth_exceeded_{false};
 };
 
 class http_invalid_content_coding_field final {

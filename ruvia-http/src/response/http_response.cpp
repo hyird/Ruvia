@@ -264,6 +264,9 @@ void http_response::apply_encoded_representation(
     if (body != nullptr) {
         body_.set_owned(memory_resource(), std::move(*body));
     } else {
+        if (body_.size() == 0 && !body_.file_representation()) {
+            body_.set_head_metadata_only();
+        }
         (void)headers_.remove_header_validated("Content-Length", detail::response_header_content_length);
     }
     update.publish();

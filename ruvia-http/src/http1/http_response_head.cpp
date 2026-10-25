@@ -6,6 +6,7 @@
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/response/http1_status_line.h"
+#include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
@@ -150,10 +151,12 @@ void append_response_head(
     // Its empty suppressed body then has no length of its own, so the declared
     // Content-Length is the only truthful value, and without one the field is
     // omitted rather than claiming an empty GET (RFC 9110 section 8.6).
-    const bool suppressed_empty_buffered_body = buffered != nullptr && body_plan.body_suppressed() &&
-                                                body_plan.status_allows_body() &&
-                                                body_plan.explicit_content_length_allowed() &&
-                                                buffered->content_length() == 0;
+    const auto known_bits = response_known_header_bits(response);
+    const bool suppressed_empty_buffered_body =
+        buffered != nullptr && body_plan.body_suppressed() && body_plan.status_allows_body() &&
+        body_plan.explicit_content_length_allowed() && buffered->content_length() == 0 &&
+        (response_body(response).head_metadata_only() ||
+            (known_bits & response_header_content_length) != 0);
     const bool auto_content_length_owned_by_writer =
         body_plan.auto_content_length_allowed() && !emit_chunked_transfer_encoding &&
         !suppressed_empty_buffered_body && (buffered != nullptr || !body_plan.status_allows_body());
@@ -161,7 +164,6 @@ void append_response_head(
         body_plan.explicit_content_length_allowed() && !emit_chunked_transfer_encoding &&
         !auto_content_length_owned_by_writer &&
         (plan.close_delimited_stream() == nullptr || body_plan.body_suppressed());
-    const auto known_bits = response_known_header_bits(response);
     const auto declared_content_length =
         (explicit_content_length_allowed || suppressed_empty_buffered_body) &&
                 (known_bits & response_header_content_length) != 0

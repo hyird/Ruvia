@@ -505,6 +505,21 @@ RUVIA_TEST(http1_buffered_head_keeps_declared_length_without_body) {
     const auto materialized_wire = emit_buffered_head(materialized, http_known_method::head);
     RUVIA_CHECK_EQ(count_occurrences(materialized_wire, "Content-Length: "), std::size_t{1});
     RUVIA_CHECK((materialized_wire.find("Content-Length: 5\r\n") != std::string_view::npos));
+
+    // A zero-byte buffered response without apply_content_encoding emits Content-Length: 0 on HEAD.
+    http_response zero_representation(std::pmr::new_delete_resource());
+    zero_representation.body("");
+    const auto zero_wire = emit_buffered_head(zero_representation, http_known_method::head);
+    RUVIA_CHECK_EQ(count_occurrences(zero_wire, "Content-Length: "), std::size_t{1});
+    RUVIA_CHECK((zero_wire.find("Content-Length: 0\r\n") != std::string_view::npos));
+
+    // Applying a content coding without an encoded body removes Content-Length on HEAD.
+    http_response coded_head(std::pmr::new_delete_resource());
+    coded_head.header("Content-Length", "1024");
+    coded_head.apply_content_encoding("gzip");
+    const auto coded_wire = emit_buffered_head(coded_head, http_known_method::head);
+    RUVIA_CHECK_EQ(count_occurrences(coded_wire, "Content-Length: "), std::size_t{0});
+    RUVIA_CHECK((coded_wire.find("Content-Encoding: gzip\r\n") != std::string_view::npos));
 }
 
 RUVIA_TEST(response_head_close_delimited_stream_rejects_declared_framing) {

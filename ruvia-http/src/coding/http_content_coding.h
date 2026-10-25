@@ -18,8 +18,9 @@ struct http_content_coding_field_result_access final {
         return http_content_coding_field_result(values);
     }
 
-    [[nodiscard]] static constexpr http_content_coding_field_result unsupported() noexcept {
-        return http_content_coding_field_result(http_unsupported_content_coding{});
+    [[nodiscard]] static constexpr http_content_coding_field_result unsupported(
+        bool depth_exceeded = false) noexcept {
+        return http_content_coding_field_result(http_unsupported_content_coding(depth_exceeded));
     }
 
     [[nodiscard]] static constexpr http_content_coding_field_result invalid() noexcept {
@@ -40,7 +41,8 @@ public:
 
 private:
     http_content_coding_field_result_access::sequence_type codings_{};
-    bool unsupported_{false};
+    bool unknown_coding_{false};
+    bool depth_exceeded_{false};
     bool invalid_{false};
 };
 

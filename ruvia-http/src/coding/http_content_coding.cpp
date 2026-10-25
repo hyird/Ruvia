@@ -97,12 +97,15 @@ void http_content_coding_field_parser::update(std::string_view value) noexcept {
     invalid_ = !visit_content_coding_members(value, http_field_list_role::recipient, [this](std::string_view token) noexcept {
         const auto coding = http_content_coding_from_token(token);
         if (!coding.has_value()) {
-            unsupported_ = true;
+            unknown_coding_ = true;
+            return;
+        }
+        if (*coding == http_content_coding::identity) {
             return;
         }
         if (codings_.size_ == max_content_codings) {
             // Keep scanning: later malformed members still invalidate the field.
-            unsupported_ = true;
+            depth_exceeded_ = true;
         } else {
             codings_.values_[codings_.size_++] = *coding;
         }
@@ -113,8 +116,11 @@ http_content_coding_field_result http_content_coding_field_parser::finish() cons
     if (invalid_) {
         return http_content_coding_field_result_access::invalid();
     }
-    if (unsupported_) {
-        return http_content_coding_field_result_access::unsupported();
+    if (unknown_coding_) {
+        return http_content_coding_field_result_access::unsupported(false);
+    }
+    if (depth_exceeded_) {
+        return http_content_coding_field_result_access::unsupported(true);
     }
     return http_content_coding_field_result_access::coding(codings_);
 }

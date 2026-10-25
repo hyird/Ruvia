@@ -169,11 +169,13 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     check_coding("  br ", http_content_coding::brotli);
     check_coding("zstd", http_content_coding::zstd);
     check_coding("deflate", http_content_coding::deflate);
-    check_coding("identity", http_content_coding::identity);
-    const auto empty = parse_http_content_coding("");
-    RUVIA_CHECK(empty.invalid() == nullptr);
-    RUVIA_CHECK(empty.unsupported() == nullptr);
-    RUVIA_CHECK(empty.codings().empty());
+    for (const std::string_view value : {std::string_view(""), std::string_view("identity"),
+             std::string_view("IDENTITY, identity")}) {
+        const auto empty = parse_http_content_coding(value);
+        RUVIA_CHECK(empty.invalid() == nullptr);
+        RUVIA_CHECK(empty.unsupported() == nullptr);
+        RUVIA_CHECK(empty.codings().empty());
+    }
 
     constexpr std::array mappings{
         std::pair{http_content_coding::identity, std::string_view("identity")},
@@ -185,8 +187,12 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     for (const auto& [coding, token] : mappings) {
         RUVIA_CHECK_EQ(ruvia::http_content_coding_token(coding), token);
         const auto parsed_value = parse_http_content_coding(token);
-        RUVIA_CHECK_EQ(parsed_value.codings().size(), 1U);
-        RUVIA_CHECK(parsed_value.codings().front() == coding);
+        if (coding == http_content_coding::identity) {
+            RUVIA_CHECK(parsed_value.codings().empty());
+        } else {
+            RUVIA_CHECK_EQ(parsed_value.codings().size(), 1U);
+            RUVIA_CHECK(parsed_value.codings().front() == coding);
+        }
         RUVIA_CHECK(ruvia::http_content_coding_from_token(token) == coding);
     }
     RUVIA_CHECK(ruvia::http_content_coding_from_token("X-GZIP") == http_content_coding::gzip);
@@ -216,17 +222,25 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
 
 RUVIA_TEST(http_content_coding_field_bounds_the_coding_stack) {
     std::string value("identity");
-    for (std::size_t index = 1; index < ruvia::max_content_codings; ++index) {
-        value += ", gzip";
+    for (std::size_t index = 0; index < ruvia::max_content_codings; ++index) {
+        value += ", gzip, identity";
     }
     const auto bounded = parse_http_content_coding(value);
     RUVIA_CHECK(bounded.unsupported() == nullptr);
     RUVIA_CHECK_EQ(bounded.codings().size(), ruvia::max_content_codings);
 
     value += ", identity";
+    const auto still_bounded = parse_http_content_coding(value);
+    RUVIA_CHECK(still_bounded.unsupported() == nullptr);
+    RUVIA_CHECK_EQ(still_bounded.codings().size(), ruvia::max_content_codings);
+
+    value += ", gzip";
     const auto oversized = parse_http_content_coding(value);
     RUVIA_CHECK(oversized.invalid() == nullptr);
     RUVIA_CHECK(oversized.unsupported() != nullptr);
+    if (oversized.unsupported() != nullptr) {
+        RUVIA_CHECK(oversized.unsupported()->depth_exceeded());
+    }
     RUVIA_CHECK(oversized.codings().empty());
 
     value += ", bad coding";

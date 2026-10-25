@@ -33,14 +33,17 @@ void configure_http_client_response_decoding(http_client_response_state& state_v
     // request without Accept-Encoding accepts every coding (§12.5.3). A
     // syntactically valid stack this client cannot fully decode is therefore
     // exposed as received, with Content-Encoding kept, like a 206 body.
-    if (parsed_coding.unsupported() != nullptr) {
-        state_value.content_coding_.reset();
-        return;
+    if (const auto* unsupported = parsed_coding.unsupported()) {
+        if (!unsupported->depth_exceeded()) {
+            state_value.content_coding_.reset();
+            return;
+        }
     }
     const bool transforms_body = std::ranges::any_of(parsed_coding.codings(), [](http_content_coding coding) {
         return coding != http_content_coding::identity;
     });
-    state_value.body_decode_required_ = parsed_coding.invalid() != nullptr || transforms_body;
+    state_value.body_decode_required_ =
+        parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr || transforms_body;
     if (state_value.body_decode_required_) {
         state_value.collect_all_ = true;
     } else {
@@ -56,7 +59,7 @@ void decode_http_client_response_body(http_client_response_state& state_value,
     auto* const resource = state_value.resource_;
     try {
         const auto& parsed_coding = *state_value.content_coding_;
-        if (parsed_coding.invalid() != nullptr) {
+        if (parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr) {
             throw http_client_error(http_client_error::code_type::protocol_error,
                 "invalid HTTP response Content-Encoding");
         }
@@ -92,6 +95,10 @@ void decode_http_client_response_body(http_client_response_state& state_value,
             state_value.offset_ = 0;
             state_value.body_decode_required_ = false;
             state_value.content_coding_.reset();
+            std::erase_if(state_value.headers_, [](const http_header& field) noexcept {
+                return http_ascii_equals_ignore_case(field.name(), "Content-Encoding") ||
+                       http_ascii_equals_ignore_case(field.name(), "Content-Length");
+            });
             state_value.notify_producer_space();
             return;
         }

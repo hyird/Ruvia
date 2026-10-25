@@ -11,6 +11,7 @@
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_cache.h"
@@ -96,14 +97,28 @@ namespace {
 
 // The single decimal Content-Length a HEAD handler declared, or nullopt.
 [[nodiscard]] std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept {
-    const auto value = http_trim_ows(response.header("Content-Length").value_or(std::string_view{}));
-    std::uint64_t length = 0;
-    const auto* end = value.data() + value.size();
-    const auto [ptr, ec] = std::from_chars(value.data(), end, length);
-    if (value.empty() || ec != std::errc{} || ptr != end) {
+    const auto field = response.header("Content-Length");
+    if (!field.has_value()) {
         return std::nullopt;
     }
-    return length;
+    std::optional<std::uint64_t> declared;
+    bool valid = true;
+    http_visit_comma_separated_quoted_field_items(*field, [&](std::string_view item) noexcept {
+        if (item.empty()) {
+            valid = false;
+            return false;
+        }
+        std::uint64_t parsed = 0;
+        const auto [ptr, ec] = std::from_chars(item.data(), item.data() + item.size(), parsed);
+        if (ec != std::errc{} || ptr != item.data() + item.size() ||
+            (declared.has_value() && *declared != parsed)) {
+            valid = false;
+            return false;
+        }
+        declared = parsed;
+        return true;
+    });
+    return valid ? declared : std::nullopt;
 }
 
 // An empty HEAD body is a HEAD handler describing the GET representation
@@ -115,7 +130,8 @@ namespace {
     const http_response_coding_selection& selection, http_response& response, const compression_config& options) {
     const auto declared = declared_content_length(response);
     const bool encode = declared.has_value()
-                            ? !((*declared < options.min_bytes_ && selection.identity_accepted()) ||
+                            ? !(((*declared == 0 || *declared < options.min_bytes_) &&
+                                    selection.identity_accepted()) ||
                                   *declared > options.max_bytes_)
                             : !selection.identity_accepted();
     if (!encode) {
@@ -178,7 +194,8 @@ http_buffered_compression_step apply_response_compression(const http_response_co
         http_response_compression_source::buffered,
         http_response_coding_availability::identity_and_compression);
     if (decision == http_response_compression_decision::encode && request_method == http_known_method::head &&
-        body.empty()) {
+        body.empty() &&
+        (response_body(response).head_metadata_only() || response.header("Content-Length").has_value())) {
         return apply_head_content_encoding(selection, response, options);
     }
     // min_bytes_ only says when encoding stops paying off; a client that

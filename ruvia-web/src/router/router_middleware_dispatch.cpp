@@ -6,6 +6,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
 #include "ruvia/web/error.h"
 
@@ -164,6 +165,19 @@ detail::middleware_chain detail::route_table::route_chain(const route_entry& rou
         .failure_ = &route_table::contain_failure};
 }
 
+namespace {
+
+task<http_response> mark_explicit_head_route_response(task<http_response> operation) {
+    auto response = co_await std::move(operation);
+    if (!response.has_file_representation() && response.body_bytes().empty() &&
+        !response.status().is_redirection() && !response.status().is_error()) {
+        detail::http_response_body_access::set_head_metadata_only(response);
+    }
+    co_return response;
+}
+
+}  // namespace
+
 task<http_response> detail::route_table::invoke_route(const resolved_route& resolved, context& context_value) const {
     const auto& route = resolved.route();
     if (route.endpoint().buffered() == nullptr) {
@@ -172,10 +186,13 @@ task<http_response> detail::route_table::invoke_route(const resolved_route& reso
     // Hot path: a route with no middleware goes straight to the handler. The
     // context response slot is only needed when middleware can observe the
     // downstream response through context::response().
-    if (!route.has_middleware()) {
-        return resolved.handler()(context_value);
+    auto operation = !route.has_middleware()
+                         ? resolved.handler()(context_value)
+                         : respond_through_chain(route_chain(route), context_value, resolved.handler());
+    if (route.method() == http_known_method::head) {
+        return mark_explicit_head_route_response(std::move(operation));
     }
-    return respond_through_chain(route_chain(route), context_value, resolved.handler());
+    return operation;
 }
 
 task<http_response> detail::route_table::respond_through_chain(

@@ -981,6 +981,47 @@ RUVIA_TEST(http_client_passes_unsupported_content_codings_through) {
     run_operation(worker, io, operation);
 }
 
+RUVIA_TEST(http_client_strips_decoded_content_encoding_and_rejects_overdeep_known_stacks) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    const auto gz_hello = *ruvia::encode_http_content(
+        ruvia::http_content_coding::gzip, "hello", {.max_encoded_bytes_ = 1024});
+    scripted_head_peer peer(io, worker.handle_,
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: " +
+                std::to_string(gz_hello.size()) + "\r\nConnection: close\r\n\r\n" + std::string(gz_hello),
+            "HTTP/1.1 200 OK\r\nContent-Encoding: identity, identity, identity, identity, identity, "
+            "identity, identity, identity, gzip\r\nContent-Length: " +
+                std::to_string(gz_hello.size()) + "\r\nConnection: close\r\n\r\n" + std::string(gz_hello),
+            "HTTP/1.1 200 OK\r\nContent-Encoding: gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip\r\n"
+            "Content-Length: " +
+                std::to_string(gz_hello.size()) + "\r\nConnection: close\r\n\r\n" + std::string(gz_hello)});
+    auto config = local_http_client_config(peer.port());
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        for (int i = 0; i < 2; ++i) {
+            auto response = co_await client.handle().send({.target_ = "/decoded"});
+            RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{200});
+            const auto bytes_value = co_await response.body().read_all();
+            RUVIA_CHECK_EQ(bytes_value.text(), std::string_view("hello"));
+            RUVIA_CHECK(!response.header("Content-Encoding").has_value());
+            RUVIA_CHECK(!response.header("Content-Length").has_value());
+        }
+        bool rejected_overdeep = false;
+        try {
+            auto response = co_await client.handle().send({.target_ = "/overdeep"});
+            (void)co_await response.body().read_all();
+        } catch (const ruvia::http_client_error& error) {
+            rejected_overdeep = error.code() == ruvia::http_client_error::code_type::protocol_error;
+        }
+        RUVIA_CHECK(rejected_overdeep);
+        co_await peer.wait();
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
 RUVIA_TEST(http_client_handle_options_override_pool_timeout_and_start_when_operation_runs) {
     {
         auto& io = ruvia::test::new_test_io_context();

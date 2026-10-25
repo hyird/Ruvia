@@ -33,8 +33,9 @@ RUVIA_TEST(http_client_content_encoding_has_one_authoritative_path) {
             {http_content_coding::zstd}},
         {"HTTP/1.1 200 OK\r\nContent-Encoding: deflate\r\nContent-Length: 0",
             {http_content_coding::deflate}},
-        {"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 0",
-            {http_content_coding::identity}},
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: identity\r\nContent-Length: 0", {}},
+        {"HTTP/1.1 200 OK\r\nContent-Encoding: identity, identity, gzip, identity\r\nContent-Length: 0",
+            {http_content_coding::gzip}},
         {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip, br\r\nContent-Length: 0",
             {http_content_coding::gzip, http_content_coding::brotli}},
         {"HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\n"

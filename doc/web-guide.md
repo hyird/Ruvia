@@ -129,7 +129,7 @@ ruvia::app().listen({
 
 #### 压缩、CORS 与可信代理配置
 
-- `compression_config`：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。`min_bytes_` 只是“压缩是否划算”的阈值：请求以 `identity;q=0` 等方式拒绝 identity 时，小于该值的缓冲响应同样压缩（且不要求结果小于原文），而不是回 `406`。响应已带 `Content-Encoding`、`Content-Range`、`Cache-Control: no-transform` 或完整性字段 `Content-Digest` / `Repr-Digest` / `Content-MD5` 时保持原表示不压缩（RFC 9530：摘要随内容编码而变）。显式 `HEAD` 路由返回空响应体时不压缩该空体：按其声明的 `Content-Length`（无声明时仅在拒绝 identity 时）决定是否加 `Content-Encoding`，加上时去掉 `Content-Length`（编码后长度未知，RFC 9110 §8.6 允许省略）；未声明 `Content-Length` 的空 `HEAD` 响应不再发送 `Content-Length: 0`。
+- `compression_config`：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。`min_bytes_` 只是“压缩是否划算”的阈值：请求以 `identity;q=0` 等方式拒绝 identity 时，小于该值的缓冲响应同样压缩（且不要求结果小于原文），而不是回 `406`。响应已带 `Content-Encoding`、`Content-Range`、`Cache-Control: no-transform` 或完整性字段 `Content-Digest` / `Repr-Digest` / `Content-MD5` 时保持原表示不压缩（RFC 9530：摘要随内容编码而变）；应用自行设置的 `Content-Encoding` 编码栈（含自定义编码 token）仍按请求的 `Accept-Encoding` 逐项校验，任一层编码被拒绝时回 `406`。`GET` 路由（含 `HEAD` 回退）、0 字节文件与重定向响应在 `HEAD` 下与 `GET` 一致发送 `Content-Length: 0`（拒绝 identity 时同样编码 0 字节体）；显式 `RUVIA_HEAD` 路由返回空非文件响应体时不压缩该空体：按其声明的 `Content-Length`（支持逗号分隔的相同值；无声明时仅在拒绝 identity 时）决定是否加 `Content-Encoding`，加上时去掉 `Content-Length`（编码后长度未知，RFC 9110 §8.6 允许省略），未声明 `Content-Length` 的显式空 `HEAD` 响应省略 `Content-Length`。
 - `cors_config`：
   - `origin_`：`cors_origin_config{.mode_ = cors_origin_mode::any | exact | credentialed_exact, .value_ = "..."}`
   - `request_headers_`：`cors_request_headers_config{.mode_ = cors_request_headers_mode::reflect | fixed, .names_ = {...}}`

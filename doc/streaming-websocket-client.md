@@ -331,6 +331,8 @@ std::string_view text = body_bytes.text();
 // co_await response.body().pipe_to(c.stream());
 ```
 
+响应体若采用全部受支持的 `Content-Encoding` 编码栈（`gzip`、`deflate`、`br`、`zstd`；`identity` 视为无编码且不计入编码层数上限），在交付首个字节前自动解码，并从 `response.headers()` 中移除 `Content-Encoding` 与编码前的 `Content-Length`（RFC 9110 §8.4）；`206` 响应或包含未知编码 token 的响应按原样交付并保留 `Content-Encoding`；语法非法或超过 `max_content_codings` 层数的已知编码栈以 `protocol_error` 失败。
+
 ### 5.4 流式请求体上传、`100-continue` 与客户端隧道
 
 - **流式上传 (`open_request`)**：

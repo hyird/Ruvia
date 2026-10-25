@@ -1431,6 +1431,44 @@ RUVIA_TEST(http2_public_transformed_coding_ows_preserves_response_framing) {
     }
 }
 
+RUVIA_TEST(http2_public_empty_buffered_head_matches_get_content_length) {
+    for (const std::string_view method : {std::string_view("GET"), std::string_view("HEAD")}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        auto client = prepared_client(&resource);
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        const auto wire = server_request_wire(&resource, {}, method);
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto request = server.next_event();
+        RUVIA_CHECK(request && request->request_head());
+        const auto request_end = server.next_event();
+        RUVIA_CHECK(request_end && request_end->message_end());
+        ruvia::http_response response(&resource);
+        response.body("");
+        const auto plan = ruvia::plan_buffered_http_response_write(
+            request->request_head()->build_request().known_method(), response);
+        const auto submitted = server.submit_response_head(1, response, plan);
+        RUVIA_CHECK(std::holds_alternative<ruvia::http_buffered_response_write_plan>(submitted));
+        (void)server.release(std::move(*request->request_head()));
+        const auto response_wire = ruvia::testing::drain_output(server);
+        RUVIA_CHECK(client.feed(response_wire) == ruvia::http2_feed_result::accepted);
+        const auto head = client.next_event();
+        RUVIA_CHECK(head && head->response_head());
+        if (head && head->response_head()) {
+            const auto fields = head->response_head()->head().headers();
+            const auto found = std::find_if(fields.begin(), fields.end(),
+                [](const auto& field) { return field.name() == "content-length"; });
+            RUVIA_CHECK(found != fields.end());
+            if (found != fields.end()) {
+                RUVIA_CHECK_EQ(found->value(), "0");
+            }
+        }
+        const auto end = client.next_event();
+        RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == 1);
+        RUVIA_CHECK(!client.next_event());
+        RUVIA_CHECK(!client.connection_error());
+    }
+}
+
 RUVIA_TEST(http2_public_server_submits_buffered_response_head_and_returns_write_plan) {
     std::pmr::monotonic_buffer_resource resource;
     auto server = ruvia::http2_connection::server({.resource_ = &resource});

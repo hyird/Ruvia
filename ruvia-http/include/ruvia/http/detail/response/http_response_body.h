@@ -24,9 +24,17 @@ namespace detail {
 class http_response_body;
 
 class http_empty_response_body final {
+public:
+    [[nodiscard]] constexpr bool head_metadata_only() const noexcept {
+        return head_metadata_only_;
+    }
+
 private:
     friend class http_response_body;
-    constexpr http_empty_response_body() noexcept = default;
+    explicit constexpr http_empty_response_body(bool head_metadata_only = false) noexcept
+        : head_metadata_only_(head_metadata_only) {}
+
+    bool head_metadata_only_{false};
 };
 
 class http_static_response_bytes final {
@@ -220,6 +228,13 @@ public:
         return owned_file() != nullptr || multipart_body() != nullptr;
     }
 
+    [[nodiscard]] bool head_metadata_only() const noexcept {
+        if (const auto* body = std::get_if<http_empty_response_body>(&value_)) {
+            return body->head_metadata_only();
+        }
+        return false;
+    }
+
     [[nodiscard]] std::uint64_t size() const noexcept {
         if (const auto* body = owned_file()) {
             return body->length();
@@ -232,6 +247,7 @@ public:
 
 private:
     friend class ::ruvia::http_response;
+    friend struct http_response_body_access;
 
     using value_type = std::variant<http_empty_response_body, http_static_response_bytes,
         http_owned_response_bytes, http_owned_response_file, http_multipart_response_body>;
@@ -239,6 +255,10 @@ private:
 
     void set_empty() noexcept {
         value_.emplace<http_empty_response_body>(http_empty_response_body{});
+    }
+
+    void set_head_metadata_only() noexcept {
+        value_.emplace<http_empty_response_body>(http_empty_response_body(true));
     }
 
     void set_copy(std::pmr::memory_resource* resource, std::string_view bytes_value) {
