@@ -11,6 +11,13 @@
 #include <ios>
 #include <limits>
 #include <system_error>
+#include <utility>
+
+#if defined(__linux__)
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#include <sys/uio.h>
+#endif
 
 #include "ruvia/http/http_response_file.h"
 
@@ -24,6 +31,41 @@ public:
     explicit response_file_input(http_response_file_view file) noexcept {
         handle_ = open_native_file_for_read(file, error_);
     }
+
+#if defined(__linux__)
+    response_file_input(native_file_handle handle, http_response_file_view file) noexcept
+        : handle_(std::move(handle)),
+          error_(validate_native_file(handle_.get(), file)) {}
+
+    // 只尝试已缓存的字节；未读完的后缀由同一读取器交给阻塞池。
+    [[nodiscard]] std::size_t read_cached(std::uint64_t offset, char* output, std::size_t size) noexcept {
+#if defined(SYS_preadv2) && defined(RWF_NOWAIT)
+        if (!cached_read_supported_ || offset > static_cast<std::uint64_t>((std::numeric_limits<off_t>::max)())) {
+            return 0;
+        }
+        iovec buffer{output, size};
+        // 内核 ABI 按 unsigned long 拆分偏移；64 位 ABI 的高位参数为零。
+        const auto low = static_cast<unsigned long>(offset);
+        unsigned long high = 0;
+        if constexpr (sizeof(unsigned long) < sizeof(offset)) {
+            high = static_cast<unsigned long>(offset >> 32);
+        }
+        const auto count = ::syscall(SYS_preadv2, handle_.get(), &buffer, 1UL, low, high, RWF_NOWAIT);
+        if (count < 0) {
+            if (errno == ENOSYS || errno == EOPNOTSUPP || errno == EINVAL || errno == EPERM) {
+                cached_read_supported_ = false;
+            }
+            return 0;
+        }
+        return static_cast<std::size_t>(count);
+#else
+        static_cast<void>(offset);
+        static_cast<void>(output);
+        static_cast<void>(size);
+        return 0;
+#endif
+    }
+#endif
 
     response_file_input(const response_file_input&) = delete;
     response_file_input& operator=(const response_file_input&) = delete;
@@ -103,6 +145,9 @@ private:
     native_file_handle handle_;
     std::error_code error_;
     std::streamsize last_read_{0};
+#if defined(__linux__) && defined(SYS_preadv2) && defined(RWF_NOWAIT)
+    bool cached_read_supported_{true};
+#endif
 };
 #else
 class response_file_input final {

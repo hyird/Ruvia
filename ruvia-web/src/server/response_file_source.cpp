@@ -61,16 +61,36 @@ void response_file_source::select_file(http_response_file_view file) {
         state_.size_ = file.size();
         state_.identity_ = file.identity();
         state_.reopen_ = true;
+#if defined(__linux__)
+        state_.opened_.reset();
+        if (const auto* opened = file.opened_handle()) {
+            // 独立 fd 随读取状态转移；取消后响应可先析构，迟到读取仍安全。
+            const auto duplicate = ::fcntl(borrowed_native_file(*opened), F_DUPFD_CLOEXEC, 0);
+            if (duplicate < 0) {
+                state_.error_ = std::error_code(errno, std::system_category());
+            } else {
+                state_.opened_ = native_file_handle(duplicate);
+            }
+        }
+#endif
     }
     state_.position_ = file.offset();
     state_.reposition_ = true;
 }
 
 void response_file_source::read_ahead(read_state& state, std::size_t bytes, bool completes_range) {
-    state.filled_ = 0;
     if (state.reopen_) {
+#if defined(__linux__)
+        const auto file = http_response_file_view(state.path_.c_str(), state.size_, 0, state.size_, state.identity_);
+        if (state.opened_.get() >= 0) {
+            state.input_.emplace(std::move(state.opened_), file);
+        } else {
+            state.input_.emplace(file);
+        }
+#else
         state.input_.emplace(
             http_response_file_view(state.path_.c_str(), state.size_, 0, state.size_, state.identity_));
+#endif
         state.reopen_ = false;
         if (!*state.input_) {
             state.error_ = std::make_error_code(std::errc::no_such_file_or_directory);
@@ -86,13 +106,14 @@ void response_file_source::read_ahead(read_state& state, std::size_t bytes, bool
             return;
         }
     }
-    if (!read_exact(input, state.buffer_.data(), bytes)) {
+    const auto remaining = bytes - state.filled_;
+    if (!read_exact(input, state.buffer_.data() + state.filled_, remaining)) {
         // The committed length can no longer be honoured.
         state.error_ = std::make_error_code(std::errc::io_error);
         return;
     }
     state.filled_ = bytes;
-    state.position_ += state.filled_;
+    state.position_ += remaining;
     if (completes_range && !input.matches_snapshot(state.identity_, state.size_)) {
         state.error_ = std::make_error_code(std::errc::operation_canceled);
     }
@@ -102,9 +123,28 @@ task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
     if (lost_ || state_.error_) {
         co_return false;
     }
+    state_.filled_ = 0;
+#if defined(__linux__)
+    if (!state_.reopen_ && state_.input_) {
+        state_.filled_ = state_.input_->read_cached(state_.position_, state_.buffer_.data(), bytes);
+        state_.position_ += state_.filled_;
+        state_.reposition_ = true;
+        if (state_.filled_ == bytes) {
+            if (completes_range && !state_.input_->matches_snapshot(state_.identity_, state_.size_)) {
+                state_.error_ = std::make_error_code(std::errc::operation_canceled);
+            }
+            co_return !state_.error_;
+        }
+    }
+#endif
     if (io_.pool_ == nullptr) {
+#if defined(__linux__)
+        state_.error_ = std::make_error_code(std::errc::operation_not_supported);
+        co_return false;
+#else
         read_ahead(state_, bytes, completes_range);
         co_return !state_.error_;
+#endif
     }
     auto result = co_await run_blocking(*io_.pool_, io_.worker_, io_.stop_,
         [state = std::move(state_), bytes, completes_range]() mutable {

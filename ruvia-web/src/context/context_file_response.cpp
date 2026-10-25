@@ -79,9 +79,8 @@ public:
         // The transport reads or sends the bytes and checks the handle (or the
         // file it opens) against the identity first.
         transport,
-        // The handle's metadata is the snapshot this response was framed
-        // from, so a small body is read from it right here, the handle is
-        // closed, and the bytes travel with the response.
+        // Outside Linux, a small body is read from this framing handle here.
+        // Linux defers even small bodies to the asynchronous reader.
         framing_snapshot,
     };
 
@@ -128,6 +127,7 @@ public:
 #if defined(__unix__) || defined(_WIN32)
         if (read_policy_ == inline_read::framing_snapshot && opened_ &&
             length <= detail::inline_response_file_max_bytes) {
+#if !defined(__linux__)
             std::pmr::string bytes(resource);
             bytes.resize(static_cast<std::size_t>(length));
             if (detail::read_native_file_at(
@@ -142,6 +142,10 @@ public:
             opened_ = {};
             response.file_bytes_body(std::move(bytes));
             return;
+#else
+            // Linux 的小文件也交给异步读取器，不能因长度较小就在 worker 上等磁盘。
+            static_cast<void>(resource);
+#endif
         }
 #else
         static_cast<void>(resource);

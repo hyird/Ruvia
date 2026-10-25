@@ -20,15 +20,13 @@
 
 // The one reader for buffered file response bodies (a whole file, a byte
 // range, or multipart/byteranges parts interleaved with in-memory boundaries)
-// used over TLS or without a native sendfile. Plain TCP keeps
-// sendfile/TransmitFile.
+// used over TLS and on Linux. Windows plain TCP keeps overlapped TransmitFile.
 //
-// Opening, seeking and reading run on the server's blocking pool: each round
-// trip reads ahead up to response_file_read_ahead_bytes (several transport
-// chunks) and moves the owned read state through the pool -- the bytes are
-// never copied out of the read buffer. When the deployment disabled the pool
-// (application::get_blocking_pool(nullptr)), the same reads run inline on the
-// worker, exactly as response compression does without a pool.
+// Opening and blocking reads run on the server's blocking pool. Each round
+// trip reads ahead up to response_file_read_ahead_bytes; Linux tries later
+// reads with RWF_NOWAIT first. The owned read state moves through the pool,
+// without copying its buffered bytes. With application::blocking_pool(nullptr),
+// other platforms retain inline reads; Linux fails rather than waiting for I/O.
 //
 // Every file range is re-validated against its snapshot identity on the read
 // that completes it, so the final bytes of a range are never released for a
@@ -130,6 +128,9 @@ private:
         std::uint64_t size_{};
         http_response_file_identity identity_{http_response_file_identity::unchecked()};
         std::optional<response_file_input> input_;
+#if defined(__linux__)
+        native_file_handle opened_;
+#endif
         read_buffer buffer_;
         std::uint64_t position_{};
         std::size_t filled_{};

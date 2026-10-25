@@ -113,9 +113,10 @@ public:
     application& document_root(document_root_config config);
     application& document_root(std::nullptr_t);
     // Configures the process-wide ordinary-thread pool used by
-    // context::run_blocking() and large buffered-response compression. It is
+    // context::run_blocking(), file reads and large buffered-response compression. It is
     // enabled by default with bounded CPU-based sizing; nullptr explicitly
     // disables it, making large buffered-response compression synchronous.
+    // Linux file reads then fail instead of blocking a worker on file I/O.
     // run() starts the threads before the first request; after workers stop,
     // running callables are not awaited and may finish on the pool's detached
     // state.

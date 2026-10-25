@@ -1,3 +1,4 @@
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -28,8 +29,8 @@
 #include "test_harness.h"
 #include "test_io_context.h"
 
-// File bodies leave the server on the native path (sendfile/TransmitFile, or
-// one buffered send for small files). Pipelined responses must still arrive
+// File bodies use buffered reads on Linux and native asynchronous transfers
+// on Windows. Pipelined responses must still arrive
 // complete and in order, whatever path each one takes.
 
 namespace file_response_transfer_test {
@@ -43,7 +44,7 @@ constexpr std::size_t medium_size = 20 * 1024;
 constexpr std::size_t large_size = 300 * 1024 + 17;
 
 [[nodiscard]] const fs::path& transfer_dir() {
-    static const fs::path dir = fs::temp_directory_path() / "ruvia_file_response_transfer";
+    static const fs::path dir = fs::current_path() / "ruvia_file_response_transfer";
     return dir;
 }
 
@@ -310,19 +311,91 @@ RUVIA_TEST(file_changed_in_place_after_framing_is_never_sent_under_its_head) {
         std::string response;
         std::error_code error;
         asio::read(socket, asio::dynamic_buffer(response), error);
-        // Bytes paired with the head are always the framed version: a small
-        // body was read from the framing handle before the rewrite and is
-        // sent as framed; a larger handle is checked before the head is sent,
-        // so the connection closes without committing a 200.
+        // Linux 在异步首读时校验所有大小的文件；Windows 仍可能在生成
+        // 响应时拥有小文件正文。两条路径均不允许发送被改写后的字节。
         RUVIA_CHECK(response.find(replacement.substr(0, 64)) == std::string::npos);
+#if defined(__linux__)
+        RUVIA_CHECK(!response.starts_with("HTTP/1.1 200 "));
+#else
         if (size == small_size) {
             RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
             RUVIA_CHECK(response.ends_with(file_bytes(size, 'a')));
         } else {
             RUVIA_CHECK(!response.starts_with("HTTP/1.1 200 "));
         }
+#endif
     }
 
+    server.finish();
+    fs::remove_all(transfer_dir(), ignored);
+}
+
+#if !defined(_WIN32)
+// Renaming a directory that still contains the server's open handle succeeds on
+// POSIX and fails on Windows, so this identity check is POSIX-only.
+RUVIA_TEST(file_response_keeps_its_opened_file_after_path_replacement) {
+    std::error_code ignored;
+    const auto previous_dir = transfer_dir().parent_path() / "ruvia_file_response_previous";
+    fs::remove_all(transfer_dir(), ignored);
+    fs::remove_all(previous_dir, ignored);
+    fs::create_directories(transfer_dir());
+    const auto original = file_bytes(large_size, 'a');
+    const auto path = transfer_dir() / "owned.bin";
+    write_file(path, original);
+
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    rewritten = false;
+    asio::ip::tcp::socket socket(io);
+    socket.connect(server.endpoint());
+    const auto request = get("/file-transfer/held/owned.bin", "Connection: close\r\n");
+    asio::write(socket, asio::buffer(request));
+    const bool held = held_response_framed.try_acquire_for(std::chrono::seconds(5));
+    RUVIA_CHECK(held);
+    // 移动父目录不改写文件本身的身份；原路径现在指向另一份内容。
+    fs::rename(transfer_dir(), previous_dir);
+    fs::create_directories(transfer_dir());
+    write_file(path, file_bytes(large_size, 'x'));
+    rewritten = true;
+    std::string wire;
+    asio::read(socket, asio::dynamic_buffer(wire), ignored);
+    const auto responses = split_responses(wire, {false});
+    RUVIA_CHECK_EQ(responses.size(), std::size_t{1});
+    if (responses.size() == 1) {
+        RUVIA_CHECK_EQ(responses.front().status_, std::string("200"));
+        RUVIA_CHECK(responses.front().body_ == original);
+    }
+    server.finish();
+    fs::remove_all(transfer_dir(), ignored);
+    fs::remove_all(previous_dir, ignored);
+}
+#endif
+
+RUVIA_TEST(abandoned_file_response_does_not_hold_the_worker) {
+    std::error_code ignored;
+    fs::remove_all(transfer_dir(), ignored);
+    fs::create_directories(transfer_dir());
+    write_file(transfer_dir() / "large.bin", file_bytes(4 * 1024 * 1024, 'a'));
+
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    asio::ip::tcp::socket socket(io);
+    socket.open(asio::ip::tcp::v4());
+    socket.set_option(asio::socket_base::receive_buffer_size(1024));
+    socket.connect(server.endpoint());
+    const auto request = get("/file-transfer/large");
+    asio::write(socket, asio::buffer(request));
+    std::array<char, 1024> prefix{};
+    const auto received = socket.read_some(asio::buffer(prefix));
+    RUVIA_CHECK(received != 0);
+    socket.close();
+
+    const auto wire = exchange(io, server.endpoint(), get("/file-transfer/text", "Connection: close\r\n"));
+    const auto responses = split_responses(wire, {false});
+    RUVIA_CHECK_EQ(responses.size(), std::size_t{1});
+    if (responses.size() == 1) {
+        RUVIA_CHECK_EQ(responses.front().body_, std::string("between"));
+    }
     server.finish();
     fs::remove_all(transfer_dir(), ignored);
 }

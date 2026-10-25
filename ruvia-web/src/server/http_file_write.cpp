@@ -10,12 +10,7 @@
 
 #include "server/http_native_file.h"
 
-#if defined(__linux__)
-#include <sys/sendfile.h>
-#include <sys/socket.h>
-
-#include <cerrno>
-#elif defined(_WIN32)
+#if defined(_WIN32)
 #include <mswsock.h>
 
 #include <asio/windows/overlapped_ptr.hpp>
@@ -23,7 +18,7 @@
 
 namespace ruvia::detail {
 
-#if defined(__linux__) || defined(_WIN32)
+#if defined(_WIN32)
 namespace {
 
 // The handle the response was framed from, or one opened here into `owned`,
@@ -40,15 +35,6 @@ namespace {
     owned = open_native_file_for_read(file, ec);
     return owned.get();
 }
-
-#if defined(__linux__)
-[[nodiscard]] task<std::error_code> wait_writable(asio::ip::tcp::socket& socket) {
-    const auto completion = co_await ruvia::async_asio([&socket](auto handler) mutable {
-        socket.async_wait(asio::ip::tcp::socket::wait_write, std::move(handler));
-    });
-    co_return completion.error_code();
-}
-#endif
 
 }  // namespace
 
@@ -83,71 +69,7 @@ task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::so
     if (result.error_) {
         co_return result;
     }
-#if defined(__linux__)
-    // Both the head send and sendfile below must return EAGAIN rather than
-    // block the worker on a full socket buffer.
-    if (!socket.native_non_blocking()) {
-        socket.native_non_blocking(true, result.error_);
-        if (result.error_) {
-            co_return result;
-        }
-    }
-    // MSG_MORE holds the head until sendfile appends the first file bytes,
-    // so both leave in one segment; sendfile's final chunk pushes the cork.
-    const int head_flags = MSG_NOSIGNAL | (file.length() != 0 ? MSG_MORE : 0);
-    while (!head.empty()) {
-        const auto sent = ::send(socket.native_handle(), head.data(), head.size(), head_flags);
-        if (sent > 0) {
-            head.remove_prefix(static_cast<std::size_t>(sent));
-            progress.touch();
-            continue;
-        }
-        if (sent < 0 && errno == EINTR) {
-            continue;
-        }
-        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            result.error_ = co_await wait_writable(socket);
-            if (result.error_) {
-                co_return result;
-            }
-            continue;
-        }
-        result.error_ = sent == 0 ? std::error_code(asio::error::operation_aborted)
-                                  : std::error_code(errno, std::system_category());
-        co_return result;
-    }
-    result.head_written_ = true;
 
-    auto offset = static_cast<off_t>(file.offset());
-    std::uint64_t remaining = file.length();
-    while (remaining > 0) {
-        const auto next_send =
-            static_cast<std::size_t>(std::min<std::uint64_t>(remaining, 0x7ffff000ULL));
-        const auto sent = ::sendfile(socket.native_handle(), input, &offset, next_send);
-        if (sent > 0) {
-            remaining -= static_cast<std::uint64_t>(sent);
-            progress.touch();
-            continue;
-        }
-        if (sent == 0) {
-            result.error_ = asio::error::operation_aborted;
-            co_return result;
-        }
-        if (errno == EINTR) {
-            continue;
-        }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            result.error_ = co_await wait_writable(socket);
-            if (result.error_) {
-                co_return result;
-            }
-            continue;
-        }
-        result.error_ = std::error_code(errno, std::system_category());
-        co_return result;
-    }
-    co_return result;
-#elif defined(_WIN32)
     // A null OVERLAPPED would make every TransmitFile call synchronous until
     // the peer drained the whole range, blocking this worker's event loop
     // behind one slow reader; the overlapped call completes through the
@@ -199,7 +121,6 @@ task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::so
     }
     result.head_written_ = true;
     co_return result;
-#endif
 }
 #endif
 

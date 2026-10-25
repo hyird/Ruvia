@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <string_view>
 #include <system_error>
@@ -122,55 +123,31 @@ template <typename const_buffer_sequence_type>
     return true;
 }
 
-// Writes a committed file or multipart/byteranges body after its head. Plain
-// TCP hands file ranges to the kernel (sendfile/TransmitFile) where the
-// platform has one; TLS, or TCP without a native path, reads through
-// response_file_source.
-template <typename stream_type>
-task<std::error_code> write_http1_file_body(stream_type& stream, const http_response& response,
-    const response_file_io& file_io, connection_scanner::entry& progress) {
-    if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket> &&
-                  native_response_file_write_available) {
-        for (std::size_t index = 0; index < response.body_segment_count(); ++index) {
-            const auto segment = response.body_segment(index);
-            if (segment.file_) {
-                if (const auto written = co_await write_http_response_file(stream, {}, *segment.file_, progress);
-                    written.error_) {
-                    co_return written.error_;
-                }
-            } else if (!segment.bytes_.empty()) {
-                auto part = co_await ruvia::async_asio<std::size_t>(
-                    [&stream, &progress, bytes = segment.bytes_](auto handler) mutable {
-                        asio::async_write(
-                            stream, asio::buffer(bytes), http_write_progress(progress), std::move(handler));
-                    });
-                if (const auto error = part.error_code()) {
-                    co_return error;
-                }
+#if defined(_WIN32)
+// Windows keeps its overlapped native transfer for committed file ranges.
+inline task<std::error_code> write_http1_native_file_body(asio::ip::tcp::socket& stream,
+    const http_response& response, connection_scanner::entry& progress) {
+    for (std::size_t index = 0; index < response.body_segment_count(); ++index) {
+        const auto segment = response.body_segment(index);
+        if (segment.file_) {
+            if (const auto written = co_await write_http_response_file(stream, {}, *segment.file_, progress);
+                written.error_) {
+                co_return written.error_;
             }
-        }
-        co_return std::error_code{};
-    } else {
-        response_file_source source(response, file_io);
-        for (;;) {
-            const auto chunk = co_await source.next();
-            if (chunk.kind() == response_body_chunk::kind_type::end) {
-                co_return std::error_code{};
-            }
-            if (chunk.kind() == response_body_chunk::kind_type::failed) {
-                co_return std::make_error_code(std::errc::io_error);
-            }
-            auto written = co_await ruvia::async_asio<std::size_t>(
-                [&stream, &progress, bytes = chunk.bytes()](auto handler) mutable {
+        } else if (!segment.bytes_.empty()) {
+            auto part = co_await ruvia::async_asio<std::size_t>(
+                [&stream, &progress, bytes = segment.bytes_](auto handler) mutable {
                     asio::async_write(
                         stream, asio::buffer(bytes), http_write_progress(progress), std::move(handler));
                 });
-            if (const auto error = written.error_code()) {
+            if (const auto error = part.error_code()) {
                 co_return error;
             }
         }
     }
+    co_return std::error_code{};
 }
+#endif
 
 // A buffered response serialized into the connection's output.
 struct http1_response_write_start final {
@@ -220,6 +197,7 @@ task<http1_buffered_response_write_result> finish_file_response_write(stream_typ
     const http1_buffered_response_plan& response_plan, const http1_response_write_start& start,
     const response_file_io& file_io, connection_scanner::entry& progress) {
     const auto response_head_bytes = start.head_bytes_;
+#if defined(_WIN32)
     if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket> &&
                   native_response_file_write_available) {
         if (response_plan.send_body() && !response.has_multipart_file_body()) {
@@ -251,21 +229,66 @@ task<http1_buffered_response_write_result> finish_file_response_write(stream_typ
             co_return classify_http1_buffered_response_write(
                 response_plan, response_head_bytes, write_ec, written_bytes);
         }
-    }
-    auto write_completion = co_await ruvia::async_asio<std::size_t>(
-        [&stream, &progress, head_view = head.view()](auto handler) mutable {
-            asio::async_write(
-                stream, asio::buffer(head_view), http_write_progress(progress), std::move(handler));
-        });
-    const auto ec = write_completion.error_code();
-    const auto bytes_transferred = write_completion.result();
-    if (ec || !response_plan.send_body()) {
+        auto write_completion = co_await ruvia::async_asio<std::size_t>(
+            [&stream, &progress, head_view = head.view()](auto handler) mutable {
+                asio::async_write(
+                    stream, asio::buffer(head_view), http_write_progress(progress), std::move(handler));
+            });
+        const auto ec = write_completion.error_code();
+        const auto bytes_transferred = write_completion.result();
+        if (ec || !response_plan.send_body()) {
+            co_return classify_http1_buffered_response_write(
+                response_plan, response_head_bytes, ec, bytes_transferred);
+        }
+        const auto body_error = co_await write_http1_native_file_body(stream, response, progress);
         co_return classify_http1_buffered_response_write(
-            response_plan, response_head_bytes, ec, bytes_transferred);
+            response_plan, response_head_bytes, body_error, response_head_bytes);
     }
-    const auto body_error = co_await write_http1_file_body(stream, response, file_io, progress);
-    co_return classify_http1_buffered_response_write(
-        response_plan, response_head_bytes, body_error, response_head_bytes);
+#endif
+    response_file_source source(response, file_io);
+    auto first = response_body_chunk::end();
+#if defined(__linux__)
+    if (response_plan.send_body()) {
+        // 先验证并读取首块，再提交响应头；首块和头共用一次散集写。
+        first = co_await source.next();
+        if (first.kind() == response_body_chunk::kind_type::failed) {
+            co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
+                std::make_error_code(std::errc::io_error), 0);
+        }
+    }
+#endif
+    const std::array<asio::const_buffer, 2> buffers{asio::buffer(head.view()), asio::buffer(first.bytes())};
+    auto write_completion = co_await ruvia::async_asio<std::size_t>(
+        [&stream, &progress, &buffers](auto handler) mutable {
+            asio::async_write(stream, buffers, http_write_progress(progress), std::move(handler));
+        });
+    if (write_completion.error_code() || !response_plan.send_body()) {
+        co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
+            write_completion.error_code(), write_completion.result());
+    }
+#if defined(__linux__)
+    if (first.kind() == response_body_chunk::kind_type::end) {
+        co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, {}, response_head_bytes);
+    }
+#endif
+    for (;;) {
+        const auto chunk = co_await source.next();
+        if (chunk.kind() == response_body_chunk::kind_type::end) {
+            co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, {}, response_head_bytes);
+        }
+        if (chunk.kind() == response_body_chunk::kind_type::failed) {
+            co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
+                std::make_error_code(std::errc::io_error), response_head_bytes);
+        }
+        auto written = co_await ruvia::async_asio<std::size_t>(
+            [&stream, &progress, bytes = chunk.bytes()](auto handler) mutable {
+                asio::async_write(stream, asio::buffer(bytes), http_write_progress(progress), std::move(handler));
+            });
+        if (written.error_code()) {
+            co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
+                written.error_code(), response_head_bytes);
+        }
+    }
 }
 
 }  // namespace ruvia::detail

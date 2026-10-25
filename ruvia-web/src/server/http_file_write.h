@@ -13,10 +13,9 @@
 
 namespace ruvia::detail {
 
-// Whether plain TCP can hand a file range to the kernel (sendfile on Linux,
-// overlapped TransmitFile on Windows). Other platforms, and TLS connections,
-// read file bodies through response_file_source.
-#if defined(__linux__) || defined(_WIN32)
+// Windows plain TCP uses overlapped TransmitFile. Other platforms and TLS
+// connections read file bodies through response_file_source.
+#if defined(_WIN32)
 inline constexpr bool native_response_file_write_available = true;
 
 struct http_response_file_write_result final {
@@ -33,9 +32,8 @@ struct http_response_file_write_result final {
 
 // Sends `head`, then the range of `file` from the kernel. The file is opened
 // (or its opened handle borrowed) before any byte is sent, so a missing or
-// changed file fails with no head written. Windows carries the head in the
-// first TransmitFile; Linux corks it with MSG_MORE so it shares the first
-// segment with the file bytes. Touches `progress` after every transfer.
+// changed file fails with no head written. The first TransmitFile carries
+// the head. Touches `progress` after every transfer.
 task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::socket& socket,
     std::string_view head, http_response_file_view file, connection_scanner::entry& progress);
 #else
