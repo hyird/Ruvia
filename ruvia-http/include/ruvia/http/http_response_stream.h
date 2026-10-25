@@ -37,8 +37,8 @@ enum class http_response_trailer_intent : std::uint8_t { none,
 }
 
 // Authoritative phase immediately after the initial response head is submitted.
-// trailers_only is distinct from body_open: HTTP/2 may carry trailing HEADERS
-// after a HEAD/204-style response without allowing any DATA.
+// Body-suppressed responses (HEAD / 304) complete at the initial head
+// (message_ended) and discard trailers.
 enum class http_response_stream_head_disposition : std::uint8_t { body_open,
     trailers_only,
     message_ended };
@@ -58,10 +58,12 @@ public:
     }
 
     // HTTP/1.1 requires chunked framing for trailers (RFC 9112 7.1.2).
-    // HTTP/2 carries them in a trailing field section.
+    // HTTP/2 carries them in a trailing field section. A body-suppressed
+    // response (HEAD / 304) ends at its initial head and discards trailers.
     [[nodiscard]] bool trailers_available() const noexcept {
-        return (framing_ == http_response_stream_framing::http1_chunked && !body_plan_.body_suppressed()) ||
-               framing_ == http_response_stream_framing::http2_frames;
+        return !body_plan_.body_suppressed() &&
+               (framing_ == http_response_stream_framing::http1_chunked ||
+                   framing_ == http_response_stream_framing::http2_frames);
     }
 
     [[nodiscard]] http_response_stream_head_disposition head_disposition() const noexcept {
@@ -101,15 +103,6 @@ private:
     http_response_stream_framing framing, http_known_method request_method, http_status_code response_status,
     http_response_trailer_intent trailer_intent) noexcept {
     const auto body_plan = plan_http_response_body(request_method, response_status);
-    if (framing == http_response_stream_framing::http2_frames) {
-        return http_response_stream_commit_plan(framing, body_plan,
-            body_plan.body_suppressed() ? (trailer_intent == http_response_trailer_intent::present
-                                                  ? http_response_stream_head_disposition::trailers_only
-                                                  : http_response_stream_head_disposition::message_ended)
-                                        : http_response_stream_head_disposition::body_open,
-            trailer_intent == http_response_trailer_intent::present);
-    }
-
     return http_response_stream_commit_plan(framing, body_plan,
         body_plan.body_suppressed() ? http_response_stream_head_disposition::message_ended
                                     : http_response_stream_head_disposition::body_open,

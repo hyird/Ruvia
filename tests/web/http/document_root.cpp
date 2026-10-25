@@ -43,10 +43,20 @@ class document_root_routes final {
     RUVIA_GET("/admin/panel/*", private_file, document_root_guard);
     // Makes PROPFIND a method this server knows, for the 405-vs-501 split.
     RUVIA_METHOD("PROPFIND", "/dav", private_file);
+    RUVIA_POST("/encoded/:slug", post_slug);
+    RUVIA_GET("/a%20b.txt", get_space_route);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> private_file(ruvia::context& c) {
         co_return c.text("guarded");
+    }
+
+    ruvia::task<ruvia::http_response> post_slug(ruvia::context& c) {
+        co_return c.text("posted:" + std::string(c.req().param("slug").value_or("")));
+    }
+
+    ruvia::task<ruvia::http_response> get_space_route(ruvia::context& c) {
+        co_return c.text("from-route");
     }
 };
 
@@ -56,10 +66,14 @@ class document_root_routes final {
     fs::remove_all(dir, ignored);
     fs::create_directories(dir / "private");
     fs::create_directories(dir / "admin" / "panel");
+    fs::create_directories(dir / "encoded");
     std::ofstream(dir / "private" / "file.txt") << "secret";
     std::ofstream(dir / "admin" / "panel" / "secret.txt") << "secret";
     std::ofstream(dir / "public.txt") << "public";
     std::ofstream(dir / "my report.txt") << "spaced";
+    std::ofstream(dir / "encoded" / "readme.txt") << "readme-from-disk";
+    std::ofstream(dir / "encoded" / "hello world.txt") << "hello-world-from-disk";
+    std::ofstream(dir / "a%20b.txt") << "literal-percent";
     return dir;
 }
 
@@ -152,5 +166,22 @@ RUVIA_TEST(document_root_never_serves_targets_rejected_by_routing) {
     const auto propfind = exchange(io, server.endpoint(), "/public.txt", "PROPFIND");
     RUVIA_CHECK(has_status(propfind, "405"));
     RUVIA_CHECK(propfind.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+
+    // Percent-encoded document-root paths alongside a sibling method route on the same path pattern.
+    const auto encoded_readme = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "GET");
+    RUVIA_CHECK(has_status(encoded_readme, "200"));
+    RUVIA_CHECK(encoded_readme.ends_with("readme-from-disk"));
+    const auto encoded_space = exchange(io, server.endpoint(), "/encoded/hello%20world.txt", "GET");
+    RUVIA_CHECK(has_status(encoded_space, "200"));
+    RUVIA_CHECK(encoded_space.ends_with("hello-world-from-disk"));
+    const auto encoded_options = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "OPTIONS");
+    RUVIA_CHECK(has_status(encoded_options, "204"));
+    RUVIA_CHECK(encoded_options.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::string::npos);
+    const auto delete_encoded = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "DELETE");
+    RUVIA_CHECK(has_status(delete_encoded, "405"));
+    RUVIA_CHECK(delete_encoded.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::string::npos);
+    const auto literal_percent = exchange(io, server.endpoint(), "/a%2520b.txt", "GET");
+    RUVIA_CHECK(has_status(literal_percent, "200"));
+    RUVIA_CHECK(literal_percent.ends_with("literal-percent"));
     server.finish();
 }

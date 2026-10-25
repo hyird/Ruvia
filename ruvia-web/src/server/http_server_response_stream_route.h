@@ -42,7 +42,6 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     }
     const auto close_policy = d.request_sequence_.next_response_close_policy();
     const auto stream_plan = http1_plan_response_stream(d.parsed_, close_policy);
-    auto connection_plan = stream_plan.request_connection_plan();
     using response_sink_type = response_stream_sink<stream_type>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().response_stream();
@@ -123,21 +122,17 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     if (auto* route_response = result_value.route_response()) {
         d.response_ = std::move(*route_response).take_response();
         d.scanner_entry_.touch();
-        if (response_sink.peer_eof_monitoring()) {
-            co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, connection_plan,
-                d.request_sequence_, body_state.consumption(), request_bytes.size(), pipeline_stash,
-                [&body_state, &response_sink](std::pmr::string& stash) {
-                    return body_state.take_pipeline(stash, response_sink.monitored_pipeline());
-                });
-        }
-        co_return finalize_buffered_route_response(
-            d.response_, connection_plan, d.request_sequence_, request_head.header_bytes());
+        co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan_,
+            d.request_sequence_, body_state.consumption(), request_bytes.size(), pipeline_stash,
+            [&body_state, &response_sink](std::pmr::string& stash) {
+                return body_state.take_pipeline(stash, response_sink.monitored_pipeline());
+            });
     }
 
     // Only the completed committed alternative remains.
     const auto committed_status = result_value.committed_status();
 
-    connection_plan = response_sink.connection_plan();
+    const auto connection_plan = response_sink.connection_plan();
     d.request_sequence_.complete_committed_response(connection_plan);
     if (connection_plan.disposition() != http1_close_policy::allow_reuse) {
         co_return http1_session_request_completion::make_committed_stream(

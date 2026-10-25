@@ -46,8 +46,8 @@ struct document_root_fallback final {
 };
 
 [[nodiscard]] document_root_fallback select_document_root_fallback(
-    const detail::route_table& routes, const detail::document_root_binding& document_root,
-    const http_request& request, request_memory& memory, const detail::context_services& services,
+    const detail::document_root_binding& document_root, const http_request& request,
+    request_memory& memory, const detail::context_services& services,
     detail::static_file_selection_mode static_file_mode) {
     const auto* const root = document_root.root();
     const auto method = request.known_method();
@@ -67,18 +67,6 @@ struct document_root_fallback final {
         decoded = detail::decode_request_path(request.path(), memory.resource());
         if (!decoded) {
             return {};
-        }
-        if (*decoded != request.path()) {
-            const auto decoded_resolution = routes.resolve(detail::route_request_view{
-                .known_method_ = http_known_method::options,
-                .method_ = "OPTIONS",
-                .path_ = *decoded,
-            });
-            if (decoded_resolution.resolved() != nullptr ||
-                decoded_resolution.method_not_allowed() != nullptr ||
-                decoded_resolution.rejected() != nullptr) {
-                return {};
-            }
         }
         relative = std::string_view(*decoded).substr(1);
     }
@@ -152,7 +140,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             auto fallback = resolution.rejected() != nullptr
                                 ? document_root_fallback{}
                                 : select_document_root_fallback(
-                                      *this, document_root, request, memory, services, static_file_mode);
+                                      document_root, request, memory, services, static_file_mode);
             auto& unmatched_response = fallback.response_;
             // One handle_error co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's

@@ -95,6 +95,7 @@ task<void> websocket_client_state::await_peer_transport_end() {
     // within a reasonable time. Either way the close handshake has completed,
     // so neither that timeout nor a failing transport fails the operation.
     arm(close_handshake_timer_, config_.close_handshake_timeout_, client_abort_reason::closing);
+    bool read_failed = false;
     try {
         for (;;) {
             // Discards whatever the server sent after its Close.
@@ -106,6 +107,18 @@ task<void> websocket_client_state::await_peer_transport_end() {
             input_.commit(count);
         }
     } catch (const websocket_client_error&) {
+        read_failed = true;
+    }
+    if (read_failed) {
+        if (http2_ && abort_reason_ == client_abort_reason::closing) {
+            abort_reason_ = client_abort_reason::none;
+            try {
+                co_await wait_for_write_idle(write_wait_type::reader);
+                write_guard_type write_guard(*this, write_phase_type::application);
+                co_await http2_->finish();
+            } catch (const websocket_client_error&) {
+            }
+        }
         retire(client_abort_reason::closing);
         co_return;
     }

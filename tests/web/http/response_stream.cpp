@@ -1,6 +1,9 @@
+#include <zlib.h>
+
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <exception>
 #include <memory>
 #include <memory_resource>
@@ -15,6 +18,7 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/read.hpp>
+#include <asio/read_until.hpp>
 #include <asio/write.hpp>
 
 #include "ruvia/core/event_loop.h"
@@ -24,6 +28,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
@@ -37,6 +42,18 @@ struct stream_lane_observation final {
     std::atomic<bool> end_overlap_rejected_{};
     std::atomic<bool> completed_{};
     std::atomic<bool> endless_write_failed_{};
+    std::atomic<int> uaf_phase_{};
+    std::atomic<bool> uaf_route_done_{};
+    std::atomic<bool> uaf_failed_{};
+    std::atomic<std::size_t> uaf_decoded_bytes_{};
+};
+
+class stream_early_respond_middleware final {
+public:
+    ruvia::task<void> handle(ruvia::context& context_value, ruvia::next&) {
+        const auto body = co_await context_value.req().text();
+        context_value.respond(context_value.text("early:" + std::string(body)));
+    }
 };
 
 const auto stream_lane_observed = std::make_shared<stream_lane_observation>();
@@ -51,6 +68,9 @@ class stream_lane_routes final {
     RUVIA_GET("/server-endless-stream", endless);
     RUVIA_GET("/server-upstream-timeout-stream", upstream_timeout);
     RUVIA_GET("/server-stream-then-read-body", stream_then_read_body);
+    RUVIA_GET("/server-uaf-head-stream", uaf_head_stream, ruvia::stream_body);
+    RUVIA_POST("/server-stream-early-respond", never_stream, stream_early_respond_middleware);
+    RUVIA_GET("/server-stream-plain", plain);
     RUVIA_ROUTES_END
 
     ruvia::task<void> output(ruvia::context& context_value) {
@@ -117,6 +137,47 @@ class stream_lane_routes final {
         co_await writer.write("x");
         const auto body = co_await context_value.req().text();
         co_await writer.write(body);
+    }
+
+    ruvia::task<void> never_stream(ruvia::context& context_value) {
+        co_await context_value.stream_text().write("never");
+    }
+
+    ruvia::task<ruvia::http_response> plain(ruvia::context& context_value) {
+        co_return context_value.text("plain-ok");
+    }
+
+    ruvia::task<void> uaf_head_stream(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
+        auto& out = context_value.stream_text();
+        auto& reader = context_value.req().body_reader();
+        try {
+            co_await out.write("head");
+            observed.uaf_phase_.store(1);
+            static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(25)));
+
+            auto r1 = co_await reader.read();
+            auto r2 = co_await reader.read();
+
+            co_await out.write("discarded1");
+            observed.uaf_phase_.store(2);
+            static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(25)));
+
+            auto r3 = co_await reader.read();
+
+            co_await out.write("discarded2");
+            observed.uaf_phase_.store(3);
+            static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(25)));
+
+            std::size_t total = (r1 ? r1->size() : 0) + (r2 ? r2->size() : 0) + (r3 ? r3->size() : 0);
+            while (auto chunk = co_await reader.read()) {
+                total += chunk->size();
+            }
+            observed.uaf_decoded_bytes_.store(total);
+        } catch (...) {
+            observed.uaf_failed_.store(true);
+        }
+        observed.uaf_route_done_.store(true);
     }
 };
 
@@ -262,4 +323,106 @@ RUVIA_TEST(response_stream_body_read_after_commit_sends_no_continue) {
     RUVIA_CHECK(response.starts_with("HTTP/1.1 200 "));
     RUVIA_CHECK(response.find("100 Continue") == std::string::npos);
     RUVIA_CHECK(response.ends_with("\r\n\r\n1\r\nx\r\n4\r\nabcd\r\n0\r\n\r\n"));
+}
+
+RUVIA_TEST(response_stream_head_transfer_coded_chunked_body_survives_peer_monitor_reallocation) {
+    const auto gzip_member = [](std::string_view input, int level) {
+        z_stream zs{};
+        if (deflateInit2(&zs, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {
+            throw std::runtime_error("deflateInit2 failed");
+        }
+        std::string out(deflateBound(&zs, input.size()) + 64, '\0');
+        zs.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
+        zs.avail_in = static_cast<uInt>(input.size());
+        zs.next_out = reinterpret_cast<Bytef*>(out.data());
+        zs.avail_out = static_cast<uInt>(out.size());
+        if (deflate(&zs, Z_FINISH) != Z_STREAM_END) {
+            deflateEnd(&zs);
+            throw std::runtime_error("deflate failed");
+        }
+        out.resize(zs.total_out);
+        deflateEnd(&zs);
+        return out;
+    };
+    const auto make_chunk = [](std::string_view data) {
+        char hex[32];
+        std::snprintf(hex, sizeof(hex), "%zx\r\n", data.size());
+        std::string out(hex);
+        out.append(data);
+        out.append("\r\n");
+        return out;
+    };
+
+    const std::string payload1(8000, 'X');
+    const std::string payload2(100000, 'A');
+    const std::string chunk1a = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION));
+    const std::string chunk1b = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION));
+    const std::string chunk2 = make_chunk(gzip_member(payload2, Z_BEST_COMPRESSION));
+    const std::string chunk3a = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION));
+    const std::string chunk3b = make_chunk(gzip_member(payload1, Z_NO_COMPRESSION)) + "0\r\n\r\n";
+
+    stream_lane_observed->uaf_phase_.store(0);
+    stream_lane_observed->uaf_route_done_.store(false);
+    stream_lane_observed->uaf_failed_.store(false);
+    stream_lane_observed->uaf_decoded_bytes_.store(0);
+
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io,
+        {.worker_count_ = 1,
+            .connection_scan_interval_ = std::chrono::milliseconds(5),
+            .memory_pool_ = {.retained_block_bytes_ = 0}});
+
+    asio::ip::tcp::socket sock(io);
+    sock.connect(server.endpoint());
+    std::string initial_wire =
+        "HEAD /server-uaf-head-stream HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: gzip, chunked\r\n\r\n";
+    initial_wire.append(chunk1a);
+    asio::write(sock, asio::buffer(initial_wire));
+
+    std::string resp_head;
+    asio::read_until(sock, asio::dynamic_buffer(resp_head), "\r\n\r\n");
+    RUVIA_CHECK(resp_head.starts_with("HTTP/1.1 200 "));
+
+    while (stream_lane_observed->uaf_phase_.load() < 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    asio::write(sock, asio::buffer(chunk1b));
+
+    while (stream_lane_observed->uaf_phase_.load() < 2) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    asio::write(sock, asio::buffer(chunk2 + chunk3a));
+
+    while (stream_lane_observed->uaf_phase_.load() < 3) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    asio::write(sock, asio::buffer(chunk3b));
+
+    while (!stream_lane_observed->uaf_route_done_.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    sock.close();
+    server.finish();
+
+    RUVIA_CHECK(!stream_lane_observed->uaf_failed_.load());
+    RUVIA_CHECK_EQ(stream_lane_observed->uaf_decoded_bytes_.load(), std::size_t{4 * 8000 + 100000});
+}
+
+RUVIA_TEST(response_stream_middleware_short_circuit_after_body_read_preserves_pipelined_request) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    const std::string_view wire =
+        "POST /server-stream-early-respond HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhello"
+        "GET /server-stream-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    asio::write(client, asio::buffer(wire));
+    std::string response;
+    std::error_code ec;
+    asio::read(client, asio::dynamic_buffer(response), ec);
+    client.close();
+    server.finish();
+
+    RUVIA_CHECK(response.find("early:hello") != std::string::npos);
+    RUVIA_CHECK(response.find("plain-ok") != std::string::npos);
 }

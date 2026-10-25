@@ -393,6 +393,7 @@ void exercise_closing_peer(ruvia::testing::test_context& ruvia_ctx, closing_peer
 }
 
 enum class handshake_end { close_on_data,
+    close_without_end_stream,
     end_on_headers };
 
 // The peer answers the Extended CONNECT in one write: either 200 HEADERS
@@ -458,7 +459,10 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
                         ruvia::websocket_connection websocket;
                         RUVIA_CHECK(websocket.submit_close(1000, "bye") == ruvia::websocket_close_submit_status::accepted);
                         const auto close = websocket.output_plan();
-                        RUVIA_CHECK(connection.submit_data(head->stream_id(), close.bytes(), ruvia::http2_end_stream::end_stream) ==
+                        const auto end_flag = mode == handshake_end::close_without_end_stream
+                                                  ? ruvia::http2_end_stream::keep_open
+                                                  : ruvia::http2_end_stream::end_stream;
+                        RUVIA_CHECK(connection.submit_data(head->stream_id(), close.bytes(), end_flag) ==
                                     ruvia::http2_data_submit_status::accepted);
                     }
                     request.emplace(std::move(*head));
@@ -474,10 +478,13 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
     bool closed_by_peer = false;
     std::optional<ruvia::websocket_client_error::code_type> connect_error;
     const auto run = [&]() -> ruvia::task<void> {
-        ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
+        ruvia::websocket_client client(attachment.loop(), {
+                                                              .scheme_ = ruvia::websocket_scheme::ws,
                                                               .protocol_ = ruvia::websocket_client_protocol::http2,
                                                               .host_ = "127.0.0.1",
-                                                              .port_ = peer.local_endpoint().port()});
+                                                              .port_ = peer.local_endpoint().port(),
+                                                              .close_handshake_timeout_ = std::chrono::milliseconds(50),
+                                                          });
         std::exception_ptr failure;
         try {
             co_await client.connect();
@@ -501,7 +508,7 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
-    if (mode == handshake_end::close_on_data) {
+    if (mode != handshake_end::end_on_headers) {
         RUVIA_CHECK(connected);
         RUVIA_CHECK(closed_by_peer);
         RUVIA_CHECK(!connect_error.has_value());
@@ -513,6 +520,7 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
     // it closes the connection.
     RUVIA_CHECK(reached_eof);
     std::optional<std::uint32_t> goaway_error;
+    bool saw_stream_end_stream = false;
     RUVIA_CHECK(received.starts_with(ruvia::http2_client_preface));
     for (std::size_t offset = ruvia::http2_client_preface.size();
         offset + ruvia::http2_frame_header_bytes <= received.size();) {
@@ -523,6 +531,11 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
             break;
         }
         const auto* payload = received.data() + offset + ruvia::http2_frame_header_bytes;
+        if (header_value->stream_id_ == 1 &&
+            header_value->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) &&
+            (header_value->flags_ & 0x1U) != 0) {
+            saw_stream_end_stream = true;
+        }
         if (header_value->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) && header_value->length_ >= 8) {
             goaway_error = (std::uint32_t(static_cast<unsigned char>(payload[4])) << 24) |
                            (std::uint32_t(static_cast<unsigned char>(payload[5])) << 16) |
@@ -532,6 +545,9 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
         offset += ruvia::http2_frame_header_bytes + header_value->length_;
     }
     RUVIA_CHECK(goaway_error == std::uint32_t{0});
+    if (mode != handshake_end::end_on_headers) {
+        RUVIA_CHECK(saw_stream_end_stream);
+    }
 }
 }  // namespace
 
@@ -573,4 +589,8 @@ RUVIA_TEST(http2_websocket_handshake_accepts_close_and_end_stream_in_the_same_re
 
 RUVIA_TEST(http2_websocket_handshake_rejects_end_stream_on_response_headers_and_sends_goaway) {
     exercise_handshake_end(ruvia_ctx, handshake_end::end_on_headers);
+}
+
+RUVIA_TEST(http2_websocket_close_handshake_timeout_sends_end_stream_before_goaway) {
+    exercise_handshake_end(ruvia_ctx, handshake_end::close_without_end_stream);
 }

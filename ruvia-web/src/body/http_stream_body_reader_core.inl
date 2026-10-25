@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <functional>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -200,7 +201,22 @@ task<void> stream_body_reader<stream_type>::release_peer_monitor() {
         if (body_plan_.chunked() != nullptr && !initial_body_and_pipeline_.empty()) {
             materialize_initial_remainder();
         }
+        const auto current_view = buffer_.view();
+        const bool transfer_in_buffer =
+            !transfer_input_.empty() && !current_view.empty() &&
+            std::greater_equal<const char*>{}(transfer_input_.data(), current_view.data()) &&
+            std::less_equal<const char*>{}(transfer_input_.data() + transfer_input_.size(),
+                current_view.data() + current_view.size());
+        const auto transfer_offset =
+            transfer_in_buffer ? static_cast<std::size_t>(transfer_input_.data() - current_view.data()) : 0;
+        if (transfer_input_.empty() && initial_body_and_pipeline_.empty() && read_cursor_ != 0) {
+            buffer_.consume(read_cursor_);
+            read_cursor_ = 0;
+        }
         buffer_.append(monitored);
+        if (transfer_in_buffer) {
+            transfer_input_ = std::string_view(buffer_.data() + transfer_offset, transfer_input_.size());
+        }
         monitor->clear_pipeline();
     }
 }

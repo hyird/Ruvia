@@ -396,3 +396,4 @@ if (bearer) {
 
 - `jwt_bearer_token` 只返回符合 RFC 6750 `b64token` 语法（`ALPHA / DIGIT / - . _ ~ + /`，末尾可跟 `=`）的令牌；含空格、逗号等其他字符时返回 `std::nullopt`。
 - 自定义声明的值可以是任意 JSON 值（RFC 7519 §2）。载荷整体仍校验 JSON 语法与声明名唯一性；字符串值经 `claims()` / `claim(name)` 暴露，数字、布尔、`null`、数组与对象等非字符串自定义声明按 RFC 7519 §4 忽略，不导致令牌被拒绝。注册声明（`iss` / `sub` / `aud` / `jti` / `exp` / `nbf` / `iat`）类型不符时仍拒绝。
+- `jwt_decode_unverified` 在不校验签名与时间声明的前提下解码载荷，但仍按 RFC 7519 §7.2 校验三段式结构与 JOSE Header（要求合法的 Base64url/JSON 对象、唯一的键名、非空字符串 `"alg"`，并拒绝 `"crit"` 与 `"b64"` 扩展）。

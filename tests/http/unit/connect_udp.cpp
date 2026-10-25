@@ -259,3 +259,143 @@ RUVIA_TEST(http_connect_udp_sender_requires_exactly_one_capsule_protocol_true) {
     const std::array true_value{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
     RUVIA_CHECK(!check(true_value).has_value());
 }
+
+RUVIA_TEST(http_connect_udp_sender_and_recipient_field_validation) {
+    // Sender rejects empty Connection list members and end-to-end field names (RFC 9110 5.6.1.1, 7.6.1).
+    const std::array sender_bad_connection{
+        ruvia::http_header_view{"Host", "example.test"},
+        ruvia::http_header_view{"Connection", ", Upgrade, Cache-Control, Accept"},
+        ruvia::http_header_view{"Upgrade", "connect-udp"},
+        ruvia::http_header_view{"Capsule-Protocol", "?1"},
+    };
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request_to_send({
+                                                                     .version_ = ruvia::http_protocol_version::http11,
+                                                                     .method_ = "GET",
+                                                                     .authority_ = "example.test",
+                                                                     .path_ = "/.well-known/masque/udp/192.0.2.1/443/",
+                                                                     .headers_ = sender_bad_connection,
+                                                                 })
+            .has_value());
+
+    // Sender validates Host syntax and authority match.
+    const std::array bad_host_h1{
+        ruvia::http_header_view{"Host", "invalid@host:99999"},
+        ruvia::http_header_view{"Connection", "Upgrade"},
+        ruvia::http_header_view{"Upgrade", "connect-udp"},
+        ruvia::http_header_view{"Capsule-Protocol", "?1"},
+    };
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request_to_send({
+                                                                     .version_ = ruvia::http_protocol_version::http11,
+                                                                     .method_ = "GET",
+                                                                     .authority_ = "example.test",
+                                                                     .path_ = "/proxy",
+                                                                     .headers_ = bad_host_h1,
+                                                                 })
+            .has_value());
+
+    const std::array mismatched_host_h1{
+        ruvia::http_header_view{"Host", "other.test"},
+        ruvia::http_header_view{"Connection", "Upgrade"},
+        ruvia::http_header_view{"Upgrade", "connect-udp"},
+        ruvia::http_header_view{"Capsule-Protocol", "?1"},
+    };
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request_to_send({
+                                                                     .version_ = ruvia::http_protocol_version::http11,
+                                                                     .method_ = "GET",
+                                                                     .authority_ = "example.test",
+                                                                     .path_ = "/proxy",
+                                                                     .headers_ = mismatched_host_h1,
+                                                                 })
+            .has_value());
+
+    // HTTP/2 rejects connection-specific headers (Keep-Alive, Proxy-Connection, TE) and non-http(s) schemes.
+    const std::array h2_keep_alive{
+        ruvia::http_header_view{"Capsule-Protocol", "?1"},
+        ruvia::http_header_view{"Keep-Alive", "timeout=5"},
+    };
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request_to_send({
+                                                                     .version_ = ruvia::http_protocol_version::http2,
+                                                                     .method_ = "CONNECT",
+                                                                     .protocol_ = "connect-udp",
+                                                                     .scheme_ = "https",
+                                                                     .authority_ = "example.test",
+                                                                     .path_ = "/proxy",
+                                                                     .headers_ = h2_keep_alive,
+                                                                 })
+            .has_value());
+    const std::array valid_capsule{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request_to_send({
+                                                                     .version_ = ruvia::http_protocol_version::http2,
+                                                                     .method_ = "CONNECT",
+                                                                     .protocol_ = "connect-udp",
+                                                                     .scheme_ = "not a valid scheme!",
+                                                                     .authority_ = "example.test",
+                                                                     .path_ = "/proxy",
+                                                                     .headers_ = valid_capsule,
+                                                                 })
+            .has_value());
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_response(
+        ruvia::http_protocol_version::http2, 200, h2_keep_alive)
+            .has_value());
+    ruvia::http_response h2_resp;
+    h2_resp.status(ruvia::http_status::ok);
+    h2_resp.header("Keep-Alive", "timeout=5");
+    RUVIA_CHECK(ruvia::prepare_http_connect_udp_response(
+                    std::move(h2_resp), ruvia::http_protocol_version::http2)
+                    .index() != 0);
+
+    // Recipient parses Upgrade = #protocol (ignoring empty elements and allowing additional tokens on requests).
+    const std::array list_fields{
+        ruvia::http_header_view{"Host", "example.test"},
+        ruvia::http_header_view{"Connection", "Upgrade"},
+        ruvia::http_header_view{"Upgrade", ", connect-udp, fallback"},
+        ruvia::http_header_view{"Capsule-Protocol", "?1"},
+    };
+    const auto parsed_req = ruvia::make_parsed_http_request(
+        "GET", "/.well-known/masque/udp/192.0.2.1/443/", list_fields, {}, std::pmr::get_default_resource());
+    RUVIA_CHECK(ruvia::is_http_connect_udp_upgrade_request(parsed_req));
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request(parsed_req).has_value());
+
+    const std::array empty_elem_resp{
+        ruvia::http_header_view{"Connection", "Upgrade"},
+        ruvia::http_header_view{"Upgrade", ", connect-udp,"},
+        ruvia::http_header_view{"Capsule-Protocol", "?1"},
+    };
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_response(
+        ruvia::http_protocol_version::http11, 101, empty_elem_resp)
+            .has_value());
+
+    // Recipient allows Content-Length: 0 on requests, rejects non-zero Content-Length on requests,
+    // and rejects Content-Length on 2xx responses (RFC 9297 3.2).
+    const std::array cl0_req{
+        ruvia::http_header_view{"Capsule-Protocol", "?1"},
+        ruvia::http_header_view{"Content-Length", "0"},
+    };
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request({
+                                                              .version_ = ruvia::http_protocol_version::http2,
+                                                              .method_ = "CONNECT",
+                                                              .protocol_ = "connect-udp",
+                                                              .scheme_ = "https",
+                                                              .authority_ = "example.test",
+                                                              .path_ = "/proxy",
+                                                              .headers_ = cl0_req,
+                                                          })
+            .has_value());
+    const std::array cl5_req{
+        ruvia::http_header_view{"Capsule-Protocol", "?1"},
+        ruvia::http_header_view{"Content-Length", "5"},
+    };
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_request({
+                                                             .version_ = ruvia::http_protocol_version::http2,
+                                                             .method_ = "CONNECT",
+                                                             .protocol_ = "connect-udp",
+                                                             .scheme_ = "https",
+                                                             .authority_ = "example.test",
+                                                             .path_ = "/proxy",
+                                                             .headers_ = cl5_req,
+                                                         })
+            .has_value());
+    RUVIA_CHECK(ruvia::validate_http_connect_udp_response(
+        ruvia::http_protocol_version::http2, 200, cl0_req)
+            .has_value());
+}

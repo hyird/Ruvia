@@ -712,6 +712,24 @@ RUVIA_TEST(jwt_decode_unverified_reads_claims_without_authenticating) {
         jwt_error::code_type::signature_mismatch));
 }
 
+RUVIA_TEST(jwt_decode_unverified_validates_jose_header) {
+    const auto payload = wire_base64url(R"({"sub":"user-1","exp":4102444800})");
+    const auto check_header = [&](std::string token, jwt_error::code_type expected) {
+        RUVIA_CHECK(throws_jwt_error([&] { (void)decode_jwt_unverified(token); }, expected));
+    };
+    check_header("." + payload + ".sig", jwt_error::code_type::invalid_header);
+    check_header("!!!." + payload + ".sig", jwt_error::code_type::malformed_token);
+    check_header(wire_base64url("not-json") + "." + payload + ".sig", jwt_error::code_type::invalid_header);
+    check_header(wire_base64url(R"({"alg":"HS256","alg":"HS512"})") + "." + payload + ".sig",
+        jwt_error::code_type::invalid_header);
+    check_header(wire_base64url(R"({"typ":"JWT"})") + "." + payload + ".sig",
+        jwt_error::code_type::invalid_header);
+    check_header(wire_base64url(R"({"alg":""})") + "." + payload + ".sig",
+        jwt_error::code_type::invalid_header);
+    check_header(wire_base64url(R"({"alg":"HS256","b64":false,"crit":["b64"]})") + "." + payload + ".sig",
+        jwt_error::code_type::invalid_header);
+}
+
 RUVIA_TEST(jwt_verify_rejects_malformed_token) {
     const auto verify = verify_options(secret);
     RUVIA_CHECK(throws_jwt_error(

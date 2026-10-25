@@ -175,6 +175,9 @@ private:
 
 [[nodiscard]] std::pmr::string jwt_sign(const jwt_sign_options& options);
 [[nodiscard]] jwt_payload jwt_verify(const jwt_verify_options& options);
+// Decodes and validates the three-part token structure, JOSE header (requiring
+// a non-empty "alg" string and rejecting duplicate keys / "crit" / "b64"), and
+// payload claims without verifying the signature or time-based claims.
 [[nodiscard]] jwt_payload jwt_decode_unverified(jwt_decode_unverified_options options);
 // Returns the b64token of an "Authorization: Bearer <token>" field value
 // (RFC 6750 §2.1: 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" )

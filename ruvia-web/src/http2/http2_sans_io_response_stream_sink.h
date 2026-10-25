@@ -86,7 +86,7 @@ public:
 
     [[nodiscard]] stop_token cancel_on_peer_eof() {
         auto token = stream_signal_.terminal_stop_token();
-        if (connection_.stream_aborted(stream_id_)) {
+        if (state_.body_suppressed_complete() || connection_.stream_aborted(stream_id_)) {
             stream_signal_.stop();
         }
         return token;
@@ -263,6 +263,9 @@ public:
             }
         }
         state_.mark_ended();
+        if (state_.body_suppressed_complete()) {
+            stream_signal_.stop();
+        }
     }
 
 private:

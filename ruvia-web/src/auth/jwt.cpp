@@ -436,6 +436,10 @@ jwt_payload jwt_decode_unverified(jwt_decode_unverified_options options) {
     auto* resolved = pmr_resource_or_default(options.resource_);
     const auto token = options.token_.view();
     const auto parts = detail::jwt_split_token(token);
+    const auto header_value = detail::jwt_base64_url_decode(parts.header_, resolved);
+    if (detail::jwt_parse_jose_algorithm(header_value, resolved).empty()) {
+        throw jwt_error(jwt_error::code_type::invalid_header, "JWT JOSE header is invalid");
+    }
     const auto payload_json = detail::jwt_base64_url_decode(parts.payload_, resolved);
     return detail::jwt_payload_access::decode_payload_json(payload_json, resolved);
 }

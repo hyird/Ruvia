@@ -42,6 +42,11 @@ struct sleeping_stream_observation final {
     std::atomic<bool> head_loop_finished_{};
     std::atomic<bool> naive_loop_failed_{};
     std::atomic<bool> naive_loop_finished_{};
+    std::atomic<bool> head_trailer_pre_stopped_{};
+    std::atomic<bool> head_trailer_post_stopped_{};
+    std::atomic<bool> head_trailer_sleep_stopped_{};
+    std::atomic<bool> head_trailer_aborted_{};
+    std::atomic<bool> head_trailer_done_{};
 };
 
 const auto sleeping_stream_observed = std::make_shared<sleeping_stream_observation>();
@@ -62,6 +67,8 @@ class sleeping_stream_routes final {
     RUVIA_POST("/http2-bounded-buffered", bounded_buffered, ruvia::body_limit<16>);
     RUVIA_POST("/http2-bounded-stream", count_upload, ruvia::stream_body, ruvia::body_limit<16>);
     RUVIA_POST("/http2-bounded-delayed-stream", bounded_delayed_stream, ruvia::stream_body, ruvia::body_limit<16>);
+    RUVIA_GET("/http2-head-trailer-write", head_trailer_write);
+    RUVIA_GET("/http2-head-trailer-only", head_trailer_only);
     RUVIA_ROUTES_END
 
     // An SSE loop that only aborted() ends. After a HEAD every write succeeds
@@ -101,6 +108,30 @@ class sleeping_stream_routes final {
             throw;
         }
         observed.naive_loop_finished_ = true;
+    }
+
+    ruvia::task<void> head_trailer_write(ruvia::context& context_value) {
+        auto& out = context_value.stream_text();
+        context_value.header("Trailer", "X-Complete");
+        co_await out.write("body");
+        const ruvia::http_header_view trailers[] = {{"X-Complete", "yes"}};
+        co_await out.end(trailers);
+    }
+
+    ruvia::task<void> head_trailer_only(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
+        auto& out = context_value.stream_text();
+        auto pre_token = out.cancel_on_peer_eof();
+        context_value.header("Trailer", "X-Complete");
+        const ruvia::http_header_view trailers[] = {{"X-Complete", "yes"}};
+        co_await out.end(trailers);
+        auto post_token = out.cancel_on_peer_eof();
+        const auto sleep_res = co_await out.sleep(std::chrono::seconds(10));
+        observed.head_trailer_aborted_ = out.aborted();
+        observed.head_trailer_pre_stopped_ = pre_token.stop_requested();
+        observed.head_trailer_post_stopped_ = post_token.stop_requested();
+        observed.head_trailer_sleep_stopped_ = sleep_res == ruvia::timer_sleep_result::stop_requested;
+        observed.head_trailer_done_ = true;
     }
 
     ruvia::task<ruvia::http_response> bounded_buffered(ruvia::context& context_value) {
@@ -811,5 +842,64 @@ RUVIA_TEST(http2_oversized_request_body_answers_413_without_100_continue) {
         RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string("413"));
         client.close();
     }
+    server.finish();
+}
+
+RUVIA_TEST(http2_head_stream_with_trailers_strips_trailer_header_and_stops_eof_token) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    auto& observed = *sleeping_stream_observed;
+    observed.head_trailer_pre_stopped_ = false;
+    observed.head_trailer_post_stopped_ = false;
+    observed.head_trailer_sleep_stopped_ = false;
+    observed.head_trailer_aborted_ = false;
+    observed.head_trailer_done_ = false;
+
+    for (const std::string_view path : {"/http2-head-trailer-write", "/http2-head-trailer-only"}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        asio::write(client, asio::buffer(request_wire(&resource, "HEAD", path, {})));
+        client.non_blocking(true);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        bool ended = false;
+        bool saw_trailer_header = false;
+        unsigned header_frames = 0;
+        while (!ended) {
+            const auto frame = http2_streaming_test::read_frame(client, deadline);
+            if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
+                (frame.header_.flags_ & 0x1) == 0) {
+                std::string ack;
+                append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
+                asio::write(client, asio::buffer(ack));
+                continue;
+            }
+            if (frame.header_.stream_id_ == 1) {
+                RUVIA_CHECK(frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers));
+                ++header_frames;
+                (void)decoder.decode(frame.payload_, [&](std::string_view name, std::string_view) {
+                    if (name == "trailer" || name == "x-complete") {
+                        saw_trailer_header = true;
+                    }
+                    return true;
+                });
+                ended = (frame.header_.flags_ & 0x1) != 0;
+            }
+        }
+        RUVIA_CHECK_EQ(header_frames, 1U);
+        RUVIA_CHECK(!saw_trailer_header);
+        client.close();
+    }
+
+    const auto finish_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!observed.head_trailer_done_ && std::chrono::steady_clock::now() < finish_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    RUVIA_CHECK(observed.head_trailer_done_.load());
+    RUVIA_CHECK(observed.head_trailer_aborted_.load());
+    RUVIA_CHECK(observed.head_trailer_pre_stopped_.load());
+    RUVIA_CHECK(observed.head_trailer_post_stopped_.load());
+    RUVIA_CHECK(observed.head_trailer_sleep_stopped_.load());
     server.finish();
 }
