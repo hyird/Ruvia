@@ -1049,3 +1049,198 @@ RUVIA_TEST(http2_push_promise_on_connected_tunnel_is_a_stream_error) {
     }
     (void)server.release(std::move(*connect_head));
 }
+
+// A5H2-01: Releasing >128 push stream leases while GOAWAY stream_closed events
+// are still queued in events_ defers up to http2_stream_table::max_streams
+// releases without calling std::terminate().
+RUVIA_TEST(http2_push_releasing_more_than_max_concurrent_streams_leases_before_draining_events_succeeds) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+
+    const auto parent = client.submit_request_head(
+        ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(parent));
+    relay.transfer(client, server);
+    std::vector<ruvia::http2_request_head_event> held_heads;
+    while (auto ev = server.next_event()) {
+        if (auto* rh = ev->request_head()) {
+            held_heads.push_back(std::move(*rh));
+        }
+    }
+    for (std::size_t i = 0; i < 130; ++i) {
+        auto pushed = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/asset"});
+        RUVIA_CHECK(pushed.index() == 0);
+        if (pushed.index() == 0) {
+            held_heads.push_back(std::move(std::get<0>(pushed)));
+        }
+        (void)ruvia::testing::drain_output(server);
+    }
+    const std::array<char, 17> goaway{0, 0, 8, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    RUVIA_CHECK(server.feed(std::string_view(goaway.data(), goaway.size())) ==
+                ruvia::http2_feed_result::accepted);
+    // Release all 131 held leases BEFORE draining server.next_event()!
+    held_heads.clear();
+    std::size_t closed_events = 0;
+    while (auto ev = server.next_event()) {
+        if (ev->stream_closed()) {
+            ++closed_events;
+        }
+    }
+    RUVIA_CHECK_EQ(closed_events, std::size_t{130});
+}
+
+// A5H2-05: When a client refuses a reserved push stream because 128 push
+// responses are already active, (a) a valid HEAD push response with nonzero
+// Content-Length is refused with REFUSED_STREAM (not PROTOCOL_ERROR), and
+// (b) a 1xx push response does not emit a phantom informational_head event.
+RUVIA_TEST(http2_push_refused_response_preserves_head_method_and_suppresses_informational_event) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+
+    const auto sub = client.submit_request_head(
+        ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(sub));
+    const auto parent_id = std::get<std::uint32_t>(sub);
+    (void)ruvia::testing::drain_output(client);
+
+    const auto make_frame = [&](ruvia::http2_frame_type type, std::uint8_t flags,
+                                std::uint32_t stream_id, std::string_view payload) {
+        std::string frame(ruvia::http2_frame_header_bytes, '\0');
+        RUVIA_CHECK(ruvia::encode_http2_frame_header(std::span(frame.data(), frame.size()),
+            static_cast<std::uint32_t>(payload.size()), type, flags, stream_id));
+        frame.append(payload);
+        return frame;
+    };
+    const auto send_push_promise = [&](std::uint32_t promised_id, std::string_view method) {
+        std::pmr::string pblock(&resource);
+        ruvia::hpack_encoder::encode_header(pblock, ":method", method);
+        ruvia::hpack_encoder::encode_header(pblock, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(pblock, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(pblock, ":path", "/asset");
+        std::string payload(4, '\0');
+        payload[0] = static_cast<char>((promised_id >> 24) & 0x7f);
+        payload[1] = static_cast<char>((promised_id >> 16) & 0xff);
+        payload[2] = static_cast<char>((promised_id >> 8) & 0xff);
+        payload[3] = static_cast<char>(promised_id & 0xff);
+        payload.append(pblock);
+        const auto wire = make_frame(ruvia::http2_frame_type::push_promise, 0x4, parent_id, payload);
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        while (client.next_event()) {
+        }
+    };
+
+    for (std::uint32_t i = 1; i <= 128; ++i) {
+        send_push_promise(i * 2, "GET");
+    }
+    send_push_promise(258, "HEAD");
+    send_push_promise(260, "GET");
+
+    for (std::uint32_t i = 1; i <= 128; ++i) {
+        std::pmr::string rblock(&resource);
+        ruvia::hpack_encoder::encode_status(rblock, ruvia::http_status::ok);
+        const auto wire = make_frame(ruvia::http2_frame_type::headers, 0x4, i * 2, rblock);
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        while (client.next_event()) {
+        }
+    }
+    (void)ruvia::testing::drain_output(client);
+
+    // (a) Stream 258 was promised as HEAD; valid HEAD response with Content-Length: 100 and END_STREAM.
+    {
+        std::pmr::string rblock(&resource);
+        ruvia::hpack_encoder::encode_status(rblock, ruvia::http_status::ok);
+        ruvia::hpack_encoder::encode_header(rblock, "content-length", "100");
+        const auto wire = make_frame(ruvia::http2_frame_type::headers, 0x5, 258, rblock);
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        while (client.next_event()) {
+        }
+        const auto out = ruvia::testing::drain_output(client);
+        RUVIA_CHECK_EQ(out.size(), ruvia::http2_frame_header_bytes + 4);
+        if (out.size() == ruvia::http2_frame_header_bytes + 4) {
+            RUVIA_CHECK_EQ(static_cast<unsigned char>(out[12]),
+                static_cast<unsigned char>(ruvia::http2_error_code::refused_stream));
+        }
+    }
+
+    // (b) Stream 260 receives 103 Early Hints while refused; must not emit informational_head.
+    {
+        std::pmr::string rblock(&resource);
+        ruvia::hpack_encoder::encode_status(rblock, ruvia::http_status::early_hints);
+        ruvia::hpack_encoder::encode_header(rblock, "link", "</style.css>; rel=preload; as=style");
+        const auto wire = make_frame(ruvia::http2_frame_type::headers, 0x4, 260, rblock);
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        bool saw_informational = false;
+        bool saw_closed = false;
+        while (auto ev = client.next_event()) {
+            if (ev->informational_head()) {
+                saw_informational = true;
+            }
+            if (const auto* closed = ev->stream_closed()) {
+                saw_closed = closed->error() == ruvia::http2_error_code::refused_stream;
+            }
+        }
+        RUVIA_CHECK(!saw_informational);
+        RUVIA_CHECK(saw_closed);
+        const auto out = ruvia::testing::drain_output(client);
+        RUVIA_CHECK_EQ(out.size(), ruvia::http2_frame_header_bytes + 4);
+        if (out.size() == ruvia::http2_frame_header_bytes + 4) {
+            RUVIA_CHECK_EQ(static_cast<unsigned char>(out[12]),
+                static_cast<unsigned char>(ruvia::http2_error_code::refused_stream));
+        }
+    }
+}
+
+// A5H2-07: Remote PUSH_PROMISE reservations are capped below
+// http2_stream_table::max_streams so max_concurrent_streams (128) slots remain
+// available for locally initiated client requests.
+RUVIA_TEST(http2_push_remote_promise_flood_does_not_starve_client_request_submission) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+
+    const auto sub1 = client.submit_request_head(
+        ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(sub1));
+    const auto parent_id = std::get<std::uint32_t>(sub1);
+    (void)ruvia::testing::drain_output(client);
+
+    std::pmr::string pblock(&resource);
+    ruvia::hpack_encoder::encode_header(pblock, ":method", "GET");
+    ruvia::hpack_encoder::encode_header(pblock, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(pblock, ":authority", "example.test");
+    ruvia::hpack_encoder::encode_header(pblock, ":path", "/p");
+    for (std::uint32_t i = 1; i <= 511; ++i) {
+        const std::uint32_t pid = i * 2;
+        std::string payload(4, '\0');
+        payload[0] = static_cast<char>((pid >> 24) & 0x7f);
+        payload[1] = static_cast<char>((pid >> 16) & 0xff);
+        payload[2] = static_cast<char>((pid >> 8) & 0xff);
+        payload[3] = static_cast<char>(pid & 0xff);
+        payload.append(pblock);
+        std::string wire(ruvia::http2_frame_header_bytes, '\0');
+        RUVIA_CHECK(ruvia::encode_http2_frame_header(std::span(wire.data(), wire.size()),
+            static_cast<std::uint32_t>(payload.size()), ruvia::http2_frame_type::push_promise, 0x4, parent_id));
+        wire.append(payload);
+        RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+        while (client.next_event()) {
+        }
+    }
+
+    const auto sub2 = client.submit_request_head(
+        ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(sub2));
+}

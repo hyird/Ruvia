@@ -146,6 +146,7 @@ bool http2_connection::finish_push_promise(std::string_view block) {
         output_.append_rst_stream(scratch.id(), http2_error_code::protocol_error);
         hpack_transaction.commit();
         stream_transaction.commit();
+        closed_streams_.remember(scratch.id(), http2_stream_close_source::local, true);
         last_peer_push_stream_id_ = scratch.id();
         last_stream_id_ = scratch.id();
         return true;
@@ -155,6 +156,7 @@ bool http2_connection::finish_push_promise(std::string_view block) {
         output_.append_rst_stream(scratch.id(), http2_error_code::refused_stream);
         hpack_transaction.commit();
         stream_transaction.commit();
+        closed_streams_.remember(scratch.id(), http2_stream_close_source::local, true);
         last_peer_push_stream_id_ = scratch.id();
         last_stream_id_ = scratch.id();
         return true;
@@ -179,6 +181,7 @@ bool http2_connection::finish_push_promise(std::string_view block) {
         output_.append_rst_stream(id, http2_error_code::enhance_your_calm);
         hpack_transaction.commit();
         stream_transaction.commit();
+        closed_streams_.remember(id, http2_stream_close_source::local, true);
         last_peer_push_stream_id_ = id;
         last_stream_id_ = id;
         return true;

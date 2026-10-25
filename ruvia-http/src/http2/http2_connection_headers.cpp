@@ -139,6 +139,10 @@ bool http2_connection::start_discarded_header_block(
     }
     try {
         discarded_header_stream_.emplace(header_value.stream_id_, resource_);
+        if (const auto* existing = find_stream(header_value.stream_id_);
+            existing != nullptr && !existing->request_method().empty()) {
+            discarded_header_stream_->assign_request_method(existing->request_method());
+        }
         if ((header_value.flags_ & http2_flag_end_stream) != 0) {
             (void)discarded_header_stream_->record_remote_head_end_stream();
         }
@@ -213,7 +217,7 @@ bool http2_connection::finish_discarded_header_block(std::string_view block) {
     if (has_live_stream) {
         close_stream(stream_id, http2_stream_close_source::local, error);
     } else {
-        closed_streams_.remember(stream_id, http2_stream_close_source::local);
+        closed_streams_.remember(stream_id, http2_stream_close_source::local, true);
     }
     discarded_header_stream_.reset();
     discarded_header_action_ = discarded_header_action_type::ignore;

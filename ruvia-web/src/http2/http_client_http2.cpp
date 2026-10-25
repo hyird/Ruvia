@@ -331,7 +331,8 @@ void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept 
 }
 
 void http_client_connection::reprioritize(http_client_response_state& state_value, http_priority priority) {
-    if (!http2_.has_connection() || !http2_.running() || http2_.failed()) {
+    if (generation_ != state_value.connection_generation_ || !http2_.has_connection() || !http2_.running() ||
+        http2_.failed()) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP/2 response connection is retired");
     }
     const auto status = http2_.connection().submit_priority_update(static_cast<std::uint32_t>(state_value.stream_id_),
@@ -419,6 +420,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         state_value.transport_ = http_client_response_transport::http2;
         state_value.request_method_ = classify_http_method(request.method());
         state_value.connection_index_ = index_;
+        state_value.connection_generation_ = generation_;
         state_value.request_id_ = stream.request_id_;
         register_http2_stream(stream);
         struct stream_registration final {
@@ -726,6 +728,7 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
         state_value.transport_ = http_client_response_transport::http2;
         state_value.request_method_ = classify_http_method(promise.request_.method_);
         state_value.connection_index_ = connection.index();
+        state_value.connection_generation_ = connection.generation_;
         state_value.stream_id_ = promise.promised_stream_id_;
         state_value.request_id_ = connection.next_http2_request_id();
         state_value.promised_request_.emplace(state_value.resource_);

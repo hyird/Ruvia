@@ -163,6 +163,10 @@ bool http2_connection::process_window_update(
         return true;
     }
     auto* stream = streams_.find(header_value.stream_id_);
+    if (was_closed_by_peer_reset(header_value.stream_id_, stream)) {
+        append_goaway(http2_error_code::stream_closed, "WINDOW_UPDATE after peer RST_STREAM");
+        return false;
+    }
     if (stream != nullptr && http2_stream_is_closed(*stream)) {
         // RFC 9113 section 5.1 (closed): WINDOW_UPDATE received in this state
         // MUST be ignored, whatever its increment; the section 6.9 zero-increment

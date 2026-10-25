@@ -23,6 +23,8 @@ public:
     // concurrency slot, so this can exceed SETTINGS_MAX_CONCURRENT_STREAMS.
     static constexpr std::size_t max_streams =
         static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 4;
+    static constexpr std::size_t max_push_streams =
+        max_streams - static_cast<std::size_t>(http2_local_settings::max_concurrent_streams);
 
     explicit http2_stream_table(std::pmr::memory_resource* resource)
         : resource_(http_pmr_resource_or_default(resource)),
@@ -74,7 +76,8 @@ public:
         if (auto* existing = find(stream_id); existing != nullptr) {
             return existing;
         }
-        if (size_ >= max_streams) {
+        const bool is_push = (stream_id & 1U) == 0;
+        if (size_ >= max_streams || (is_push && push_size_ >= max_push_streams)) {
             return nullptr;
         }
         for (auto& slot : inline_) {
@@ -82,6 +85,9 @@ public:
                 slot.emplace(stream_id, resource_);
                 slot->set_send_window(peer_initial_window_size);
                 ++size_;
+                if (is_push) {
+                    ++push_size_;
+                }
                 return &*slot;
             }
         }
@@ -90,6 +96,9 @@ public:
         auto* result_value = stream.get();
         overflow_.push_back(std::move(stream));
         ++size_;
+        if (is_push) {
+            ++push_size_;
+        }
         return result_value;
     }
     [[nodiscard]] http2_stream_state* create(std::uint32_t, std::int32_t) && = delete;
@@ -99,6 +108,9 @@ public:
             if (slot && slot->id() == stream_id) {
                 slot.reset();
                 --size_;
+                if ((stream_id & 1U) == 0) {
+                    --push_size_;
+                }
                 return true;
             }
         }
@@ -106,6 +118,9 @@ public:
             if (overflow_[i] != nullptr && overflow_[i]->id() == stream_id) {
                 erase_overflow_at(i);
                 --size_;
+                if ((stream_id & 1U) == 0) {
+                    --push_size_;
+                }
                 return true;
             }
         }
@@ -226,6 +241,7 @@ private:
     std::array<std::optional<http2_stream_state>, inline_capacity> inline_{};
     std::pmr::vector<overflow_stream_type> overflow_;
     std::size_t size_{0};
+    std::size_t push_size_{0};
     std::size_t snapshot_iteration_depth_{0};
     bool overflow_needs_compact_{false};
 };

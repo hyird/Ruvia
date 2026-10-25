@@ -154,6 +154,7 @@ public:
     http_client_response_transport transport_{http_client_response_transport::unassigned};
     std::optional<::ruvia::http2_received_data_credit> http2_data_credit_{};
     std::size_t connection_index_{0};
+    std::uint64_t connection_generation_{0};
     std::uint64_t request_id_{0};
     std::uint64_t cancellation_id_{0};
     std::uint64_t stream_id_{0};

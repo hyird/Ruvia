@@ -417,7 +417,8 @@ void http_client_pool::abandon_response(http_client_response_state& state_value,
         case http_client_response_transport::http2:
             if (state_value.connection_index_ < connections_.size()) {
                 auto& conn = connection(state_value.connection_index_);
-                if (error == http2_error_code::protocol_error && state_value.stream_id_ != 0) {
+                if (conn.generation_ == state_value.connection_generation_ &&
+                    error == http2_error_code::protocol_error && state_value.stream_id_ != 0) {
                     conn.http2_.submit_reset(static_cast<std::uint32_t>(state_value.stream_id_), error);
                 }
                 if (state_value.request_id_ != 0) {

@@ -71,7 +71,7 @@ public:
 
 private:
     static constexpr std::size_t record_limit =
-        static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 4;
+        static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 16;
 
     struct closed_stream_record_type final {
         std::uint32_t id_{0};

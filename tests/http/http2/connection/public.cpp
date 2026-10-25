@@ -4537,3 +4537,248 @@ RUVIA_TEST(http2_public_built_request_exposes_extended_protocol) {
         (void)server.release(std::move(*request_head_event));
     }
 }
+
+// A5H2-02: Receiving DATA or HEADERS on a stream that completed normally (both
+// halves closed by END_STREAM without local RST_STREAM), or receiving DATA on a
+// skipped (implicitly closed) stream ID, fails with GOAWAY(STREAM_CLOSED).
+RUVIA_TEST(http2_public_data_and_headers_after_normal_end_stream_or_on_skipped_stream_fail_with_stream_closed) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    for (const bool pinned : {true, false}) {
+        for (const bool send_headers : {false, true}) {
+            auto client = ruvia::http2_connection::client({.resource_ = &resource});
+            auto server = ruvia::http2_connection::server({.resource_ = &resource});
+            relay.transfer(client, server);
+            relay.transfer(server, client);
+            relay.transfer(client, server);
+
+            const auto sub = client.submit_request_head(
+                ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+            RUVIA_CHECK(std::holds_alternative<std::uint32_t>(sub));
+            const auto sid = std::get<std::uint32_t>(sub);
+            relay.transfer(client, server);
+            std::optional<ruvia::http2_request_head_event> req;
+            while (auto ev = server.next_event()) {
+                if (auto* rh = ev->request_head()) {
+                    req.emplace(std::move(*rh));
+                }
+            }
+            ruvia::http_response resp(&resource);
+            resp.status(ruvia::http_status::no_content);
+            RUVIA_CHECK(std::holds_alternative<ruvia::http_buffered_response_write_plan>(
+                server.submit_response_head(
+                    sid, resp, ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, resp))));
+            if (!pinned && req) {
+                (void)server.release(std::move(*req));
+                req.reset();
+            }
+            (void)ruvia::testing::drain_output(server);
+
+            std::pmr::string late(&resource);
+            if (send_headers) {
+                std::pmr::string block(&resource);
+                ruvia::hpack_encoder::encode_header(block, "x-late", "1");
+                append_frame(late, ruvia::http2_frame_type::headers, 0x5, sid, block);
+            } else {
+                append_frame(late, ruvia::http2_frame_type::data, 0x1, sid, "late-data");
+            }
+            RUVIA_CHECK(server.feed(late) == ruvia::http2_feed_result::protocol_failure);
+            RUVIA_CHECK(server.connection_error() == ruvia::http2_error_code::stream_closed);
+            if (req) {
+                (void)server.release(std::move(*req));
+            }
+        }
+    }
+
+    // Skipped stream ID: opening stream 3 implicitly closes stream 1; DATA on stream 1 is STREAM_CLOSED.
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    (void)ruvia::testing::drain_output(server);
+    std::pmr::string wire(ruvia::http2_client_preface, &resource);
+    append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+    std::pmr::string block(&resource);
+    ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+    ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+    ruvia::hpack_encoder::encode_header(block, ":path", "/");
+    append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 3, block);
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    while (auto ev = server.next_event()) {
+        if (auto* rh = ev->request_head()) {
+            (void)server.release(std::move(*rh));
+        }
+    }
+    (void)ruvia::testing::drain_output(server);
+
+    std::pmr::string skipped_data(&resource);
+    append_frame(skipped_data, ruvia::http2_frame_type::data, 0x1, 1, "on-skipped-stream-1");
+    RUVIA_CHECK(server.feed(skipped_data) == ruvia::http2_feed_result::protocol_failure);
+    RUVIA_CHECK(server.connection_error() == ruvia::http2_error_code::stream_closed);
+}
+
+// A5H2-03: Receiving WINDOW_UPDATE after peer RST_STREAM fails with GOAWAY(STREAM_CLOSED).
+RUVIA_TEST(http2_public_window_update_after_peer_rst_stream_fails_with_stream_closed) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    for (const bool pinned : {true, false}) {
+        auto client = ruvia::http2_connection::client({.resource_ = &resource});
+        auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        relay.transfer(client, server);
+        relay.transfer(server, client);
+        relay.transfer(client, server);
+
+        const auto sub = client.submit_request_head(
+            ruvia::http2_regular_request_head_view{.method_ = "POST",
+                .authority_ = "example.test",
+                .content_ = ruvia::http2_request_content::streaming()});
+        RUVIA_CHECK(std::holds_alternative<std::uint32_t>(sub));
+        const auto sid = std::get<std::uint32_t>(sub);
+        relay.transfer(client, server);
+        std::optional<ruvia::http2_request_head_event> req;
+        while (auto ev = server.next_event()) {
+            if (auto* rh = ev->request_head()) {
+                req.emplace(std::move(*rh));
+            }
+        }
+        if (!pinned && req) {
+            (void)server.release(std::move(*req));
+            req.reset();
+        }
+        (void)ruvia::testing::drain_output(server);
+
+        constexpr std::array<char, 4> cancel_payload{0, 0, 0, 8};
+        std::pmr::string wire(&resource);
+        append_frame(wire, ruvia::http2_frame_type::rst_stream, 0, sid,
+            std::string_view(cancel_payload.data(), cancel_payload.size()));
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        while (server.next_event()) {
+        }
+
+        constexpr std::array<char, 4> wu_payload{0, 0, 0, 1};
+        std::pmr::string wu(&resource);
+        append_frame(wu, ruvia::http2_frame_type::window_update, 0, sid,
+            std::string_view(wu_payload.data(), wu_payload.size()));
+        RUVIA_CHECK(server.feed(wu) == ruvia::http2_feed_result::protocol_failure);
+        RUVIA_CHECK(server.connection_error() == ruvia::http2_error_code::stream_closed);
+        if (req) {
+            (void)server.release(std::move(*req));
+        }
+    }
+}
+
+// A5H2-06: finish_discarded_header_block and immediate-reset branches of
+// finish_push_promise record reset_sent = true so submit_reset(PROTOCOL_ERROR)
+// does not emit a duplicate RST_STREAM.
+RUVIA_TEST(http2_public_refused_or_rejected_stream_does_not_emit_duplicate_late_rst_stream) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    (void)ruvia::testing::drain_output(server);
+    std::pmr::string wire(ruvia::http2_client_preface, &resource);
+    append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    server.finish_drain();
+    (void)ruvia::testing::drain_output(server);
+
+    std::pmr::string block(&resource);
+    ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+    ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+    ruvia::hpack_encoder::encode_header(block, ":path", "/");
+    std::pmr::string req(&resource);
+    append_frame(req, ruvia::http2_frame_type::headers, 0x5, 1, block);
+    RUVIA_CHECK(server.feed(req) == ruvia::http2_feed_result::accepted);
+    const auto first_rst = ruvia::testing::drain_output(server);
+    RUVIA_CHECK_EQ(first_rst.size(), ruvia::http2_frame_header_bytes + 4);
+
+    RUVIA_CHECK(server.submit_reset(1, ruvia::http2_error_code::protocol_error) ==
+                ruvia::http2_submit_status::closed);
+    RUVIA_CHECK(ruvia::testing::drain_output(server).empty());
+
+    ruvia::testing::output_relay relay;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
+    auto push_server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, push_server);
+    relay.transfer(push_server, client);
+    relay.transfer(client, push_server);
+    const auto sub = client.submit_request_head(
+        ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(sub));
+    (void)ruvia::testing::drain_output(client);
+
+    // Immediate-reset branch 1: unsafe method POST on promised stream 2.
+    std::pmr::string post_push(&resource);
+    ruvia::hpack_encoder::encode_header(post_push, ":method", "POST");
+    ruvia::hpack_encoder::encode_header(post_push, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(post_push, ":authority", "example.test");
+    ruvia::hpack_encoder::encode_header(post_push, ":path", "/upload");
+    std::string post_payload("\x00\x00\x00\x02", 4);
+    post_payload.append(post_push);
+    std::pmr::string post_wire(&resource);
+    append_frame(post_wire, ruvia::http2_frame_type::push_promise, 0x4, 1, post_payload);
+    RUVIA_CHECK(client.feed(post_wire) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK_EQ(ruvia::testing::drain_output(client).size(), ruvia::http2_frame_header_bytes + 4);
+    RUVIA_CHECK(client.submit_reset(2, ruvia::http2_error_code::protocol_error) ==
+                ruvia::http2_submit_status::closed);
+    RUVIA_CHECK(ruvia::testing::drain_output(client).empty());
+
+    // Immediate-reset branch 2: draining client refuses promised stream 4.
+    client.begin_drain();
+    (void)ruvia::testing::drain_output(client);
+    std::pmr::string get_push(&resource);
+    ruvia::hpack_encoder::encode_header(get_push, ":method", "GET");
+    ruvia::hpack_encoder::encode_header(get_push, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(get_push, ":authority", "example.test");
+    ruvia::hpack_encoder::encode_header(get_push, ":path", "/asset");
+    std::string get_payload("\x00\x00\x00\x04", 4);
+    get_payload.append(get_push);
+    std::pmr::string get_wire(&resource);
+    append_frame(get_wire, ruvia::http2_frame_type::push_promise, 0x4, 1, get_payload);
+    RUVIA_CHECK(client.feed(get_wire) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK_EQ(ruvia::testing::drain_output(client).size(), ruvia::http2_frame_header_bytes + 4);
+    RUVIA_CHECK(client.submit_reset(4, ruvia::http2_error_code::protocol_error) ==
+                ruvia::http2_submit_status::closed);
+    RUVIA_CHECK(ruvia::testing::drain_output(client).empty());
+}
+
+// A5H2-07: Peer RST_STREAM frames on skipped stream IDs within the rapid-reset
+// budget do not evict earlier peer-reset records from closed_streams_.
+RUVIA_TEST(http2_public_skipped_stream_resets_do_not_evict_peer_reset_history) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+
+    std::pmr::string block(&resource);
+    ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+    ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+    ruvia::hpack_encoder::encode_header(block, ":path", "/");
+    std::pmr::string wire(&resource);
+    append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1027, block);
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    while (auto ev = server.next_event()) {
+        if (auto* rh = ev->request_head()) {
+            (void)server.release(std::move(*rh));
+        }
+    }
+
+    constexpr std::array<char, 4> cancel_payload{0, 0, 0, 8};
+    std::pmr::string resets(&resource);
+    append_frame(resets, ruvia::http2_frame_type::rst_stream, 0, 1027,
+        std::string_view(cancel_payload.data(), cancel_payload.size()));
+    for (std::uint32_t i = 0; i < 512; ++i) {
+        append_frame(resets, ruvia::http2_frame_type::rst_stream, 0, i * 2 + 1,
+            std::string_view(cancel_payload.data(), cancel_payload.size()));
+    }
+    RUVIA_CHECK(server.feed(resets) == ruvia::http2_feed_result::accepted);
+    while (server.next_event()) {
+    }
+
+    std::pmr::string dup_rst(&resource);
+    append_frame(dup_rst, ruvia::http2_frame_type::rst_stream, 0, 1027,
+        std::string_view(cancel_payload.data(), cancel_payload.size()));
+    RUVIA_CHECK(server.feed(dup_rst) == ruvia::http2_feed_result::protocol_failure);
+    RUVIA_CHECK(server.connection_error() == ruvia::http2_error_code::stream_closed);
+}

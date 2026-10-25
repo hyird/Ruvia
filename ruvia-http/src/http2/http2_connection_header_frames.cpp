@@ -83,10 +83,8 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
             // minimally processed and discarded. Do not send a second RST.
             discarded_action = discarded_header_action_type::ignore;
         } else if (http2_stream_is_closed(*existing)) {
-            // A pin can retain normally completed request storage after both
-            // protocol halves have closed. Decode for HPACK synchronization,
-            // but never make storage retention authorize another stream frame.
-            discarded_action = discarded_header_action_type::ignore;
+            append_goaway(http2_error_code::stream_closed, "HEADERS on closed stream");
+            return false;
         } else if (http2_remote_final_head_decoded(*existing) &&
                    (existing->tunnel().open() != nullptr ||
                        (role_ == http2_role::server && existing->tunnel().pending() != nullptr))) {
@@ -126,11 +124,13 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
             append_goaway(http2_error_code::protocol_error, "HEADERS on idle stream");
             return false;
         }
-        if (closed_streams_.source(header_value.stream_id_) == http2_stream_close_source::peer) {
-            append_goaway(http2_error_code::stream_closed, "HEADERS after peer RST_STREAM");
+        const auto close_source = closed_streams_.source(header_value.stream_id_);
+        if (close_source != http2_stream_close_source::peer_goaway &&
+            !closed_streams_.local_reset_sent(header_value.stream_id_)) {
+            append_goaway(http2_error_code::stream_closed, "HEADERS on closed stream");
             return false;
         }
-        // A locally cancelled/completed or GOAWAY-rejected client stream no longer has
+        // A locally reset or GOAWAY-rejected client stream no longer has
         // storage. Decode any late block into scratch so HPACK stays synchronized.
         discarded_action = discarded_header_action_type::ignore;
     } else {
@@ -149,7 +149,12 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
                     http2_error_code::protocol_error, "new peer stream id is not increasing");
                 return false;
             }
-            // A stream explicitly closed by this endpoint can still have an in-flight
+            if (source_value != http2_stream_close_source::peer_goaway &&
+                !closed_streams_.local_reset_sent(header_value.stream_id_)) {
+                append_goaway(http2_error_code::stream_closed, "HEADERS on closed stream");
+                return false;
+            }
+            // A stream explicitly reset by this endpoint can still have an in-flight
             // field block. Minimally decode and discard it so HPACK remains synchronized
             // as permitted by RFC 9113 5.1.
             discarded_action = discarded_header_action_type::ignore;

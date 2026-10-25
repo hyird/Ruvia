@@ -63,9 +63,13 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
         return false;
     }
     if (stream == nullptr) {
+        if (is_idle_stream_id(header_value.stream_id_)) {
+            append_goaway(http2_error_code::protocol_error, "DATA before HEADERS");
+            return false;
+        }
         const auto close_source = closed_streams_.source(header_value.stream_id_);
         if (close_source == http2_stream_close_source::peer_goaway ||
-            !is_idle_stream_id(header_value.stream_id_)) {
+            closed_streams_.local_reset_sent(header_value.stream_id_)) {
             // A dropped DATA frame still consumes connection flow control, but has no
             // stream window or application event to publish.
             reserve_consumed_data_credit(nullptr, static_cast<std::uint32_t>(flow_bytes));
@@ -73,14 +77,18 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
             release_dropped_data_connection_window(flow_bytes);
             return true;
         }
-        append_goaway(http2_error_code::protocol_error, "DATA before HEADERS");
+        append_goaway(http2_error_code::stream_closed, "DATA on closed stream");
         return false;
     }
     if (http2_stream_is_closed(*stream)) {
-        reserve_consumed_data_credit(nullptr, static_cast<std::uint32_t>(flow_bytes));
-        debit_connection();
-        release_dropped_data_connection_window(flow_bytes);
-        return true;
+        if (stream->is_aborted()) {
+            reserve_consumed_data_credit(nullptr, static_cast<std::uint32_t>(flow_bytes));
+            debit_connection();
+            release_dropped_data_connection_window(flow_bytes);
+            return true;
+        }
+        append_goaway(http2_error_code::stream_closed, "DATA on closed stream");
+        return false;
     }
 
     const auto reset_stream = [&](http2_error_code error, bool debit_stream_window) {

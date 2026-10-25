@@ -6,14 +6,14 @@
 #include <exception>
 #include <limits>
 
-#include "http2/http2_local_settings.h"
+#include "http2/http2_stream_table.h"
 
 namespace ruvia::detail {
 
 // Owner-lease releases and DATA credits that could not be applied yet. A pinned
 // stream is released only after its delivered DATA credit and queued events are
 // gone; a release or credit whose application failed is retried later. Both sets
-// are bounded by the stream-concurrency limit, so they never allocate.
+// are bounded by the stream-table capacity, so they never allocate.
 class http2_stream_lease_ledger final {
 public:
     enum class release_kind_type : std::uint8_t {
@@ -109,9 +109,9 @@ public:
     }
 
 private:
-    std::array<release_type, http2_local_settings::max_concurrent_streams> releases_{};
+    std::array<release_type, http2_stream_table::max_streams> releases_{};
     std::size_t release_count_{0};
-    std::array<credit_type, http2_local_settings::max_concurrent_streams> credits_{};
+    std::array<credit_type, http2_stream_table::max_streams> credits_{};
     std::size_t credit_count_{0};
 };
 

@@ -140,6 +140,9 @@ header_decode_status http2_connection::decode_response_header_block(http2_stream
             return header_decode_status::protocol_error;
         }
         stream.mark_informational_response();
+        if (discarded_header_stream_ && &stream == &*discarded_header_stream_) {
+            return header_decode_status::ok;
+        }
         reserve_event_slots(1);
         auto head = http_client_response_head_access::make(
             *context_value.status_, http_protocol_version::http2, resource_);
