@@ -1,5 +1,3 @@
-#include <sys/socket.h>
-
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -275,7 +273,7 @@ void client_cancelled_multi_record_tls_write_omits_close_notify(
                                                  });
 
     bool post_cancelled = false;
-    auto root = attachment.loop().start([&]() -> ruvia::task<void> {
+    auto run_client = [&]() -> ruvia::task<void> {
         auto h = client.handle();
         {
             auto r1 = co_await h.send({.method_ = "GET", .target_ = "/warmup"});
@@ -299,7 +297,8 @@ void client_cancelled_multi_record_tls_write_omits_close_notify(
         }
         co_await client.shutdown();
         attachment.stop();
-    }());
+    };
+    auto root = attachment.loop().start(run_client());
 
     attachment.run();
     root.get();
@@ -325,9 +324,8 @@ void client_tls_write_timeout_during_speculative_post_does_not_hang(
     std::thread server_thread([&] {
         tls_stream srv(server_io, identity.context_);
         acceptor.accept(srv.lowest_layer());
-        int rcvbuf = 4096;
-        setsockopt(srv.lowest_layer().native_handle(), SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
         std::error_code ec;
+        srv.lowest_layer().set_option(asio::socket_base::receive_buffer_size(4096), ec);
         srv.handshake(asio::ssl::stream_base::server, ec);
         std::array<char, 4096> buf{};
         std::string req1;
@@ -361,7 +359,7 @@ void client_tls_write_timeout_during_speculative_post_does_not_hang(
 
     std::atomic<bool> post_completed{false};
     bool timed_out = false;
-    auto root = attachment.loop().start([&]() -> ruvia::task<void> {
+    auto run_client = [&]() -> ruvia::task<void> {
         auto h = client.handle();
         {
             auto r1 = co_await h.send({.method_ = "GET", .target_ = "/warmup"});
@@ -391,7 +389,8 @@ void client_tls_write_timeout_during_speculative_post_does_not_hang(
         co_await tasks.join();
         co_await client.shutdown();
         attachment.stop();
-    }());
+    };
+    auto root = attachment.loop().start(run_client());
 
     bool watchdog_fired = false;
     std::thread watchdog([&] {
