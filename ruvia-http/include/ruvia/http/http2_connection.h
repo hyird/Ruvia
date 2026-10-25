@@ -168,7 +168,8 @@ public:
     // Server CONNECT: DATA received before the accept/reject decision (RFC 9113
     // section 8.5; optimistic per RFC 9298 section 5 as updated by RFC 9931) is
     // published as tunnel_data events whose credit the owner holds until it consumes
-    // the bytes after accepting; a 2xx accept publishes tunnel_end only after them.
+    // the bytes after accepting; a 2xx accept (via submit_connect_response_head
+    // or submit_websocket_handshake) publishes tunnel_end only after them.
     // After a non-2xx response, further DATA is discarded and its credit returned.
     // RFC 8441 :protocol websocket is handled the same way (RFC 6455 section 4.1
     // binds only the client). Unknown extension frame types on an established tunnel
@@ -205,6 +206,8 @@ public:
     // streams' send windows.
     // Resetting an associated request leaves any in-progress PUSH_PROMISE block
     // intact; its CONTINUATION can still publish a promised-stream event.
+    // A PROTOCOL_ERROR reset may also be submitted for a malformed message after
+    // both END_STREAM flags have closed the stream.
     [[nodiscard]] http2_submit_status submit_reset(std::uint32_t stream_id, http2_error_code error);
     [[nodiscard]] http2_received_data_acknowledge_status acknowledge(http2_received_data_credit&& credit);
     [[nodiscard]] bool has_queued_data(std::uint32_t stream_id) const noexcept;

@@ -831,3 +831,45 @@ RUVIA_TEST(http2_server_goaway_ignores_completed_push_stream_retained_by_lease) 
         RUVIA_CHECK(server.release(std::move(*req_head->request_head())) == ruvia::http2_server_request_release_status::released);
     }
 }
+
+RUVIA_TEST(http2_reserved_push_does_not_crowd_out_max_concurrent_client_streams) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+
+    std::vector<ruvia::http2_request_head_event> held_heads;
+    const auto first = client.submit_request_head(
+        ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(first));
+    relay.transfer(client, server);
+    while (auto ev = server.next_event()) {
+        if (auto* rh = ev->request_head()) {
+            held_heads.push_back(std::move(*rh));
+        }
+    }
+    auto pushed = server.submit_push_request(1, {.authority_ = "example.test", .path_ = "/pushed"});
+    RUVIA_CHECK(pushed.index() == 0);
+    (void)ruvia::testing::drain_output(server);
+
+    for (int i = 0; i < 127; ++i) {
+        const auto sub = client.submit_request_head(
+            ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+        RUVIA_CHECK(std::holds_alternative<std::uint32_t>(sub));
+        relay.transfer(client, server);
+        while (auto ev = server.next_event()) {
+            if (auto* rh = ev->request_head()) {
+                held_heads.push_back(std::move(*rh));
+            }
+        }
+    }
+    RUVIA_CHECK_EQ(held_heads.size(), std::size_t{128});
+    RUVIA_CHECK(ruvia::testing::drain_output(server).empty());
+    (void)server.release(std::move(std::get<0>(pushed)));
+    for (auto& head : held_heads) {
+        (void)server.release(std::move(head));
+    }
+}

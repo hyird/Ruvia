@@ -98,9 +98,24 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
         } else if (http2_remote_final_head_decoded(*existing)) {
             return process_trailer_headers(*existing, header_value, fragment);
         } else if (role_ == http2_role::client) {
-            // A 1xx interim head was decoded on this stream; this block is the next
-            // (possibly final) response head -- decode it through the shared tail.
-            stream = existing;
+            if (existing->push_reservation() == http2_push_reservation::remote) {
+                std::size_t active_push = 0;
+                streams_.for_each([&](const auto& item) {
+                    if ((item.id() & 1U) == 0 && !http2_stream_is_closed(item) &&
+                        item.push_reservation() == http2_push_reservation::none) {
+                        ++active_push;
+                    }
+                });
+                if (active_push + 1 > http2_local_settings::max_concurrent_streams) {
+                    discarded_action = discarded_header_action_type::refuse_stream;
+                } else {
+                    stream = existing;
+                }
+            } else {
+                // A 1xx interim head was decoded on this stream; this block is the next
+                // (possibly final) response head -- decode it through the shared tail.
+                stream = existing;
+            }
         } else {
             // A second initial request head is a stream error. Decode its complete
             // field block before applying the reset so HPACK remains synchronized.

@@ -69,7 +69,7 @@ public:
         if (auto* existing = find(stream_id); existing != nullptr) {
             return existing;
         }
-        if (size_ >= http2_local_settings::max_concurrent_streams) {
+        if (size_ >= static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 4) {
             return nullptr;
         }
         for (auto& slot : inline_) {

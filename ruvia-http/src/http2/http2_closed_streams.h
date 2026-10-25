@@ -13,7 +13,8 @@ namespace ruvia::detail {
 
 class http2_closed_stream_history final {
 public:
-    void remember(std::uint32_t stream_id, http2_stream_close_source source_value) {
+    void remember(
+        std::uint32_t stream_id, http2_stream_close_source source_value, bool reset_sent = false) {
         if (stream_id == 0 || !http2_is_valid_stream_close_source(source_value)) {
             return;
         }
@@ -21,14 +22,15 @@ public:
             auto& record = records_[i];
             if (record.id_ == stream_id) {
                 record.source_ = source_value;
+                record.reset_sent_ = record.reset_sent_ || reset_sent;
                 return;
             }
         }
         if (size_ < record_limit) {
-            records_[size_++] = closed_stream_record_type{stream_id, source_value};
+            records_[size_++] = closed_stream_record_type{stream_id, source_value, reset_sent};
             return;
         }
-        records_[replace_index_] = closed_stream_record_type{stream_id, source_value};
+        records_[replace_index_] = closed_stream_record_type{stream_id, source_value, reset_sent};
         replace_index_ = (replace_index_ + 1) % record_limit;
     }
 
@@ -43,6 +45,20 @@ public:
         return std::nullopt;
     }
 
+    [[nodiscard]] bool claim_late_local_reset(std::uint32_t stream_id) noexcept {
+        for (std::size_t i = 0; i < size_; ++i) {
+            auto& record = records_[i];
+            if (record.id_ == stream_id) {
+                if (record.source_ != http2_stream_close_source::local || record.reset_sent_) {
+                    return false;
+                }
+                record.reset_sent_ = true;
+                return true;
+            }
+        }
+        return false;
+    }
+
 private:
     static constexpr std::size_t record_limit =
         static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 4;
@@ -50,6 +66,7 @@ private:
     struct closed_stream_record_type final {
         std::uint32_t id_{0};
         http2_stream_close_source source_{http2_stream_close_source::local};
+        bool reset_sent_{false};
     };
 
     std::array<closed_stream_record_type, record_limit> records_{};

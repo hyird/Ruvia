@@ -28,12 +28,27 @@ namespace ruvia::detail {
            stream.protocol_is_websocket();
 }
 
+[[nodiscard]] inline bool http2_websocket_connect_remote_head_ended(
+    const http2_stream_state& stream) noexcept {
+    const auto& remote = stream.remote_receive();
+    const auto* pending_end = remote.connect_pending_end_stream();
+    return remote.head_end_stream_pending() != nullptr ||
+           (pending_end != nullptr && pending_end->ended_without_tunnel_data());
+}
+
+[[nodiscard]] inline bool http2_websocket_connect_content_acceptable(
+    const http2_stream_state& stream) noexcept {
+    const auto* known = stream.remote_content().allowed_known_length();
+    return stream.remote_content().allowed_without_length() != nullptr ||
+           (known != nullptr && known->declared_length() == 0);
+}
+
 [[nodiscard]] inline websocket_handshake_validation_result validate_http2_websocket_handshake(
     const http2_stream_state& stream, const http_request& request,
     websocket_handshake_validation_options options = {}) noexcept {
     if (!http2_is_pending_websocket_connect(stream) || !http2_remote_final_head_decoded(stream) ||
-        http2_remote_peer_half_closed(stream) ||
-        stream.remote_content().allowed_without_length() == nullptr) {
+        http2_websocket_connect_remote_head_ended(stream) ||
+        !http2_websocket_connect_content_acceptable(stream)) {
         return websocket_handshake_validation_result::make_invalid_request();
     }
 

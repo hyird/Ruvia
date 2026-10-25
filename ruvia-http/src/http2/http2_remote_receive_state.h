@@ -41,14 +41,22 @@ private:
     constexpr http2_remote_connect_pending() noexcept = default;
 };
 
-// A server decoded CONNECT and then observed END_STREAM on its HEADERS or on an empty
+// A server decoded CONNECT and then observed END_STREAM on its HEADERS or on a
 // DATA frame. The peer send half is closed while the application still owns the
 // accept/reject decision.
 class http2_remote_connect_pending_end_stream final {
+public:
+    [[nodiscard]] constexpr bool ended_without_tunnel_data() const noexcept {
+        return ended_without_tunnel_data_;
+    }
+
 private:
     friend class http2_remote_receive_state;
 
-    constexpr http2_remote_connect_pending_end_stream() noexcept = default;
+    explicit constexpr http2_remote_connect_pending_end_stream(bool ended_without_tunnel_data) noexcept
+        : ended_without_tunnel_data_(ended_without_tunnel_data) {}
+
+    bool ended_without_tunnel_data_{false};
 };
 
 // The server rejected CONNECT before the peer closed its request half. CONNECT has no
@@ -129,7 +137,7 @@ private:
             return true;
         }
         if (head_end_stream_pending() != nullptr) {
-            state_ = state_type(http2_remote_connect_pending_end_stream());
+            state_ = state_type(http2_remote_connect_pending_end_stream(true));
             return true;
         }
         return false;
@@ -183,11 +191,11 @@ private:
         return true;
     }
 
-    [[nodiscard]] bool finish_pending_connect() noexcept {
+    [[nodiscard]] bool finish_pending_connect(bool had_tunnel_data) noexcept {
         if (connect_pending() == nullptr) {
             return false;
         }
-        state_ = state_type(http2_remote_connect_pending_end_stream());
+        state_ = state_type(http2_remote_connect_pending_end_stream(!had_tunnel_data));
         return true;
     }
 

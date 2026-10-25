@@ -831,6 +831,9 @@ void http2_sans_io_session_engine::on_message_head(http2_request_head_event& mes
         reset_event_stream(stream_id, http2_error_code::internal_error);
         return;
     }
+    if (snapshot.priority_update_.has_value()) {
+        stream_runtime->reprioritize(snapshot.priority_update_->request_priority());
+    }
     const bool connect_request = snapshot.connect_pending_;
     if (snapshot.body_open_ && !connect_request &&
         stream_runtimes_.mark_request_body_open(stream_id)) {
@@ -1056,7 +1059,7 @@ void http2_sans_io_session_engine::drain_events() {
             on_message_end(*message_end);
         } else if (const auto* stream_closed = event->stream_closed()) {
             on_stream_closed(*stream_closed);
-        } else if (const auto* update = event->priority_update(); update != nullptr && !update->push_) {
+        } else if (const auto* update = event->priority_update(); update != nullptr) {
             if (auto* runtime = stream_runtimes_.find(static_cast<std::uint32_t>(update->element_id_))) {
                 runtime->reprioritize(update->fields_.request_priority());
             }

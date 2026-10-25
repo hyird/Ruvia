@@ -109,11 +109,10 @@ header_decode_status http2_connection::decode_initial_header_block(http2_stream_
 
 header_decode_status http2_connection::decode_refused_header_block(http2_stream_state& stream,
     std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction) {
-    http2_stream_header_decode_transaction transaction{stream, true};
-    http2_header_decode_context context_value{stream};
-    const auto result_value = decoder_.decode(
-        block, &context_value, decode_initial_header_field, hpack_transaction);
-    return http2_classify_header_decode_result(result_value);
+    http2_stream_header_decode_transaction transaction{stream, role_ == http2_role::server};
+    return role_ == http2_role::client
+               ? decode_response_header_block(stream, block, hpack_transaction)
+               : decode_header_block(stream, block, hpack_transaction);
 }
 
 header_decode_status http2_connection::decode_discarded_header_block(http2_stream_state& stream,
@@ -140,6 +139,9 @@ bool http2_connection::start_discarded_header_block(
     }
     try {
         discarded_header_stream_.emplace(header_value.stream_id_, resource_);
+        if ((header_value.flags_ & http2_flag_end_stream) != 0) {
+            (void)discarded_header_stream_->record_remote_head_end_stream();
+        }
         discarded_header_action_ = action;
         const bool end_headers = (header_value.flags_ & http2_flag_end_headers) != 0;
         if (end_headers ? fragment.size() > max_http2_encoded_header_block_bytes
@@ -301,6 +303,9 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
     // A later frame in the same input batch can close this stream before the
     // public request event acquires its lease. Keep that event's storage alive.
     if (role_ == http2_role::server) {
+        if (const auto priority = priorities_.find(stream.id()); priority != priorities_.end()) {
+            stream.set_priority_update(priority->second);
+        }
         pin_stream(stream.id());
     }
     const auto request_content_signal = stream.request_content_canceled()

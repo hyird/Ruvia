@@ -457,12 +457,18 @@ http2_connection::submit_websocket_handshake(
         return http2_websocket_handshake_submit_error::closed;
     }
     if (role_ != http2_role::server || !http2_remote_final_head_decoded(*stream) ||
-        http2_remote_peer_half_closed(*stream) || stream->local_send().head_pending() == nullptr ||
+        http2_websocket_connect_remote_head_ended(*stream) ||
+        !http2_websocket_connect_content_acceptable(*stream) ||
+        stream->local_send().head_pending() == nullptr ||
         !http2_is_pending_websocket_connect(*stream) || validation.accepted() == nullptr) {
         return http2_websocket_handshake_submit_error::invalid_state;
     }
+    const bool terminal_remote_half = http2_remote_peer_half_closed(*stream);
+    if (terminal_remote_half) {
+        reserve_event_slots(1);
+    }
     http2_encode_websocket_handshake_headers(stream->local_header_block(), negotiation);
-    commit_connect_response_head(*stream, false);
+    commit_connect_response_head(*stream, terminal_remote_half);
     const auto compression = negotiation.compression();
     return http2_websocket_negotiation(std::move(negotiation).take_subprotocol(), compression);
 }
@@ -569,8 +575,24 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
     }
     auto* stream = find_stream(stream_id);
     if (stream == nullptr) {
-        return closed_streams_.source(stream_id).has_value() ? http2_submit_status::closed
-                                                             : http2_submit_status::invalid_state;
+        const auto close_source = closed_streams_.source(stream_id);
+        if (!close_source.has_value()) {
+            return http2_submit_status::invalid_state;
+        }
+        if (error == http2_error_code::protocol_error &&
+            close_source == http2_stream_close_source::local &&
+            local_connection_state_.fatal_failure() == nullptr &&
+            closed_streams_.claim_late_local_reset(stream_id)) {
+            const auto output_checkpoint = output_.checkpoint();
+            try {
+                output_.append_rst_stream(stream_id, error);
+                return http2_submit_status::accepted;
+            } catch (...) {
+                output_.rollback_to(output_checkpoint);
+                throw;
+            }
+        }
+        return http2_submit_status::closed;
     }
     if (stream->is_aborted()) {
         return http2_submit_status::closed;
@@ -587,7 +609,7 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
     // decoded; rejecting an early reset also preserves the mandatory CONTINUATION run.
     if ((role_ == http2_role::client && stream->local_send().head_pending() != nullptr) ||
         (role_ == http2_role::server && !http2_remote_final_head_decoded(*stream)) ||
-        http2_stream_is_closed(*stream)) {
+        (http2_stream_is_closed(*stream) && error != http2_error_code::protocol_error)) {
         return http2_submit_status::invalid_state;
     }
     const auto output_checkpoint = output_.checkpoint();

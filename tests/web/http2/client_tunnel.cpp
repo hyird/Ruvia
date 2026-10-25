@@ -378,3 +378,118 @@ RUVIA_TEST(http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_i
     RUVIA_CHECK(malformed_rejected);
     RUVIA_CHECK(reset_error == ruvia::http2_error_code::protocol_error);
 }
+
+// WST-01: When the client half-closes its tunnel send direction first (finish())
+// and the server responds with a truncated capsule on DATA(END_STREAM), the
+// client still resets the stream with RST_STREAM(PROTOCOL_ERROR).
+RUVIA_TEST(http2_client_half_closed_tunnel_resets_truncated_capsule_on_end_stream_with_protocol_error) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::string raw_from_client;
+    bool server_done = false;
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await peer.async_accept(asio::use_awaitable);
+        std::pmr::monotonic_buffer_resource resource;
+        auto connection = ruvia::http2_connection::server({.resource_ = &resource});
+        std::optional<ruvia::http2_request_head_event> request;
+        std::array<char, 16384> input{};
+        std::pmr::string output(&resource);
+        while (!server_done) {
+            if (connection.wants_write()) {
+                output.clear();
+                connection.take_output(output);
+                co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
+            }
+            std::size_t count = 0;
+            try {
+                count = co_await socket.async_read_some(asio::buffer(input), asio::use_awaitable);
+            } catch (const std::system_error&) {
+                break;
+            }
+            const auto bytes_value = std::string_view(input.data(), count);
+            raw_from_client.append(bytes_value);
+            for (;;) {
+                const auto fed = connection.feed(bytes_value);
+                while (auto event = connection.next_event()) {
+                    if (auto* head = event->request_head()) {
+                        ruvia::http_response accepted(&resource);
+                        accepted.status(ruvia::http_status::ok);
+                        accepted.header("capsule-protocol", "?1");
+                        (void)connection.submit_connect_response_head(head->stream_id(), accepted);
+                        request.emplace(std::move(*head));
+                    } else if (auto* end = event->tunnel_end()) {
+                        std::string truncated(
+                            "\x00\x0a"
+                            "ab",
+                            4);
+                        (void)connection.submit_data(
+                            end->stream_id(), truncated, ruvia::http2_end_stream::end_stream);
+                    } else if (auto* data = event->tunnel_data()) {
+                        (void)connection.acknowledge(data->take_credit());
+                    }
+                }
+                if (fed != ruvia::http2_feed_result::events_pending) {
+                    break;
+                }
+            }
+        }
+        request.reset();
+    };
+    asio::co_spawn(io, serve(), asio::detached);
+
+    bool client_threw = false;
+    auto find_rst_code = [&]() -> std::optional<std::uint32_t> {
+        for (std::size_t off = 24; off + ruvia::http2_frame_header_bytes <= raw_from_client.size();) {
+            const auto hdr = ruvia::parse_http2_frame_header(
+                std::span<const char>(raw_from_client.data() + off, ruvia::http2_frame_header_bytes));
+            if (!hdr || off + ruvia::http2_frame_header_bytes + hdr->length_ > raw_from_client.size()) {
+                break;
+            }
+            const auto* p = reinterpret_cast<const unsigned char*>(
+                raw_from_client.data() + off + ruvia::http2_frame_header_bytes);
+            if (hdr->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream) &&
+                hdr->length_ == 4) {
+                return (std::uint32_t(p[0]) << 24) | (std::uint32_t(p[1]) << 16) |
+                       (std::uint32_t(p[2]) << 8) | std::uint32_t(p[3]);
+            }
+            off += ruvia::http2_frame_header_bytes + hdr->length_;
+        }
+        return std::nullopt;
+    };
+
+    auto run = [&]() -> ruvia::task<void> {
+        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
+                                                         .host_ = "127.0.0.1",
+                                                         .port_ = peer.local_endpoint().port(),
+                                                         .connection_count_ = 1,
+                                                         .request_timeout_ = std::chrono::seconds(5),
+                                                         .protocol_ = ruvia::http_client_protocol::http2_only});
+        auto opened = co_await client.handle().open_udp_tunnel(
+            {.target_ = "/.well-known/masque/udp/target.test/53/"});
+        RUVIA_CHECK(opened.tunnel() != nullptr);
+        auto udp = std::move(*opened.tunnel()).udp({.max_capsule_length_ = 100});
+        co_await udp.finish();
+        try {
+            (void)co_await udp.read();
+        } catch (const std::runtime_error&) {
+            client_threw = true;
+        }
+        const auto& worker_value = attachment.loop().handle();
+        for (unsigned attempt = 0; !find_rst_code() && attempt != 50; ++attempt) {
+            (void)co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(10));
+        }
+        server_done = true;
+        co_await client.shutdown();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+    RUVIA_CHECK(client_threw);
+    const auto rst_code = find_rst_code();
+    RUVIA_CHECK(rst_code.has_value());
+    if (rst_code) {
+        RUVIA_CHECK_EQ(*rst_code, static_cast<std::uint32_t>(ruvia::http2_error_code::protocol_error));
+    }
+}

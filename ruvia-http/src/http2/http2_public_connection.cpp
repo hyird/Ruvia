@@ -112,6 +112,7 @@ public:
         const http2_server_request_snapshot snapshot{
             .content_ = content,
             .declared_content_length_ = declared_content_length,
+            .priority_update_ = stream->priority_update(),
             .body_open_ = value.body_open_,
             .connect_pending_ = connect_pending,
         };

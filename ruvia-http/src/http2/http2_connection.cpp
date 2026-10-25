@@ -572,14 +572,20 @@ bool http2_connection::process_priority_update(const http2_frame_header& header_
         append_goaway(http2_error_code::protocol_error, "too many prioritized idle streams");
         return false;
     }
+    http2_stream_state* active_stream = nullptr;
     if (!is_idle_stream_id(id)) {
-        const auto* stream = find_stream(id);
-        if (!stream || http2_stream_is_closed(*stream) || stream->local_send().end_stream_committed() != nullptr) {
+        active_stream = find_stream(id);
+        if (!active_stream || http2_stream_is_closed(*active_stream) ||
+            active_stream->local_send().end_stream_committed() != nullptr) {
             return true;
         }
     }
     reserve_event_slots(1);
-    priorities_.insert_or_assign(id, std::get<0>(update).fields_);
+    const auto fields = std::get<0>(update).fields_;
+    priorities_.insert_or_assign(id, fields);
+    if (active_stream != nullptr) {
+        active_stream->set_priority_update(fields);
+    }
     events_.push_back(http2_event(std::get<0>(update)));
     return true;
 }
@@ -595,8 +601,8 @@ bool http2_connection::process_frame(const http2_frame_header& header_value, std
         return false;
     }
     const auto type = static_cast<http2_frame_type>(header_value.type_);
-    const bool known_frame = header_value.type_ <= 9 || type == http2_frame_type::alternative_service ||
-                             type == http2_frame_type::origin || type == http2_frame_type::priority_update;
+    const bool known_frame = header_value.type_ <= 9 ||
+                             (role_ == http2_role::client && type == http2_frame_type::alternative_service);
     if (auto* stream = find_stream(header_value.stream_id_); stream && !stream->is_aborted()) {
         if (known_frame) {
             const auto reservation = stream->push_reservation();

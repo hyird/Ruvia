@@ -159,8 +159,9 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
         if (!end_stream) {
             return true;
         }
-        const bool remote_finished = pending_connect_control ? stream->finish_remote_pending_connect()
-                                                             : stream->finish_remote_rejected_connect();
+        const bool remote_finished = pending_connect_control
+                                         ? stream->finish_remote_pending_connect(early_tunnel_data)
+                                         : stream->finish_remote_rejected_connect();
         if (!remote_finished) {
             // The selected remote alternative is exclusive and the transition is
             // noexcept; reaching this branch means an internal invariant failed.

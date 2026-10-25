@@ -645,3 +645,82 @@ RUVIA_TEST(http2_connect_accepts_zero_content_length_and_resets_nonzero) {
         }
     }
 }
+
+// RFC 8441 extended CONNECT accepts Content-Length: 0 and early DATA(END_STREAM)
+// carrying a WebSocket frame before the 200 handshake response is committed.
+RUVIA_TEST(http2_websocket_connect_accepts_zero_content_length_and_early_data_with_end_stream) {
+    std::pmr::unsynchronized_pool_resource resource;
+    {
+        auto server = started_server(&resource);
+        auto wire = opening_wire(&resource);
+        auto block = connect_block(&resource, "websocket");
+        ruvia::hpack_encoder::encode_header(block, "content-length", "0");
+        append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag, 1, block);
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto head = take_request_head(server);
+        RUVIA_CHECK(head.has_value());
+        if (head) {
+            const auto req = head->build_request(&resource);
+            const auto val = ruvia::validate_http2_websocket_handshake(server, 1, req);
+            RUVIA_CHECK(val.accepted() != nullptr);
+            const auto sub = server.submit_websocket_handshake(1, req, val);
+            RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(sub));
+            (void)server.release(std::move(*head));
+        }
+    }
+    {
+        auto server = started_server(&resource);
+        auto wire = opening_wire(&resource);
+        auto block = connect_block(&resource, "websocket");
+        append_frame(wire, ruvia::http2_frame_type::headers, end_headers_flag, 1, block);
+        append_frame(wire, ruvia::http2_frame_type::data, end_stream_flag, 1,
+            std::string_view("\x88\x82\x00\x00\x00\x00\x03\xe8", 8));
+        RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+        std::optional<ruvia::http2_request_head_event> head;
+        bool saw_data = false;
+        while (auto ev = server.next_event()) {
+            if (auto* rh = ev->request_head()) {
+                head.emplace(std::move(*rh));
+            } else if (ev->tunnel_data()) {
+                saw_data = true;
+            }
+        }
+        RUVIA_CHECK(head.has_value());
+        RUVIA_CHECK(saw_data);
+        if (head) {
+            const auto req = head->build_request(&resource);
+            const auto val = ruvia::validate_http2_websocket_handshake(server, 1, req);
+            RUVIA_CHECK(val.accepted() != nullptr);
+            const auto sub = server.submit_websocket_handshake(1, req, val);
+            RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(sub));
+            auto end_ev = server.next_event();
+            RUVIA_CHECK(end_ev && end_ev->tunnel_end() != nullptr);
+            (void)server.release(std::move(*head));
+        }
+    }
+}
+
+// Refused streams must still validate mandatory pseudo-headers and framing,
+// resetting malformed requests with PROTOCOL_ERROR instead of REFUSED_STREAM.
+RUVIA_TEST(http2_refused_stream_with_malformed_headers_emits_protocol_error) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = started_server(&resource);
+    auto wire = opening_wire(&resource);
+    RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
+    server.finish_drain();
+    (void)take_frames(server);
+
+    std::pmr::string bad_block(&resource);
+    ruvia::hpack_encoder::encode_header(bad_block, "x-foo", "bar");
+    std::pmr::string bad_wire(&resource);
+    append_frame(bad_wire, ruvia::http2_frame_type::headers, end_headers_flag | end_stream_flag, 1, bad_block);
+    RUVIA_CHECK(server.feed(bad_wire) == ruvia::http2_feed_result::accepted);
+    const auto frames = take_frames(server);
+    RUVIA_CHECK_EQ(frames.size(), std::size_t{1});
+    if (!frames.empty()) {
+        RUVIA_CHECK(frames.front().is(ruvia::http2_frame_type::rst_stream));
+        RUVIA_CHECK_EQ(frames.front().header_.stream_id_, 1U);
+        RUVIA_CHECK_EQ(read_u32(frames.front().payload_),
+            static_cast<std::uint32_t>(ruvia::http2_error_code::protocol_error));
+    }
+}

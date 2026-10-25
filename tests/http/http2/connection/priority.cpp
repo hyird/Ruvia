@@ -181,3 +181,40 @@ RUVIA_TEST(http2_headers_crowded_by_idle_priorities_is_refused_not_connection_er
     }
     RUVIA_CHECK(saw_request);
 }
+
+RUVIA_TEST(http2_priority_update_on_idle_stream_is_attached_to_snapshot_and_cleaned_up_on_release) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+
+    RUVIA_CHECK(client.submit_priority_update(1, {.urgency_ = 1, .incremental_ = true}) ==
+                ruvia::http2_submit_status::accepted);
+    const auto submitted = client.submit_request_head(
+        ruvia::http2_regular_request_head_view{.authority_ = "example.test", .target_ = "/prio"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
+    relay.transfer(client, server);
+
+    std::optional<ruvia::http2_request_head_event> req_head;
+    while (auto ev = server.next_event()) {
+        if (auto* rh = ev->request_head()) {
+            req_head.emplace(std::move(*rh));
+        }
+    }
+    RUVIA_CHECK(req_head.has_value());
+    if (req_head) {
+        RUVIA_CHECK(req_head->snapshot().priority_update_.has_value());
+        if (req_head->snapshot().priority_update_) {
+            RUVIA_CHECK_EQ(req_head->snapshot().priority_update_->request_priority().urgency_, std::uint8_t{1});
+            RUVIA_CHECK(req_head->snapshot().priority_update_->request_priority().incremental_);
+        }
+        ruvia::http_response resp(&resource);
+        resp.status(ruvia::http_status::no_content);
+        (void)server.submit_response_head(
+            1, resp, ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, resp));
+        (void)server.release(std::move(*req_head));
+    }
+}

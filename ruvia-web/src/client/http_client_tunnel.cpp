@@ -61,14 +61,17 @@ struct tunnel_output_policy final {
     }
 };
 void abort_tunnel(detail::http_client_response_state* state, http2_error_code error) noexcept {
-    if (state == nullptr || !state->tunnel_ || state->tunnel_->output_.stopped_ || state->pool_ == nullptr) {
+    if (state == nullptr || !state->tunnel_ || state->pool_ == nullptr) {
+        return;
+    }
+    if (state->tunnel_->output_.stopped_ && error != http2_error_code::protocol_error) {
         return;
     }
     if (!state->memory_domain().worker().is_current()) {
         std::terminate();
     }
     state->tunnel_->output_.stop();
-    if (!state->complete_ && !state->abandoned_) {
+    if ((!state->complete_ || error == http2_error_code::protocol_error) && !state->abandoned_) {
         state->pool_->abandon_response(*state, error);
     }
 }

@@ -3,8 +3,8 @@
 #include <cstdint>
 #include <optional>
 
+#include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_status.h"
-
 namespace ruvia::detail {
 
 class http2_stream_request_state final {
@@ -93,6 +93,14 @@ public:
         has_informational_response_ = true;
     }
 
+    [[nodiscard]] const std::optional<http_priority_fields>& priority_update() const& noexcept {
+        return priority_update_;
+    }
+
+    void set_priority_update(http_priority_fields fields) noexcept {
+        priority_update_ = fields;
+    }
+
 private:
     bool has_protocol_ : 1 {false};
     bool has_scheme_ : 1 {false};
@@ -104,6 +112,7 @@ private:
     bool has_informational_response_ : 1 {false};
     std::uint16_t scheme_default_port_{0};
     std::optional<http_received_status> response_status_;
+    std::optional<http_priority_fields> priority_update_;
 };
 
 }  // namespace ruvia::detail

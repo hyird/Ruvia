@@ -83,12 +83,16 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
         connection_.submit_response_head(stream_id, response, std::move(write_plan));
     const auto* submitted_head = std::get_if<http_buffered_response_write_plan>(&head_result);
     if (submitted_head == nullptr) {
-        if (std::get<http2_response_head_submit_error>(head_result) == http2_response_head_submit_error::closed) {
+        const auto error = std::get<http2_response_head_submit_error>(head_result);
+        if (error == http2_response_head_submit_error::closed) {
             co_return std::nullopt;
         }
         // Invalid final metadata cannot leave an open peer stream waiting for a
         // response that the transactional head submission rejected.
-        submit_reset_no_throw(connection_, stream_id, http2_error_code::internal_error);
+        submit_reset_no_throw(connection_, stream_id,
+            error == http2_response_head_submit_error::peer_stream_limit_reached
+                ? http2_error_code::cancel
+                : http2_error_code::internal_error);
         output_budget_.release_and_reconcile(stream_id, connection_);
         wake_writer();
         co_return std::nullopt;

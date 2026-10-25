@@ -177,3 +177,87 @@ RUVIA_TEST(http2_connection_advertisement_validates_stream_state_and_rejects_tun
         (void)server.release(std::move(*req3_lease));
     }
 }
+
+RUVIA_TEST(http2_connection_ignores_valid_altsvc_on_tunnel_idle_and_closed_streams_and_origin_on_reserved_push) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    auto client = ruvia::http2_connection::client(
+        {.resource_ = &resource, .enable_push_ = true, .receive_origin_advertisements_ = true});
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+
+    const auto connect_submitted = client.submit_request_head(
+        ruvia::http2_connect_request_head_view{.authority_ = "example.test:443"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(connect_submitted));
+    const auto connect_id = std::get<std::uint32_t>(connect_submitted);
+    relay.transfer(client, server);
+    std::optional<ruvia::http2_request_head_event> connect_req;
+    while (auto ev = server.next_event()) {
+        if (auto* rh = ev->request_head()) {
+            connect_req.emplace(std::move(*rh));
+        }
+    }
+    ruvia::http_response ok_resp(&resource);
+    ok_resp.status(ruvia::http_status::ok);
+    RUVIA_CHECK(server.submit_connect_response_head(connect_id, ok_resp) ==
+                ruvia::http2_submit_status::accepted);
+    relay.transfer(server, client);
+    while (client.next_event()) {
+    }
+
+    const auto altsvc_tunnel =
+        std::get<0>(ruvia::encode_http2_alternative_service_frame(connect_id, "", "h3=\":443\"", 16384, &resource));
+    const auto altsvc_idle =
+        std::get<0>(ruvia::encode_http2_alternative_service_frame(99, "", "h3=\":443\"", 16384, &resource));
+    RUVIA_CHECK(client.feed(std::string_view(altsvc_tunnel.data(), altsvc_tunnel.size())) ==
+                ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!client.next_event().has_value());
+    RUVIA_CHECK(client.feed(std::string_view(altsvc_idle.data(), altsvc_idle.size())) ==
+                ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!client.next_event().has_value());
+    RUVIA_CHECK(!client.connection_error().has_value());
+
+    const auto get_submitted = client.submit_request_head(
+        ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(get_submitted));
+    const auto get_id = std::get<std::uint32_t>(get_submitted);
+    relay.transfer(client, server);
+    std::optional<ruvia::http2_request_head_event> get_req;
+    while (auto ev = server.next_event()) {
+        if (auto* rh = ev->request_head()) {
+            get_req.emplace(std::move(*rh));
+        }
+    }
+    auto pushed = server.submit_push_request(get_id, {.authority_ = "example.test", .path_ = "/pushed"});
+    RUVIA_CHECK(pushed.index() == 0);
+    const auto push_id = std::get<0>(pushed).stream_id();
+    relay.transfer(server, client);
+    while (client.next_event()) {
+    }
+
+    // Server ignores client-sent ALTSVC on reserved(local) push stream (RFC 7838 section 4).
+    std::pmr::string client_altsvc(&resource);
+    std::array<char, 9> hdr{};
+    RUVIA_CHECK(ruvia::encode_http2_frame_header(hdr, 11, ruvia::http2_frame_type::alternative_service, 0, push_id));
+    client_altsvc.append(hdr.data(), hdr.size());
+    client_altsvc.append("\0\0h3=\":443\"", 11);
+    RUVIA_CHECK(server.feed(client_altsvc) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!server.connection_error().has_value());
+
+    // Client ignores server-sent ORIGIN on reserved(remote) push stream (RFC 8336 section 2.2).
+    std::pmr::string server_origin(&resource);
+    RUVIA_CHECK(ruvia::encode_http2_frame_header(hdr, 0, ruvia::http2_frame_type::origin, 0, push_id));
+    server_origin.append(hdr.data(), hdr.size());
+    RUVIA_CHECK(client.feed(server_origin) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!client.connection_error().has_value());
+
+    (void)server.release(std::move(std::get<0>(pushed)));
+    if (get_req) {
+        (void)server.release(std::move(*get_req));
+    }
+    if (connect_req) {
+        (void)server.release(std::move(*connect_req));
+    }
+}

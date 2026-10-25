@@ -253,11 +253,11 @@ public:
         return lifecycle_.finish_remote_content();
     }
 
-    [[nodiscard]] bool finish_remote_pending_connect() noexcept {
+    [[nodiscard]] bool finish_remote_pending_connect(bool had_tunnel_data) noexcept {
         if (tunnel_state_.pending() == nullptr) {
             return false;
         }
-        return lifecycle_.finish_remote_pending_connect();
+        return lifecycle_.finish_remote_pending_connect(had_tunnel_data);
     }
 
     [[nodiscard]] bool finish_remote_tunnel() noexcept {
@@ -577,6 +577,14 @@ public:
 
     void mark_informational_response() noexcept {
         request_state_.mark_informational_response();
+    }
+
+    [[nodiscard]] const std::optional<http_priority_fields>& priority_update() const& noexcept {
+        return request_state_.priority_update();
+    }
+
+    void set_priority_update(http_priority_fields fields) noexcept {
+        request_state_.set_priority_update(fields);
     }
 };
 

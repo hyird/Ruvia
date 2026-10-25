@@ -71,6 +71,7 @@ void http2_connection::detach_active_header_block(http2_stream_state& stream) {
 void http2_connection::unpin_stream(std::uint32_t stream_id) {
     auto* stream = streams_.find(stream_id);
     if (stream == nullptr) {
+        priorities_.erase(stream_id);
         std::erase(pinned_streams_, stream_id);
         return;  // never created, or already removed
     }
@@ -79,6 +80,7 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         // Returning the owner lease is the fallback that settles any abandoned
         // debt before storage is finally removed.
         flush_window_debt(*stream);
+        priorities_.erase(stream_id);
         std::erase(pinned_streams_, stream_id);
         release_local_request_stream(*stream);
         streams_.remove(stream_id);
@@ -93,9 +95,12 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         discard_deferred_stream_state(stream_id);
         // A normally drained send still owes its owner a completion notification.
         // Only an abort below cancels notifications that the owner has not taken.
-        closed_streams_.remember(stream_id, http2_stream_close_source::local);
+        if (closed_streams_.source(stream_id) != http2_stream_close_source::peer) {
+            closed_streams_.remember(stream_id, http2_stream_close_source::local);
+        }
         ++completed_responses_;
         release_local_request_stream_if_closed(*stream);
+        priorities_.erase(stream_id);
         std::erase(pinned_streams_, stream_id);
         streams_.remove(stream_id);
         return;
@@ -166,7 +171,7 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
     if (!is_pinned(stream_id)) {
         flush_window_debt(*stream);
     }
-    closed_streams_.remember(stream_id, source_value);
+    closed_streams_.remember(stream_id, source_value, source_value == http2_stream_close_source::local);
     if (!is_pinned(stream_id)) {
         streams_.remove(stream_id);
     }
@@ -185,9 +190,9 @@ bool http2_connection::close_stream_by_owner(std::uint32_t stream_id) {
 
 bool http2_connection::was_closed_by_peer_reset(
     std::uint32_t stream_id, const http2_stream_state* retained_stream) const noexcept {
-    if (retained_stream != nullptr) {
-        return retained_stream->is_aborted() &&
-               retained_stream->local_send().aborted()->source() == http2_stream_close_source::peer;
+    if (retained_stream != nullptr && retained_stream->is_aborted() &&
+        retained_stream->local_send().aborted()->source() == http2_stream_close_source::peer) {
+        return true;
     }
     return closed_streams_.source(stream_id) == http2_stream_close_source::peer;
 }
@@ -214,17 +219,6 @@ bool http2_connection::process_rst_stream(const http2_frame_header& header_value
         append_goaway(http2_error_code::stream_closed, "RST_STREAM after peer RST_STREAM");
         return false;
     }
-    if (stream != nullptr && http2_stream_is_closed(*stream)) {
-        // RST_STREAM can race with END_STREAM or a reset sent by this endpoint.
-        // The stream was already terminal, so minimally process without charging
-        // another peer-reset lifecycle.
-        return true;
-    }
-    if (closed_streams_.source(header_value.stream_id_) == http2_stream_close_source::peer_goaway) {
-        // The peer already declared this request unprocessed. A trailing reset has no
-        // stream lifecycle left to mutate and must not consume the rapid-reset budget.
-        return true;
-    }
     const auto error = static_cast<http2_error_code>(
         http2_read32(reinterpret_cast<const unsigned char*>(payload_value.data())));
     // Rapid-reset budget (CVE-2023-44487): count peer resets and trip if they run too far
@@ -249,20 +243,23 @@ bool http2_connection::process_rst_stream(const http2_frame_header& header_value
     // refusal after a final response head contradicts that and stays a reset.
     const bool refused_request = role_ == http2_role::client && error == http2_error_code::refused_stream &&
                                  (header_value.stream_id_ & 1U) != 0 && stream != nullptr &&
-                                 stream->response_status() == nullptr;
+                                 stream->response_status() == nullptr &&
+                                 !stream->has_informational_response();
     if (refused_request) {
         reserve_event_slots(1);
     }
-    if (!(refused_request ? close_stream_impl(header_value.stream_id_, http2_stream_close_source::peer, error,
-                                close_notification_type::owner_already_knows)
-                          : close_stream(header_value.stream_id_, http2_stream_close_source::peer, error))) {
-        // A reset can race with one sent by this endpoint. RFC 9113 requires
-        // minimal processing in that state, but the no-op neither opened a
-        // handler slot nor freed one and therefore must not spend the
-        // rapid-reset lifecycle budget.
-        return true;
-    }
-    if (refused_request) {
+    const bool already_closed = stream == nullptr || http2_stream_is_closed(*stream);
+    if (already_closed) {
+        // A reset can arrive after END_STREAM or a reset sent by this endpoint.
+        // Remember the peer reset so any subsequent frame on this stream triggers
+        // STREAM_CLOSED, and count it against the rapid-reset budget.
+        closed_streams_.remember(header_value.stream_id_, http2_stream_close_source::peer);
+    } else if (!(refused_request
+                       ? close_stream_impl(header_value.stream_id_, http2_stream_close_source::peer, error,
+                             close_notification_type::owner_already_knows)
+                       : close_stream(header_value.stream_id_, http2_stream_close_source::peer, error))) {
+        closed_streams_.remember(header_value.stream_id_, http2_stream_close_source::peer);
+    } else if (refused_request) {
         events_.push_back(http2_event(http2_request_unprocessed_event(header_value.stream_id_)));
     }
     ++peer_reset_streams_;
@@ -308,6 +305,9 @@ std::optional<http2_request_head_submit_error> http2_connection::local_request_a
 }
 
 http2_stream_state* http2_connection::admit_local_request_stream() {
+    if (active_local_request_streams_ >= http2_local_settings::max_concurrent_streams) {
+        return nullptr;
+    }
     auto* stream = create_stream(next_local_stream_id_);
     if (stream != nullptr) {
         next_local_stream_id_ += 2;

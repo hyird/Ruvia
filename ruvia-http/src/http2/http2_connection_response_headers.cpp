@@ -79,11 +79,6 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
     const auto response_known_bit = classify_response_header_name(name);
     const bool successful_connect =
         context_value->content_semantics_ == http_response_content_semantics::connect_tunnel;
-    if (response_known_bit == response_header_content_length && successful_connect) {
-        // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
-        // response. It describes neither HTTP content nor the following tunnel DATA.
-        return true;
-    }
     if (validate_response_field(kind, value, http_field_list_role::recipient, context_value->fields_) !=
         response_field_status::ok) {
         return false;
@@ -93,7 +88,10 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
         if (content_length.parse_field(value) != http_content_length_parse_status::ok) {
             return false;
         }
-        if (!stream.declare_remote_content_length(*content_length.value())) {
+        // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
+        // response as a framing header, while still retaining it in the header section
+        // so protocol validators (such as RFC 9297 section 3.2) can inspect it.
+        if (!successful_connect && !stream.declare_remote_content_length(*content_length.value())) {
             return false;
         }
     }
