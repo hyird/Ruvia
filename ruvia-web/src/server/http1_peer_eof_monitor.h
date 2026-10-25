@@ -75,6 +75,14 @@ public:
         return input_.view();
     }
 
+    [[nodiscard]] bool stopped() const noexcept {
+        return closing_;
+    }
+
+    void clear_pipeline() noexcept {
+        input_.clear();
+    }
+
     void ensure_writable() const {
         if (failure_ != nullptr) {
             std::rethrow_exception(failure_);
@@ -105,7 +113,10 @@ public:
     }
 
     task<void> join() {
-        co_await tasks_.join();
+        if (!joined_) {
+            joined_ = true;
+            co_await tasks_.join();
+        }
         if (failure_ != nullptr) {
             std::rethrow_exception(failure_);
         }
@@ -176,6 +187,7 @@ private:
     std::exception_ptr failure_;
     bool closing_{};
     bool peer_aborted_{};
+    bool joined_{};
 };
 
 }  // namespace ruvia::detail

@@ -97,6 +97,10 @@ std::atomic<bool> head_loop_token_stopped{false};
 std::atomic<bool> head_loop_completed{false};
 std::atomic<bool> naive_loop_failed{false};
 std::atomic<bool> naive_loop_finished{false};
+std::atomic<bool> read_after_write_failed{false};
+std::atomic<bool> read_after_write_finished{false};
+std::mutex read_after_write_mutex;
+std::string read_after_write_body;
 
 // Turns every exception from the rest of the chain into a 500, as
 // error-wrapping middleware does.
@@ -118,6 +122,7 @@ class response_policy_routes final {
     RUVIA_GET("/policy-plain", plain);
     RUVIA_GET("/policy-head-loop", head_loop);
     RUVIA_GET("/policy-head-naive", head_naive);
+    RUVIA_GET("/policy-head-read-after-write", head_read_after_write);
     RUVIA_GET("/policy-head-convert", stream, exception_converting_middleware);
     RUVIA_GET_WS("/policy-websocket", websocket);
     RUVIA_CONNECT("policy-target.test:443", tunnel);
@@ -167,6 +172,28 @@ class response_policy_routes final {
             throw;
         }
         naive_loop_finished.store(true);
+    }
+
+    ruvia::task<void> head_read_after_write(ruvia::context& context_value) {
+        auto& output = context_value.stream_text();
+        try {
+            co_await output.write("first");
+            static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(20)));
+            const auto body = co_await context_value.req().text();
+            {
+                std::lock_guard lock(read_after_write_mutex);
+                read_after_write_body.assign(body);
+            }
+            for (int i = 0; i < 1000; ++i) {
+                co_await output.write("tick");
+                static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(10)));
+            }
+        } catch (...) {
+            read_after_write_failed.store(true);
+            read_after_write_finished.store(true);
+            throw;
+        }
+        read_after_write_finished.store(true);
     }
 
     ruvia::task<void> trailer_stream(ruvia::context& context_value) {
@@ -372,21 +399,57 @@ RUVIA_TEST(http1_head_only_stream_completes_writes_and_reports_aborted) {
 RUVIA_TEST(http1_head_only_naive_loop_ends_when_the_client_closes) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
+    for (const std::string_view request : {
+             std::string_view("HEAD /policy-head-naive HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+             std::string_view("HEAD /policy-head-naive HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhello"),
+         }) {
+        naive_loop_failed.store(false);
+        naive_loop_finished.store(false);
+        {
+            asio::ip::tcp::socket socket(io);
+            socket.connect(server.endpoint());
+            asio::write(socket, asio::buffer(request));
+            std::string head;
+            asio::read_until(socket, asio::dynamic_buffer(head), "\r\n\r\n");
+            RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
+            socket.close();
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!naive_loop_finished.load() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        RUVIA_CHECK(naive_loop_finished.load());
+        RUVIA_CHECK(naive_loop_failed.load());
+    }
+
+    read_after_write_failed.store(false);
+    read_after_write_finished.store(false);
+    {
+        std::lock_guard lock(read_after_write_mutex);
+        read_after_write_body.clear();
+    }
     {
         asio::ip::tcp::socket socket(io);
         socket.connect(server.endpoint());
-        asio::write(socket, asio::buffer(std::string_view("HEAD /policy-head-naive HTTP/1.1\r\nHost: localhost\r\n\r\n")));
+        asio::write(socket,
+            asio::buffer(std::string_view(
+                "HEAD /policy-head-read-after-write HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\n")));
         std::string head;
         asio::read_until(socket, asio::dynamic_buffer(head), "\r\n\r\n");
         RUVIA_CHECK(head.starts_with("HTTP/1.1 200 "));
+        asio::write(socket, asio::buffer(std::string_view("hello")));
         socket.close();
     }
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!naive_loop_finished.load() && std::chrono::steady_clock::now() < deadline) {
+    while (!read_after_write_finished.load() && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    RUVIA_CHECK(naive_loop_finished.load());
-    RUVIA_CHECK(naive_loop_failed.load());
+    RUVIA_CHECK(read_after_write_finished.load());
+    RUVIA_CHECK(read_after_write_failed.load());
+    {
+        std::lock_guard lock(read_after_write_mutex);
+        RUVIA_CHECK_EQ(read_after_write_body, "hello");
+    }
     server.finish();
 }
 

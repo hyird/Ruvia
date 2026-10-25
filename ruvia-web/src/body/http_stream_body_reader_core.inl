@@ -85,6 +85,7 @@ body_pipeline_handover stream_body_reader<stream_type>::take_pipeline(
 template <typename stream_type>
 task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>::read() {
     require_not_failed();
+    co_await release_peer_monitor();
     try {
         if (body_plan_.chunked() != nullptr) {
             if (continue_pending_) {
@@ -113,6 +114,7 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
 template <typename stream_type>
 task<std::string_view> stream_body_reader<stream_type>::read_all(std::pmr::string& body) {
     require_not_failed();
+    co_await release_peer_monitor();
     try {
         if (const auto* known_length = body_plan_.known_length()) {
             co_return co_await read_known_length_all(body, known_length->content_length());
@@ -179,6 +181,31 @@ task<void> stream_body_reader<stream_type>::send_continue() {
 }
 
 template <typename stream_type>
+task<void> stream_body_reader<stream_type>::release_peer_monitor() {
+    if (peer_monitor_ == nullptr) {
+        co_return;
+    }
+    auto* monitor = std::exchange(peer_monitor_, nullptr);
+    monitor->cancel();
+    try {
+        co_await monitor->join();
+    } catch (...) {
+        peer_eof_observed_ = true;
+    }
+    if (monitor->peer_aborted()) {
+        peer_eof_observed_ = true;
+    }
+    const auto monitored = monitor->pipeline();
+    if (!monitored.empty()) {
+        if (body_plan_.chunked() != nullptr && !initial_body_and_pipeline_.empty()) {
+            materialize_initial_remainder();
+        }
+        buffer_.append(monitored);
+        monitor->clear_pipeline();
+    }
+}
+
+template <typename stream_type>
 void stream_body_reader<stream_type>::require_not_failed() const {
     if (failed_) {
         throw std::logic_error("request body consumption previously failed");
@@ -187,6 +214,9 @@ void stream_body_reader<stream_type>::require_not_failed() const {
 
 template <typename stream_type>
 task<void> stream_body_reader<stream_type>::read_more() {
+    if (peer_eof_observed_) {
+        throw_incomplete_request_body();
+    }
     // Every view handed out by an earlier read is dead once more input is
     // needed, so this is where the consumed prefix is finally dropped. Only the
     // unread framing suffix moves, once per socket read, instead of once per

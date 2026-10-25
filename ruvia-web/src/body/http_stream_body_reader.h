@@ -24,6 +24,7 @@
 #include "body/http_stream_body_reader_errors.h"
 #include "context/http_interim_response_output.h"
 #include "server/connection_scanner.h"
+#include "server/http1_peer_eof_monitor.h"
 
 namespace ruvia::detail {
 
@@ -70,12 +71,16 @@ public:
     [[nodiscard]] std::size_t pipeline_size() const noexcept {
         return initial_pipeline_remainder().size() + buffered_pipeline_remainder().size();
     }
+    void bind_peer_monitor(http1_peer_eof_monitor<stream_type>* monitor) noexcept {
+        peer_monitor_ = monitor;
+    }
 
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read();
     task<std::string_view> read_all(std::pmr::string& body);
 
 private:
     task<void> send_continue();
+    task<void> release_peer_monitor();
     void require_not_failed() const;
     [[nodiscard]] std::string_view initial_pipeline_remainder() const noexcept;
     [[nodiscard]] std::string_view buffered_pipeline_remainder() const noexcept;
@@ -104,6 +109,7 @@ private:
     http_request_trailers trailers_;
     connection_scanner::entry& scanner_entry_;
     http_interim_response_output& interim_output_;
+    http1_peer_eof_monitor<stream_type>* peer_monitor_{nullptr};
     // Offset of the first unconsumed byte in the active source: the borrowed
     // initial view while it is set, buffer_ otherwise. Consumed buffer_ bytes are
     // dropped only when read_more() needs room for socket input.
@@ -114,6 +120,7 @@ private:
     // never be consumed further and must stay incomplete.
     bool failed_{false};
     bool continue_pending_{false};
+    bool peer_eof_observed_{false};
 };
 
 }  // namespace ruvia::detail

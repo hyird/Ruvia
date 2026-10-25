@@ -95,9 +95,10 @@ public:
     /// next write fails exactly as a GET write fails after a peer abort, so a
     /// loop that never checks aborted() ends no later than it would for GET.
     /// On HTTP/1 the server watches the connection's read side from that head
-    /// on (when the request body is fully read): a peer end with no further
-    /// request bytes ends the connection, one behind pipelined requests is a
-    /// half-close whose requests are still answered. end() succeeds and
+    /// on: a peer end with no further request bytes (or on a connection that
+    /// will close after the response) ends the connection, while one behind
+    /// pipelined requests on a reusable connection is a half-close whose
+    /// requests are still answered. end() succeeds and
     /// discards trailers after validating them. From the head on aborted() is
     /// true, sleep() returns stop_requested at once, and the
     /// cancel_on_peer_eof() token is stopped.

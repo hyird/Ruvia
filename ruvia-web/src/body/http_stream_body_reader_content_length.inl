@@ -71,6 +71,10 @@ task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
     }
     auto filled = body.size();
     while (delivered_bytes_ < content_length) {
+        if (peer_eof_observed_) {
+            body.resize(filled);
+            throw_incomplete_request_body();
+        }
         const auto remaining_body = content_length - delivered_bytes_;
         if (filled == body.size()) {
             const auto final_size = remaining_body > body.max_size() - filled ? body.max_size() : filled + remaining_body;

@@ -45,6 +45,10 @@ struct http_lazy_buffered_body_route_state final {
         return body_->loader();
     }
 
+    [[nodiscard]] lazy_buffered_body<stream_type>& body() noexcept {
+        return body_->loader();
+    }
+
     [[nodiscard]] http1_request_body_consumption consumption() const noexcept {
         return body_->loader().consumption();
     }

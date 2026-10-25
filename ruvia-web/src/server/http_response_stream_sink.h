@@ -58,7 +58,7 @@ public:
         http_response_head_buffer& head, connection_scanner::entry& scanner_entry,
         const worker_handle& worker_value, const http_request& request, const cors_options* cors,
         http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
-        const lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
+        lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
         http_response_coding_availability response_coding_availability,
         std::pmr::memory_resource* inbound_resource = nullptr) noexcept
         : stream_(stream),
@@ -78,8 +78,12 @@ public:
     response_stream_sink(stream_type&, worker_memory&, worker_codecs&, http_response_head_buffer&,
         connection_scanner::entry&, worker_handle&&, const http_request&, const cors_options*,
         http1_response_stream_plan, http1_response_stream_plan,
-        const lazy_buffered_body<stream_type>&, http_response_coding_selection,
+        lazy_buffered_body<stream_type>&, http_response_coding_selection,
         http_response_coding_availability, std::pmr::memory_resource* = nullptr) = delete;
+
+    ~response_stream_sink() {
+        request_body_.reader().bind_peer_monitor(nullptr);
+    }
 
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
@@ -136,6 +140,7 @@ public:
     }
 
     task<void> finish_peer_monitor() {
+        request_body_.reader().bind_peer_monitor(nullptr);
         if (peer_monitor_) {
             peer_monitor_->cancel();
             co_await peer_monitor_->join();
@@ -201,6 +206,26 @@ private:
         }
     }
 
+    void ensure_body_suppressed_peer_monitor() {
+        if (!worker_.is_current()) {
+            return;
+        }
+        if (peer_monitor_ && peer_monitor_->stopped() && !peer_monitor_->peer_aborted()) {
+            request_body_.reader().bind_peer_monitor(nullptr);
+            peer_monitor_.reset();
+        }
+        if (!peer_monitor_) {
+            const auto meaning = connection_plan_.disposition() == http1_close_policy::allow_reuse
+                                     ? http1_peer_eof_meaning::ends_idle_connection
+                                     : http1_peer_eof_meaning::abandons_response;
+            start_peer_monitor(meaning);
+            if (request_body_.consumption() != http1_request_body_consumption::complete) {
+                request_body_.reader().bind_peer_monitor(&*peer_monitor_);
+            }
+        }
+        peer_monitor_->request_stop();
+    }
+
     // A body write after a body-suppressed head completed the response (HEAD,
     // 304) succeeds without sending -- the body a GET would carry is discarded
     // -- only while the connection that carried the response lives. Once the
@@ -208,6 +233,7 @@ private:
     // socket (timeout, drain, shutdown), it fails exactly as a GET body write
     // fails then, so a handler that never checks aborted() still ends.
     task<void> discard_body_write() {
+        ensure_body_suppressed_peer_monitor();
         ensure_peer_writable();
         if (!stream_.lowest_layer().is_open()) {
             const std::error_code error = asio::error::bad_descriptor;
@@ -281,16 +307,11 @@ private:
         }
         if (state_.body_suppressed_complete()) {
             // The head completed the response. Watch the connection from now
-            // on, when the request body is settled and this is its worker, so
-            // discarded writes of a handler still running fail once the peer
-            // leaves; any peer-EOF token handed out stops now.
-            if (!peer_monitor_ && worker_.is_current() &&
-                request_body_.consumption() == http1_request_body_consumption::complete) {
-                start_peer_monitor(http1_peer_eof_meaning::ends_idle_connection);
-            }
-            if (peer_monitor_) {
-                peer_monitor_->request_stop();
-            }
+            // on so discarded writes of a handler still running fail once the
+            // peer leaves; if the request body is still unread, the body
+            // reader reclaims the monitor and any bytes it buffered before
+            // reading the socket. Any peer-EOF token handed out stops now.
+            ensure_body_suppressed_peer_monitor();
         }
     }
 
@@ -452,7 +473,7 @@ private:
     const cors_options* cors_;
     http1_response_stream_plan plan_;
     http1_response_stream_plan consumed_plan_;
-    const lazy_buffered_body<stream_type>& request_body_;
+    lazy_buffered_body<stream_type>& request_body_;
     http1_request_connection_plan connection_plan_;
     http_streaming_response_compression compression_;
     response_stream_state state_;
