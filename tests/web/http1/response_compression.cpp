@@ -25,6 +25,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/static_files.h"
+#include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
 #include "test_harness.h"
@@ -87,6 +88,11 @@ class response_compression_routes final {
     RUVIA_GET("/compression-custom-coding", custom_coding);
     RUVIA_GET("/compression-mixed-rejected", mixed_rejected_coding);
     RUVIA_POST("/compression-echo-decoded", echo_decoded);
+    RUVIA_GET("/compression-zero-declared", head_zero_declared);
+    RUVIA_GET("/compression-stream-custom", stream_custom_coding);
+    RUVIA_GET("/compression-stream-mixed", stream_mixed_coding);
+    RUVIA_GET("/compression-stream-204", stream_no_content);
+    RUVIA_GET("/compression-stream-304", stream_not_modified);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> small(ruvia::context& context_value) {
@@ -144,6 +150,26 @@ class response_compression_routes final {
     ruvia::task<ruvia::http_response> echo_decoded(ruvia::context& context_value) {
         const auto body = co_await context_value.req().text();
         co_return context_value.text(body);
+    }
+    ruvia::task<void> stream_custom_coding(ruvia::context& context_value) {
+        context_value.header("Content-Encoding", "x-custom");
+        auto& writer = context_value.stream_text();
+        co_await writer.write("custom-stream-payload");
+        co_await writer.end();
+    }
+    ruvia::task<void> stream_mixed_coding(ruvia::context& context_value) {
+        context_value.header("Content-Encoding", "br, x-custom");
+        auto& writer = context_value.stream_text();
+        co_await writer.write("mixed-stream-payload");
+        co_await writer.end();
+    }
+    ruvia::task<void> stream_no_content(ruvia::context& context_value) {
+        context_value.status(ruvia::http_status::no_content);
+        co_await context_value.stream_text().end();
+    }
+    ruvia::task<void> stream_not_modified(ruvia::context& context_value) {
+        context_value.status(ruvia::http_status::not_modified);
+        co_await context_value.stream_text().end();
     }
     ruvia::task<ruvia::http_response> tiny(ruvia::context& context_value) {
         co_return context_value.text("hello");
@@ -526,6 +552,18 @@ RUVIA_TEST(http1_head_fallback_on_empty_get_files_and_redirects_matches_get_head
                                         .value_or("");
     RUVIA_CHECK(head_fields(zero_declared_get) == head_fields(zero_declared_head));
     RUVIA_CHECK(has_field(head_fields(zero_declared_head), "content-length: 0"));
+    for (const std::string_view path :
+        {std::string_view("/compression-head-zero"), std::string_view("/compression-zero-declared")}) {
+        const auto refused_zero_get = fetch_response(
+            server.endpoint(), get_request(path, "Accept-Encoding: gzip, identity;q=0\r\n"))
+                                          .value_or("");
+        const auto refused_zero_head = fetch_response(
+            server.endpoint(), head_request(path, "Accept-Encoding: gzip, identity;q=0\r\n"))
+                                           .value_or("");
+        RUVIA_CHECK(head_fields(refused_zero_get) == head_fields(refused_zero_head));
+        RUVIA_CHECK(has_field(head_fields(refused_zero_head), "content-encoding: gzip"));
+        RUVIA_CHECK(has_field(head_fields(refused_zero_head), "content-length: 20"));
+    }
 
     // 5. Custom Content-Encoding negotiation and mixed rejected coding stacks.
     const auto custom_ok = fetch_response(server.endpoint(),
@@ -538,6 +576,31 @@ RUVIA_TEST(http1_head_fallback_on_empty_get_files_and_redirects_matches_get_head
         server.endpoint(), get_request("/compression-mixed-rejected", "Accept-Encoding: br;q=0\r\n"))
                                     .value_or("");
     RUVIA_CHECK(mixed_rejected.starts_with("HTTP/1.1 406 "));
+    const auto stream_custom_ok = fetch_response(server.endpoint(),
+        get_request("/compression-stream-custom", "Accept-Encoding: x-custom, identity;q=0\r\n"))
+                                      .value_or("");
+    RUVIA_CHECK(stream_custom_ok.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(has_field(head_fields(stream_custom_ok), "content-encoding: x-custom"));
+
+    const auto stream_custom_rejected = fetch_response(server.endpoint(),
+        get_request("/compression-stream-custom", "Accept-Encoding: gzip\r\n"))
+                                            .value_or("");
+    RUVIA_CHECK(stream_custom_rejected.starts_with("HTTP/1.1 406 "));
+
+    const auto stream_mixed_rejected = fetch_response(server.endpoint(),
+        get_request("/compression-stream-mixed", "Accept-Encoding: br, x-custom;q=0\r\n"))
+                                           .value_or("");
+    RUVIA_CHECK(stream_mixed_rejected.starts_with("HTTP/1.1 406 "));
+
+    const auto stream_204 = fetch_response(server.endpoint(),
+        get_request("/compression-stream-204", "Accept-Encoding: *;q=0\r\n"))
+                                .value_or("");
+    RUVIA_CHECK(stream_204.starts_with("HTTP/1.1 204 "));
+
+    const auto stream_304 = fetch_response(server.endpoint(),
+        get_request("/compression-stream-304", "Accept-Encoding: *;q=0\r\n"))
+                                .value_or("");
+    RUVIA_CHECK(stream_304.starts_with("HTTP/1.1 304 "));
 
     const auto range_416_custom = fetch_response(server.endpoint(),
         get_request("/compression-file",

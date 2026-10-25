@@ -11,6 +11,7 @@
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
+#include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
@@ -646,4 +647,27 @@ RUVIA_TEST(stable_view_headers_reject_request_only_te_field) {
     http_response response(std::pmr::new_delete_resource());
     RUVIA_CHECK(throws_invalid([&] { response.header_stable_view("TE", "trailers"); }));
     RUVIA_CHECK(!response.header("TE").has_value());
+}
+
+RUVIA_TEST(http1_commit_final_response_preserves_custom_connection_options_when_closing) {
+    http_response response(std::pmr::new_delete_resource());
+    response.status(ruvia::http_status::ok);
+    response.header("X-Custom-Hop", "secret-hop");
+    response.header("Connection", "keep-alive, X-Custom-Hop");
+    const auto committed =
+        ruvia::http1_commit_final_response(response, ruvia::plan_http11_request_connection(true));
+    RUVIA_CHECK_EQ(committed.disposition(), ruvia::http1_close_policy::close_after_response);
+    RUVIA_CHECK_EQ(
+        response.header("Connection").value_or(""), std::string_view("close, X-Custom-Hop"));
+
+    http_response upgrade_response(std::pmr::new_delete_resource());
+    upgrade_response.status(ruvia::http_status::upgrade_required);
+    upgrade_response.header("Upgrade", "example/1");
+    upgrade_response.header("X-Hop-2", "v");
+    upgrade_response.header("Connection", "X-Hop-2");
+    const auto upgrade_committed = ruvia::http1_commit_final_response(
+        upgrade_response, ruvia::plan_http11_request_connection(true));
+    RUVIA_CHECK_EQ(upgrade_committed.disposition(), ruvia::http1_close_policy::close_after_response);
+    RUVIA_CHECK_EQ(upgrade_response.header("Connection").value_or(""),
+        std::string_view("close, Upgrade, X-Hop-2"));
 }

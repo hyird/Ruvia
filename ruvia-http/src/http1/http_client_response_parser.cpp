@@ -15,6 +15,10 @@
 
 namespace ruvia::detail {
 
+[[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(
+    const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response,
+    http1_client_request_content_phase request_content_phase, bool interim_faulty_framing);
+
 struct http1_client_response_parse_result_access final {
     [[nodiscard]] static http1_client_response_parse_result need_more() noexcept {
         return http1_client_response_parse_result(http1_client_response_need_more());
@@ -136,7 +140,8 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     }
     const auto& parsed_value = std::get<0>(parsed_head);
 
-    auto planning = detail::plan_http1_client_response(exchange_state_, parsed_value, request_content_phase_);
+    auto planning = detail::plan_http1_client_response(
+        exchange_state_, parsed_value, request_content_phase_, interim_faulty_framing_);
     if ((planning.index() != 0)) {
         return fail(std::get<1>(planning));
     }
@@ -158,6 +163,11 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
 
     auto result_value = detail::http1_client_response_parse_result_access::parsed(
         std::move(head), std::move(plan), header_bytes);
+    if (parsed_value.status_code_.is_informational() &&
+        parsed_value.protocol_version_ == http_protocol_version::http10 &&
+        parsed_value.saw_transfer_encoding_) {
+        interim_faulty_framing_ = true;
+    }
     if (parsed_value.status_code_ == http_status::continue_value) {
         request_content_phase_ = receive_continue(request_content_phase_);
     }

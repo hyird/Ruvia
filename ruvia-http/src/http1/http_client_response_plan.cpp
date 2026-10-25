@@ -38,12 +38,14 @@ namespace {
 
 [[nodiscard]] bool request_allows_protocol_switch(const http1_client_exchange_state& exchange_state,
     const http1_client_parsed_response_head& response,
-    http1_client_request_content_phase request_content_phase) noexcept {
+    http1_client_request_content_phase request_content_phase,
+    bool interim_faulty_framing) noexcept {
     const bool request_content_allows_switch =
         request_content_phase == http1_client_request_content_phase::content_complete ||
         request_content_phase == http1_client_request_content_phase::content_complete_awaiting_continue ||
         request_content_phase == http1_client_request_content_phase::continue_received_content_complete;
-    if (http1_client_exchange_state_access::close_policy(exchange_state) ==
+    if (interim_faulty_framing ||
+        http1_client_exchange_state_access::close_policy(exchange_state) ==
             http1_close_policy::close_after_response ||
         !request_content_allows_switch) {
         return false;
@@ -113,14 +115,16 @@ namespace {
 [[nodiscard]] http1_close_policy final_response_persistence(
     const http1_client_exchange_state& exchange_state,
     const http1_client_parsed_response_head& response,
-    http1_client_request_content_phase request_content_phase) noexcept {
+    http1_client_request_content_phase request_content_phase,
+    bool interim_faulty_framing) noexcept {
     // A final response while Expect still gates the content cancels content
     // whose framing the request head already committed. The server may keep
     // reading it (RFC 9110 section 10.1.1), so the next request on this
     // connection would be consumed as that content.
     // A rejected CONNECT is not a reusable HTTP exchange: RFC 9931 section 8
     // requires the proxy to close it before interpreting any following request.
-    if (http1_client_exchange_state_access::method(exchange_state) == http_known_method::connect ||
+    if (interim_faulty_framing ||
+        http1_client_exchange_state_access::method(exchange_state) == http_known_method::connect ||
         http1_client_exchange_state_access::close_policy(exchange_state) ==
             http1_close_policy::close_after_response ||
         request_content_phase == http1_client_request_content_phase::awaiting_continue) {
@@ -187,14 +191,14 @@ struct http1_client_response_plan_access final {
 
 http1_client_response_planning_result_type plan_http1_client_response(
     const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response,
-    http1_client_request_content_phase request_content_phase) {
+    http1_client_request_content_phase request_content_phase, bool interim_faulty_framing) {
     const auto content_semantics = classify_http_response_content_semantics(
         http1_client_exchange_state_access::method(exchange_state), response.status_code_);
 
     if (content_semantics == http_response_content_semantics::protocol_switch) {
         if (response.protocol_version_ != http_protocol_version::http11 ||
-            response.content_length_field_present_ || response.saw_transfer_encoding_ ||
-            !request_allows_protocol_switch(exchange_state, response, request_content_phase)) {
+            !request_allows_protocol_switch(
+                exchange_state, response, request_content_phase, interim_faulty_framing)) {
             return http1_client_response_parse_error::invalid_protocol_switch;
         }
         return http1_client_response_plan_access::protocol_upgrade();
@@ -217,7 +221,8 @@ http1_client_response_planning_result_type plan_http1_client_response(
                                   content_semantics == http_response_content_semantics::with_content;
     const auto content_length = response.content_length_.value();
 
-    const auto persistence = final_response_persistence(exchange_state, response, request_content_phase);
+    const auto persistence = final_response_persistence(
+        exchange_state, response, request_content_phase, interim_faulty_framing);
     const auto persistent_content_signal = request_content_signal(request_content_phase,
         response.status_code_, persistence == http1_close_policy::close_after_response);
     if (content_semantics == http_response_content_semantics::without_content) {
@@ -263,6 +268,12 @@ http1_client_response_planning_result_type plan_http1_client_response(
         http_transfer_codings{},
         request_content_signal(request_content_phase, response.status_code_, true),
         discards_content);
+}
+
+http1_client_response_planning_result_type plan_http1_client_response(
+    const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response,
+    http1_client_request_content_phase request_content_phase) {
+    return plan_http1_client_response(exchange_state, response, request_content_phase, false);
 }
 
 }  // namespace ruvia::detail

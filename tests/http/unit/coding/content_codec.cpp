@@ -243,6 +243,29 @@ RUVIA_TEST(http_content_coding_field_bounds_the_coding_stack) {
     }
     RUVIA_CHECK(oversized.codings().empty());
 
+    const auto oversized_with_unknown = parse_http_content_coding(
+        "gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, x-custom");
+    RUVIA_CHECK(oversized_with_unknown.invalid() == nullptr);
+    RUVIA_CHECK(oversized_with_unknown.unsupported() != nullptr);
+    if (oversized_with_unknown.unsupported() != nullptr) {
+        RUVIA_CHECK(oversized_with_unknown.unsupported()->depth_exceeded());
+    }
+
+    const auto oversized_unknown_only =
+        parse_http_content_coding("x1, x2, x3, x4, x5, x6, x7, x8, x9");
+    RUVIA_CHECK(oversized_unknown_only.invalid() == nullptr);
+    RUVIA_CHECK(oversized_unknown_only.unsupported() != nullptr);
+    if (oversized_unknown_only.unsupported() != nullptr) {
+        RUVIA_CHECK(oversized_unknown_only.unsupported()->depth_exceeded());
+    }
+
+    const auto eight_known_plus_unknown = parse_http_content_coding(
+        "gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, x-custom");
+    RUVIA_CHECK(eight_known_plus_unknown.invalid() == nullptr);
+    RUVIA_CHECK(eight_known_plus_unknown.unsupported() != nullptr);
+    if (eight_known_plus_unknown.unsupported() != nullptr) {
+        RUVIA_CHECK(eight_known_plus_unknown.unsupported()->depth_exceeded());
+    }
     value += ", bad coding";
     const auto malformed = parse_http_content_coding(value);
     RUVIA_CHECK(malformed.invalid() != nullptr);

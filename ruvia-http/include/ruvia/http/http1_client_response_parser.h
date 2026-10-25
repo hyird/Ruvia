@@ -443,6 +443,7 @@ private:
     std::pmr::memory_resource* resource_;
     phase_type phase_{phase_type::await_response};
     detail::http1_client_request_content_phase request_content_phase_;
+    bool interim_faulty_framing_{false};
     std::size_t header_scan_offset_{0};
 };
 

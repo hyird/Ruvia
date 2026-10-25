@@ -108,9 +108,9 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
 
         switch (kind) {
             case request_header_kind::content_length:
-                output.content_length_field_present_ = true;
-                // A 101 still records its forbidden presence for handshake checks;
-                // successful CONNECT ignores it because the stream becomes a tunnel.
+                // RFC 9112 section 6.3 rule 1: 1xx (including 101), 204, 304,
+                // and HEAD responses end at the first empty line regardless of
+                // framing fields; successful CONNECT becomes a tunnel.
                 if (framing_fields_apply) {
                     switch (output.content_length_.parse_field(value)) {
                         case http_content_length_parse_status::ok:

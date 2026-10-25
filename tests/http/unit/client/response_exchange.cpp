@@ -575,20 +575,91 @@ RUVIA_TEST(http_client_switching_protocols_requires_wire_agreement) {
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Connection: Upgrade\r\nUpgrade: IRC",
         http1_close_policy::allow_reuse, offered));
-    RUVIA_CHECK(parse_fails("GET",
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Connection: Upgrade\r\nUpgrade: websocket\r\nContent-Length: 0",
-        http1_close_policy::allow_reuse, offered));
-    RUVIA_CHECK(parse_fails("GET",
-        "HTTP/1.1 101 Switching Protocols\r\n"
-        "Connection: Upgrade\r\nUpgrade: websocket\r\n"
-        "Transfer-Encoding: chunked",
-        http1_close_policy::allow_reuse, offered));
+    for (const std::string_view framing : {
+             std::string_view("Content-Length: 0\r\n"),
+             std::string_view("Content-Length: 5\r\n"),
+             std::string_view("Transfer-Encoding: chunked\r\n"),
+         }) {
+        std::string head(valid_response);
+        head.append("\r\n");
+        head.append(framing);
+        head.append("\r\n");
+        const std::string wire = head + "protocol_bytes";
+        const auto switched = parse_wire("GET", wire, http1_close_policy::allow_reuse, offered);
+        RUVIA_CHECK(switched.parsed() != nullptr);
+        if (const auto* parsed = switched.parsed()) {
+            RUVIA_CHECK(parsed->plan().protocol_upgrade() != nullptr);
+            RUVIA_CHECK_EQ(parsed->consumed_bytes(), head.size());
+        }
+    }
     RUVIA_CHECK(parse_fails("GET",
         "HTTP/1.0 101 Switching Protocols\r\n"
         "Connection: Upgrade\r\nUpgrade: websocket",
         http1_close_policy::allow_reuse, offered));
     RUVIA_CHECK(parse_fails("GET", valid_response, http1_close_policy::allow_reuse, closing_offer));
+}
+
+RUVIA_TEST(http_client_http10_informational_transfer_encoding_latches_faulty_framing_close) {
+    ruvia::http_client_request_view post_request;
+    post_request.method_ = "POST";
+    post_request.target_ = "/upload";
+    post_request.content_ = ruvia::http_client_request_content_view::bytes("hello");
+    std::array<char, 512> post_head{};
+    const auto post_prepared = ruvia::http1_client_request_writer().prepare(
+        ruvia::http_origin_view::http({.host_ = "example.test"}), post_request, post_head,
+        {.expectation_ = ruvia::http_client_request_expectation::continue_value});
+    const auto* post_prep = std::get_if<ruvia::prepared_http1_client_request>(&post_prepared);
+    RUVIA_CHECK(post_prep != nullptr);
+    if (post_prep == nullptr) {
+        return;
+    }
+
+    http1_client_response_parser post_parser(post_prep->exchange_state());
+    const auto interim = post_parser.parse(
+        "HTTP/1.0 100 Continue\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n");
+    RUVIA_CHECK(interim.parsed() != nullptr);
+    RUVIA_CHECK(post_parser.complete_request_content() ==
+                http1_client_request_content_completion_status::completed);
+    const auto final_res = post_parser.parse(
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Length: 0\r\n\r\n");
+    RUVIA_CHECK(final_res.parsed() != nullptr);
+    if (final_res.parsed() != nullptr) {
+        RUVIA_CHECK(require_known_length(final_res.parsed()->plan()).persistence() ==
+                    http1_close_policy::close_after_response);
+    }
+
+    const ruvia::http_header_view offered[] = {
+        {"Connection", "Upgrade"},
+        {"Upgrade", "websocket"},
+    };
+    ruvia::http_client_request_view ws_request;
+    ws_request.method_ = "GET";
+    ws_request.target_ = "/ws";
+    ws_request.headers_ = offered;
+    std::array<char, 512> ws_head{};
+    const auto ws_prepared = ruvia::http1_client_request_writer().prepare(
+        ruvia::http_origin_view::http({.host_ = "example.test"}), ws_request, ws_head);
+    const auto* ws_prep = std::get_if<ruvia::prepared_http1_client_request>(&ws_prepared);
+    RUVIA_CHECK(ws_prep != nullptr);
+    if (ws_prep == nullptr) {
+        return;
+    }
+    http1_client_response_parser ws_parser(ws_prep->exchange_state());
+    const auto hints = ws_parser.parse(
+        "HTTP/1.0 103 Early Hints\r\n"
+        "Transfer-Encoding: chunked\r\n\r\n");
+    RUVIA_CHECK(hints.parsed() != nullptr);
+    const auto upgrade_res = ws_parser.parse(
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket\r\n\r\n");
+    RUVIA_CHECK(upgrade_res.failure() != nullptr);
+    if (upgrade_res.failure() != nullptr) {
+        RUVIA_CHECK(*upgrade_res.failure() ==
+                    http1_client_response_parse_error::invalid_protocol_switch);
+    }
 }
 
 RUVIA_TEST(http_client_response_plan_owns_version_and_connection_persistence) {

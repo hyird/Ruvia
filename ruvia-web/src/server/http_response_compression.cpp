@@ -194,7 +194,7 @@ http_buffered_compression_step apply_response_compression(const http_response_co
         http_response_compression_source::buffered,
         http_response_coding_availability::identity_and_compression);
     if (decision == http_response_compression_decision::encode && request_method == http_known_method::head &&
-        body.empty() &&
+        body.empty() && declared_content_length(response) != std::uint64_t{0} &&
         (response_body(response).head_metadata_only() || response.header("Content-Length").has_value())) {
         return apply_head_content_encoding(selection, response, options);
     }

@@ -195,12 +195,6 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         return admission;
     }
     if (endpoint->response_stream() != nullptr) {
-        // A response stream commits its representation before a buffered
-        // status can be inspected, so a failed negotiation is final here.
-        if (admission.tail_.coding_policy().negotiation_failed()) {
-            return reject(http_request_endpoint::not_acceptable,
-                http_request_rejection::error(http_error_info(http_not_acceptable_coding_error())));
-        }
         admission.endpoint_ = http_request_endpoint::response_stream;
         return admission;
     }

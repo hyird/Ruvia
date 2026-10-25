@@ -263,7 +263,7 @@ private:
             if (cors_ != nullptr) {
                 apply_cors_headers(request_, response, *cors_);
             }
-            compression_.prepare(plan_.request_method(), response);
+            compression_.prepare(request_, response);
             // The request body is settled at commit: read in full by now, the
             // connection stays reusable; anything less closes it after the
             // stream, since the body bytes still in the socket would be read as

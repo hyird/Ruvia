@@ -323,10 +323,6 @@ http1_request_connection_plan http1_commit_final_response(
     const auto response_options = http1_control.connection_options();
     const auto upgrade_protocols = http1_control.upgrade_protocols();
     const bool preserve_upgrade = upgrade_protocols.has_field();
-    const bool generate_upgrade_option = preserve_upgrade && !response_options.upgrade();
-    if (generate_upgrade_option) {
-        add_http1_connection_option(response, detail::http_connection_upgrade_option, response_options.has_field());
-    }
     // A failed CONNECT never becomes a tunnel. RFC 9931 section 8 requires
     // closing instead of interpreting optimistic tunnel data as more requests.
     if (response_options.close() || (plan.tunnel_request() && !response.status().is_successful())) {
@@ -336,10 +332,16 @@ http1_request_connection_plan http1_commit_final_response(
         http1_mark_connection_close(response, preserve_upgrade
                                                   ? http1_connection_close_field_policy::preserve_upgrade
                                                   : http1_connection_close_field_policy::close_only);
-    } else if (plan.protocol_version() == http_protocol_version::http10 &&
-               !response_options.keep_alive()) {
-        add_http1_connection_option(response, detail::http_connection_keep_alive_option,
-            response_options.has_field() || generate_upgrade_option);
+    } else {
+        const bool generate_upgrade_option = preserve_upgrade && !response_options.upgrade();
+        if (generate_upgrade_option) {
+            add_http1_connection_option(
+                response, detail::http_connection_upgrade_option, response_options.has_field());
+        }
+        if (plan.protocol_version() == http_protocol_version::http10 && !response_options.keep_alive()) {
+            add_http1_connection_option(response, detail::http_connection_keep_alive_option,
+                response_options.has_field() || generate_upgrade_option);
+        }
     }
     return plan;
 }

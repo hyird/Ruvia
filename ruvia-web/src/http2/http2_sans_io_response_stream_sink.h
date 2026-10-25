@@ -280,7 +280,7 @@ private:
             }
             throw_if_terminated();
             throw_if_body_failed();
-            compression_.prepare(request_method_, response);
+            compression_.prepare(context_access::request(state_.bound_context()), response);
             const auto commit_body_plan = plan_http_response_body(request_method_, response.status());
             compression_.activate(commit_body_plan);
             const auto head_result = connection_.submit_streaming_response_head(

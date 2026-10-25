@@ -69,6 +69,8 @@ class sleeping_stream_routes final {
     RUVIA_POST("/http2-bounded-delayed-stream", bounded_delayed_stream, ruvia::stream_body, ruvia::body_limit<16>);
     RUVIA_GET("/http2-head-trailer-write", head_trailer_write);
     RUVIA_GET("/http2-head-trailer-only", head_trailer_only);
+    RUVIA_GET("/http2-stream-custom", stream_custom);
+    RUVIA_GET("/http2-stream-204", stream_204);
     RUVIA_ROUTES_END
 
     // An SSE loop that only aborted() ends. After a HEAD every write succeeds
@@ -132,6 +134,18 @@ class sleeping_stream_routes final {
         observed.head_trailer_post_stopped_ = post_token.stop_requested();
         observed.head_trailer_sleep_stopped_ = sleep_res == ruvia::timer_sleep_result::stop_requested;
         observed.head_trailer_done_ = true;
+    }
+
+    ruvia::task<void> stream_custom(ruvia::context& context_value) {
+        context_value.header("Content-Encoding", "x-custom");
+        auto& out = context_value.stream_text();
+        co_await out.write("payload");
+        co_await out.end();
+    }
+
+    ruvia::task<void> stream_204(ruvia::context& context_value) {
+        context_value.status(ruvia::http_status::no_content);
+        co_await context_value.stream_text().end();
     }
 
     ruvia::task<ruvia::http_response> bounded_buffered(ruvia::context& context_value) {
@@ -901,5 +915,33 @@ RUVIA_TEST(http2_head_stream_with_trailers_strips_trailer_header_and_stops_eof_t
     RUVIA_CHECK(observed.head_trailer_pre_stopped_.load());
     RUVIA_CHECK(observed.head_trailer_post_stopped_.load());
     RUVIA_CHECK(observed.head_trailer_sleep_stopped_.load());
+    server.finish();
+}
+
+RUVIA_TEST(http2_stream_custom_content_encoding_and_bodyless_status_negotiation) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto check_status = [&](std::string_view path, std::string_view accept_encoding,
+                                  std::string_view expected_status) {
+        std::pmr::unsynchronized_pool_resource resource;
+        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        std::string wire(ruvia::http2_client_preface);
+        append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
+        ruvia::hpack_encoder::encode_header(block, ":path", path);
+        ruvia::hpack_encoder::encode_header(block, "accept-encoding", accept_encoding);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
+        asio::write(client, asio::buffer(wire));
+        RUVIA_CHECK_EQ(read_first_status(client, decoder), std::string(expected_status));
+        client.close();
+    };
+    check_status("/http2-stream-custom", "x-custom, identity;q=0", "200");
+    check_status("/http2-stream-custom", "gzip", "406");
+    check_status("/http2-stream-204", "*;q=0", "204");
     server.finish();
 }
