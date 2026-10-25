@@ -3,6 +3,7 @@
 #include <memory>
 #include <memory_resource>
 
+#include <asio/fwd.hpp>
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -14,10 +15,6 @@
 #include "redis/redis_config_storage.h"
 #include "redis/redis_registry.h"
 #include "redis/redis_subscription_connection.h"
-
-namespace asio {
-class io_context;
-}
 
 namespace ruvia::detail {
 

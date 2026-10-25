@@ -50,7 +50,8 @@ RUVIA_TEST(worker_runtime_cold_stop_cancels_io_and_reclaims_inputs_before_shutdo
     ruvia::worker_runtime runtime;
     const auto worker = runtime.handle();
     asio::steady_timer timer(runtime.io_context());
-    auto payload = std::make_shared<int>(42);
+    // 上下文分配的控制块在 worker 释放强引用，在调用线程释放最后的弱引用。
+    auto payload = std::allocate_shared<int>(asio::execution_context::allocator<int>(runtime.io_context()), 42);
     std::weak_ptr<int> lifetime = payload;
     bool completion_on_owner = false;
     bool shutdown_after_completion = false;

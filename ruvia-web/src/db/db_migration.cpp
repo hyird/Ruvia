@@ -1,11 +1,14 @@
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <exception>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <utility>
 
+#include <asio/config.hpp>
 #include <asio/io_context.hpp>
 #include <openssl/evp.h>
 

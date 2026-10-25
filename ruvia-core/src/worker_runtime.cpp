@@ -2,7 +2,10 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -62,6 +65,7 @@ public:
         reached,
         aborted };
 
+    // 上下文跨越启动、运行和析构线程，使用可跨线程释放的进程级资源。
     explicit impl_type(worker_runtime_options options)
         : io_context_(std::allocator_arg, std::pmr::polymorphic_allocator<std::byte>(process_resource()),
               asio::config_from_concurrency_hint(options.io_policy_ == worker_io_policy::single_owner

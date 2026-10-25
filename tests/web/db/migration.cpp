@@ -9,6 +9,7 @@
 #include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
+#include "failing_memory_resource.h"
 #include "test_harness.h"
 
 RUVIA_TEST(db_migrator_options_default_table_uses_ruvia_name) {
@@ -75,8 +76,13 @@ RUVIA_TEST(db_migrator_lock_timeout_bounds_only_the_postgresql_lock_wait) {
     config.username_ = "test";
     config.pool_size_per_worker_ = 3;
     config.query_timeout_ = std::chrono::seconds(5);
-    const auto report = ruvia::db_migrator::migrate(config, std::span<const ruvia::db_migration>{});
-    RUVIA_CHECK(!report.changed());
+    failing_memory_resource resource;
+    {
+        const auto report = ruvia::db_migrator::migrate(config, std::span<const ruvia::db_migration>{},
+            {.resource_ = &resource});
+        RUVIA_CHECK(!report.changed());
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
     RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
     const auto statements = peer.postgres_parses();
     RUVIA_CHECK_EQ(statements.size(), std::size_t{6});

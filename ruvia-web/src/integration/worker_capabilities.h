@@ -6,6 +6,8 @@
 #include <optional>
 #include <span>
 
+#include <asio/fwd.hpp>
+
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -18,10 +20,6 @@
 #include "integration/worker_client_registry_view.h"
 #include "ratelimit/rate_limiter.h"
 #include "redis/redis_registry.h"
-
-namespace asio {
-class io_context;
-}
 
 namespace ruvia {
 class blocking_pool;
