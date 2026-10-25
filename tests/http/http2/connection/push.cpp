@@ -680,7 +680,7 @@ RUVIA_TEST(http2_push_repeated_response_and_cancellation_preserve_promises) {
     }
 }
 
-RUVIA_TEST(http2_push_rejects_connect_and_incomplete_parent_and_refuses_draining_promises) {
+RUVIA_TEST(http2_push_rejects_incomplete_parent_and_refuses_draining_promises) {
     std::pmr::unsynchronized_pool_resource resource;
     ruvia::testing::output_relay relay;
     auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
@@ -709,7 +709,9 @@ RUVIA_TEST(http2_push_rejects_connect_and_incomplete_parent_and_refuses_draining
     (void)server.next_event();
     (void)server.next_event();
 
-    // 2. Server rejects submit_push_request on a CONNECT stream, and client rejects PUSH_PROMISE on CONNECT.
+    // 2. The server declines to push on a CONNECT stream, but the client must
+    // accept a peer PUSH_PROMISE while the CONNECT response is still pending
+    // (RFC 9113 section 6.6 allows any open peer-initiated stream).
     auto connect_client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
     auto connect_server = ruvia::http2_connection::server({.resource_ = &resource});
     relay.transfer(connect_client, connect_server);
@@ -738,8 +740,10 @@ RUVIA_TEST(http2_push_rejects_connect_and_incomplete_parent_and_refuses_draining
         static_cast<std::uint32_t>(4 + push_block.size()), ruvia::http2_frame_type::push_promise, 0x4, 1));
     bad_promise[12] = 2;
     bad_promise.append(push_block);
-    RUVIA_CHECK(connect_client.feed(bad_promise) == ruvia::http2_feed_result::protocol_failure);
-    RUVIA_CHECK(connect_client.connection_error() == ruvia::http2_error_code::protocol_error);
+    RUVIA_CHECK(connect_client.feed(bad_promise) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!connect_client.connection_error());
+    const auto pending_connect_push = connect_client.next_event();
+    RUVIA_CHECK(pending_connect_push && pending_connect_push->push_promise());
 
     // 3. Client in graceful drain refuses new PUSH_PROMISE above last_stream_id with REFUSED_STREAM while updating HPACK.
     auto drain_client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
@@ -973,4 +977,75 @@ RUVIA_TEST(http2_push_promise_on_normally_completed_stream_is_a_connection_error
     promise.append(push_block);
     RUVIA_CHECK(client.feed(promise) == ruvia::http2_feed_result::protocol_failure);
     RUVIA_CHECK(client.connection_error() == ruvia::http2_error_code::protocol_error);
+}
+
+RUVIA_TEST(http2_push_promise_on_connected_tunnel_is_a_stream_error) {
+    // RFC 9113 section 8.5: once CONNECT is established, any frame other than
+    // DATA/RST_STREAM/WINDOW_UPDATE/PRIORITY is a stream error, not a
+    // connection error. The promised stream is cancelled as well.
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+
+    const auto connect_id = client.submit_request_head(
+        ruvia::http2_connect_request_head_view{.authority_ = "example.test:443"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(connect_id));
+    relay.transfer(client, server);
+    std::optional<ruvia::http2_request_head_event> connect_head;
+    while (auto event_value = server.next_event()) {
+        if (auto* head = event_value->request_head()) {
+            connect_head.emplace(std::move(*head));
+        }
+    }
+    RUVIA_CHECK(connect_head.has_value());
+    if (!connect_head) {
+        return;
+    }
+    ruvia::http_response response(&resource);
+    response.status(ruvia::http_status::ok);
+    RUVIA_CHECK(server.submit_connect_response_head(1, response) ==
+                ruvia::http2_submit_status::accepted);
+    relay.transfer(server, client);
+    while (client.next_event()) {
+    }
+    RUVIA_CHECK(!client.connection_error());
+
+    std::pmr::string push_block(&resource);
+    ruvia::hpack_encoder::encode_header(push_block, ":method", "GET");
+    ruvia::hpack_encoder::encode_header(push_block, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(push_block, ":authority", "example.test");
+    ruvia::hpack_encoder::encode_header(push_block, ":path", "/pushed");
+    std::string promise(ruvia::http2_frame_header_bytes + 4, '\0');
+    RUVIA_CHECK(ruvia::encode_http2_frame_header(std::span(promise).first(9),
+        static_cast<std::uint32_t>(4 + push_block.size()), ruvia::http2_frame_type::push_promise, 0x4, 1));
+    promise[12] = 2;
+    promise.append(push_block);
+    RUVIA_CHECK(client.feed(promise) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!client.connection_error());
+
+    const auto closed = client.next_event();
+    RUVIA_CHECK(closed && closed->stream_closed() && closed->stream_closed()->stream_id() == 1);
+    RUVIA_CHECK(!client.next_event());
+    const auto output = ruvia::testing::drain_output(client);
+    RUVIA_CHECK_EQ(output.size(), 2 * (ruvia::http2_frame_header_bytes + 4));
+    if (output.size() == 2 * (ruvia::http2_frame_header_bytes + 4)) {
+        const auto associated = ruvia::parse_http2_frame_header(std::span(output).first(9));
+        RUVIA_CHECK(associated && associated->type_ ==
+                                      static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));
+        RUVIA_CHECK_EQ(associated->stream_id_, 1u);
+        RUVIA_CHECK_EQ(static_cast<unsigned char>(output[12]),
+            static_cast<unsigned char>(ruvia::http2_error_code::protocol_error));
+        const auto promised = ruvia::parse_http2_frame_header(
+            std::span(output).subspan(ruvia::http2_frame_header_bytes + 4).first(9));
+        RUVIA_CHECK(promised && promised->type_ ==
+                                    static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));
+        RUVIA_CHECK_EQ(promised->stream_id_, 2u);
+        RUVIA_CHECK_EQ(static_cast<unsigned char>(output.back()),
+            static_cast<unsigned char>(ruvia::http2_error_code::cancel));
+    }
+    (void)server.release(std::move(*connect_head));
 }

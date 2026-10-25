@@ -17,6 +17,7 @@
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_stream.h"
 
@@ -4491,4 +4492,48 @@ RUVIA_TEST(http2_public_asterisk_form_request_never_generates_authority) {
     const auto accepted = client.submit_request_head(
         ruvia::http2_regular_request_head_view{.method_ = "OPTIONS", .target_ = "*"});
     RUVIA_CHECK(std::holds_alternative<std::uint32_t>(accepted));
+}
+
+RUVIA_TEST(http2_public_built_request_exposes_extended_protocol) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::testing::output_relay relay;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+
+    const std::array websocket_headers{ruvia::http_header_view{"sec-websocket-version", "13"}};
+    for (const std::string_view protocol : {"websocket", "connect-udp"}) {
+        const ruvia::http2_extended_connect_request_head_view head{
+            .protocol_ = protocol,
+            .authority_ = "example.test",
+            .target_ = "/proxy",
+            .headers_ = protocol == "websocket"
+                            ? std::span<const ruvia::http_header_view>(websocket_headers)
+                            : std::span<const ruvia::http_header_view>{}};
+        const auto submitted = client.submit_request_head(head);
+        RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
+        if (!std::holds_alternative<std::uint32_t>(submitted)) {
+            return;
+        }
+        relay.transfer(client, server);
+        std::optional<ruvia::http2_request_head_event> request_head_event;
+        while (auto event_value = server.next_event()) {
+            if (auto* request_head = event_value->request_head()) {
+                request_head_event.emplace(std::move(*request_head));
+            }
+        }
+        RUVIA_CHECK(request_head_event.has_value());
+        if (!request_head_event) {
+            return;
+        }
+        const auto request = request_head_event->build_request(&resource);
+        RUVIA_CHECK_EQ(request.protocol(), protocol);
+        // RFC 8441/9298: :protocol selects the tunnel protocol, so a WebSocket
+        // CONNECT must not validate as CONNECT-UDP.
+        RUVIA_CHECK_EQ(ruvia::validate_http_connect_udp_request(request).has_value(),
+            protocol == "websocket");
+        (void)server.release(std::move(*request_head_event));
+    }
 }

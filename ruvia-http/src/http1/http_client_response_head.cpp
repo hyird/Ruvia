@@ -162,13 +162,10 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     if (output.transfer_encoding_.unsupported()) {
         return http1_client_response_parse_error::unsupported_transfer_encoding;
     }
-    // RFC 9112 section 6.3 rules 1 and 2: responses that end at the header
-    // section ignore framing fields, so only a response with content rejects
-    // the HTTP/1.0 Transfer-Encoding combination.
-    if (framing_fields_apply && output.protocol_version_ == http_protocol_version::http10 &&
-        output.saw_transfer_encoding_) {
-        return http1_client_response_parse_error::transfer_encoding_in_http10;
-    }
+    // RFC 9112 section 6.1: an HTTP/1.0 message carrying Transfer-Encoding is
+    // treated as if its framing were faulty and the connection closes after it.
+    // The transfer codings stay unparsed; the plan ignores Transfer-Encoding and
+    // falls back to Content-Length or close delimiting.
     return output;
 }
 

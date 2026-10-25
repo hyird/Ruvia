@@ -24,7 +24,12 @@ bool http2_connection::process_push_promise(const http2_frame_header& header_val
                                            parent_value->local_send().aborted()->source() ==
                                                http2_stream_close_source::local
                                      : closed_streams_.local_reset_sent(header_value.stream_id_);
-    if ((parent_value != nullptr && parent_value->tunnel().not_connect() == nullptr) ||
+    const bool parent_connected_tunnel = parent_value != nullptr && parent_value->tunnel().open() != nullptr;
+    // RFC 9113 section 6.6 admits a PUSH_PROMISE on any open or half-closed
+    // (local) peer-initiated stream, including a CONNECT whose response is still
+    // pending. A connected tunnel is handled after HPACK decoding, where section
+    // 8.5 makes the frame a stream error rather than a connection error.
+    if (!parent_connected_tunnel &&
         (!canceled_parent && (!parent_value || http2_remote_peer_half_closed(*parent_value)))) {
         append_goaway(http2_error_code::protocol_error, "PUSH_PROMISE on closed or idle stream");
         return false;
@@ -48,9 +53,11 @@ bool http2_connection::process_push_promise(const http2_frame_header& header_val
     try {
         push_header_stream_.emplace(promised, resource_);
         push_associated_stream_id_ = header_value.stream_id_;
+        push_reject_connected_tunnel_ = parent_connected_tunnel;
         if (end_headers ? block.size() > max_http2_encoded_header_block_bytes
                         : !http2_start_header_block(*push_header_stream_, block)) {
             push_header_stream_.reset();
+            push_reject_connected_tunnel_ = false;
             append_goaway(http2_error_code::compression_error, "push field block exceeds limit");
             return false;
         }
@@ -65,12 +72,14 @@ bool http2_connection::process_push_promise(const http2_frame_header& header_val
         return true;
     } catch (...) {
         push_header_stream_.reset();
+        push_reject_connected_tunnel_ = false;
         throw;
     }
 }
 
 bool http2_connection::process_push_continuation(const http2_frame_header& header_value, std::string_view payload_value) {
     if (!push_header_stream_) {
+        push_reject_connected_tunnel_ = false;
         append_goaway(http2_error_code::protocol_error, "missing push continuation state");
         return false;
     }
@@ -78,6 +87,7 @@ bool http2_connection::process_push_continuation(const http2_frame_header& heade
     const auto bytes_value = push_header_stream_->remote_header_block().size();
     try {
         if (!http2_append_header_block(*push_header_stream_, payload_value)) {
+            push_reject_connected_tunnel_ = false;
             append_goaway(http2_error_code::compression_error, "push field block exceeds limit");
             return false;
         }
@@ -100,6 +110,8 @@ bool http2_connection::process_push_continuation(const http2_frame_header& heade
 
 bool http2_connection::finish_push_promise(std::string_view block) {
     auto& scratch = *push_header_stream_;
+    const bool reject_connected_tunnel = push_reject_connected_tunnel_;
+    push_reject_connected_tunnel_ = false;
     // PUSH_PROMISE represents a complete request without a request body.
     (void)scratch.record_remote_head_end_stream();
     http2_stream_header_decode_transaction stream_transaction{scratch, true};
@@ -108,6 +120,26 @@ bool http2_connection::finish_push_promise(std::string_view block) {
     if (status == header_decode_status::compression_error) {
         append_goaway(http2_error_code::compression_error, "push field block decompression failed");
         return false;
+    }
+    if (reject_connected_tunnel) {
+        // RFC 9113 section 8.5: on a connected stream only DATA, RST_STREAM,
+        // WINDOW_UPDATE and PRIORITY are allowed; any other frame is a stream
+        // error. The block still had to be decoded so HPACK stays synchronized,
+        // and the promised stream is reserved by the frame (section 6.6), so it
+        // is cancelled explicitly instead of being left dangling.
+        const auto promised_id = scratch.id();
+        reserve_stream_close_effects();
+        output_.reserve_additional(http2_frame_header_bytes + 4);
+        output_.append_rst_stream(push_associated_stream_id_, http2_error_code::protocol_error);
+        output_.append_rst_stream(promised_id, http2_error_code::cancel);
+        hpack_transaction.commit();
+        stream_transaction.commit();
+        closed_streams_.remember(promised_id, http2_stream_close_source::local, true);
+        last_peer_push_stream_id_ = promised_id;
+        last_stream_id_ = promised_id;
+        close_stream(push_associated_stream_id_, http2_stream_close_source::local,
+            http2_error_code::protocol_error);
+        return true;
     }
     if (status != header_decode_status::ok ||
         (scratch.request_method() != "GET" && scratch.request_method() != "HEAD")) {

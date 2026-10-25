@@ -70,6 +70,10 @@ struct http_request_access final {
         request.authority_ = authority;
     }
 
+    static void set_protocol(http_request& request, std::string_view protocol) noexcept {
+        request.protocol_ = protocol;
+    }
+
     static void set_target_form(http_request& request, ::ruvia::http_request_target_form form) noexcept {
         request.target_form_ = form;
     }

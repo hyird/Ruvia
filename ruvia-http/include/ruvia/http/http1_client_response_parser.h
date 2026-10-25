@@ -263,7 +263,6 @@ enum class http1_client_response_parse_error : std::uint8_t {
     conflicting_content_length,
     invalid_transfer_encoding,
     unsupported_transfer_encoding,
-    transfer_encoding_in_http10,
     content_length_and_transfer_encoding,
     invalid_protocol_switch,
 };

@@ -84,8 +84,6 @@ std::string_view http1_client_response_parse_error_message(
             return "invalid response Transfer-Encoding";
         case http1_client_response_parse_error::unsupported_transfer_encoding:
             return "unsupported response transfer coding";
-        case http1_client_response_parse_error::transfer_encoding_in_http10:
-            return "Transfer-Encoding in HTTP/1.0 response";
         case http1_client_response_parse_error::content_length_and_transfer_encoding:
             return "response has both Content-Length and Transfer-Encoding";
         case http1_client_response_parse_error::invalid_protocol_switch:

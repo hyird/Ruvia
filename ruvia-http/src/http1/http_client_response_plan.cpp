@@ -225,7 +225,12 @@ http1_client_response_planning_result_type plan_http1_client_response(
     }
 
     const auto& transfer_encoding = response.transfer_encoding_.value();
-    if (response.saw_transfer_encoding_) {
+    // RFC 9112 section 6.1: HTTP/1.0 Transfer-Encoding is faulty framing, so the
+    // codings are ignored and the message falls back to Content-Length or close
+    // delimiting while the connection closes after it.
+    const bool http10_faulty_framing = response.protocol_version_ == http_protocol_version::http10 &&
+                                       response.saw_transfer_encoding_;
+    if (response.saw_transfer_encoding_ && !http10_faulty_framing) {
         if (content_length.has_value()) {
             return http1_client_response_parse_error::content_length_and_transfer_encoding;
         }

@@ -885,12 +885,23 @@ RUVIA_TEST(http_client_unframed_body_response_is_close_delimited) {
 }
 
 RUVIA_TEST(http_client_http10_transfer_encoding_is_faulty_framing_only_with_content) {
-    RUVIA_CHECK(parse_fails("GET", "HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked"));
+    // RFC 9112 section 6.1: the codings are ignored; the message falls back to
+    // Content-Length, else close delimiting, and closes after it.
+    const auto unframed = parse_head("GET", "HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked");
+    const auto* close_delimited = unframed.plan().close_delimited();
+    RUVIA_CHECK(close_delimited != nullptr);
+    if (close_delimited != nullptr) {
+        RUVIA_CHECK(close_delimited->transfer_codings().empty());
+    }
+    const auto framed = parse_head(
+        "GET", "HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 5");
+    RUVIA_CHECK_EQ(require_known_length(framed.plan()).content_length(), std::size_t{5});
+    RUVIA_CHECK(require_known_length(framed.plan()).persistence() ==
+                http1_close_policy::close_after_response);
     // RFC 9112 section 6.3 rule 1: HEAD, 204 and 304 responses end at the
-    // header section regardless of framing fields, so the HTTP/1.0 version
-    // check does not apply to them. RFC 9112 section 6.1 still treats the
-    // HTTP/1.0 message as faulty: the connection closes after it, whatever
-    // keep-alive it requests.
+    // header section regardless of framing fields. RFC 9112 section 6.1 still
+    // treats the HTTP/1.0 message as faulty: the connection closes after it,
+    // whatever keep-alive it requests.
     for (const auto& [method, response] : {
              std::pair{"HEAD", "HTTP/1.0 200 OK\r\nTransfer-Encoding: gzip\r\nConnection: keep-alive"},
              std::pair{"GET", "HTTP/1.0 304 Not Modified\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive"},

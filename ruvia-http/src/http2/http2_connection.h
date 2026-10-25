@@ -593,6 +593,10 @@ private:
     bool encoder_table_size_update_pending_{false};
     std::optional<http2_stream_state> push_header_stream_;
     std::uint32_t push_associated_stream_id_{0};
+    // PUSH_PROMISE received on a connected CONNECT stream: decode for HPACK, then
+    // reset both the associated stream (RFC 9113 section 8.5 stream error) and the
+    // promised stream (RFC 9113 section 6.6 reserved stream).
+    bool push_reject_connected_tunnel_{false};
     bool enable_push_{false};
     bool receive_origin_advertisements_{false};
     std::uint32_t last_peer_push_stream_id_{0};

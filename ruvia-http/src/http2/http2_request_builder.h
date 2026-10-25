@@ -54,6 +54,7 @@ public:
         http_request_access::set_target(request, target);
         http_request_access::set_scheme(request, stream.request_scheme());
         http_request_access::set_authority(request, http2_effective_request_authority(stream));
+        http_request_access::set_protocol(request, stream.request_protocol());
         http_request_access::set_target_form(request, ::ruvia::http_request_target_form::http2);
         http_request_access::set_path(request, target_parts.path_);
         http_request_access::set_query_string(request, target_parts.query_string_);

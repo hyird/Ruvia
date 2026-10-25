@@ -65,6 +65,7 @@ public:
         target_ = {};
         scheme_ = {};
         authority_ = {};
+        protocol_ = {};
         path_ = {};
         query_string_ = {};
         protocol_version_ = http_protocol_version::http11;
@@ -83,6 +84,12 @@ public:
 
     [[nodiscard]] std::string_view authority() const noexcept {
         return authority_;
+    }
+
+    // The HTTP/2 :protocol pseudo-field (RFC 8441 extended CONNECT). Empty for
+    // HTTP/1 requests and for HTTP/2 requests that carry no :protocol.
+    [[nodiscard]] std::string_view protocol() const noexcept {
+        return protocol_;
     }
 
     [[nodiscard]] http_request_target_form target_form() const noexcept {
@@ -105,7 +112,7 @@ public:
     // block. HTTP/1 preserves accepted field-name spelling but removes field
     // framing/OWS and replaces a conflicting Host value for absolute- or
     // authority-form targets. HTTP/2 names are lowercase, pseudo-fields are
-    // exposed through method()/scheme()/authority()/target(), split Cookie
+    // exposed through method()/scheme()/authority()/protocol()/target(), split Cookie
     // fields are coalesced, and Host is synthesized from a valid :authority
     // when absent. Repeated regular fields retain wire order.
     // Content-Type is retained as metadata without parsing media-type syntax;
@@ -149,6 +156,7 @@ private:
     std::string_view target_;
     std::string_view scheme_;
     std::string_view authority_;
+    std::string_view protocol_;
     std::string_view path_;
     std::string_view query_string_;
     http_protocol_version protocol_version_{http_protocol_version::http11};
