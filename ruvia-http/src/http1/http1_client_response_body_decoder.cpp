@@ -1,6 +1,7 @@
 #include "ruvia/http/http1_client_response_body_decoder.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <limits>
 #include <stdexcept>
 #include <type_traits>
@@ -25,7 +26,8 @@ std::string_view http1_client_response_body_error_message(http1_client_response_
 
 http1_client_response_body_decoder::http1_client_response_body_decoder(
     http1_client_response_plan plan, std::pmr::memory_resource* resource)
-    : unfolded_trailers_(detail::http_pmr_resource_or_default(resource)) {
+    // 使用可抛构造，让调试 STL 元数据的分配失败正常传播。
+    : unfolded_trailers_(std::size_t{0}, '\0', detail::http_pmr_resource_or_default(resource)) {
     if (resource == nullptr) {
         throw std::invalid_argument("HTTP/1 response body decoder requires a memory resource");
     }
