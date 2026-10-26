@@ -126,6 +126,8 @@ private:
 // a stack containing an unknown coding, is exposed as received with its
 // Content-Encoding field kept; a malformed or over-deep Content-Encoding field
 // fails the response with protocol_error.
+// For HTTP/1, bytes received beyond a complete framed response retire the
+// connection and are discarded; they do not turn that response into a failure.
 class http_client_response_body final {
 public:
     http_client_response_body(const http_client_response_body&) = delete;

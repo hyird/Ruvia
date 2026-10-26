@@ -370,13 +370,13 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         }
         eof = !read.ok();
     }
-    // A connection that is not reused takes any bytes after the response with
-    // it (RFC 9112 §9.6); a rejected CONNECT may be followed by bytes of unknown
-    // ownership. Only a reusable connection would parse them as the next response.
-    const bool reusable = persistence == http1_close_policy::allow_reuse && !request.is_tunnel();
-    if (reusable && !read_buffer.empty()) {
-        throw http_client_error(http_client_error::code_type::protocol_error, "unexpected bytes after HTTP response");
-    }
+    // Bytes beyond this response's framing cannot belong to a response the
+    // client requested. Preserve the complete framed response, but retire the
+    // transport so those bytes are discarded rather than parsed as a future
+    // response. A rejected CONNECT likewise leaves subsequent ownership
+    // unknown (RFC 9112 §9.6).
+    const bool reusable = persistence == http1_close_policy::allow_reuse &&
+                          !request.is_tunnel() && read_buffer.empty();
     if (timeout.expired()) {
         throw_body_timeout();
     }

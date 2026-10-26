@@ -714,6 +714,26 @@ RUVIA_TEST(client_response_body_collectors_return_public_results) {
     run_operation(worker, io, operation);
 }
 
+// A response is complete at its declared Content-Length. Bytes beyond that
+// boundary belong to no requested response: retain the complete response and
+// retire the connection instead of turning the valid message into a failure.
+RUVIA_TEST(http_client_preserves_fixed_length_response_before_unsolicited_bytes) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    scripted_head_peer peer(
+        io, worker.handle_, {"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nokunsolicited"});
+    ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(peer.port()));
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        auto response = co_await client.handle().send({.target_ = "/overlong"});
+        const auto body = co_await response.body().read_all();
+        RUVIA_CHECK_EQ(body.text(), std::string_view("ok"));
+        co_await peer.wait();
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
 RUVIA_TEST(client_response_body_claims_its_shared_lane_only_when_started) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
