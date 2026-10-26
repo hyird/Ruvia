@@ -56,9 +56,10 @@ concept http2_client_session_handler = requires(handler_type& handler, http2_eve
 // The one HTTP/2 client connection driver shared by the HTTP client pool and
 // the WebSocket client: preface, the sole socket reader and writer, event
 // drain and generation-safe failure over a borrowed client_tcp_transport. The
-// writer takes whole pending output by allocator-matching swap, so a feed() or
-// submit during an in-flight write never invalidates the bytes being written.
-// Worker-affine and address-stable; the owner joins `tasks` before retiring it.
+// writer transfers complete frame-bounded batches into its own storage, so a
+// feed() or submit during an in-flight write never invalidates the bytes being
+// written. Worker-affine and address-stable; the owner joins `tasks` before
+// retiring it.
 template <typename handler_type>
 class http2_client_session final {
 public:
@@ -99,7 +100,7 @@ public:
         std::array<char, read_buffer_bytes> input{};
         for (;;) {
             while (connection_->wants_write()) {
-                connection_->take_output(output);
+                take_output_batch(output);
                 const auto written = co_await transport_.write(output, timeout);
                 if (!written.ok()) {
                     connection_.reset();
@@ -219,6 +220,12 @@ public:
 
 private:
     static constexpr std::size_t read_buffer_bytes = 16384;
+    static constexpr std::size_t write_batch_bytes = http2_default_max_frame_size;
+
+    void take_output_batch(std::pmr::string& output) {
+        output.clear();
+        (void)connection_->take_output_batch(write_batch_bytes, output);
+    }
 
     [[nodiscard]] bool feed(std::string_view bytes_value) {
         for (;;) {
@@ -304,13 +311,14 @@ private:
         try {
             for (;;) {
                 while (generation_ == generation && !failed_ && connection_->wants_write()) {
-                    connection_->take_output(output);
+                    take_output_batch(output);
                     writing_ = true;
                     const auto written = co_await transport_.write(output, operation_timeout(write_timeout_));
                     writing_ = false;
                     // Retain ordinary heads and frame-sized DATA batches, but
-                    // return one-off large request bursts before the connection idles.
-                    http_clear_pmr_string_retaining_small(output, 2 * read_buffer_bytes);
+                    // return an unexpectedly larger indivisible frame before
+                    // the connection idles.
+                    http_clear_pmr_string_retaining_small(output, 2 * write_batch_bytes);
                     if (!written.ok()) {
                         fail(generation, written, {});
                         co_return;
