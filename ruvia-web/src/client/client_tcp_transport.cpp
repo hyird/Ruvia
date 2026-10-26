@@ -3,7 +3,6 @@
 #include <chrono>
 #include <utility>
 
-#include <asio/connect.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/write.hpp>
 #include <openssl/bio.h>
@@ -11,6 +10,7 @@
 
 #include "ruvia/core/async.h"
 
+#include "client/client_happy_eyeballs.h"
 #include "tls/tls_stream_end.h"
 #include "util/tcp_socket_policies.h"
 
@@ -42,8 +42,8 @@ void client_tcp_transport::abort(client_abort_reason reason) noexcept {
     }
     resolver_.cancel();
     std::error_code ignored;
-    if (connecting_) {
-        (void)stream_.lowest_layer().close(ignored);
+    if (connecting_ != nullptr) {
+        connecting_->cancel();
     } else {
         (void)stream_.lowest_layer().cancel(ignored);
     }
@@ -55,6 +55,9 @@ void client_tcp_transport::close() noexcept {
     write_.timer_.cancel();
     write_.deadline_.reset();
     resolver_.cancel();
+    if (connecting_ != nullptr) {
+        connecting_->cancel();
+    }
     send_close_notify();
     std::error_code ignored;
     (void)stream_.lowest_layer().cancel(ignored);
@@ -195,16 +198,24 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     if (resolved.error_) {
         co_return finish(read_, timeout, resolved.error_, 0, client_transport_status::resolve_failed);
     }
-    const auto endpoints = std::move(resolved.addresses_);
-    connecting_ = true;
-    const auto connected = co_await async_asio([this, &endpoints](auto handler) mutable {
-        asio::async_connect(stream_.next_layer().socket(), endpoints, std::move(handler));
-    });
-    connecting_ = false;
-    if (connected.error_code() || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() ||
+    client_happy_eyeballs connector(worker_, stream_.get_executor(), resolved.addresses_);
+    connecting_ = &connector;
+    struct clear_connector final {
+        client_happy_eyeballs*& value_;
+        ~clear_connector() {
+            value_ = nullptr;
+        }
+    } connector_guard{connecting_};
+    auto connected = co_await connector.connect();
+    connecting_ = nullptr;
+    if (connected.error_ || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() ||
         timeout.expired()) {
-        co_return finish(read_, timeout, connected.error_code(), 0, client_transport_status::connect_failed);
+        co_return finish(read_, timeout, connected.error_, 0, client_transport_status::connect_failed);
     }
+    if (!connected.socket_) {
+        std::terminate();
+    }
+    stream_.next_layer().replace_socket(std::move(*connected.socket_));
     apply_tcp_socket_policies(stream_.next_layer().socket(), endpoint_.tcp_.no_delay_, endpoint_.tcp_.keep_alive_);
     // Every socket operation is asynchronous or a bounded probe, and the TLS
     // socket layer writes records directly.

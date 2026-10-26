@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <exception>
 #include <system_error>
 #include <type_traits>
 #include <utility>
@@ -71,6 +72,15 @@ public:
     // CONNECT tunnel, which writes its own TLS records.
     [[nodiscard]] asio::ip::tcp::socket& socket() noexcept {
         return socket_;
+    }
+    // Replaces the unopened pre-handshake socket with the winner of the
+    // Happy Eyeballs race. No TLS record operation may be active yet.
+    void replace_socket(asio::ip::tcp::socket socket) noexcept {
+        if (writes_ != 0) {
+            std::terminate();
+        }
+        socket_ = std::move(socket);
+        reset();
     }
     // Every record the stream handed to the socket is whole on the wire, in
     // sequence: no write is pending or partly done, and none failed.

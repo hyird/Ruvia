@@ -24,6 +24,8 @@
 
 namespace ruvia::detail {
 
+class client_happy_eyeballs;
+
 // Why an owner stopped a transport. The latest non-none reason wins until the
 // owner starts a new operation with reset_abort().
 enum class client_abort_reason : std::uint8_t { none,
@@ -124,9 +126,8 @@ public:
         abort_reason_ = client_abort_reason::none;
     }
     // Records the reason (replacing an earlier one) and cancels pending
-    // resolve and socket operations; the socket stays open until close(),
-    // except during connect: Asio's multi-endpoint connect moves on to the next
-    // endpoint after a cancelled attempt and stops only on a closed socket.
+    // resolve and socket operations; the established socket stays open until
+    // close(). During an address race, every attempt is closed and joined.
     void abort(client_abort_reason reason) noexcept;
     // Closes the connection at once. An established TLS connection first
     // sends close_notify (RFC 9112 §9.8, RFC 9846 §6.1) with one non-blocking
@@ -175,7 +176,9 @@ private:
     lane_deadline write_;
     client_abort_reason abort_reason_{client_abort_reason::none};
     bool tls_started_{false};
-    bool connecting_{false};
+    // Non-null only while the address race is active; abort() cancels and the
+    // connect coroutine joins every attempted socket before clearing it.
+    client_happy_eyeballs* connecting_{nullptr};
     // The TLS connection is established and has not failed, so a close may
     // append close_notify once its socket layer holds whole records only.
     bool tls_close_ready_{false};
