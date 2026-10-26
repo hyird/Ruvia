@@ -30,8 +30,11 @@ enum class response_mode { ordinary,
     abandoned,
     abandoned_pending,
     buffered,
+    streaming,
     disconnected,
     refused };
+
+constexpr std::size_t streaming_payload_bytes = 256 * 1024;
 
 void append_frame(std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
     std::uint32_t stream_id, std::string_view payload) {
@@ -175,7 +178,8 @@ private:
                 const std::string_view body = requests_ == 2 ? "next" : rejected ? "no"
                                                                                  : "ok";
                 std::pmr::string fields(&memory);
-                const bool empty_final = requests_ == 1 && mode_ == response_mode::buffered;
+                const bool empty_final = requests_ == 1 &&
+                                         (mode_ == response_mode::buffered || mode_ == response_mode::streaming);
                 ruvia::hpack_encoder::encode_header(fields, ":status", empty_final ? "204" : rejected ? "413"
                                                                                                       : "200");
                 if (!empty_final) {
@@ -197,6 +201,17 @@ private:
                     const std::string_view increment("\0\0\0\1", 4);
                     append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, increment);
                     append_frame(wire, ruvia::http2_frame_type::window_update, 0, first_stream, increment);
+                } else if (mode_ == response_mode::streaming && !payload.empty()) {
+                    const auto increment_value = static_cast<std::uint32_t>(payload.size());
+                    const std::array<char, 4> increment{
+                        static_cast<char>((increment_value >> 24U) & 0x7fU),
+                        static_cast<char>((increment_value >> 16U) & 0xffU),
+                        static_cast<char>((increment_value >> 8U) & 0xffU),
+                        static_cast<char>(increment_value & 0xffU)};
+                    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0,
+                        {increment.data(), increment.size()});
+                    append_frame(wire, ruvia::http2_frame_type::window_update, 0, first_stream,
+                        {increment.data(), increment.size()});
                 }
             } else if (header->stream_id_ == first_stream && type == ruvia::http2_frame_type::rst_stream) {
                 request_reset_ = true;
@@ -260,6 +275,17 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                 RUVIA_CHECK(response.status() == ruvia::http_status::no_content);
                 const auto bytes = co_await response.body().read_all();
                 RUVIA_CHECK(bytes.bytes().empty());
+            } else if (mode == response_mode::streaming) {
+                const std::string payload(streaming_payload_bytes, 's');
+                auto exchange = co_await client.handle().open_request({.method_ = "POST", .target_ = "/upload"},
+                    {.content_length_ = payload.size(), .max_chunk_bytes_ = payload.size()});
+                auto response = co_await exchange.response();
+                RUVIA_CHECK(response.status() == ruvia::http_status::no_content);
+                const auto bytes = co_await response.body().read_all();
+                RUVIA_CHECK(bytes.bytes().empty());
+                co_await exchange.body().write(payload);
+                co_await exchange.body().end();
+                RUVIA_CHECK(exchange.body().complete());
             } else {
                 const bool expect = mode == response_mode::continued || mode == response_mode::rejected;
                 auto exchange = co_await client.handle().open_request({.method_ = "POST", .target_ = "/upload"},
@@ -316,8 +342,14 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                 RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "next");
                 co_await peer.join();
                 RUVIA_CHECK_EQ(peer.requests_, 2U);
-                if (mode == response_mode::ordinary || mode == response_mode::continued || mode == response_mode::buffered) {
-                    RUVIA_CHECK_EQ(peer.received_, mode == response_mode::buffered ? std::string(65536, 'b') : std::string("payload"));
+                if (mode == response_mode::ordinary || mode == response_mode::continued ||
+                    mode == response_mode::buffered || mode == response_mode::streaming) {
+                    const auto expected = mode == response_mode::buffered
+                                              ? std::string(65536, 'b')
+                                          : mode == response_mode::streaming
+                                              ? std::string(streaming_payload_bytes, 's')
+                                              : std::string("payload");
+                    RUVIA_CHECK_EQ(peer.received_, expected);
                     RUVIA_CHECK(peer.request_ended_);
                 } else if (mode == response_mode::refused) {
                     RUVIA_CHECK(peer.received_.empty());
@@ -372,6 +404,10 @@ RUVIA_TEST(http2_client_abandoned_upload_cancels_its_retained_incomplete_respons
 
 RUVIA_TEST(http2_client_early_final_drains_window_blocked_buffered_upload_before_reuse) {
     http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::buffered);
+}
+
+RUVIA_TEST(http2_client_streaming_upload_drains_one_large_chunk_across_flow_control_windows) {
+    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::streaming);
 }
 
 RUVIA_TEST(http2_client_upload_transport_failure_preserves_completed_response) {

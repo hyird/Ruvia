@@ -615,6 +615,48 @@ task<void> http_client_connection::wait_for_http2_queued_data(
     }
 }
 
+task<bool> http_client_connection::send_http2_output_chunk(
+    http2_stream& stream, http_client_output_queue& upload) {
+    // Bound the sans-I/O core's flow-control-blocked copy while the output
+    // queue continues to own the caller's whole chunk until it is drained.
+    constexpr std::size_t submit_bytes = http2_default_max_frame_size;
+    auto& connection = http2_.connection();
+    std::size_t offset = 0;
+    while (offset < upload.chunk_.size() && !stream.failed() && !stream.retryable_ && !upload.stopped_) {
+        const auto count = std::min(submit_bytes, upload.chunk_.size() - offset);
+        http2_data_submit_status submitted{};
+        try {
+            submitted = connection.submit_data(
+                stream.stream_id_, std::string_view(upload.chunk_).substr(offset, count), http2_end_stream::keep_open);
+        } catch (const std::invalid_argument&) {
+            stream.error_ = http_client_error::code_type::invalid_request;
+            http2_.submit_reset(stream.stream_id_);
+            co_return false;
+        } catch (const std::logic_error&) {
+            stream.error_ = http_client_error::code_type::invalid_request;
+            http2_.submit_reset(stream.stream_id_);
+            co_return false;
+        }
+        if (submitted == http2_data_submit_status::backpressured ||
+            submitted == http2_data_submit_status::expectation_pending) {
+            co_await stream.signal_.wait();
+            continue;
+        }
+        if (submitted != http2_data_submit_status::accepted &&
+            submitted != http2_data_submit_status::queued) {
+            stream.error_ = http_client_error::code_type::invalid_request;
+            http2_.submit_reset(stream.stream_id_);
+            co_return false;
+        }
+        offset += count;
+        http2_.wake_writer();
+        if (submitted == http2_data_submit_status::queued) {
+            co_await wait_for_http2_queued_data(stream, upload);
+        }
+    }
+    co_return offset == upload.chunk_.size() && !stream.failed() && !stream.retryable_ && !upload.stopped_;
+}
+
 task<void> http_client_connection::stream_http2_upload(
     const http_client_request_storage& request, http2_stream& stream, http_client_output_queue& upload) {
     auto& connection = http2_.connection();
@@ -650,33 +692,7 @@ task<void> http_client_connection::stream_http2_upload(
             break;
         }
         if (upload.chunk_ready_) {
-            http2_data_submit_status submitted{};
-            try {
-                submitted = connection.submit_data(stream.stream_id_, upload.chunk_, http2_end_stream::keep_open);
-            } catch (const std::invalid_argument&) {
-                stream.error_ = http_client_error::code_type::invalid_request;
-                http2_.submit_reset(stream.stream_id_);
-                break;
-            } catch (const std::logic_error&) {
-                stream.error_ = http_client_error::code_type::invalid_request;
-                http2_.submit_reset(stream.stream_id_);
-                break;
-            }
-            if (submitted == http2_data_submit_status::backpressured ||
-                submitted == http2_data_submit_status::expectation_pending) {
-                co_await stream.signal_.wait();
-                continue;
-            }
-            if (submitted != http2_data_submit_status::accepted && submitted != http2_data_submit_status::queued) {
-                stream.error_ = http_client_error::code_type::invalid_request;
-                http2_.submit_reset(stream.stream_id_);
-                break;
-            }
-            http2_.wake_writer();
-            if (submitted == http2_data_submit_status::queued) {
-                co_await wait_for_http2_queued_data(stream, upload);
-            }
-            if (!stream.failed() && !stream.retryable_ && !upload.stopped_) {
+            if (co_await send_http2_output_chunk(stream, upload)) {
                 upload.acknowledge_chunk();
             }
         } else if (upload.end_requested_) {
