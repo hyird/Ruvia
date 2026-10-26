@@ -148,8 +148,15 @@ task<void> http_client_pool::join() {
 }
 
 http_client_stats http_client_pool::stats() const noexcept {
-    return {requests_buffered_, requests_in_flight_, completed_requests_, failed_requests_, wire_counters_.sent_,
-        wire_counters_.received_, advertisements_.dropped(), received_pushes_, rejected_pushes_};
+    return {.buffered_requests_ = requests_buffered_,
+        .in_flight_requests_ = requests_in_flight_,
+        .completed_requests_ = completed_requests_,
+        .failed_requests_ = failed_requests_,
+        .plaintext_bytes_sent_ = wire_counters_.sent_,
+        .plaintext_bytes_received_ = wire_counters_.received_,
+        .dropped_advertisements_ = advertisements_.dropped(),
+        .received_pushes_ = received_pushes_,
+        .rejected_pushes_ = rejected_pushes_};
 }
 
 void http_client_pool::cancel_operation_by_id(std::uint64_t cancellation_id) noexcept {

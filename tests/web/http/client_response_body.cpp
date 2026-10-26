@@ -1322,7 +1322,7 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_cancel_and_deadline_without_reading) {
                     asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
                 });
             }
-            RUVIA_CHECK(client.handle().stats().bytes_received_ >= encoded.size());
+            RUVIA_CHECK(client.handle().stats().plaintext_bytes_received_ >= encoded.size());
 
             if (deadline) {
                 (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(300));
@@ -1366,7 +1366,7 @@ RUVIA_TEST(http1_transfer_gzip_full_queue_loop_stop_joins_without_reading) {
                 asio::post(io, [done = std::move(done)]() mutable { done(std::error_code{}); });
             });
         }
-        RUVIA_CHECK(client.handle().stats().bytes_received_ >= encoded.size());
+        RUVIA_CHECK(client.handle().stats().plaintext_bytes_received_ >= encoded.size());
         worker.attachment_.stop();
         co_await client.shutdown();
         joined = true;
