@@ -126,8 +126,11 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
             return false;
         }
         const auto close_source = closed_streams_.source(header_value.stream_id_);
+        const bool possibly_forgotten_reset =
+            closed_streams_.may_have_forgotten_local_request_reset(header_value.stream_id_);
         if (close_source != http2_stream_close_source::peer_goaway &&
-            !closed_streams_.local_reset_sent(header_value.stream_id_)) {
+            !closed_streams_.local_reset_sent(header_value.stream_id_) &&
+            !possibly_forgotten_reset) {
             append_goaway(http2_error_code::stream_closed, "HEADERS on closed stream");
             return false;
         }

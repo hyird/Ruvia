@@ -4657,6 +4657,68 @@ RUVIA_TEST(http2_public_built_request_exposes_extended_protocol) {
     }
 }
 
+RUVIA_TEST(http2_public_late_responses_after_many_client_cancellations_keep_connection) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    std::pmr::string settings(&resource);
+    append_peer_settings(settings);
+    RUVIA_CHECK(client.feed(settings) == ruvia::http2_feed_result::accepted);
+    (void)ruvia::testing::drain_output(client);
+
+    std::uint32_t first_canceled_stream = 0;
+    for (std::size_t index = 0; index != 2100; ++index) {
+        const auto submitted = client.submit_request_head(ruvia::http2_regular_request_head_view{
+            .method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .target_ = "/canceled"});
+        RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
+        if (!std::holds_alternative<std::uint32_t>(submitted)) {
+            return;
+        }
+        const auto stream_id = std::get<std::uint32_t>(submitted);
+        if (index == 0) {
+            first_canceled_stream = stream_id;
+        }
+        RUVIA_CHECK(client.submit_reset(stream_id, ruvia::http2_error_code::cancel) ==
+                    ruvia::http2_submit_status::accepted);
+        (void)ruvia::testing::drain_output(client);
+    }
+
+    const auto active = client.submit_request_head(ruvia::http2_regular_request_head_view{
+        .method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .target_ = "/active"});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(active));
+    if (!std::holds_alternative<std::uint32_t>(active)) {
+        return;
+    }
+    const auto active_stream = std::get<std::uint32_t>(active);
+    (void)ruvia::testing::drain_output(client);
+
+    std::pmr::string response_block(&resource);
+    ruvia::hpack_encoder::encode_header(response_block, ":status", "200");
+    std::pmr::string late_head(&resource);
+    append_frame(
+        late_head, ruvia::http2_frame_type::headers, 0x4, first_canceled_stream, response_block);
+    const auto late_head_result = client.feed(late_head);
+    RUVIA_CHECK(late_head_result == ruvia::http2_feed_result::accepted);
+    if (late_head_result != ruvia::http2_feed_result::accepted) {
+        return;
+    }
+    RUVIA_CHECK(!client.next_event());
+
+    std::pmr::string late_data(&resource);
+    append_frame(late_data, ruvia::http2_frame_type::data, 0x1, first_canceled_stream, "late");
+    RUVIA_CHECK(client.feed(late_data) == ruvia::http2_feed_result::accepted);
+    RUVIA_CHECK(!client.next_event());
+    RUVIA_CHECK(!client.connection_error());
+
+    std::pmr::string active_response(&resource);
+    append_frame(active_response, ruvia::http2_frame_type::headers, 0x5, active_stream, response_block);
+    RUVIA_CHECK(client.feed(active_response) == ruvia::http2_feed_result::accepted);
+    const auto head = client.next_event();
+    RUVIA_CHECK(head && head->response_head() && head->response_head()->stream_id() == active_stream);
+    const auto end = client.next_event();
+    RUVIA_CHECK(end && end->message_end() && end->message_end()->stream_id() == active_stream);
+    RUVIA_CHECK(!client.connection_error());
+}
+
 // A5H2-02: Receiving DATA or HEADERS on a stream that completed normally (both
 // halves closed by END_STREAM without local RST_STREAM), or receiving DATA on a
 // skipped (implicitly closed) stream ID, fails with GOAWAY(STREAM_CLOSED).

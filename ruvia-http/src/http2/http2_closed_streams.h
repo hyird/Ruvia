@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -30,8 +31,24 @@ public:
             records_[size_++] = closed_stream_record_type{stream_id, source_value, reset_sent};
             return;
         }
+        const auto& evicted = records_[replace_index_];
+        if (evicted.source_ == http2_stream_close_source::local && evicted.reset_sent_ &&
+            (evicted.id_ & 1U) != 0) {
+            forgotten_local_request_reset_through_ =
+                std::max(forgotten_local_request_reset_through_, evicted.id_);
+        }
         records_[replace_index_] = closed_stream_record_type{stream_id, source_value, reset_sent};
         replace_index_ = (replace_index_ + 1) % record_limit;
+    }
+
+    // Client-originated stream IDs are consecutive odd values. Once exact close
+    // metadata is evicted, any older odd stream can therefore have been reset
+    // locally. RFC 9113 section 5.1 permits ignoring frames that might have been
+    // sent before the peer observed that reset. This preserves active sibling
+    // streams without retaining per-stream state for the connection's whole life.
+    [[nodiscard]] bool may_have_forgotten_local_request_reset(
+        std::uint32_t stream_id) const noexcept {
+        return (stream_id & 1U) != 0 && stream_id <= forgotten_local_request_reset_through_;
     }
 
     [[nodiscard]] std::optional<http2_stream_close_source> source(
@@ -82,6 +99,7 @@ private:
     std::array<closed_stream_record_type, record_limit> records_{};
     std::size_t size_{0};
     std::size_t replace_index_{0};
+    std::uint32_t forgotten_local_request_reset_through_{0};
 };
 
 }  // namespace ruvia::detail

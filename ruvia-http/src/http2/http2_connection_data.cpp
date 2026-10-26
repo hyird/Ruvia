@@ -68,8 +68,12 @@ bool http2_connection::process_data(const http2_frame_header& header_value, std:
             return false;
         }
         const auto close_source = closed_streams_.source(header_value.stream_id_);
+        const bool possibly_forgotten_reset =
+            role_ == http2_role::client &&
+            closed_streams_.may_have_forgotten_local_request_reset(header_value.stream_id_);
         if (close_source == http2_stream_close_source::peer_goaway ||
-            closed_streams_.local_reset_sent(header_value.stream_id_)) {
+            closed_streams_.local_reset_sent(header_value.stream_id_) ||
+            possibly_forgotten_reset) {
             // A dropped DATA frame still consumes connection flow control, but has no
             // stream window or application event to publish.
             reserve_consumed_data_credit(nullptr, static_cast<std::uint32_t>(flow_bytes));
