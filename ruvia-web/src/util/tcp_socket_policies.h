@@ -26,15 +26,19 @@ inline void validate_tcp_socket_policies(tcp_no_delay_policy no_delay, tcp_keep_
     }
 }
 
-inline void apply_tcp_socket_policies(asio::ip::tcp::socket& socket, tcp_no_delay_policy no_delay,
-    tcp_keep_alive_policy keep_alive) noexcept {
-    std::error_code ignored;
+[[nodiscard]] inline std::error_code apply_tcp_socket_policies(asio::ip::tcp::socket& socket,
+    tcp_no_delay_policy no_delay, tcp_keep_alive_policy keep_alive) noexcept {
+    std::error_code error;
     if (no_delay == tcp_no_delay_policy::enable) {
-        (void)socket.set_option(asio::ip::tcp::no_delay(true), ignored);
+        socket.set_option(asio::ip::tcp::no_delay(true), error);
+        if (error) {
+            return error;
+        }
     }
     if (keep_alive == tcp_keep_alive_policy::enable) {
-        (void)socket.set_option(asio::socket_base::keep_alive(true), ignored);
+        socket.set_option(asio::socket_base::keep_alive(true), error);
     }
+    return error;
 }
 
 }  // namespace ruvia

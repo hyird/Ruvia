@@ -221,11 +221,13 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
         std::terminate();
     }
     stream_.next_layer().replace_socket(std::move(*connected.socket_));
-    apply_tcp_socket_policies(stream_.next_layer().socket(), endpoint_.tcp_.no_delay_, endpoint_.tcp_.keep_alive_);
+    auto mode_error = apply_tcp_socket_policies(
+        stream_.next_layer().socket(), endpoint_.tcp_.no_delay_, endpoint_.tcp_.keep_alive_);
     // Every socket operation is asynchronous or a bounded probe, and the TLS
     // socket layer writes records directly.
-    std::error_code mode_error;
-    (void)stream_.next_layer().socket().non_blocking(true, mode_error);
+    if (!mode_error) {
+        stream_.next_layer().socket().non_blocking(true, mode_error);
+    }
     if (mode_error || !secure()) {
         co_return finish(read_, timeout, mode_error, 0, client_transport_status::connect_failed);
     }
