@@ -63,6 +63,12 @@ struct client_wire_counters final {
     std::size_t received_{};
 };
 
+enum class client_idle_transport_status : std::uint8_t {
+    reusable,
+    closed,
+    pending_data,
+};
+
 // Borrowed origin of one transport; the owner's startup config outlives it.
 struct client_tcp_endpoint final {
     // Validated unbracketed host used for DNS.
@@ -141,10 +147,11 @@ public:
     // back; the close cancels it.
     void close() noexcept;
     // Bounded non-blocking check of a connected, idle transport that never
-    // runs the TLS engine. An HTTP/1 peer sends nothing between exchanges, so
-    // readable or TLS-buffered bytes or end of stream retire the connection
-    // (FIN, TLS close_notify, post-handshake records or an unsolicited response).
-    [[nodiscard]] bool idle_open() noexcept;
+    // runs the TLS engine. An HTTP/1 or Redis peer sends nothing between
+    // exchanges, so readable or TLS-buffered bytes are distinguished from an
+    // end of stream before either condition retires the connection. Pending TLS
+    // data can be close_notify, a post-handshake record or an unsolicited response.
+    [[nodiscard]] client_idle_transport_status idle_status() noexcept;
 
     // Raw stream for the CONNECT tunnel adapter, which owns TLS shutdown: the
     // transport no longer sends close_notify for this connection.

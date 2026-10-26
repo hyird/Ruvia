@@ -107,21 +107,26 @@ void client_tcp_transport::send_close_notify() noexcept {
 // and an idle connection normally carries none; a later control record only
 // costs one reconnect. Raw bytes Asio holds in its own input buffer stay
 // invisible here, like a close racing the probe: the response read reports them.
-bool client_tcp_transport::idle_open() noexcept {
+client_idle_transport_status client_tcp_transport::idle_status() noexcept {
     auto& socket = stream_.next_layer().socket();
     if (!socket.is_open()) {
-        return false;
+        return client_idle_transport_status::closed;
     }
     if (secure()) {
         SSL* const native = stream_.native_handle();
         if (SSL_has_pending(native) != 0 || BIO_ctrl_pending(SSL_get_rbio(native)) != 0) {
-            return false;
+            return client_idle_transport_status::pending_data;
         }
     }
     std::error_code error;
     char byte{};
-    (void)socket.receive(asio::buffer(&byte, 1), asio::socket_base::message_peek, error);
-    return error == asio::error::would_block;
+    const auto bytes = socket.receive(
+        asio::buffer(&byte, 1), asio::socket_base::message_peek, error);
+    if (error == asio::error::would_block) {
+        return client_idle_transport_status::reusable;
+    }
+    return !error && bytes != 0 ? client_idle_transport_status::pending_data
+                                : client_idle_transport_status::closed;
 }
 
 bool client_tcp_transport::arm(lane_deadline& lane, const operation_timeout& timeout) {

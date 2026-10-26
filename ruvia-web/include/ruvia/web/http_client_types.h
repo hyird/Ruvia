@@ -151,6 +151,10 @@ struct http_client_stats final {
     // content-decoding expansion.
     std::size_t plaintext_bytes_sent_{0};
     std::size_t plaintext_bytes_received_{0};
+    // Idle HTTP/1 connections retired because transport bytes or a buffered TLS
+    // record were waiting before the next request. A TLS record can carry
+    // close_notify, post-handshake control data or an unsolicited response.
+    std::size_t idle_connections_with_pending_data_{0};
     std::size_t dropped_advertisements_{0};
     std::size_t received_pushes_{0};
     std::size_t rejected_pushes_{0};

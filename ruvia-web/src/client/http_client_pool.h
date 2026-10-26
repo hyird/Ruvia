@@ -137,6 +137,9 @@ public:
     [[nodiscard]] client_wire_counters& wire_counters() noexcept {
         return wire_counters_;
     }
+    void record_idle_connection_with_pending_data() noexcept {
+        ++idle_connections_with_pending_data_;
+    }
     // Admits or rejects one HTTP/2 PUSH_PROMISE of `connection`.
     void accept_http2_push(http_client_connection& connection, const http2_push_promise_event& promise);
 
@@ -185,6 +188,7 @@ private:
     std::size_t requests_in_flight_{0};
     std::size_t completed_requests_{0};
     std::size_t failed_requests_{0};
+    std::size_t idle_connections_with_pending_data_{0};
     bool background_joined_{false};
 };
 

@@ -154,6 +154,7 @@ http_client_stats http_client_pool::stats() const noexcept {
         .failed_requests_ = failed_requests_,
         .plaintext_bytes_sent_ = wire_counters_.sent_,
         .plaintext_bytes_received_ = wire_counters_.received_,
+        .idle_connections_with_pending_data_ = idle_connections_with_pending_data_,
         .dropped_advertisements_ = advertisements_.dropped(),
         .received_pushes_ = received_pushes_,
         .rejected_pushes_ = rejected_pushes_};

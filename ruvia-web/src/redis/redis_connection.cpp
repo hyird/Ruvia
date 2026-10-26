@@ -194,7 +194,7 @@ task<void> redis_connection::connect(const operation_timeout* operation_timeout_
         // A peer that closed the idle connection or sent unsolicited bytes
         // would desynchronize the next reply; reconnect instead.
         const bool reader_idle = reader_ == nullptr || reader_->len == reader_->pos;
-        if (reader_idle && transport_.idle_open()) {
+        if (reader_idle && transport_.idle_status() == client_idle_transport_status::reusable) {
             co_return;
         }
         close();

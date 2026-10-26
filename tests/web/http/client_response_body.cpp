@@ -2698,7 +2698,9 @@ RUVIA_TEST(http_client_replaces_a_keep_alive_connection_the_peer_closed_while_id
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
-        RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{0});
+        const auto stats = client.handle().stats();
+        RUVIA_CHECK_EQ(stats.failed_requests_, std::size_t{0});
+        RUVIA_CHECK_EQ(stats.idle_connections_with_pending_data_, std::size_t{0});
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -2789,7 +2791,9 @@ RUVIA_TEST(http_client_tls_idle_probe_retires_a_connection_with_unread_peer_reco
             if (peer_failure) {
                 std::rethrow_exception(peer_failure);
             }
-            RUVIA_CHECK_EQ(client.handle().stats().failed_requests_, std::size_t{0});
+            const auto stats = client.handle().stats();
+            RUVIA_CHECK_EQ(stats.failed_requests_, std::size_t{0});
+            RUVIA_CHECK_EQ(stats.idle_connections_with_pending_data_, std::size_t{1});
             co_await client.shutdown();
         };
         run_operation(worker, io, operation);

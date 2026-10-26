@@ -182,8 +182,15 @@ task<void> http_client_connection::ensure_connected(
         throw http_client_error(http_client_error::code_type::closing, "HTTP client connection is retired");
     }
     if (connected_) {
-        if (protocol_ == protocol_type::http2 || transport_.idle_open()) {
+        if (protocol_ == protocol_type::http2) {
             co_return;
+        }
+        const auto idle_status = transport_.idle_status();
+        if (idle_status == client_idle_transport_status::reusable) {
+            co_return;
+        }
+        if (idle_status == client_idle_transport_status::pending_data) {
+            pool_.record_idle_connection_with_pending_data();
         }
         close();
     }
