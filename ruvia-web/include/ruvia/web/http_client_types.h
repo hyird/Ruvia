@@ -145,9 +145,10 @@ struct http_client_stats final {
     std::size_t in_flight_requests_{0};
     std::size_t completed_requests_{0};
     std::size_t failed_requests_{0};
-    // Plaintext application octets at the transport's HTTP/tunnel boundary.
-    // Includes HTTP framing and tunnel payload; excludes TLS handshake/record
-    // overhead and content-decoding expansion.
+    // Plaintext application octets completed at the transport's HTTP/tunnel
+    // boundary, including a completed prefix reported with an I/O error. Includes
+    // HTTP framing and tunnel payload; excludes TLS handshake/record overhead and
+    // content-decoding expansion.
     std::size_t plaintext_bytes_sent_{0};
     std::size_t plaintext_bytes_received_{0};
     std::size_t dropped_advertisements_{0};

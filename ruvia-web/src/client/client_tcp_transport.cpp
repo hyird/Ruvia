@@ -260,12 +260,13 @@ task<client_transport_result> client_tcp_transport::read_some(std::span<char> by
     if (is_tls_error(completion.error_code())) {
         tls_close_ready_ = false;
     }
+    const auto transferred = completion.result();
+    counters_.received_ += transferred;
     auto result_value = finish(read_, timeout, completion.error_code(),
-        completion.error_code() ? 0 : completion.result(), client_transport_status::io_failed);
+        completion.error_code() ? 0 : transferred, client_transport_status::io_failed);
     if (result_value.ok() && result_value.bytes_ == 0) {
         result_value.status_ = client_transport_status::eof;
     }
-    counters_.received_ += result_value.bytes_;
     co_return result_value;
 }
 
@@ -293,12 +294,13 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
     if (completion.error_code()) {
         tls_close_ready_ = false;
     }
+    const auto transferred = completion.result();
+    counters_.sent_ += transferred;
     auto result_value = finish(write_, timeout, completion.error_code(),
-        completion.error_code() ? 0 : completion.result(), client_transport_status::io_failed);
+        completion.error_code() ? 0 : transferred, client_transport_status::io_failed);
     if (result_value.status_ == client_transport_status::eof) {
         result_value.status_ = client_transport_status::io_failed;
     }
-    counters_.sent_ += result_value.bytes_;
     co_return result_value;
 }
 

@@ -237,6 +237,7 @@ public:
     }
     std::string head_;
     std::string body_;
+    std::size_t uploaded_bytes_{0};
 
 private:
     asio::awaitable<void> serve() {
@@ -260,6 +261,7 @@ private:
                 co_await asio::async_read(
                     socket, asio::dynamic_buffer(input), asio::transfer_exactly(1), asio::use_awaitable);
             }
+            uploaded_bytes_ = input.size();
             const std::string body(rejected_body_size, 'r');
             const std::string head = "HTTP/1.1 413 Content Too Large\r\nContent-Length: " +
                                      std::to_string(body.size()) +
@@ -2084,6 +2086,8 @@ RUVIA_TEST(http_client_upload_write_failure_preserves_complete_early_response) {
         }
         RUVIA_CHECK_EQ(response_bytes, upload_peer::rejected_body_size);
         co_await peer.wait();
+        RUVIA_CHECK(client.handle().stats().plaintext_bytes_sent_ >=
+                    peer.head_.size() + peer.uploaded_bytes_);
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);

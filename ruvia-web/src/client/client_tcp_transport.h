@@ -56,6 +56,8 @@ struct client_transport_result final {
     }
 };
 
+// Counts plaintext bytes completed by socket/TLS I/O, including the completed
+// prefix of an operation that also reports an error.
 struct client_wire_counters final {
     std::size_t sent_{};
     std::size_t received_{};
