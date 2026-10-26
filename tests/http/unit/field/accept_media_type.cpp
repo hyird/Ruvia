@@ -1,9 +1,43 @@
 #include <initializer_list>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/http_accept_match.h"
 
 #include "test_harness.h"
+
+RUVIA_TEST(http_media_type_parameters_are_not_limited_by_inline_storage) {
+    for (const int count : {64, 65, 96, 512}) {
+        std::string offered = "text/plain";
+        for (int index = 0; index < count; ++index) {
+            offered += ";p" + std::to_string(index) + "=\"a;b\"";
+        }
+        RUVIA_CHECK(ruvia::is_valid_http_content_type_field_value(offered));
+
+        ruvia::http_accept_match wildcard;
+        wildcard.update_media_type("*/*", offered);
+        RUVIA_CHECK_EQ(wildcard.quality(), 1000);
+
+        ruvia::http_accept_match specific;
+        specific.update_media_type("text/plain;q=0.9", offered);
+        specific.update_media_type(offered + ";q=0.2", offered);
+        RUVIA_CHECK_EQ(specific.quality(), 200);
+
+        const auto tail_name = "p" + std::to_string(count - 1);
+        ruvia::http_accept_match tail;
+        tail.update_media_type("text/plain;" + tail_name + "=\"a;b\";q=0.4", offered);
+        RUVIA_CHECK_EQ(tail.quality(), 400);
+
+        RUVIA_CHECK(!ruvia::is_valid_http_content_type_field_value(offered + ";" + tail_name + "=v"));
+        RUVIA_CHECK(!ruvia::is_valid_http_content_type_field_value(offered + ";P0=v"));
+        RUVIA_CHECK(!ruvia::is_valid_http_content_type_field_value(offered + ";broken=\"unterminated"));
+
+        ruvia::http_accept_match malformed;
+        malformed.update_media_type("text/*;q=0.7", offered);
+        malformed.update_media_type(offered + ";broken=", offered);
+        RUVIA_CHECK_EQ(malformed.quality(), 700);
+    }
+}
 
 RUVIA_TEST(http_accept_match_accumulates_fields_and_respects_specific_exclusion) {
     ruvia::http_accept_match media;

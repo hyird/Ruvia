@@ -12,7 +12,7 @@ namespace ruvia::detail {
 
 [[nodiscard]] inline int http_media_range_match_specificity(std::string_view range,
     const http_media_type_parts& offered_parts, const http_media_type_parameters& offered_parameters,
-    int& quality) noexcept {
+    std::size_t& parameter_count, int& quality) noexcept {
     http_media_type_parts range_parts;
     if (!http_parse_media_type_parts(range, true, range_parts)) {
         return -1;
@@ -27,36 +27,42 @@ namespace ruvia::detail {
     if (!parameters.parse(range, &quality)) {
         return -1;
     }
-    int parameter_count = 0;
-    for (std::size_t i = 0; i < parameters.size_; ++i) {
-        const auto& parameter = parameters.values_[i];
-        if (http_ascii_equals_ignore_case(parameter.name(), "q")) {
-            continue;
-        }
-        if (!offered_parameters.contains(parameter.name(), parameter.value())) {
-            return -1;
-        }
-        ++parameter_count;
+    parameter_count = 0;
+    if (!parameters.visit([&](std::string_view name, std::string_view value) noexcept {
+            if (http_ascii_equals_ignore_case(name, "q")) {
+                return true;
+            }
+            if (!offered_parameters.contains(name, value)) {
+                return false;
+            }
+            ++parameter_count;
+            return true;
+        })) {
+        return -1;
     }
-    const auto type_specificity = range_parts.type_ == "*" ? 0 : (range_parts.subtype_ == "*" ? 1 : 2);
-    return (type_specificity << 16) | parameter_count;
+    return range_parts.type_ == "*" ? 0 : (range_parts.subtype_ == "*" ? 1 : 2);
 }
 
 // Field lines accumulate as one logical Accept value without concatenation.
 inline void http_accumulate_media_type_acceptance(std::string_view accept, std::string_view offered,
-    int& best_specificity, int& best_quality) noexcept {
+    int& best_specificity, std::size_t& best_parameter_count, int& best_quality) noexcept {
     http_media_type_parts offered_parts;
     http_media_type_parameters offered_parameters;
     if (!http_parse_media_type(offered, offered_parts, offered_parameters)) {
         return;
     }
     http_visit_comma_separated_quoted(accept,
-        [offered_parts, &offered_parameters, &best_specificity, &best_quality](std::string_view item) noexcept {
+        [offered_parts, &offered_parameters, &best_specificity, &best_parameter_count, &best_quality](std::string_view item) noexcept {
             int quality = 1000;
-            const auto specificity = http_media_range_match_specificity(item, offered_parts, offered_parameters, quality);
+            std::size_t parameter_count = 0;
+            const auto specificity = http_media_range_match_specificity(item, offered_parts, offered_parameters, parameter_count, quality);
             if (specificity >= 0) {
-                if (specificity > best_specificity || (specificity == best_specificity && quality > best_quality)) {
+                if (specificity > best_specificity ||
+                    (specificity == best_specificity &&
+                        (parameter_count > best_parameter_count ||
+                            (parameter_count == best_parameter_count && quality > best_quality)))) {
                     best_specificity = specificity;
+                    best_parameter_count = parameter_count;
                     best_quality = quality;
                 }
             }

@@ -39,6 +39,14 @@ bool http_response::has_file_representation() const noexcept {
     return detail::response_body(*this).file_representation();
 }
 
+void http_response::head_metadata_body() noexcept {
+    body_.set_head_metadata_only();
+}
+
+bool http_response::has_head_metadata_body() const noexcept {
+    return body_.head_metadata_only();
+}
+
 std::size_t http_response::body_segment_count() const noexcept {
     const auto& body = detail::response_body(*this);
     if (const auto* multipart = body.multipart_body()) {
@@ -265,7 +273,7 @@ void http_response::apply_encoded_representation(
         body_.set_owned(memory_resource(), std::move(*body));
     } else {
         if (body_.size() == 0 && !body_.file_representation()) {
-            body_.set_head_metadata_only();
+            head_metadata_body();
         }
         (void)headers_.remove_header_validated("Content-Length", detail::response_header_content_length);
     }

@@ -6,7 +6,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
 #include "ruvia/web/error.h"
 
@@ -171,7 +170,7 @@ task<http_response> mark_explicit_head_route_response(task<http_response> operat
     auto response = co_await std::move(operation);
     if (!response.has_file_representation() && response.body_bytes().empty() &&
         !response.status().is_redirection() && !response.status().is_error()) {
-        detail::http_response_body_access::set_head_metadata_only(response);
+        response.head_metadata_body();
     }
     co_return response;
 }

@@ -26,16 +26,16 @@ public:
         : fields_(std::exchange(other.fields_, nullptr)),
           kinds_(std::exchange(other.kinds_, nullptr)),
           resource_(std::exchange(other.resource_, nullptr)),
-          size_(std::exchange(other.size_, 0)),
-          capacity_(std::exchange(other.capacity_, 0)) {}
+          size_(std::exchange(other.size_, std::uint16_t{0})),
+          capacity_(std::exchange(other.capacity_, std::uint16_t{0})) {}
     http_request_header_block& operator=(http_request_header_block&& other) noexcept {
         if (this != &other) {
             release();
             fields_ = std::exchange(other.fields_, nullptr);
             kinds_ = std::exchange(other.kinds_, nullptr);
             resource_ = std::exchange(other.resource_, nullptr);
-            size_ = std::exchange(other.size_, 0);
-            capacity_ = std::exchange(other.capacity_, 0);
+            size_ = std::exchange(other.size_, std::uint16_t{0});
+            capacity_ = std::exchange(other.capacity_, std::uint16_t{0});
         }
         return *this;
     }

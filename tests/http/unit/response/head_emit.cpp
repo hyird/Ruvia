@@ -102,6 +102,26 @@ bool throws_length(fn_type&& fn) {
 
 }  // namespace
 
+RUVIA_TEST(http1_head_metadata_body_preserves_declared_or_unknown_representation_length) {
+    for (const auto version : {ruvia::http_protocol_version::http10, ruvia::http_protocol_version::http11}) {
+        http_response response;
+        response.head_metadata_body();
+        const auto unknown = emit_buffered_head(response, http_known_method::head, version);
+        RUVIA_CHECK(unknown.find("Content-Length:") == std::string::npos);
+
+        response.header("Content-Length", "256");
+        const auto declared = emit_buffered_head(response, http_known_method::head, version);
+        RUVIA_CHECK(declared.find("Content-Length: 256\r\n") != std::string::npos);
+        const auto get = emit_buffered_head(response, http_known_method::get, version);
+        RUVIA_CHECK(get.find("Content-Length: 0\r\n") != std::string::npos);
+
+        response.remove_header("Content-Length");
+        response.body("");
+        const auto empty = emit_buffered_head(response, http_known_method::head, version);
+        RUVIA_CHECK(empty.find("Content-Length: 0\r\n") != std::string::npos);
+    }
+}
+
 RUVIA_TEST(http1_response_head_reserve_preserves_inline_capacity_and_failed_growth) {
     for (const std::size_t used : {std::size_t{0}, std::size_t{1}, ruvia::response_head_stack_bytes - 1, ruvia::response_head_stack_bytes}) {
         // Leave room for implementation-owned STL proxies, but not a spilled head.

@@ -149,10 +149,15 @@ configure_package_config_file(
     ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfig.cmake
     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ruvia
 )
+if(PROJECT_VERSION_MAJOR EQUAL 0)
+    set(_ruvia_version_compatibility SameMinorVersion)
+else()
+    set(_ruvia_version_compatibility SameMajorVersion)
+endif()
 write_basic_package_version_file(
     ${CMAKE_CURRENT_BINARY_DIR}/ruviaConfigVersion.cmake
     VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMinorVersion
+    COMPATIBILITY ${_ruvia_version_compatibility}
 )
 install(
     FILES

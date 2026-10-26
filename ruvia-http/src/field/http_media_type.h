@@ -1,7 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
+#include <optional>
 #include <string_view>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
@@ -81,8 +83,8 @@ struct http_media_type_parts final {
     }
 }
 
-// Scoped views of a validated parameter list. Accept matching reuses the offered
-// parameters instead of rescanning its field for every range parameter.
+// 常规参数缓存在栈上；超出的已验证后缀借用原字段，不以缓存容量限制参数数量。
+// 所有视图仅在原字段保持有效且不变时有效，解析与匹配都不分配内存。
 struct http_media_type_parameters final {
     struct parameter final {
         const char* name_data_;
@@ -98,15 +100,45 @@ struct http_media_type_parameters final {
             return {value_data_, value_size_};
         }
     };
-    // Only [0, size_) is initialized and read. Plain pointer/length slots avoid
-    // default-constructing 128 string_views even for a value with no parameters.
+    // Only the cached prefix is initialized and read. Plain pointer/length slots
+    // avoid constructing string_views for unused cache slots.
     std::array<parameter, 64> values_;
     std::size_t size_{0};
+    std::string_view overflow_{};
+
+    template <typename visitor_type>
+    [[nodiscard]] bool visit(visitor_type&& visitor) const {
+        for (std::size_t i = 0; i < std::min(size_, values_.size()); ++i) {
+            if (!visitor(values_[i].name(), values_[i].value())) {
+                return false;
+            }
+        }
+        bool complete = true;
+        http_visit_semicolon_parameters_quoted_field(overflow_,
+            [&](std::string_view name, std::string_view value) {
+                complete = visitor(name, value);
+                return complete;
+            });
+        return complete;
+    }
+
+    [[nodiscard]] std::optional<std::string_view> find(std::string_view name) const noexcept {
+        std::optional<std::string_view> result;
+        (void)visit([&](std::string_view candidate, std::string_view value) noexcept {
+            if (http_ascii_equals_ignore_case(candidate, name)) {
+                result = value;
+                return false;
+            }
+            return true;
+        });
+        return result;
+    }
 
     // A quality output selects Accept semantics: q is parsed as a weight,
     // including an invalid weight's zero quality, rather than a media parameter.
     [[nodiscard]] bool parse(std::string_view value, int* quality = nullptr) noexcept {
         size_ = 0;
+        overflow_ = {};
         if (quality != nullptr) {
             *quality = 1000;
         }
@@ -123,12 +155,7 @@ struct http_media_type_parameters final {
             if (!http_media_token(name) || parameter_value.empty() || parameter_value != http_trim_ows(parameter_value)) {
                 return false;
             }
-            for (std::size_t i = 0; i < size_; ++i) {
-                if (http_ascii_equals_ignore_case(values_[i].name(), name)) {
-                    return false;
-                }
-            }
-            if (size_ == values_.size()) {
+            if (find(name).has_value()) {
                 return false;
             }
             if (quality != nullptr && http_ascii_equals_ignore_case(name, "q")) {
@@ -137,19 +164,23 @@ struct http_media_type_parameters final {
             } else if (!is_http_token_or_quoted_string(parameter_value)) {
                 return false;
             }
-            values_[size_++] = {name.data(), name.size(), parameter_value.data(), parameter_value.size()};
+            if (size_ < values_.size()) {
+                values_[size_] = {name.data(), name.size(), parameter_value.data(), parameter_value.size()};
+            } else if (overflow_.empty()) {
+                overflow_ = part;
+            } else {
+                overflow_ = std::string_view(overflow_.data(),
+                    static_cast<std::size_t>(part.data() + part.size() - overflow_.data()));
+            }
+            ++size_;
             return true;
         });
     }
 
     [[nodiscard]] bool contains(std::string_view name, std::string_view value) const noexcept {
-        for (std::size_t i = 0; i < size_; ++i) {
-            if (http_ascii_equals_ignore_case(values_[i].name(), name)) {
-                return http_media_parameter_value_equals(values_[i].value(), value,
-                    http_ascii_equals_ignore_case(name, "charset"));
-            }
-        }
-        return false;
+        const auto parameter_value = find(name);
+        return parameter_value.has_value() && http_media_parameter_value_equals(*parameter_value, value,
+                                                  http_ascii_equals_ignore_case(name, "charset"));
     }
 };
 

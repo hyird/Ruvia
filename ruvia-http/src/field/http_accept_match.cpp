@@ -15,7 +15,7 @@ bool is_valid_http_content_type_field_value(std::string_view value) noexcept {
 }
 
 void http_accept_match::update_media_type(std::string_view field, std::string_view offered) noexcept {
-    detail::http_accumulate_media_type_acceptance(field, offered, specificity_, quality_);
+    detail::http_accumulate_media_type_acceptance(field, offered, specificity_, parameter_specificity_, quality_);
 }
 
 void http_accept_match::update_token(std::string_view field, std::string_view offered,

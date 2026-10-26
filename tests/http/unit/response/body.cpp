@@ -113,6 +113,44 @@ RUVIA_TEST(response_public_body_owns_its_source) {
     RUVIA_CHECK_EQ(response.body_bytes(), std::string_view("owned copy"));
 }
 
+RUVIA_TEST(response_head_metadata_body_releases_storage_and_follows_body_lifetime) {
+    failing_memory_resource resource;
+    {
+        http_response response(&resource);
+        const auto retained_allocations = resource.live_allocations();
+        RUVIA_CHECK(!response.has_head_metadata_body());
+        response.body(std::string(256, 'x'));
+        RUVIA_CHECK(resource.live_allocations() != 0);
+        response.head_metadata_body();
+        RUVIA_CHECK(response.has_head_metadata_body());
+        RUVIA_CHECK(response.body_bytes().empty());
+        RUVIA_CHECK_EQ(response.body_segment_count(), std::size_t{0});
+        RUVIA_CHECK_EQ(resource.live_allocations(), retained_allocations);
+
+        response.header("Content-Length", "256");
+        http_response moved(std::move(response));
+        RUVIA_CHECK(moved.has_head_metadata_body());
+        RUVIA_CHECK(!response.has_head_metadata_body());
+        RUVIA_CHECK_EQ(moved.header("Content-Length").value_or("missing"), std::string_view("256"));
+        moved.static_body("");
+        RUVIA_CHECK(!moved.has_head_metadata_body());
+
+        moved.head_metadata_body();
+        resource.fail_after(0);
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { moved.body(std::string(256, 'y')); }));
+        resource.allow_allocations();
+        RUVIA_CHECK(moved.has_head_metadata_body());
+        moved.owned_body(std::pmr::string("replacement", &resource));
+        RUVIA_CHECK(!moved.has_head_metadata_body());
+        RUVIA_CHECK_EQ(moved.body_bytes(), std::string_view("replacement"));
+
+        moved.head_metadata_body();
+        moved.body("");
+        RUVIA_CHECK(!moved.has_head_metadata_body());
+    }
+    RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+}
+
 RUVIA_TEST(public_response_file_view_exposes_read_only_descriptor) {
     const std::filesystem::path path("public-fixture.bin");
     const auto identity = ruvia::http_response_file_identity::checked({1, 2, 3, 4});

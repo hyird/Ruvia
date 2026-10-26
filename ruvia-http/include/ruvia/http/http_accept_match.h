@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -48,6 +49,7 @@ public:
 private:
     int specificity_{-1};
     int quality_{0};
+    std::size_t parameter_specificity_{0};
 };
 
 }  // namespace ruvia

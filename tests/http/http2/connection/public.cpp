@@ -4380,9 +4380,8 @@ RUVIA_TEST(http2_public_client_refused_stream_after_informational_is_not_unproce
     }
 }
 
-// H2-03: Client validates Content-Length syntax on 2xx CONNECT responses and
-// preserves valid Content-Length in response_head while ignoring it for framing.
-RUVIA_TEST(http2_public_client_connect_response_validates_and_retains_content_length) {
+// CONNECT 成功时保留但忽略长度；拒绝响应仍按普通 HTTP 正文分帧处理。
+RUVIA_TEST(http2_public_client_connect_response_ignores_success_length_and_validates_rejection) {
     std::pmr::unsynchronized_pool_resource resource;
     ruvia::testing::output_relay relay;
     auto client = ruvia::http2_connection::client({.resource_ = &resource});
@@ -4419,9 +4418,9 @@ RUVIA_TEST(http2_public_client_connect_response_validates_and_retains_content_le
     RUVIA_CHECK(has_cl);
     RUVIA_CHECK(!client.stream_aborted(sid1));
 
-    // Invalid Content-Length syntax on 200 CONNECT is rejected with PROTOCOL_ERROR
+    // 非 2xx CONNECT 的非法 Content-Length 仍触发 PROTOCOL_ERROR。
     std::pmr::string rblock2(&resource);
-    ruvia::hpack_encoder::encode_header(rblock2, ":status", "200");
+    ruvia::hpack_encoder::encode_header(rblock2, ":status", "400");
     ruvia::hpack_encoder::encode_header(rblock2, "content-length", "not-a-number");
     std::pmr::string rwire2(&resource);
     append_frame(rwire2, ruvia::http2_frame_type::headers, 0x4, sid2, rblock2);
@@ -4737,6 +4736,67 @@ RUVIA_TEST(http2_public_refused_or_rejected_stream_does_not_emit_duplicate_late_
     RUVIA_CHECK(client.submit_reset(4, ruvia::http2_error_code::protocol_error) ==
                 ruvia::http2_submit_status::closed);
     RUVIA_CHECK(ruvia::testing::drain_output(client).empty());
+}
+
+// RFC 9110 §9.3.6：成功 CONNECT 的长度字段仅保留为元数据，不能阻止进入隧道。
+RUVIA_TEST(http2_public_successful_connect_ignores_content_length_semantics) {
+    for (const bool extended : {false, true}) {
+        for (const std::string_view length : {"", "0", "42", "not-a-number", "18446744073709551616", "1, 2"}) {
+            std::pmr::unsynchronized_pool_resource resource;
+            auto client = ruvia::http2_connection::client({.resource_ = &resource});
+            (void)ruvia::testing::drain_output(client);
+            constexpr std::array<char, 6> enable_connect{0, 8, 0, 0, 0, 1};
+            std::pmr::string settings(&resource);
+            append_frame(settings, ruvia::http2_frame_type::settings, 0, 0,
+                std::string_view(enable_connect.data(), enable_connect.size()));
+            RUVIA_CHECK(client.feed(settings) == ruvia::http2_feed_result::accepted);
+
+            const auto submitted = extended
+                                       ? client.submit_request_head(ruvia::http2_extended_connect_request_head_view{
+                                             .protocol_ = "example", .authority_ = "example.test", .target_ = "/tunnel"})
+                                       : client.submit_request_head(ruvia::http2_connect_request_head_view{
+                                             .authority_ = "example.test:443"});
+            RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
+            if (!std::holds_alternative<std::uint32_t>(submitted)) {
+                continue;
+            }
+            const auto stream_id = std::get<std::uint32_t>(submitted);
+            (void)ruvia::testing::drain_output(client);
+
+            std::pmr::string block(&resource);
+            ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
+            ruvia::hpack_encoder::encode_header(block, "content-length", length);
+            std::pmr::string wire(&resource);
+            append_frame(wire, ruvia::http2_frame_type::headers, 0x4, stream_id, block);
+            append_frame(wire, ruvia::http2_frame_type::data, 0x1, stream_id, "tunnel bytes");
+            RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
+            bool received_head = false;
+            bool received_data = false;
+            bool received_end = false;
+            while (auto event = client.next_event()) {
+                RUVIA_CHECK(event->stream_closed() == nullptr);
+                if (const auto* head = event->response_head()) {
+                    received_head = true;
+                    const auto headers = head->head().headers();
+                    RUVIA_CHECK_EQ(headers.size(), std::size_t{1});
+                    if (!headers.empty()) {
+                        RUVIA_CHECK_EQ(headers.front().name(), std::string_view("content-length"));
+                        RUVIA_CHECK_EQ(headers.front().value(), length);
+                    }
+                } else if (const auto* data = event->tunnel_data()) {
+                    received_data = true;
+                    RUVIA_CHECK_EQ(data->bytes(), std::string_view("tunnel bytes"));
+                } else if (event->tunnel_end() != nullptr) {
+                    received_end = true;
+                }
+            }
+            RUVIA_CHECK(received_head);
+            RUVIA_CHECK(received_data);
+            RUVIA_CHECK(received_end);
+            RUVIA_CHECK(client.submit_reset(stream_id, ruvia::http2_error_code::cancel) ==
+                        ruvia::http2_submit_status::accepted);
+        }
+    }
 }
 
 // A5H2-07: Peer RST_STREAM frames on skipped stream IDs within the rapid-reset

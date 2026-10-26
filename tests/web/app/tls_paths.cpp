@@ -249,17 +249,21 @@ std::string tls12_selected_cipher(asio::io_context& io, const asio::ip::tcp::end
     return SSL_get_cipher_name(stream.native_handle());
 }
 
-// Establishes a TLS 1.2 session under server_name `first`, then offers it on a
-// new connection under `second`; true when the server resumed it.
-bool resumes_tls12_session_under(
-    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const char* first, const char* second) {
-    auto client = tls12_client();
+// 在指定 TLS 版本下建立会话，再以第二个 SNI 尝试恢复。
+bool resumes_tls_session_under(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
+    int version, const char* first, const char* second) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    if (SSL_CTX_set_min_proto_version(client.native_handle(), version) != 1 ||
+        SSL_CTX_set_max_proto_version(client.native_handle(), version) != 1) {
+        throw std::runtime_error("cannot configure the resumption client TLS version");
+    }
     std::unique_ptr<SSL_SESSION, decltype(&SSL_SESSION_free)> session(nullptr, SSL_SESSION_free);
     for (const char* name : {first, second}) {
         asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
         if (SSL_set_tlsext_host_name(stream.native_handle(), name) != 1 ||
             (session && SSL_set_session(stream.native_handle(), session.get()) != 1)) {
-            throw std::runtime_error("cannot prepare the TLS 1.2 resumption client");
+            throw std::runtime_error("cannot prepare the TLS resumption client");
         }
         asio::error_code error;
         stream.next_layer().connect(endpoint, error);
@@ -267,14 +271,26 @@ bool resumes_tls12_session_under(
             stream.handshake(asio::ssl::stream_base::client, error);
         }
         if (error) {
-            throw std::system_error(error, "TLS 1.2 resumption handshake failed");
+            throw std::system_error(error, "TLS resumption handshake failed");
         }
         if (session) {
             return SSL_session_reused(stream.native_handle()) == 1;
         }
+        if (version == TLS1_3_VERSION) {
+            // TLS 1.3 的 ticket 在握手后发送；读取实际响应以处理 NewSessionTicket。
+            const auto request = std::string("GET /tls HTTP/1.1\r\nHost: ") + name + "\r\nConnection: close\r\n\r\n";
+            asio::write(stream, asio::buffer(request), error);
+            std::array<char, 1024> buffer;
+            while (!error) {
+                (void)stream.read_some(asio::buffer(buffer), error);
+            }
+            if (error != asio::error::eof) {
+                throw std::system_error(error, "TLS session ticket read failed");
+            }
+        }
         session.reset(SSL_get1_session(stream.native_handle()));
         if (!session || SSL_SESSION_is_resumable(session.get()) != 1) {
-            throw std::runtime_error("TLS 1.2 session is not resumable");
+            throw std::runtime_error("TLS session is not resumable");
         }
         // A session whose SSL is freed without a local shutdown is marked
         // unresumable; record a clean local close instead.
@@ -369,10 +385,12 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
                 std::string("ECDHE-RSA-AES128-GCM-SHA256"));
             RUVIA_CHECK_EQ(tls12_selected_cipher(io, endpoint, "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"),
                 std::string("ECDHE-RSA-AES128-GCM-SHA256"));
-            RUVIA_CHECK(resumes_tls12_session_under(io, endpoint, "localhost", "localhost"));
-            RUVIA_CHECK(resumes_tls12_session_under(io, endpoint, "sni.test", "SNI.test"));
-            RUVIA_CHECK(!resumes_tls12_session_under(io, endpoint, "localhost", "sni.test"));
-            RUVIA_CHECK(!resumes_tls12_session_under(io, endpoint, "localhost", "unknown.test"));
+            for (const int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {
+                RUVIA_CHECK(resumes_tls_session_under(io, endpoint, version, "localhost", "localhost"));
+                RUVIA_CHECK(resumes_tls_session_under(io, endpoint, version, "sni.test", "SNI.test"));
+                RUVIA_CHECK(!resumes_tls_session_under(io, endpoint, version, "localhost", "sni.test"));
+                RUVIA_CHECK(!resumes_tls_session_under(io, endpoint, version, "localhost", "unknown.test"));
+            }
         }
         app.stop();
         runner.join();

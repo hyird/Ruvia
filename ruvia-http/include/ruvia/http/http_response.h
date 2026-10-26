@@ -429,6 +429,11 @@ public:
     // True for file_body(), multipart_file_body() and file_bytes_body() bodies:
     // the bytes are a file's representation, which a sender transmits as is.
     [[nodiscard]] bool has_file_representation() const noexcept;
+    // 将正文替换为仅描述 HEAD 所选表示的空正文，保留首部并释放原正文资源。
+    // 序列化 HEAD 时保留显式 Content-Length；未提供长度时不推断为零。
+    // 标记随移动转移；重新设置正文会清除它，不影响 GET 等方法的正文规则。
+    void head_metadata_body() noexcept;
+    [[nodiscard]] bool has_head_metadata_body() const noexcept;
     [[nodiscard]] std::size_t body_segment_count() const noexcept;
     [[nodiscard]] http_response_body_segment_view body_segment(std::size_t index) const& RUVIA_LIFETIMEBOUND;
     http_response_body_segment_view body_segment(std::size_t index) const&& = delete;

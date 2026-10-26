@@ -105,7 +105,7 @@ using http2_response_head_plan_result_type =
     // through its declared Content-Length, if any (RFC 9110 section 8.6).
     if (body_plan.body_suppressed() && body_plan.status_allows_body() &&
         body_plan.explicit_content_length_allowed() && write_plan.content_length() == 0 &&
-        (response_body(response).head_metadata_only() ||
+        (response.has_head_metadata_body() ||
             response_has_known_header(response, response_header_content_length))) {
         return http2_response_head_plan::preserve_explicit(body_plan, response);
     }

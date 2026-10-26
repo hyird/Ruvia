@@ -155,7 +155,7 @@ void append_response_head(
     const bool suppressed_empty_buffered_body =
         buffered != nullptr && body_plan.body_suppressed() && body_plan.status_allows_body() &&
         body_plan.explicit_content_length_allowed() && buffered->content_length() == 0 &&
-        (response_body(response).head_metadata_only() ||
+        (response.has_head_metadata_body() ||
             (known_bits & response_header_content_length) != 0);
     const bool auto_content_length_owned_by_writer =
         body_plan.auto_content_length_allowed() && !emit_chunked_transfer_encoding &&

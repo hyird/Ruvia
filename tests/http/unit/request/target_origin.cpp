@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/http_header.h"
@@ -30,6 +31,26 @@ constexpr http_target_origin_connection secured{.secured_ = true};
 }
 
 }  // namespace
+
+RUVIA_TEST(target_origin_dns_reference_names_follow_label_and_full_name_boundaries) {
+    const auto maximal = std::string(63, 'a') + "." + std::string(63, 'b') + "." +
+                         std::string(63, 'c') + "." + std::string(61, 'd');
+    for (const std::string_view host : {std::string_view(maximal), std::string_view("7.example"),
+             std::string_view("xn--bcher-kva.example")}) {
+        const auto origin = decide("GET", "/", host, secured);
+        RUVIA_CHECK(origin.action() == http_target_origin_action::verify_certificate);
+        RUVIA_CHECK(origin.host_kind() == http_target_host_kind::dns_name);
+        RUVIA_CHECK_EQ(origin.host(), host);
+    }
+    const auto rooted_name = maximal + ".";
+    const auto rooted = decide("GET", "/", rooted_name, secured);
+    RUVIA_CHECK(rooted.action() == http_target_origin_action::verify_certificate);
+    RUVIA_CHECK_EQ(rooted.host(), std::string_view(maximal));
+
+    for (const auto& host : {maximal + "d", std::string(64, 'a') + ".example"}) {
+        RUVIA_CHECK(decide("GET", "/", host, secured).action() == http_target_origin_action::misdirected);
+    }
+}
 
 // RFC 9110 §7.4: an "https" target needs a secured connection whose
 // certificate covers the target host; "http" targets and tunnel destinations

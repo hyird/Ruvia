@@ -118,7 +118,7 @@ pool.join();
 | 头文件 | 核心公开类型 / 函数 | 说明 |
 | --- | --- | --- |
 | `"ruvia/http/http_request.h"` / `"ruvia/http/http_request_trailers.h"` | `class http_request final`、`make_parsed_http_request`、`class http_request_trailers final` | 请求头与请求体零拷贝视图描述符、大小写不敏感首部/Cookie 查找与请求 Trailer 校验收集 |
-| `"ruvia/http/http_response.h"` / `"ruvia/http/http_interim_response.h"` | `class http_response final`、`class http_response_headers final`、`class http_interim_response_head final`、`plan_buffered_http_response_write` | 最终响应（`200..599`）与临时响应（`1xx`）模型，以及针对 `HEAD` / `204` / `205` / `304` 的响应体写计划 |
+| `"ruvia/http/http_response.h"` / `"ruvia/http/http_interim_response.h"` | `class http_response final`、`class http_response_headers final`、`class http_interim_response_head final`、`plan_buffered_http_response_write` | 最终响应（`200..599`）与临时响应（`1xx`）模型，以及针对 `HEAD` / `204` / `205` / `304` 的响应体写计划。`head_metadata_body()` 将正文替换为描述 HEAD 所选表示的空正文；`has_head_metadata_body()` 查询该状态。显式 `Content-Length` 保留为 GET 表示的长度，缺失时不推断为零；重新设置正文会清除标记 |
 | `"ruvia/http/http_content_coding.h"` / `"ruvia/http/http_content_codec.h"` / `"ruvia/http/http_content_encoder.h"` | `enum class http_content_coding { identity, gzip, deflate, brotli, zstd }`、`encode_http_content`、`decode_http_content`、`class http_content_encode_context final`、`class http_content_encode_error final`、`class http_content_encoder final` | 单次缓冲、可复用缓冲上下文与流式增量的 `gzip` / `deflate` / `br` / `zstd` 内容压缩，以及带解压上限保护的解码器 |
 | `"ruvia/http/multipart_parser.h"` | `parse_multipart_boundary`、`parse_multipart_body`、`class multipart_parser final` | 一次性与流式增量（`feed` / `poll`）的 `multipart/form-data` 解析器 |
 | `"ruvia/http/sse.h"` | `struct sse_message final`、`format_sse_message` | Server-Sent Events 消息格式化与校验 |

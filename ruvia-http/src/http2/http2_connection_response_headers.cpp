@@ -83,15 +83,15 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
         response_field_status::ok) {
         return false;
     }
-    if (response_known_bit == response_header_content_length) {
+    // RFC 9110 9.3.6: successful CONNECT ignores Content-Length semantics,
+    // including invalid or unrepresentable numerals. Retain the generic-byte-valid
+    // field so extension validators (RFC 9297 section 3.2) can still inspect it.
+    if (response_known_bit == response_header_content_length && !successful_connect) {
         http_content_length_state content_length;
         if (content_length.parse_field(value) != http_content_length_parse_status::ok) {
             return false;
         }
-        // RFC 9110 9.3.6: a client ignores Content-Length on a successful CONNECT
-        // response as a framing header, while still retaining it in the header section
-        // so protocol validators (such as RFC 9297 section 3.2) can inspect it.
-        if (!successful_connect && !stream.declare_remote_content_length(*content_length.value())) {
+        if (!stream.declare_remote_content_length(*content_length.value())) {
             return false;
         }
     }
