@@ -18,6 +18,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "client/client_tcp_transport.h"
 
@@ -307,7 +308,9 @@ private:
                     writing_ = true;
                     const auto written = co_await transport_.write(output, operation_timeout(write_timeout_));
                     writing_ = false;
-                    output.clear();
+                    // Retain ordinary heads and frame-sized DATA batches, but
+                    // return one-off large request bursts before the connection idles.
+                    http_clear_pmr_string_retaining_small(output, 2 * read_buffer_bytes);
                     if (!written.ok()) {
                         fail(generation, written, {});
                         co_return;
