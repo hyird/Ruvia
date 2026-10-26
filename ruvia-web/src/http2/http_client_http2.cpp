@@ -3,6 +3,7 @@
 
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_known_method.h"
@@ -483,17 +484,10 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 stream.stream_id_ = *accepted;
                 state_value.stream_id_ = stream.stream_id_;
                 if (body != nullptr && !body->value().empty()) {
-                    try {
-                        const auto status =
-                            connection.submit_data(stream.stream_id_, body->value(), http2_end_stream::end_stream);
-                        if (status != http2_data_submit_status::accepted && status != http2_data_submit_status::queued) {
-                            stream.error_ = http_client_error::code_type::protocol_error;
-                        }
-                    } catch (...) {
-                        stream.error_ = http_client_error::code_type::protocol_error;
-                    }
+                    co_await send_http2_buffered_request_body(stream, body->value());
+                } else {
+                    http2_.wake_writer();
                 }
-                http2_.wake_writer();
                 break;
             }
             const auto error = std::get<http2_request_head_submit_error>(submitted);
@@ -566,6 +560,51 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         co_return true;
     }
     throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/2 request retry exhausted");
+}
+
+task<void> http_client_connection::send_http2_buffered_request_body(
+    http2_stream& stream, std::string_view body) {
+    // Match the server DATA budget: one frame-sized slice is the largest
+    // flow-control-blocked suffix the sans-I/O core owns for this request.
+    constexpr std::size_t submit_bytes = http2_default_max_frame_size;
+    auto& connection = http2_.connection();
+    std::size_t offset = 0;
+    while (offset < body.size() && !stream.failed() && !stream.retryable_) {
+        const auto count = std::min(submit_bytes, body.size() - offset);
+        const auto end_stream =
+            offset + count == body.size() ? http2_end_stream::end_stream : http2_end_stream::keep_open;
+        http2_data_submit_status submitted{};
+        try {
+            submitted = connection.submit_data(stream.stream_id_, body.substr(offset, count), end_stream);
+        } catch (...) {
+            stream.error_ = http_client_error::code_type::protocol_error;
+            http2_.submit_reset(stream.stream_id_);
+            co_return;
+        }
+        if (submitted == http2_data_submit_status::backpressured) {
+            while (http2_.has_connection() && connection.has_queued_data(stream.stream_id_) &&
+                   !stream.failed() && !stream.retryable_) {
+                co_await stream.signal_.wait();
+            }
+            continue;
+        }
+        if (submitted != http2_data_submit_status::accepted &&
+            submitted != http2_data_submit_status::queued) {
+            if (!stream.complete_) {
+                stream.error_ = http_client_error::code_type::protocol_error;
+                http2_.submit_reset(stream.stream_id_);
+            }
+            co_return;
+        }
+        offset += count;
+        http2_.wake_writer();
+        if (submitted == http2_data_submit_status::queued) {
+            while (http2_.has_connection() && connection.has_queued_data(stream.stream_id_) &&
+                   !stream.failed() && !stream.retryable_) {
+                co_await stream.signal_.wait();
+            }
+        }
+    }
 }
 
 task<void> http_client_connection::wait_for_http2_queued_data(
