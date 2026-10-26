@@ -162,6 +162,12 @@ void client_happy_eyeballs::on_connect(std::size_t index, const std::error_code&
     } else {
         if (error && error != asio::error::operation_aborted) {
             last_error_ = error;
+            if (!cancelled_ && !winner_) {
+                // RFC 8305 section 5: a fast failure must not leave the next
+                // address waiting for the remainder of the attempt delay.
+                delay_.cancel();
+                launch_ready_ = true;
+            }
         }
         close_socket(current.socket_);
     }
