@@ -54,6 +54,16 @@ constexpr std::size_t response_read_chunk_bytes = 16384;
     return {asio::buffer(bytes)};
 }
 
+[[nodiscard]] bool is_upload_io_failure(const std::exception_ptr& failure) noexcept {
+    try {
+        std::rethrow_exception(failure);
+    } catch (const http_client_error& error) {
+        return error.code() == http_client_error::code_type::io_error;
+    } catch (...) {
+        return false;
+    }
+}
+
 [[noreturn]] void throw_body_timeout() {
     throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 response body decoding timed out");
 }
@@ -688,22 +698,32 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
             co_return;
         }
     } catch (...) {
-        // A receiver, timeout, or cancellation stops output before it closes
-        // the socket; the resulting write abort is a consequence, not the cause.
-        // So is a write that fails once the whole response has been received:
-        // the server may close after its final response (RFC 9112 section 9.6).
-        // A write failure while the response is still being received is the
-        // real cause; closing the socket below only cancels the receiver's read.
-        if (!state_value.complete_ && !upload.output_.stopped_) {
-            failure = std::current_exception();
+        const auto upload_failure = std::current_exception();
+        // TCP directions are independent: a peer can reject more request
+        // bytes while a complete final response is already on its way. Keep
+        // reading after a plain transport write failure; framing decides
+        // whether that response is valid. Timeout, cancellation, local
+        // request errors and explicit abandonment still terminate both lanes.
+        const bool preserve_response = !state_value.abandoned_ &&
+                                       connection_.transport_.abort_reason() == client_abort_reason::none &&
+                                       is_upload_io_failure(upload_failure);
+        if (preserve_response) {
+            upload.failure_ = upload_failure;
+            if (!state_value.complete_ && !upload.output_.stopped_) {
+                failure = upload_failure;
+            }
+        } else if (!state_value.complete_ && !upload.output_.stopped_) {
+            failure = upload_failure;
             // The caller's pending write() wakes on stop() below and reports
-            // the published failure instead of a bare cancellation.
+            // the published exchange failure instead of a bare cancellation.
             if (state_value.failure_ == nullptr) {
                 state_value.failure_ = failure;
             }
         }
         upload.output_.stop();
-        connection_.close();
+        if (!preserve_response) {
+            connection_.close();
+        }
     }
 }
 

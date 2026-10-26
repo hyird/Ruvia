@@ -388,7 +388,10 @@ private:
 // before return; completing write() means transport accepted the entire chunk.
 // Only one write/end operation may run at a time. Cold operations can coexist
 // and claim the output lane when awaited. Chunk size is bounded by
-// max_chunk_bytes_; split larger sources into sequential writes.
+// max_chunk_bytes_; split larger sources into sequential writes. An HTTP/1
+// transport write failure does not discard a complete final response arriving
+// from the peer: response() remains consumable, while the failed upload is
+// reported independently and its connection is not reused.
 class http_client_request_body_writer final {
 public:
     http_client_request_body_writer(const http_client_request_body_writer&) = delete;

@@ -47,6 +47,9 @@ struct upload_output_policy final {
         return true;
     }
     [[noreturn]] static void throw_stopped(detail::http_client_response_state& state_value) {
+        if (state_value.upload_->failure_) {
+            std::rethrow_exception(state_value.upload_->failure_);
+        }
         if (state_value.failure_) {
             std::rethrow_exception(state_value.failure_);
         }

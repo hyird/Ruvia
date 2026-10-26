@@ -197,11 +197,13 @@ private:
 class upload_peer final {
 public:
     static constexpr std::size_t early_hint_count = 300;
+    static constexpr std::size_t rejected_body_size = 32 * 1024;
     enum class mode_type { chunked,
         known_length,
         continue_value,
         continue_timeout,
-        early_final };
+        early_final,
+        early_final_while_uploading };
     upload_peer(asio::io_context& io, const ruvia::worker_handle& worker_value, mode_type mode)
         : io_(io),
           acceptor_(io, {asio::ip::tcp::v4(), std::uint16_t{0}}),
@@ -247,6 +249,27 @@ private:
         if (mode_ == mode_type::early_final) {
             constexpr std::string_view reply = "HTTP/1.1 413 Content Too Large\r\nContent-Length: 2\r\nConnection: close\r\n\r\nno";
             co_await asio::async_write(socket, asio::buffer(reply), asio::use_awaitable);
+            co_return;
+        }
+        if (mode_ == mode_type::early_final_while_uploading) {
+            // Prove that a large upload is already in progress, then put the
+            // complete response on the wire before refusing the remaining
+            // request bytes. The client's small response queue leaves most of
+            // this body in the socket while the upload write fails.
+            if (input.empty()) {
+                co_await asio::async_read(
+                    socket, asio::dynamic_buffer(input), asio::transfer_exactly(1), asio::use_awaitable);
+            }
+            const std::string body(rejected_body_size, 'r');
+            const std::string head = "HTTP/1.1 413 Content Too Large\r\nContent-Length: " +
+                                     std::to_string(body.size()) +
+                                     "\r\nConnection: close\r\n\r\n";
+            co_await asio::async_write(socket, asio::buffer(head), asio::use_awaitable);
+            co_await asio::async_write(socket, asio::buffer(body), asio::use_awaitable);
+            asio::steady_timer response_visible(io_, std::chrono::milliseconds(10));
+            co_await response_visible.async_wait(asio::use_awaitable);
+            std::error_code ignored;
+            socket.shutdown(asio::ip::tcp::socket::shutdown_receive, ignored);
             co_return;
         }
         if (mode_ == mode_type::continue_value) {
@@ -1996,6 +2019,52 @@ RUVIA_TEST(http_client_upload_exchange_preserves_early_final_response_and_stops_
         // client destruction, including the stopped, unfinished upload path.
         RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{413});
         RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size()), "no");
+    };
+    run_operation(worker, io, operation);
+}
+
+RUVIA_TEST(http_client_upload_write_failure_preserves_complete_early_response) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    upload_peer peer(io, worker.handle_, upload_peer::mode_type::early_final_while_uploading);
+    auto config = local_http_client_config(peer.port());
+    config.max_response_bytes_ = 1024;
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        constexpr std::size_t upload_size = 8 * 1024 * 1024;
+        auto exchange = co_await client.handle().open_request(
+            {.method_ = "POST", .target_ = "/upload"},
+            {.max_chunk_bytes_ = upload_size});
+        std::string upload(upload_size, 'u');
+        bool upload_failed = false;
+        ruvia::task_scope writers(worker.handle_);
+        const auto write = [&]() -> ruvia::task<void> {
+            try {
+                co_await exchange.body().write(upload);
+            } catch (const ruvia::http_client_error&) {
+                upload_failed = true;
+            }
+        };
+        writers.spawn(write());
+        auto response = co_await exchange.response();
+        RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{413});
+        co_await writers.join();
+        RUVIA_CHECK(upload_failed);
+        // The public write wakes as soon as the final response stops its
+        // queue. Let the transport write observe the peer close before body
+        // consumption resumes the response reader.
+        (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(100));
+        std::size_t response_bytes = 0;
+        while (const auto chunk = co_await response.body().read()) {
+            response_bytes += chunk->size();
+            RUVIA_CHECK(std::all_of(
+                chunk->begin(), chunk->end(), [](std::byte value) { return value == std::byte{'r'}; }));
+        }
+        RUVIA_CHECK_EQ(response_bytes, upload_peer::rejected_body_size);
+        co_await peer.wait();
+        co_await client.shutdown();
     };
     run_operation(worker, io, operation);
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <exception>
 #include <vector>
 
 #include "ruvia/http/http_header.h"
@@ -18,6 +19,11 @@ public:
     http_client_output_queue output_;
     http_client_upload_config config_;
     std::pmr::vector<http_header> trailers_;
+    // An HTTP/1 peer can stop accepting an in-flight upload while still
+    // delivering a complete response. The upload operation reports this
+    // independently so it cannot poison that response before framing proves
+    // whether the response completed.
+    std::exception_ptr failure_;
     bool content_released_{};
     bool response_taken_{};
     bool response_active_{};
