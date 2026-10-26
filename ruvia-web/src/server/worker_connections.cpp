@@ -617,8 +617,16 @@ void worker_connections::accept_socket(std::size_t listener_index, tcp_socket_ty
         tasks_.spawn(listener_value.tls() != nullptr ? run_tls_session(listener_value, std::move(connection))
                                                      : run_session(listener_value, std::move(connection)));
     } catch (...) {
+        auto failure = std::current_exception();
+        std::pmr::string remote_address(memory_.allocator<char>());
+        std::uint16_t remote_port = 0;
+        try {
+            resolve_remote_endpoint(socket, remote_address, remote_port);
+        } catch (...) {
+            remote_address.clear();
+        }
         accept_failures_.fetch_add(1, std::memory_order_relaxed);
-        options_.connection_failure_.invoke({}, std::current_exception());
+        options_.connection_failure_.invoke(remote_address, std::move(failure));
     }
 }
 
