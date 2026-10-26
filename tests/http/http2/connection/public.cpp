@@ -1882,6 +1882,93 @@ RUVIA_TEST(http2_public_output_drain_preserves_control_limits_on_copy_failure) {
     }
 }
 
+RUVIA_TEST(http2_public_bounds_malformed_request_stream_resets_per_connection) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    (void)ruvia::testing::drain_output(server);
+
+    std::pmr::string handshake(ruvia::http2_client_preface, &resource);
+    append_peer_settings(handshake);
+    RUVIA_CHECK(server.feed(handshake) == ruvia::http2_feed_result::accepted);
+    (void)ruvia::testing::drain_output(server);
+
+    std::pmr::string malformed(&resource);
+    ruvia::hpack_encoder::encode_header(malformed, ":method", "GET");
+    ruvia::hpack_encoder::encode_header(malformed, ":scheme", "https");
+    ruvia::hpack_encoder::encode_header(malformed, ":authority", "example.test");
+    std::uint32_t next_stream_id = 1;
+    for (std::uint32_t index = 0; index != 32; ++index) {
+        std::pmr::string frame(&resource);
+        append_frame(frame, ruvia::http2_frame_type::headers, 0x5, next_stream_id, malformed);
+        next_stream_id += 2;
+        const auto result = server.feed(frame);
+        while (server.next_event()) {
+        }
+        (void)ruvia::testing::drain_output(server);
+        if (index + 1 == 32) {
+            RUVIA_CHECK(result == ruvia::http2_feed_result::protocol_failure);
+            RUVIA_CHECK(server.connection_error() == ruvia::http2_error_code::enhance_your_calm);
+        } else {
+            RUVIA_CHECK(result == ruvia::http2_feed_result::accepted);
+            RUVIA_CHECK(!server.connection_error());
+        }
+
+        if (index == 15) {
+            std::pmr::string valid(malformed, &resource);
+            ruvia::hpack_encoder::encode_header(valid, ":path", "/");
+            std::pmr::string valid_frame(&resource);
+            append_frame(valid_frame, ruvia::http2_frame_type::headers, 0x5, next_stream_id, valid);
+            const auto valid_stream_id = next_stream_id;
+            next_stream_id += 2;
+            RUVIA_CHECK(server.feed(valid_frame) == ruvia::http2_feed_result::accepted);
+            auto request = server.next_event();
+            RUVIA_CHECK(request && request->request_head());
+            const auto end = server.next_event();
+            RUVIA_CHECK(end && end->message_end());
+            if (request && request->request_head()) {
+                ruvia::http_response response(&resource);
+                response.status(ruvia::http_status::no_content);
+                const auto submitted = server.submit_response_head(valid_stream_id, response,
+                    ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response));
+                RUVIA_CHECK(std::holds_alternative<ruvia::http_buffered_response_write_plan>(submitted));
+                (void)server.release(std::move(*request->request_head()));
+            }
+            (void)ruvia::testing::drain_output(server);
+        }
+    }
+}
+
+RUVIA_TEST(http2_public_malformed_response_streams_do_not_consume_server_abuse_budget) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    std::pmr::string settings(&resource);
+    append_peer_settings(settings);
+    RUVIA_CHECK(client.feed(settings) == ruvia::http2_feed_result::accepted);
+
+    std::array<std::uint32_t, 32> stream_ids{};
+    for (auto& stream_id : stream_ids) {
+        const auto submitted = client.submit_request_head(ruvia::http2_regular_request_head_view{
+            .method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .target_ = "/"});
+        RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
+        if (const auto* id = std::get_if<std::uint32_t>(&submitted)) {
+            stream_id = *id;
+        }
+    }
+    (void)ruvia::testing::drain_output(client);
+
+    std::pmr::string malformed(&resource);
+    ruvia::hpack_encoder::encode_header(malformed, "content-type", "text/plain");
+    for (const auto stream_id : stream_ids) {
+        std::pmr::string frame(&resource);
+        append_frame(frame, ruvia::http2_frame_type::headers, 0x5, stream_id, malformed);
+        RUVIA_CHECK(client.feed(frame) == ruvia::http2_feed_result::accepted);
+        while (client.next_event()) {
+        }
+        (void)ruvia::testing::drain_output(client);
+        RUVIA_CHECK(!client.connection_error());
+    }
+}
+
 RUVIA_TEST(http2_public_data_submission_stops_after_connection_failure) {
     for (const bool blocked_window : {false, true}) {
         for (const auto end_stream : {ruvia::http2_end_stream::keep_open, ruvia::http2_end_stream::end_stream}) {

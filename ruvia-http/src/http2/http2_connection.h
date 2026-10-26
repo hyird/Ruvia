@@ -495,10 +495,12 @@ private:
         std::string_view block, hpack_decoder::decode_transaction_type& hpack_transaction);
     template <http2_header_block_kind kind>
     [[nodiscard]] bool complete_decoded_header_block(http2_stream_state& stream, std::string_view block);
-    // On a decode failure: compression error is fatal (GOAWAY, returns false); anything
-    // else RST_STREAMs the stream and survives (returns true).
+    // On a decode failure: compression error is fatal (GOAWAY, returns false);
+    // malformed server request heads consume a connection-lifetime abuse budget;
+    // anything else RST_STREAMs the stream and survives (returns true).
     [[nodiscard]] bool handle_header_decode_failure(http2_stream_state& stream,
-        header_decode_status status, hpack_decoder::decode_transaction_type* hpack_transaction);
+        header_decode_status status, hpack_decoder::decode_transaction_type* hpack_transaction,
+        bool malformed_request_head);
     // Emit message_head (and message_end when the peer already ended the stream)
     // for the sans-I/O owner to dispatch.
     void emit_request_headers(http2_stream_state& stream);
@@ -632,12 +634,13 @@ private:
     http2_receive_window_credit connection_receive_credit_;
     preface_phase_type preface_phase_{preface_phase_type::not_started};
 
-    // Defense-in-depth flood budgets (see http2_connection.cpp). No clock in the core, so
-    // these are per-connection counters that trip GOAWAY(ENHANCE_YOUR_CALM).
-    std::uint32_t peer_reset_streams_{0};    // new stream aborts from peer RST_STREAM
-    std::uint32_t completed_responses_{0};   // streams finished without reset (refills budget)
-    std::uint32_t consecutive_pings_{0};     // inbound PINGs since output was last drained
-    std::uint32_t consecutive_settings_{0};  // inbound non-ACK SETTINGS since output drained
+    // Defense-in-depth flood budgets. No clock in the core, so these are
+    // per-connection counters that trip GOAWAY(ENHANCE_YOUR_CALM).
+    std::uint32_t malformed_request_streams_{0};  // malformed server initial heads; never refilled
+    std::uint32_t peer_reset_streams_{0};         // new stream aborts from peer RST_STREAM
+    std::uint32_t completed_responses_{0};        // streams finished without reset (refills reset budget)
+    std::uint32_t consecutive_pings_{0};          // inbound PINGs since output was last drained
+    std::uint32_t consecutive_settings_{0};       // inbound non-ACK SETTINGS since output drained
 };
 
 }  // namespace ruvia::detail

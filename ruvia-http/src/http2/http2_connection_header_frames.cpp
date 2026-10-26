@@ -29,7 +29,8 @@ bool http2_connection::complete_decoded_header_block(http2_stream_state& stream,
     }
     if (status != header_decode_status::ok) {
         transaction.rollback();
-        return handle_header_decode_failure(stream, status, &hpack_transaction);
+        return handle_header_decode_failure(stream, status, &hpack_transaction,
+            kind == http2_header_block_kind::initial && role_ == http2_role::server);
     }
     transaction.commit();
     hpack_transaction.commit();

@@ -19,6 +19,15 @@ namespace {
         *static_cast<http2_header_decode_context*>(target), name, value);
 }
 
+// A peer can otherwise keep one connection alive while forcing the server to
+// decode and reset malformed request heads across almost the full stream-id
+// space. This connection-lifetime budget follows Pingora's abuse bound; valid
+// exchanges do not refill it.
+constexpr std::uint32_t http2_max_malformed_request_streams = 32;
+constexpr char http2_malformed_requests_goaway_debug[] = "excessive malformed request streams";
+constexpr std::size_t http2_malformed_requests_goaway_bytes =
+    http2_frame_header_bytes + 8 + sizeof(http2_malformed_requests_goaway_debug) - 1;
+
 // CONNECT has no request content; DATA after its HEADERS is tunnel data (RFC
 // 9113 8.5). RFC 9110 8.6 makes Content-Length on CONNECT only a sender SHOULD
 // NOT, so a declared zero is harmless, while a non-zero length would claim
@@ -266,23 +275,35 @@ void http2_connection::reserve_stream_close_effects() {
 }
 
 bool http2_connection::handle_header_decode_failure(http2_stream_state& stream, header_decode_status status,
-    hpack_decoder::decode_transaction_type* hpack_transaction) {
+    hpack_decoder::decode_transaction_type* hpack_transaction, bool malformed_request_head) {
     if (status == header_decode_status::compression_error) {
         append_goaway(http2_error_code::compression_error, "invalid HPACK block");
         http2_reset_header_block(stream);
         return false;
     }
+    const auto malformed_request_count_after_this_stream =
+        static_cast<std::uint64_t>(malformed_request_streams_) +
+        static_cast<std::uint64_t>(malformed_request_head);
+    const bool malformed_request_budget_exhausted =
+        malformed_request_count_after_this_stream >= http2_max_malformed_request_streams;
     const bool has_live_stream = find_stream(stream.id()) == &stream;
     if (has_live_stream) {
         reserve_stream_close_effects();
     }
-    output_.reserve_additional(http2_frame_header_bytes + 4);
+    constexpr std::size_t reset_bytes = http2_frame_header_bytes + 4;
+    if (malformed_request_budget_exhausted) {
+        const auto close_bytes = reset_bytes + (has_live_stream ? http2_window_update_frame_bytes : 0);
+        output_.reserve_segments_additional(has_live_stream ? 3 : 2);
+        output_.reserve_additional(close_bytes + http2_malformed_requests_goaway_bytes);
+    } else {
+        output_.reserve_additional(reset_bytes);
+    }
     output_.append_rst_stream(stream.id(), http2_error_code::protocol_error);
     if (hpack_transaction != nullptr && hpack_transaction->active()) {
         hpack_transaction->commit();
     }
     // The error response is now fully reserved and appended. Only this point is
-    // safe to consume the compressed block: if either reservation above throws,
+    // safe to consume the compressed block: if any reservation above throws,
     // the caller must be able to retry the exact field block and its HPACK state.
     http2_reset_header_block(stream);
     if (has_live_stream) {
@@ -292,6 +313,13 @@ bool http2_connection::handle_header_decode_failure(http2_stream_state& stream, 
         (void)stream.abort(http2_stream_close_source::local);
         // Refused-stream scratch is not in the table, but still models the same
         // whole-stream terminal transition as a live stream.
+    }
+    if (malformed_request_head) {
+        ++malformed_request_streams_;
+    }
+    if (malformed_request_budget_exhausted) {
+        append_goaway(http2_error_code::enhance_your_calm, http2_malformed_requests_goaway_debug);
+        return false;
     }
     return true;
 }
