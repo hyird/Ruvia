@@ -400,6 +400,9 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
             } catch (...) {
                 if (connection_value.protocol_ != http_client_connection::protocol_type::http2) {
                     connection_value.close();
+                    // exchange.run() has joined its child operations, so no I/O
+                    // still borrows these failed exchange buffers.
+                    connection_value.retain_idle_buffers();
                 }
                 throw;
             }
