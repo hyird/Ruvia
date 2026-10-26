@@ -137,6 +137,11 @@ public:
         void* observer_context = nullptr);
     [[nodiscard]] bool wants_write() const noexcept;
 
+    // Point-in-time client request-stream capacity. This does not reserve a
+    // stream; it clamps local_limit to the protocol core and peer SETTINGS
+    // limits, and returns zero for a server or unavailable client connection.
+    [[nodiscard]] std::size_t available_request_streams(std::size_t local_limit) const noexcept;
+
     // Submitted fields are encoded/owned before returning. If owner-lease
     // allocation fails after HEADERS commit, cancellation follows the deferred
     // release rules above and the original exception is rethrown.

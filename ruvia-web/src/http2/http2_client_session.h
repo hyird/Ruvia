@@ -155,6 +155,10 @@ public:
     [[nodiscard]] bool usable() const noexcept {
         return connection_.has_value() && session_tasks_ != 0 && !failed_ && !draining_;
     }
+    [[nodiscard]] std::size_t available_request_streams(std::size_t local_limit) const noexcept {
+        return usable() ? connection_->available_request_streams(local_limit) : 0;
+    }
+
     // Reader or writer of some generation is still running.
     [[nodiscard]] bool running() const noexcept {
         return session_tasks_ != 0;

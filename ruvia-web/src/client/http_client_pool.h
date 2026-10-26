@@ -163,6 +163,7 @@ private:
     [[nodiscard]] http_client_connection& connection(std::size_t index) noexcept {
         return *connections_[index % connections_.size()];
     }
+    [[nodiscard]] http_client_connection& connection_for_request(std::size_t index) noexcept;
 
     asio::io_context& io_context_;
     const worker_handle& worker_;

@@ -304,6 +304,20 @@ std::optional<http2_request_head_submit_error> http2_connection::local_request_a
     return std::nullopt;
 }
 
+std::size_t http2_connection::available_local_request_streams(std::size_t local_limit) const noexcept {
+    if (draining() || local_request_admission_error().has_value()) {
+        return 0;
+    }
+    auto limit = local_limit;
+    if (limit > http2_local_settings::max_concurrent_streams) {
+        limit = http2_local_settings::max_concurrent_streams;
+    }
+    if (limit > peer_settings_.max_concurrent_streams()) {
+        limit = peer_settings_.max_concurrent_streams();
+    }
+    return limit > active_local_request_streams_ ? limit - active_local_request_streams_ : 0;
+}
+
 http2_stream_state* http2_connection::admit_local_request_stream() {
     if (active_local_request_streams_ >= http2_local_settings::max_concurrent_streams) {
         return nullptr;

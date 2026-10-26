@@ -74,6 +74,9 @@ public:
     [[nodiscard]] std::size_t index() const noexcept {
         return index_;
     }
+    // Advisory only; the worker-affine request driver consumes the selected
+    // capacity synchronously before another request can select it.
+    [[nodiscard]] std::size_t available_http2_request_streams() const noexcept;
 
     // Serialized by connect_scheduler_. Returns true only when the existing
     // transport remains connected and is reused; a replacement returns false.

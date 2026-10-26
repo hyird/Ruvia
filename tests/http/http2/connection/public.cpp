@@ -3394,6 +3394,39 @@ RUVIA_TEST(http2_public_server_refuses_stream_beyond_advertised_concurrency) {
     RUVIA_CHECK_EQ(request_heads, std::size_t{advertised_limit});
 }
 
+RUVIA_TEST(http2_public_reports_available_client_request_streams_without_reserving) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    RUVIA_CHECK_EQ(server.available_request_streams(4), std::size_t{0});
+
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    RUVIA_CHECK_EQ(client.available_request_streams(1000), std::size_t{128});
+    RUVIA_CHECK_EQ(client.available_request_streams(0), std::size_t{0});
+    std::pmr::string settings(&resource);
+    constexpr std::array<char, 6> peer_limit{0, 3, 0, 0, 0, 2};
+    append_frame(settings, ruvia::http2_frame_type::settings, 0, 0,
+        std::string_view(peer_limit.data(), peer_limit.size()));
+    RUVIA_CHECK(client.feed(settings) == ruvia::http2_feed_result::accepted);
+    while (client.next_event()) {
+    }
+    RUVIA_CHECK_EQ(client.available_request_streams(4), std::size_t{2});
+    RUVIA_CHECK_EQ(client.available_request_streams(1), std::size_t{1});
+
+    const auto submitted = client.submit_request_head(
+        ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
+    const auto* stream_id = std::get_if<std::uint32_t>(&submitted);
+    RUVIA_CHECK(stream_id != nullptr);
+    RUVIA_CHECK_EQ(client.available_request_streams(4), std::size_t{1});
+    if (stream_id != nullptr) {
+        RUVIA_CHECK(client.submit_reset(*stream_id, ruvia::http2_error_code::cancel) ==
+                    ruvia::http2_submit_status::accepted);
+    }
+    RUVIA_CHECK_EQ(client.available_request_streams(4), std::size_t{2});
+
+    client.begin_drain();
+    RUVIA_CHECK_EQ(client.available_request_streams(4), std::size_t{0});
+}
+
 namespace {
 
 bool http2_client_submits_field(std::string_view name, std::string_view value) {

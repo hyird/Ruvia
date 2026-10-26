@@ -3423,6 +3423,160 @@ RUVIA_TEST(http_capsule_client_retains_payloads_across_reads_and_rejects_truncat
     }
 }
 
+RUVIA_TEST(http2_client_uses_available_stream_capacity_across_connections) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::array<std::optional<asio::ip::tcp::socket>, 2> sockets;
+    std::array<ruvia::http2_connection, 2> connections{
+        ruvia::http2_connection::server(), ruvia::http2_connection::server()};
+    ruvia::worker_signal peer_done(worker.handle_);
+    asio::steady_timer deadline(io);
+    std::exception_ptr peer_failure;
+    bool peer_finished = false;
+
+    const auto flush = [&](std::size_t index, std::optional<std::uint32_t> stream_limit = std::nullopt)
+        -> asio::awaitable<void> {
+        std::pmr::string output;
+        connections[index].take_output(output);
+        if (stream_limit.has_value()) {
+            const std::array<char, 15> settings{
+                '\0', '\0', '\x06', '\x04', '\0', '\0', '\0', '\0', '\0',
+                '\0', '\x03', '\0', '\0', '\0', static_cast<char>(*stream_limit)};
+            output.append(settings.data(), settings.size());
+        }
+        if (!output.empty()) {
+            co_await asio::async_write(*sockets[index], asio::buffer(output), asio::use_awaitable);
+        }
+    };
+    const auto read_request = [&](std::size_t index) -> asio::awaitable<ruvia::http2_request_head_event> {
+        std::array<char, 16384> input{};
+        for (;;) {
+            while (auto event = connections[index].next_event()) {
+                if (auto* request = event->request_head()) {
+                    co_return std::move(*request);
+                }
+            }
+            const auto count = co_await sockets[index]->async_read_some(asio::buffer(input), asio::use_awaitable);
+            const auto bytes = std::string_view(input.data(), count);
+            for (;;) {
+                const auto status = connections[index].feed(bytes);
+                if (status == ruvia::http2_feed_result::protocol_failure) {
+                    throw std::runtime_error("invalid HTTP/2 capacity test input");
+                }
+                while (auto event = connections[index].next_event()) {
+                    if (auto* request = event->request_head()) {
+                        co_return std::move(*request);
+                    }
+                }
+                if (status != ruvia::http2_feed_result::events_pending) {
+                    break;
+                }
+            }
+        }
+    };
+    const auto respond = [&](std::size_t index, ruvia::http2_request_head_event&& request) {
+        const auto stream_id = request.stream_id();
+        const auto built = request.build_request();
+        ruvia::http_response response;
+        const auto submitted = connections[index].submit_response_head(
+            stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
+        if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(submitted) ||
+            connections[index].release(std::move(request)) !=
+                ruvia::http2_server_request_release_status::released) {
+            throw std::runtime_error("HTTP/2 capacity test response rejected");
+        }
+    };
+    const auto serve = [&]() -> asio::awaitable<void> {
+        for (auto& socket : sockets) {
+            socket.emplace(co_await acceptor.async_accept(asio::use_awaitable));
+        }
+        // The first accepted connection is pool connection 1 and has one
+        // request slot. The second is connection 0 and has two.
+        co_await flush(0, 1);
+        co_await flush(1, 2);
+
+        auto first_warm = co_await read_request(0);
+        auto second_warm = co_await read_request(1);
+        respond(1, std::move(second_warm));
+        co_await flush(1);
+        respond(0, std::move(first_warm));
+        co_await flush(0);
+
+        auto saturated = co_await read_request(0);
+        auto available = co_await read_request(1);
+        auto rerouted = co_await read_request(1);
+        const auto rerouted_target = rerouted.build_request().target();
+        if (rerouted_target != "/probe") {
+            throw std::runtime_error("HTTP/2 request was not routed to available stream capacity");
+        }
+        respond(0, std::move(saturated));
+        respond(1, std::move(available));
+        respond(1, std::move(rerouted));
+        co_await flush(0);
+        co_await flush(1);
+        for (auto& socket : sockets) {
+            std::error_code ignored;
+            socket->close(ignored);
+        }
+    };
+    deadline.expires_after(std::chrono::seconds(3));
+    deadline.async_wait([&](const std::error_code& error) {
+        if (error) {
+            return;
+        }
+        std::error_code ignored;
+        acceptor.close(ignored);
+        for (auto& socket : sockets) {
+            if (socket) {
+                socket->close(ignored);
+            }
+        }
+    });
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+        peer_finished = true;
+        deadline.cancel();
+        peer_done.notify();
+    });
+
+    auto config = local_http_client_config(acceptor.local_endpoint().port());
+    config.connection_count_ = 2;
+    config.max_concurrent_http2_streams_per_connection_ = 2;
+    config.protocol_ = ruvia::http_client_protocol::http2_only;
+    config.request_timeout_ = std::chrono::seconds(2);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    const auto send = [&](ruvia::http_client& client_value, std::string_view target) -> ruvia::task<void> {
+        auto response = co_await client_value.handle().send({.target_ = target});
+        RUVIA_CHECK(response.status() == ruvia::http_status::ok);
+        RUVIA_CHECK((co_await response.body().read_all()).empty());
+    };
+    auto operation = [&]() -> ruvia::task<void> {
+        const acceptor_closer closer{acceptor};
+        {
+            ruvia::task_scope warm(worker.handle_);
+            warm.spawn(send(client, "/warm-first"));
+            warm.spawn(send(client, "/warm-second"));
+            co_await warm.join();
+        }
+        {
+            ruvia::task_scope requests(worker.handle_);
+            requests.spawn(send(client, "/hold-saturated"));
+            requests.spawn(send(client, "/hold-available"));
+            requests.spawn(send(client, "/probe"));
+            co_await requests.join();
+        }
+        while (!peer_finished) {
+            co_await peer_done.wait();
+        }
+        if (peer_failure) {
+            std::rethrow_exception(peer_failure);
+        }
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
 RUVIA_TEST(http2_cold_start_cancelled_waiter_does_not_close_active_session) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);

@@ -74,6 +74,13 @@ http_client_connection::http_client_connection(http_client_pool& pool, std::size
 
 http_client_connection::~http_client_connection() = default;
 
+std::size_t http_client_connection::available_http2_request_streams() const noexcept {
+    return protocol_ == protocol_type::http2
+               ? http2_.available_request_streams(
+                     pool_.config().max_concurrent_http2_streams_per_connection_)
+               : 0;
+}
+
 void http_client_connection::throw_if_aborted() const {
     if (const auto reason = transport_.abort_reason(); reason != client_abort_reason::none) {
         throw http_client_error(http_client_abort_error(reason), http_client_abort_message(reason));

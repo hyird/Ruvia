@@ -289,6 +289,22 @@ void http_client_pool::require_accepting() const {
     }
 }
 
+http_client_connection& http_client_pool::connection_for_request(std::size_t index) noexcept {
+    auto& preferred = connection(index);
+    if (preferred.protocol_ != http_client_connection::protocol_type::http2 ||
+        preferred.available_http2_request_streams() != 0) {
+        return preferred;
+    }
+    for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
+        auto& candidate = connection(index + offset);
+        if (candidate.protocol_ == http_client_connection::protocol_type::http2 &&
+            candidate.available_http2_request_streams() != 0) {
+            return candidate;
+        }
+    }
+    return preferred;
+}
+
 task<void> http_client_pool::execute_request_into(
     http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
     try {
@@ -318,7 +334,7 @@ task<void> http_client_pool::execute_request_into(
     http_client_connection* tcp_connection = nullptr;
     try {
         throw_if_abandoned(*state_value);
-        tcp_connection = &connection(index);
+        tcp_connection = &connection_for_request(index);
         state_value->connection_index_ = tcp_connection->index();
         co_await execute_tcp(*tcp_connection, request, timeout, acquire_timeout, options.stop_token_, *state_value);
         --requests_in_flight_;

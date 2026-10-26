@@ -257,6 +257,8 @@ public:
     void begin_connection();
 
     // --- client role -------------------------------------------------------------
+    [[nodiscard]] std::size_t available_local_request_streams(std::size_t local_limit) const noexcept;
+
     // Validate, open the next odd stream, and queue a regular request HEADERS block as
     // one transaction. Failure consumes neither a stream ID nor a peer concurrency
     // slot. `content` is the sole Content-Length/END_STREAM contract; later content

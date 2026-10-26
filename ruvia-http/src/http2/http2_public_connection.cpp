@@ -478,6 +478,10 @@ http2_received_data_acknowledge_status http2_connection::acknowledge(http2_recei
     return acknowledged ? http2_received_data_acknowledge_status::acknowledged
                         : http2_received_data_acknowledge_status::closed;
 }
+std::size_t http2_connection::available_request_streams(std::size_t local_limit) const noexcept {
+    return impl_->connection_.available_local_request_streams(local_limit);
+}
+
 bool http2_connection::has_queued_data(std::uint32_t stream_id) const noexcept {
     return impl_->connection_.has_queued_data(stream_id);
 }
