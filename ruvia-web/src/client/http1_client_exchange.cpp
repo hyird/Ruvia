@@ -501,14 +501,16 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
             const auto ending = output.end_requested_ && !output.chunk_ready_ ? http_stream_end::end
                                                                               : http_stream_end::keep_open;
             const auto bytes_value = output.chunk_ready_ ? std::string_view(output.chunk_) : std::string_view{};
+            std::size_t completed_bytes = 0;
             std::error_code error;
             if (tls != nullptr) {
                 http_socket_tunnel_transport transport(stream, tls);
-                error = co_await transport.write_bytes(bytes_value, ending);
+                error = co_await transport.write_bytes(bytes_value, ending, &completed_bytes);
             } else {
                 http_socket_tunnel_transport transport(stream.next_layer().socket(), nullptr);
-                error = co_await transport.write_bytes(bytes_value, ending);
+                error = co_await transport.write_bytes(bytes_value, ending, &completed_bytes);
             }
+            pool_.wire_counters().sent_ += completed_bytes;
             write_timer.cancel();
             connection_.throw_if_aborted();
             if (error) {
@@ -516,7 +518,6 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
                                                                       : http_client_error::code_type::io_error,
                     error_code_text(error));
             }
-            pool_.wire_counters().sent_ += bytes_value.size();
             if (ending == http_stream_end::end) {
                 output.finish();
             } else {

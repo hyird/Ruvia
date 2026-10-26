@@ -52,12 +52,21 @@ public:
         }
         co_return result_value.result() != 0;
     }
-    [[nodiscard]] task<std::error_code> write_bytes(std::string_view bytes_value, http_stream_end end) {
+    // `completed_bytes` receives the plaintext prefix accepted by the stream,
+    // including progress reported with the terminal error.
+    [[nodiscard]] task<std::error_code> write_bytes(
+        std::string_view bytes_value, http_stream_end end, std::size_t* completed_bytes = nullptr) {
+        if (completed_bytes != nullptr) {
+            *completed_bytes = 0;
+        }
         while (!bytes_value.empty()) {
             const auto chunk = bytes_value.substr(0, 4096);
             const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
                 asio::async_write(stream_, asio::buffer(chunk), std::move(handler));
             });
+            if (completed_bytes != nullptr) {
+                *completed_bytes += result_value.result();
+            }
             if (result_value.error_code()) {
                 co_return result_value.error_code();
             }
