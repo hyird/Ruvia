@@ -216,9 +216,11 @@ RUVIA_TEST(http_client_staggers_and_races_opposite_address_families) {
     }
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    opposite_family_peer peer(io, attachment.loop().handle(), *first_is_v6);
+    auto loop = attachment.loop();
+    auto worker = loop.handle();
+    opposite_family_peer peer(io, worker, *first_is_v6);
     peer.start();
-    auto root = attachment.loop().start(exercise(attachment, peer, ruvia_ctx));
+    auto root = loop.start(exercise(attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
 }
@@ -231,9 +233,11 @@ RUVIA_TEST(http_client_timeout_cancels_the_address_race_before_the_next_family) 
     }
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    opposite_family_peer peer(io, attachment.loop().handle(), *first_is_v6);
+    auto loop = attachment.loop();
+    auto worker = loop.handle();
+    opposite_family_peer peer(io, worker, *first_is_v6);
     peer.start();
-    auto root = attachment.loop().start(exercise_stagger_cancellation(attachment, peer, ruvia_ctx));
+    auto root = loop.start(exercise_stagger_cancellation(attachment, peer, ruvia_ctx));
     attachment.run();
     root.get();
 }
