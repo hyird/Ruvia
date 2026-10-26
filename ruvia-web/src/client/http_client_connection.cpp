@@ -164,8 +164,9 @@ bool http_client_connection::cancel_by_id(std::uint64_t cancellation_id) noexcep
     return true;
 }
 
-task<void> http_client_connection::ensure_connected(
-    const operation_timeout& operation_timeout_value, const operation_timeout& acquire_timeout, stop_token stop_token_value, http_client_response_state& response) {
+task<bool> http_client_connection::ensure_connected(const operation_timeout& operation_timeout_value,
+    const operation_timeout& acquire_timeout, stop_token stop_token_value,
+    http_client_response_state& response) {
     std::size_t connect_slot = 0;
     co_await acquire_serial_slot(connect_scheduler_, acquire_timeout, stop_token_value, connect_slot);
     struct connect_lease final {
@@ -183,11 +184,11 @@ task<void> http_client_connection::ensure_connected(
     }
     if (connected_) {
         if (protocol_ == protocol_type::http2) {
-            co_return;
+            co_return true;
         }
         const auto idle_status = transport_.idle_status();
         if (idle_status == client_idle_transport_status::reusable) {
-            co_return;
+            co_return true;
         }
         if (idle_status == client_idle_transport_status::pending_data) {
             pool_.record_idle_connection_with_pending_data();
@@ -242,14 +243,14 @@ task<void> http_client_connection::ensure_connected(
     }
     connected_ = true;
     if (protocol_ != protocol_type::http2) {
-        co_return;
+        co_return false;
     }
     const auto started = co_await http2_.start({.enable_push_ = config.push_.enabled_,
                                                    .receive_origin_advertisements_ = config.advertisements_.receive_origins_},
         timeout);
     switch (started.status_) {
         case http2_client_session_start_status::started:
-            co_return;
+            co_return false;
         case http2_client_session_start_status::transport_failed:
             close();
             throw_http_client_transport_error(started.transport_, "upstream closed during HTTP/2 preface");

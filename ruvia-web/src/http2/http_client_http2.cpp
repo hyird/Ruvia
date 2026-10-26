@@ -407,7 +407,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                     .error_ = std::make_error_code(std::errc::operation_canceled)});
             }
             co_await wait_for_http2_session_stop(timeout, stop_token_value);
-            co_await ensure_connected(timeout, timeout, stop_token_value, state_value);
+            (void)co_await ensure_connected(timeout, timeout, stop_token_value, state_value);
             if (protocol_ != protocol_type::http2) {
                 co_return false;
             }

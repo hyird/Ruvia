@@ -75,9 +75,11 @@ public:
         return index_;
     }
 
-    // Serialized by connect_scheduler_; a live connection is reused.
-    [[nodiscard]] task<void> ensure_connected(
-        const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop_token_value, http_client_response_state& response);
+    // Serialized by connect_scheduler_. Returns true only when the existing
+    // transport remains connected and is reused; a replacement returns false.
+    [[nodiscard]] task<bool> ensure_connected(
+        const operation_timeout& timeout, const operation_timeout& acquire_timeout,
+        stop_token stop_token_value, http_client_response_state& response);
     // Terminal close of the current connection; a running HTTP/2 session
     // fails through its single transition so every stream is woken.
     void close() noexcept;

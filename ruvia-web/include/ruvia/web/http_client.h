@@ -453,6 +453,10 @@ public:
     http_client_handle& operator=(const http_client_handle&) = delete;
 
     [[nodiscard]] http_client_handle with_options(operation_options options) const;
+    // On HTTP/1, send() may transparently replay an idempotent request once
+    // when a reused connection fails with I/O before any final response head.
+    // Fresh connections, streamed uploads, tunnels, and non-idempotent methods
+    // are never replayed automatically.
     [[nodiscard]] task<http_client_response> send(
         const http_client_request_view& request) const;
     [[nodiscard]] task<http_client_exchange> open_request(

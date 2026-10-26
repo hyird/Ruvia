@@ -7,6 +7,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_cancellation.h"
+#include "ruvia/http/http_known_method.h"
 
 #include "client/client_tls.h"
 #include "client/http1_client_exchange.h"
@@ -20,6 +21,23 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
     if (state_value.abandoned_) {
         throw http_client_error(
             http_client_error::code_type::cancelled, "HTTP request abandoned before transport admission");
+    }
+}
+
+[[nodiscard]] bool can_retry_reused_http1_request(const std::exception_ptr& failure,
+    const http_client_request_storage& request,
+    const http_client_response_state& response) noexcept {
+    if (request.upload() != nullptr || request.is_tunnel() ||
+        !is_http_method_idempotent(request.method()) || response.head_ready_ ||
+        !response.informational_.empty() || response.abandoned_) {
+        return false;
+    }
+    try {
+        std::rethrow_exception(failure);
+    } catch (const http_client_error& error) {
+        return error.code() == http_client_error::code_type::io_error;
+    } catch (...) {
+        return false;
     }
 }
 
@@ -381,22 +399,54 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
             // A previous HTTP/1 exchange may have closed this connection while this
             // request waited for the serial exchange slot. Reconnect only after
             // acquiring that slot, so the connection cannot be replaced underneath
-            // an active HTTP/1 exchange. Every failure below closes the connection
-            // before the slot is released; pool handoff resumes the next waiter
-            // synchronously.
+            // an active HTTP/1 exchange. Every final failure below closes the
+            // connection before the slot is released; pool handoff resumes the next
+            // waiter synchronously.
             try {
                 // The HTTP/2 fallback already connected and negotiated HTTP/1.
                 // Do not idle-probe this fresh TLS stream before its first response:
                 // session tickets can look like unsolicited response bytes. A connect
                 // or exchange while waiting for this slot invalidates the snapshot.
-                if (!connection_value.connected_ || connected_http1_generation != connection_value.generation_) {
-                    co_await connection_value.ensure_connected(timeout, acquire_timeout, stop_token_value, state_value);
+                bool reused_http1 = false;
+                if (!connection_value.connected_ ||
+                    connected_http1_generation != connection_value.generation_) {
+                    reused_http1 = co_await connection_value.ensure_connected(
+                        timeout, acquire_timeout, stop_token_value, state_value);
                 }
                 if (connection_value.protocol_ == http_client_connection::protocol_type::http2) {
                     retry_as_http2 = true;
                 } else {
-                    http1_client_exchange exchange(*this, connection_value);
-                    co_await exchange.run(request, timeout, stop_token_value, state_value);
+                    bool retried = false;
+                    for (;;) {
+                        std::exception_ptr failure;
+                        try {
+                            http1_client_exchange exchange(*this, connection_value);
+                            co_await exchange.run(request, timeout, stop_token_value, state_value);
+                        } catch (...) {
+                            failure = std::current_exception();
+                        }
+                        if (failure == nullptr) {
+                            break;
+                        }
+                        if (retried || !reused_http1 ||
+                            !can_retry_reused_http1_request(failure, request, state_value)) {
+                            std::rethrow_exception(failure);
+                        }
+                        // RFC 9110 section 9.2.2 permits automatically retrying
+                        // an idempotent request. Limit that recovery to one failed
+                        // reused transport and a response head not yet published.
+                        connection_value.close();
+                        connection_value.retain_idle_buffers();
+                        retried = true;
+                        reused_http1 = false;
+                        (void)co_await connection_value.ensure_connected(
+                            timeout, acquire_timeout, stop_token_value, state_value);
+                        if (connection_value.protocol_ ==
+                            http_client_connection::protocol_type::http2) {
+                            retry_as_http2 = true;
+                            break;
+                        }
+                    }
                 }
             } catch (...) {
                 if (connection_value.protocol_ != http_client_connection::protocol_type::http2) {

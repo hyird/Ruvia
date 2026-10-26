@@ -2707,6 +2707,108 @@ RUVIA_TEST(http_client_replaces_a_keep_alive_connection_the_peer_closed_while_id
     RUVIA_CHECK_EQ(connections, 2U);
 }
 
+RUVIA_TEST(http_client_retries_only_idempotent_requests_after_a_reused_connection_fails_before_its_response) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    unsigned connections = 0;
+    unsigned retried_requests = 0;
+    unsigned non_idempotent_requests = 0;
+    std::exception_ptr peer_failure;
+    ruvia::worker_signal peer_done(worker.handle_);
+    bool peer_finished = false;
+    const auto read_request = [](asio::ip::tcp::socket& socket) -> asio::awaitable<void> {
+        asio::streambuf request;
+        co_await asio::async_read_until(socket, request, "\r\n\r\n", asio::use_awaitable);
+    };
+    const auto answer = [](asio::ip::tcp::socket& socket, std::string_view body,
+                            std::string_view connection) -> asio::awaitable<void> {
+        const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " +
+                                     std::to_string(body.size()) + "\r\nConnection: " +
+                                     std::string(connection) + "\r\n\r\n" + std::string(body);
+        co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+    };
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto first = co_await acceptor.async_accept(asio::use_awaitable);
+        ++connections;
+        co_await read_request(first);
+        co_await answer(first, "prime", "keep-alive");
+        co_await read_request(first);
+        ++retried_requests;
+        std::error_code ignored;
+        first.close(ignored);
+
+        std::error_code accept_error;
+        auto second = co_await acceptor.async_accept(asio::redirect_error(asio::use_awaitable, accept_error));
+        if (accept_error == asio::error::operation_aborted) {
+            co_return;
+        }
+        if (accept_error) {
+            throw std::system_error(accept_error);
+        }
+        ++connections;
+        co_await read_request(second);
+        ++retried_requests;
+        co_await answer(second, "retried", "keep-alive");
+        co_await read_request(second);
+        ++non_idempotent_requests;
+        acceptor.close(ignored);
+        second.close(ignored);
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+        peer_finished = true;
+        peer_done.notify();
+    });
+    auto config = local_http_client_config(acceptor.local_endpoint().port());
+    config.connection_count_ = 1;
+    config.request_timeout_ = std::chrono::seconds(3);
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    auto operation = [&]() -> ruvia::task<void> {
+        const acceptor_closer closer{acceptor};
+        auto first = co_await client.handle().send({.target_ = "/prime"});
+        const auto first_body = co_await first.body().read_all();
+        RUVIA_CHECK_EQ(std::string_view(
+                           reinterpret_cast<const char*>(first_body.bytes().data()), first_body.size()),
+            "prime");
+
+        std::optional<std::string> retry_body;
+        try {
+            auto response = co_await client.handle().send({.target_ = "/retry"});
+            const auto bytes_value = co_await response.body().read_all();
+            retry_body.emplace(
+                reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size());
+        } catch (const ruvia::http_client_error&) {
+            std::error_code ignored;
+            acceptor.close(ignored);
+        }
+        std::optional<ruvia::http_client_error::code_type> post_failure;
+        if (retry_body.has_value()) {
+            try {
+                (void)co_await client.handle().send({.method_ = "POST", .target_ = "/post"});
+            } catch (const ruvia::http_client_error& error) {
+                post_failure = error.code();
+            }
+        }
+        while (!peer_finished) {
+            co_await peer_done.wait();
+        }
+        if (peer_failure) {
+            std::rethrow_exception(peer_failure);
+        }
+        RUVIA_CHECK(retry_body == std::optional<std::string>("retried"));
+        RUVIA_CHECK(post_failure == ruvia::http_client_error::code_type::io_error);
+        const auto stats = client.handle().stats();
+        RUVIA_CHECK_EQ(stats.completed_requests_, std::size_t{2});
+        RUVIA_CHECK_EQ(stats.failed_requests_, std::size_t{1});
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+    RUVIA_CHECK_EQ(connections, 2U);
+    RUVIA_CHECK_EQ(retried_requests, 2U);
+    RUVIA_CHECK_EQ(non_idempotent_requests, 1U);
+}
+
 // The idle probe never decrypts: any record a TLS peer sends while the pooled
 // connection idles, a TLS 1.3 session ticket as much as a close_notify,
 // retires the connection, and the next request uses a fresh one.
