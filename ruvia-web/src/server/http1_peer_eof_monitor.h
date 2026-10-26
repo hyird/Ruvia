@@ -19,6 +19,7 @@
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
 
+#include "server/http_connection_state.h"
 #include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
@@ -129,10 +130,15 @@ private:
             // detecting a FIN behind more pipelined bytes then requires the
             // handler to finish so the session can consume those requests.
             while (!closing_ && input_.size() < allowance_) {
-                // A quiet SSE needs no look-ahead allocation. Allocate the
-                // bounded pipeline buffer only after application data arrives.
+                // A quiet SSE needs no look-ahead allocation. After the first
+                // application byte, grow like the connection read buffer
+                // instead of reserving the full 64 KiB header allowance.
                 char first_byte;
                 const bool first_read = input_.capacity() == 0;
+                if (!first_read && input_.size() == input_.capacity()) {
+                    input_.reserve(std::min(
+                        allowance_, std::max(initial_read_buffer_bytes, input_.capacity() * 2)));
+                }
                 const auto space = first_read ? std::span<char>(&first_byte, 1) : input_.prepare_spare();
                 // Cancel this operation, not the socket's concurrent writer.
                 // Asio's SSL io_op feeds received encrypted input into its
@@ -146,7 +152,7 @@ private:
                 // every returned byte before inspecting the shutdown state.
                 if (first_read) {
                     if (completion.result() != 0) {
-                        input_.reserve(allowance_);
+                        input_.reserve(std::min(initial_read_buffer_bytes, allowance_));
                         input_.append(std::string_view(&first_byte, completion.result()));
                     }
                 } else {
