@@ -46,6 +46,7 @@ struct http_server_listener_definition final {
               sni_identities_(pmr_resource_or_default(resource)) {}
 
         tls_certificate certificate_;
+        std::uint64_t max_outgoing_records_{std::uint64_t{1} << 23};
         std::optional<tls_client_certificate_policy> client_certificates_;
         std::pmr::vector<sni_identity> sni_identities_;
         // Created once by server configuration validation and shared by every

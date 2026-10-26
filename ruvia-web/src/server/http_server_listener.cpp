@@ -10,6 +10,7 @@ http_server_listener_definition::tls clone_tls(
     const http_server_listener_definition::tls& source_value, std::pmr::memory_resource* resource) {
     http_server_listener_definition::tls result_value(source_value.certificate_, resource);
     result_value.client_certificates_ = source_value.client_certificates_;
+    result_value.max_outgoing_records_ = source_value.max_outgoing_records_;
     result_value.sni_identities_.reserve(source_value.sni_identities_.size());
     for (const auto& configured : source_value.sni_identities_) {
         result_value.sni_identities_.emplace_back(configured.host_, configured.certificate_, resource);

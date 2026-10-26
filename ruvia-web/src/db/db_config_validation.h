@@ -68,7 +68,7 @@ inline void validate_db_config(const db_config& config) {
     }
 #endif
 
-    detail::ensure_config_host(config.host_, "database host must not be empty", "database host is invalid");
+    validate_client_origin_host(config.host_, "database host must not be empty", "database host is invalid");
     // Both drivers pass these to C APIs as NUL-terminated strings.
     for (const std::string_view value : {std::string_view{config.username_}, std::string_view{config.password_},
              std::string_view{config.database_}}) {

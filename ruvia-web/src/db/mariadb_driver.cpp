@@ -28,6 +28,7 @@
 #include "db/db_pool.h"
 #include "db/db_sql.h"
 #include "db/mariadb_pipeline.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {
@@ -930,12 +931,20 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     }
     const auto client_flags = use_tls ? static_cast<unsigned long>(CLIENT_SSL) : 0UL;
     MYSQL* connected = nullptr;
-    int status = mysql_real_connect_start(&connected, &initialized, resolved_hosts.c_str(), config.username_.c_str(),
-        config.password_.c_str(), config.database_.empty() ? nullptr : config.database_.c_str(), config.port_,
-        nullptr, client_flags);
+    int status;
+    {
+        native_tls_context_scope tls_scope(use_tls ? config.host_ : std::string_view{}, config.tls_.max_outgoing_records_);
+        status = mysql_real_connect_start(&connected, &initialized, resolved_hosts.c_str(), config.username_.c_str(),
+            config.password_.c_str(), config.database_.empty() ? nullptr : config.database_.c_str(), config.port_,
+            nullptr, client_flags);
+        tls_scope.rethrow_failure();
+    }
     while (status != 0) {
+        const auto ready = co_await wait_for_mysql(pool, index, status, deadline_value);
+        native_tls_context_scope tls_scope(use_tls ? config.host_ : std::string_view{}, config.tls_.max_outgoing_records_);
         status = mysql_real_connect_cont(
-            &connected, &initialized, co_await wait_for_mysql(pool, index, status, deadline_value));
+            &connected, &initialized, ready);
+        tls_scope.rethrow_failure();
     }
     if (connected == nullptr) {
         throw mysql_error(initialized, "mysql_real_connect", db_error::code_type::connect_failed);

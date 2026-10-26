@@ -27,6 +27,7 @@
 #include "ruvia/web/db/db_types.h"
 #include "ruvia/web/detail/db/db_backend.h"
 
+#include "client/client_host_resolver.h"
 #include "db/db_config_storage.h"
 #include "db/db_host_resolution.h"
 #include "db/db_slot_socket.h"
@@ -148,8 +149,8 @@ struct postgresql_driver final {
 // waits on a Ruvia-owned duplicate of it.
 template <typename driver_type>
 struct db_slot final {
-    db_slot(asio::io_context& io_context, std::pmr::memory_resource* resource)
-        : resolver_(io_context),
+    db_slot(asio::io_context& io_context, const worker_handle& worker, std::pmr::memory_resource* resource)
+        : resolver_(worker),
           wait_socket_(io_context),
           session_(resource) {}
 
@@ -162,7 +163,7 @@ struct db_slot final {
     db_slot(db_slot&&) noexcept = default;
     db_slot& operator=(db_slot&&) noexcept = default;
 
-    asio::ip::tcp::resolver resolver_;
+    client_host_resolver resolver_;
     typename driver_type::connection_type* connection_{nullptr};
     db_slot_socket wait_socket_;
     // Driver state of the current connection.

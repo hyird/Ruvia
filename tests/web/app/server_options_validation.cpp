@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <memory_resource>
@@ -105,6 +106,30 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
                         {
                             .requirement_ = ruvia::tls_client_certificate_requirement::required,
                         },
+                },
+        });
+    }));
+    RUVIA_CHECK(throws_invalid([] {
+        ruvia::app().listen({
+            .address_ = "127.0.0.1",
+            .https_ = 8443,
+            .tls_ =
+                {
+                    .certificate_chain_file_ = "cert.pem",
+                    .private_key_file_ = "key.pem",
+                    .max_outgoing_records_ = 0,
+                },
+        });
+    }));
+    RUVIA_CHECK(throws_invalid([] {
+        ruvia::app().listen({
+            .address_ = "127.0.0.1",
+            .https_ = 8443,
+            .tls_ =
+                {
+                    .certificate_chain_file_ = "cert.pem",
+                    .private_key_file_ = "key.pem",
+                    .max_outgoing_records_ = (std::uint64_t{1} << 23) + 1,
                 },
         });
     }));

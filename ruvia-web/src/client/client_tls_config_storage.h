@@ -13,11 +13,13 @@
 #include "client/client_host.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_file_paths.h"
+#include "tls/tls_protocol_policy.h"
 #include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
 
 inline void validate_client_tls_config(const client_tls_config& config) {
+    validate_tls_record_limit(config.max_outgoing_records_);
     if (config.mode_ != client_tls_mode::verify_identity && config.mode_ != client_tls_mode::skip_verification &&
         config.mode_ != client_tls_mode::disabled) {
         throw std::invalid_argument("invalid client TLS mode");
@@ -63,6 +65,7 @@ struct client_tls_config_storage final {
     // Copies share the parsed trust store and identity; no file is re-read.
     client_tls_config_storage(const client_tls_config_storage& source_value, std::pmr::memory_resource* resource)
         : mode_(source_value.mode_),
+          max_outgoing_records_(source_value.max_outgoing_records_),
           ca_file_(source_value.ca_file_, pmr_resource_or_default(resource)),
           certificate_chain_file_(source_value.certificate_chain_file_, pmr_resource_or_default(resource)),
           private_key_file_(source_value.private_key_file_, pmr_resource_or_default(resource)),
@@ -80,6 +83,7 @@ struct client_tls_config_storage final {
     }
 
     client_tls_mode mode_;
+    std::uint64_t max_outgoing_records_;
     std::pmr::string ca_file_;
     std::pmr::string certificate_chain_file_;
     std::pmr::string private_key_file_;

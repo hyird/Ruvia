@@ -127,7 +127,7 @@ db_pool<driver_type>::db_pool(asio::io_context& io_context, const worker_handle&
     }
     slots_.reserve(config_.pool_size_per_worker_);
     for (std::size_t index = 0; index < config_.pool_size_per_worker_; ++index) {
-        slots_.emplace_back(io_context_, resource_);
+        slots_.emplace_back(io_context_, worker_, resource_);
     }
 }
 
@@ -266,10 +266,10 @@ task<void> db_pool<driver_type>::connect_slot(std::size_t index, const operation
 }
 
 // Resolving runs under the operation deadline with the slot's resolve deadline
-// armed around it, so a stalled resolve is torn down with everything else on
-// that slot. The deadline is checked once before arming and once after
-// resuming, because the timer may have fired while this coroutine was
-// suspended.
+// armed around it. A system query already running cannot be interrupted, but
+// cancellation retires this slot's waiter immediately and discards its late
+// result. The deadline is checked once before arming and once after resuming,
+// because the timer may have fired while this coroutine was suspended.
 template <typename driver_type>
 task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
     std::size_t index, const operation_timeout& deadline_value) {
@@ -285,13 +285,9 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
     auto& slot = slots_[index];
     try {
         db_slot_active_wait_guard active_resolve(slot);
-        const auto port = format_db_port(config_.port_);
-        auto completion = co_await ruvia::async_asio<asio::ip::tcp::resolver::results_type>(
-            [this, &slot, &port](auto handler) mutable {
-                slot.resolver_.async_resolve(config_.host_, std::string_view(port.data()), std::move(handler));
-            });
-        const auto resolve_error = completion.error_code();
-        auto results = std::move(completion).take_result();
+        auto completion = co_await slot.resolver_.resolve(config_.host_, config_.port_, deadline_value);
+        const auto resolve_error = completion.error_;
+        auto results = std::move(completion.addresses_);
         const bool deadline_expired = leases_.clear_deadline(index) || deadline_value.expired();
         leases_.throw_if_aborted(index);
         if (slot.close_requested_) {

@@ -124,6 +124,7 @@ ruvia::app().listen({
 - `tls_.client_certificates_.requirement_` 支持 `tls_client_certificate_requirement::optional` 或 `required`（双向 TLS / mTLS），通过 `c.conn().tls()->client_certificate_subject()` 读取客户端证书主题。
 - `sni_` 按 SNI 主机名（ASCII 不区分大小写）选择证书；客户端未发送 server_name 或名称不匹配任何 `sni_` 项时使用主证书完成握手。这是为单证书与通配符证书部署做出的产品选择，不发送 RFC 9325 §3.7 建议的 `unrecognized_name` 告警。
 - 协议策略固定：仅 TLS 1.2 / 1.3；TLS 1.2 只协商 ECDHE + AEAD 密码套件（AES-128-GCM 优先），由服务器偏好决定；拒绝重协商；ALPN 依次选择 `h2`、`http/1.1`、`http/1.0`，三者都未提供时以 `no_application_protocol` 告警失败。
+- `tls_.max_outgoing_records_`（默认 `2^23`，范围 `1..2^23`）限制每条连接发出的全部 TLS 记录，计入握手与 KeyUpdate 且更新密钥不重置；到达上限时终止连接，以低于 RFC 9846 §5.5 的 AES-GCM 单密钥用量上限。
 - 会话可在同一监听器的任意 worker 上恢复；TLS 1.2 与 TLS 1.3 会话都只在与建立时相同的 SNI 名称（ASCII 不区分大小写）下恢复（RFC 6066 §3；RFC 9846 §4.6.1 允许拒绝不同 SNI 的 PSK），否则完整握手。会话票据密钥每 2 小时（会话有效期）轮换一次，旧密钥再保留一个周期用于解密，随后销毁（RFC 9325 §3.4）；某个 worker 复制密钥失败时约 5 秒后重试，而不是等到下一次轮换。
 - 目标源校验（RFC 9110 §7.4 / §15.5.20）：目标为 `https` 资源的请求（HTTPS 连接上的 origin-form / asterisk-form，或显式 `https` 绝对形式目标 / HTTP/2 `:scheme https`），只有当本连接握手出示的证书在 subjectAltName 的 DNS 或 IP 条目中覆盖目标主机（`:authority`，否则 `Host`；通配符只匹配完整的最左标签，不使用主题 CN）时才处理，否则回 `421 Misdirected Request`；HTTP/2 只拒绝该流，连接保留。证书匹配而非 SNI 匹配，因此证书覆盖的其他名称仍可复用连接（RFC 9113 §9.1.1）。明文监听器收到 `https` 目标同样回 `421`。`http` 目标、CONNECT 隧道目标与空 authority 的请求不受影响；来自 `trusted_proxy_config` 网段的对端豁免两项检查。每个连接缓存最近 4 个主机的判定，不对每个请求重复扫描证书。
 

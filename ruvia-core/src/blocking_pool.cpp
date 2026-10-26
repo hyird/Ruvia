@@ -44,6 +44,11 @@ namespace {
 
 }  // namespace
 
+blocking_pool& detail::runtime_blocking_pool() {
+    static blocking_pool pool;
+    return pool;
+}
+
 std::string_view describe_blocking_status(blocking_status status) noexcept {
     switch (status) {
         case blocking_status::completed:

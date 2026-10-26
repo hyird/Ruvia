@@ -16,6 +16,7 @@
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/read_until.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
@@ -222,6 +223,54 @@ bool refuses_with_no_application_protocol(const alpn_handshake& handshake) {
            ERR_GET_REASON(static_cast<unsigned long>(handshake.error_.value())) == SSL_R_TLSV1_ALERT_NO_APPLICATION_PROTOCOL;
 }
 
+bool bounded_tls_connection_ends(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, int version) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    if (SSL_CTX_set_min_proto_version(client.native_handle(), version) != 1 ||
+        SSL_CTX_set_max_proto_version(client.native_handle(), version) != 1) {
+        return false;
+    }
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    std::error_code error;
+    stream.next_layer().connect(endpoint, error);
+    if (error) {
+        return false;
+    }
+    stream.handshake(asio::ssl::stream_base::client, error);
+    if (error) {
+        return false;
+    }
+    unsigned completed = 0;
+    for (; completed != 64; ++completed) {
+        if (version == TLS1_3_VERSION && completed % 4 == 0 &&
+            SSL_key_update(stream.native_handle(), SSL_KEY_UPDATE_REQUESTED) != 1) {
+            return false;
+        }
+        error.clear();
+        constexpr std::string_view request = "GET /tls HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        asio::write(stream, asio::buffer(request), error);
+        if (error) {
+            return completed != 0;
+        }
+        bool done = false;
+        std::string response;
+        asio::async_read_until(stream, asio::dynamic_buffer(response), "\r\n\r\nsecure",
+            [&](const std::error_code& result, std::size_t) { error = result; done = true; });
+        io.restart();
+        io.run_for(1s);
+        if (!done) {
+            stream.next_layer().close();
+            io.restart();
+            io.run();
+            return false;
+        }
+        if (error) {
+            return completed != 0;
+        }
+    }
+    return false;
+}
+
 // A TLS 1.2 client context that authenticates nothing; tests choose the offer.
 asio::ssl::context tls12_client(const char* cipher_suites = nullptr) {
     asio::ssl::context client(asio::ssl::context::tls_client);
@@ -346,6 +395,7 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
                         .private_key_file_ = private_key,
                         .private_key_password_ = password,
                     }},
+                    .max_outgoing_records_ = 32,
                 },
         };
     };
@@ -386,6 +436,7 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
             RUVIA_CHECK_EQ(tls12_selected_cipher(io, endpoint, "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"),
                 std::string("ECDHE-RSA-AES128-GCM-SHA256"));
             for (const int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {
+                RUVIA_CHECK(bounded_tls_connection_ends(io, endpoint, version));
                 RUVIA_CHECK(resumes_tls_session_under(io, endpoint, version, "localhost", "localhost"));
                 RUVIA_CHECK(resumes_tls_session_under(io, endpoint, version, "sni.test", "SNI.test"));
                 RUVIA_CHECK(!resumes_tls_session_under(io, endpoint, version, "localhost", "sni.test"));

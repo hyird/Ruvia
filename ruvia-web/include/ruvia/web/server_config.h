@@ -178,6 +178,9 @@ struct tls_config final {
     std::string private_key_password_{};
     tls_client_certificate_config client_certificates_{};
     std::vector<tls_sni_config> sni_{};
+    // 发出的 TLS 记录总上限，范围 1..2^23；含握手及控制记录，KeyUpdate 不
+    // 重置计数。达到上限后终止连接，以满足 RFC 9846 §5.5 的密钥用量约束。
+    std::uint64_t max_outgoing_records_{std::uint64_t{1} << 23};
 };
 
 // One bind address with optional HTTP and HTTPS service ports, independent of

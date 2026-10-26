@@ -1,6 +1,5 @@
 #include "client/client_tcp_transport.h"
 
-#include <array>
 #include <chrono>
 #include <utility>
 
@@ -11,7 +10,6 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
-#include "ruvia/http/http_number_format.h"
 
 #include "tls/tls_stream_end.h"
 #include "util/tcp_socket_policies.h"
@@ -28,7 +26,7 @@ client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::cont
       tls_(tls),
       endpoint_(endpoint),
       counters_(counters),
-      resolver_(io),
+      resolver_(worker_value),
       stream_(io.get_executor(), tls) {}
 
 client_tcp_transport::~client_tcp_transport() = default;
@@ -190,18 +188,14 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     if (!arm(read_, timeout)) {
         co_return aborted();
     }
-    std::array<char, http_max_unsigned_decimal_size> port_buffer;
-    const auto port = http_format_unsigned(port_buffer, endpoint_.port_);
-    auto resolved = co_await async_asio<asio::ip::tcp::resolver::results_type>([this, port](auto handler) mutable {
-        resolver_.async_resolve(endpoint_.host_, port, std::move(handler));
-    });
+    auto resolved = co_await resolver_.resolve(endpoint_.host_, endpoint_.port_, timeout);
     if (abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
         co_return finish(read_, timeout, {}, 0, client_transport_status::resolve_failed);
     }
-    if (resolved.error_code()) {
-        co_return finish(read_, timeout, resolved.error_code(), 0, client_transport_status::resolve_failed);
+    if (resolved.error_) {
+        co_return finish(read_, timeout, resolved.error_, 0, client_transport_status::resolve_failed);
     }
-    const auto endpoints = std::move(resolved).take_result();
+    const auto endpoints = std::move(resolved.addresses_);
     connecting_ = true;
     const auto connected = co_await async_asio([this, &endpoints](auto handler) mutable {
         asio::async_connect(stream_.next_layer().socket(), endpoints, std::move(handler));

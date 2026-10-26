@@ -2254,6 +2254,93 @@ RUVIA_TEST(http_client_tls_matches_dns_names_only_against_dns_id_subject_alt_nam
     }
 }
 
+namespace tls_record_budget_tests {
+
+struct tunnel_peer final {
+    tunnel_peer(asio::io_context& io, const ruvia::worker_handle& worker, asio::ssl::context& tls)
+        : acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
+          done_(worker),
+          tls_(tls) {}
+
+    asio::awaitable<void> serve() {
+        asio::ssl::stream<asio::ip::tcp::socket> stream(co_await acceptor_.async_accept(asio::use_awaitable), tls_);
+        std::error_code error;
+        co_await stream.async_handshake(asio::ssl::stream_base::server, asio::redirect_error(asio::use_awaitable, error));
+        if (error) {
+            co_return;
+        }
+        asio::streambuf request;
+        co_await asio::async_read_until(stream, request, "\r\n\r\n", asio::redirect_error(asio::use_awaitable, error));
+        if (error) {
+            co_return;
+        }
+        constexpr std::string_view head = "HTTP/1.1 200 Connection Established\r\n\r\n";
+        co_await asio::async_write(stream, asio::buffer(head), asio::use_awaitable);
+        std::array<char, 128> bytes{};
+        for (;;) {
+            const auto count = co_await stream.async_read_some(asio::buffer(bytes), asio::redirect_error(asio::use_awaitable, error));
+            received_.append(bytes.data(), count);
+            if (error) {
+                co_return;
+            }
+        }
+    }
+
+    ruvia::task<void> exercise(ruvia::http_client& client, ruvia::testing::test_context& ruvia_ctx, std::uint64_t limit) {
+        const acceptor_closer closer{acceptor_};
+        unsigned completed = 0;
+        bool failed = false;
+        try {
+            auto result = co_await client.handle().open_tunnel({.authority_ = "target.test:443"});
+            auto tunnel = std::move(*result.tunnel());
+            for (; completed != 64; ++completed) {
+                co_await tunnel.write("x");
+            }
+        } catch (const ruvia::http_client_error&) {
+            failed = true;
+        }
+        RUVIA_CHECK(failed);
+        RUVIA_CHECK(completed < 64);
+        RUVIA_CHECK_EQ(completed != 0, limit != 1);
+        co_await client.shutdown();
+        while (!finished_) {
+            co_await done_.wait();
+        }
+        RUVIA_CHECK(received_.size() <= limit);
+        RUVIA_CHECK(std::ranges::all_of(received_, [](char byte) { return byte == 'x'; }));
+    }
+
+    asio::ip::tcp::acceptor acceptor_;
+    ruvia::worker_signal done_;
+    asio::ssl::context& tls_;
+    bool finished_{false};
+    std::string received_;
+};
+
+}  // namespace tls_record_budget_tests
+
+RUVIA_TEST(http_client_tls_record_budget_covers_handshake_and_replaced_connect_bio) {
+    for (const int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {
+        for (const std::uint64_t limit : {std::uint64_t{1}, std::uint64_t{32}}) {
+            auto& io = ruvia::test::new_test_io_context();
+            test_worker worker(io);
+            ruvia::test::tls_identity identity("localhost");
+            RUVIA_CHECK(SSL_CTX_set_min_proto_version(identity.context_.native_handle(), version) == 1);
+            RUVIA_CHECK(SSL_CTX_set_max_proto_version(identity.context_.native_handle(), version) == 1);
+            tls_record_budget_tests::tunnel_peer peer(io, worker.handle_, identity.context_);
+            asio::co_spawn(io, peer.serve(), [&](std::exception_ptr) { peer.finished_ = true; peer.done_.notify(); });
+            auto config = local_http_client_config(peer.acceptor_.local_endpoint().port());
+            config.scheme_ = ruvia::http_scheme::https;
+            config.tls_.ca_file_ = identity.ca_file_.string();
+            config.tls_.server_name_ = "localhost";
+            config.tls_.max_outgoing_records_ = limit;
+            config.request_timeout_ = std::chrono::seconds(3);
+            ruvia::http_client client(worker.attachment_.loop(), config);
+            run_operation(worker, io, [&] { return peer.exercise(client, ruvia_ctx, limit); });
+        }
+    }
+}
+
 // RFC 9113 §9.2.1: renegotiation is disabled. A TLS 1.2 server's HelloRequest
 // is answered with a no_renegotiation alert, which ends the server's attempt,
 // while the response already sent is still delivered.

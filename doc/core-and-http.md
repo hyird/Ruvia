@@ -55,7 +55,7 @@ pool.join();
 | `"ruvia/core/worker_handle.h"` | `class worker_handle`、`using worker_id_type = std::uint64_t`、`enum class post_status`、`template <typename Sig> class post_outcome final` | 跨线程安全的稳定派发端点与有界队列投递结果。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`post(fn)`、`post_factory(factory)`、`schedule_timer(...)` |
 | `"ruvia/core/worker_runtime.h"` | `class worker_runtime final`、`struct worker_runtime_options`、`struct worker_runtime_hooks`、`enum class runtime_lifecycle_phase` | 底层单 Worker 线程与两阶段启停状态机（`startup -> ready -> serve -> stop_admission -> finalize -> drain -> shutdown -> join`） |
 | `"ruvia/core/worker_group.h"` | `class worker_group final` | 协调多个 `worker_runtime` 同步完成两阶段启动屏障（`start()` / `serve()`）与停机回收（`request_stop()` / `join()`） |
-| `"ruvia/core/blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(pool, worker_handle, [timeout], [stop_token], fn)` | 固定大小阻塞卸载线程池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至池线程并在完成后回到原 Worker 恢复协程 |
+| `"ruvia/core/blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(pool, worker_handle, [timeout], [stop_token], fn)`、`run_blocking(worker_handle, operation_options, fn)` | 固定大小阻塞卸载线程池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至池线程并在完成后回到原 Worker 恢复协程；不显式传池的重载使用 core 拥有的进程级有界池（默认线程数与队列容量），用于独立运行时也必须可用的系统阻塞操作。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
 
 ---
 

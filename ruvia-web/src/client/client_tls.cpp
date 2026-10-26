@@ -108,6 +108,7 @@ public:
 client_tls_config_storage::client_tls_config_storage(
     const client_tls_config& source_value, client_tls_files files, std::pmr::memory_resource* resource)
     : mode_(source_value.mode_),
+      max_outgoing_records_(source_value.max_outgoing_records_),
       ca_file_(source_value.ca_file_, pmr_resource_or_default(resource)),
       certificate_chain_file_(source_value.certificate_chain_file_, pmr_resource_or_default(resource)),
       private_key_file_(source_value.private_key_file_, pmr_resource_or_default(resource)),
@@ -152,7 +153,7 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
     if (config.mode_ != client_tls_mode::verify_identity && config.mode_ != client_tls_mode::skip_verification) {
         throw std::invalid_argument("client TLS context requires TLS to be enabled");
     }
-    apply_tls_protocol_policy(context_value);
+    apply_tls_protocol_policy(context_value, config.max_outgoing_records_);
     const bool verify = config.mode_ == client_tls_mode::verify_identity;
     SSL_CTX_set_verify(&context_value, verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
     if (verify) {

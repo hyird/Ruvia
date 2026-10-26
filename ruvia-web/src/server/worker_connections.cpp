@@ -463,7 +463,7 @@ void worker_connections::configure_tls(http_server_session_config& listener_valu
         context_value.set_options(asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
                                   asio::ssl::context::no_sslv3 | asio::ssl::context::no_tlsv1 |
                                   asio::ssl::context::no_tlsv1_1 | asio::ssl::context::single_dh_use);
-        apply_tls_protocol_policy(*context_value.native_handle());
+        apply_tls_protocol_policy(*context_value.native_handle(), tls->max_outgoing_records_);
         // RFC 9325 §4.2.1: the server's order decides, whatever the client prefers.
         SSL_CTX_set_options(context_value.native_handle(), SSL_OP_CIPHER_SERVER_PREFERENCE);
         SSL_CTX_set_alpn_select_cb(context_value.native_handle(), select_alpn_protocol, nullptr);

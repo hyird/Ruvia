@@ -40,6 +40,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/one_shot.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
@@ -164,6 +165,10 @@ private:
 };
 
 namespace detail {
+
+// Core owns the process-wide bounded executor for operations without an
+// explicitly supplied pool. Its destruction never waits for running work.
+[[nodiscard]] blocking_pool& runtime_blocking_pool();
 
 struct blocking_result_access;
 
@@ -440,6 +445,20 @@ template <typename rep_type, typename period_type, typename fn_type>
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     return detail::run_blocking_until(pool, std::move(worker_value),
         ::ruvia::worker_timer_saturating_duration_cast(timeout), std::move(stop_token_value), std::move(fn));
+}
+
+// 使用 core 拥有的进程共享有界池，线程数和队列容量采用 blocking_pool_options
+// 的默认值。与显式 pool 的重载具有相同的输入所有权、取消和停机契约；没有
+// 结果接收者的迟到任务仍只持有自身数据，不延长 worker 或事件循环的寿命。
+template <typename fn_type>
+[[nodiscard]] auto run_blocking(worker_handle worker_value, operation_options options, fn_type fn)
+    -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
+    std::optional<std::chrono::steady_clock::duration> timeout;
+    if (options.timeout_) {
+        timeout = worker_timer_saturating_duration_cast(*options.timeout_);
+    }
+    return detail::run_blocking_until(detail::runtime_blocking_pool(), std::move(worker_value),
+        timeout, std::move(options.stop_token_), std::move(fn));
 }
 
 }  // namespace ruvia

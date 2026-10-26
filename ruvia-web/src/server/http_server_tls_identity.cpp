@@ -18,6 +18,7 @@
 #include "tls/tls_credential.h"
 #include "tls/tls_file_paths.h"
 #include "tls/tls_host.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {
@@ -83,6 +84,7 @@ struct tls_identity_files final {
 http_server_listener_definition::tls load_http_server_tls(
     const tls_config& config, std::pmr::memory_resource* resource) {
     auto* const target_resource = pmr_resource_or_default(resource);
+    validate_tls_record_limit(config.max_outgoing_records_);
     // Every setting is validated before any file is read.
     const auto primary = make_tls_identity_files(
         config.certificate_chain_file_, config.private_key_file_, config.private_key_password_, target_resource);
@@ -116,6 +118,7 @@ http_server_listener_definition::tls load_http_server_tls(
     }
 
     http_server_listener_definition::tls tls(load_tls_certificate(primary), target_resource);
+    tls.max_outgoing_records_ = config.max_outgoing_records_;
     if (verify_file.has_value()) {
         tls.client_certificates_.emplace(http_server_listener_definition::tls_client_certificate_policy{
             .requirement_ = client.requirement_,

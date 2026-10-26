@@ -38,9 +38,10 @@ enum class client_tls_mode : std::uint8_t {
 // identity once, when the client or its registration is created, and share
 // them across workers; database drivers read the files when connecting.
 // HTTP, WebSocket and Redis clients negotiate TLS 1.2 or 1.3, offer only ECDHE
-// with AEAD suites for TLS 1.2, and refuse renegotiation. Their verification
-// matches a DNS name against DNS-ID subjectAltNames only (RFC 9525): never the
-// subject Common Name, and wildcards only as a complete left-most label.
+// with AEAD suites for TLS 1.2, and refuse renegotiation. Every client verifies
+// identities by subjectAltName type (RFC 9525): DNS names match DNS-ID entries,
+// IP literals match IP entries, the subject Common Name is never used, and DNS
+// wildcards cover only a complete left-most label.
 struct client_tls_config final {
     client_tls_mode mode_{client_tls_mode::verify_identity};
     // File paths must not contain NUL bytes.
@@ -52,6 +53,10 @@ struct client_tls_config final {
     // SNI and verified peer name, an IP literal or ASCII DNS name; nullopt
     // uses the configured host. An IP literal matches IP subjectAltNames.
     std::optional<std::string> server_name_{};
+    // 每条 TLS 连接发出的记录总上限（含握手和 KeyUpdate），范围 1..2^23。
+    // 达到上限后终止连接；更新密钥不重置计数。保守的连接级上限保证不会达到
+    // RFC 9846 §5.5 的单密钥 AES-GCM 用量上限，也适用于数据库连接。
+    std::uint64_t max_outgoing_records_{std::uint64_t{1} << 23};
 };
 
 }  // namespace ruvia

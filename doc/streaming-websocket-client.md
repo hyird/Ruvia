@@ -305,11 +305,13 @@ Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.htm
 | `max_concurrent_http2_streams_per_connection_` | `std::size_t`（默认 `100`） | 单条 HTTP/2 连接并发流上限 |
 | `connect_timeout_` / `write_timeout_` / `request_timeout_` / `acquire_timeout_` | 超时配置 | 连接建立（默认 `5s`）、写入（`30s`）、完整请求（`30s`）与连接池借用等待超时（`5s`） |
 | `max_response_bytes_` | `std::size_t`（默认 `default_max_buffered_body_bytes`） | `read_all()` 默认最大响应体字节数 |
-| `tls_` / `tcp_` | `client_tls_config` / `client_tcp_config` | 客户端 TLS 证书校验（`verify_identity` / `skip_verification`）、CA 文件、mTLS 客户端证书与 TCP `no_delay_` / `keep_alive_`。主机名只与证书 DNS 类型 subjectAltName 比对（RFC 9525）：不回退到主题 CN，通配符只能是完整的最左标签；仅 TLS 1.2 / 1.3，TLS 1.2 只提供 ECDHE + AEAD 密码套件，拒绝重协商（WebSocket 与 Redis 客户端相同） |
+| `tls_` / `tcp_` | `client_tls_config` / `client_tcp_config` | 客户端 TLS 证书校验（`verify_identity` / `skip_verification`）、CA 文件、mTLS 客户端证书与 TCP `no_delay_` / `keep_alive_`。HTTP、WebSocket、Redis 和数据库客户端都按 RFC 9525 校验证书 subjectAltName：DNS 名只匹配 DNS 项，IP 只匹配 IP 项，不回退到主题 CN，DNS 通配符只能是完整的最左标签。仅 TLS 1.2 / 1.3，TLS 1.2 只提供 ECDHE + AEAD 密码套件并拒绝重协商。`max_outgoing_records_`（默认 `2^23`，范围 `1..2^23`）限制每条连接发出的全部 TLS 记录，计入握手与 KeyUpdate 且更新密钥不重置；到达上限时终止连接，以低于 RFC 9846 §5.5 的 AES-GCM 单密钥用量上限 |
 | `received_cookies_` | `http_client_received_cookie_policy`（默认 `ignore`） | 设为 `retain_and_send` 时启用客户端 Cookie Jar 自动管理 `Set-Cookie` |
 | `push_` / `advertisements_` | `http_client_push_config` / `http_client_advertisement_config` | 控制是否接收 HTTP/2 Server Push 与 `ORIGIN` / `ALTSVC` 通告 |
 
 TLS 连接关闭时（响应要求关闭、`shutdown()` 退役空闲连接或 HTTP/2 会话、WebSocket 与 Redis 客户端关闭），客户端先以一次非阻塞写发送 `close_notify`（[RFC 9112 §9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.8)），不等待对端告警；关闭始终立即完成，挂起的读取不阻止告警，由关闭取消。告警只追加在已完整写出的 TLS 记录之后：仍有记录写入等待 socket 或只写出部分记录（来自写入，或来自读取对握手后消息的应答，例如 TLS 1.2 `HelloRequest` 引发的 `no_renegotiation` 告警）、记录写入失败或被取消，以及发生 TLS 错误后的关闭不发送告警，`CONNECT` 隧道由隧道自身负责 TLS 关闭。
+
+系统 DNS 查询通过 core 的共享有界阻塞池执行；查询参数在异步入口返回前完成拥有化。底层 `getaddrinfo` 已开始后不能抢占，但超时、取消、客户端关闭和 Worker 停机都会立即释放当前等待者，不等待系统调用返回；迟到结果被丢弃。
 
 ### 5.3 发送请求、读取响应与流式代理
 

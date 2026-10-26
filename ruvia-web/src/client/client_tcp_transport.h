@@ -17,6 +17,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 
+#include "client/client_host_resolver.h"
 #include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
 #include "client/client_tls_socket.h"
@@ -168,7 +169,7 @@ private:
     asio::ssl::context& tls_;
     client_tcp_endpoint endpoint_;
     client_wire_counters& counters_;
-    asio::ip::tcp::resolver resolver_;
+    client_host_resolver resolver_;
     asio::ssl::stream<client_tls_socket> stream_;
     lane_deadline read_;
     lane_deadline write_;

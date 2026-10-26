@@ -26,6 +26,7 @@
 #include "db/db_pool.h"
 #include "db/db_postgresql.h"
 #include "db/postgresql_pipeline.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {
@@ -641,7 +642,11 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
     auto& slot = pool.slot(index);
     slot.session_.statements_.clear();
     auto addresses = co_await pool.resolve_host(index, deadline_value);
-    auto resolved_hosts = make_postgresql_resolved_host_list(config.tls_.tls_host(config.host_), addresses, pool.resource());
+    auto tls_host = config.tls_.tls_host(config.host_);
+    if (tls_host.ends_with('.') && !is_client_ip_address(tls_host)) {
+        tls_host.remove_suffix(1);
+    }
+    auto resolved_hosts = make_postgresql_resolved_host_list(tls_host, addresses, pool.resource());
     const auto port = format_db_port(config.port_);
     // Pin the client encoding to UTF-8. Ruvia's strings are UTF-8 throughout,
     // and query parameters are sent in text format; without this the connection
@@ -658,7 +663,11 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
         use_tls ? (config.tls_.ca_file_.empty() ? "system" : config.tls_.ca_file_.c_str()) : "",
         config.tls_.certificate_chain_file_.c_str(), config.tls_.private_key_file_.c_str(), "disable", "TLSv1.2",
         nullptr};
-    slot.connection_ = PQconnectStartParams(keywords.data(), values.data(), 0);
+    {
+        native_tls_context_scope tls_scope(use_tls ? tls_host : std::string_view{}, config.tls_.max_outgoing_records_);
+        slot.connection_ = PQconnectStartParams(keywords.data(), values.data(), 0);
+        tls_scope.rethrow_failure();
+    }
     if (slot.connection_ == nullptr) {
         throw db_error(db_error::code_type::connect_failed, db_driver::postgresql, "PQconnectStartParams failed");
     }
@@ -677,7 +686,9 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
                 status == PGRES_POLLING_READING ? db_socket_readiness::read : db_socket_readiness::write,
                 deadline_value);
         }
+        native_tls_context_scope tls_scope(use_tls ? tls_host : std::string_view{}, config.tls_.max_outgoing_records_);
         status = PQconnectPoll(slot.connection_);
+        tls_scope.rethrow_failure();
     }
     if (status != PGRES_POLLING_OK || PQstatus(slot.connection_) != CONNECTION_OK) {
         throw postgresql_error(*slot.connection_, "PQconnectPoll", db_error::code_type::connect_failed);

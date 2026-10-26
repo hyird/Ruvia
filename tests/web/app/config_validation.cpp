@@ -1,6 +1,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -79,6 +80,19 @@ RUVIA_TEST(app_http_client_rejects_invalid_hosts_with_distinct_messages) {
     tls_config = with_host("example.com");
     tls_config.tls_.server_name_ = long_name;
     RUVIA_CHECK_EQ(register_client(std::move(tls_config)), std::string("TLS server name is invalid"));
+}
+
+RUVIA_TEST(client_tls_rejects_unsafe_outgoing_record_limits) {
+    const auto rejects = [](std::uint64_t limit) {
+        ruvia::http_client_config config;
+        config.host_ = "example.com";
+        config.tls_.max_outgoing_records_ = limit;
+        return throws_invalid([&config] {
+            ruvia::app().http_client({.alias_ = "tls-record-limit", .config_ = std::move(config)});
+        });
+    };
+    RUVIA_CHECK(rejects(0));
+    RUVIA_CHECK(rejects((std::uint64_t{1} << 23) + 1));
 }
 
 RUVIA_TEST(app_document_root_rejects_invalid_static_options_at_configuration) {

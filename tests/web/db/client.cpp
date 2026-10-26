@@ -131,7 +131,7 @@ RUVIA_TEST(db_migrator_copies_public_configuration) {
     std::optional<ruvia::db_migrator> migrator;
     {
         auto config = test_db_config();
-        config.host_ = std::string(80, 'h');
+        config.host_ = std::string(40, 'h') + "." + std::string(40, 'h');
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         config.username_ = std::string(80, 'u');
         config.password_ = std::string(80, 'p');
@@ -153,7 +153,7 @@ RUVIA_TEST(db_migrator_copies_public_configuration) {
 RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
     {
         auto config = test_db_config();
-        config.host_ = std::string(80, 'h');
+        config.host_ = std::string(40, 'h') + "." + std::string(40, 'h');
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         config.connect_timeout_ = std::chrono::milliseconds::zero();
         tracking_resource resource;
@@ -168,7 +168,7 @@ RUVIA_TEST(db_migrator_validates_complete_configuration_before_allocating) {
     }
     {
         auto config = test_db_config();
-        config.host_ = std::string(80, 'h');
+        config.host_ = std::string(40, 'h') + "." + std::string(40, 'h');
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         tracking_resource resource;
         const ruvia::db_migrator_options options{
@@ -187,6 +187,16 @@ RUVIA_TEST(db_migrator_rejects_nul_bytes_in_credentials) {
         auto config = test_db_config();
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         config.*field = "app\0suffix"s;
+        RUVIA_CHECK(throws_on([&] { (void)ruvia::db_migrator(config, {}); }));
+    }
+}
+
+RUVIA_TEST(database_config_rejects_non_host_dns_inputs) {
+    for (const std::string_view host : {std::string_view("bad_name"), std::string_view("1.2.3.999"),
+             std::string_view("host..example"), std::string_view("-host.example")}) {
+        auto config = test_db_config();
+        config.host_ = host;
+        config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         RUVIA_CHECK(throws_on([&] { (void)ruvia::db_migrator(config, {}); }));
     }
 }
