@@ -2103,6 +2103,45 @@ bool test_reset_stop_registration_cancels_deferred_unstarted_callback() {
     return !ran && !reg.valid();
 }
 
+bool test_stop_registration_move_can_stop_attachment() {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context);
+    bool armed = false;
+    bool ran = false;
+    struct callback final {
+        ruvia::event_loop_attachment* attachment_;
+        bool* armed_;
+        bool* ran_;
+        callback(ruvia::event_loop_attachment& owner, bool& enabled, bool& invoked)
+            : attachment_(&owner),
+              armed_(&enabled),
+              ran_(&invoked) {}
+        callback(const callback&) = delete;
+        callback(callback&& other) noexcept
+            : attachment_(other.attachment_),
+              armed_(other.armed_),
+              ran_(other.ran_) {
+            if (*armed_) {
+                attachment_->stop();
+            }
+        }
+        ~callback() {
+            if (*armed_) {
+                attachment_->stop();
+            }
+        }
+        ruvia::task<void> operator()() {
+            *ran_ = true;
+            co_return;
+        }
+    };
+    auto reg = attachment.loop().on_stop(callback(attachment, armed, ran));
+    armed = true;
+    reg.reset();
+    attachment.run();
+    return !ran && !reg.valid();
+}
+
 ruvia::task<void> wait_for_shutdown_timer(const ruvia::worker_handle& worker_value, bool& child_done) {
     static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::hours(1)));
     child_done = true;
@@ -2374,6 +2413,7 @@ int main() {
                        test_async_stop_callbacks_start_together_and_keep_captures_alive) &&
                    run("reset_stop_registration_cancels_deferred_unstarted_callback",
                        test_reset_stop_registration_cancels_deferred_unstarted_callback) &&
+                   run("stop_registration_move_can_stop_attachment", test_stop_registration_move_can_stop_attachment) &&
                    run("root_tasks_join_nested_scopes_during_stop",
                        test_root_tasks_join_nested_scopes_during_stop) &&
                    run("root_result_moves_are_reentrant_and_preserve_owner",

@@ -145,14 +145,17 @@ public:
         std::shared_ptr<event_loop_state> active_loop;
         {
             const std::lock_guard lock(mutex_);
-            if (started_) {
+            if (started_ || cancelled_) {
                 return;
             }
-            abandoned = std::move(callback_);
+            cancelled_ = true;
             if (std::exchange(retirement_begun_, false)) {
                 active_loop = std::move(active_loop_);
             }
         }
+        // Cancellation owns the callback after publishing cancelled_; neither
+        // the stop notification nor a deferred start may use it now.
+        abandoned = std::move(callback_);
         abandoned = nullptr;
         if (active_loop) {
             active_loop->retirement_.finish();
@@ -166,7 +169,7 @@ public:
         }
         {
             const std::lock_guard lock(mutex_);
-            if (!callback_ || retirement_begun_ || started_) {
+            if (cancelled_ || !callback_ || retirement_begun_ || started_) {
                 return;
             }
             loop->retirement_.begin();
@@ -195,7 +198,7 @@ private:
     void start_callback(std::shared_ptr<event_loop_stop_listener> self) noexcept {
         {
             const std::lock_guard lock(mutex_);
-            if (!callback_ || !retirement_begun_) {
+            if (cancelled_ || !callback_ || !retirement_begun_) {
                 return;
             }
             started_ = true;
@@ -235,6 +238,7 @@ private:
     asio::io_context::executor_type executor_;
     std::mutex mutex_;
     bool retirement_begun_{false};
+    bool cancelled_{false};
     bool started_{false};
     move_only_function<task<void>()> callback_;
     std::weak_ptr<event_loop_state> loop_;

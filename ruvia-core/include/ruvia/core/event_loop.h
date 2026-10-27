@@ -207,6 +207,8 @@ public:
     // callable owner remains address-stable until its returned task and
     // completion handler have both finished; resetting the registration only
     // unregisters cleanup that has not started.
+    // Cancelling an unstarted callback moves and destroys its target outside
+    // the listener lock; those operations may request loop stop.
     template <typename fn_type>
         requires std::invocable<fn_type&> &&
                  std::same_as<std::invoke_result_t<fn_type&>, task<void>> &&
