@@ -352,7 +352,7 @@ db_projection apply_projection(db_query& query, std::span<const db_selection> se
 
 template <typename entity_type, typename c_type>
 void append_upsert_column_from_list(db_query& query,
-    std::pmr::vector<db_assignment>& updates,
+    std::span<db_assignment> updates, std::size_t& update_count,
     db_expression& update_where, std::span<const std::string_view> inserted_columns,
     const db_upsert_options& options, std::string_view qualifier) {
     const auto name = c_type::name.view();
@@ -376,7 +376,7 @@ void append_upsert_column_from_list(db_query& query,
     auto value = custom_value == options.update_expressions_.end()
                      ? query.excluded(name)
                      : custom_value->expression(query, entity_type::table_name(), qualifier == entity_type::table_name() ? std::string_view{} : qualifier);
-    updates.push_back(db_assignment{name, db_expr(value, {}, true)});
+    updates[update_count++] = db_assignment{name, db_expr(value, {}, true)};
     if (options.skip_update_if_no_values_changed_) {
         auto changed = query.binary(
             query.column(name, qualifier), db_binary_operator::is_distinct_from, value);
@@ -420,15 +420,16 @@ void apply_entity_upsert(db_query& query, std::span<const std::string_view> inse
     if (options.do_nothing_ && !options.update_where_.empty()) {
         throw std::invalid_argument("upsert update condition requires an update action");
     }
-    std::pmr::vector<db_assignment> updates(query.resource());
+    std::array<db_assignment, std::tuple_size_v<typename entity_type::columns_type>> updates{};
+    std::size_t update_count = 0;
     db_expression update_where;
     bool do_nothing = options.do_nothing_;
     if (!do_nothing) {
         for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
             append_upsert_column_from_list<entity_type, c_type>(
-                query, updates, update_where, inserted_columns, options, qualifier);
+                query, updates, update_count, update_where, inserted_columns, options, qualifier);
         });
-        if (updates.empty() && driver == db_driver::postgresql) {
+        if (update_count == 0 && driver == db_driver::postgresql) {
             do_nothing = true;
         }
     }
@@ -441,7 +442,7 @@ void apply_entity_upsert(db_query& query, std::span<const std::string_view> inse
     query.on_conflict({
         .columns_ = options.conflict_paths_,
         .target_where_ = target_where,
-        .update_ = updates,
+        .update_ = std::span<const db_assignment>(updates.data(), update_count),
         .update_where_ = update_where,
         .do_nothing_ = do_nothing,
         .any_unique_key_ = options.any_unique_key_,
@@ -1482,9 +1483,11 @@ public:
         return insert_builder(std::span<const entity_type>(&entity, 1), alias);
     }
     [[nodiscard]] db_write_query_builder<entity_type, executor_type> insert_builder(std::span<const entity_type> entities, std::string_view alias = {}) const {
-        std::pmr::vector<std::string_view> columns(executor_.query_resource());
-        auto query = insert_query(entities, &columns, alias);
-        return db_write_query_builder<entity_type, executor_type>(executor_, std::move(query), true, alias, columns);
+        std::array<std::string_view, column_capacity> columns{};
+        std::size_t column_count = 0;
+        auto query = insert_query(entities, &columns, &column_count, alias);
+        return db_write_query_builder<entity_type, executor_type>(
+            executor_, std::move(query), true, alias, std::span<const std::string_view>(columns.data(), column_count));
     }
     [[nodiscard]] task<entity_rows<entity_type>> find(const db_find_options& options = {}) const {
         return find_builder(options).get_many();
@@ -1615,14 +1618,15 @@ public:
     }
 
 private:
+    static constexpr std::size_t column_capacity = std::tuple_size_v<typename entity_type::columns_type>;
     friend class db_handle;
     friend class db_transaction;
     explicit db_repository(detail::db_repository_input_type<executor_type> executor)
         : executor_(executor) {}
     static void append_entity_returning(db_query& query) {
-        std::pmr::vector<db_expression> values(query.resource());
-        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
-            values.push_back(query.column(c_type::name.view()));
+        std::array<db_expression, column_capacity> values{};
+        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
+            values[index] = query.column(c_type::name.view());
         });
         query.returning(values);
     }
@@ -1655,24 +1659,30 @@ private:
             if (!all_keys_set) {
                 return insert_query(entities);
             }
-            std::pmr::vector<std::string_view> columns(executor_.query_resource());
-            auto query = insert_query(entities, &columns);
+            std::array<std::string_view, column_capacity> columns_buf{};
+            std::size_t column_count = 0;
+            auto query = insert_query(entities, &columns_buf, &column_count);
+            const std::span<const std::string_view> columns(columns_buf.data(), column_count);
             const auto driver = executor_.query_driver();
             constexpr auto upd_col = detail::update_date_column<entity_type>();
             constexpr auto ver_col = detail::version_column<entity_type>();
-            std::pmr::vector<borrowed_text> conflict_columns(query.resource());
+            std::array<borrowed_text, keys.size()> conflict_columns{};
+            std::size_t conflict_count = 0;
             if (driver == db_driver::postgresql) {
-                conflict_columns.assign(keys.begin(), keys.end());
+                for (const auto key : keys) {
+                    conflict_columns[conflict_count++] = key;
+                }
             }
-            std::pmr::vector<db_assignment> updates(query.resource());
+            std::array<db_assignment, column_capacity> updates{};
+            std::size_t update_count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
                 if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
                     constexpr auto name = c_type::name.view();
                     if constexpr (!upd_col.empty() && name == upd_col) {
-                        updates.push_back(db_assignment{name, db_expr(query.call("now"), {}, true)});
+                        updates[update_count++] = db_assignment{name, db_expr(query.call("now"), {}, true)};
                     } else if constexpr (!ver_col.empty() && name == ver_col) {
-                        updates.push_back(db_assignment{name,
-                            db_expr(query.binary(query.column(name, entity_type::table_name()), db_binary_operator::add, query.value(1)), {}, true)});
+                        updates[update_count++] = db_assignment{name,
+                            db_expr(query.binary(query.column(name, entity_type::table_name()), db_binary_operator::add, query.value(1)), {}, true)};
                     } else if constexpr (!c_type::options.primary_key_ && !c_type::options.generated_) {
                         std::size_t set_count = 0;
                         for (const auto& entity : entities) {
@@ -1684,16 +1694,16 @@ private:
                             throw std::invalid_argument("bulk upsert requires identical set columns or explicit update_columns");
                         }
                         if (std::ranges::find(columns, name) != columns.end()) {
-                            updates.push_back(db_assignment{name, db_expr(query.excluded(name), {}, true)});
+                            updates[update_count++] = db_assignment{name, db_expr(query.excluded(name), {}, true)};
                         }
                     }
                 }
             });
-            const bool do_nothing = updates.empty() && driver == db_driver::postgresql;
+            const bool do_nothing = update_count == 0 && driver == db_driver::postgresql;
             const bool any_unique_key = driver != db_driver::postgresql;
             query.on_conflict({
-                .columns_ = conflict_columns,
-                .update_ = updates,
+                .columns_ = std::span<const borrowed_text>(conflict_columns.data(), conflict_count),
+                .update_ = std::span<const db_assignment>(updates.data(), update_count),
                 .do_nothing_ = do_nothing,
                 .any_unique_key_ = any_unique_key,
             });
@@ -1768,8 +1778,10 @@ private:
         return query;
     }
     db_query upsert_query(std::span<const entity_type> entities, const db_upsert_options& options) const {
-        std::pmr::vector<std::string_view> columns(executor_.query_resource());
-        auto query = insert_query(entities, &columns);
+        std::array<std::string_view, column_capacity> columns_buf{};
+        std::size_t column_count = 0;
+        auto query = insert_query(entities, &columns_buf, &column_count);
+        const std::span<const std::string_view> columns(columns_buf.data(), column_count);
         if (!options.do_nothing_ && options.update_columns_.empty()) {
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
                 if constexpr (!c_type::options.primary_key_ && !c_type::options.generated_ &&
@@ -1794,24 +1806,30 @@ private:
         return query;
     }
     db_query insert_query(std::span<const entity_type> entities,
-        std::pmr::vector<std::string_view>* out_columns = nullptr, std::string_view alias = {}) const {
+        std::array<std::string_view, column_capacity>* out_columns = nullptr,
+        std::size_t* out_column_count = nullptr, std::string_view alias = {}) const {
         if (entities.empty()) {
             throw std::invalid_argument("repository insert requires an entity");
         }
         db_query query(executor_.query_resource());
-        std::array<bool, std::tuple_size_v<typename entity_type::columns_type>> selected{};
-        std::pmr::vector<std::string_view> columns(query.resource());
+        std::array<bool, column_capacity> selected{};
+        std::array<std::string_view, column_capacity> columns_buf{};
+        std::size_t column_count = 0;
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
             if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
                 if (std::ranges::any_of(entities, [](const entity_type& entity) { return entity.template is_set<c_type::name>(); })) {
                     selected[index] = true;
-                    columns.push_back(c_type::name.view());
+                    columns_buf[column_count++] = c_type::name.view();
                 }
             }
         });
         if (out_columns != nullptr) {
-            *out_columns = columns;
+            *out_columns = columns_buf;
         }
+        if (out_column_count != nullptr) {
+            *out_column_count = column_count;
+        }
+        const std::span<const std::string_view> columns(columns_buf.data(), column_count);
         query.insert_into(entity_type::table_name(), columns, alias);
         if (columns.empty()) {
             if (entities.size() != 1) {
@@ -1820,16 +1838,16 @@ private:
             return query;
         }
         for (const auto& entity : entities) {
-            std::pmr::vector<db_expression> row(query.resource());
-            row.reserve(columns.size());
+            std::array<db_expression, column_capacity> row{};
+            std::size_t row_count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
                 if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
                     if (selected[index]) {
-                        row.push_back(detail::entity_column_value<entity_type, c_type>(query, entity));
+                        row[row_count++] = detail::entity_column_value<entity_type, c_type>(query, entity);
                     }
                 }
             });
-            query.values(row);
+            query.values(std::span<const db_expression>(row.data(), row_count));
         }
         return query;
     }

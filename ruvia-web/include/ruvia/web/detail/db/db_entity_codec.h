@@ -128,6 +128,9 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
         const auto array = parse_postgresql_array_text(*source_value);
         const auto contents = array.contents_;
         out.clear();
+        if (array.elements_) {
+            out.reserve(*array.elements_);
+        }
         std::pmr::string token(resource);
         bool quoted = false;
         bool quoted_token = false;
@@ -349,6 +352,7 @@ db_value entity_db_value(const t_type& value, [[maybe_unused]] std::pmr::memory_
         return db_value(value);
     } else if constexpr (is_pmr_vector<t_type>::value) {
         std::pmr::string encoded(resource);
+        encoded.reserve(2U + value.size() * 4U);
         encoded.push_back('{');
         bool first = true;
         for (const auto& item : value) {
