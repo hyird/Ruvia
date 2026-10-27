@@ -93,6 +93,16 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
     if (!is_current()) {
         throw std::logic_error("worker timers must be scheduled on their worker");
     }
+    if (registration.scheduling_) {
+        throw std::logic_error("worker timer registration is already active");
+    }
+    registration.scheduling_ = true;
+    struct scheduling_guard final {
+        bool& scheduling_;
+        ~scheduling_guard() {
+            scheduling_ = false;
+        }
+    } guard{registration.scheduling_};
     if (registration.dispatcher_ != nullptr) {
         // The previous binding may belong to another worker; its slot state is
         // the only part of that worker read here.

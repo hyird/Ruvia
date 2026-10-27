@@ -163,11 +163,11 @@ template <typename rep_type, typename period_type>
 
 // Borrowed timer token. A registration is bound to the worker of its most
 // recent schedule_timer() until that timer expires, is cancelled, or is
-// released by cancel()/cancel_and_notify(). Rescheduling while the timer is still
-// pending (on any worker) throws std::logic_error. Once it has expired or been
-// cancelled the registration may be scheduled again, including on another
-// worker; that worker observes the release with acquire/release ordering, so a
-// caller that learned of the expiry through its completion may reuse it.
+// released by cancel()/cancel_and_notify(). Rescheduling while registration
+// is in progress or the timer is still pending throws std::logic_error. Once
+// it has expired or been cancelled, it may be scheduled on another worker;
+// that worker observes the release with acquire/release ordering, so a caller
+// that learned of the expiry through its completion may reuse it.
 class worker_timer_registration final {
 public:
     worker_timer_registration() noexcept = default;
@@ -207,6 +207,7 @@ private:
     const detail::timer_slot* slot_state_{nullptr};
     std::size_t slot_{0};
     std::uint64_t generation_{0};
+    bool scheduling_{false};
 
     friend class detail::worker_dispatcher;
 };

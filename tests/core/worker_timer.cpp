@@ -710,6 +710,72 @@ bool timer_registration_survives_stop_during_callback_move() {
     return true;
 }
 
+bool timer_registration_rejects_reentrant_acquire() {
+    struct state final {
+        const ruvia::worker_handle* worker_;
+        ruvia::worker_timer_registration* registration_;
+        int trigger_;
+        int moves_{};
+        bool attempted_{};
+        bool inner_accepted_{};
+        bool inner_rejected_{};
+    };
+    struct callback final {
+        state* state_;
+        explicit callback(state& value) noexcept
+            : state_(&value) {}
+        callback(const callback&) = delete;
+        callback(callback&& other) noexcept
+            : state_(other.state_) {
+            if (++state_->moves_ != state_->trigger_) {
+                return;
+            }
+            state_->attempted_ = true;
+            try {
+                state_->inner_accepted_ = state_->worker_->schedule_timer(*state_->registration_,
+                                              std::chrono::steady_clock::now() + std::chrono::hours(1),
+                                              [](ruvia::worker_timer_outcome) {}) == ruvia::worker_timer_schedule_status::scheduled;
+            } catch (const std::logic_error&) {
+                state_->inner_rejected_ = true;
+            }
+        }
+        void operator()(ruvia::worker_timer_outcome) {}
+    };
+    for (int trigger = 1; trigger <= 12; ++trigger) {
+        asio::io_context io_context;
+        ruvia::worker_runtime_context runtime(io_context, 8);
+        const auto& worker = runtime.handle();
+        ruvia::worker_timer_registration registration;
+        state current{&worker, &registration, trigger};
+        bool success = false;
+        asio::post(io_context, [&] {
+            ruvia::move_only_function<void(ruvia::worker_timer_outcome)> completion{callback(current)};
+            current.moves_ = 0;
+            bool outer_accepted = false;
+            bool outer_rejected = false;
+            try {
+                outer_accepted = worker.schedule_timer(registration,
+                                     std::chrono::steady_clock::now() + std::chrono::hours(1), std::move(completion)) ==
+                                 ruvia::worker_timer_schedule_status::scheduled;
+            } catch (const std::logic_error&) {
+                outer_rejected = true;
+            }
+            success = current.attempted_
+                          ? (current.inner_accepted_ && outer_rejected) ||
+                                (outer_accepted && current.inner_rejected_)
+                          : outer_accepted;
+            registration.cancel();
+            runtime.stop_timers();
+        });
+        io_context.run();
+        runtime.detach();
+        if (!success) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int main() {
     if (!timer_duration_conversions_preserve_integer_ticks_and_saturate() ||
         !timer_immediate_shutdown_works() ||
@@ -722,6 +788,7 @@ int main() {
         !timed_primitives_report_timer_stop() || !expired_registration_reschedules_on_another_worker() ||
         !timer_callback_failure_preserves_remaining_operations() ||
         !timer_registration_survives_stop_during_callback_move() ||
+        !timer_registration_rejects_reentrant_acquire() ||
         !self_rescheduling_due_timer_yields_to_other_handlers() ||
         !self_rescheduling_due_timer_preserves_other_expirations()) {
         return 1;
