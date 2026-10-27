@@ -48,6 +48,46 @@ namespace {
 constexpr std::size_t max_client_request_head_bytes = max_http_header_bytes + 1024;
 constexpr std::size_t response_read_chunk_bytes = 16384;
 
+// The returned plan borrows only the request body and the output buffer, not
+// the temporary header descriptors or the assembled Cookie field.
+[[nodiscard]] auto prepare_client_head(http_client_pool& pool, const http_client_request_storage& request,
+    const http_client_upload_state* upload, std::pmr::memory_resource* response_resource,
+    http_io_buffer& write_buffer) {
+    std::pmr::vector<http_header_view> headers(pool.resource());
+    std::pmr::string cookie_header(pool.resource());
+    auto source = pool.policy().prepare_request(request, headers, cookie_header);
+    auto origin = pool.origin();
+    const bool connect_udp = request.udp_tunnel();
+    if (connect_udp) {
+        const auto authority = parse_http_authority(borrowed_text(request.tunnel_authority()));
+        if (!authority) {
+            throw http_client_error(http_client_error::code_type::invalid_request, "invalid CONNECT-UDP authority");
+        }
+        const http_origin_options options{.host_ = authority->host(), .port_ = authority->port()};
+        origin = pool.config().scheme_ == http_scheme::https ? http_origin_view::https(options)
+                                                             : http_origin_view::http(options);
+    }
+    http1_client_request_writer writer(response_resource);
+    const auto prepare = [&](std::span<char> buffer) {
+        if (connect_udp) {
+            return writer.prepare_connect_udp(origin, source.target_, headers, buffer);
+        }
+        if (request.is_tunnel()) {
+            return writer.prepare_connect(borrowed_text(request.tunnel_authority()), headers, buffer);
+        }
+        if (upload != nullptr) {
+            return writer.prepare_streaming(origin,
+                {.method_ = source.method_,
+                    .target_ = source.target_,
+                    .headers_ = headers,
+                    .content_length_ = upload->config_.content_length_},
+                buffer, {.expectation_ = upload->config_.expectation_});
+        }
+        return writer.prepare(origin, source, buffer);
+    };
+    return prepare_http1_request_head(write_buffer, max_client_request_head_bytes, prepare);
+}
+
 // One contiguous write() part. A temporary argument outlives the write: it is
 // destroyed only at the end of the full-expression that awaits it.
 [[nodiscard]] std::array<asio::const_buffer, 1> single_part(std::string_view bytes) noexcept {
@@ -173,45 +213,11 @@ task<void> http1_client_exchange::run(
     cancellation.arm(stop_token_value);
 
     auto* const response_resource = state_value.resource_;
-    std::pmr::vector<http_header_view> headers(pool_.resource());
-    std::pmr::string cookie_header(pool_.resource());
-    auto source_value = pool_.policy().prepare_request(request, headers, cookie_header);
-
-    auto origin = pool_.origin();
-    const bool connect_udp = request.udp_tunnel();
-    if (connect_udp) {
-        const auto authority = parse_http_authority(borrowed_text(request.tunnel_authority()));
-        if (!authority) {
-            throw http_client_error(http_client_error::code_type::invalid_request, "invalid CONNECT-UDP authority");
-        }
-        const http_origin_options options{.host_ = authority->host(), .port_ = authority->port()};
-        origin = pool_.config().scheme_ == http_scheme::https ? http_origin_view::https(options)
-                                                              : http_origin_view::http(options);
-    }
-
     auto* const upload = state_value.upload_ ? &*state_value.upload_ : nullptr;
-    http1_client_request_writer writer(response_resource);
-    const auto prepare_head = [&](std::span<char> buffer) {
-        if (connect_udp) {
-            return writer.prepare_connect_udp(origin, source_value.target_, headers, buffer);
-        }
-        if (request.is_tunnel()) {
-            return writer.prepare_connect(borrowed_text(request.tunnel_authority()), headers, buffer);
-        }
-        if (upload != nullptr) {
-            return writer.prepare_streaming(origin,
-                {.method_ = source_value.method_,
-                    .target_ = source_value.target_,
-                    .headers_ = headers,
-                    .content_length_ = upload->config_.content_length_},
-                buffer, {.expectation_ = upload->config_.expectation_});
-        }
-        return writer.prepare(origin, source_value, buffer);
-    };
     // The head is written into the connection's retained, uninitialized buffer.
     auto& write_buffer = connection_.write_buffer_;
     write_buffer.clear();
-    auto prepared_result = prepare_http1_request_head(write_buffer, max_client_request_head_bytes, prepare_head);
+    auto prepared_result = prepare_client_head(pool_, request, upload, response_resource, write_buffer);
     const auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
     if (!prepared) {
         const auto* failure = std::get_if<http1_client_request_prepare_error>(&prepared_result);
