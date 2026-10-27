@@ -108,14 +108,10 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
 // Asking the catalogue is the portable way to find out: ALTER TABLE ... ADD
 // COLUMN IF NOT EXISTS is a MariaDB and PostgreSQL extension that MySQL does
 // not accept, and running an unguarded ALTER would fail on every later run.
-[[nodiscard]] std::pmr::string build_checksum_column_probe_sql(
-    db_driver driver, std::pmr::memory_resource* resource) {
-    std::pmr::string sql(
-        "SELECT 1 FROM information_schema.columns WHERE table_schema = ", resource);
-    sql.append(driver == db_driver::postgresql ? "current_schema() AND table_name = $1"
-                                               : "DATABASE() AND table_name = ?");
-    sql.append(" AND column_name = 'checksum'");
-    return sql;
+[[nodiscard]] constexpr std::string_view checksum_column_probe_sql(db_driver driver) noexcept {
+    return driver == db_driver::postgresql
+               ? "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'checksum'"
+               : "SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = 'checksum'";
 }
 
 [[nodiscard]] std::pmr::string build_add_checksum_column_sql(
@@ -171,9 +167,14 @@ void append_migration_id(std::pmr::vector<std::pmr::string>& ids, std::string_vi
 
 [[nodiscard]] std::runtime_error migration_drift(
     std::string_view id, std::pmr::memory_resource* resource) {
-    std::pmr::string message("database migration '", resource);
+    constexpr std::string_view prefix = "database migration '";
+    constexpr std::string_view suffix =
+        "' was edited after it was applied; its recorded checksum no longer matches";
+    std::pmr::string message(resource);
+    message.reserve(prefix.size() + id.size() + suffix.size());
+    message.append(prefix);
     message.append(id);
-    message.append("' was edited after it was applied; its recorded checksum no longer matches");
+    message.append(suffix);
     return std::runtime_error(message.c_str());
 }
 
@@ -274,10 +275,15 @@ private:
         // session's lock_timeout is what ends that wait. It bounds only this
         // wait: migration statements run on the same session and must keep the
         // server's configured lock_timeout.
-        std::pmr::string timeout_sql("SET lock_timeout TO '", resource);
-        detail::append_db_number(timeout_sql, detail::postgres_lock_timeout_milliseconds(lock_timeout));
-        timeout_sql.append("ms'");
-        (void)co_await handle.execute(timeout_sql);
+        auto set_timeout = [&] {
+            std::pmr::string timeout_sql(resource);
+            timeout_sql.reserve(48);
+            timeout_sql.append("SET lock_timeout TO '");
+            detail::append_db_number(timeout_sql, detail::postgres_lock_timeout_milliseconds(lock_timeout));
+            timeout_sql.append("ms'");
+            return handle.execute(timeout_sql);
+        }();
+        (void)co_await std::move(set_timeout);
         std::array<db_value, 1> lock_params{db_value{lock_name}};
         (void)co_await handle.query("SELECT pg_advisory_lock(hashtextextended($1, 0))",
             std::span<const db_value>(lock_params));
@@ -299,32 +305,46 @@ private:
     [[nodiscard]] static task<void> apply_migrations(db_handle& handle, db_driver driver,
         std::span<const db_migration> migrations, const db_migrator_options_storage& options,
         db_migration_report& report, std::pmr::memory_resource* resource) {
-        (void)co_await handle.execute(
-            build_create_migrations_table_sql(options.table_, driver, resource));
+        auto create_table = [&] {
+            const auto sql = build_create_migrations_table_sql(options.table_, driver, resource);
+            return handle.execute(sql);
+        }();
+        (void)co_await std::move(create_table);
 
         std::array<db_value, 1> table_params{db_value{std::string_view(options.table_)}};
-        auto checksum_column = co_await handle.query(
-            build_checksum_column_probe_sql(driver, resource), std::span<const db_value>(table_params));
-        if (checksum_column.empty()) {
-            (void)co_await handle.execute(
-                build_add_checksum_column_sql(options.table_, driver, resource));
+        if ((co_await handle.query(checksum_column_probe_sql(driver), std::span<const db_value>(table_params))).empty()) {
+            auto add_column = [&] {
+                const auto sql = build_add_checksum_column_sql(options.table_, driver, resource);
+                return handle.execute(sql);
+            }();
+            (void)co_await std::move(add_column);
+        }
+        if (migrations.empty()) {
+            co_return;
         }
 
         auto find_sql = build_find_migration_sql(options.table_, driver, resource);
         auto insert_sql = build_insert_migration_sql(options.table_, driver, resource);
-        auto adopt_sql = build_adopt_checksum_sql(options.table_, driver, resource);
+        std::optional<std::pmr::string> adopt_sql;
         for (const auto& migration : migrations) {
             const auto checksum = detail::migration_checksum(migration.sql(), resource);
             std::array<db_value, 1> find_params{db_value{migration.id()}};
             auto existing = co_await handle.query(find_sql, std::span<const db_value>(find_params));
             if (!existing.empty()) {
-                const auto& recorded = existing[0][0];
-                const auto value = recorded.value();
-                if (!value || value->empty()) {
+                const auto value = existing[0][0].value();
+                const bool adopt = !value || value->empty();
+                const bool drift = !adopt && *value != std::string_view(checksum);
+                {
+                    const auto discarded = std::move(existing);
+                }
+                if (adopt) {
+                    if (!adopt_sql.has_value()) {
+                        adopt_sql.emplace(build_adopt_checksum_sql(options.table_, driver, resource));
+                    }
                     std::array<db_value, 2> adopt_params{
                         db_value{std::string_view(checksum)}, db_value{migration.id()}};
-                    (void)co_await handle.execute(adopt_sql, std::span<const db_value>(adopt_params));
-                } else if (*value != std::string_view(checksum)) {
+                    (void)co_await handle.execute(*adopt_sql, std::span<const db_value>(adopt_params));
+                } else if (drift) {
                     throw migration_drift(migration.id(), resource);
                 }
                 append_migration_id(report.skipped_, migration.id());
