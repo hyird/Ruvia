@@ -870,8 +870,8 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     const auto& config = pool.config();
     auto& slot = pool.slot(index);
     slot.session_.statements_.clear();
-    auto addresses = co_await pool.resolve_host(index, deadline_value);
-    auto resolved_hosts = make_mariadb_resolved_host_list(addresses, pool.resource());
+    auto resolved_hosts =
+        make_mariadb_resolved_host_list(co_await pool.resolve_host(index, deadline_value), pool.resource());
 
     ensure_mysql_thread_initialized();
     slot.connection_ = mysql_init(nullptr);
@@ -946,6 +946,7 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
             &connected, &initialized, ready);
         tls_scope.rethrow_failure();
     }
+    std::pmr::string(resolved_hosts.get_allocator().resource()).swap(resolved_hosts);
     if (connected == nullptr) {
         throw mysql_error(initialized, "mysql_real_connect", db_error::code_type::connect_failed);
     }

@@ -629,29 +629,30 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
     const auto& config = pool.config();
     auto& slot = pool.slot(index);
     slot.session_.statements_.clear();
-    auto addresses = co_await pool.resolve_host(index, deadline_value);
     auto tls_host = config.tls_.tls_host(config.host_);
     if (tls_host.ends_with('.') && !is_client_ip_address(tls_host)) {
         tls_host.remove_suffix(1);
     }
-    auto resolved_hosts = make_postgresql_resolved_host_list(tls_host, addresses, pool.resource());
-    const auto port = format_db_port(config.port_);
     // Pin the client encoding to UTF-8. Ruvia's strings are UTF-8 throughout,
     // and query parameters are sent in text format; without this the connection
     // inherits the server/database default encoding, so non-ASCII parameters and
     // result text would be misinterpreted on a non-UTF-8 database (e.g. LATIN1,
     // SQL_ASCII). libpq accepts client_encoding as a connection keyword.
     const bool use_tls = config.tls_.mode_ == client_tls_mode::verify_identity;
-    const std::array<const char*, 14> keywords{"host", "hostaddr", "port", "user", "password", "dbname",
-        "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey", "gssencmode", "ssl_min_protocol_version",
-        nullptr};
-    const std::array<const char*, 14> values{resolved_hosts.hosts_.c_str(), resolved_hosts.addresses_.c_str(),
-        port.data(), config.username_.c_str(), config.password_.c_str(), config.database_.c_str(), "UTF8",
-        use_tls ? "verify-full" : "disable",
-        use_tls ? (config.tls_.ca_file_.empty() ? "system" : config.tls_.ca_file_.c_str()) : "",
-        config.tls_.certificate_chain_file_.c_str(), config.tls_.private_key_file_.c_str(), "disable", "TLSv1.2",
-        nullptr};
     {
+        const auto resolved_hosts = make_postgresql_resolved_host_list(
+            tls_host, co_await pool.resolve_host(index, deadline_value), pool.resource());
+        const auto port = format_db_port(config.port_);
+        const std::array<const char*, 14> keywords{"host", "hostaddr", "port", "user", "password", "dbname",
+            "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey", "gssencmode", "ssl_min_protocol_version",
+            nullptr};
+        const std::array<const char*, 14> values{resolved_hosts.hosts_.c_str(), resolved_hosts.addresses_.c_str(),
+            port.data(), config.username_.c_str(), config.password_.c_str(), config.database_.c_str(), "UTF8",
+            use_tls ? "verify-full" : "disable",
+            use_tls ? (config.tls_.ca_file_.empty() ? "system" : config.tls_.ca_file_.c_str()) : "",
+            config.tls_.certificate_chain_file_.c_str(), config.tls_.private_key_file_.c_str(), "disable", "TLSv1.2",
+            nullptr};
+        // PQconnectStartParams copies the parameter strings before returning.
         native_tls_context_scope tls_scope(use_tls ? tls_host : std::string_view{}, config.tls_.max_outgoing_records_);
         slot.connection_ = PQconnectStartParams(keywords.data(), values.data(), 0);
         tls_scope.rethrow_failure();
