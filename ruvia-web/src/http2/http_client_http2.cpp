@@ -531,6 +531,15 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         const auto error = stream.error_;
         const auto failure = stream.failure_;
         registration.reset();
+        // No stream ID means no request head or body was submitted to this
+        // connection. A transport failure at the stream-capacity wait is safe
+        // to retry even for a streaming upload; protocol and cancellation
+        // failures must still be reported.
+        if (stream.stream_id_ == 0 && failure == nullptr &&
+            error == http_client_error::code_type::io_error && attempt_value == 0 &&
+            !timeout.expired() && !stop_token_value.stop_requested()) {
+            continue;
+        }
         if (retryable && request.output() == nullptr && attempt_value == 0 && !timeout.expired()) {
             continue;
         }

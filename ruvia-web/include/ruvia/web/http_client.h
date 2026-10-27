@@ -457,6 +457,9 @@ public:
     // when a reused connection fails with I/O before any final response head.
     // Fresh connections, streamed uploads, tunnels, and non-idempotent methods
     // are never replayed automatically.
+    // On HTTP/2, a transport failure while waiting for stream capacity may be
+    // retried once before a stream ID is assigned: no request head or body has
+    // been submitted, including for streaming uploads and tunnels.
     [[nodiscard]] task<http_client_response> send(
         const http_client_request_view& request) const;
     [[nodiscard]] task<http_client_exchange> open_request(

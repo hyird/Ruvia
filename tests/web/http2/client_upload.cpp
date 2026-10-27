@@ -32,7 +32,9 @@ enum class response_mode { ordinary,
     buffered,
     streaming,
     disconnected,
-    refused };
+    refused,
+    connection_lost,
+    connection_lost_upload };
 
 constexpr std::size_t streaming_payload_bytes = 256 * 1024;
 
@@ -101,6 +103,39 @@ private:
         if (std::string_view(preface.data(), preface.size()) != ruvia::http2_client_preface) {
             throw std::runtime_error("missing HTTP/2 client preface");
         }
+        if (mode_ == response_mode::connection_lost || mode_ == response_mode::connection_lost_upload) {
+            std::string wire;
+            const std::array<char, 6> no_streams{0, 3, 0, 0, 0, 0};
+            append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {no_streams.data(), no_streams.size()});
+            const std::array<char, 8> ping{};
+            append_frame(wire, ruvia::http2_frame_type::ping, 0, 0, {ping.data(), ping.size()});
+            co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
+            for (;;) {
+                std::array<char, ruvia::http2_frame_header_bytes> bytes;
+                co_await asio::async_read(socket_, asio::buffer(bytes), asio::use_awaitable);
+                const auto header = ruvia::parse_http2_frame_header(bytes);
+                if (!header) {
+                    throw std::runtime_error("invalid client HTTP/2 frame");
+                }
+                std::string payload(header->length_, '\0');
+                if (!payload.empty()) {
+                    co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
+                }
+                const auto type = static_cast<ruvia::http2_frame_type>(header->type_);
+                if (type == ruvia::http2_frame_type::headers) {
+                    throw std::runtime_error("request submitted despite zero stream limit");
+                }
+                if (type == ruvia::http2_frame_type::ping && (header->flags_ & 1U) != 0) {
+                    break;
+                }
+            }
+            socket_.close();
+            co_await acceptor_.async_accept(socket_, asio::use_awaitable);
+            co_await asio::async_read(socket_, asio::buffer(preface), asio::use_awaitable);
+            if (std::string_view(preface.data(), preface.size()) != ruvia::http2_client_preface) {
+                throw std::runtime_error("missing retried HTTP/2 client preface");
+            }
+        }
         std::string wire;
         const std::array<char, 6> one_stream{0, 3, 0, 0, 0, 1};
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {one_stream.data(), one_stream.size()});
@@ -156,7 +191,12 @@ private:
                     co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
                     continue;
                 }
-                if (requests_ == 1) {
+                if (requests_ == 1 && mode_ == response_mode::connection_lost) {
+                    if (method != "GET" || path != "/next") {
+                        throw std::runtime_error("unexpected retried request");
+                    }
+                    first_stream = header->stream_id_;
+                } else if (requests_ == 1) {
                     if (method != "POST" || path != "/upload") {
                         throw std::runtime_error("unexpected initial request");
                     }
@@ -175,8 +215,8 @@ private:
                     throw std::runtime_error("unexpected extra request");
                 }
                 const bool rejected = requests_ == 1 && mode_ == response_mode::rejected;
-                const std::string_view body = requests_ == 2 ? "next" : rejected ? "no"
-                                                                                 : "ok";
+                const std::string_view body = requests_ == 2 || mode_ == response_mode::connection_lost ? "next" : rejected ? "no"
+                                                                                                                            : "ok";
                 std::pmr::string fields(&memory);
                 const bool empty_final = requests_ == 1 &&
                                          (mode_ == response_mode::buffered || mode_ == response_mode::streaming);
@@ -219,7 +259,9 @@ private:
             if (!wire.empty()) {
                 co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
             }
-            if (requests_ == 2 || (requests_ == 1 && mode_ == response_mode::disconnected)) {
+            if (requests_ == 2 || (requests_ == 1 && (mode_ == response_mode::disconnected ||
+                                                         mode_ == response_mode::connection_lost ||
+                                                         (mode_ == response_mode::connection_lost_upload && request_ended_)))) {
                 co_return;
             }
         }
@@ -251,8 +293,21 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                                                          .request_timeout_ = std::chrono::seconds(2),
                                                          .protocol_ = ruvia::http_client_protocol::http2_only});
         try {
-            if (mode == response_mode::refused) {
-                // The refused request is replayed instead of failing.
+            if (mode == response_mode::refused || mode == response_mode::connection_lost) {
+                // These cases start with the request below.
+            } else if (mode == response_mode::connection_lost_upload) {
+                auto exchange = co_await client.handle().open_request(
+                    {.method_ = "POST", .target_ = "/upload"}, {.content_length_ = 7});
+                co_await exchange.body().write("payload");
+                co_await exchange.body().end();
+                auto response = co_await exchange.response();
+                const auto bytes = co_await response.body().read_all();
+                const auto body = bytes.bytes();
+                RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "ok");
+                co_await peer.join();
+                RUVIA_CHECK_EQ(peer.requests_, 1U);
+                RUVIA_CHECK_EQ(peer.received_, "payload");
+                RUVIA_CHECK(peer.request_ended_);
             } else if (mode == response_mode::abandoned_pending) {
                 std::optional<ruvia::http_client_response> retained;
                 {
@@ -335,13 +390,13 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                     RUVIA_CHECK(cancelled);
                 }
             }
-            if (mode != response_mode::disconnected) {
+            if (mode != response_mode::disconnected && mode != response_mode::connection_lost_upload) {
                 auto next = co_await client.handle().send({.target_ = "/next"});
                 const auto bytes = co_await next.body().read_all();
                 const auto body = bytes.bytes();
                 RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(body.data()), body.size()), "next");
                 co_await peer.join();
-                RUVIA_CHECK_EQ(peer.requests_, 2U);
+                RUVIA_CHECK_EQ(peer.requests_, mode == response_mode::connection_lost ? 1U : 2U);
                 if (mode == response_mode::ordinary || mode == response_mode::continued ||
                     mode == response_mode::buffered || mode == response_mode::streaming) {
                     const auto expected = mode == response_mode::buffered
@@ -351,7 +406,7 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                                               : std::string("payload");
                     RUVIA_CHECK_EQ(peer.received_, expected);
                     RUVIA_CHECK(peer.request_ended_);
-                } else if (mode == response_mode::refused) {
+                } else if (mode == response_mode::refused || mode == response_mode::connection_lost) {
                     RUVIA_CHECK(peer.received_.empty());
                     RUVIA_CHECK(!peer.request_reset_);
                 } else {
@@ -416,4 +471,12 @@ RUVIA_TEST(http2_client_upload_transport_failure_preserves_completed_response) {
 
 RUVIA_TEST(http2_client_retries_request_refused_with_refused_stream) {
     http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::refused);
+}
+
+RUVIA_TEST(http2_client_retries_unsubmitted_request_after_connection_loss) {
+    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::connection_lost);
+}
+
+RUVIA_TEST(http2_client_retries_unsubmitted_streaming_upload_after_connection_loss) {
+    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::connection_lost_upload);
 }
