@@ -42,11 +42,12 @@ struct db_config_storage;
 
 [[nodiscard]] std::pmr::string encode_db_cache_rows(const db_rows& rows, std::pmr::memory_resource* resource);
 [[nodiscard]] db_rows decode_db_cache_rows(std::string_view bytes_value, std::pmr::memory_resource* resource);
-// An id-keyed entry: the caller's id and the result shape are separate key parts.
-[[nodiscard]] std::pmr::string db_cache_id_key(std::string_view name_space, std::string_view id, db_cache_shape shape,
+// Key functions take the immutable prefix already built for this cache owner.
+// An id-keyed entry keeps the caller's id and result shape as separate parts.
+[[nodiscard]] std::pmr::string db_cache_id_key(std::string_view prefix, std::string_view id, db_cache_shape shape,
     std::pmr::memory_resource* resource);
 // Keyed by id and shape when the query names an id, otherwise by its SQL and parameters.
-[[nodiscard]] std::pmr::string db_cache_key(std::string_view name_space, std::string_view id, db_cache_shape shape,
+[[nodiscard]] std::pmr::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_shape shape,
     std::string_view sql, std::span<const db_value> params, db_driver driver, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::string db_cache_prefix(std::string_view name_space, std::pmr::memory_resource* resource);
 

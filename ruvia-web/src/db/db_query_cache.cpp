@@ -64,11 +64,6 @@ constexpr std::string_view cache_prefix = "ruvia:qc:v3:";
 constexpr std::size_t digest_text_bytes = 2 * SHA256_DIGEST_LENGTH;
 constexpr std::size_t full_prefix_bytes = cache_prefix.size() + digest_text_bytes + 1;
 
-void append_cache_prefix(std::pmr::string& output, std::string_view name_space) {
-    output.append(cache_prefix);
-    append_digest(output, name_space);
-    output.push_back(':');
-}
 }  // namespace
 
 task<db_rows> db_cache_query::operator()(operation_options options) && {
@@ -179,27 +174,29 @@ std::pmr::string db_cache_scope(std::string_view name_space, std::string_view al
 std::pmr::string db_cache_prefix(std::string_view name_space, std::pmr::memory_resource* resource) {
     std::pmr::string result_value(resource);
     result_value.reserve(full_prefix_bytes);
-    append_cache_prefix(result_value, name_space);
+    result_value.append(cache_prefix);
+    append_digest(result_value, name_space);
+    result_value.push_back(':');
     return result_value;
 }
-std::pmr::string db_cache_id_key(std::string_view name_space, std::string_view id, db_cache_shape shape,
+std::pmr::string db_cache_id_key(std::string_view prefix, std::string_view id, db_cache_shape shape,
     std::pmr::memory_resource* resource) {
     const auto shape_tag = db_cache_shape_tag(shape);
     std::pmr::string result_value(resource);
-    result_value.reserve(full_prefix_bytes + 3 + shape_tag.size() + 1 + digest_text_bytes);
-    append_cache_prefix(result_value, name_space);
+    result_value.reserve(prefix.size() + 3 + shape_tag.size() + 1 + digest_text_bytes);
+    result_value.append(prefix);
     result_value.append("id:").append(shape_tag).push_back(':');
     append_digest(result_value, id);
     return result_value;
 }
-std::pmr::string db_cache_key(std::string_view name_space, std::string_view id, db_cache_shape shape,
+std::pmr::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_shape shape,
     std::string_view sql, std::span<const db_value> params, db_driver driver, std::pmr::memory_resource* resource) {
     if (!id.empty()) {
-        return db_cache_id_key(name_space, id, shape, resource);
+        return db_cache_id_key(prefix, id, shape, resource);
     }
     std::pmr::string result_value(resource);
-    result_value.reserve(full_prefix_bytes + 4 + digest_text_bytes);
-    append_cache_prefix(result_value, name_space);
+    result_value.reserve(prefix.size() + 4 + digest_text_bytes);
+    result_value.append(prefix);
     std::pmr::string input(resource);
     number(input, static_cast<std::uint64_t>(driver));
     text(input, sql);

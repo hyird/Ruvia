@@ -44,7 +44,7 @@ private:
     std::chrono::milliseconds duration_;
     bool always_enabled_;
     bool ignore_errors_;
-    std::pmr::string name_space_;
+    std::pmr::string prefix_;
     redis_handle redis_;
 };
 

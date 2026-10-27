@@ -56,7 +56,7 @@ RUVIA_DB_ENTITY(record, "records", ruvia::db_column<"v", std::pmr::string>)
 constexpr std::string_view cache_id = "item";
 constexpr std::chrono::milliseconds cache_lifetime = std::chrono::minutes(1);
 
-// A RESP2 key-value store answering GET, SET and DEL on every accepted
+// A RESP2 key-value store answering GET, SET, DEL and prefix SCAN on every accepted
 // connection. Without credentials or a database index the client sends no
 // handshake. All connections run on one thread, so the map needs no lock.
 class redis_store_peer final {
@@ -208,6 +208,20 @@ private:
             }
             return ":" + std::to_string(removed) + "\r\n";
         }
+        if (name == "SCAN" && arguments.size() == 6 && arguments[1] == "0" &&
+            arguments[2] == "MATCH" && arguments[3].ends_with('*') && arguments[4] == "COUNT") {
+            const auto prefix = std::string_view(arguments[3]).substr(0, arguments[3].size() - 1);
+            std::string values;
+            std::size_t count = 0;
+            for (const auto& [key, value] : store_) {
+                (void)value;
+                if (key.starts_with(prefix)) {
+                    values.append("$").append(std::to_string(key.size())).append("\r\n").append(key).append("\r\n");
+                    ++count;
+                }
+            }
+            return "*2\r\n$1\r\n0\r\n*" + std::to_string(count) + "\r\n" + values;
+        }
         return "-ERR unsupported command\r\n";
     }
 
@@ -280,6 +294,7 @@ RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
             {.rows_ = {"beta"}},
             {.column_ = "exists", .rows_ = {"f"}},
             {.column_ = "count", .rows_ = {"5"}},
+            {.rows_ = {"delta"}},
         });
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
@@ -323,6 +338,14 @@ RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 RUVIA_CHECK(!(co_await read_exists(handle)));
                 RUVIA_CHECK_EQ(co_await read_count(handle), std::uint64_t{5});
                 RUVIA_CHECK(co_await read_many(handle, suffixed_id) == gamma);
+                // Clear uses the same cached namespace prefix without touching
+                // an unrelated Redis key.
+                (void)co_await store.set("outside-cache", "keep");
+                co_await handle.query_result_cache().clear();
+                RUVIA_CHECK_EQ(redis_peer.key_count(), std::size_t{1});
+                const auto outside = co_await store.get("outside-cache");
+                RUVIA_CHECK(outside.has_value() && *outside == "keep");
+                RUVIA_CHECK(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"delta"});
             } catch (...) {
                 failure = std::current_exception();
             }

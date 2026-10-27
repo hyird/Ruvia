@@ -89,7 +89,7 @@ db_query_cache_state::db_query_cache_state(const redis_handle& redis, const db_c
       duration_(config.duration_),
       always_enabled_(config.always_enabled_),
       ignore_errors_(config.ignore_errors_),
-      name_space_(identity, resource),
+      prefix_(db_cache_prefix(identity, resource)),
       redis_(redis.with_options({})) {}
 
 db_query_cache_state::~db_query_cache_state() = default;
@@ -109,7 +109,7 @@ std::optional<std::pmr::string> db_query_cache_state::key(
     if (!query.cache_enabled().value_or(always_enabled_) || !query.cacheable()) {
         return std::nullopt;
     }
-    return db_cache_key(name_space_, query.cache_id(), query.cache_shape(), statement.sql(), statement.params(), driver,
+    return db_cache_key(prefix_, query.cache_id(), query.cache_shape(), statement.sql(), statement.params(), driver,
         resource_);
 }
 
@@ -185,7 +185,7 @@ task<void> db_query_cache_state::remove(
             throw std::invalid_argument("cache identifier must not be empty");
         }
         for (const auto shape : db_cache_shapes) {
-            keys.push_back(db_cache_id_key(name_space_, id, shape, resource_));
+            keys.push_back(db_cache_id_key(prefix_, id, shape, resource_));
         }
     }
     return remove_keys(redis_, std::move(keys), scope, std::move(options));
@@ -193,7 +193,9 @@ task<void> db_query_cache_state::remove(
 
 task<void> db_query_cache_state::clear(operation_scope& scope, operation_options options) {
     require_open();
-    auto pattern = db_cache_prefix(name_space_, resource_);
+    std::pmr::string pattern(resource_);
+    pattern.reserve(prefix_.size() + 1);
+    pattern.append(prefix_);
     pattern.push_back('*');
     return clear_keys(redis_, std::move(pattern), scope, std::move(options));
 }
