@@ -78,7 +78,8 @@ public:
 
     // Returns the one stable awaiter; waiting is worker-affine and permits one
     // outstanding wait. Constructing or discarding a cold task around wait()
-    // does not register an operation.
+    // does not register an operation. A notification racing with registration
+    // may resume asynchronously.
     [[nodiscard]] wait_awaiter_type& wait() noexcept;
 
     // Worker-affine and nonblocking. A pending wait completes as closed after

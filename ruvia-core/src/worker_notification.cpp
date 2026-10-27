@@ -148,9 +148,17 @@ bool worker_notification_state::wait_ready() {
 }
 
 bool worker_notification_state::begin_wait(std::coroutine_handle<> continuation) {
-    if (wait_ready()) {
+    require_worker();
+    if (wait_pending_) {
+        throw std::logic_error("worker notification permits one outstanding wait");
+    }
+    if (is_closed()) {
+        wait_result_ = worker_notification_wait_status::closed;
+        wait_error_.clear();
         return false;
     }
+    // A signal arriving after await_ready remains readable by the native
+    // async wait; polling the receiver again only adds an empty system call.
 
     wait_pending_ = true;
     wait_continuation_ = continuation;

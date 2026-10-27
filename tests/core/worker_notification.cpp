@@ -226,6 +226,51 @@ ruvia::task<void> probe_concurrent_wait(
     }
 }
 
+struct notify_during_registration final {
+    ruvia::worker_notification& notification_;
+    ruvia::worker_notification::wait_awaiter_type& wait_;
+
+    bool await_ready() {
+        const bool ready = wait_.await_ready();
+        if (!ready) {
+            static_cast<void>(notification_.notify());
+        }
+        return ready;
+    }
+
+    bool await_suspend(std::coroutine_handle<> continuation) {
+        return wait_.await_suspend(continuation);
+    }
+
+    ruvia::worker_notification_wait_status await_resume() {
+        return wait_.await_resume();
+    }
+};
+
+ruvia::task<void> wait_for_registration_race(
+    ruvia::worker_notification& notification, bool& notified) {
+    notified = (co_await notify_during_registration{notification, notification.wait()}) ==
+               ruvia::worker_notification_wait_status::notified;
+    notification.close();
+}
+
+RUVIA_TEST(worker_notification_delivers_signal_during_wait_registration) {
+    ruvia::worker_runtime worker;
+    ruvia::worker_notification notification(worker);
+    bool notified = false;
+    auto waiting = spawn(worker, wait_for_registration_race(notification, notified));
+    RUVIA_CHECK(worker.start());
+    const bool completed = finish(waiting);
+    if (!completed) {
+        auto closer = spawn(worker, close_notification(notification));
+        static_cast<void>(finish(closer));
+        static_cast<void>(finish(waiting));
+    }
+    RUVIA_CHECK(completed);
+    RUVIA_CHECK(notified);
+    RUVIA_CHECK(stop(worker));
+}
+
 RUVIA_TEST(worker_notification_early_latch_cold_wait_and_repeated_reuse) {
     constexpr std::size_t round_count = 128;
     ruvia::worker_runtime worker;
