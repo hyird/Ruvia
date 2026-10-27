@@ -163,10 +163,15 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
     const auto elapsed =
         std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
     if (elapsed < duration) {
-        const auto encoded_bytes = encode_db_cache_rows(rows, resource_);
         try {
-            (void)co_await redis_.with_options(db_required_options(options, deadline))
-                .set(key, encoded_bytes, {.expiration_ = redis_set_expiration::expires_after(duration - elapsed)});
+            // SET owns its arguments before returning the cold operation. Do
+            // not retain the serialized rows while that operation waits on IO.
+            auto write = [&] {
+                const auto encoded_bytes = encode_db_cache_rows(rows, resource_);
+                return redis_.with_options(db_required_options(options, deadline))
+                    .set(key, encoded_bytes, {.expiration_ = redis_set_expiration::expires_after(duration - elapsed)});
+            }();
+            (void)co_await std::move(write);
         } catch (const redis_error& error) {
             rethrow_or_timeout_redis_cache_error(error, deadline, ignore_errors_);
         }
