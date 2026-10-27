@@ -53,14 +53,21 @@ struct reader {
         return result_value;
     }
 };
-std::pmr::string digest(std::string_view bytes_value, std::pmr::memory_resource* resource) {
+void append_digest(std::pmr::string& output, std::string_view bytes_value) {
     std::array<unsigned char, SHA256_DIGEST_LENGTH> hash{};
     if (!SHA256(reinterpret_cast<const unsigned char*>(bytes_value.data()), bytes_value.size(), hash.data())) {
         throw std::runtime_error("database cache key digest failed");
     }
-    std::pmr::string result(resource);
-    http_append_lower_hex(result, hash);
-    return result;
+    http_append_lower_hex(output, hash);
+}
+constexpr std::string_view cache_prefix = "ruvia:qc:v3:";
+constexpr std::size_t digest_text_bytes = 2 * SHA256_DIGEST_LENGTH;
+constexpr std::size_t full_prefix_bytes = cache_prefix.size() + digest_text_bytes + 1;
+
+void append_cache_prefix(std::pmr::string& output, std::string_view name_space) {
+    output.append(cache_prefix);
+    append_digest(output, name_space);
+    output.push_back(':');
 }
 }  // namespace
 
@@ -165,18 +172,24 @@ std::pmr::string db_cache_scope(std::string_view name_space, std::string_view al
     text(identity, config.database_);
     text(identity, config.username_);
     text(identity, config.tls_.server_name_ ? std::string_view(*config.tls_.server_name_) : std::string_view{});
-    return digest(identity, resource);
+    std::pmr::string result(resource);
+    append_digest(result, identity);
+    return result;
 }
 std::pmr::string db_cache_prefix(std::string_view name_space, std::pmr::memory_resource* resource) {
-    std::pmr::string result_value("ruvia:qc:v3:", resource);
-    result_value.append(digest(name_space, resource)).push_back(':');
+    std::pmr::string result_value(resource);
+    result_value.reserve(full_prefix_bytes);
+    append_cache_prefix(result_value, name_space);
     return result_value;
 }
 std::pmr::string db_cache_id_key(std::string_view name_space, std::string_view id, db_cache_shape shape,
     std::pmr::memory_resource* resource) {
-    auto result_value = db_cache_prefix(name_space, resource);
-    result_value.append("id:").append(db_cache_shape_tag(shape)).push_back(':');
-    result_value.append(digest(id, resource));
+    const auto shape_tag = db_cache_shape_tag(shape);
+    std::pmr::string result_value(resource);
+    result_value.reserve(full_prefix_bytes + 3 + shape_tag.size() + 1 + digest_text_bytes);
+    append_cache_prefix(result_value, name_space);
+    result_value.append("id:").append(shape_tag).push_back(':');
+    append_digest(result_value, id);
     return result_value;
 }
 std::pmr::string db_cache_key(std::string_view name_space, std::string_view id, db_cache_shape shape,
@@ -184,7 +197,9 @@ std::pmr::string db_cache_key(std::string_view name_space, std::string_view id, 
     if (!id.empty()) {
         return db_cache_id_key(name_space, id, shape, resource);
     }
-    auto result_value = db_cache_prefix(name_space, resource);
+    std::pmr::string result_value(resource);
+    result_value.reserve(full_prefix_bytes + 4 + digest_text_bytes);
+    append_cache_prefix(result_value, name_space);
     std::pmr::string input(resource);
     number(input, static_cast<std::uint64_t>(driver));
     text(input, sql);
@@ -212,7 +227,8 @@ std::pmr::string db_cache_key(std::string_view name_space, std::string_view id, 
                 break;
         }
     }
-    result_value.append("sql:").append(digest(input, resource));
+    result_value.append("sql:");
+    append_digest(result_value, input);
     return result_value;
 }
 }  // namespace ruvia::detail
