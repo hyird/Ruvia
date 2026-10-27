@@ -130,7 +130,9 @@ public:
             using target_type = typename relation_type::target_entity_type;
             db_expression predicate;
             if constexpr (mapping_type::through_join_table) {
-                std::pmr::string junction(alias, query.resource());
+                std::pmr::string junction(query.resource());
+                junction.reserve(alias.size() + 9U);
+                junction.append(alias);
                 junction.append("_junction");
                 for_each_descriptor<typename mapping_type::source_columns_type>([&]<typename column_type, std::size_t> {
                     conjunction(query, predicate,
@@ -244,6 +246,7 @@ private:
             conjunction(query, predicate, query.import_expression(extra_condition));
         }
         query.join(node_value.join_, target_type::table_name(), predicate, node_value.alias_);
+        node_value.columns_.reserve(std::tuple_size_v<typename target_type::columns_type>);
         for_each_descriptor<typename target_type::columns_type>([&]<typename column_type, std::size_t> {
             auto name = unique_projection(query);
             query.add_select(query.alias(query.column(column_type::name.view(), node_value.alias_), name));
@@ -268,7 +271,8 @@ private:
                 node.offset_ = column_count_;
                 node.join_ = rest.empty() ? requested_join : db_join_type::left;
                 if (parent_value != root) {
-                    node.path_ = nodes_[parent_value].path_;
+                    node.path_.reserve(nodes_[parent_value].path_.size() + 1U + name.size());
+                    node.path_.append(nodes_[parent_value].path_);
                     node.path_.push_back('.');
                 }
                 node.path_.append(name);

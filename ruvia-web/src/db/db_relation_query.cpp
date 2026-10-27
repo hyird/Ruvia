@@ -14,6 +14,7 @@ db_relation_plan db_relation_plan::clone() const {
     result.column_count_ = column_count_;
     result.next_alias_ = next_alias_;
     result.next_projection_ = next_projection_;
+    result.nodes_.reserve(nodes_.size());
     for (const auto& node : nodes_) {
         result.nodes_.emplace_back(node, resource_);
     }
@@ -35,8 +36,11 @@ std::pmr::string db_relation_plan::normalize(std::string_view root_alias, std::s
     } else if (const auto dot = path.find('.'); dot != std::string_view::npos) {
         for (const auto& node : nodes_) {
             if (path.substr(0, dot) == node.alias_) {
-                std::pmr::string result_value(node.path_, resource_);
-                result_value.append(path.substr(dot));
+                const auto suffix = path.substr(dot);
+                std::pmr::string result_value(resource_);
+                result_value.reserve(node.path_.size() + suffix.size());
+                result_value.append(node.path_);
+                result_value.append(suffix);
                 return result_value;
             }
         }
@@ -77,18 +81,20 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     if (!paginated && !scope_lock) {
         return std::nullopt;
     }
+    if (paginated) {
+        if (query.has_grouping() || !s.set_operations_.empty() || !s.distinct_on_.empty()) {
+            throw std::invalid_argument("paged relation loading requires an ungrouped SELECT without set operations or DISTINCT ON");
+        }
+        if (s.lock_ && s.lock_->skip_locked_) {
+            throw std::invalid_argument("paged relation loading cannot combine SKIP LOCKED with collection expansion");
+        }
+    }
     auto result_value = query.clone(s.resource_);
     if (scope_lock) {
         result_value.storage().lock_->tables_.emplace_back(root_alias);
     }
     if (!paginated) {
         return result_value;
-    }
-    if (query.has_grouping() || !s.set_operations_.empty() || !s.distinct_on_.empty()) {
-        throw std::invalid_argument("paged relation loading requires an ungrouped SELECT without set operations or DISTINCT ON");
-    }
-    if (s.lock_ && s.lock_->skip_locked_) {
-        throw std::invalid_argument("paged relation loading cannot combine SKIP LOCKED with collection expansion");
     }
 
     // Select a page of root identities before filtering the expanded result.
@@ -119,15 +125,20 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     rank_storage.projections_.clear();
     auto window = ranked.make_node(db_node_kind::window);
     window.left_ = ranked.require_expression(ranked.call("row_number"));
-    std::pmr::vector<std::pmr::string> key_names(s.resource_), order_names(s.resource_);
+    window.args_.reserve(primary_key.size());
+    std::pmr::vector<std::pmr::string> key_names(s.resource_);
+    key_names.reserve(primary_key.size());
     for (std::size_t i = 0; i < primary_key.size(); ++i) {
-        auto& name = key_names.emplace_back("__ruvia_page_key_");
+        auto& name = key_names.emplace_back();
+        name.reserve(32);
+        name.append("__ruvia_page_key_");
         append_db_number(name, static_cast<std::uint64_t>(i));
         const auto key = ranked.column(primary_key[i], root_alias);
         window.args_.push_back(ranked.require_expression(key));
         ranked.add_select(ranked.alias(key, name));
     }
     if (orders.empty()) {
+        orders.reserve(window.args_.size());
         for (const auto key : window.args_) {
             orders.push_back({key, db_order_direction::asc, db_nulls_order::default_value});
         }
@@ -136,13 +147,18 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     for (const auto key : primary_key) {
         result_value.add_order_by(result_value.column(key, root_alias));
     }
+    std::pmr::vector<std::pmr::string> order_names(s.resource_);
+    order_names.reserve(orders.size());
     for (std::size_t i = 0; i < orders.size(); ++i) {
-        auto& name = order_names.emplace_back("__ruvia_page_order_");
+        auto& name = order_names.emplace_back();
+        name.reserve(32);
+        name.append("__ruvia_page_order_");
         append_db_number(name, static_cast<std::uint64_t>(i));
         ranked.add_select(ranked.alias(db_expression(&rank_storage, orders[i].expression_), name));
     }
-    window.orders_ = orders;
-    ranked.add_select(ranked.alias(ranked.push_node(std::move(window)), "__ruvia_page_rank"));
+    window.orders_ = std::move(orders);
+    const auto window_expr = ranked.push_node(std::move(window));
+    ranked.add_select(ranked.alias(window_expr, "__ruvia_page_rank"));
 
     db_query page(s.resource_);
     for (const auto& key : key_names) {
@@ -151,8 +167,9 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     page.from(ranked, "__ruvia_ranked");
     page.where(page.binary(page.column("__ruvia_page_rank", "__ruvia_ranked"),
         db_binary_operator::equal, page.value(1)));
-    for (std::size_t i = 0; i < orders.size(); ++i) {
-        page.add_order_by(page.column(order_names[i], "__ruvia_ranked"), orders[i].direction_, orders[i].nulls_);
+    const auto& window_orders = rank_storage.nodes_[ranked.require_expression(window_expr)].orders_;
+    for (std::size_t i = 0; i < order_names.size(); ++i) {
+        page.add_order_by(page.column(order_names[i], "__ruvia_ranked"), window_orders[i].direction_, window_orders[i].nulls_);
     }
     // Break ordering ties using the complete primary key, including composite keys.
     for (const auto& key : key_names) {
@@ -172,8 +189,12 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
 }
 
 std::pmr::string db_relation_plan::unique_alias(const db_query& query, std::string_view reserved) {
+    constexpr std::string_view prefix = "__ruvia_relation_";
+    std::pmr::string alias(resource_);
+    alias.reserve(32);
+    alias.append(prefix);
     for (;;) {
-        std::pmr::string alias("__ruvia_relation_", resource_);
+        alias.resize(prefix.size());
         append_db_number(alias, static_cast<std::uint64_t>(next_alias_++));
         if (alias != reserved && !uses_source_name(query, alias)) {
             return alias;
@@ -182,8 +203,12 @@ std::pmr::string db_relation_plan::unique_alias(const db_query& query, std::stri
 }
 
 std::pmr::string db_relation_plan::unique_projection(const db_query& query) {
+    constexpr std::string_view prefix = "__ruvia_column_";
+    std::pmr::string name(resource_);
+    name.reserve(32);
+    name.append(prefix);
     for (;;) {
-        std::pmr::string name("__ruvia_column_", resource_);
+        name.resize(prefix.size());
         append_db_number(name, static_cast<std::uint64_t>(next_projection_++));
         if (!uses_projection_name(query, name)) {
             return name;
