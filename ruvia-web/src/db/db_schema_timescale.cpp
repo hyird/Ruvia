@@ -12,15 +12,17 @@ void db_schema::set_table_options(std::string_view table_value, std::span<const 
     if (options.empty()) {
         throw std::invalid_argument("table options cannot be empty");
     }
-    std::pmr::string sql("ALTER TABLE ", resource_);
-    detail::append_db_qualified_identifier(sql, table_value, driver_);
-    sql += " SET (";
     for (std::size_t i = 0; i < options.size(); ++i) {
         for (std::size_t j = 0; j < i; ++j) {
             if (options[i].name_ == options[j].name_) {
                 throw std::invalid_argument("duplicate table option");
             }
         }
+    }
+    std::pmr::string sql("ALTER TABLE ", resource_);
+    detail::append_db_qualified_identifier(sql, table_value, driver_);
+    sql += " SET (";
+    for (std::size_t i = 0; i < options.size(); ++i) {
         if (i != 0) {
             sql += ", ";
         }
@@ -54,16 +56,17 @@ void db_schema::set_database_option(std::string_view database_value, std::string
 void db_schema::create_hypertable(const db_hypertable_options& options) {
     require_postgresql();
     // Validate names separately from the SQL text values consumed by Timescale.
-    std::pmr::string table(resource_), column(resource_);
+    std::pmr::string table(resource_);
     detail::append_db_qualified_identifier(table, options.table_, driver_);
-    detail::append_db_identifier(column, options.time_column_, driver_);
+    detail::validate_db_identifier(options.time_column_, driver_);
     db_query query(resource_);
-    std::pmr::vector<db_expression> dimensions(resource_);
-    dimensions.push_back(query.value(db_value(options.time_column_)));
+    std::array<db_expression, 2> dimensions{query.value(db_value(options.time_column_)), {}};
+    std::size_t dimension_count = 1U;
     if (!options.chunk_interval_.empty()) {
-        dimensions.push_back(query.import_expression(options.chunk_interval_));
+        dimensions[dimension_count++] = query.import_expression(options.chunk_interval_);
     }
-    const auto dimension = query.call("by_range", dimensions);
+    const auto dimension = query.call(
+        "by_range", std::span<const db_expression>(dimensions.data(), dimension_count));
     const std::array args{query.value(db_value(std::string_view(table))), dimension};
     const std::array named{db_named_argument{"create_default_indexes", query.value(db_value(options.create_default_indexes_))},
         db_named_argument{"if_not_exists", query.value(db_value(options.if_not_exists_))},
@@ -82,8 +85,8 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
     if (!options.enabled_ && (!options.segment_by_.empty() || !options.order_by_.empty())) {
         throw std::invalid_argument("disabled compression cannot specify segment or order columns");
     }
-    std::pmr::vector<db_table_option> values(resource_);
-    values.push_back({"timescaledb.compress", options.enabled_});
+    std::array<db_table_option, 3> values{db_table_option{"timescaledb.compress", options.enabled_}, {}, {}};
+    std::size_t value_count = 1U;
     std::pmr::string segments(resource_);
     if (!options.segment_by_.empty()) {
         for (const auto& column : options.segment_by_) {
@@ -92,7 +95,7 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
             }
             detail::append_db_identifier(segments, column, driver_);
         }
-        values.push_back({"timescaledb.compress_segmentby", segments});
+        values[value_count++] = {"timescaledb.compress_segmentby", segments};
     }
     std::pmr::string order(resource_);
     if (!options.order_by_.empty()) {
@@ -109,9 +112,9 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
                 order += " NULLS LAST";
             }
         }
-        values.push_back({"timescaledb.compress_orderby", order});
+        values[value_count++] = {"timescaledb.compress_orderby", order};
     }
-    set_table_options(table_value, values);
+    set_table_options(table_value, std::span<const db_table_option>(values.data(), value_count));
 }
 void db_schema::add_compression_policy(std::string_view table_value, db_expression after, bool if_not_exists) {
     require_postgresql();
