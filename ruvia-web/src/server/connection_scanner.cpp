@@ -1,6 +1,7 @@
 #include "server/connection_scanner.h"
 
 #include <chrono>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 
@@ -29,6 +30,11 @@ void validate_scanner_timeout(const std::optional<std::chrono::milliseconds>& ti
 [[nodiscard]] bool timeout_expired(
     const std::optional<std::chrono::milliseconds>& timeout, std::int64_t inactive_ms) noexcept {
     return timeout.has_value() && inactive_ms >= timeout->count();
+}
+
+[[nodiscard]] std::int64_t close_deadline_after(std::int64_t now, std::chrono::milliseconds delay) noexcept {
+    const auto maximum = (std::numeric_limits<std::int64_t>::max)();
+    return now > maximum - delay.count() ? maximum : now + delay.count();
 }
 
 [[nodiscard]] std::int64_t activity_now_ms() noexcept {
@@ -300,7 +306,7 @@ void connection_scanner::impl_type::drain() noexcept {
     draining_ = true;
     // The coarse clock may lag by an interval; a lost cancel is closed by the
     // first scan at least one whole interval after this drain.
-    const auto close_deadline = steady_now_ms() + options_.scan_interval_.count();
+    const auto close_deadline = close_deadline_after(steady_now_ms(), options_.scan_interval_);
     for (auto* current = sentinel_.next_; current != &sentinel_;) {
         auto* const next = current->next_;
         if (current->reading_request_head_) {
@@ -387,13 +393,13 @@ void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
     if (!entry_value.close_requested_) {
         const auto now = cached_now_ms_;
         if (entry_value.reading_request_head_) {
-            request_close(entry_value, now + options_.scan_interval_.count());
+            request_close(entry_value, close_deadline_after(now, options_.scan_interval_));
             return;
         }
         // A stalled write cannot carry a graceful end (GOAWAY, close alert).
         if (entry_value.phase_ != phase::writing && entry_value.has_drain_check()) {
             // The callback may retire the entry; record the request first.
-            record_close_request(entry_value, now + connection_close_grace.count());
+            record_close_request(entry_value, close_deadline_after(now, connection_close_grace));
             entry_value.notify_drain();
             return;
         }
