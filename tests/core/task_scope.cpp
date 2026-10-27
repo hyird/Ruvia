@@ -171,7 +171,9 @@ ruvia::task<void> verify_join_waits_for_node_deallocation(
             primary, resource, completed_after_node_release));
         joined_during_deallocation = completed_after_node_release || !primary.has_value();
     });
-    static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(10)));
+    while (primary.has_value()) {
+        static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
+    }
     co_await observer.join();
     success = completed_after_node_release && !joined_during_deallocation &&
               !primary.has_value() && starts == 1 && resource.live_allocations() == 0;
