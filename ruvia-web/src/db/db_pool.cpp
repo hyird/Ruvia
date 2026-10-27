@@ -456,6 +456,9 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
     } catch (...) {
         failure = std::current_exception();
     }
+    // Release the failed statement's storage before awaiting ROLLBACK.
+    std::pmr::string(sql.get_allocator().resource()).swap(sql);
+    std::pmr::vector<db_value>(params.get_allocator().resource()).swap(params);
     co_await retire_failed_transaction_slot(index, resource, timeout, failure);
     cancellation.finish();
     release_slot(index);
