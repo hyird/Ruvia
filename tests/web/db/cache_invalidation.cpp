@@ -295,6 +295,7 @@ RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
             {.column_ = "exists", .rows_ = {"f"}},
             {.column_ = "count", .rows_ = {"5"}},
             {.rows_ = {"delta"}},
+            {.rows_ = {"epsilon"}},
         });
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
@@ -338,6 +339,10 @@ RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 RUVIA_CHECK(!(co_await read_exists(handle)));
                 RUVIA_CHECK_EQ(co_await read_count(handle), std::uint64_t{5});
                 RUVIA_CHECK(co_await read_many(handle, suffixed_id) == gamma);
+                // A multi-id removal drops every shape for each id.
+                co_await handle.query_result_cache().remove(cache_id, suffixed_id);
+                RUVIA_CHECK_EQ(redis_peer.key_count(), std::size_t{0});
+                RUVIA_CHECK(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"delta"});
                 // Clear uses the same cached namespace prefix without touching
                 // an unrelated Redis key.
                 (void)co_await store.set("outside-cache", "keep");
@@ -345,7 +350,7 @@ RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 RUVIA_CHECK_EQ(redis_peer.key_count(), std::size_t{1});
                 const auto outside = co_await store.get("outside-cache");
                 RUVIA_CHECK(outside.has_value() && *outside == "keep");
-                RUVIA_CHECK(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"delta"});
+                RUVIA_CHECK(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"epsilon"});
             } catch (...) {
                 failure = std::current_exception();
             }

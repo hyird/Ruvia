@@ -184,9 +184,7 @@ task<void> db_query_cache_state::remove(
         if (id.empty()) {
             throw std::invalid_argument("cache identifier must not be empty");
         }
-        for (const auto shape : db_cache_shapes) {
-            keys.push_back(db_cache_id_key(prefix_, id, shape, resource_));
-        }
+        append_db_cache_id_keys(keys, prefix_, id);
     }
     return remove_keys(redis_, std::move(keys), scope, std::move(options));
 }
