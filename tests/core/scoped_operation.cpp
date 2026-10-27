@@ -998,6 +998,45 @@ RUVIA_TEST(scoped_capability_cleanup_can_reenter_scope_close) {
     RUVIA_CHECK_EQ(expired, 1);
 }
 
+RUVIA_TEST(scoped_capability_reentrant_join_waits_for_cleanup) {
+    struct helpers final {
+        struct state final {
+            std::unique_ptr<ruvia::operation_scope>* scope_;
+            ruvia::task_scope* children_;
+            bool* cleanup_active_;
+            bool* joined_during_cleanup_;
+        };
+        static ruvia::task<void> join(state& value) {
+            co_await (*value.scope_)->close_and_join();
+            *value.joined_during_cleanup_ = *value.cleanup_active_;
+            value.scope_->reset();
+        }
+        static ruvia::task<void> drive(const ruvia::worker_handle& worker, bool& joined_during_cleanup) {
+            auto scope = std::make_unique<ruvia::operation_scope>();
+            ruvia::task_scope children(worker);
+            bool cleanup_active = false;
+            state value{&scope, &children, &cleanup_active, &joined_during_cleanup};
+            ruvia::scoped_capability_registration capability(*scope, &value, [](void* raw) noexcept {
+                auto& cleanup = *static_cast<state*>(raw);
+                *cleanup.cleanup_active_ = true;
+                cleanup.children_->spawn(join(cleanup));
+                *cleanup.cleanup_active_ = false;
+            });
+            scope->close();
+            co_await children.join();
+        }
+    };
+    ruvia::event_loop_pool loops({.loop_count_ = 1});
+    const auto loop = loops.loop(0);
+    bool joined_during_cleanup = false;
+    auto root = loop.start(helpers::drive(loop.handle(), joined_during_cleanup));
+    loops.start();
+    root.get();
+    RUVIA_CHECK(!joined_during_cleanup);
+    loops.stop();
+    loops.join();
+}
+
 RUVIA_TEST(scoped_capability_cleanup_can_reenter_scope_close_during_join_resume) {
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);

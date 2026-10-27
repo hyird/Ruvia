@@ -19,7 +19,8 @@ class scoped_operation_registration;
 
 // Worker-affine owner of borrowed capabilities and their lazy operations.
 // Close discards cold frames before capability cleanup. Started operations must
-// finish; close_and_join waits for their frames and leases to retire first.
+// finish; close_and_join waits for their frames, leases and capability cleanup
+// to retire, including when invoked reentrantly by a cleanup callback.
 class operation_scope final {
 public:
     operation_scope() noexcept = default;
@@ -65,6 +66,7 @@ private:
     void* context_{nullptr};
     std::coroutine_handle<> join_continuation_{};
     bool active_{true};
+    bool expiring_capabilities_{false};
     bool join_started_{false};
     bool join_complete_{false};
 };

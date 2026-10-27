@@ -18,11 +18,14 @@ struct operation_scope::drain_guard final {
 
     ~drain_guard() {
         auto* scope = registration_.scope_;
-        registration_.phase_ = detail::scoped_operation_registration::phase::expired;
-        scope->unlink(registration_);
-        if (scope->head_ == nullptr && scope->join_continuation_ == nullptr) {
+        // Keep the drain registered while capability callbacks run: a join
+        // started by one of them must not publish retirement prematurely.
+        if (scope->head_ == &registration_ && registration_.next_ == nullptr &&
+            scope->join_continuation_ == nullptr) {
             scope->expire_capabilities();
         }
+        registration_.phase_ = detail::scoped_operation_registration::phase::expired;
+        scope->unlink(registration_);
         // Join may retire this scope's owner inline. No further scope access.
         scope->resume_joiner();
     }
@@ -52,9 +55,7 @@ struct operation_scope::join_awaiter final {
 };
 
 void operation_scope::close() noexcept {
-    if (head_ == nullptr) {
-        active_ = false;
-        expire_capabilities();
+    if (expiring_capabilities_) {
         return;
     }
     for (auto* operation = head_; operation != nullptr; operation = operation->next_) {
@@ -104,9 +105,11 @@ void operation_scope::expire_for_join() noexcept {
 }
 
 void operation_scope::expire_capabilities() noexcept {
+    expiring_capabilities_ = true;
     while (capability_head_ != nullptr) {
         capability_head_->expire();
     }
+    expiring_capabilities_ = false;
 }
 
 void operation_scope::resume_joiner() noexcept {
