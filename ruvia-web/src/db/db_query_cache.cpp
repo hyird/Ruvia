@@ -189,15 +189,18 @@ db_rows decode_db_cache_rows(std::pmr::string bytes_value, std::pmr::memory_reso
     if (count > reader_value.bytes_.size() / (columns + 1)) {
         invalid_cache();
     }
-    // The result owns the encoded storage; fields borrow from that stable
-    // object. Rebinding to the result's resource is required when Redis and
-    // the database use different worker pools.
-    const auto consumed = bytes_value.size() - reader_value.bytes_.size();
-    auto* const result_resource = pmr_resource_or_default(resource);
-    auto storage = make_pmr_object<std::pmr::string>(
-        result_resource, std::move(bytes_value), result_resource);
-    reader_value.bytes_ = std::string_view(*storage).substr(consumed);
-    db_result_access::own_raw_result(result_value, storage.release(), &release_cache_storage);
+    // Only fields can borrow the encoded storage. Empty results and
+    // zero-column rows need no backing allocation after decoding.
+    if (count != 0 && columns != 0) {
+        // Rebind to the result's resource when Redis and the database use
+        // different worker pools.
+        const auto consumed = bytes_value.size() - reader_value.bytes_.size();
+        auto* const result_resource = pmr_resource_or_default(resource);
+        auto storage = make_pmr_object<std::pmr::string>(
+            result_resource, std::move(bytes_value), result_resource);
+        reader_value.bytes_ = std::string_view(*storage).substr(consumed);
+        db_result_access::own_raw_result(result_value, storage.release(), &release_cache_storage);
+    }
     auto& fields_value = db_result_access::fields(result_value);
     auto& rows = db_result_access::rows(result_value);
     fields_value.reserve(static_cast<std::size_t>(count * columns));

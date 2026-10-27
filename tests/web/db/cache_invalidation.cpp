@@ -440,6 +440,72 @@ RUVIA_TEST(db_query_result_cache_distinguishes_sql_parameter_values) {
     ruvia::test::retire_backend_attachment(attachment);
 }
 
+RUVIA_TEST(db_query_result_cache_preserves_empty_and_zero_column_results) {
+    redis_store_peer redis_peer;
+    std::string empty("RUVIAQC2");
+    empty.append(16, '\0');
+    redis_peer.poison_reads(empty);
+    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
+        ruvia::test::backend_startup_peer::after_startup::idle, {});
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
+        .port_ = redis_peer.port(),
+        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled},
+        .pool_size_per_worker_ = 1};
+    auto exercise = [&]() -> ruvia::task<void> {
+        ruvia::redis_client redis(attachment.loop(), redis_config);
+        std::exception_ptr failure;
+        try {
+            co_await redis.connect();
+            ruvia::db_client database(attachment.loop(), database_peer.config(), redis.handle(), ruvia::db_cache_config{});
+            try {
+                co_await database.connect();
+                auto query = database.handle().repository<record>().query_builder();
+                query.cache(cache_id, cache_lifetime);
+                auto empty_rows = co_await query.get_raw_many();
+                RUVIA_CHECK(empty_rows.empty());
+                auto empty_with_schema = empty;
+                empty_with_schema[16] = 1;
+                empty_with_schema.push_back('\1');
+                empty_with_schema.append(7, '\0');
+                empty_with_schema.push_back('v');
+                redis_peer.poison_reads(std::move(empty_with_schema));
+                auto named_empty_rows = co_await query.get_raw_many();
+                RUVIA_CHECK(named_empty_rows.empty());
+                auto zero_columns = empty;
+                zero_columns[8] = 2;
+                zero_columns.append(2, '\2');
+                redis_peer.poison_reads(std::move(zero_columns));
+                auto rows = co_await query.get_raw_many();
+                RUVIA_CHECK_EQ(rows.size(), 2u);
+                RUVIA_CHECK(rows[0].empty());
+                RUVIA_CHECK(rows[1].empty());
+                RUVIA_CHECK(empty_rows.empty());
+                RUVIA_CHECK(named_empty_rows.empty());
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            co_await database.shutdown();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+        co_await redis.shutdown();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    try {
+        ruvia::test::drive_backend_task(attachment, exercise());
+    } catch (...) {
+        ruvia::test::retire_backend_attachment(attachment);
+        throw;
+    }
+    ruvia::test::retire_backend_attachment(attachment);
+}
+
 // A corrupt entry claiming an enormous count of zero-column rows is an invalid
 // cache entry: it is rejected before any row storage is reserved, so a cache
 // that ignores errors reads the database instead.
