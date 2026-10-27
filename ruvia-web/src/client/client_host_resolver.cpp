@@ -28,12 +28,6 @@ struct client_host_resolver::query final {
     }
 };
 
-namespace {
-task<client_resolve_result> ready_result(client_resolve_result result) {
-    co_return std::move(result);
-}
-}  // namespace
-
 client_host_resolver::client_host_resolver(client_host_resolver&& other) noexcept
     : worker_(other.worker_) {
     if (other.stop_) {
@@ -49,13 +43,12 @@ client_host_resolver& client_host_resolver::operator=(client_host_resolver&& oth
     return *this;
 }
 
-task<client_resolve_result> client_host_resolver::resolve(std::string_view host, std::uint16_t port,
+client_resolve_operation client_host_resolver::resolve(std::string_view host, std::uint16_t port,
     const operation_timeout& timeout) {
     std::error_code error;
     const auto address = asio::ip::make_address(host, error);
     if (!error) {
-        return ready_result(client_resolve_result{
-            .literal_ = asio::ip::tcp::endpoint(address, port)});
+        return client_resolve_result{.literal_ = asio::ip::tcp::endpoint(address, port)};
     }
     std::array<char, http_max_unsigned_decimal_size> digits;
     const auto service = http_format_unsigned(digits, port);

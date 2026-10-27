@@ -6,6 +6,7 @@
 #include <string>
 #include <system_error>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
@@ -285,7 +286,15 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
     auto& slot = slots_[index];
     try {
         db_slot_active_wait_guard active_resolve(slot);
-        auto completion = co_await slot.resolver_.resolve(config_.host_, config_.port_, deadline_value);
+        client_resolve_result completion;
+        {
+            auto pending = slot.resolver_.resolve(config_.host_, config_.port_, deadline_value);
+            if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
+                completion = std::move(*immediate);
+            } else {
+                completion = co_await std::move(std::get<task<client_resolve_result>>(pending));
+            }
+        }
         const auto resolve_error = completion.error_;
         const bool deadline_expired = leases_.clear_deadline(index) || deadline_value.expired();
         leases_.throw_if_aborted(index);

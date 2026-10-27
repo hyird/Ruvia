@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <utility>
+#include <variant>
 
 #include <asio/ssl/error.hpp>
 #include <asio/write.hpp>
@@ -196,7 +197,15 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     if (!arm(read_, timeout)) {
         co_return aborted();
     }
-    auto resolved = co_await resolver_.resolve(endpoint_.host_, endpoint_.port_, timeout);
+    client_resolve_result resolved;
+    {
+        auto pending = resolver_.resolve(endpoint_.host_, endpoint_.port_, timeout);
+        if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
+            resolved = std::move(*immediate);
+        } else {
+            resolved = co_await std::move(std::get<task<client_resolve_result>>(pending));
+        }
+    }
     if (abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
         co_return finish(read_, timeout, {}, 0, client_transport_status::resolve_failed);
     }

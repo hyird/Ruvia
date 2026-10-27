@@ -311,7 +311,7 @@ Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.htm
 
 TLS 连接关闭时（响应要求关闭、`shutdown()` 退役空闲连接或 HTTP/2 会话、WebSocket 与 Redis 客户端关闭），客户端先以一次非阻塞写发送 `close_notify`（[RFC 9112 §9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.8)），不等待对端告警；关闭始终立即完成，挂起的读取不阻止告警，由关闭取消。告警只追加在已完整写出的 TLS 记录之后：仍有记录写入等待 socket 或只写出部分记录（来自写入，或来自读取对握手后消息的应答，例如 TLS 1.2 `HelloRequest` 引发的 `no_renegotiation` 告警）、记录写入失败或被取消，以及发生 TLS 错误后的关闭不发送告警，`CONNECT` 隧道由隧道自身负责 TLS 关闭。
 
-系统 DNS 查询通过 core 的共享有界阻塞池执行；查询参数在异步入口返回前完成拥有化。底层 `getaddrinfo` 已开始后不能抢占，但超时、取消、客户端关闭和 Worker 停机都会立即释放当前等待者，不等待系统调用返回；迟到结果被丢弃。
+系统 DNS 查询通过 core 的共享有界阻塞池执行；查询参数在异步入口返回前完成拥有化。底层 `getaddrinfo` 已开始后不能抢占，但超时、取消、客户端关闭和 Worker 停机都会立即释放当前等待者，不等待系统调用返回；迟到结果被丢弃。数字地址在同步阶段生成端点，不创建解析协程帧。
 
 HTTP、WebSocket 与 Redis 客户端对系统解析结果执行 [RFC 8305 §4–5](https://www.rfc-editor.org/rfc/rfc8305.html#section-4) 连接竞速：保留平台给出的 RFC 6724 地址优先级和各地址族内部顺序，从首选地址族开始交错 IPv6 / IPv4；首个连接立即发起，后续连接按 RFC 8305 建议值每隔 `250ms` 发起，先前尝试保持并行，首个成功连接获胜，其余尝试全部取消并等待结束。数字地址不查询 DNS，直接发起单次连接；只有一个候选地址时也不引入延迟。`connect_timeout_` 仍统一覆盖系统解析、全部连接尝试和 TLS 握手，无需也不提供单独的 Happy Eyeballs 配置。当前系统解析是一次合并的 `getaddrinfo` 查询，不实现 RFC 8305 §3 的独立 A / AAAA 查询与 `50ms` Resolution Delay；数据库连接把数字地址或同一有序解析结果交给原生驱动，不经过上述 socket 竞速。
 
