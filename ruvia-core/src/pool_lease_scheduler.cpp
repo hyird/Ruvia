@@ -215,11 +215,14 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     // its stop token.
     if (timeout_.has_value() && owner_->worker_.valid()) {
         try {
+            // The worker-local timer belongs to this acquire and is cancelled
+            // before it can be destroyed. Its expiry can unlink the waiter
+            // directly; cross-thread stop notifications still use waiter IDs.
             const auto status = owner_->worker_.schedule_timer(deadline_timer_,
                 worker_timer_deadline_after(*timeout_),
-                [waiter_state, waiter_id](worker_timer_outcome outcome) noexcept {
+                [waiter_state, waiter = this](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
-                        (void)waiter_state->queue_.expire(waiter_id);
+                        (void)waiter_state->queue_.expire(*waiter);
                     }
                 });
             if (status == worker_timer_schedule_status::scheduled &&

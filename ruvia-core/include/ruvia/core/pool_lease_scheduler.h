@@ -41,6 +41,7 @@ public:
     // leased synchronously without suspending; only a saturated pool waits.
     // The result carries the leased slot index as its value, or closed,
     // timed_out or cancelled; it is never worker_stopping.
+    // A timed-out waiter leaves other queued acquisitions unchanged.
     // A timeout arms a timer on the scheduler's worker. Once that
     // worker's timer queue stops (pending or new acquires alike) no timer
     // fires: the acquire completes only through release(), close() (closed),

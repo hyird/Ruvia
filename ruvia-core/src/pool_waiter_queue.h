@@ -83,14 +83,13 @@ public:
         return waiter != nullptr && commit_cancellation(*waiter, continuation);
     }
 
-    [[nodiscard]] bool expire(std::uint64_t id) noexcept {
-        auto* waiter = find(id);
-        if (waiter == nullptr || !waiter->queued_) {
+    [[nodiscard]] bool expire(pool_lease_acquire& waiter) noexcept {
+        if (!waiter.queued_) {
             return false;
         }
-        remove(*waiter);
-        waiter->complete(worker_wait_status::timed_out);
-        waiter->resume();
+        remove(waiter);
+        waiter.complete(worker_wait_status::timed_out);
+        waiter.resume();
         return true;
     }
 
