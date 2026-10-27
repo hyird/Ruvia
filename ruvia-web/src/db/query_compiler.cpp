@@ -109,6 +109,8 @@ constexpr std::array pg_function_parameter_cast_table{
     pg_function_parameter_casts{"width_bucket", 0, 0b1000},
 };
 
+static_assert(std::ranges::is_sorted(pg_function_parameter_cast_table, {}, &pg_function_parameter_casts::name_));
+
 // The cast for argument `position` of `function`, unqualified or in pg_catalog.
 [[nodiscard]] pg_parameter_cast pg_function_parameter_cast(std::string_view function, std::size_t position) noexcept {
     constexpr std::string_view catalog = "pg_catalog.";
@@ -118,15 +120,14 @@ constexpr std::array pg_function_parameter_cast_table{
     if (position >= 32) {
         return pg_parameter_cast::context;
     }
-    for (const auto& entry : pg_function_parameter_cast_table) {
-        if (entry.name_ == function) {
-            if ((entry.int4_positions_ >> position) & 1U) {
-                return pg_parameter_cast::int4;
-            }
-            if ((entry.value_category_positions_ >> position) & 1U) {
-                return pg_parameter_cast::value_category;
-            }
-            return pg_parameter_cast::context;
+    const auto found = std::ranges::lower_bound(
+        pg_function_parameter_cast_table, function, {}, &pg_function_parameter_casts::name_);
+    if (found != pg_function_parameter_cast_table.end() && found->name_ == function) {
+        if ((found->int4_positions_ >> position) & 1U) {
+            return pg_parameter_cast::int4;
+        }
+        if ((found->value_category_positions_ >> position) & 1U) {
+            return pg_parameter_cast::value_category;
         }
     }
     return pg_parameter_cast::context;
@@ -183,6 +184,7 @@ public:
 
     std::pmr::string sql_;
     std::pmr::vector<db_value> params_;
+    std::size_t expected_params_{0};
     [[nodiscard]] db_driver driver() const noexcept {
         return driver_;
     }
@@ -238,18 +240,38 @@ public:
             }
             return;
         }
-        if (pg() && node != nullptr && parameter_positions_.has_value()) {
-            if (const auto found = parameter_positions_->find(node); found != parameter_positions_->end()) {
-                pg_parameter(found->second, value, cast);
-                return;
+        if (pg() && node != nullptr) {
+            if (parameter_positions_.has_value()) {
+                if (const auto found = parameter_positions_->find(node); found != parameter_positions_->end()) {
+                    pg_parameter(found->second, value, cast);
+                    return;
+                }
+            } else {
+                for (std::size_t i = 0; i < inline_parameter_count_; ++i) {
+                    if (inline_parameter_positions_[i].first == node) {
+                        pg_parameter(inline_parameter_positions_[i].second, value, cast);
+                        return;
+                    }
+                }
             }
+        }
+        if (params_.empty() && expected_params_ > 1U) {
+            params_.reserve(expected_params_);
         }
         params_.push_back(clone_db_value_for_resource(value, params_.get_allocator().resource()));
         if (pg() && node != nullptr) {
-            if (!parameter_positions_.has_value()) {
-                parameter_positions_.emplace(params_.get_allocator().resource());
+            if (parameter_positions_.has_value()) {
+                parameter_positions_->emplace(node, params_.size());
+            } else if (inline_parameter_count_ < inline_parameter_capacity) {
+                inline_parameter_positions_[inline_parameter_count_++] = {node, params_.size()};
+            } else {
+                auto& map = parameter_positions_.emplace(params_.get_allocator().resource());
+                map.reserve(inline_parameter_capacity * 2U);
+                for (const auto& entry : inline_parameter_positions_) {
+                    map.emplace(entry.first, entry.second);
+                }
+                map.emplace(node, params_.size());
             }
-            parameter_positions_->emplace(node, params_.size());
         }
         if (pg()) {
             pg_parameter(params_.size(), value, cast);
@@ -309,11 +331,14 @@ private:
         }
     }
 
+    static constexpr std::size_t inline_parameter_capacity = 16;
     db_driver driver_;
     db_parameter_mode mode_;
-    // PostgreSQL numbers a reused node's parameter once. Built when the first
-    // node-bound PostgreSQL parameter is recorded: the map allocates buckets
-    // on construction, and MariaDB never consults it.
+    std::array<std::pair<const db_query_node*, std::size_t>, inline_parameter_capacity> inline_parameter_positions_{};
+    std::size_t inline_parameter_count_{0};
+    // PostgreSQL numbers a reused node's parameter once. Small queries use
+    // inline_parameter_positions_ without heap allocations; larger queries
+    // spill into parameter_positions_.
     std::optional<std::pmr::unordered_map<const db_query_node*, std::size_t>> parameter_positions_;
 };
 
@@ -335,6 +360,11 @@ public:
     void query(const db_query_storage& s, std::size_t depth = 0) {
         require_depth(depth);
         validate_query_shape(s);
+        if (depth == 0) {
+            output_.sql_.reserve(64U + s.nodes_.size() * 16U + s.projections_.size() * 12U +
+                                 s.orders_.size() * 16U + s.joins_.size() * 32U + s.ctes_.size() * 48U);
+            output_.expected_params_ = estimate_bound_parameters(s);
+        }
         if (!s.ctes_.empty()) {
             if (!output_.pg() && s.kind_ != db_query_kind::select) {
                 output_.unsupported("data-changing WITH");
@@ -475,6 +505,22 @@ private:
     static const db_query_storage& nested(const db_query_storage& s, std::size_t index) {
         return s.queries_.at(index).storage();
     }
+    [[nodiscard]] static std::size_t estimate_bound_parameters(const db_query_storage& s, std::size_t depth = 0) noexcept {
+        if (depth > 256) {
+            return 0;
+        }
+        std::size_t count = (s.limit_.has_value() ? 1U : 0U) + (s.offset_.has_value() ? 1U : 0U);
+        for (const auto& node : s.nodes_) {
+            if (node.kind_ == db_node_kind::value && db_value_access::type(node.value_) != db_value_type::null) {
+                ++count;
+            }
+        }
+        for (const auto& sub : s.queries_) {
+            count += estimate_bound_parameters(sub.storage(), depth + 1);
+        }
+        return count;
+    }
+
     template <class range_type, class fn_type>
     void separated(const range_type& range, fn_type&& fn) {
         bool first = true;
