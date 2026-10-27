@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <exception>
 #include <optional>
 #include <span>
@@ -268,8 +269,8 @@ task<void> http1_client_exchange::run(
     }
     worker_timer_registration upload_completion_timer;
     if (!upload->output_.ended_ && !upload->output_.stopped_) {
-        if (const auto remaining = timeout.remaining()) {
-            (void)pool_.worker().schedule_timer(upload_completion_timer, worker_timer_deadline_after(*remaining),
+        if (const auto deadline = timeout.deadline()) {
+            (void)pool_.worker().schedule_timer(upload_completion_timer, *deadline,
                 [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         connection_.cancel(generation, client_abort_reason::timeout);
@@ -455,14 +456,14 @@ task<void> http1_client_exchange::wait_for_body_space(
     const auto max_response_bytes = pool_.config().max_response_bytes_;
     while (!state_value.collect_all_ && state_value.pending_.size() >= max_response_bytes) {
         connection_.throw_if_aborted();
-        const auto remaining = timeout.remaining();
-        if (remaining && remaining->count() == 0) {
+        const auto deadline = timeout.deadline();
+        if (deadline && *deadline <= std::chrono::steady_clock::now()) {
             throw_body_timeout();
         }
         bool expired = false;
         worker_timer_registration timer;
-        if (remaining) {
-            (void)pool_.worker().schedule_timer(timer, worker_timer_deadline_after(*remaining),
+        if (deadline) {
+            (void)pool_.worker().schedule_timer(timer, *deadline,
                 [&expired, &state_value](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         expired = true;
@@ -499,8 +500,8 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
                 continue;
             }
             worker_timer_registration write_timer;
-            if (const auto remaining = timeout.constrained_by(pool_.config().write_timeout_).remaining()) {
-                (void)pool_.worker().schedule_timer(write_timer, worker_timer_deadline_after(*remaining),
+            if (const auto deadline = timeout.constrained_by(pool_.config().write_timeout_).deadline()) {
+                (void)pool_.worker().schedule_timer(write_timer, *deadline,
                     [this](worker_timer_outcome outcome) noexcept {
                         if (outcome == worker_timer_outcome::expired) {
                             expire_tunnel();
@@ -559,8 +560,8 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
     std::exception_ptr writer_failure;
     std::exception_ptr receive_failure;
     try {
-        if (const auto remaining = timeout.remaining()) {
-            (void)pool_.worker().schedule_timer(lifetime_timer, worker_timer_deadline_after(*remaining),
+        if (const auto deadline = timeout.deadline()) {
+            (void)pool_.worker().schedule_timer(lifetime_timer, *deadline,
                 [this](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         expire_tunnel();

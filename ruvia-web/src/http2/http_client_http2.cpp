@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 #include "ruvia/core/worker_cancellation.h"
@@ -351,11 +352,11 @@ void http_client_connection::reprioritize(http_client_response_state& state_valu
 task<void> http_client_connection::wait_for_http2_session_stop(
     const operation_timeout& timeout, stop_token stop_token_value, const http_client_response_state& response) {
     worker_timer_registration deadline_timer;
-    if (const auto remaining = timeout.remaining()) {
-        if (remaining->count() == 0) {
+    if (const auto deadline = timeout.deadline()) {
+        if (*deadline <= std::chrono::steady_clock::now()) {
             throw http_client_error(http_client_error::code_type::timeout, "HTTP/2 session shutdown wait timed out");
         }
-        (void)pool_.worker().schedule_timer(deadline_timer, worker_timer_deadline_after(*remaining),
+        (void)pool_.worker().schedule_timer(deadline_timer, *deadline,
             [this](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     http2_.state_signal().notify();
@@ -442,8 +443,8 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             }
         } registration{*this, stream};
         worker_timer_registration deadline_timer;
-        if (const auto remaining = timeout.remaining()) {
-            (void)pool_.worker().schedule_timer(deadline_timer, worker_timer_deadline_after(*remaining),
+        if (const auto deadline = timeout.deadline()) {
+            (void)pool_.worker().schedule_timer(deadline_timer, *deadline,
                 [this, request_id = stream.request_id_](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         cancel_http2_stream(request_id, client_abort_reason::timeout);
@@ -838,8 +839,8 @@ task<void> http_client_pool::run_http2_push(
     auto& state_value = driver->state_;
     worker_timer_registration timer;
     try {
-        if (const auto remaining = driver->timeout_.remaining()) {
-            (void)worker_.schedule_timer(timer, worker_timer_deadline_after(*remaining),
+        if (const auto deadline = driver->timeout_.deadline()) {
+            (void)worker_.schedule_timer(timer, *deadline,
                 [raw = driver.get()](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         raw->connection_.cancel_http2_stream(raw->stream_.request_id_, client_abort_reason::timeout);
