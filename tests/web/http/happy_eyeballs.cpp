@@ -168,7 +168,11 @@ private:
 
 }  // namespace happy_eyeballs_tests
 
+#if defined(_WIN32)
+RUVIA_TEST(http_client_tries_next_address_family_when_first_is_unavailable) {
+#else
 RUVIA_TEST(http_client_fast_address_failure_immediately_starts_the_next_family) {
+#endif
     using namespace happy_eyeballs_tests;
     const auto first_is_v6 = localhost_first_is_v6();
     if (!first_is_v6) {
@@ -181,7 +185,15 @@ RUVIA_TEST(http_client_fast_address_failure_immediately_starts_the_next_family) 
     auto worker = loop.handle();
     opposite_family_peer peer(io, worker, *first_is_v6);
     peer.start();
-    auto root = loop.start(exercise(attachment, peer, ruvia_ctx, "localhost", 150ms));
+    // Windows can leave a connect to a bound, non-listening socket pending
+    // instead of refusing it immediately. Allow the 250 ms stagger there;
+    // the shorter deadline elsewhere still checks immediate failure handling.
+#if defined(_WIN32)
+    constexpr auto connect_timeout = 2s;
+#else
+    constexpr auto connect_timeout = 150ms;
+#endif
+    auto root = loop.start(exercise(attachment, peer, ruvia_ctx, "localhost", connect_timeout));
     attachment.run();
     root.get();
 }

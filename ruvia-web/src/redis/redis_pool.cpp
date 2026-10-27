@@ -91,9 +91,9 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
     result_type result(resolved);
     if constexpr (!single_reply) {
         result.reserve(reply_count);
-    }
-    if (reply_count == 0) {
-        co_return result;
+        if (reply_count == 0) {
+            co_return result;
+        }
     }
 
     // Ordinary commands start their budget here; an ORM retry retains the

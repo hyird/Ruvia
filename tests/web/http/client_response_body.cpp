@@ -204,11 +204,13 @@ public:
         continue_value,
         continue_timeout,
         early_final,
-        early_final_while_uploading };
+        early_final_while_uploading,
+        early_final_orderly_while_uploading };
     upload_peer(asio::io_context& io, const ruvia::worker_handle& worker_value, mode_type mode)
         : io_(io),
           acceptor_(io, {asio::ip::tcp::v4(), std::uint16_t{0}}),
           socket_(io),
+          response_release_(io, asio::steady_timer::time_point::max()),
           done_(worker_value),
           mode_(mode) {}
     std::uint16_t port() const {
@@ -227,6 +229,10 @@ public:
         std::error_code ignored;
         acceptor_.close(ignored);
         socket_.close(ignored);
+        response_release_.cancel();
+    }
+    void release_response() {
+        response_release_.expires_at(asio::steady_timer::time_point::min());
     }
     ruvia::task<void> wait() {
         while (!complete_) {
@@ -253,11 +259,11 @@ private:
             co_await asio::async_write(socket, asio::buffer(reply), asio::use_awaitable);
             co_return;
         }
-        if (mode_ == mode_type::early_final_while_uploading) {
-            // Prove that a large upload is already in progress, then put the
-            // complete response on the wire before refusing the remaining
-            // request bytes. The client's small response queue leaves most of
-            // this body in the socket while the upload write fails.
+        if (mode_ == mode_type::early_final_while_uploading ||
+            mode_ == mode_type::early_final_orderly_while_uploading) {
+            // Prove that a large upload is already in progress before sending
+            // a final response. The client's small response queue exercises
+            // body delivery while the upload is stopped.
             if (input.empty()) {
                 co_await asio::async_read(
                     socket, asio::dynamic_buffer(input), asio::transfer_exactly(1), asio::use_awaitable);
@@ -269,6 +275,15 @@ private:
                                      "\r\nConnection: close\r\n\r\n";
             co_await asio::async_write(socket, asio::buffer(head), asio::use_awaitable);
             co_await asio::async_write(socket, asio::buffer(body), asio::use_awaitable);
+            if (mode_ == mode_type::early_final_orderly_while_uploading) {
+                // Keep the socket open until the client consumes the response.
+                // Closing with unread request bytes can reset the connection and
+                // discard response bytes on Windows.
+                socket.shutdown(asio::ip::tcp::socket::shutdown_send);
+                std::error_code ignored;
+                co_await response_release_.async_wait(asio::redirect_error(asio::use_awaitable, ignored));
+                co_return;
+            }
             asio::steady_timer response_visible(io_, std::chrono::milliseconds(10));
             co_await response_visible.async_wait(asio::use_awaitable);
             std::error_code ignored;
@@ -307,6 +322,7 @@ private:
     asio::io_context& io_;
     asio::ip::tcp::acceptor acceptor_;
     asio::ip::tcp::socket socket_;
+    asio::steady_timer response_release_;
     ruvia::worker_signal done_;
     mode_type mode_;
     std::exception_ptr failure_;
@@ -2097,10 +2113,11 @@ RUVIA_TEST(http_client_upload_exchange_preserves_early_final_response_and_stops_
     run_operation(worker, io, operation);
 }
 
-RUVIA_TEST(http_client_upload_write_failure_preserves_complete_early_response) {
+namespace {
+void exercise_early_response_during_upload(ruvia::testing::test_context& ruvia_ctx, upload_peer::mode_type mode) {
     auto& io = ruvia::test::new_test_io_context();
     test_worker worker(io);
-    upload_peer peer(io, worker.handle_, upload_peer::mode_type::early_final_while_uploading);
+    upload_peer peer(io, worker.handle_, mode);
     auto config = local_http_client_config(peer.port());
     config.max_response_bytes_ = 1024;
     config.request_timeout_ = std::chrono::seconds(3);
@@ -2126,10 +2143,11 @@ RUVIA_TEST(http_client_upload_write_failure_preserves_complete_early_response) {
         RUVIA_CHECK_EQ(response.status().value(), std::uint16_t{413});
         co_await writers.join();
         RUVIA_CHECK(upload_failed);
-        // The public write wakes as soon as the final response stops its
-        // queue. Let the transport write observe the peer close before body
-        // consumption resumes the response reader.
-        (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(100));
+        if (mode == upload_peer::mode_type::early_final_while_uploading) {
+            // Let the transport write observe the peer close before resuming
+            // response body consumption.
+            (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(100));
+        }
         std::size_t response_bytes = 0;
         while (const auto chunk = co_await response.body().read()) {
             response_bytes += chunk->size();
@@ -2137,6 +2155,7 @@ RUVIA_TEST(http_client_upload_write_failure_preserves_complete_early_response) {
                 chunk->begin(), chunk->end(), [](std::byte value) { return value == std::byte{'r'}; }));
         }
         RUVIA_CHECK_EQ(response_bytes, upload_peer::rejected_body_size);
+        peer.release_response();
         co_await peer.wait();
         RUVIA_CHECK(client.handle().stats().plaintext_bytes_sent_ >=
                     peer.head_.size() + peer.uploaded_bytes_);
@@ -2144,6 +2163,17 @@ RUVIA_TEST(http_client_upload_write_failure_preserves_complete_early_response) {
     };
     run_operation(worker, io, operation);
 }
+}  // namespace
+
+RUVIA_TEST(http_client_early_response_stops_upload_and_preserves_body) {
+    exercise_early_response_during_upload(ruvia_ctx, upload_peer::mode_type::early_final_orderly_while_uploading);
+}
+
+#if !defined(_WIN32)
+RUVIA_TEST(http_client_upload_write_failure_preserves_complete_early_response) {
+    exercise_early_response_during_upload(ruvia_ctx, upload_peer::mode_type::early_final_while_uploading);
+}
+#endif
 
 namespace {
 void exercise_tls_response_retirement(ruvia::testing::test_context& ruvia_ctx, bool join_before_reuse) {
