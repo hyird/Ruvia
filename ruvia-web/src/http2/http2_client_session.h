@@ -97,7 +97,8 @@ public:
         failed_ = false;
         draining_ = false;
         std::pmr::string output(resource_);
-        std::array<char, read_buffer_bytes> input{};
+        // Only the prefix reported by read_some reaches the parser.
+        std::array<char, read_buffer_bytes> input;
         for (;;) {
             while (connection_->wants_write()) {
                 take_output_batch(output);
@@ -283,7 +284,7 @@ private:
 
     [[nodiscard]] task<void> run_reader(std::uint64_t generation) {
         const task_guard guard{*this, generation};
-        std::array<char, read_buffer_bytes> input{};
+        std::array<char, read_buffer_bytes> input;
         const operation_timeout unbounded(std::nullopt);
         try {
             while (generation_ == generation && !failed_) {
