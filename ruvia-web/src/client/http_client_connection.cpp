@@ -38,20 +38,14 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
         .alpn_ = select_client_alpn(config.protocol_)};
 }
 
-[[nodiscard]] task<void> acquire_serial_slot(pool_lease_scheduler& scheduler,
-    const operation_timeout& timeout, stop_token stop_token_value, std::size_t& slot) {
-    const auto result_value = co_await scheduler.acquire(timeout.remaining(), std::move(stop_token_value));
-    if (result_value.has_value()) {
-        slot = result_value.value();
-        co_return;
-    }
-    if (result_value.status() == worker_wait_status::timed_out) {
+[[noreturn]] void throw_connect_acquire_failure(worker_wait_status status) {
+    if (status == worker_wait_status::timed_out) {
         throw http_client_error(http_client_error::code_type::timeout, "HTTP client connect wait timed out");
     }
-    if (result_value.status() == worker_wait_status::cancelled) {
+    if (status == worker_wait_status::cancelled) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP client connect wait cancelled");
     }
-    if (result_value.status() == worker_wait_status::closed) {
+    if (status == worker_wait_status::closed) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closing");
     }
     std::terminate();
@@ -174,8 +168,11 @@ bool http_client_connection::cancel_by_id(std::uint64_t cancellation_id) noexcep
 task<bool> http_client_connection::ensure_connected(const operation_timeout& operation_timeout_value,
     const operation_timeout& acquire_timeout, stop_token stop_token_value,
     http_client_response_state& response) {
-    std::size_t connect_slot = 0;
-    co_await acquire_serial_slot(connect_scheduler_, acquire_timeout, stop_token_value, connect_slot);
+    const auto acquired = co_await connect_scheduler_.acquire(acquire_timeout.remaining(), stop_token_value);
+    if (!acquired.has_value()) {
+        throw_connect_acquire_failure(acquired.status());
+    }
+    const auto connect_slot = acquired.value();
     struct connect_lease final {
         pool_lease_scheduler& scheduler_;
         std::size_t slot_;
