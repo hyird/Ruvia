@@ -11,6 +11,7 @@
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/db/db_result_access.h"
 #include "ruvia/web/detail/db/db_utils.h"
@@ -78,6 +79,12 @@ constexpr std::size_t full_prefix_bytes = cache_prefix.size() + digest_text_byte
     result.append(prefix).append("id:").append(shape_tag).push_back(':');
     http_append_lower_hex(result, hash);
     return result;
+}
+
+void release_cache_storage(void* storage) noexcept {
+    auto* const bytes = static_cast<std::pmr::string*>(storage);
+    auto* const resource = bytes->get_allocator().resource();
+    destroy_pmr_object(bytes, resource);
 }
 
 // SQL and parameters can be large. Feed the existing byte encoding directly
@@ -161,11 +168,11 @@ std::pmr::string encode_db_cache_rows(const db_rows& rows, std::pmr::memory_reso
     }
     return out;
 }
-db_rows decode_db_cache_rows(std::string_view bytes_value, std::pmr::memory_resource* resource) {
+db_rows decode_db_cache_rows(std::pmr::string bytes_value, std::pmr::memory_resource* resource) {
     if (!bytes_value.starts_with("RUVIAQC2")) {
         invalid_cache();
     }
-    reader reader_value{bytes_value.substr(8)};
+    reader reader_value{std::string_view(bytes_value).substr(8)};
     const auto count = reader_value.number();
     const auto columns = reader_value.number();
     if (columns > reader_value.bytes_.size() / 8) {
@@ -182,6 +189,15 @@ db_rows decode_db_cache_rows(std::string_view bytes_value, std::pmr::memory_reso
     if (count > reader_value.bytes_.size() / (columns + 1)) {
         invalid_cache();
     }
+    // The result owns the encoded storage; fields borrow from that stable
+    // object. Rebinding to the result's resource is required when Redis and
+    // the database use different worker pools.
+    const auto consumed = bytes_value.size() - reader_value.bytes_.size();
+    auto* const result_resource = pmr_resource_or_default(resource);
+    auto storage = make_pmr_object<std::pmr::string>(
+        result_resource, std::move(bytes_value), result_resource);
+    reader_value.bytes_ = std::string_view(*storage).substr(consumed);
+    db_result_access::own_raw_result(result_value, storage.release(), &release_cache_storage);
     auto& fields_value = db_result_access::fields(result_value);
     auto& rows = db_result_access::rows(result_value);
     fields_value.reserve(static_cast<std::size_t>(count * columns));
@@ -201,7 +217,7 @@ db_rows decode_db_cache_rows(std::string_view bytes_value, std::pmr::memory_reso
             if (present == '\0') {
                 fields_value.push_back(db_result_access::null_field(resource));
             } else if (present == '\1') {
-                fields_value.push_back(db_result_access::owned_field(reader_value.text(), resource));
+                fields_value.push_back(db_result_access::borrowed_field(reader_value.text(), resource));
             } else {
                 invalid_cache();
             }

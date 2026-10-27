@@ -41,7 +41,7 @@ struct db_config_storage;
     const db_config_storage& config, std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::pmr::string encode_db_cache_rows(const db_rows& rows, std::pmr::memory_resource* resource);
-[[nodiscard]] db_rows decode_db_cache_rows(std::string_view bytes_value, std::pmr::memory_resource* resource);
+[[nodiscard]] db_rows decode_db_cache_rows(std::pmr::string bytes_value, std::pmr::memory_resource* resource);
 // Key functions take the immutable prefix already built for this cache owner.
 // Append all result shapes for one id, sharing the id digest.
 void append_db_cache_id_keys(std::pmr::vector<std::pmr::string>& keys, std::string_view prefix, std::string_view id);

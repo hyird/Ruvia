@@ -134,7 +134,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
     if (bytes_value.has_value()) {
         std::optional<db_rows> rows;
         try {
-            rows.emplace(decode_db_cache_rows(*bytes_value, resource_));
+            rows.emplace(decode_db_cache_rows(std::move(*bytes_value), resource_));
         } catch (const db_conversion_error&) {
             if (deadline.expired()) {
                 throw_db_query_timeout();

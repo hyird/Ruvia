@@ -333,6 +333,16 @@ RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 RUVIA_CHECK_EQ(co_await read_one(handle), std::string("alpha"));
                 RUVIA_CHECK(co_await read_exists(handle));
                 RUVIA_CHECK_EQ(co_await read_count(handle), std::uint64_t{3});
+                auto raw_query = handle.repository<record>().query_builder();
+                raw_query.cache(cache_id, cache_lifetime);
+                auto cached_rows = co_await raw_query.get_raw_many();
+                auto moved_rows = std::move(cached_rows);
+                // Subsequent Redis reads must not invalidate an earlier result.
+                RUVIA_CHECK(co_await read_many(handle) == many);
+                RUVIA_CHECK_EQ(moved_rows.size(), many.size());
+                for (std::size_t index = 0; index < many.size(); ++index) {
+                    RUVIA_CHECK(moved_rows[index]["v"].value() == many[index]);
+                }
                 // A user id that spells another id plus a shape name is its own
                 // entry: it reads the database instead of the "one" result.
                 constexpr std::string_view suffixed_id = "item-one";
