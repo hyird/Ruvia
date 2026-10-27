@@ -19,6 +19,24 @@ struct task_scope::node_type {
     task<void> task_;
 };
 
+struct task_scope::retiring_guard final {
+    explicit retiring_guard(task_scope& scope) noexcept
+        : scope_(&scope),
+          previous_(scope.retiring_) {
+        scope.retiring_ = this;
+    }
+
+    ~retiring_guard() {
+        if (!destroyed_) {
+            scope_->retiring_ = previous_;
+        }
+    }
+
+    task_scope* scope_;
+    retiring_guard* previous_;
+    bool destroyed_{false};
+};
+
 task_scope::task_scope(const worker_handle& worker_value, task_scope_options options)
     : worker_(worker_value),
       resource_(pmr_resource_or_default(options.resource_)) {
@@ -30,6 +48,9 @@ task_scope::task_scope(const worker_handle& worker_value, task_scope_options opt
 task_scope::~task_scope() {
     if (active_ != 0 || std::holds_alternative<task_scope_joining_type>(lifecycle_)) {
         std::terminate();
+    }
+    for (auto* retiring = retiring_; retiring != nullptr; retiring = retiring->previous_) {
+        retiring->destroyed_ = true;
     }
     // Every child finished but no join observed the outcome: the failure has
     // no other owner.
@@ -62,12 +83,14 @@ void task_scope::spawn(task<void> task_value) & {
         {
             task<void> discarded(std::move(task_value));
         }
-        release_spawn_reservation();
+        --active_;
+        resume_join_if_idle();
         throw;
     }
     if (join_started()) {
         allocator.delete_object(node_value);
-        release_spawn_reservation();
+        --active_;
+        resume_join_if_idle();
         throw std::logic_error("cannot spawn a task after task scope join started");
     }
 
@@ -119,7 +142,7 @@ bool task_scope::join_awaiter_type::await_ready() const {
         std::holds_alternative<task_scope_joined_type>(scope_.lifecycle_)) {
         throw std::logic_error("task scope can only be joined once");
     }
-    if (scope_.active_ == 0) {
+    if (scope_.active_ == 0 && scope_.retiring_ == nullptr) {
         scope_.lifecycle_.template emplace<task_scope_joined_type>();
         return true;
     }
@@ -137,8 +160,8 @@ void task_scope::join_awaiter_type::await_resume() {
     scope_.rethrow_failure();
 }
 
-void task_scope::release_spawn_reservation() noexcept {
-    if (--active_ != 0) {
+void task_scope::resume_join_if_idle() noexcept {
+    if (active_ != 0 || retiring_ != nullptr) {
         return;
     }
     auto* joining = std::get_if<task_scope_joining_type>(&lifecycle_);
@@ -173,26 +196,21 @@ void task_scope::finish(node_type* node_value) noexcept {
             notify_stop = true;
         }
     }
-    node_value->task_.finish_direct_completion();
     if (notify_stop) {
         request_stop();
     }
 
-    const bool last_active = --active_ == 0;
-    std::coroutine_handle<> join_continuation{};
-    if (last_active) {
-        if (auto* joining = std::get_if<task_scope_joining_type>(&lifecycle_)) {
-            join_continuation = joining->continuation();
-            lifecycle_.template emplace<task_scope_joined_type>();
+    --active_;
+    {
+        retiring_guard retiring(*this);
+        std::pmr::polymorphic_allocator<node_type> allocator(resource_);
+        node_value->task_.finish_direct_completion();
+        allocator.delete_object(node_value);
+        if (retiring.destroyed_) {
+            return;
         }
     }
-
-    std::pmr::polymorphic_allocator<node_type> allocator(resource_);
-    allocator.delete_object(node_value);
-
-    if (join_continuation) {
-        join_continuation.resume();
-    }
+    resume_join_if_idle();
 }
 
 void task_scope::rethrow_failure() {

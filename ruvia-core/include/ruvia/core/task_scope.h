@@ -56,13 +56,14 @@ public:
     std::size_t size() const&& = delete;
     // Cold join tasks do not close spawn admission. Starting a join claims the
     // scope exactly once and prevents further spawning; it waits for in-progress
-    // spawn admission as well as children. The scope and worker must remain
-    // alive until that task and all children have completed.
+    // spawn admission and child node retirement. The scope and worker must
+    // remain alive until that task and all children have completed.
     [[nodiscard]] task<void> join() &;
     task<void> join() && = delete;
 
 private:
     struct node_type;
+    struct retiring_guard;
 
     struct task_scope_open_type final {};
     class task_scope_joining_type final {
@@ -89,7 +90,7 @@ private:
     static void child_complete(void* raw) noexcept;
     [[nodiscard]] static task<void> join_scope(task_scope& scope);
     void finish(node_type* node) noexcept;
-    void release_spawn_reservation() noexcept;
+    void resume_join_if_idle() noexcept;
     void rethrow_failure();
 
     using lifecycle_type = std::variant<task_scope_open_type, task_scope_joining_type, task_scope_joined_type>;
@@ -99,6 +100,7 @@ private:
     mutable std::optional<stop_source> stop_source_;
     bool stop_requested_{false};
     std::size_t active_{0};
+    retiring_guard* retiring_{nullptr};
     lifecycle_type lifecycle_;
     std::exception_ptr failure_{};
 };

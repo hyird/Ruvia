@@ -29,6 +29,10 @@ public:
         callback_ = std::move(callback);
     }
 
+    void before_next_deallocation(std::function<void()> callback) {
+        deallocation_callback_ = std::move(callback);
+    }
+
     void fail_next_allocation() noexcept {
         upstream_.fail_after(0);
     }
@@ -47,6 +51,10 @@ private:
     }
 
     void do_deallocate(void* allocation, std::size_t bytes, std::size_t alignment) override {
+        auto callback = std::exchange(deallocation_callback_, {});
+        if (callback) {
+            callback();
+        }
         upstream_.deallocate(allocation, bytes, alignment);
     }
 
@@ -56,6 +64,7 @@ private:
 
     failing_memory_resource upstream_;
     std::function<void()> callback_;
+    std::function<void()> deallocation_callback_;
 };
 
 ruvia::task<void> increment(ruvia::worker_handle worker_value, int& value) {
@@ -137,6 +146,35 @@ ruvia::task<void> verify_reentrant_join_on_failed_allocation(
     co_await observer.join();
     success = allocation_failed && join_completed && !joined_during_allocation &&
               starts == 0 && primary.size() == 0 && resource.live_allocations() == 0;
+}
+
+ruvia::task<void> join_and_destroy_after_deallocation(std::optional<ruvia::task_scope>& primary,
+    reentrant_memory_resource& resource, bool& completed_after_node_release) {
+    co_await primary->join();
+    completed_after_node_release =
+        primary.has_value() && primary->size() == 0 && resource.live_allocations() == 0;
+    primary.reset();
+}
+
+ruvia::task<void> verify_join_waits_for_node_deallocation(
+    ruvia::worker_handle worker_value, bool& success) {
+    reentrant_memory_resource resource;
+    std::optional<ruvia::task_scope> primary(
+        std::in_place, worker_value, ruvia::task_scope_options{.resource_ = &resource});
+    ruvia::task_scope observer(worker_value);
+    bool completed_after_node_release = false;
+    bool joined_during_deallocation = false;
+    int starts = 0;
+    primary->spawn(increment(worker_value, starts));
+    resource.before_next_deallocation([&] {
+        observer.spawn(join_and_destroy_after_deallocation(
+            primary, resource, completed_after_node_release));
+        joined_during_deallocation = completed_after_node_release || !primary.has_value();
+    });
+    static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(10)));
+    co_await observer.join();
+    success = completed_after_node_release && !joined_during_deallocation &&
+              !primary.has_value() && starts == 1 && resource.live_allocations() == 0;
 }
 
 ruvia::task<void> join_and_destroy_on_failure(std::optional<ruvia::task_scope>& primary,
@@ -393,12 +431,17 @@ int main() {
     bool reentrant_spawn_safe = false;
     bool reentrant_stop_join_safe = false;
     bool reentrant_failed_spawn_safe = false;
+    bool reentrant_deallocation_safe = false;
     ruvia::test::run_worker_tasks(runtime,
         ruvia::test::task_scope_tests::exercise(worker_value, success),
         ruvia::test::task_scope_tests::verify_spawn_rechecks_join_after_allocation(worker_value, reentrant_spawn_safe),
         ruvia::test::task_scope_tests::verify_stop_callback_reentrant_join_waits_for_finish(
             worker_value, reentrant_stop_join_safe),
-        ruvia::test::task_scope_tests::verify_reentrant_join_on_failed_allocation(worker_value, reentrant_failed_spawn_safe));
+        ruvia::test::task_scope_tests::verify_reentrant_join_on_failed_allocation(worker_value, reentrant_failed_spawn_safe),
+        ruvia::test::task_scope_tests::verify_join_waits_for_node_deallocation(worker_value, reentrant_deallocation_safe));
     runtime.detach();
-    return success && reentrant_spawn_safe && reentrant_stop_join_safe && reentrant_failed_spawn_safe ? 0 : 1;
+    return success && reentrant_spawn_safe && reentrant_stop_join_safe &&
+                   reentrant_failed_spawn_safe && reentrant_deallocation_safe
+               ? 0
+               : 1;
 }
