@@ -1,9 +1,12 @@
 #include "redis/redis_subscription_connection.h"
 
 #include <exception>
+#include <memory_resource>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
 #include "ruvia/core/operation_timeout.h"
 
@@ -92,6 +95,8 @@ task<void> redis_subscription_connection::send(std::pmr::vector<std::pmr::string
         write_buffer.clear();
         write_buffer.reserve(resp_command_serialized_size(args));
         append_resp_command(write_buffer, args);
+        // The serialized request owns the bytes needed by the write.
+        std::pmr::vector<std::pmr::string>(args.get_allocator()).swap(args);
         co_await connection_.write_request(operation_timeout_value.constrained_by(owner_.config_.command_timeout_));
     } catch (...) {
         fail();

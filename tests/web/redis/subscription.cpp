@@ -301,7 +301,8 @@ ruvia::task<void> check_error_reply_keeps_connection(ruvia::redis_client& client
     co_await client.connect();
     auto redis = client.handle();
     auto subscription = redis.subscription();
-    const std::array<std::string_view, 2> channels{"denied", "allowed"};
+    const std::string allowed_name(64 * 1024, 'a');
+    const std::array<std::string_view, 2> channels{"denied", allowed_name};
     co_await subscription.subscribe(channels);
     bool denied = false;
     try {
@@ -311,8 +312,8 @@ ruvia::task<void> check_error_reply_keeps_connection(ruvia::redis_client& client
     }
     RUVIA_CHECK(denied);
     auto allowed = co_await subscription.read();
-    RUVIA_CHECK(allowed && allowed->kind() == ruvia::redis_pubsub_event_kind::subscribed && allowed->channel() == "allowed");
-    RUVIA_CHECK(co_await redis.publish("allowed", "still open") == 1);
+    RUVIA_CHECK(allowed && allowed->kind() == ruvia::redis_pubsub_event_kind::subscribed && allowed->channel() == allowed_name);
+    RUVIA_CHECK(co_await redis.publish(allowed_name, "still open") == 1);
     auto message = co_await subscription.read();
     RUVIA_CHECK(message && message->payload() == "still open");
     co_await client.shutdown();
