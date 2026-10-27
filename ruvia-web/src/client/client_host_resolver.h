@@ -15,8 +15,10 @@
 namespace ruvia::detail {
 
 struct client_resolve_result final {
-    asio::ip::tcp::resolver::results_type addresses_;
-    std::error_code error_;
+    asio::ip::tcp::resolver::results_type addresses_{};
+    // Numeric hosts do not need a heap-backed resolver result.
+    std::optional<asio::ip::tcp::endpoint> literal_{};
+    std::error_code error_{};
 };
 
 // HTTP、WebSocket、Redis 和数据库共用的系统名称查询。系统 getaddrinfo 不可

@@ -287,7 +287,6 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
         db_slot_active_wait_guard active_resolve(slot);
         auto completion = co_await slot.resolver_.resolve(config_.host_, config_.port_, deadline_value);
         const auto resolve_error = completion.error_;
-        auto results = std::move(completion.addresses_);
         const bool deadline_expired = leases_.clear_deadline(index) || deadline_value.expired();
         leases_.throw_if_aborted(index);
         if (slot.close_requested_) {
@@ -301,7 +300,7 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
                 std::string("resolving ").append(driver_type::name).append(" host failed: ").append(error_code_text(resolve_error)),
                 resolve_error.value());
         }
-        co_return collect_db_resolved_addresses(results, driver_type::driver, resource_);
+        co_return collect_db_resolved_addresses(completion, driver_type::driver, resource_);
     } catch (...) {
         (void)leases_.clear_deadline(index);
         throw;

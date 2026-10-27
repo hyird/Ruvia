@@ -8,6 +8,8 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 
+#include "client/client_host_resolver.h"
+
 namespace ruvia::detail {
 namespace {
 
@@ -17,24 +19,33 @@ void append_list_separator(std::pmr::string& output) {
     }
 }
 
+void append_db_resolved_address(db_resolved_addresses_type& addresses,
+    const asio::ip::address& endpoint, db_driver driver) {
+    std::string address;
+    try {
+        address = endpoint.to_string();
+    } catch (const std::system_error& error) {
+        throw db_error(db_error::code_type::resolve_failed, driver,
+            system_error_text(error), error.code().value());
+    }
+    if (std::ranges::none_of(addresses, [&address](const std::pmr::string& existing) {
+            return std::string_view(existing) == address;
+        })) {
+        addresses.emplace_back(address.data(), address.size());
+    }
+}
+
 }  // namespace
 
-db_resolved_addresses_type collect_db_resolved_addresses(const asio::ip::tcp::resolver::results_type& results,
+db_resolved_addresses_type collect_db_resolved_addresses(const client_resolve_result& results,
     db_driver driver, std::pmr::memory_resource* resource) {
     const auto resolved = pmr_resource_or_default(resource);
     db_resolved_addresses_type addresses(resolved);
-    for (const auto& result : results) {
-        std::string address;
-        try {
-            address = result.endpoint().address().to_string();
-        } catch (const std::system_error& error) {
-            throw db_error(db_error::code_type::resolve_failed, driver,
-                system_error_text(error), error.code().value());
-        }
-        if (std::ranges::none_of(addresses, [&address](const std::pmr::string& existing) {
-                return std::string_view(existing) == address;
-            })) {
-            addresses.emplace_back(address.data(), address.size());
+    if (results.literal_) {
+        append_db_resolved_address(addresses, results.literal_->address(), driver);
+    } else {
+        for (const auto& result : results.addresses_) {
+            append_db_resolved_address(addresses, result.endpoint().address(), driver);
         }
     }
     if (addresses.empty()) {

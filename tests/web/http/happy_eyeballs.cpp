@@ -133,12 +133,13 @@ private:
 };
 
 [[nodiscard]] ruvia::task<void> exercise(ruvia::event_loop_attachment& attachment,
-    opposite_family_peer& peer, ruvia::testing::test_context& ruvia_ctx) {
+    opposite_family_peer& peer, ruvia::testing::test_context& ruvia_ctx, std::string_view host,
+    std::chrono::milliseconds connect_timeout) {
     ruvia::http_client client(attachment.loop(),
         {.scheme_ = ruvia::http_scheme::http,
-            .host_ = "localhost",
+            .host_ = host,
             .port_ = peer.port(),
-            .connect_timeout_ = 150ms,
+            .connect_timeout_ = connect_timeout,
             .request_timeout_ = 3s,
             .protocol_ = ruvia::http_client_protocol::http1_only});
     std::exception_ptr failure;
@@ -180,7 +181,23 @@ RUVIA_TEST(http_client_fast_address_failure_immediately_starts_the_next_family) 
     auto worker = loop.handle();
     opposite_family_peer peer(io, worker, *first_is_v6);
     peer.start();
-    auto root = loop.start(exercise(attachment, peer, ruvia_ctx));
+    auto root = loop.start(exercise(attachment, peer, ruvia_ctx, "localhost", 150ms));
+    attachment.run();
+    root.get();
+}
+
+RUVIA_TEST(http_client_connects_to_an_ipv6_literal) {
+    using namespace happy_eyeballs_tests;
+    if (!localhost_first_is_v6()) {
+        return;
+    }
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    auto loop = attachment.loop();
+    auto worker = loop.handle();
+    opposite_family_peer peer(io, worker, false);
+    peer.start();
+    auto root = loop.start(exercise(attachment, peer, ruvia_ctx, "::1", 3s));
     attachment.run();
     root.get();
 }

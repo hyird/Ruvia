@@ -203,24 +203,38 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     if (resolved.error_) {
         co_return finish(read_, timeout, resolved.error_, 0, client_transport_status::resolve_failed);
     }
-    client_happy_eyeballs connector(worker_, stream_.get_executor(), resolved.addresses_);
-    connecting_ = &connector;
-    struct clear_connector final {
-        client_happy_eyeballs*& value_;
-        ~clear_connector() {
-            value_ = nullptr;
+    if (resolved.literal_) {
+        // One numeric endpoint needs neither a resolver result allocation nor
+        // the multi-address race. The same transport deadline and cancellation
+        // own this socket as in the ordinary I/O paths.
+        stream_.next_layer().replace_socket(asio::ip::tcp::socket(stream_.get_executor()));
+        const auto connected = co_await async_asio([this, endpoint = *resolved.literal_](auto handler) mutable {
+            stream_.next_layer().socket().async_connect(endpoint, std::move(handler));
+        });
+        if (connected.error_code() || abort_reason_ != client_abort_reason::none ||
+            read_.deadline_.expired() || timeout.expired()) {
+            co_return finish(read_, timeout, connected.error_code(), 0, client_transport_status::connect_failed);
         }
-    } connector_guard{connecting_};
-    auto connected = co_await connector.connect();
-    connecting_ = nullptr;
-    if (connected.error_ || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() ||
-        timeout.expired()) {
-        co_return finish(read_, timeout, connected.error_, 0, client_transport_status::connect_failed);
+    } else {
+        client_happy_eyeballs connector(worker_, stream_.get_executor(), resolved.addresses_);
+        connecting_ = &connector;
+        struct clear_connector final {
+            client_happy_eyeballs*& value_;
+            ~clear_connector() {
+                value_ = nullptr;
+            }
+        } connector_guard{connecting_};
+        auto connected = co_await connector.connect();
+        connecting_ = nullptr;
+        if (connected.error_ || abort_reason_ != client_abort_reason::none || read_.deadline_.expired() ||
+            timeout.expired()) {
+            co_return finish(read_, timeout, connected.error_, 0, client_transport_status::connect_failed);
+        }
+        if (!connected.socket_) {
+            std::terminate();
+        }
+        stream_.next_layer().replace_socket(std::move(*connected.socket_));
     }
-    if (!connected.socket_) {
-        std::terminate();
-    }
-    stream_.next_layer().replace_socket(std::move(*connected.socket_));
     auto mode_error = apply_tcp_socket_policies(
         stream_.next_layer().socket(), endpoint_.tcp_.no_delay_, endpoint_.tcp_.keep_alive_);
     // Every socket operation is asynchronous or a bounded probe, and the TLS

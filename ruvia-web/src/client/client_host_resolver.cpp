@@ -53,13 +53,12 @@ task<client_resolve_result> client_host_resolver::resolve(std::string_view host,
     const operation_timeout& timeout) {
     std::error_code error;
     const auto address = asio::ip::make_address(host, error);
+    if (!error) {
+        return ready_result(client_resolve_result{
+            .literal_ = asio::ip::tcp::endpoint(address, port)});
+    }
     std::array<char, http_max_unsigned_decimal_size> digits;
     const auto service = http_format_unsigned(digits, port);
-    if (!error) {
-        return ready_result(client_resolve_result{asio::ip::tcp::resolver::results_type::create(
-                                                      asio::ip::tcp::endpoint(address, port), std::string(host), std::string(service)),
-            {}});
-    }
     return resolve_query(query{std::pmr::string(host, process_resource()), std::pmr::string(service, process_resource())}, timeout);
 }
 
@@ -80,11 +79,11 @@ task<client_resolve_result> client_host_resolver::resolve_query(query input, ope
         case blocking_status::completed:
             co_return std::move(result).value();
         case blocking_status::timed_out:
-            co_return client_resolve_result{{}, asio::error::timed_out};
+            co_return client_resolve_result{.error_ = asio::error::timed_out};
         case blocking_status::queue_full:
-            co_return client_resolve_result{{}, asio::error::no_buffer_space};
+            co_return client_resolve_result{.error_ = asio::error::no_buffer_space};
         default:
-            co_return client_resolve_result{{}, asio::error::operation_aborted};
+            co_return client_resolve_result{.error_ = asio::error::operation_aborted};
     }
 }
 
