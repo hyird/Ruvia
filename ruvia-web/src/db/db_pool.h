@@ -390,14 +390,14 @@ private:
     public:
         lease_acquire(db_pool& pool, const operation_timeout& timeout, const stop_token& stop)
             : waiting_(pool, stop),
-              acquire_(pool.leases_.acquire(timeout, pool.config_.acquire_timeout_, stop).operator co_await()) {}
+              acquire_(pool.leases_.acquire(timeout, pool.config_.acquire_timeout_, stop)) {}
         lease_acquire(const lease_acquire&) = delete;
         lease_acquire& operator=(const lease_acquire&) = delete;
 
-        [[nodiscard]] bool await_ready() const noexcept {
+        [[nodiscard]] bool await_ready() {
             return acquire_.await_ready();
         }
-        [[nodiscard]] std::coroutine_handle<> await_suspend(std::coroutine_handle<> continuation) noexcept {
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) {
             return acquire_.await_suspend(continuation);
         }
         [[nodiscard]] std::size_t await_resume() {
@@ -406,7 +406,7 @@ private:
 
     private:
         exclusive_wait waiting_;
-        task_awaiter<std::size_t> acquire_;
+        typename leases_type::acquire_awaiter acquire_;
     };
 
     template <typename result_type>

@@ -1,18 +1,19 @@
 #pragma once
 
 #include <chrono>
+#include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
@@ -75,17 +76,37 @@ public:
         return worker_;
     }
 
-    // Waits for a free slot under the tighter of the operation deadline and
-    // the pool's own acquire timeout. Every non-acquired outcome is reported
-    // through the policy's error type.
-    [[nodiscard]] task<std::size_t> acquire(const operation_timeout& timeout,
-        std::optional<std::chrono::milliseconds> acquire_timeout, stop_token stop_token_value) {
-        const auto result_value = co_await scheduler_.acquire(
-            timeout.constrained_by(acquire_timeout).remaining(), std::move(stop_token_value));
-        if (result_value.has_value()) {
-            co_return result_value.value();
+    class acquire_awaiter final {
+    public:
+        acquire_awaiter(owner_type& owner, pool_lease_acquire acquire) noexcept
+            : owner_(owner),
+              acquire_(std::move(acquire)) {}
+
+        [[nodiscard]] bool await_ready() {
+            return acquire_.await_ready();
         }
-        policy_type::throw_acquire_failure(owner_, result_value.status());
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) {
+            return acquire_.await_suspend(continuation);
+        }
+        [[nodiscard]] std::size_t await_resume() {
+            const auto result_value = acquire_.await_resume();
+            if (result_value.has_value()) {
+                return result_value.value();
+            }
+            policy_type::throw_acquire_failure(owner_, result_value.status());
+        }
+
+    private:
+        owner_type& owner_;
+        pool_lease_acquire acquire_;
+    };
+
+    // The common free-slot path completes directly in the caller's frame.
+    // Saturated pools use the same scheduler, timeout and cancellation path.
+    [[nodiscard]] acquire_awaiter acquire(const operation_timeout& timeout,
+        std::optional<std::chrono::milliseconds> acquire_timeout, stop_token stop_token_value) {
+        return acquire_awaiter(owner_, scheduler_.acquire(
+                                           timeout.constrained_by(acquire_timeout).remaining(), std::move(stop_token_value)));
     }
 
     // Leases a free slot without waiting; nullopt while every slot is leased
