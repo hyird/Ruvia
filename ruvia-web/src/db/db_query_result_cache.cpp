@@ -37,13 +37,18 @@ task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr:
     if (keys.empty()) {
         co_return;
     }
-    std::pmr::vector<std::string_view> views(resource);
-    views.reserve(keys.size());
-    for (const auto& key : keys) {
-        views.emplace_back(key);
-    }
     try {
-        (void)co_await redis.with_options(db_required_options(options, deadline_value)).del(views);
+        // DEL owns its arguments at the call boundary. The temporary views
+        // are no longer needed while the command waits for its reply.
+        auto deletion = [&] {
+            std::pmr::vector<std::string_view> views(resource);
+            views.reserve(keys.size());
+            for (const auto& key : keys) {
+                views.emplace_back(key);
+            }
+            return redis.with_options(db_required_options(options, deadline_value)).del(views);
+        }();
+        (void)co_await std::move(deletion);
     } catch (const redis_error& error) {
         rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
     }
