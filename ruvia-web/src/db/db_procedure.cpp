@@ -74,7 +74,9 @@ void db_procedure::declare_row(std::string_view name, std::string_view table_val
     declarations_ += sql;
 }
 void db_procedure::declare_record(std::string_view name) {
+    detail::validate_db_identifier(name, pg);
     std::pmr::string sql(resource_);
+    sql.reserve(name.size() + 2U + 9U);
     detail::append_db_identifier(sql, name, pg);
     sql += " RECORD;\n";
     register_variable(name);
@@ -173,11 +175,11 @@ void db_procedure::catch_sql_state(std::string_view state_value) {
         throw std::invalid_argument("exception handler requires an open block");
     }
     require_sql_state(state_value);
+    const std::string_view prefix = blocks_.back() == block_type::begin ? "EXCEPTION\nWHEN SQLSTATE "
+                                                                        : "WHEN SQLSTATE ";
     std::pmr::string sql(resource_);
-    if (blocks_.back() == block_type::begin) {
-        sql += "EXCEPTION\n";
-    }
-    sql += "WHEN SQLSTATE ";
+    sql.reserve(prefix.size() + 8U + 12U);
+    sql.append(prefix);
     detail::append_db_string_literal(sql, state_value, pg);
     sql += " THEN\nNULL;\n";
     statements_ += sql;
@@ -194,12 +196,15 @@ void db_procedure::begin_for_query(std::string_view target, const db_query& quer
     if (!query.returns_rows()) {
         throw std::invalid_argument("FOR IN query loop requires a row-returning query");
     }
+    detail::validate_db_identifier(target, pg);
     const auto statement = query.compile(pg, resource_, db_parameter_mode::literal);
-    std::pmr::string sql("FOR ", resource_);
+    std::pmr::string sql(resource_);
+    sql.reserve(4U + target.size() + 2U + 4U + statement.sql().size() + 6U);
+    sql.append("FOR ");
     detail::append_db_identifier(sql, target, pg);
-    sql += " IN ";
-    sql += statement.sql();
-    sql += " LOOP\n";
+    sql.append(" IN ");
+    sql.append(statement.sql());
+    sql.append(" LOOP\n");
     blocks_.push_back(block_type::loop);
     statements_ += sql;
 }
@@ -239,15 +244,18 @@ void db_procedure::execute_dynamic(db_expression command, std::span<const db_exp
     statements_ += sql;
 }
 void db_procedure::lock_table(std::string_view table, db_table_lock_mode mode, bool nowait) {
-    std::pmr::string sql("LOCK TABLE ", resource_);
+    const auto mode_name = table_lock_mode_name(mode);
+    std::pmr::string sql(resource_);
+    sql.reserve(11U + table.size() + 4U + 4U + mode_name.size() + 5U + (nowait ? 7U : 0U) + 2U);
+    sql.append("LOCK TABLE ");
     detail::append_db_qualified_identifier(sql, table, pg);
-    sql += " IN ";
-    sql += table_lock_mode_name(mode);
-    sql += " MODE";
+    sql.append(" IN ");
+    sql.append(mode_name);
+    sql.append(" MODE");
     if (nowait) {
-        sql += " NOWAIT";
+        sql.append(" NOWAIT");
     }
-    sql += ";\n";
+    sql.append(";\n");
     statements_ += sql;
 }
 void db_procedure::return_value(db_expression expression) {
@@ -272,14 +280,17 @@ std::pmr::string db_procedure::body(std::pmr::memory_resource* resource) const {
     if (!blocks_.empty()) {
         throw std::invalid_argument("procedure has unclosed control-flow blocks");
     }
+    const std::string_view statements =
+        statements_.empty() ? std::string_view("NULL;\n") : std::string_view(statements_);
     std::pmr::string result(pmr_resource_or_default(resource));
+    result.reserve((!declarations_.empty() ? 8U + declarations_.size() : 0U) + 6U + statements.size() + 3U);
     if (!declarations_.empty()) {
-        result += "DECLARE\n";
-        result += declarations_;
+        result.append("DECLARE\n");
+        result.append(declarations_);
     }
-    result += "BEGIN\n";
-    result += statements_.empty() ? std::string_view("NULL;\n") : std::string_view(statements_);
-    result += "END";
+    result.append("BEGIN\n");
+    result.append(statements);
+    result.append("END");
     return result;
 }
 
