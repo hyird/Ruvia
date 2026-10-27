@@ -137,18 +137,36 @@ void jwt_base64_url_encode_into(char* out, std::string_view input) noexcept {
         http_base64_charset::url_safe, http_base64_padding::forbidden);
 }
 
-[[nodiscard]] std::pmr::string jwt_base64_url_decode(std::string_view input, std::pmr::memory_resource* resource) {
-    std::pmr::string out(resource);
-    out.resize(http_base64_decoded_size_bound(input.size()));
-    const auto decoded_size = http_base64_decode(input,
-        std::span(reinterpret_cast<std::uint8_t*>(out.data()), out.size()),
-        http_base64_charset::url_safe, http_base64_padding::forbidden);
-    if (!decoded_size) {
-        throw jwt_error(jwt_error::code_type::malformed_token, "JWT base64url value is invalid");
+struct jwt_decoded_section final {
+    static constexpr std::size_t inline_capacity = 256;
+    std::array<char, inline_capacity> inline_{};
+    std::pmr::string heap_;
+    std::size_t size_{0};
+
+    jwt_decoded_section(std::string_view input, std::pmr::memory_resource* resource)
+        : heap_(resource) {
+        const auto bound = http_base64_decoded_size_bound(input.size());
+        char* target = inline_.data();
+        if (bound > inline_capacity) {
+            heap_.resize(bound);
+            target = heap_.data();
+        }
+        const auto decoded_size = http_base64_decode(input,
+            std::span(reinterpret_cast<std::uint8_t*>(target), bound),
+            http_base64_charset::url_safe, http_base64_padding::forbidden);
+        if (!decoded_size) {
+            throw jwt_error(jwt_error::code_type::malformed_token, "JWT base64url value is invalid");
+        }
+        size_ = *decoded_size;
+        if (!heap_.empty()) {
+            heap_.resize(size_);
+        }
     }
-    out.resize(*decoded_size);
-    return out;
-}
+
+    [[nodiscard]] std::string_view view() const noexcept {
+        return heap_.empty() ? std::string_view(inline_.data(), size_) : std::string_view(heap_);
+    }
+};
 
 [[nodiscard]] hmac_digest jwt_hmac_digest(jwt_algorithm algorithm) {
     switch (algorithm) {
@@ -172,6 +190,18 @@ void jwt_base64_url_encode_into(char* out, std::string_view input) noexcept {
             return "HS512";
     }
     return {};
+}
+
+[[nodiscard]] std::string_view jwt_header_json(jwt_algorithm algorithm) {
+    switch (algorithm) {
+        case jwt_algorithm::hs256:
+            return "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+        case jwt_algorithm::hs384:
+            return "{\"alg\":\"HS384\",\"typ\":\"JWT\"}";
+        case jwt_algorithm::hs512:
+            return "{\"alg\":\"HS512\",\"typ\":\"JWT\"}";
+    }
+    throw std::invalid_argument("unsupported JWT algorithm");
 }
 
 // Encodes the base64url signature into `out`. Throws std::invalid_argument for
@@ -302,14 +332,20 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
         (options.not_before_delay_.has_value() && options.not_before_delay_->count() < 0)) {
         throw std::invalid_argument("JWT signing time offsets must not be negative");
     }
+    const auto digest = detail::jwt_hmac_digest(options.algorithm_);
+    const auto header = detail::jwt_header_json(options.algorithm_);
     auto* resolved = pmr_resource_or_default(options.resource_);
     const auto now = std::chrono::system_clock::now();
-    std::pmr::string header(resolved);
-    header.append("{\"alg\":");
-    detail::append_json_string<detail::json_hex_case::lower>(header, detail::jwt_algorithm_name(options.algorithm_));
-    header.append(",\"typ\":\"JWT\"}");
 
+    std::size_t payload_reserve = 32U + options.issuer_.size() + options.subject_.size() +
+                                  options.audience_.size() + options.id_.size() +
+                                  (options.expires_in_.has_value() ? 20U : 0U) +
+                                  (options.not_before_delay_.has_value() ? 20U : 0U);
+    for (const auto& claim : options.claims_) {
+        payload_reserve += claim.name_.size() + claim.value_.size() + 8U;
+    }
     std::pmr::string payload(resolved);
+    payload.reserve(payload_reserve);
     payload.push_back('{');
     bool first = true;
     if (!options.issuer_.empty()) {
@@ -353,7 +389,7 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
     const auto encoded_payload_size =
         http_base64_encoded_size(payload.size(), http_base64_padding::forbidden);
     const auto signature_size = http_base64_encoded_size(
-        detail::hmac_digest_size(detail::jwt_hmac_digest(options.algorithm_)),
+        detail::hmac_digest_size(digest),
         http_base64_padding::forbidden);
     if (encoded_header_size > std::numeric_limits<std::size_t>::max() - 1 ||
         encoded_payload_size > std::numeric_limits<std::size_t>::max() - 1 - (encoded_header_size + 1) ||
@@ -392,13 +428,15 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
     if (!detail::constant_time_bytes_equal(expected, parts.signature_)) {
         throw jwt_error(jwt_error::code_type::signature_mismatch, "JWT signature verification failed");
     }
-    const auto header_value = detail::jwt_base64_url_decode(parts.header_, resolved);
-    if (detail::jwt_parse_jose_algorithm(header_value, resolved) !=
-        detail::jwt_algorithm_name(options.algorithm_)) {
-        throw jwt_error(jwt_error::code_type::algorithm_mismatch, "JWT algorithm mismatch");
+    {
+        const detail::jwt_decoded_section header_value(parts.header_, resolved);
+        if (detail::jwt_parse_jose_algorithm(header_value.view(), resolved) !=
+            detail::jwt_algorithm_name(options.algorithm_)) {
+            throw jwt_error(jwt_error::code_type::algorithm_mismatch, "JWT algorithm mismatch");
+        }
     }
-    const auto payload_json = detail::jwt_base64_url_decode(parts.payload_, resolved);
-    auto payload_value = detail::jwt_payload_access::decode_payload_json(payload_json, resolved);
+    const detail::jwt_decoded_section payload_json(parts.payload_, resolved);
+    auto payload_value = detail::jwt_payload_access::decode_payload_json(payload_json.view(), resolved);
     if (options.expiration_claim_ == jwt_expiration_claim_policy::require && !payload_value.expires_at()) {
         throw jwt_error(jwt_error::code_type::missing_claim, "JWT token is missing exp claim");
     }
@@ -436,12 +474,14 @@ jwt_payload jwt_decode_unverified(jwt_decode_unverified_options options) {
     auto* resolved = pmr_resource_or_default(options.resource_);
     const auto token = options.token_.view();
     const auto parts = detail::jwt_split_token(token);
-    const auto header_value = detail::jwt_base64_url_decode(parts.header_, resolved);
-    if (detail::jwt_parse_jose_algorithm(header_value, resolved).empty()) {
-        throw jwt_error(jwt_error::code_type::invalid_header, "JWT JOSE header is invalid");
+    {
+        const detail::jwt_decoded_section header_value(parts.header_, resolved);
+        if (detail::jwt_parse_jose_algorithm(header_value.view(), resolved).empty()) {
+            throw jwt_error(jwt_error::code_type::invalid_header, "JWT JOSE header is invalid");
+        }
     }
-    const auto payload_json = detail::jwt_base64_url_decode(parts.payload_, resolved);
-    return detail::jwt_payload_access::decode_payload_json(payload_json, resolved);
+    const detail::jwt_decoded_section payload_json(parts.payload_, resolved);
+    return detail::jwt_payload_access::decode_payload_json(payload_json.view(), resolved);
 }
 
 std::optional<std::string_view> jwt_bearer_token(std::string_view authorization) noexcept {

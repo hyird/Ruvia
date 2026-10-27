@@ -68,6 +68,33 @@ task<void> detail::session_access::commit(context& context_value) {
 #include "http/secure_token.h"
 
 namespace ruvia {
+namespace {
+
+struct session_key_buffer final {
+    static constexpr std::size_t inline_capacity = 128;
+    std::array<char, inline_capacity> inline_{};
+    std::pmr::string heap_;
+    std::size_t size_{0};
+
+    session_key_buffer(std::string_view prefix, std::string_view id, std::pmr::memory_resource* resource)
+        : heap_(resource) {
+        size_ = prefix.size() + id.size();
+        if (size_ <= inline_capacity) {
+            prefix.copy(inline_.data(), prefix.size());
+            id.copy(inline_.data() + prefix.size(), id.size());
+        } else {
+            heap_.reserve(size_);
+            heap_.append(prefix);
+            heap_.append(id);
+        }
+    }
+
+    [[nodiscard]] std::string_view view() const noexcept {
+        return heap_.empty() ? std::string_view(inline_.data(), size_) : std::string_view(heap_);
+    }
+};
+
+}  // namespace
 
 const session_config& session_middleware::validate(const session_config& source_value) {
     if (source_value.redis_alias_.empty()) {
@@ -108,10 +135,11 @@ task<void> session_middleware::handle(context& c, next& next_value) {
     const auto cookie = c.req().cookie(cookie_name_);
     if (cookie && detail::is_valid_session_id(*cookie)) {
         detail::session_access::observe_presented_id(c, *cookie);
-        std::pmr::string key(c.pool());
-        key.append(key_prefix_);
-        key.append(cookie->data(), cookie->size());
-        if (auto stored = co_await c.redis(redis_alias_).get(key)) {
+        auto get_task = [&] {
+            const session_key_buffer key(key_prefix_, *cookie, c.pool());
+            return c.redis(redis_alias_).get(key.view());
+        }();
+        if (auto stored = co_await std::move(get_task)) {
             detail::session_access::load(c, *stored);
         }
     }
@@ -153,10 +181,11 @@ task<void> session_middleware::commit(context& c) const {
             detail::append_expired_session_cookie_header(*staged_overlay, cookie_name_, secure);
         }
         if (cleared->old_id_.has_value()) {
-            std::pmr::string key(c.pool());
-            key.append(key_prefix_);
-            key.append(cleared->old_id_->data(), cleared->old_id_->size());
-            (void)(co_await c.redis(redis_alias_).del(key));
+            auto del_task = [&] {
+                const session_key_buffer key(key_prefix_, *cleared->old_id_, c.pool());
+                return c.redis(redis_alias_).del(key.view());
+            }();
+            (void)(co_await std::move(del_task));
         }
         publish();
         co_return;
@@ -184,29 +213,33 @@ task<void> session_middleware::commit(context& c) const {
         detail::append_session_cookie_header(*staged_overlay, cookie_name_, new_id, secure);
     }
 
-    std::pmr::string key(c.pool());
-    key.append(key_prefix_).append(new_id);
+    const session_key_buffer key(key_prefix_, new_id, c.pool());
     bool applied = false;
     if (!old_id.empty()) {
-        std::pmr::string old_key(c.pool());
-        old_key.append(key_prefix_).append(old_id);
-        // session_middleware::validate requires a positive TTL.
-        std::array<char, http_max_unsigned_decimal_size> ttl_buffer;
-        const auto ttl = http_format_unsigned(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));
-        const std::array<std::string_view, 2> keys{old_key, key};
-        const std::array<std::string_view, 2> args{data, ttl};
-        // Redis executes the entire transition atomically. A stale request may
-        // neither recreate a revoked identifier nor mint a successor from it.
-        const auto result_value = co_await c.redis(redis_alias_).eval(detail::session_rotation_script, keys, args);
+        auto eval_task = [&] {
+            const session_key_buffer old_key(key_prefix_, old_id, c.pool());
+            // session_middleware::validate requires a positive TTL.
+            std::array<char, http_max_unsigned_decimal_size> ttl_buffer;
+            const auto ttl = http_format_unsigned(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));
+            const std::array<std::string_view, 2> keys{old_key.view(), key.view()};
+            const std::array<std::string_view, 2> args{data, ttl};
+            // Redis executes the entire transition atomically. A stale request may
+            // neither recreate a revoked identifier nor mint a successor from it.
+            return c.redis(redis_alias_).eval(detail::session_rotation_script, keys, args);
+        }();
+        const auto result_value = co_await std::move(eval_task);
         if (result_value.kind() == redis_value::kind_type::error) {
             throw redis_error(redis_error::code_type::command_error, result_value.error());
         }
         applied = result_value.integer() == 1;
     } else {
-        redis_set_options options;
-        options.condition_ = redis_set_condition::if_absent;
-        options.expiration_ = redis_set_expiration::expires_after(ttl_);
-        const auto result_value = co_await c.redis(redis_alias_).set(key, data, std::move(options));
+        auto set_task = [&] {
+            redis_set_options options;
+            options.condition_ = redis_set_condition::if_absent;
+            options.expiration_ = redis_set_expiration::expires_after(ttl_);
+            return c.redis(redis_alias_).set(key.view(), data, std::move(options));
+        }();
+        const auto result_value = co_await std::move(set_task);
         applied = result_value.applied();
     }
     if (!applied) {

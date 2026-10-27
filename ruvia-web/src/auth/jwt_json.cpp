@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -35,24 +36,43 @@ template <typename visitor_type>
     // Literal names are views into json. Escaped names arrive decoded in storage
     // that lives for one visitor call, so only those are copied; list nodes keep
     // each copy at a stable address.
-    std::pmr::vector<std::string_view> names(resource);
+    static constexpr std::size_t inline_capacity = 16;
+    std::array<std::string_view, inline_capacity> inline_names{};
+    std::size_t inline_count = 0;
+    std::pmr::vector<std::string_view> heap_names(resource);
     std::pmr::forward_list<std::pmr::string> decoded_names(resource);
     const std::less_equal<> not_after;
+    const auto record_name = [&](std::string_view stored_name) {
+        if (!heap_names.empty()) {
+            heap_names.push_back(stored_name);
+        } else if (inline_count < inline_capacity) {
+            inline_names[inline_count++] = stored_name;
+        } else {
+            heap_names.reserve(inline_capacity * 2U);
+            heap_names.assign(inline_names.begin(), inline_names.end());
+            heap_names.push_back(stored_name);
+        }
+    };
     const auto visited = visit_json_object_fields(resolved_pmr_resource_tag{}, json, resource,
         [&](std::string_view name, std::string_view value) {
             if (not_after(json.data(), name.data()) &&
                 not_after(name.data() + name.size(), json.data() + json.size())) {
-                names.push_back(name);
+                record_name(name);
             } else {
-                names.emplace_back(decoded_names.emplace_front(name));
+                record_name(decoded_names.emplace_front(name));
             }
             visitor(name, value);
         });
     if (visited != json_object_visit_result::complete) {
         return false;
     }
-    std::ranges::sort(names);
-    return std::ranges::adjacent_find(names) == names.end();
+    if (heap_names.empty()) {
+        const std::span<std::string_view> active(inline_names.data(), inline_count);
+        std::ranges::sort(active);
+        return std::ranges::adjacent_find(active) == active.end();
+    }
+    std::ranges::sort(heap_names);
+    return std::ranges::adjacent_find(heap_names) == heap_names.end();
 }
 
 [[nodiscard]] std::optional<std::chrono::system_clock::time_point> jwt_parse_json_numeric_date(
