@@ -354,6 +354,7 @@ private:
                 co_return;
             }
             co_await write_encoded(compression_.output());
+            compression_.release_output();
             co_return;
         }
 
@@ -436,6 +437,7 @@ private:
                 throw;
             }
             co_await write_encoded(compression_.output());
+            compression_.release_output();
         }
         ensure_peer_writable();
         if (plan_.framing() == http_response_stream_framing::http1_close_delimited) {

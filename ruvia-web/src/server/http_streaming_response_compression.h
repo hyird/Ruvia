@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <memory_resource>
 #include <stdexcept>
 #include <string>
@@ -10,6 +11,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_encoder.h"
+#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/web/error.h"
 
@@ -141,6 +143,14 @@ public:
         return encoded_chunk_;
     }
     std::string_view output() const&& = delete;
+
+    // A sent chunk no longer has a transport borrower. Keep ordinary stream
+    // buffers reusable without retaining unusually large writes for the life
+    // of a long-running handler.
+    void release_output() {
+        constexpr std::size_t retained_bytes = 64 * 1024;
+        http_clear_pmr_string_retaining_small(encoded_chunk_, retained_bytes);
+    }
 
 private:
     struct unprepared_type final {};

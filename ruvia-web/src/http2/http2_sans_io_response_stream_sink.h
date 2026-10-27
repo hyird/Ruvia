@@ -149,6 +149,7 @@ public:
                 if (!compression_.output().empty()) {
                     co_await write_encoded(compression_.output());
                 }
+                compression_.release_output();
                 offset += count;
             }
             co_return;
@@ -240,6 +241,7 @@ public:
                 throw;
             }
             co_await write_encoded(compression_.output());
+            compression_.release_output();
         }
         http2_finish_status result_value{};
         try {
