@@ -64,11 +64,11 @@ public:
     worker_memory(const worker_memory&) = delete;
     worker_memory& operator=(const worker_memory&) = delete;
 
-    // Returns every cached large block upstream and drains the calling
-    // thread's coroutine frame cache; live allocations and the small-object
-    // pool are untouched. Owner thread only: the first call binds `owner` as
-    // the worker this memory serves, and every call throws std::logic_error
-    // unless it runs on that worker.
+    // Returns cached large blocks upstream and drains the calling thread's
+    // coroutine frame cache; live allocations and the small-object pool are
+    // untouched. Blocks newly cached by a reentrant upstream call may remain.
+    // Owner thread only: the first call binds `owner` as the worker this memory
+    // serves, and every call throws std::logic_error unless it runs on that worker.
     void trim(const worker_handle& owner);
 
     template <typename t_type = std::byte>

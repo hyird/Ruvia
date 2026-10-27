@@ -35,12 +35,14 @@ void worker_block_cache::release_cached() noexcept {
         const std::size_t block_bytes = (index + 1) * granularity_bytes;
         void*& head = bins_[index];
         while (head != nullptr) {
-            void* const next_value = *static_cast<void**>(head);
-            upstream_->deallocate(head, block_bytes, block_alignment);
-            head = next_value;
+            // The upstream may reenter this cache while releasing the block.
+            // Publish its removal and accounting before calling user code.
+            void* const block = head;
+            head = *static_cast<void**>(block);
+            cached_bytes_ -= block_bytes;
+            upstream_->deallocate(block, block_bytes, block_alignment);
         }
     }
-    cached_bytes_ = 0;
 }
 
 void* worker_block_cache::do_allocate(std::size_t bytes_value, std::size_t alignment) {

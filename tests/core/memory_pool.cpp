@@ -243,6 +243,78 @@ RUVIA_TEST(worker_memory_trim_releases_cached_blocks_only_on_its_owner) {
     resource->deallocate(live_block, block_bytes);
 }
 
+RUVIA_TEST(worker_memory_trim_allows_reentrant_upstream_release) {
+    class reentrant_resource final : public std::pmr::memory_resource {
+    public:
+        ruvia::worker_memory* memory_{};
+        const ruvia::worker_handle* owner_{};
+        void* releasing_{};
+        bool armed_{};
+        bool duplicated_{};
+        std::size_t small_returns_{};
+
+    private:
+        void* do_allocate(std::size_t bytes, std::size_t alignment) override {
+            return std::pmr::new_delete_resource()->allocate(bytes, alignment);
+        }
+        void do_deallocate(void* block, std::size_t bytes, std::size_t alignment) override {
+            if (releasing_ == block) {
+                duplicated_ = true;
+                return;
+            }
+            if (armed_ && bytes == 32 * 1024) {
+                armed_ = false;
+                releasing_ = block;
+                memory_->trim(*owner_);
+                auto* resource = memory_->resource();
+                void* added = resource->allocate(20000);
+                resource->deallocate(added, 20000);
+                releasing_ = nullptr;
+            }
+            if (bytes == 20 * 1024) {
+                ++small_returns_;
+            }
+            std::pmr::new_delete_resource()->deallocate(block, bytes, alignment);
+        }
+        bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+            return this == &other;
+        }
+    } upstream;
+    ruvia::worker_memory memory(upstream, {.retained_block_bytes_ = 40 * 1024});
+    ruvia::worker_runtime runtime;
+    const auto owner = runtime.handle();
+    upstream.memory_ = &memory;
+    upstream.owner_ = &owner;
+    bool completed = false;
+    bool budget_preserved = false;
+    bool all_returned = false;
+    RUVIA_CHECK(owner.post([&] {
+                         constexpr std::size_t bytes = 30000;
+                         auto* resource = memory.resource();
+                         void* block = resource->allocate(bytes);
+                         resource->deallocate(block, bytes);
+                         upstream.armed_ = true;
+                         memory.trim(owner);
+                         std::array<void*, 3> blocks{};
+                         for (auto& value : blocks) {
+                             value = resource->allocate(20000);
+                         }
+                         for (auto* value : blocks) {
+                             resource->deallocate(value, 20000);
+                         }
+                         budget_preserved = upstream.small_returns_ == 1;
+                         memory.trim(owner);
+                         all_returned = upstream.small_returns_ == 3;
+                         completed = true;
+                     })
+            .accepted());
+    runtime.join();
+    RUVIA_CHECK(completed);
+    RUVIA_CHECK(!upstream.duplicated_);
+    RUVIA_CHECK(budget_preserved);
+    RUVIA_CHECK(all_returned);
+}
+
 RUVIA_TEST(worker_memory_trim_rejects_a_worker_other_than_its_bound_owner) {
     ruvia::worker_memory memory;
     ruvia::worker_runtime first;
