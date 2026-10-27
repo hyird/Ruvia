@@ -356,6 +356,8 @@ auto rows = co_await repo.find({
 });
 ```
 
+ORM 写入和删除先按脚本摘要执行；收到 `NOSCRIPT` 后释放该错误回复，再以脚本正文重试。两次执行共享同一操作超时与取消边界。
+
 ---
 
 ## 5. JWT 认证（`"ruvia/web/auth/jwt.h"`）

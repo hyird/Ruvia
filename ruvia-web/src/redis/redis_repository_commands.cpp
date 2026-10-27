@@ -127,9 +127,13 @@ task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_scr
     std::pmr::memory_resource* resource) {
     scoped_request_io_timer timer(scope, request_io_kind::redis);
     const operation_timeout deadline(options.timeout_);
-    auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, resource, options, deadline);
-    if (reply.kind() != redis_value::kind_type::error || !reply.error().starts_with("NOSCRIPT")) {
-        co_return reply;
+    {
+        auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, resource, options, deadline);
+        if (reply.kind() != redis_value::kind_type::error || !reply.error().starts_with("NOSCRIPT")) {
+            co_return reply;
+        }
+        // The error is consumed by this decision; release its storage before
+        // the fallback waits for its connection and response.
     }
     // The server's script cache was flushed or never loaded this script:
     // EVAL runs the body and caches it under the same digest for later calls.
