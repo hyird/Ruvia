@@ -40,6 +40,7 @@
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
@@ -939,6 +940,57 @@ RUVIA_TEST(http_client_jar_follows_user_agent_set_cookie_algorithm) {
             // Path=/café is stored as given and does not match "/check".
             RUVIA_CHECK(check.find("p=2") == std::string::npos);
             RUVIA_CHECK(check.find("part=insecure") == std::string::npos);
+        }
+        co_await client.shutdown();
+    };
+    run_operation(worker, io, operation);
+}
+
+RUVIA_TEST(http_client_merges_explicit_cookie_fields_without_losing_other_headers) {
+    auto& io = ruvia::test::new_test_io_context();
+    test_worker worker(io);
+    scripted_head_peer peer(io, worker.handle_,
+        {"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
+    auto config = local_http_client_config(peer.port());
+    config.cookies_ = {{"sid", "stored"}};
+    ruvia::http_client client(worker.attachment_.loop(), config);
+    peer.start();
+    auto operation = [&]() -> ruvia::task<void> {
+        const std::array fields{ruvia::http_header_view{"Cookie", "a=1"},
+            ruvia::http_header_view{"X-Test", "present"},
+            ruvia::http_header_view{"cOoKiE", "b=2"}};
+        auto response = co_await client.handle().send({.target_ = "/", .headers_ = fields});
+        RUVIA_CHECK((co_await response.body().read_all()).empty());
+        co_await peer.wait();
+        RUVIA_CHECK_EQ(peer.requests_.size(), std::size_t{1});
+        if (!peer.requests_.empty()) {
+            const std::string_view request = peer.requests_.front();
+            std::size_t cookie_count = 0;
+            bool merged = false;
+            bool other_header = false;
+            auto line_start = request.find("\r\n") + 2;
+            while (line_start < request.size()) {
+                const auto line_end = request.find("\r\n", line_start);
+                if (line_end == std::string_view::npos || line_end == line_start) {
+                    break;
+                }
+                const auto line = request.substr(line_start, line_end - line_start);
+                const auto colon = line.find(':');
+                if (colon != std::string_view::npos) {
+                    const auto name = line.substr(0, colon);
+                    const auto value = line.substr(colon + 1);
+                    if (ruvia::http_ascii_equals_ignore_case(name, "cookie")) {
+                        ++cookie_count;
+                        merged = value == " a=1; b=2; sid=stored";
+                    } else if (ruvia::http_ascii_equals_ignore_case(name, "x-test")) {
+                        other_header = value == " present";
+                    }
+                }
+                line_start = line_end + 2;
+            }
+            RUVIA_CHECK_EQ(cookie_count, std::size_t{1});
+            RUVIA_CHECK(merged);
+            RUVIA_CHECK(other_header);
         }
         co_await client.shutdown();
     };

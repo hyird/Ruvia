@@ -220,7 +220,7 @@ http_client_request_view client_request_policy::prepare_request(const http_clien
     auto field_count = input_headers.size();
     bool add_user_agent = !config_.user_agent_.empty();
     cookie_header.clear();
-    // Owning request storage has already normalized every field name.
+    // Request storage preserves caller field-name spelling.
     for (const auto& field : input_headers) {
         const auto name = field.name();
         if (add_user_agent && http_ascii_equals_ignore_case(name, "user-agent")) {
@@ -235,6 +235,7 @@ http_client_request_view client_request_policy::prepare_request(const http_clien
         }
         cookie_header.append(field.value());
     }
+    const bool has_input_cookie = field_count != input_headers.size();
 
     // RFC 9110 §9.3.8: TRACE reflects the request, so stored credentials stay
     // out; caller-written Cookie fields above remain the caller's choice.
@@ -263,7 +264,7 @@ http_client_request_view client_request_policy::prepare_request(const http_clien
     headers.clear();
     headers.reserve(field_count);
     for (const auto& field : input_headers) {
-        if (!http_ascii_equals_ignore_case(field.name(), "cookie")) {
+        if (!has_input_cookie || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
             headers.emplace_back(field.name(), field.value());
         }
     }
