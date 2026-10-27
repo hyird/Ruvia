@@ -578,9 +578,18 @@ private:
             });
             return count;
         }();
-        static constexpr std::size_t column_count = std::tuple_size_v<typename entity_type::columns_type>;
+        static constexpr std::size_t max_mutation_arguments = [] {
+            std::size_t count = 0;
+            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+                constexpr auto value_kind = detail::redis_column_value_kind<typename column_type::value_type>();
+                constexpr bool tag_shadow =
+                    value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_value;
+                count += tag_shadow ? 9U : 6U;
+            });
+            return count;
+        }();
         auto args = detail::redis_orm_write_arguments(
-            mapping().prefix_, id, mode, options, 1 + required + column_count * 3, memory);
+            mapping().prefix_, id, mode, options, 1 + required + max_mutation_arguments, memory);
         args.emplace_back(detail::encode_redis_scalar(required, memory));
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
             if constexpr (!column_type::options.nullable_) {

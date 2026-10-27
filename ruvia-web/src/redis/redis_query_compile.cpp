@@ -85,8 +85,10 @@ void require_index_fits_column(redis_index_kind index_kind, redis_column_kind co
 }
 
 [[nodiscard]] std::pmr::string redis_index_name(std::string_view prefix, std::pmr::memory_resource* resource) {
-    std::pmr::string result_value(prefix, resource);
-    result_value += ":idx";
+    std::pmr::string result_value(resource);
+    result_value.reserve(prefix.size() + 4U);
+    result_value.append(prefix);
+    result_value.append(":idx");
     return result_value;
 }
 
@@ -96,8 +98,10 @@ void require_index_fits_column(redis_index_kind index_kind, redis_column_kind co
 // column names as they are.
 [[nodiscard]] std::pmr::string shadow_field(
     std::string_view shadow, std::string_view field, std::pmr::memory_resource* resource) {
-    std::pmr::string result_value(shadow, resource);
-    result_value += field;
+    std::pmr::string result_value(resource);
+    result_value.reserve(shadow.size() + field.size());
+    result_value.append(shadow);
+    result_value.append(field);
     return result_value;
 }
 
@@ -322,11 +326,15 @@ public:
         append_expression(output, predicate.nodes_, predicate.nodes_[predicate.root_], 0U);
     }
 
-    [[nodiscard]] std::pmr::string sort_field(std::string_view field) const {
+    void validate_sort_field(std::string_view field) const {
         (void)find_column_info(mapping_.columns_, field);
         if (!mapping_.sortable(field)) {
             throw std::invalid_argument("Redis order column is not sortable");
         }
+    }
+
+    [[nodiscard]] std::pmr::string sort_field(std::string_view field) const {
+        validate_sort_field(field);
         if (mapping_.index_kind(field) == redis_index_kind::tag) {
             return shadow_field(sort_shadow, field, resource_);
         }
@@ -470,15 +478,17 @@ void require_exact_numeric_text(std::string_view value) {
     require_redis_exact_number(number);
 }
 
-void append_set(redis_orm_arguments_type& args, std::string_view field, std::string_view value) {
+template <typename field_type, typename value_type>
+void append_set(redis_orm_arguments_type& args, field_type&& field, value_type&& value) {
     args.emplace_back("s");
-    args.emplace_back(field);
-    args.emplace_back(value);
+    args.emplace_back(std::forward<field_type>(field));
+    args.emplace_back(std::forward<value_type>(value));
 }
 
-void append_delete(redis_orm_arguments_type& args, std::string_view field) {
+template <typename field_type>
+void append_delete(redis_orm_arguments_type& args, field_type&& field) {
     args.emplace_back("d");
-    args.emplace_back(field);
+    args.emplace_back(std::forward<field_type>(field));
     args.emplace_back();
 }
 
@@ -533,27 +543,21 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
     std::optional<std::uint64_t> take_override) {
     resource = pmr_resource_or_default(resource);
     const redis_query_compiler compiler(mapping, resource);
-    std::pmr::vector<std::pmr::string> args(resource);
-    emplace_redis_string(args, "FT.SEARCH");
-    args.push_back(redis_index_name(mapping.prefix_, resource));
-    std::pmr::string query(resource);
-    if (const auto* predicate = redis_predicate_access::storage(options.where_)) {
-        compiler.append_predicate(query, *predicate);
-    } else {
-        query = "*";
-    }
-    args.emplace_back(std::move(query));
-    emplace_redis_string(args, "LIMIT");
     constexpr auto max_redis_integer = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     const auto skip = options.skip_.value_or(0U);
     const auto requested_take = options.take_.value_or(redis_find_default_take);
-    if (skip > max_redis_integer || requested_take > max_redis_integer) {
+    const auto take = take_override.value_or(requested_take);
+    if (skip > max_redis_integer || requested_take > max_redis_integer || (!count_only && take > max_redis_integer)) {
         throw std::invalid_argument("Redis Search LIMIT exceeds signed 64-bit range");
     }
     std::optional<std::pmr::string> sort_field_name;
     if (options.order_.has_value()) {
         const auto& order = *options.order_;
-        sort_field_name = compiler.sort_field(order.field_);
+        if (count_only) {
+            compiler.validate_sort_field(order.field_);
+        } else {
+            sort_field_name = compiler.sort_field(order.field_);
+        }
         switch (order.direction_) {
             case redis_order_direction::asc:
             case redis_order_direction::desc:
@@ -562,21 +566,29 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
                 throw std::invalid_argument("invalid Redis order direction");
         }
     }
+    std::pmr::string query(resource);
+    if (const auto* predicate = redis_predicate_access::storage(options.where_)) {
+        compiler.append_predicate(query, *predicate);
+    } else {
+        query = "*";
+    }
+    std::pmr::vector<std::pmr::string> args(resource);
+    args.reserve(sort_field_name.has_value() ? 11U : 8U);
+    emplace_redis_string(args, "FT.SEARCH");
+    args.push_back(redis_index_name(mapping.prefix_, resource));
+    args.emplace_back(std::move(query));
+    emplace_redis_string(args, "LIMIT");
     if (count_only) {
         emplace_redis_string(args, "0");
         emplace_redis_string(args, "0");
     } else {
-        const auto take = take_override.value_or(requested_take);
-        if (take > max_redis_integer) {
-            throw std::invalid_argument("Redis Search LIMIT exceeds signed 64-bit range");
-        }
         std::pmr::string encoded_skip(resource), encoded_take(resource);
         http_append_unsigned(encoded_skip, skip);
         http_append_unsigned(encoded_take, take);
         args.emplace_back(std::move(encoded_skip));
         args.emplace_back(std::move(encoded_take));
     }
-    if (!count_only && sort_field_name.has_value()) {
+    if (sort_field_name.has_value()) {
         emplace_redis_string(args, "SORTBY");
         args.push_back(std::move(*sort_field_name));
         emplace_redis_string(
@@ -594,7 +606,16 @@ std::pmr::vector<std::pmr::string> compile_redis_index(
         throw std::invalid_argument("Redis repository requires at least one index column");
     }
     resource = pmr_resource_or_default(resource);
+    std::size_t arg_count = 8U;
+    for (const auto& definition : mapping.indexes_) {
+        if (definition.kind_ == redis_index_kind::tag) {
+            arg_count += definition.sortable_ ? 16U : 10U;
+        } else {
+            arg_count += definition.sortable_ ? 8U : 7U;
+        }
+    }
     std::pmr::vector<std::pmr::string> args(resource);
+    args.reserve(arg_count);
     emplace_redis_string(args, "FT.CREATE");
     args.push_back(redis_index_name(mapping.prefix_, resource));
     emplace_redis_string(args, "ON");
@@ -618,10 +639,10 @@ std::pmr::vector<std::pmr::string> compile_redis_index(
                 emplace_redis_string(args, "SORTABLE");
             }
         }
-        const auto presence = shadow_field(present_shadow, field, resource);
+        auto presence = shadow_field(present_shadow, field, resource);
         emplace_redis_string(args, presence);
         emplace_redis_string(args, "AS");
-        emplace_redis_string(args, presence);
+        args.push_back(std::move(presence));
         emplace_redis_string(args, "TAG");
         emplace_redis_string(args, "CASESENSITIVE");
         if (definition.kind_ == redis_index_kind::tag && definition.sortable_) {
@@ -665,10 +686,9 @@ std::optional<std::pmr::string> redis_primary_key(
 void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view field,
     std::optional<std::string_view> value, bool numeric_index, bool tag_shadow_value,
     std::pmr::memory_resource* resource) {
-    const auto presence = shadow_field(present_shadow, field, resource);
     if (!value) {
         append_delete(args, field);
-        append_delete(args, presence);
+        append_delete(args, shadow_field(present_shadow, field, resource));
         if (tag_shadow_value) {
             append_delete(args, shadow_field(tag_shadow, field, resource));
         }
@@ -678,7 +698,7 @@ void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view 
         require_exact_numeric_text(*value);
     }
     append_set(args, field, *value);
-    append_set(args, presence, present_value);
+    append_set(args, shadow_field(present_shadow, field, resource), present_value);
     if (tag_shadow_value) {
         append_set(args, shadow_field(tag_shadow, field, resource), encode_redis_tag(*value, resource));
     }
