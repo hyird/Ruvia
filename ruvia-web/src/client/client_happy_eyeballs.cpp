@@ -17,40 +17,6 @@ using namespace std::chrono_literals;
 
 constexpr auto connection_attempt_delay = 250ms;
 
-void append_unique(std::pmr::vector<asio::ip::tcp::endpoint>& output,
-    const asio::ip::tcp::endpoint& endpoint) {
-    if (std::ranges::find(output, endpoint) == output.end()) {
-        output.push_back(endpoint);
-    }
-}
-
-std::pmr::vector<asio::ip::tcp::endpoint> interleave_addresses(
-    const asio::ip::tcp::resolver::results_type& addresses) {
-    auto* const resource = process_resource();
-    std::pmr::vector<asio::ip::tcp::endpoint> first_family(resource);
-    std::pmr::vector<asio::ip::tcp::endpoint> other_family(resource);
-    if (addresses.empty()) {
-        return first_family;
-    }
-    const bool first_is_v6 = addresses.begin()->endpoint().address().is_v6();
-    for (const auto& entry : addresses) {
-        auto& family = entry.endpoint().address().is_v6() == first_is_v6 ? first_family : other_family;
-        append_unique(family, entry.endpoint());
-    }
-    std::pmr::vector<asio::ip::tcp::endpoint> ordered(resource);
-    ordered.reserve(first_family.size() + other_family.size());
-    const auto count = std::max(first_family.size(), other_family.size());
-    for (std::size_t index = 0; index != count; ++index) {
-        if (index < first_family.size()) {
-            ordered.push_back(first_family[index]);
-        }
-        if (index < other_family.size()) {
-            ordered.push_back(other_family[index]);
-        }
-    }
-    return ordered;
-}
-
 }  // namespace
 
 client_happy_eyeballs::client_happy_eyeballs(const worker_handle& worker,
@@ -59,10 +25,27 @@ client_happy_eyeballs::client_happy_eyeballs(const worker_handle& worker,
     : worker_(worker),
       changed_(worker),
       attempts_(process_resource()) {
-    const auto ordered = interleave_addresses(addresses);
-    attempts_.reserve(ordered.size());
-    for (const auto& endpoint : ordered) {
-        attempts_.emplace_back(executor, endpoint);
+    if (addresses.empty()) {
+        return;
+    }
+    attempts_.reserve(addresses.size());
+    const bool first_is_v6 = addresses.begin()->endpoint().address().is_v6();
+    auto first = addresses.begin();
+    auto other = addresses.begin();
+    const auto append_next = [&](auto& current, bool is_v6) {
+        while (current != addresses.end()) {
+            const auto endpoint = current->endpoint();
+            ++current;
+            if (endpoint.address().is_v6() == is_v6 &&
+                std::ranges::find(attempts_, endpoint, &attempt::endpoint_) == attempts_.end()) {
+                attempts_.emplace_back(executor, endpoint);
+                return;
+            }
+        }
+    };
+    while (first != addresses.end() || other != addresses.end()) {
+        append_next(first, first_is_v6);
+        append_next(other, !first_is_v6);
     }
 }
 
