@@ -55,6 +55,7 @@ enum class worker_timer_outcome : std::uint8_t {
 // registration unbound. That is the same terminal point a pending timer reaches
 // through stop_timers(), which delivers worker_timer_outcome::cancelled; timed
 // primitives map both to their own shutdown result.
+// This also applies when moving the completion itself stops the timer queue.
 enum class worker_timer_schedule_status : std::uint8_t {
     scheduled,
     worker_stopping,

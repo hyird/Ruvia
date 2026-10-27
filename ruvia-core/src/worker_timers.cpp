@@ -124,9 +124,16 @@ worker_timer_schedule_status worker_dispatcher::schedule_timer(worker_timer_regi
         ++slot.generation_;
     }
     slot.next_free_ = no_timer_slot;
-    slot.occupied_ = true;
     slot.cancel_requested_ = false;
+    // The target's move may stop timers reentrantly. Keep this reserved slot
+    // unpublished until the move completes so stop_timers() cannot retire it
+    // while its callback is still being constructed.
     slot.completion_ = std::move(completion);
+    if (timers_stopping_.load(std::memory_order_acquire)) {
+        static_cast<void>(release_timer_slot(slot_index));
+        return worker_timer_schedule_status::worker_stopping;
+    }
+    slot.occupied_ = true;
     slot.active_generation_.store(slot.generation_, std::memory_order_release);
     try {
         timers_.push_back(timer_entry{

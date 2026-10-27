@@ -647,6 +647,69 @@ bool self_rescheduling_due_timer_preserves_other_expirations() {
     return order == "ABAA";
 }
 
+bool timer_registration_survives_stop_during_callback_move() {
+    struct state final {
+        ruvia::worker_runtime_context* runtime_;
+        int trigger_;
+        int moves_{};
+        int completions_{};
+        bool stopped_{};
+        bool cancelled_{};
+    };
+    struct callback final {
+        state* state_;
+        explicit callback(state& value) noexcept
+            : state_(&value) {}
+        callback(const callback&) = delete;
+        callback(callback&& other) noexcept
+            : state_(other.state_) {
+            if (++state_->moves_ == state_->trigger_) {
+                state_->stopped_ = true;
+                state_->runtime_->stop_timers();
+            }
+        }
+        void operator()(ruvia::worker_timer_outcome outcome) {
+            ++state_->completions_;
+            state_->cancelled_ = outcome == ruvia::worker_timer_outcome::cancelled;
+        }
+    };
+    for (int trigger = 1; trigger <= 12; ++trigger) {
+        asio::io_context io_context;
+        ruvia::worker_runtime_context runtime(io_context, 8);
+        const auto& worker = runtime.handle();
+        ruvia::worker_timer_registration registration;
+        state current{&runtime, trigger};
+        bool success = false;
+        asio::post(io_context, [&] {
+            ruvia::move_only_function<void(ruvia::worker_timer_outcome)> completion{callback(current)};
+            current.moves_ = 0;
+            const auto result = worker.schedule_timer(
+                registration, std::chrono::steady_clock::now() + std::chrono::hours(1), std::move(completion));
+            if (!current.stopped_) {
+                runtime.stop_timers();
+            }
+            bool reusable = false;
+            try {
+                reusable = worker.schedule_timer(registration, std::chrono::steady_clock::now(),
+                               [](ruvia::worker_timer_outcome) {}) ==
+                           ruvia::worker_timer_schedule_status::worker_stopping;
+            } catch (const std::logic_error&) {
+            }
+            success = reusable &&
+                      ((result == ruvia::worker_timer_schedule_status::worker_stopping && current.completions_ == 0) ||
+                          (result == ruvia::worker_timer_schedule_status::scheduled &&
+                              current.completions_ == 1 && current.cancelled_));
+            registration.cancel();
+        });
+        io_context.run();
+        runtime.detach();
+        if (!success) {
+            return false;
+        }
+    }
+    return true;
+}
+
 int main() {
     if (!timer_duration_conversions_preserve_integer_ticks_and_saturate() ||
         !timer_immediate_shutdown_works() ||
@@ -658,6 +721,7 @@ int main() {
         !stoppable_sleep_works() ||
         !timed_primitives_report_timer_stop() || !expired_registration_reschedules_on_another_worker() ||
         !timer_callback_failure_preserves_remaining_operations() ||
+        !timer_registration_survives_stop_during_callback_move() ||
         !self_rescheduling_due_timer_yields_to_other_handlers() ||
         !self_rescheduling_due_timer_preserves_other_expirations()) {
         return 1;
