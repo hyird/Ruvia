@@ -126,7 +126,7 @@ namespace {
 
 void http2_encode_outbound_request_headers(
     std::pmr::string& block, std::span<const http_header_view> headers) {
-    std::array<char, http2_lower_header_stack_bytes> lower_name_stack{};
+    std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
     std::pmr::string lower_name_scratch(block.get_allocator().resource());
     for (const auto& header : headers) {
         hpack_encoder::encode_header(block,
@@ -368,7 +368,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         stream->mark_scheme(default_port);
         stream->mark_authority();
         stream->mark_path();
-        std::array<char, http2_lower_header_stack_bytes> lower_name_stack{};
+        std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
         std::pmr::string lower_name_scratch(resource_);
         for (std::size_t i = 0; i < request.headers_.size(); ++i) {
             const auto& header = request.headers_[i];

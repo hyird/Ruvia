@@ -494,7 +494,7 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
         }
     }
     std::pmr::string block(resource_);
-    std::array<char, http2_lower_header_stack_bytes> lower_name_stack{};
+    std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
     std::pmr::string lower_name_scratch(resource_);
     for (const auto& field : trailers) {
         hpack_encoder::encode_header(block,
