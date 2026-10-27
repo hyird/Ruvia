@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <exception>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <system_error>
@@ -64,8 +65,14 @@ public:
         tasks_.spawn(read_peer());
     }
 
-    [[nodiscard]] stop_token token() const noexcept {
-        return source_.token();
+    [[nodiscard]] stop_token token() {
+        if (!source_) {
+            source_.emplace();
+            if (stop_requested_) {
+                source_->request_stop();
+            }
+        }
+        return source_->token();
     }
 
     [[nodiscard]] bool peer_aborted() const noexcept {
@@ -96,14 +103,17 @@ public:
 
     void write_failed(const std::error_code& error) noexcept {
         peer_aborted_ = peer_aborted_ || http1_peer_transport_ended(error);
-        source_.request_stop();
+        request_stop();
         cancel();
     }
 
     // The response ended without the peer (a body-suppressed head): trips the
     // token so waits observing it end, without marking the peer aborted.
     void request_stop() noexcept {
-        source_.request_stop();
+        stop_requested_ = true;
+        if (source_) {
+            source_->request_stop();
+        }
     }
 
     void cancel() noexcept {
@@ -170,7 +180,7 @@ private:
                     }
                     if (http1_peer_transport_ended(error)) {
                         peer_aborted_ = true;
-                        source_.request_stop();
+                        request_stop();
                         co_return;
                     }
                     throw inbound_transport_error(error, "failed to monitor HTTP response stream peer");
@@ -178,12 +188,12 @@ private:
             }
         } catch (...) {
             failure_ = std::current_exception();
-            source_.request_stop();
+            request_stop();
         }
     }
 
     stream_type& stream_;
-    stop_source source_;
+    std::optional<stop_source> source_;
     task_scope tasks_;
     http_io_buffer input_;
     asio::cancellation_signal cancellation_;
@@ -193,6 +203,7 @@ private:
     std::exception_ptr failure_;
     bool closing_{};
     bool peer_aborted_{};
+    bool stop_requested_{};
     bool joined_{};
 };
 
