@@ -229,8 +229,7 @@ private:
 
 }  // namespace detail
 
-// What a blocking operation produced. Either the callable ran -- returning a
-// value or throwing -- or the operation was rejected before that could happen.
+// A blocking operation's value, exception, or rejection before execution.
 template <typename t_type>
 class blocking_result final {
 public:
@@ -243,12 +242,12 @@ public:
         return payload_.status_;
     }
 
-    // True when the callable ran and returned normally.
+    // True when execution and result delivery both completed without error.
     [[nodiscard]] bool completed() const noexcept {
         return payload_.status_ == blocking_status::completed && payload_.error_ == nullptr;
     }
 
-    // The callable ran and threw. The exception is rethrown by value().
+    // Execution or result delivery failed; value() rethrows the exception.
     [[nodiscard]] bool failed() const noexcept {
         return payload_.error_ != nullptr;
     }
@@ -258,8 +257,8 @@ public:
     }
     const std::exception_ptr& error() const&& = delete;
 
-    // Rethrows what the callable threw, or throws blocking_operation_rejected if
-    // it never ran.
+    // Rethrows the stored error, or throws blocking_operation_rejected if the
+    // operation was rejected.
     t_type value() && {
         if (payload_.error_ != nullptr) {
             std::rethrow_exception(payload_.error_);
@@ -368,29 +367,30 @@ template <typename fn_type>
                                                             : blocking_status::pool_stopped);
     }
 
-    auto waited = co_await detail::make_one_shot_awaiter(receiver, timeout, std::move(stop_token_value));
-    if (waited.has_value()) {
-        auto& payload_value = waited.value();
-        if (payload_value.status_ != blocking_status::completed) {
-            co_return blocking_result_access::rejected<result_type>(payload_value.status_);
-        }
-        try {
+    try {
+        auto waited = co_await detail::make_one_shot_awaiter(receiver, timeout, std::move(stop_token_value));
+        if (waited.has_value()) {
+            auto& payload_value = waited.value();
+            if (payload_value.status_ != blocking_status::completed) {
+                co_return blocking_result_access::rejected<result_type>(payload_value.status_);
+            }
             co_return blocking_result_access::completed<result_type>(std::move(payload_value));
-        } catch (...) {
-            payload failure;
-            failure.error_ = std::current_exception();
-            co_return blocking_result_access::completed<result_type>(std::move(failure));
         }
+        if (waited.status() == worker_wait_status::timed_out) {
+            co_return blocking_result_access::rejected<result_type>(blocking_status::timed_out);
+        }
+        if (waited.status() == worker_wait_status::cancelled) {
+            co_return blocking_result_access::rejected<result_type>(blocking_status::cancelled);
+        }
+        // Closed cannot happen -- this coroutine owns the receiver and is the only
+        // waiter -- so anything else is the worker going away under the operation.
+        co_return blocking_result_access::rejected<result_type>(blocking_status::worker_stopping);
+    } catch (...) {
+        // Payload delivery now moves the result on the receiving worker.
+        payload failure;
+        failure.error_ = std::current_exception();
+        co_return blocking_result_access::completed<result_type>(std::move(failure));
     }
-    if (waited.status() == worker_wait_status::timed_out) {
-        co_return blocking_result_access::rejected<result_type>(blocking_status::timed_out);
-    }
-    if (waited.status() == worker_wait_status::cancelled) {
-        co_return blocking_result_access::rejected<result_type>(blocking_status::cancelled);
-    }
-    // Closed cannot happen -- this coroutine owns the receiver and is the only
-    // waiter -- so anything else is the worker going away under the operation.
-    co_return blocking_result_access::rejected<result_type>(blocking_status::worker_stopping);
 }
 
 }  // namespace detail

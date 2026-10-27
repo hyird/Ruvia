@@ -36,6 +36,32 @@ struct yielding_result final {
     int value_;
 };
 
+struct receiver_move_failure final {
+    explicit receiver_move_failure(std::thread::id receiver) noexcept
+        : receiver_(receiver) {}
+    receiver_move_failure(const receiver_move_failure&) = delete;
+    receiver_move_failure(receiver_move_failure&& other)
+        : receiver_(other.receiver_) {
+        if (std::this_thread::get_id() == receiver_) {
+            throw std::runtime_error("receiver move failed");
+        }
+    }
+    std::thread::id receiver_;
+};
+
+task<void> exercise_receiver_move_failure(blocking_pool& pool, worker_handle worker, bool& success) {
+    const auto receiver = std::this_thread::get_id();
+    auto result = co_await run_blocking(pool, worker, [receiver] { return receiver_move_failure(receiver); });
+    if (result.status() != blocking_status::completed || !result.failed()) {
+        co_return;
+    }
+    try {
+        static_cast<void>(std::move(result).value());
+    } catch (const std::runtime_error&) {
+        success = true;
+    }
+}
+
 task<void> exercise_completion_during_suspend(
     blocking_pool& pool, worker_handle worker, bool& success) {
     for (int value = 0; value < 1024; ++value) {
@@ -601,6 +627,18 @@ RUVIA_TEST(blocking_pool_cross_thread_completion_preserves_results) {
     ruvia::worker_runtime_context runtime(io_context, 8);
     ruvia::test::run_worker_tasks(runtime,
         ruvia::test::blocking_pool_tests::exercise_completion_during_suspend(pool, runtime.handle(), success));
+    pool.join();
+    runtime.detach();
+    RUVIA_CHECK(success);
+}
+
+RUVIA_TEST(blocking_pool_receiver_move_failure_is_reported) {
+    bool success = false;
+    blocking_pool pool({.thread_count_ = 1});
+    asio::io_context io_context;
+    ruvia::worker_runtime_context runtime(io_context, 8);
+    ruvia::test::run_worker_tasks(runtime,
+        ruvia::test::blocking_pool_tests::exercise_receiver_move_failure(pool, runtime.handle(), success));
     pool.join();
     runtime.detach();
     RUVIA_CHECK(success);

@@ -55,7 +55,7 @@ pool.join();
 | `"ruvia/core/worker_handle.h"` | `class worker_handle`、`using worker_id_type = std::uint64_t`、`enum class post_status`、`template <typename Sig> class post_outcome final` | 跨线程安全的稳定派发端点与有界队列投递结果。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`post(fn)`、`post_factory(factory)`、`schedule_timer(...)` |
 | `"ruvia/core/worker_runtime.h"` | `class worker_runtime final`、`struct worker_runtime_options`、`struct worker_runtime_hooks`、`enum class runtime_lifecycle_phase` | 底层单 Worker 线程与两阶段启停状态机（`startup -> ready -> serve -> stop_admission -> finalize -> drain -> shutdown -> join`） |
 | `"ruvia/core/worker_group.h"` | `class worker_group final` | 协调多个 `worker_runtime` 同步完成两阶段启动屏障（`start()` / `serve()`）与停机回收（`request_stop()` / `join()`） |
-| `"ruvia/core/blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(pool, worker_handle, [timeout], [stop_token], fn)`、`run_blocking(worker_handle, operation_options, fn)` | 固定大小阻塞卸载线程池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至池线程并在完成后回到原 Worker 恢复协程；不显式传池的重载使用 core 拥有的进程级有界池（默认线程数与队列容量），用于独立运行时也必须可用的系统阻塞操作。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
+| `"ruvia/core/blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(pool, worker_handle, [timeout], [stop_token], fn)`、`run_blocking(worker_handle, operation_options, fn)` | 固定大小阻塞卸载线程池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至池线程并在完成后回到原 Worker 恢复协程；不显式传池的重载使用 core 拥有的进程级有界池（默认线程数与队列容量），用于独立运行时也必须可用的系统阻塞操作。调用或交付值的异常保存在结果中并由 `value()` 重新抛出。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
 
 ---
 
@@ -65,7 +65,7 @@ pool.join();
 | --- | --- | --- |
 | `"ruvia/core/worker_wait_result.h"` | `enum class worker_wait_status { value, closed, worker_stopping, timed_out, cancelled }`、`template <typename T> class worker_wait_result final` | Worker 等待操作的统一返回包装（提供 `status()`、`has_value()`、`value()`、`take_value()`） |
 | `"ruvia/core/channel.h"` | `make_channel<T>(worker_handle, channel_options)`、`class channel_sender<T>`、`class channel_receiver<T>` | 有界 MPSC 通道：`channel_sender` 可拷贝并支持多生产者跨线程 `send(value)`；`channel_receiver` 绑定单个目标 Worker 并支持 `receive()` / `receive_for(...)`。容量限制排队值与正在构造的发送预留；预分配一个额外交付槽，若所有槽均暂被接收或销毁操作占用，发送可返回 `full`。并发发送按发布顺序交付；构造期间关闭通道则返回被拒绝的值。`send()` 调用期间须保持调用者对象存活，包括值的移动和析构 |
-| `"ruvia/core/one_shot.h"` | `make_one_shot<T>(worker_handle, one_shot_options = {})`、`class one_shot_completion<T>`、`class one_shot_receiver<T>` | 跨线程单次值交付原语：`complete(value)` 可在任意线程调用一次，`wait()` / `wait_for(...)` 在绑定 Worker 上等待 |
+| `"ruvia/core/one_shot.h"` | `make_one_shot<T>(worker_handle, one_shot_options = {})`、`class one_shot_completion<T>`、`class one_shot_receiver<T>` | 跨线程单次值交付原语：`complete(value)` 可在任意线程调用，`wait()` / `wait_for(...)` 在绑定 Worker 上等待。另一交付正在构造值时返回 `in_progress` 和被拒绝的值；构造失败后可重试，构造期间接收端关闭或 Worker 停机则拒绝交付。已交付值在接收端移动失败时异常传给接收端且值已消费。调用期间须保持 completion 句柄存活，包括值的移动和析构 |
 | `"ruvia/core/worker_signal.h"` | `class worker_signal final` | 同 Worker 内部零分配单等待者唤醒原语（`wait()` 与 `notify()` 均须在所属 Worker 线程调用） |
 | `"ruvia/core/worker_notification.h"` | `class worker_notification final` | 跨线程闩锁合并通知原语（任意线程无锁 `notify()`，所属 Worker 上 `co_await notification.wait()`） |
 | `"ruvia/core/pool_lease_scheduler.h"` | `class pool_lease_scheduler final`、`class pool_lease_acquire final` | 单 Worker 连接/槽位池租约调度器（空闲时同步返回槽位下标，满载时挂起排队并支持超时与取消） |

@@ -136,6 +136,149 @@ task<void> exercise_payload_retirement(worker_handle worker, bool& success) {
     success = true;
 }
 
+bool test_completion_move_can_close_receiver(bool stop_worker) {
+    asio::io_context io;
+    worker_runtime_context runtime(io, 8);
+    payload_state state;
+    auto [completion, receiver] = make_one_shot<payload>(runtime.handle());
+    std::binary_semaphore requested{0};
+    std::binary_semaphore closed{0};
+    bool observe = true;
+    bool closed_during_move = false;
+    const auto close = [&] {
+        if (stop_worker) {
+            runtime.close();
+        } else {
+            receiver.close();
+        }
+    };
+    state.query_on_move_ = true;
+    state.reenter_ = [&] {
+        if (std::exchange(observe, false)) {
+            requested.release();
+            closed_during_move = closed.try_acquire_for(std::chrono::milliseconds(300));
+            if (closed_during_move) {
+                close();
+            }
+        }
+    };
+    std::thread closer([&] {
+        requested.acquire();
+        close();
+        closed.release();
+    });
+    bool rejected = false;
+    {
+        const auto result = completion.complete(payload(state));
+        closer.join();
+        rejected = result.status() == (stop_worker ? one_shot_complete_status::worker_stopping
+                                                   : one_shot_complete_status::receiver_closed) &&
+                   result.rejected() != nullptr && result.rejected()->value_ &&
+                   *result.rejected()->value_ == 42;
+    }
+    receiver.close();
+    runtime.detach();
+    return rejected && closed_during_move && state.destroyed_ == 1;
+}
+
+task<void> verify_payload_value(one_shot_receiver<payload>& receiver, bool& success) {
+    const auto result = co_await receiver.wait();
+    success = result.has_value() && result.value().value_ && *result.value().value_ == 42;
+}
+
+bool test_concurrent_completion_reservation(bool throw_first) {
+    asio::io_context io;
+    worker_runtime_context runtime(io, 8);
+    payload_state first_state;
+    payload_state retry_state;
+    auto [completion, receiver] = make_one_shot<payload>(runtime.handle());
+    std::binary_semaphore entered{0};
+    std::binary_semaphore proceed{0};
+    std::binary_semaphore second_finished{0};
+    bool observe = true;
+    first_state.query_on_move_ = true;
+    first_state.throw_on_move_ = throw_first;
+    first_state.reenter_ = [&] {
+        if (std::exchange(observe, false)) {
+            entered.release();
+            proceed.acquire();
+        }
+    };
+    retry_state.reenter_ = [] {};
+    bool first_completed = false;
+    bool first_failed = false;
+    std::thread first([&] {
+        try {
+            first_completed = completion.complete(payload(first_state)).accepted();
+        } catch (const std::runtime_error&) {
+            first_failed = true;
+        }
+    });
+    entered.acquire();
+    one_shot_complete_status second_status = one_shot_complete_status::completed;
+    std::thread second([&] {
+        second_status = completion.complete(payload{}).status();
+        second_finished.release();
+    });
+    const bool concurrent = second_finished.try_acquire_for(std::chrono::milliseconds(300));
+    proceed.release();
+    first.join();
+    second.join();
+    const bool retried = !throw_first || completion.complete(payload(retry_state)).accepted();
+    if ((!first_completed && !retried) || (!first_completed && !throw_first)) {
+        receiver.close();
+    }
+    bool received = false;
+    ruvia::test::run_worker_tasks(runtime, verify_payload_value(receiver, received));
+    runtime.detach();
+    return concurrent && second_status == one_shot_complete_status::in_progress &&
+           first_completed == !throw_first && first_failed == throw_first && retried && received;
+}
+
+task<void> wait_for_cancellation(one_shot_receiver<payload>& receiver, stop_token token, bool& cancelled) {
+    const auto result = co_await receiver.wait(std::move(token));
+    cancelled = result.status() == worker_wait_status::cancelled;
+}
+
+task<void> exercise_cancellation_during_completion(worker_handle worker, bool& success) {
+    payload_state state;
+    auto [completion, receiver] = make_one_shot<payload>(worker);
+    std::binary_semaphore entered{0};
+    std::binary_semaphore proceed{0};
+    std::binary_semaphore cancelled_before_release{0};
+    bool observe = true;
+    state.query_on_move_ = true;
+    state.reenter_ = [&] {
+        if (std::exchange(observe, false)) {
+            entered.release();
+            proceed.acquire();
+        }
+    };
+    bool completed = false;
+    std::thread producer([&] { completed = completion.complete(payload(state)).accepted(); });
+    entered.acquire();
+    bool cancellation_won = false;
+    std::thread release([&] {
+        cancellation_won = cancelled_before_release.try_acquire_for(std::chrono::milliseconds(300));
+        proceed.release();
+    });
+    stop_source source;
+    bool cancelled = false;
+    task_scope scope(worker);
+    scope.spawn(wait_for_cancellation(receiver, source.token(), cancelled));
+    source.request_stop();
+    cancelled_before_release.release();
+    release.join();
+    producer.join();
+    if (!completed) {
+        receiver.close();
+    }
+    co_await scope.join();
+    const auto result = co_await receiver.wait();
+    success = cancellation_won && cancelled && completed && result.has_value() &&
+              result.value().value_ && *result.value().value_ == 42;
+}
+
 }  // namespace ruvia::test::one_shot_tests
 
 namespace {
@@ -396,6 +539,7 @@ int main() {
     bool success = false;
     bool cold_receiver_tasks_safe = false;
     bool payload_retirement_safe = false;
+    bool cancellation_during_completion = false;
     {
         asio::io_context io_context;
         ruvia::worker_runtime_context runtime(io_context, 8);
@@ -408,7 +552,8 @@ int main() {
             verify_cold_receiver_tasks(std::move(cold_wait), std::move(timed_cold_wait),
                 std::move(completed_cold_wait), std::move(completed_timed_cold_wait),
                 cold_receiver_tasks_safe),
-            ruvia::test::one_shot_tests::exercise_payload_retirement(worker_value, payload_retirement_safe));
+            ruvia::test::one_shot_tests::exercise_payload_retirement(worker_value, payload_retirement_safe),
+            ruvia::test::one_shot_tests::exercise_cancellation_during_completion(worker_value, cancellation_during_completion));
         runtime.detach();
     }
 
@@ -453,6 +598,10 @@ int main() {
         runtime.detach();
     }
     const bool all_passed = success && cold_receiver_tasks_safe && payload_retirement_safe && worker_stopping && settled_outcomes_kept && cross_thread_value &&
-                            cross_thread_completed;
+                            cross_thread_completed && cancellation_during_completion &&
+                            ruvia::test::one_shot_tests::test_completion_move_can_close_receiver(false) &&
+                            ruvia::test::one_shot_tests::test_completion_move_can_close_receiver(true) &&
+                            ruvia::test::one_shot_tests::test_concurrent_completion_reservation(false) &&
+                            ruvia::test::one_shot_tests::test_concurrent_completion_reservation(true);
     return all_passed ? 0 : 1;
 }
