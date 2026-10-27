@@ -72,6 +72,7 @@ public:
     [[nodiscard]] task<void> await_head(std::string_view head_message);
     void rethrow_response_failure() const;
     void discard_response_body() noexcept;
+    void discard_failed_encoded_response() noexcept;
     void release_consumed_body_prefix();
 
     // One retention path: consume response-owned fields or copy borrowed fields.

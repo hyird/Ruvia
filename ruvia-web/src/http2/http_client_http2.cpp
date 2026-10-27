@@ -848,6 +848,9 @@ task<void> http_client_pool::run_http2_push(
         state_value.failure_ = std::current_exception();
         driver->connection_.http2_.submit_reset(stream.stream_id_);
     }
+    if (state_value.failure_ != nullptr) {
+        state_value.discard_failed_encoded_response();
+    }
     state_value.complete_ = true;
     state_value.head_signal_.notify();
     state_value.data_signal_.notify();

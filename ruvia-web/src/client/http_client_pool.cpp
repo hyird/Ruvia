@@ -272,11 +272,7 @@ task<void> http_client_pool::execute_into(
     } catch (...) {
         state_value->upload_only_failure_ =
             state_value->complete_ && state_value->upload_ && state_value->failure_ == nullptr;
-        if (!state_value->complete_ && state_value->body_decode_required_) {
-            // A failed encoded response has never exposed its collected bytes.
-            state_value->content_coding_.reset();
-            state_value->discard_response_body();
-        }
+        state_value->discard_failed_encoded_response();
         state_value->failure_ = std::current_exception();
     }
     state_value->complete_ = true;

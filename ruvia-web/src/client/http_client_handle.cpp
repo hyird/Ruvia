@@ -185,6 +185,14 @@ void detail::http_client_response_state::discard_response_body() noexcept {
     notify_producer_space();
 }
 
+void detail::http_client_response_state::discard_failed_encoded_response() noexcept {
+    if (!complete_ && body_decode_required_) {
+        // Encoded bytes are withheld until the complete representation decodes.
+        content_coding_.reset();
+        discard_response_body();
+    }
+}
+
 void detail::http_client_response_state::release_consumed_body_prefix() {
     if (offset_ > buffered_.size()) {
         std::terminate();
