@@ -32,23 +32,12 @@ void rethrow_or_timeout_redis_cache_error(
         throw;
     }
 }
-task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr::string> keys,
-    std::pmr::memory_resource* resource, const operation_options& options, const operation_timeout& deadline_value) {
-    if (keys.empty()) {
+task<void> finish_delete_key_batch(std::optional<task<std::int64_t>> deletion, const operation_timeout& deadline_value) {
+    if (!deletion) {
         co_return;
     }
     try {
-        // DEL owns its arguments at the call boundary. The temporary views
-        // are no longer needed while the command waits for its reply.
-        auto deletion = [&] {
-            std::pmr::vector<std::string_view> views(resource);
-            views.reserve(keys.size());
-            for (const auto& key : keys) {
-                views.emplace_back(key);
-            }
-            return redis.with_options(db_required_options(options, deadline_value)).del(views);
-        }();
-        (void)co_await std::move(deletion);
+        (void)co_await std::move(*deletion);
     } catch (const redis_error& error) {
         rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
     }
@@ -57,11 +46,34 @@ task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr:
     }
 }
 
+task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr::string> keys,
+    std::pmr::memory_resource* resource, const operation_options& options, const operation_timeout& deadline_value) {
+    if (keys.empty()) {
+        return finish_delete_key_batch(std::nullopt, deadline_value);
+    }
+    try {
+        std::pmr::vector<std::string_view> views(resource);
+        views.reserve(keys.size());
+        for (const auto& key : keys) {
+            views.emplace_back(key);
+        }
+        // DEL owns its arguments before returning its cold operation.
+        auto deletion = redis.with_options(db_required_options(options, deadline_value)).del(views);
+        return finish_delete_key_batch(std::move(deletion), deadline_value);
+    } catch (const redis_error& error) {
+        rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
+        throw;
+    }
+}
+
 task<void> remove_keys(
     redis_handle redis, std::pmr::vector<std::pmr::string> keys, operation_scope& scope, operation_options options) {
     scoped_request_io_timer timer(scope, request_io_kind::redis);
     const operation_timeout deadline_value(options.timeout_);
-    co_await delete_key_batch(redis, keys, keys.get_allocator().resource(), options, deadline_value);
+    auto deletion = delete_key_batch(redis, keys, keys.get_allocator().resource(), options, deadline_value);
+    // The command owns the keys; release their source before network IO.
+    std::pmr::vector<std::pmr::string>(keys.get_allocator().resource()).swap(keys);
+    co_await std::move(deletion);
 }
 
 task<void> clear_keys(
@@ -81,8 +93,11 @@ task<void> clear_keys(
         if (deadline_value.expired()) {
             throw_db_query_timeout();
         }
-        co_await delete_key_batch(redis, result->values(), resource, options, deadline_value);
         cursor = result->next_cursor();
+        auto deletion = delete_key_batch(redis, result->values(), resource, options, deadline_value);
+        // Preserve only the cursor while the owned DEL waits for its reply.
+        result.reset();
+        co_await std::move(deletion);
     } while (cursor);
 }
 
