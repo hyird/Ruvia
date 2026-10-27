@@ -159,7 +159,8 @@ private:
         http2_stream& stream, std::string_view body);
     [[nodiscard]] task<void> stream_http2_upload(const http_client_request_storage& request, http2_stream& stream,
         http_client_output_queue& upload);
-    [[nodiscard]] task<void> wait_for_http2_session_stop(const operation_timeout& timeout, stop_token stop_token_value);
+    [[nodiscard]] task<void> wait_for_http2_session_stop(
+        const operation_timeout& timeout, stop_token stop_token_value, const http_client_response_state& response);
 
     http_client_pool& pool_;
     std::size_t index_;

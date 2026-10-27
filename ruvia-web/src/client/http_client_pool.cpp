@@ -502,6 +502,9 @@ void http_client_pool::abandon_response(http_client_response_state& state_value,
                 if (state_value.request_id_ != 0) {
                     conn.cancel_http2_stream(state_value.request_id_, client_abort_reason::cancelled, error);
                 }
+                // A retry may be waiting for the old session without a
+                // registered stream. Wake it to observe this abandonment.
+                conn.http2_.state_signal().notify();
             }
             break;
         case http_client_response_transport::unassigned:

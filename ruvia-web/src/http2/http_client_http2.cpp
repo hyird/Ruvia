@@ -349,7 +349,7 @@ void http_client_connection::reprioritize(http_client_response_state& state_valu
 }
 
 task<void> http_client_connection::wait_for_http2_session_stop(
-    const operation_timeout& timeout, stop_token stop_token_value) {
+    const operation_timeout& timeout, stop_token stop_token_value, const http_client_response_state& response) {
     worker_timer_registration deadline_timer;
     if (const auto remaining = timeout.remaining()) {
         if (remaining->count() == 0) {
@@ -381,7 +381,7 @@ task<void> http_client_connection::wait_for_http2_session_stop(
     worker_cancellation_registration cancellation(pool_.cancellation_target(), waiter.cancellation_id_);
     cancellation.arm(stop_token_value);
     while (http2_.running() || !http2_streams_.empty()) {
-        if (stop_token_value.stop_requested()) {
+        if (stop_token_value.stop_requested() || response.abandoned_) {
             throw http_client_error(http_client_error::code_type::cancelled, "HTTP/2 session shutdown wait cancelled");
         }
         if (timeout.expired()) {
@@ -411,7 +411,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 http2_.fail({.status_ = client_transport_status::io_failed,
                     .error_ = std::make_error_code(std::errc::operation_canceled)});
             }
-            co_await wait_for_http2_session_stop(timeout, stop_token_value);
+            co_await wait_for_http2_session_stop(timeout, stop_token_value, state_value);
             (void)co_await ensure_connected(timeout, timeout, stop_token_value, state_value);
             if (protocol_ != protocol_type::http2) {
                 co_return false;

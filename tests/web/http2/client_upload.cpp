@@ -13,6 +13,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
@@ -292,6 +293,192 @@ private:
     bool window_returned_{false};
 };
 
+class draining_peer final {
+public:
+    draining_peer(asio::io_context& io, const ruvia::worker_handle& worker)
+        : acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
+          socket_(io),
+          start_drain_(io),
+          ready_(worker),
+          done_(worker) {
+        start_drain_.expires_at(asio::steady_timer::time_point::max());
+    }
+    [[nodiscard]] std::uint16_t port() const {
+        return acceptor_.local_endpoint().port();
+    }
+    void start() {
+        asio::co_spawn(acceptor_.get_executor(), run(), [this](std::exception_ptr failure) {
+            if (!stopping_) {
+                failure_ = failure;
+            }
+            finished_ = true;
+            ready_.notify();
+            done_.notify();
+        });
+    }
+    void drain() {
+        start_drain_.expires_at(asio::steady_timer::time_point::min());
+    }
+    void stop() {
+        stopping_ = true;
+        std::error_code ignored;
+        start_drain_.cancel();
+        socket_.close(ignored);
+        acceptor_.close(ignored);
+    }
+    [[nodiscard]] ruvia::task<void> wait_ready() {
+        while (!draining_ && !finished_) {
+            co_await ready_.wait();
+        }
+        if (failure_) {
+            std::rethrow_exception(failure_);
+        }
+    }
+    [[nodiscard]] ruvia::task<void> join() {
+        while (!finished_) {
+            co_await done_.wait();
+        }
+        if (failure_) {
+            std::rethrow_exception(failure_);
+        }
+    }
+
+private:
+    [[nodiscard]] asio::awaitable<void> run() {
+        co_await acceptor_.async_accept(socket_, asio::use_awaitable);
+        std::array<char, ruvia::http2_client_preface.size()> preface;
+        co_await asio::async_read(socket_, asio::buffer(preface), asio::use_awaitable);
+        if (std::string_view(preface.data(), preface.size()) != ruvia::http2_client_preface) {
+            throw std::runtime_error("missing HTTP/2 preface");
+        }
+        std::string wire;
+        const std::array<char, 6> one_stream{0, 3, 0, 0, 0, 1};
+        append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {one_stream.data(), one_stream.size()});
+        co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
+        std::uint32_t first_stream = 0;
+        for (;;) {
+            std::array<char, ruvia::http2_frame_header_bytes> bytes;
+            co_await asio::async_read(socket_, asio::buffer(bytes), asio::use_awaitable);
+            const auto header = ruvia::parse_http2_frame_header(bytes);
+            if (!header) {
+                throw std::runtime_error("invalid HTTP/2 frame");
+            }
+            std::string payload(header->length_, '\0');
+            if (!payload.empty()) {
+                co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
+            }
+            if (static_cast<ruvia::http2_frame_type>(header->type_) == ruvia::http2_frame_type::headers) {
+                first_stream = header->stream_id_;
+                break;
+            }
+        }
+        wire.clear();
+        const std::array<char, 1> ok{static_cast<char>(0x88)};
+        append_frame(wire, ruvia::http2_frame_type::headers, 4, first_stream, {ok.data(), ok.size()});
+        co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
+        std::error_code error;
+        co_await start_drain_.async_wait(asio::redirect_error(asio::use_awaitable, error));
+        if (stopping_) {
+            co_return;
+        }
+        wire.clear();
+        const std::array<char, 8> goaway{0, 0, 0, static_cast<char>(first_stream), 0, 0, 0, 0};
+        const std::array<char, 8> ping{};
+        append_frame(wire, ruvia::http2_frame_type::goaway, 0, 0, {goaway.data(), goaway.size()});
+        append_frame(wire, ruvia::http2_frame_type::ping, 0, 0, {ping.data(), ping.size()});
+        co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
+        for (;;) {
+            std::array<char, ruvia::http2_frame_header_bytes> bytes;
+            co_await asio::async_read(socket_, asio::buffer(bytes), asio::use_awaitable);
+            const auto header = ruvia::parse_http2_frame_header(bytes);
+            if (!header) {
+                throw std::runtime_error("invalid HTTP/2 frame");
+            }
+            std::string payload(header->length_, '\0');
+            if (!payload.empty()) {
+                co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
+            }
+            if (static_cast<ruvia::http2_frame_type>(header->type_) == ruvia::http2_frame_type::headers) {
+                throw std::runtime_error("second request was submitted despite stream limit");
+            }
+            if (static_cast<ruvia::http2_frame_type>(header->type_) == ruvia::http2_frame_type::ping &&
+                (header->flags_ & 1U) != 0) {
+                draining_ = true;
+                ready_.notify();
+                break;
+            }
+        }
+        std::array<char, 1024> remaining;
+        do {
+            co_await socket_.async_read_some(asio::buffer(remaining), asio::redirect_error(asio::use_awaitable, error));
+        } while (!error);
+    }
+    asio::ip::tcp::acceptor acceptor_;
+    asio::ip::tcp::socket socket_;
+    asio::steady_timer start_drain_;
+    ruvia::worker_signal ready_;
+    ruvia::worker_signal done_;
+    std::exception_ptr failure_;
+    bool draining_{false};
+    bool stopping_{false};
+    bool finished_{false};
+};
+
+void exercise_abandon_during_drain(ruvia::testing::test_context& ruvia_ctx) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    const auto worker = attachment.loop().handle();
+    draining_peer peer(io, worker);
+    peer.start();
+    std::exception_ptr failure;
+    const auto run = [&]() -> ruvia::task<void> {
+        ruvia::http_client client(attachment.loop(), {.scheme_ = ruvia::http_scheme::http,
+                                                         .host_ = "127.0.0.1",
+                                                         .port_ = peer.port(),
+                                                         .connection_count_ = 1,
+                                                         .request_timeout_ = std::chrono::seconds(5),
+                                                         .protocol_ = ruvia::http_client_protocol::http2_only});
+        try {
+            auto held = co_await client.handle().send({.target_ = "/hold"});
+            RUVIA_CHECK(held.status() == ruvia::http_status::ok);
+            {
+                auto exchange = co_await client.handle().open_request(
+                    {.method_ = "POST", .target_ = "/abandon"}, {.content_length_ = 7});
+                for (unsigned i = 0; i != 100 && client.handle().stats().in_flight_requests_ != 2; ++i) {
+                    (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(10));
+                }
+                RUVIA_CHECK_EQ(client.handle().stats().in_flight_requests_, 2U);
+                peer.drain();
+                co_await peer.wait_ready();
+                (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(50));
+            }
+            for (unsigned i = 0; i != 100 && client.handle().stats().in_flight_requests_ != 1; ++i) {
+                (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(10));
+            }
+            RUVIA_CHECK_EQ(client.handle().stats().in_flight_requests_, 1U);
+            RUVIA_CHECK(!held.body().complete());
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        peer.stop();
+        try {
+            co_await client.shutdown();
+            co_await peer.join();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
 void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
@@ -499,4 +686,8 @@ RUVIA_TEST(http2_client_retries_unsubmitted_streaming_upload_after_connection_lo
 
 RUVIA_TEST(http2_client_retries_unsubmitted_streaming_upload_after_goaway) {
     http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::goaway_upload);
+}
+
+RUVIA_TEST(http2_abandoned_unsubmitted_upload_retires_while_older_stream_drains) {
+    http2_client_upload_test::exercise_abandon_during_drain(ruvia_ctx);
 }
