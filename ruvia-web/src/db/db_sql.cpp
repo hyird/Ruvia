@@ -280,17 +280,19 @@ struct sql_reading final {
     using kind = sql_token::kind;
     sql_reading reading;
     auto& traits = reading.traits_;
-    const auto leading = leading_sql_token(sql, backslash_escapes);
-    if (leading.kind_ == kind::hidden ||
-        (leading.kind_ == kind::word && (sql_keyword(leading.text_, "call") || sql_keyword(leading.text_, "load") ||
-                                            sql_keyword(leading.text_, "set") || sql_keyword(leading.text_, "use")))) {
+    std::size_t index = 0;
+    auto token = next_sql_token(sql, index, backslash_escapes);
+    while (token.kind_ == kind::open) {
+        token = next_sql_token(sql, index, backslash_escapes);
+    }
+    if (token.kind_ == kind::hidden ||
+        (token.kind_ == kind::word && (sql_keyword(token.text_, "call") || sql_keyword(token.text_, "load") ||
+                                          sql_keyword(token.text_, "set") || sql_keyword(token.text_, "use")))) {
         traits.preparable_ = false;
         return reading;
     }
     std::array<sql_token, 3> before{};
-    std::size_t index = 0;
-    for (auto token = next_sql_token(sql, index, backslash_escapes); token.kind_ != kind::end;
-        token = next_sql_token(sql, index, backslash_escapes)) {
+    for (; token.kind_ != kind::end; token = next_sql_token(sql, index, backslash_escapes)) {
         if (token.kind_ == kind::hidden || (token.kind_ == kind::word && sql_keyword(token.text_, "returning"))) {
             traits.preparable_ = false;
             return reading;
@@ -327,22 +329,32 @@ db_error mariadb_error(std::string_view operation, unsigned int native_code, con
             native_code == CR_ERR_NET_WRITE || session_ended(native_code))) {
         error_code = db_error::code_type::io_error;
     }
-    std::string error(operation);
+    const std::string_view state_view =
+        (sql_state != nullptr && sql_state[0] != '\0') ? std::string_view(sql_state) : std::string_view{};
+    const std::string_view message_view =
+        (message != nullptr && message[0] != '\0') ? std::string_view(message) : std::string_view{};
+    std::array<char, http_max_unsigned_decimal_size> digits;
+    const std::string_view code_view =
+        native_code != 0 ? http_format_unsigned(digits, static_cast<std::uint64_t>(native_code)) : std::string_view{};
+    std::string error;
+    error.reserve(operation.size() + 7U + (code_view.empty() ? 0U : 9U + code_view.size()) +
+                  (state_view.empty() ? 0U : 12U + state_view.size()) +
+                  (message_view.empty() ? 0U : 2U + message_view.size()));
+    error.append(operation);
     error.append(" failed");
-    if (native_code != 0) {
-        std::array<char, http_max_unsigned_decimal_size> digits;
+    if (!code_view.empty()) {
         error.append(" [errno=");
-        error.append(http_format_unsigned(digits, static_cast<std::uint64_t>(native_code)));
+        error.append(code_view);
         error.push_back(']');
     }
-    if (sql_state != nullptr && sql_state[0] != '\0') {
+    if (!state_view.empty()) {
         error.append(" [sqlstate=");
-        error.append(sql_state);
+        error.append(state_view);
         error.push_back(']');
     }
-    if (message != nullptr && message[0] != '\0') {
+    if (!message_view.empty()) {
         error.append(": ");
-        error.append(message);
+        error.append(message_view);
     }
     return db_error(error_code, db_driver::mariadb, error,
         native_code == 0 ? std::nullopt : std::optional<std::int64_t>(native_code),
