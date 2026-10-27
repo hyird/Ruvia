@@ -50,6 +50,7 @@ public:
     enum class mode_type { normal,
         coalesced_pings,
         coalesced_arrays,
+        coalesced_large,
         huge_array,
         nested_arrays,
         deep_arrays,
@@ -240,15 +241,20 @@ private:
                 }
             } else if (mode_ == mode_type::batch_echo && args.front() != "PING") {
                 reply = "$" + std::to_string(args.back().size()) + "\r\n" + args.back() + "\r\n";
-            } else if ((mode_ == mode_type::coalesced_pings || mode_ == mode_type::coalesced_arrays) &&
+            } else if ((mode_ == mode_type::coalesced_pings || mode_ == mode_type::coalesced_arrays ||
+                           mode_ == mode_type::coalesced_large) &&
                        args.front() == "PING") {
                 if (co_await line(stream, buffer) != "*1" || co_await line(stream, buffer) != "$4" ||
                     co_await line(stream, buffer) != "PING") {
                     throw std::runtime_error("expected second pipelined PING");
                 }
-                reply = mode_ == mode_type::coalesced_arrays
-                            ? "*3\r\n+\r\n+\r\n+\r\n*3\r\n+\r\n+\r\n+\r\n"
-                            : "+PONG\r\n+PONG\r\n";
+                if (mode_ == mode_type::coalesced_large) {
+                    reply = "$65537\r\n" + std::string(65537, 'x') + "\r\n+PONG\r\n";
+                } else {
+                    reply = mode_ == mode_type::coalesced_arrays
+                                ? "*3\r\n+\r\n+\r\n+\r\n*3\r\n+\r\n+\r\n+\r\n"
+                                : "+PONG\r\n+PONG\r\n";
+                }
             } else if ((mode_ == mode_type::huge_array ||
                            (mode_ == mode_type::reject_then_ping && first_connection_)) &&
                        args.front() == "PING") {
@@ -749,6 +755,27 @@ RUVIA_TEST(redis_pipeline_reply_limit_counts_each_reply_not_the_tcp_batch) {
     ruvia::redis_client client(pool.loop(0), config);
     pool.start();
     pool.loop(0).start(check_coalesced_replies(client, ruvia_ctx)).get();
+    pool.join();
+}
+
+RUVIA_TEST(redis_pipeline_preserves_large_and_following_coalesced_replies) {
+    redis_peer peer(redis_peer::mode_type::coalesced_large);
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), peer.config());
+    auto exercise = [&]() -> ruvia::task<void> {
+        co_await client.connect();
+        auto pipeline = client.handle().pipeline();
+        pipeline.command("PING").command("PING");
+        const auto replies = co_await std::move(pipeline).exec();
+        RUVIA_CHECK_EQ(replies.size(), std::size_t{2});
+        if (replies.size() == 2) {
+            RUVIA_CHECK(replies[0].string() == std::string(65537, 'x'));
+            RUVIA_CHECK(replies[1].string() == "PONG");
+        }
+        co_await client.shutdown();
+    };
+    pool.start();
+    pool.loop(0).start(exercise()).get();
     pool.join();
 }
 

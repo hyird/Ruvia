@@ -765,7 +765,7 @@ RUVIA_TEST(redis_composite_results_rebind_equivalent_resource_owners) {
 
 RUVIA_TEST(redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_shapes) {
     std::string key(128, 'k');
-    std::string payload(4097, 'v');
+    std::string payload(64 * 1024 + 1, 'v');
     key[17] = '\0';
     payload[2048] = '\0';
     const std::string_view expected_key(key);

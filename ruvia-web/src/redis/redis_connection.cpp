@@ -164,6 +164,17 @@ task<redis_value> redis_connection::read_reply(const operation_timeout& timeout,
         }
         reply_bytes_ += consumed;
         if (reply) {
+            // hiredis normally frees an oversized empty buffer only on the
+            // next feed. Release it now, without touching pipelined bytes or
+            // changing the successful reply if the shrink allocation fails.
+            if (reader_->len == reader_->pos && reader_->maxbuf != 0 &&
+                sdsalloc(reader_->buf) > reader_->maxbuf) {
+                sdsclear(reader_->buf);
+                reader_->len = reader_->pos = 0;
+                if (auto* compacted = sdsRemoveFreeSpace(reader_->buf)) {
+                    reader_->buf = compacted;
+                }
+            }
             reply_bytes_ = 0;
             co_return std::move(*reply);
         }
