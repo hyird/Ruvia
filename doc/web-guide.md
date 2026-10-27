@@ -261,6 +261,8 @@ for (const auto& worker : ruvia::app().workers()) {
 | `c.conn().remote()` / `c.conn().client()` | 直连对端地址端口（`.address()` / `.port()`）与经过 `trusted_proxies` 解析后的真实客户端地址 |
 | `c.conn().via_trusted_proxy()` / `c.conn().scheme()` / `c.conn().tls()` | 是否经过可信代理、连接有效 scheme（`http` / `https`）及 TLS 传输信息指针 |
 
+HTTP/1 定长正文已完整预读且无需内容解码时，缓冲读取直接借用连接缓冲并同步完成该读取步骤，不创建额外的正文 I/O 协程；返回的视图仍只在当前请求内有效。
+
 ### 3.2 构造响应与设置响应元数据
 
 ```cpp

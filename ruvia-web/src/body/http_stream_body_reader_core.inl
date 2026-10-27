@@ -118,7 +118,23 @@ task<std::string_view> stream_body_reader<stream_type>::read_all(std::pmr::strin
     co_await release_peer_monitor();
     try {
         if (const auto* known_length = body_plan_.known_length()) {
-            co_return co_await read_known_length_all(body, known_length->content_length());
+            const auto content_length = known_length->content_length();
+            if (finished_) {
+                if (body.empty() && delivered_bytes_ == 0 && initial_body_and_pipeline_.size() >= content_length) {
+                    co_return initial_body_and_pipeline_.substr(0, content_length);
+                }
+                co_return std::string_view(body);
+            }
+            if (exceeds_limit(content_length)) {
+                throw_request_body_too_large();
+            }
+            // A complete preread body borrows the connection buffer and needs
+            // no I/O coroutine; preserve that borrow until the session retires it.
+            if (delivered_bytes_ == 0 && initial_body_and_pipeline_.size() >= content_length) {
+                mark_finished();
+                co_return initial_body_and_pipeline_.substr(0, content_length);
+            }
+            co_return co_await read_known_length_all(body, content_length);
         }
         if (body_plan_.without_body() != nullptr) {
             co_return std::string_view(body);
