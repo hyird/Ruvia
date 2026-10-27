@@ -48,6 +48,7 @@ struct worker_runtime_hooks final {
     move_only_function<void()> stop_admission_{};
     // Owner thread, once, when finalization releases the work guard. Retires
     // domain resources; pending I/O and continuations still drain afterwards.
+    // During finalization, its target's move and destruction may reenter finalize().
     move_only_function<void()> finalize_{};
     // Runs once, for the first failure only, on the thread that reported it:
     // the owner for escaped failures, the caller for fail().

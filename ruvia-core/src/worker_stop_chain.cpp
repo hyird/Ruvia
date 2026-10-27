@@ -99,8 +99,10 @@ void worker_stop_chain::apply_stop() noexcept {
         }
         work_released_ = true;
         work.emplace(std::move(work_));
-        finalize_hook = std::move(hooks_.finalize_);
     }
+    // Only this finalizer owns the hook after work_released_ is published.
+    // Its target's move/destructor may reenter finalize(), so move it unlocked.
+    finalize_hook = std::move(hooks_.finalize_);
     try {
         if (finalize_hook) {
             finalize_hook();

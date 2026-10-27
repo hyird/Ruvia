@@ -69,6 +69,44 @@ RUVIA_TEST(worker_runtime_hook_moves_can_query_failure_during_configuration) {
     RUVIA_CHECK(started);
 }
 
+RUVIA_TEST(worker_runtime_finalize_hook_move_can_reenter_finalize) {
+    ruvia::worker_runtime runtime;
+    bool armed = false;
+    bool invoked = false;
+    struct hook final {
+        ruvia::worker_runtime* runtime_;
+        bool* armed_;
+        bool* invoked_;
+
+        hook(ruvia::worker_runtime& owner, bool& armed_value, bool& invoked_value)
+            : runtime_(&owner),
+              armed_(&armed_value),
+              invoked_(&invoked_value) {}
+        hook(const hook&) = delete;
+        hook(hook&& other) noexcept
+            : runtime_(other.runtime_),
+              armed_(other.armed_),
+              invoked_(other.invoked_) {
+            if (*armed_) {
+                runtime_->finalize();
+            }
+        }
+        ~hook() {
+            if (*armed_) {
+                runtime_->finalize();
+            }
+        }
+        void operator()() {
+            *invoked_ = true;
+        }
+    };
+    runtime.configure({.finalize_ = hook(runtime, armed, invoked)});
+    armed = true;
+    runtime.finalize();
+    runtime.join();
+    RUVIA_CHECK(invoked);
+}
+
 RUVIA_TEST(worker_runtime_drains_accepted_work_before_start) {
     ruvia::worker_runtime runtime;
     const auto worker_value = runtime.handle();
