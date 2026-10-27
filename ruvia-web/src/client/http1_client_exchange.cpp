@@ -218,7 +218,7 @@ task<void> http1_client_exchange::run(
     auto& write_buffer = connection_.write_buffer_;
     write_buffer.clear();
     auto prepared_result = prepare_client_head(pool_, request, upload, response_resource, write_buffer);
-    const auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
+    auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
     if (!prepared) {
         const auto* failure = std::get_if<http1_client_request_prepare_error>(&prepared_result);
         throw http_client_error(http_client_error::code_type::invalid_request,
@@ -226,7 +226,7 @@ task<void> http1_client_exchange::run(
                 ? std::string(http1_client_request_prepare_error_message(*failure))
                 : "HTTP request head is too large");
     }
-    http1_client_response_parser parser(prepared->exchange_state(), response_resource);
+    http1_client_response_parser parser(std::move(*prepared).take_exchange_state(), response_resource);
     if (const auto* content = prepared->content_plan().immediate(); content && !content->bytes().empty()) {
         // Keep the retained head alive through the composed scatter-gather write.
         const std::array<asio::const_buffer, 2> parts{
