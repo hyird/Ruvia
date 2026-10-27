@@ -231,7 +231,6 @@ void db_schema::create_table(const db_table_definition& t) {
     if (t.name_.empty() || t.columns_.empty()) {
         throw std::invalid_argument("table and columns are required");
     }
-    std::pmr::string s("CREATE ", resource_);
     if (t.temporary_ && t.unlogged_) {
         throw std::invalid_argument("table cannot be both temporary and unlogged");
     }
@@ -266,6 +265,9 @@ void db_schema::create_table(const db_table_definition& t) {
             }
         }
     }
+    std::pmr::string s(resource_);
+    s.reserve(32U + t.name_.size() + t.columns_.size() * 32U + t.constraints_.size() * 48U);
+    s += "CREATE ";
     if (t.temporary_) {
         s += "TEMPORARY ";
     }
@@ -563,7 +565,10 @@ void db_schema::create_view(std::string_view n, const db_query& q, bool replace,
     if (replace && mat) {
         throw std::invalid_argument("materialized views cannot use OR REPLACE");
     }
-    std::pmr::string s("CREATE ", resource_);
+    auto st = q.compile(driver_, resource_, db_parameter_mode::literal);
+    std::pmr::string s(resource_);
+    s.reserve(32U + n.size() + st.sql().size());
+    s += "CREATE ";
     if (replace) {
         s += "OR REPLACE ";
     }
@@ -573,7 +578,6 @@ void db_schema::create_view(std::string_view n, const db_query& q, bool replace,
     s += "VIEW ";
     append_db_qualified_identifier(s, n, driver_);
     s += " AS ";
-    auto st = q.compile(driver_, resource_, db_parameter_mode::literal);
     s += st.sql();
     append(std::move(s));
 }
@@ -619,7 +623,9 @@ void db_schema::run(const db_procedure& procedure) {
 void db_schema::create_trigger_function(std::string_view name, const db_procedure& procedure, bool replace) {
     require_postgresql();
     auto body = procedure.body(resource_);
-    std::pmr::string sql(replace ? "CREATE OR REPLACE FUNCTION " : "CREATE FUNCTION ", resource_);
+    std::pmr::string sql(resource_);
+    sql.reserve((replace ? 27U : 16U) + name.size() + 44U + body.size() + 16U);
+    sql += replace ? "CREATE OR REPLACE FUNCTION " : "CREATE FUNCTION ";
     append_db_qualified_identifier(sql, name, driver_);
     sql += "() RETURNS trigger LANGUAGE plpgsql AS ";
     detail::append_db_dollar_body(sql, body);
@@ -644,7 +650,9 @@ void db_schema::create_function(const db_function_definition& function) {
         function.body_.view().find('\0') != std::string_view::npos) {
         throw std::invalid_argument("function name and non-NUL body are required");
     }
-    std::pmr::string sql(function.replace_ ? "CREATE OR REPLACE FUNCTION " : "CREATE FUNCTION ", resource_);
+    std::pmr::string sql(resource_);
+    sql.reserve((function.replace_ ? 27U : 16U) + function.name_.size() + function.parameters_.size() * 24U + 48U + function.body_.size() + 16U);
+    sql += function.replace_ ? "CREATE OR REPLACE FUNCTION " : "CREATE FUNCTION ";
     append_db_qualified_identifier(sql, function.name_, driver_);
     sql += '(';
     for (std::size_t i = 0; i < function.parameters_.size(); ++i) {
@@ -703,7 +711,9 @@ void db_schema::create_function(const db_function_definition& function, const db
 void db_schema::drop_function(std::string_view name, std::span<const db_type_definition> parameter_types,
     db_drop_behavior behavior, bool if_exists) {
     require_postgresql();
-    std::pmr::string sql("DROP FUNCTION ", resource_);
+    std::pmr::string sql(resource_);
+    sql.reserve(28U + name.size() + parameter_types.size() * 12U + (behavior == db_drop_behavior::cascade ? 8U : 0U));
+    sql += "DROP FUNCTION ";
     if (if_exists) {
         sql += "IF EXISTS ";
     }
@@ -723,7 +733,9 @@ void db_schema::drop_function(std::string_view name, std::span<const db_type_def
 }
 void db_schema::lock_table(std::string_view table_value, db_table_lock_mode mode, bool nowait) {
     require_postgresql();
-    std::pmr::string sql("LOCK TABLE ", resource_);
+    std::pmr::string sql(resource_);
+    sql.reserve(48U + table_value.size());
+    sql += "LOCK TABLE ";
     append_db_qualified_identifier(sql, table_value, driver_);
     sql += " IN ";
     switch (mode) {
@@ -901,8 +913,14 @@ std::pmr::vector<db_migration> db_schema::compile(std::string_view id) const {
         if (statements_.size() == 1 && !statements_[0].procedural_) {
             out.emplace_back(db_migration_options{std::string(id), std::string(statements_[0].sql_), statements_[0].atomicity_});
         } else if (!statements_.empty()) {
-            std::pmr::string body(" BEGIN ", resource_);
-            for (auto& s : statements_) {
+            std::size_t body_size = 12U;
+            for (const auto& s : statements_) {
+                body_size += s.sql_.size() + 1U;
+            }
+            std::pmr::string body(resource_);
+            body.reserve(body_size);
+            body.append(" BEGIN ");
+            for (const auto& s : statements_) {
                 body.append(s.sql_);
                 body.push_back(';');
             }
@@ -912,8 +930,15 @@ std::pmr::vector<db_migration> db_schema::compile(std::string_view id) const {
             out.emplace_back(db_migration_options{std::string(id), std::string(sql), db_migration_atomicity::transactional});
         }
     } else {
+        out.reserve(statements_.size());
         for (size_t i = 0; i < statements_.size(); ++i) {
-            std::string numbered = std::string(id) + "_" + std::to_string(i + 1);
+            std::array<char, http_max_unsigned_decimal_size> digits;
+            const auto suffix = http_format_unsigned(digits, static_cast<std::uint64_t>(i + 1U));
+            std::string numbered;
+            numbered.reserve(id.size() + 1U + suffix.size());
+            numbered.append(id);
+            numbered.push_back('_');
+            numbered.append(suffix);
             out.emplace_back(db_migration_options{std::move(numbered), std::string(statements_[i].sql_), statements_[i].atomicity_});
         }
     }

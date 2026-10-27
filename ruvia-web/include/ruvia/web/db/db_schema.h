@@ -513,9 +513,13 @@ private:
 
 template <typename entity_type>
 void db_schema::create_table(const db_entity_table_options& options) {
-    db_table_definition table_value{.name_ = entity_type::table_name(), .columns_ = std::pmr::vector<db_schema_column>(resource_), .constraints_ = std::pmr::vector<db_schema_constraint>(options.constraints_.begin(), options.constraints_.end(), resource_), .if_not_exists_ = options.if_not_exists_, .temporary_ = options.temporary_, .unlogged_ = options.unlogged_};
+    db_table_definition table_value{.name_ = entity_type::table_name(), .columns_ = std::pmr::vector<db_schema_column>(resource_), .constraints_ = std::pmr::vector<db_schema_constraint>(resource_), .if_not_exists_ = options.if_not_exists_, .temporary_ = options.temporary_, .unlogged_ = options.unlogged_};
+    table_value.columns_.reserve(std::tuple_size_v<typename entity_type::columns_type>);
+    table_value.constraints_.reserve(options.constraints_.size() + 1U + std::tuple_size_v<typename entity_type::relations_type> * 2U);
+    table_value.constraints_.assign(options.constraints_.begin(), options.constraints_.end());
     db_query defaults(resource_);
     std::pmr::vector<borrowed_text> primary(resource_);
+    primary.reserve(detail::db_primary_key_count<entity_type>());
     bool conflicting_generation = false;
     bool conflicting_read_only = false;
     detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
@@ -608,9 +612,11 @@ void db_schema::create_table(const db_entity_table_options& options) {
     if (!primary.empty()) {
         const auto dot = entity_type::table_name().rfind('.');
         const auto local = entity_type::table_name().substr(dot == std::string_view::npos ? 0 : dot + 1);
-        auto& pkey_name = generated_names.emplace_back(local);
-        pkey_name += "_pkey";
-        table_value.constraints_.push_back({.name_ = pkey_name, .kind_ = db_constraint_kind::primary_key, .columns_ = std::move(primary)});
+        auto& pkey_name = generated_names.emplace_back();
+        pkey_name.reserve(local.size() + 5U);
+        pkey_name.append(local);
+        pkey_name.append("_pkey");
+        table_value.constraints_.push_back({.name_ = pkey_name, .kind_ = db_constraint_kind::primary_key, .columns_ = std::move(primary), .referenced_columns_ = std::pmr::vector<borrowed_text>(resource_)});
     }
     detail::for_each_descriptor<typename entity_type::relations_type>([&]<typename r_type, std::size_t> {
         if constexpr (!r_type::is_collection && r_type::is_owning) {
@@ -618,19 +624,26 @@ void db_schema::create_table(const db_entity_table_options& options) {
             using mapping_type = detail::db_relation_mapping<entity_type, r_type>;
             using target_type = typename r_type::target_entity_type;
             const auto local_table = entity_type::table_name().substr(entity_type::table_name().rfind('.') == std::string_view::npos ? 0 : entity_type::table_name().rfind('.') + 1);
-            auto& fkey_name = generated_names.emplace_back(local_table);
+            auto& fkey_name = generated_names.emplace_back();
+            fkey_name.reserve(local_table.size() + 1U + r_type::name.view().size() + 5U);
+            fkey_name.append(local_table);
             fkey_name.push_back('_');
             fkey_name.append(r_type::name.view());
             fkey_name.append("_fkey");
             db_schema_constraint fk{.name_ = fkey_name, .kind_ = db_constraint_kind::foreign_key, .columns_ = std::pmr::vector<borrowed_text>(resource_), .referenced_table_ = target_type::table_name(), .referenced_columns_ = std::pmr::vector<borrowed_text>(resource_)};
+            constexpr std::size_t join_col_count = std::tuple_size_v<typename mapping_type::join_columns_type>;
+            fk.columns_.reserve(join_col_count);
+            fk.referenced_columns_.reserve(join_col_count);
             detail::for_each_descriptor<typename mapping_type::join_columns_type>([&]<typename j_type, std::size_t> { fk.columns_.emplace_back(j_type::local.view()); fk.referenced_columns_.emplace_back(j_type::referenced.view()); });
             table_value.constraints_.push_back(std::move(fk));
             if constexpr (r_type::kind == db_relation_kind::one_to_one) {
-                auto& key_name = generated_names.emplace_back(local_table);
+                auto& key_name = generated_names.emplace_back();
+                key_name.reserve(local_table.size() + 1U + r_type::name.view().size() + 4U);
+                key_name.append(local_table);
                 key_name.push_back('_');
                 key_name.append(r_type::name.view());
                 key_name.append("_key");
-                table_value.constraints_.push_back({.name_ = key_name, .kind_ = db_constraint_kind::unique, .columns_ = table_value.constraints_.back().columns_});
+                table_value.constraints_.push_back({.name_ = key_name, .kind_ = db_constraint_kind::unique, .columns_ = std::pmr::vector<borrowed_text>(table_value.constraints_.back().columns_, resource_), .referenced_columns_ = std::pmr::vector<borrowed_text>(resource_)});
             }
         }
     });
@@ -645,20 +658,31 @@ void db_schema::create_relation_tables() {
             using m_type = detail::db_relation_mapping<entity_type, r_type>;
             using target_type = typename r_type::target_entity_type;
             db_table_definition table_value{.name_ = m_type::table_name(), .columns_ = std::pmr::vector<db_schema_column>(resource_), .constraints_ = std::pmr::vector<db_schema_constraint>(resource_)};
+            table_value.columns_.reserve(std::tuple_size_v<typename m_type::source_columns_type> + std::tuple_size_v<typename m_type::target_columns_type>);
+            table_value.constraints_.reserve(3U);
             const auto dot = m_type::table_name().rfind('.');
             const auto local_table = m_type::table_name().substr(dot == std::string_view::npos ? 0 : dot + 1);
-            std::pmr::string owner_fk_name(local_table, resource_);
-            owner_fk_name += "_owner_fkey";
-            std::pmr::string inverse_fk_name(local_table, resource_);
-            inverse_fk_name += "_inverse_fkey";
-            std::pmr::string pkey_name(local_table, resource_);
-            pkey_name += "_pkey";
+            std::pmr::string owner_fk_name(resource_);
+            owner_fk_name.reserve(local_table.size() + 11U);
+            owner_fk_name.append(local_table);
+            owner_fk_name.append("_owner_fkey");
+            std::pmr::string inverse_fk_name(resource_);
+            inverse_fk_name.reserve(local_table.size() + 13U);
+            inverse_fk_name.append(local_table);
+            inverse_fk_name.append("_inverse_fkey");
+            std::pmr::string pkey_name(resource_);
+            pkey_name.reserve(local_table.size() + 5U);
+            pkey_name.append(local_table);
+            pkey_name.append("_pkey");
             const auto add_side = [&]<typename referenced_entity_type, typename columns_type>(const std::pmr::string& fk_name) {
                 db_schema_constraint fk{.name_ = fk_name,
                     .kind_ = db_constraint_kind::foreign_key,
                     .columns_ = std::pmr::vector<borrowed_text>(resource_),
                     .referenced_table_ = referenced_entity_type::table_name(),
                     .referenced_columns_ = std::pmr::vector<borrowed_text>(resource_)};
+                constexpr std::size_t side_count = std::tuple_size_v<columns_type>;
+                fk.columns_.reserve(side_count);
+                fk.referenced_columns_.reserve(side_count);
                 detail::for_each_descriptor<columns_type>([&]<typename j_type, std::size_t> {
                     using c_type = std::tuple_element_t<referenced_entity_type::template column_index<j_type::referenced>(), typename referenced_entity_type::columns_type>;
                     table_value.columns_.push_back({.name_ = j_type::local.view(), .type_ = entity_column_type<c_type>(), .nullable_ = false});

@@ -82,11 +82,13 @@ inline void append_db_string_literal(std::pmr::string& output, std::string_view 
     if (driver == db_driver::mariadb) {
         // Hex text is independent of NO_BACKSLASH_ESCAPES and ANSI_QUOTES.
         // It also avoids allowing connection SQL modes to change DDL values.
+        output.reserve(output.size() + 26U + value.size() * 2U);
         output += "CONVERT(X'";
         http_append_lower_hex(output, value);
         output += "' USING utf8mb4)";
         return;
     }
+    output.reserve(output.size() + 3U + value.size());
     output += "E'";
     for (const char ch : value) {
         if (ch == '\\' || ch == '\'') {
@@ -153,6 +155,7 @@ inline void append_db_dollar_body(std::pmr::string& output, std::string_view bod
         append_db_number(delimiter, suffix);
         delimiter += '$';
     }
+    output.reserve(output.size() + delimiter.size() * 2U + body.size());
     output += delimiter;
     output += body;
     output += delimiter;
