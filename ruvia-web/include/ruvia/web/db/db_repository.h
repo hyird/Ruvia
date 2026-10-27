@@ -187,7 +187,11 @@ consteval std::string_view version_column() noexcept {
 template <typename e_type>
 void select_entity(db_query& query, std::string_view alias) {
     const auto qualifier = alias.empty() ? e_type::table_name() : alias;
-    for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> { query.add_select(query.column(c_type::name.view(), qualifier)); });
+    std::array<db_expression, std::tuple_size_v<typename e_type::columns_type>> columns{};
+    for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t index> {
+        columns[index] = query.column(c_type::name.view(), qualifier);
+    });
+    query.select(columns);
     query.from(e_type::table_name(), alias);
 }
 template <typename e_type>

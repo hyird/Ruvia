@@ -25,6 +25,7 @@ void require_name(std::string_view name, bool qualified = false) {
 void set_source_options(db_query_source& source_value, const db_source_options& options, std::pmr::memory_resource* resource) {
     source_value.lateral_ = options.lateral_;
     source_value.ordinality_ = options.with_ordinality_;
+    source_value.columns_.reserve(options.columns_.size());
     for (const auto& column : options.columns_) {
         require_name(column.name_);
         source_value.columns_.emplace_back(column, resource);
@@ -32,13 +33,32 @@ void set_source_options(db_query_source& source_value, const db_source_options& 
 }
 }  // namespace
 
+struct node_index_map final {
+    static constexpr std::size_t inline_capacity = 16;
+    std::array<std::size_t, inline_capacity> inline_{};
+    std::pmr::vector<std::size_t> heap_;
+
+    node_index_map(std::size_t count, std::pmr::memory_resource* resource)
+        : heap_(resource) {
+        if (count <= inline_capacity) {
+            std::fill_n(inline_.data(), count, no_db_node);
+        } else {
+            heap_.assign(count, no_db_node);
+        }
+    }
+
+    [[nodiscard]] std::size_t& operator[](std::size_t index) noexcept {
+        return heap_.empty() ? inline_[index] : heap_[index];
+    }
+};
+
 struct qualified_expression_importer final {
     const std::pmr::vector<db_query_node>& source_nodes_;
     const std::pmr::vector<db_query>& source_queries_;
     db_query_storage& target_;
     std::string_view source_qualifier_;
     std::string_view target_qualifier_;
-    std::pmr::vector<std::size_t> mapped_;
+    node_index_map mapped_;
 
     qualified_expression_importer(const std::pmr::vector<db_query_node>& source_nodes,
         const std::pmr::vector<db_query>& source_queries, db_query_storage& target,
@@ -48,7 +68,7 @@ struct qualified_expression_importer final {
           target_(target),
           source_qualifier_(source_qualifier),
           target_qualifier_(target_qualifier),
-          mapped_(source_nodes.size(), no_db_node, target.resource_) {}
+          mapped_(source_nodes.size(), target.resource_) {}
 
     qualified_expression_importer(const db_query_storage& source_value, db_query_storage& target,
         std::string_view source_qualifier, std::string_view target_qualifier)
@@ -293,7 +313,7 @@ namespace {
 }
 
 [[nodiscard]] std::size_t import_borrowed_node_to_tree(const db_query_storage& source,
-    db_expr_tree& target, std::pmr::vector<std::size_t>& mapped, bool aliased, std::size_t id, std::size_t depth) {
+    db_expr_tree& target, node_index_map& mapped, bool aliased, std::size_t id, std::size_t depth) {
     qualified_expression_importer::require_depth(depth);
     if (mapped[id] != no_db_node) {
         return mapped[id];
@@ -470,7 +490,7 @@ std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
             if (!aliased_ && !table_.empty() && target.table_.empty()) {
                 target.table_ = table_;
             }
-            std::pmr::vector<std::size_t> mapped(borrowed_.owner_->nodes_.size(), no_db_node, target.resource_);
+            node_index_map mapped(borrowed_.owner_->nodes_.size(), target.resource_);
             return import_borrowed_node_to_tree(
                 *borrowed_.owner_, target, mapped, aliased_, borrowed_.node_, 0);
         }
@@ -563,7 +583,7 @@ db_owned_expression db_owned_expression::from_expression(
     if (!aliased) {
         tree->table_ = table;
     }
-    std::pmr::vector<std::size_t> mapped(expression.owner_->nodes_.size(), no_db_node, tree->resource_);
+    node_index_map mapped(expression.owner_->nodes_.size(), tree->resource_);
     tree->root_ = import_borrowed_node_to_tree(
         *expression.owner_, *tree, mapped, aliased, expression.node_, 0);
     auto result = from_tree(std::move(tree));
@@ -686,7 +706,9 @@ db_owned_expression db_owned_expression::make_raw_sql(
         }
     }
     auto tree = allocate_tree();
+    tree->nodes_.reserve(args.size() + 1U);
     db_query_node node_value(db_node_kind::sql, tree->resource_);
+    node_value.named_.reserve(args.size());
     for (std::size_t i = 0; i < args.size(); ++i) {
         node_value.named_.emplace_back(parts[i], args[i].owned().append_to_tree(*tree), tree->resource_);
     }
@@ -699,6 +721,7 @@ db_owned_expression db_owned_expression::make_call(
     std::string_view function, std::span<const db_expr> args) {
     require_name(function, true);
     auto tree = allocate_tree();
+    tree->nodes_.reserve(args.size() + 1U);
     db_query_node node_value(db_node_kind::function, tree->resource_);
     node_value.text_ = function;
     node_value.args_.reserve(args.size());
@@ -714,6 +737,7 @@ db_owned_expression db_owned_expression::make_coalesce(std::span<const db_expr> 
         throw std::invalid_argument("COALESCE requires an argument");
     }
     auto tree = allocate_tree();
+    tree->nodes_.reserve(args.size() + 1U);
     db_query_node node_value(db_node_kind::coalesce, tree->resource_);
     node_value.args_.reserve(args.size());
     for (const auto& arg : args) {
@@ -726,9 +750,11 @@ db_owned_expression db_owned_expression::make_coalesce(std::span<const db_expr> 
 db_owned_expression db_owned_expression::make_null_if(
     const db_owned_expression& lhs, const db_owned_expression& rhs) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(3U);
     const auto left_idx = lhs.append_to_tree(*tree);
     const auto right_idx = rhs.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::null_if, tree->resource_);
+    node_value.args_.reserve(2U);
     node_value.args_.push_back(left_idx);
     node_value.args_.push_back(right_idx);
     tree->root_ = push_tree_node(*tree, std::move(node_value));
@@ -740,6 +766,7 @@ db_owned_expression db_owned_expression::make_greatest(std::span<const db_expr> 
         throw std::invalid_argument("GREATEST requires an argument");
     }
     auto tree = allocate_tree();
+    tree->nodes_.reserve(args.size() + 1U);
     db_query_node node_value(db_node_kind::greatest, tree->resource_);
     node_value.args_.reserve(args.size());
     for (const auto& arg : args) {
@@ -754,6 +781,7 @@ db_owned_expression db_owned_expression::make_least(std::span<const db_expr> arg
         throw std::invalid_argument("LEAST requires an argument");
     }
     auto tree = allocate_tree();
+    tree->nodes_.reserve(args.size() + 1U);
     db_query_node node_value(db_node_kind::least, tree->resource_);
     node_value.args_.reserve(args.size());
     for (const auto& arg : args) {
@@ -769,6 +797,7 @@ db_owned_expression db_owned_expression::make_case_when(
         throw std::invalid_argument("CASE requires a branch");
     }
     auto tree = allocate_tree();
+    tree->nodes_.reserve(branches.size() * 2U + 2U);
     db_query_node node_value(db_node_kind::case_value, tree->resource_);
     node_value.args_.reserve(branches.size() * 2);
     for (const auto& branch : branches) {
@@ -788,6 +817,7 @@ db_owned_expression db_owned_expression::make_case_when(
 db_owned_expression db_owned_expression::make_jsonb_set(const db_owned_expression& target,
     std::span<const std::string_view> path, const db_owned_expression& new_value, bool create_if_missing) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(path.size() + 6U);
     const auto target_idx = target.append_to_tree(*tree);
     const auto path_idx = push_tree_text_array(*tree, path);
     const auto val_idx = new_value.append_to_tree(*tree);
@@ -802,6 +832,7 @@ db_owned_expression db_owned_expression::make_jsonb_set(const db_owned_expressio
 db_owned_expression db_owned_expression::make_json_path_op(
     const db_owned_expression& target, db_binary_operator op, std::span<const std::string_view> path) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(path.size() + 4U);
     const auto target_idx = target.append_to_tree(*tree);
     const auto path_idx = push_tree_text_array(*tree, path);
     db_query_node node_value(db_node_kind::binary, tree->resource_);
@@ -816,6 +847,7 @@ db_owned_expression db_owned_expression::make_aggregate(std::string_view functio
     std::span<const db_expr> args, bool distinct, std::span<const db_order_term> order) {
     require_name(function, true);
     auto tree = allocate_tree();
+    tree->nodes_.reserve(args.size() + order.size() + 1U);
     db_query_node node_value(db_node_kind::aggregate, tree->resource_);
     node_value.text_ = function;
     node_value.flag_ = distinct;
@@ -834,6 +866,7 @@ db_owned_expression db_owned_expression::make_aggregate(std::string_view functio
 
 db_owned_expression db_owned_expression::make_count_star() {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(2U);
     const auto star_idx = push_tree_node(*tree, db_query_node(db_node_kind::star, tree->resource_));
     db_query_node node_value(db_node_kind::aggregate, tree->resource_);
     node_value.text_ = "count";
@@ -845,6 +878,7 @@ db_owned_expression db_owned_expression::make_count_star() {
 db_owned_expression db_owned_expression::make_filter(
     const db_owned_expression& aggregate, const db_owned_expression& predicate) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(3U);
     const auto agg_idx = aggregate.append_to_tree(*tree);
     const auto pred_idx = predicate.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::filter, tree->resource_);
@@ -857,6 +891,7 @@ db_owned_expression db_owned_expression::make_filter(
 db_owned_expression db_owned_expression::make_over(
     const db_owned_expression& function, const db_window_options& window) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(window.partition_by_.size() + window.order_by_.size() + 2U);
     const auto fn_idx = function.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::window, tree->resource_);
     node_value.left_ = fn_idx;
@@ -880,6 +915,7 @@ db_owned_expression db_owned_expression::make_within_group(
         throw std::invalid_argument("WITHIN GROUP requires ordering");
     }
     auto tree = allocate_tree();
+    tree->nodes_.reserve(order.size() + 2U);
     const auto fn_idx = function.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::within_group, tree->resource_);
     node_value.left_ = fn_idx;
@@ -895,6 +931,7 @@ db_owned_expression db_owned_expression::make_within_group(
 db_owned_expression db_owned_expression::make_cast(
     const db_owned_expression& operand, const db_type_definition& type) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(2U);
     const auto op_idx = operand.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::cast, tree->resource_);
     node_value.left_ = op_idx;
@@ -906,6 +943,7 @@ db_owned_expression db_owned_expression::make_cast(
 db_owned_expression db_owned_expression::make_at_time_zone(
     const db_owned_expression& operand, const db_owned_expression& zone) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(3U);
     const auto op_idx = operand.append_to_tree(*tree);
     const auto zone_idx = zone.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::at_time_zone, tree->resource_);
@@ -918,6 +956,7 @@ db_owned_expression db_owned_expression::make_at_time_zone(
 db_owned_expression db_owned_expression::make_extract(
     db_date_part part, const db_owned_expression& operand) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(2U);
     const auto op_idx = operand.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::extract, tree->resource_);
     node_value.left_ = op_idx;
@@ -929,6 +968,7 @@ db_owned_expression db_owned_expression::make_extract(
 db_owned_expression db_owned_expression::make_subscript(
     const db_owned_expression& array, const db_owned_expression& index) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(3U);
     const auto arr_idx = array.append_to_tree(*tree);
     const auto idx_idx = index.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::subscript, tree->resource_);
@@ -942,6 +982,7 @@ db_owned_expression db_owned_expression::make_collate(
     const db_owned_expression& operand, std::string_view collation) {
     require_name(collation, true);
     auto tree = allocate_tree();
+    tree->nodes_.reserve(2U);
     const auto op_idx = operand.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::collate, tree->resource_);
     node_value.left_ = op_idx;
@@ -953,6 +994,7 @@ db_owned_expression db_owned_expression::make_collate(
 db_owned_expression db_owned_expression::make_binary(
     const db_owned_expression& lhs, db_binary_operator op, const db_owned_expression& rhs) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(3U);
     const auto left_idx = lhs.append_to_tree(*tree);
     const auto right_idx = rhs.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::binary, tree->resource_);
@@ -982,6 +1024,7 @@ db_owned_expression db_owned_expression::make_binary(
 db_owned_expression db_owned_expression::make_unary(
     db_unary_operator op, const db_owned_expression& operand) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(2U);
     const auto op_idx = operand.append_to_tree(*tree);
     db_query_node node_value(db_node_kind::unary, tree->resource_);
     node_value.left_ = op_idx;
@@ -1007,6 +1050,7 @@ db_owned_expression db_owned_expression::make_unary(
 db_owned_expression db_owned_expression::make_between(const db_owned_expression& operand,
     const db_value& lower, const db_value& upper, bool negate) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(4U);
     const auto val_idx = operand.append_to_tree(*tree);
     const auto low_idx = push_tree_value(*tree, lower);
     const auto high_idx = push_tree_value(*tree, upper);
@@ -1022,6 +1066,7 @@ db_owned_expression db_owned_expression::make_tuple(std::span<const db_expr> ele
         throw std::invalid_argument("database tuple requires at least one element");
     }
     auto tree = allocate_tree();
+    tree->nodes_.reserve(elements.size() + 1U);
     db_query_node node_value(db_node_kind::tuple, tree->resource_);
     node_value.args_.reserve(elements.size());
     for (const auto& elem : elements) {
@@ -1035,6 +1080,7 @@ db_owned_expression db_owned_expression::make_in_list(const db_owned_expression&
     db_binary_operator op, std::size_t count, const void* context,
     db_value (*element_at)(const void* context, std::size_t index)) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(count + 3U);
     const auto left_idx = lhs.append_to_tree(*tree);
     db_query_node list_node(db_node_kind::list, tree->resource_);
     list_node.args_.reserve(count);
@@ -1053,6 +1099,7 @@ db_owned_expression db_owned_expression::make_in_list(const db_owned_expression&
 db_owned_expression db_owned_expression::make_in_expr_list(
     const db_owned_expression& lhs, db_binary_operator op, std::span<const db_tuple> values) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(values.size() + 3U);
     const auto left_idx = lhs.append_to_tree(*tree);
     db_query_node list_node(db_node_kind::list, tree->resource_);
     list_node.args_.reserve(values.size());
@@ -1072,6 +1119,7 @@ db_owned_expression db_owned_expression::make_in_subquery(
     const db_owned_expression& lhs, db_binary_operator op, const db_query& subquery) {
     subquery.require_select_query();
     auto tree = allocate_tree();
+    tree->nodes_.reserve(3U);
     const auto left_idx = lhs.append_to_tree(*tree);
     const auto query_idx = tree->queries_.size();
     tree->queries_.push_back(subquery.clone(tree->resource_));
@@ -1102,6 +1150,7 @@ db_owned_expression db_owned_expression::make_array_op(const db_owned_expression
     db_value (*element_at)(const void* context, std::size_t index),
     const db_type_definition& array_type) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(count + 4U);
     const auto left_idx = lhs.append_to_tree(*tree);
     db_query_node array_node(db_node_kind::array, tree->resource_);
     array_node.args_.reserve(count);
@@ -1124,6 +1173,7 @@ db_owned_expression db_owned_expression::make_array_op(const db_owned_expression
 db_owned_expression db_owned_expression::make_json_keys_op(
     const db_owned_expression& lhs, db_binary_operator op, std::span<const std::string_view> keys) {
     auto tree = allocate_tree();
+    tree->nodes_.reserve(keys.size() + 4U);
     const auto left_idx = lhs.append_to_tree(*tree);
     const auto keys_idx = push_tree_text_array(*tree, keys);
     db_query_node node_value(db_node_kind::binary, tree->resource_);
@@ -1239,12 +1289,15 @@ db_query::storage_owner_type db_query::copy_storage(const detail::db_query_stora
     if (source_value.source_) {
         target.source_.emplace(*source_value.source_, target.resource_);
     }
+    target.joins_.reserve(source_value.joins_.size());
     for (const auto& join : source_value.joins_) {
         target.joins_.emplace_back(join, target.resource_);
     }
+    target.assignments_.reserve(source_value.assignments_.size());
     for (const auto& assignment : source_value.assignments_) {
         target.assignments_.emplace_back(assignment.column_, assignment.expression_, target.resource_);
     }
+    target.ctes_.reserve(source_value.ctes_.size());
     for (const auto& cte : source_value.ctes_) {
         target.ctes_.emplace_back(cte, target.resource_);
     }
@@ -1317,6 +1370,7 @@ db_query& db_query::cache(std::string_view id, std::optional<std::chrono::millis
 
 detail::db_query_node db_query::make_node(db_node_kind kind, std::span<const db_expression> args) const {
     detail::db_query_node node_value(kind, resource());
+    node_value.args_.reserve(args.size());
     for (const auto arg : args) {
         node_value.args_.push_back(require_expression(arg));
     }
@@ -1375,6 +1429,7 @@ db_expression db_query::sql(std::span<const std::string_view> parts, std::span<c
             throw std::invalid_argument("SQL expression cannot contain NUL");
         }
     }
+    node_value.named_.reserve(args.size());
     for (std::size_t i = 0; i < args.size(); ++i) {
         node_value.named_.emplace_back(parts[i], require_expression(args[i]), resource());
     }
@@ -1385,6 +1440,7 @@ db_expression db_query::call(std::string_view function, std::span<const db_expre
     detail::require_name(function, true);
     auto node_value = make_node(db_node_kind::function, args);
     node_value.text_ = function;
+    node_value.named_.reserve(named.size());
     for (const auto& arg : named) {
         detail::require_name(arg.name_);
         if (std::ranges::any_of(node_value.named_, [&](const auto& existing) { return std::string_view(existing.name_) == arg.name_; })) {
@@ -1472,6 +1528,7 @@ db_expression db_query::case_when(std::span<const db_case_branch> branches, db_e
         throw std::invalid_argument("CASE requires a branch");
     }
     auto node_value = make_node(db_node_kind::case_value);
+    node_value.args_.reserve(branches.size() * 2U);
     for (const auto& branch : branches) {
         node_value.args_.push_back(require_expression(branch.when_.expression(*this)));
         node_value.args_.push_back(require_expression(branch.then_.expression(*this)));
@@ -1505,6 +1562,7 @@ db_expression db_query::aggregate(std::string_view function, std::span<const db_
     auto node_value = make_node(db_node_kind::aggregate, args);
     node_value.text_ = function;
     node_value.flag_ = distinct;
+    node_value.orders_.reserve(order.size());
     for (const auto& term : order) {
         node_value.orders_.push_back({require_expression(term.expression_.expression(*this)), term.direction_, term.nulls_});
     }
@@ -1524,6 +1582,7 @@ db_expression db_query::over(db_expression function, const db_window_options& wi
     for (const auto& item : window.partition_by_) {
         node_value.args_.push_back(require_expression(item.expression(*this)));
     }
+    node_value.orders_.reserve(window.order_by_.size());
     for (const auto& term : window.order_by_) {
         node_value.orders_.push_back({require_expression(term.expression_.expression(*this)), term.direction_, term.nulls_});
     }
@@ -1536,6 +1595,7 @@ db_expression db_query::within_group(db_expression function, std::span<const db_
     }
     auto node_value = make_node(db_node_kind::within_group);
     node_value.left_ = require_expression(function);
+    node_value.orders_.reserve(order.size());
     for (const auto& term : order) {
         node_value.orders_.push_back({require_expression(term.expression_.expression(*this)), term.direction_, term.nulls_});
     }
@@ -1592,6 +1652,7 @@ db_expression db_query::import_expression(db_expression expression, std::string_
 db_query& db_query::select(std::span<const db_expression> projections) {
     auto& s = storage();
     std::pmr::vector<std::size_t> owned(s.resource_);
+    owned.reserve(projections.size());
     for (const auto expression : projections) {
         owned.push_back(require_expression(expression));
     }
@@ -1654,6 +1715,7 @@ db_query& db_query::join(db_join_type type, std::string_view table_value, db_exp
     source_value.name_ = table_value;
     source_value.alias_ = alias;
     detail::db_stored_join join(type, std::move(source_value), on.empty() ? no_db_node : require_expression(on), s.resource_);
+    join.using_columns_.reserve(using_columns.size());
     for (const auto name : using_columns) {
         detail::require_name(name);
         join.using_columns_.emplace_back(name);
@@ -1703,6 +1765,7 @@ db_query& db_query::or_where(db_expression predicate) {
 }
 db_query& db_query::group_by(std::span<const db_expression> expressions) {
     std::pmr::vector<std::size_t> groups(resource());
+    groups.reserve(expressions.size());
     for (const auto expression : expressions) {
         groups.push_back(require_expression(expression));
     }
@@ -1765,6 +1828,7 @@ db_query& db_query::distinct_on(std::span<const db_expression> expressions) {
         throw std::invalid_argument("DISTINCT ON requires an expression");
     }
     std::pmr::vector<std::size_t> columns(resource());
+    columns.reserve(expressions.size());
     for (const auto expression : expressions) {
         columns.push_back(require_expression(expression));
     }
@@ -1775,6 +1839,7 @@ db_query& db_query::distinct_on(std::span<const db_expression> expressions) {
 }
 db_query& db_query::returning(std::span<const db_expression> expressions) {
     std::pmr::vector<std::size_t> columns(resource());
+    columns.reserve(expressions.size());
     for (const auto expression : expressions) {
         columns.push_back(require_expression(expression));
     }
@@ -1788,6 +1853,7 @@ db_query& db_query::insert_into(std::string_view table_value, std::span<const st
     }
     auto& s = storage();
     std::pmr::vector<std::pmr::string> names(s.resource_);
+    names.reserve(columns.size());
     for (const auto column : columns) {
         detail::require_name(column);
         if (std::ranges::any_of(names, [&](const auto& name) { return name == column; })) {
@@ -1807,6 +1873,7 @@ db_query& db_query::values(std::span<const db_expression> row) {
         throw std::invalid_argument("VALUES requires an INSERT or a values query");
     }
     std::pmr::vector<std::size_t> values(s.resource_);
+    values.reserve(row.size());
     for (const auto expression : row) {
         values.push_back(require_expression(expression));
     }

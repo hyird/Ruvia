@@ -124,6 +124,7 @@ struct db_query_node final {
           flag_(source_value.flag_),
           explicit_alias_(source_value.explicit_alias_),
           frame_(source_value.frame_) {
+        named_.reserve(source_value.named_.size());
         for (const auto& argument : source_value.named_) {
             named_.emplace_back(argument.name_, argument.expression_, resource);
         }
@@ -172,6 +173,7 @@ struct db_query_source final {
           lateral_(source_value.lateral_),
           ordinality_(source_value.ordinality_),
           columns_(resource) {
+        columns_.reserve(source_value.columns_.size());
         for (const auto& column : source_value.columns_) {
             columns_.emplace_back(column, resource);
         }
@@ -215,6 +217,7 @@ struct db_stored_cte final {
           recursive_(options.recursive_),
           materialization_(options.materialization_),
           columns_(resource) {
+        columns_.reserve(options.columns_.size());
         for (const auto& column : options.columns_) {
             columns_.emplace_back(column);
         }
@@ -254,6 +257,7 @@ struct db_stored_conflict final {
           update_where_(source_value.update_where_),
           do_nothing_(source_value.do_nothing_),
           any_unique_key_(source_value.any_unique_key_) {
+        assignments_.reserve(source_value.assignments_.size());
         for (const auto& assignment : source_value.assignments_) {
             assignments_.emplace_back(assignment.column_, assignment.expression_, resource);
         }
@@ -272,6 +276,7 @@ struct db_stored_lock final {
           nowait_(source_value.nowait_),
           skip_locked_(source_value.skip_locked_),
           tables_(resource) {
+        tables_.reserve(source_value.tables_.size());
         for (const auto& table : source_value.tables_) {
             tables_.emplace_back(table);
         }
