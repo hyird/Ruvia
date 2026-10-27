@@ -71,8 +71,8 @@ task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
 }
 
 // Own one lease, cancellation registration and failure cleanup for both a
-// single command and a pipeline. The source remains in this coroutine frame;
-// borrowed sources are retained by their enclosing caller until completion.
+// single command and a pipeline. Borrowed sources remain owned by their
+// enclosing caller; an owned single command can be released after encoding.
 template <typename result_type, typename command_source_type>
 task<result_type> redis_pool::execute_commands(command_source_type source, operation_options options,
     std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
@@ -121,6 +121,12 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
         for (const auto& command : commands) {
             const std::span<const std::pmr::string> args = command.args_;
             append_resp_command(write_buffer, args);
+        }
+        if constexpr (std::is_same_v<command_source_type, std::pmr::vector<std::pmr::string>>) {
+            static_assert(single_reply);
+            // The wire buffer now owns every argument; no later step uses the
+            // borrowed views in commands.
+            source.clear();
         }
 
         const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_).constrained_by(reply_timeout);
