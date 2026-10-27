@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
-#include <memory>
 #include <stdexcept>
 #include <utility>
 
@@ -138,6 +137,9 @@ redisReader* redis_reply_builder::create_reader() {
 }
 
 void redis_reply_builder::begin(std::pmr::memory_resource* resource) noexcept {
+    if (root_) {
+        std::terminate();
+    }
     resource_ = resource;
     remaining_elements_ = maximum_elements_;
     rejection_ = rejection_type::none;
@@ -158,28 +160,31 @@ void redis_reply_builder::throw_if_rejected() const {
 }
 
 redis_value redis_reply_builder::take(void* reply) noexcept {
-    auto* root = static_cast<redis_value*>(reply);
-    redis_value value(std::move(*root));
-    free_object(root);
+    auto* root = static_cast<root_slot*>(reply);
+    auto* owner = root->owner_;
+    redis_value value(std::move(root->value_));
+    owner->root_.reset();
     return value;
 }
 
 // hiredis creates the elements of an array in index order, so each child is
 // appended to its parent. Only the innermost open array grows and hiredis
 // keeps no pointer to its earlier, completed elements, so a reallocation never
-// invalidates a node the reader still refers to. Roots are allocated alone;
-// the reader hands them to free_object() or to the caller.
+// invalidates a node the reader still refers to. The root stays in this
+// connection's builder and hiredis only passes that root to free_object().
 template <typename factory_type>
 void* redis_reply_builder::place(const redisReadTask* task_value, factory_type&& factory) noexcept {
     try {
         if (task_value->parent != nullptr) {
-            auto& siblings = redis_types_access::elements(*static_cast<redis_value*>(task_value->parent->obj));
+            auto* parent = task_value->parent->parent == nullptr
+                               ? &static_cast<root_slot*>(task_value->parent->obj)->value_
+                               : static_cast<redis_value*>(task_value->parent->obj);
+            auto& siblings = redis_types_access::elements(*parent);
             siblings.push_back(factory());
             return &siblings.back();
         }
-        auto value = factory();
-        std::pmr::polymorphic_allocator<redis_value> allocator(resource_);
-        return std::construct_at(allocator.allocate(1), std::move(value));
+        root_.emplace(*this, factory());
+        return &*root_;
     } catch (...) {
         rejection_ = rejection_type::failed;
         failure_ = std::current_exception();
@@ -249,10 +254,8 @@ void* redis_reply_builder::create_bool(const redisReadTask* task_value, int valu
 }
 
 void redis_reply_builder::free_object(void* reply) noexcept {
-    auto* root = static_cast<redis_value*>(reply);
-    std::pmr::polymorphic_allocator<redis_value> allocator(redis_types_access::resource(*root));
-    std::destroy_at(root);
-    allocator.deallocate(root, 1);
+    auto* root = static_cast<root_slot*>(reply);
+    root->owner_->root_.reset();
 }
 
 }  // namespace ruvia::detail

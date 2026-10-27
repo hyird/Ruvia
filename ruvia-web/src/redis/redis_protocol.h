@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/redis/redis.h"
 
@@ -31,9 +32,9 @@ void append_resp_command(std::pmr::string& output, std::span<const std::pmr::str
 [[nodiscard]] const char* hiredis_reader_error(const redisReader& reader_value) noexcept;
 
 // The only RESP reply construction path: hiredis' reader calls these object
-// functions while parsing, so every node is a redis_value allocated straight
-// from the resource of the read in progress. One builder serves one
-// connection's reader for the reader's whole life and enforces the configured
+// functions while parsing. The root lives in the connection's builder;
+// payload and nested storage use the resource of the read in progress. One
+// builder serves one reader for its whole life and enforces the configured
 // reply budget: total array elements (one per three reply bytes) and array
 // nesting depth. A rejected or failed node makes the reader fail; the reader
 // then frees the partial tree through the builder.
@@ -48,7 +49,7 @@ public:
     // outlive it. Throws redis_error when hiredis cannot allocate the reader.
     [[nodiscard]] redisReader* create_reader();
 
-    // Starts reading one reply: nodes are allocated from `resource` and the
+    // Starts reading one reply: its owned payload uses `resource` and the
     // per-reply budget is restored.
     void begin(std::pmr::memory_resource* resource) noexcept;
 
@@ -66,6 +67,14 @@ private:
         depth,
         failed };
 
+    struct root_slot final {
+        root_slot(redis_reply_builder& owner, redis_value&& value) noexcept
+            : owner_(&owner),
+              value_(std::move(value)) {}
+        redis_reply_builder* owner_;
+        redis_value value_;
+    };
+
     template <typename factory_type>
     void* place(const redisReadTask* task_value, factory_type&& factory) noexcept;
 
@@ -79,6 +88,8 @@ private:
 
     static redisReplyObjectFunctions functions_;
 
+    // One root may be under construction until hiredis completes or rejects it.
+    std::optional<root_slot> root_;
     redisReader* reader_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
     std::optional<std::size_t> max_reply_bytes_;
