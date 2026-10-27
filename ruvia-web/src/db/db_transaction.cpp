@@ -258,8 +258,12 @@ task<void> db_transaction::release_savepoint(std::string_view name) & {
 task<void> db_transaction::run_savepoint_command(std::string_view prefix, std::string_view name) {
     registration_.require_active();
     const auto& lease_value = state_->operation_.preparation_payload();
-    std::pmr::string sql(prefix, lease_value.resource_);
-    detail::append_db_identifier(sql, name, detail::db_pool_driver(lease_value.client_));
+    const auto driver = detail::db_pool_driver(lease_value.client_);
+    detail::validate_db_identifier(name, driver);
+    std::pmr::string sql(lease_value.resource_);
+    sql.reserve(prefix.size() + name.size() + 2);
+    sql.append(prefix);
+    detail::append_db_identifier(sql, name, driver);
     operation_guard_type operation(state_->operation_);
     auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
@@ -396,15 +400,19 @@ task<void> db_transaction::declare_cursor(
         throw std::invalid_argument("SQL must not be empty");
     }
     const auto& lease_value = state_->operation_.preparation_payload();
-    auto statement = prepare_db_statement(sql, params, lease_value.resource_);
-    std::pmr::string command("DECLARE ", lease_value.resource_);
+    detail::validate_db_identifier(name, db_driver::postgresql);
+    const std::string_view mode = scroll ? " SCROLL CURSOR FOR " : " NO SCROLL CURSOR FOR ";
+    std::pmr::string command(lease_value.resource_);
+    command.reserve(8 + name.size() + 2 + mode.size() + sql.size());
+    command.append("DECLARE ");
     detail::append_db_identifier(command, name, db_driver::postgresql);
-    command += scroll ? " SCROLL CURSOR FOR " : " NO SCROLL CURSOR FOR ";
-    command += statement.sql_;
+    command.append(mode);
+    command.append(sql);
+    auto owned_params = detail::clone_db_values(params, lease_value.resource_);
     operation_guard_type operation(state_->operation_);
     auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(scope,
-        execute_void_task(std::move(command), std::move(statement.params_), scope, std::move(operation)));
+        execute_void_task(std::move(command), std::move(owned_params), scope, std::move(operation)));
 }
 
 task<db_rows> db_transaction::fetch_cursor(std::string_view name, std::uint64_t count) & {
@@ -413,9 +421,12 @@ task<db_rows> db_transaction::fetch_cursor(std::string_view name, std::uint64_t 
         throw std::invalid_argument("cursor fetch count exceeds signed 64-bit range");
     }
     const auto& lease_value = state_->operation_.preparation_payload();
-    std::pmr::string sql("FETCH FORWARD ", lease_value.resource_);
+    detail::validate_db_identifier(name, db_driver::postgresql);
+    std::pmr::string sql(lease_value.resource_);
+    sql.reserve(14 + 20 + 6 + name.size() + 2);
+    sql.append("FETCH FORWARD ");
     detail::append_db_number(sql, count);
-    sql += " FROM ";
+    sql.append(" FROM ");
     detail::append_db_identifier(sql, name, db_driver::postgresql);
     operation_guard_type operation(state_->operation_);
     auto& scope = registration_.scope();
