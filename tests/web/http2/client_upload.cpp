@@ -34,7 +34,8 @@ enum class response_mode { ordinary,
     disconnected,
     refused,
     connection_lost,
-    connection_lost_upload };
+    connection_lost_upload,
+    goaway_upload };
 
 constexpr std::size_t streaming_payload_bytes = 256 * 1024;
 
@@ -103,7 +104,8 @@ private:
         if (std::string_view(preface.data(), preface.size()) != ruvia::http2_client_preface) {
             throw std::runtime_error("missing HTTP/2 client preface");
         }
-        if (mode_ == response_mode::connection_lost || mode_ == response_mode::connection_lost_upload) {
+        if (mode_ == response_mode::connection_lost || mode_ == response_mode::connection_lost_upload ||
+            mode_ == response_mode::goaway_upload) {
             std::string wire;
             const std::array<char, 6> no_streams{0, 3, 0, 0, 0, 0};
             append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {no_streams.data(), no_streams.size()});
@@ -128,6 +130,17 @@ private:
                 if (type == ruvia::http2_frame_type::ping && (header->flags_ & 1U) != 0) {
                     break;
                 }
+            }
+            if (mode_ == response_mode::goaway_upload) {
+                wire.clear();
+                const std::array<char, 8> goaway{};
+                append_frame(wire, ruvia::http2_frame_type::goaway, 0, 0, {goaway.data(), goaway.size()});
+                co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
+                std::array<char, 1024> remaining;
+                std::error_code error;
+                do {
+                    co_await socket_.async_read_some(asio::buffer(remaining), asio::redirect_error(asio::use_awaitable, error));
+                } while (!error);
             }
             socket_.close();
             co_await acceptor_.async_accept(socket_, asio::use_awaitable);
@@ -261,7 +274,9 @@ private:
             }
             if (requests_ == 2 || (requests_ == 1 && (mode_ == response_mode::disconnected ||
                                                          mode_ == response_mode::connection_lost ||
-                                                         (mode_ == response_mode::connection_lost_upload && request_ended_)))) {
+                                                         ((mode_ == response_mode::connection_lost_upload ||
+                                                              mode_ == response_mode::goaway_upload) &&
+                                                             request_ended_)))) {
                 co_return;
             }
         }
@@ -295,7 +310,7 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
         try {
             if (mode == response_mode::refused || mode == response_mode::connection_lost) {
                 // These cases start with the request below.
-            } else if (mode == response_mode::connection_lost_upload) {
+            } else if (mode == response_mode::connection_lost_upload || mode == response_mode::goaway_upload) {
                 auto exchange = co_await client.handle().open_request(
                     {.method_ = "POST", .target_ = "/upload"}, {.content_length_ = 7});
                 co_await exchange.body().write("payload");
@@ -390,7 +405,8 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                     RUVIA_CHECK(cancelled);
                 }
             }
-            if (mode != response_mode::disconnected && mode != response_mode::connection_lost_upload) {
+            if (mode != response_mode::disconnected && mode != response_mode::connection_lost_upload &&
+                mode != response_mode::goaway_upload) {
                 auto next = co_await client.handle().send({.target_ = "/next"});
                 const auto bytes = co_await next.body().read_all();
                 const auto body = bytes.bytes();
@@ -479,4 +495,8 @@ RUVIA_TEST(http2_client_retries_unsubmitted_request_after_connection_loss) {
 
 RUVIA_TEST(http2_client_retries_unsubmitted_streaming_upload_after_connection_loss) {
     http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::connection_lost_upload);
+}
+
+RUVIA_TEST(http2_client_retries_unsubmitted_streaming_upload_after_goaway) {
+    http2_client_upload_test::exercise(ruvia_ctx, http2_client_upload_test::response_mode::goaway_upload);
 }

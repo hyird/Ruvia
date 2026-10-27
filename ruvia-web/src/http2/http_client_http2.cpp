@@ -540,7 +540,8 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             !timeout.expired() && !stop_token_value.stop_requested()) {
             continue;
         }
-        if (retryable && request.output() == nullptr && attempt_value == 0 && !timeout.expired()) {
+        if (retryable && (request.output() == nullptr || stream.stream_id_ == 0) &&
+            attempt_value == 0 && !timeout.expired()) {
             continue;
         }
         if (retryable) {
