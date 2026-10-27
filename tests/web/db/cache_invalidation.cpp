@@ -276,6 +276,13 @@ ruvia::task<std::vector<std::string>> read_many(const ruvia::db_handle& handle, 
     co_return values;
 }
 
+ruvia::task<std::string> read_sql_cached(const ruvia::db_handle& handle, std::string_view parameter) {
+    auto query = handle.repository<record>().query_builder();
+    query.where(record::column<"v">() == parameter).cache(cache_lifetime);
+    const auto row = co_await query.get_one();
+    co_return row ? std::string(std::string_view(row->get<"v">())) : std::string("missing");
+}
+
 }  // namespace
 
 RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
@@ -351,6 +358,55 @@ RUVIA_TEST(db_query_result_cache_remove_invalidates_repository_result_shapes) {
                 const auto outside = co_await store.get("outside-cache");
                 RUVIA_CHECK(outside.has_value() && *outside == "keep");
                 RUVIA_CHECK(co_await read_many(handle, suffixed_id) == std::vector<std::string>{"epsilon"});
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            co_await database.shutdown();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+        co_await redis.shutdown();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    try {
+        ruvia::test::drive_backend_task(attachment, exercise());
+    } catch (...) {
+        ruvia::test::retire_backend_attachment(attachment);
+        throw;
+    }
+    ruvia::test::retire_backend_attachment(attachment);
+}
+
+RUVIA_TEST(db_query_result_cache_distinguishes_sql_parameter_values) {
+    redis_store_peer redis_peer;
+    ruvia::test::backend_startup_peer database_peer(ruvia::test::backend_startup_peer::protocol::postgresql, false,
+        ruvia::test::backend_startup_peer::after_startup::idle, {{.rows_ = {"first"}}, {.rows_ = {"second"}}});
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
+        .port_ = redis_peer.port(),
+        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled},
+        .pool_size_per_worker_ = 1};
+    auto exercise = [&]() -> ruvia::task<void> {
+        ruvia::redis_client redis(attachment.loop(), redis_config);
+        std::exception_ptr failure;
+        try {
+            co_await redis.connect();
+            ruvia::db_client database(attachment.loop(), database_peer.config(), redis.handle(), ruvia::db_cache_config{});
+            try {
+                co_await database.connect();
+                const auto handle = database.handle();
+                const std::string large_parameter(8192, 'x');
+                std::string different_parameter = large_parameter;
+                different_parameter.back() = 'y';
+                RUVIA_CHECK_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
+                RUVIA_CHECK_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
+                RUVIA_CHECK_EQ(co_await read_sql_cached(handle, different_parameter), std::string("second"));
+                RUVIA_CHECK_EQ(co_await read_sql_cached(handle, large_parameter), std::string("first"));
             } catch (...) {
                 failure = std::current_exception();
             }

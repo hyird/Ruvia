@@ -4,9 +4,11 @@
 #include <bit>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stdexcept>
 
+#include <openssl/evp.h>
 #include <openssl/sha.h>
 
 #include "ruvia/http/http_hex.h"
@@ -77,6 +79,49 @@ constexpr std::size_t full_prefix_bytes = cache_prefix.size() + digest_text_byte
     http_append_lower_hex(result, hash);
     return result;
 }
+
+// SQL and parameters can be large. Feed the existing byte encoding directly
+// into SHA-256 instead of copying the entire input into a temporary string.
+class cache_key_hasher final {
+public:
+    cache_key_hasher()
+        : context_(EVP_MD_CTX_new(), &EVP_MD_CTX_free) {
+        if (!context_ || EVP_DigestInit_ex(context_.get(), EVP_sha256(), nullptr) != 1) {
+            throw std::runtime_error("database cache key digest failed");
+        }
+    }
+    void bytes(std::string_view value) {
+        if (!value.empty() && EVP_DigestUpdate(context_.get(), value.data(), value.size()) != 1) {
+            throw std::runtime_error("database cache key digest failed");
+        }
+    }
+    void number(std::uint64_t value) {
+        std::array<char, 8> encoded;
+        for (unsigned index = 0; index < encoded.size(); ++index) {
+            encoded[index] = static_cast<char>((value >> (index * 8)) & 255);
+        }
+        bytes({encoded.data(), encoded.size()});
+    }
+    void text(std::string_view value) {
+        number(value.size());
+        bytes(value);
+    }
+    void type(db_value_type value) {
+        const auto byte = static_cast<char>(value);
+        bytes({&byte, 1});
+    }
+    void append_result(std::pmr::string& output) {
+        std::array<unsigned char, SHA256_DIGEST_LENGTH> hash{};
+        unsigned length = 0;
+        if (EVP_DigestFinal_ex(context_.get(), hash.data(), &length) != 1 || length != hash.size()) {
+            throw std::runtime_error("database cache key digest failed");
+        }
+        http_append_lower_hex(output, hash);
+    }
+
+private:
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context_;
+};
 
 }  // namespace
 
@@ -209,35 +254,35 @@ std::pmr::string db_cache_key(std::string_view prefix, std::string_view id, db_c
     std::pmr::string result_value(resource);
     result_value.reserve(prefix.size() + 4 + digest_text_bytes);
     result_value.append(prefix);
-    std::pmr::string input(resource);
-    number(input, static_cast<std::uint64_t>(driver));
-    text(input, sql);
-    number(input, params.size());
+    cache_key_hasher input;
+    input.number(static_cast<std::uint64_t>(driver));
+    input.text(sql);
+    input.number(params.size());
     for (const auto& value : params) {
         const auto type = db_value_access::type(value);
-        input.push_back(static_cast<char>(type));
+        input.type(type);
         switch (type) {
             case db_value_type::null:
                 break;
             case db_value_type::string:
-                text(input, db_value_access::text(value));
+                input.text(db_value_access::text(value));
                 break;
             case db_value_type::signed_value:
-                number(input, static_cast<std::uint64_t>(db_value_access::signed_value(value)));
+                input.number(static_cast<std::uint64_t>(db_value_access::signed_value(value)));
                 break;
             case db_value_type::unsigned_value:
-                number(input, db_value_access::unsigned_value(value));
+                input.number(db_value_access::unsigned_value(value));
                 break;
             case db_value_type::double_value:
-                number(input, std::bit_cast<std::uint64_t>(db_value_access::get_double_value(value)));
+                input.number(std::bit_cast<std::uint64_t>(db_value_access::get_double_value(value)));
                 break;
             case db_value_type::bool_value:
-                number(input, db_value_access::get_bool_value(value));
+                input.number(db_value_access::get_bool_value(value));
                 break;
         }
     }
     result_value.append("sql:");
-    append_digest(result_value, input);
+    input.append_result(result_value);
     return result_value;
 }
 }  // namespace ruvia::detail
