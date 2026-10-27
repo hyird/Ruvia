@@ -65,19 +65,19 @@ bool set_mysql_timeout(st_mysql& connection, mysql_option option,
     return mysql_optionsv(&connection, option, &seconds) == 0;
 }
 
-mysql_wait_deadline select_mysql_wait_deadline(std::optional<std::chrono::milliseconds> operation_timeout_value,
-    std::optional<std::chrono::milliseconds> driver_timeout) noexcept {
-    if (operation_timeout_value && driver_timeout) {
-        if (*operation_timeout_value <= *driver_timeout) {
-            return {*operation_timeout_value, mysql_wait_deadline_source::operation};
+mysql_wait_deadline select_mysql_wait_deadline(std::optional<std::chrono::steady_clock::time_point> operation_deadline,
+    std::optional<std::chrono::steady_clock::time_point> driver_deadline) noexcept {
+    if (operation_deadline && driver_deadline) {
+        if (*operation_deadline <= *driver_deadline) {
+            return {*operation_deadline, mysql_wait_deadline_source::operation};
         }
-        return {*driver_timeout, mysql_wait_deadline_source::driver};
+        return {*driver_deadline, mysql_wait_deadline_source::driver};
     }
-    if (operation_timeout_value) {
-        return {*operation_timeout_value, mysql_wait_deadline_source::operation};
+    if (operation_deadline) {
+        return {*operation_deadline, mysql_wait_deadline_source::operation};
     }
-    if (driver_timeout) {
-        return {*driver_timeout, mysql_wait_deadline_source::driver};
+    if (driver_deadline) {
+        return {*driver_deadline, mysql_wait_deadline_source::driver};
     }
     return {};
 }

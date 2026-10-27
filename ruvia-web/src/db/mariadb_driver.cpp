@@ -140,16 +140,16 @@ struct mysql_wait final {
 [[nodiscard]] mysql_wait wait_for_mysql(
     mariadb_pool& pool, std::size_t index, int status, const operation_timeout& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
-    const auto timeout = deadline_value.remaining();
-    if (timeout.has_value() && timeout->count() <= 0) {
+    const auto operation_deadline = deadline_value.deadline();
+    if (operation_deadline && *operation_deadline <= std::chrono::steady_clock::now()) {
         throw pool.timed_out();
     }
-    std::optional<std::chrono::milliseconds> driver_timeout;
+    std::optional<std::chrono::steady_clock::time_point> driver_deadline;
     if ((status & MYSQL_WAIT_TIMEOUT) != 0) {
         const auto milliseconds = mysql_get_timeout_value_ms(&connection);
-        driver_timeout = std::chrono::milliseconds(milliseconds == 0 ? 1 : milliseconds);
+        driver_deadline = worker_timer_deadline_after(std::chrono::milliseconds(milliseconds == 0 ? 1 : milliseconds));
     }
-    const auto selected_deadline = select_mysql_wait_deadline(timeout, driver_timeout);
+    const auto selected_deadline = select_mysql_wait_deadline(operation_deadline, driver_deadline);
     db_socket_readiness wanted = db_socket_readiness::none;
     if ((status & MYSQL_WAIT_READ) != 0) {
         wanted = wanted | db_socket_readiness::read;
@@ -162,11 +162,11 @@ struct mysql_wait final {
     }
 
     if (wanted == db_socket_readiness::none) {
-        if (!selected_deadline.timeout_) {
+        if (!selected_deadline.deadline_) {
             throw db_error(
                 db_error::code_type::io_error, db_driver::mariadb, "MariaDB requested an unsupported empty wait");
         }
-        return mysql_wait{pool, selected_deadline.source_, pool.sleep(index, selected_deadline.timeout_, deadline_value)};
+        return mysql_wait{pool, selected_deadline.source_, pool.sleep(index, selected_deadline.deadline_, deadline_value)};
     }
 
     const auto native = mysql_native_socket(connection);
@@ -175,7 +175,7 @@ struct mysql_wait final {
             std::make_error_code(std::errc::bad_file_descriptor));
     }
     return mysql_wait{pool, selected_deadline.source_,
-        pool.wait_socket(index, native, wanted, selected_deadline.timeout_, deadline_value)};
+        pool.wait_socket(index, native, wanted, selected_deadline.deadline_, deadline_value)};
 }
 
 // The session's client character set, read for a string parameter whose

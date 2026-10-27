@@ -323,7 +323,7 @@ public:
     class slot_wait final {
     public:
         slot_wait(db_pool& pool, std::size_t index, db_deadline_kind kind, db_slot_socket::native_socket_type native,
-            db_socket_readiness wanted, std::optional<std::chrono::milliseconds> wait_timeout,
+            db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
             const operation_timeout& operation_deadline) noexcept;
         ~slot_wait();
 
@@ -339,7 +339,7 @@ public:
         std::size_t index_;
         db_deadline_kind kind_;
         db_slot_socket::native_socket_type native_;
-        std::optional<std::chrono::milliseconds> wait_timeout_;
+        std::optional<std::chrono::steady_clock::time_point> wait_deadline_;
         const operation_timeout& operation_deadline_;
         db_slot_socket::readiness_awaiter socket_wait_;
         // The slot is marked borrowed between arming and resumption.
@@ -347,14 +347,14 @@ public:
     };
 
     [[nodiscard]] slot_wait wait_socket(std::size_t index, db_slot_socket::native_socket_type native,
-        db_socket_readiness wanted, std::optional<std::chrono::milliseconds> wait_timeout,
+        db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
         const operation_timeout& operation_deadline) noexcept {
-        return slot_wait(*this, index, db_deadline_kind::socket, native, wanted, wait_timeout, operation_deadline);
+        return slot_wait(*this, index, db_deadline_kind::socket, native, wanted, wait_deadline, operation_deadline);
     }
-    [[nodiscard]] slot_wait sleep(std::size_t index, std::optional<std::chrono::milliseconds> wait_timeout,
+    [[nodiscard]] slot_wait sleep(std::size_t index, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
         const operation_timeout& operation_deadline) noexcept {
         return slot_wait(*this, index, db_deadline_kind::sleep, db_slot_socket::invalid_socket,
-            db_socket_readiness::none, wait_timeout, operation_deadline);
+            db_socket_readiness::none, wait_deadline, operation_deadline);
     }
     [[nodiscard]] db_error timed_out() const;
     [[nodiscard]] db_error closing_error() const;

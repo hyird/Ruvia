@@ -280,7 +280,7 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
     };
 
     leases_.throw_if_aborted(index);
-    if (!leases_.arm_deadline(index, deadline_value.remaining(), db_deadline_kind::resolve)) {
+    if (!leases_.arm_deadline(index, deadline_value.deadline(), db_deadline_kind::resolve)) {
         throw resolve_timed_out();
     }
     auto& slot = slots_[index];
@@ -319,12 +319,12 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
 template <typename driver_type>
 db_pool<driver_type>::slot_wait::slot_wait(db_pool& pool, std::size_t index, db_deadline_kind kind,
     db_slot_socket::native_socket_type native, db_socket_readiness wanted,
-    std::optional<std::chrono::milliseconds> wait_timeout, const operation_timeout& operation_deadline) noexcept
+    std::optional<std::chrono::steady_clock::time_point> wait_deadline, const operation_timeout& operation_deadline) noexcept
     : pool_(pool),
       index_(index),
       kind_(kind),
       native_(native),
-      wait_timeout_(wait_timeout),
+      wait_deadline_(wait_deadline),
       operation_deadline_(operation_deadline),
       socket_wait_(pool.slots_[index].wait_socket_.wait(wanted)) {}
 
@@ -347,7 +347,7 @@ bool db_pool<driver_type>::slot_wait::await_ready() {
                 error.value());
         }
     }
-    if (!leases.arm_deadline(index_, wait_timeout_, kind_)) {
+    if (!leases.arm_deadline(index_, wait_deadline_, kind_)) {
         return true;
     }
     if (slot.wait_active_) {
@@ -398,7 +398,7 @@ db_socket_wait_result db_pool<driver_type>::slot_wait::await_resume() {
             slot.wait_socket_.close();
         }
         result_value.expired_ = leases.poll_deadline(index_) ||
-                                (wait_timeout_.has_value() && wait_timeout_->count() <= 0);
+                                (wait_deadline_.has_value() && *wait_deadline_ <= std::chrono::steady_clock::now());
     }
     (void)leases.clear_deadline(index_);
     leases.throw_if_aborted(index_);

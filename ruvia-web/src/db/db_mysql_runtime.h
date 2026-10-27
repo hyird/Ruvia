@@ -19,12 +19,12 @@ enum class mysql_wait_deadline_source : std::uint8_t {
 };
 
 struct mysql_wait_deadline final {
-    std::optional<std::chrono::milliseconds> timeout_;
+    std::optional<std::chrono::steady_clock::time_point> deadline_;
     mysql_wait_deadline_source source_{mysql_wait_deadline_source::none};
 };
 
 [[nodiscard]] mysql_wait_deadline select_mysql_wait_deadline(
-    std::optional<std::chrono::milliseconds> operation_timeout_value,
-    std::optional<std::chrono::milliseconds> driver_timeout) noexcept;
+    std::optional<std::chrono::steady_clock::time_point> operation_deadline,
+    std::optional<std::chrono::steady_clock::time_point> driver_deadline) noexcept;
 
 }  // namespace ruvia::detail

@@ -703,9 +703,9 @@ public:
         explicit socket_wait(db_pipeline_reader& reader) noexcept
             : reader_(reader) {}
         socket_wait(db_pipeline_reader& reader, std::size_t slot, db_slot_socket::native_socket_type native,
-            db_socket_readiness wanted, std::optional<std::chrono::milliseconds> timeout) noexcept
+            db_socket_readiness wanted, std::optional<clock_type::time_point> deadline) noexcept
             : reader_(reader) {
-            wait_.emplace(reader.pool_, slot, db_deadline_kind::socket, native, wanted, timeout, reader.unbounded_);
+            wait_.emplace(reader.pool_, slot, db_deadline_kind::socket, native, wanted, deadline, reader.unbounded_);
         }
         socket_wait(const socket_wait&) = delete;
         socket_wait& operator=(const socket_wait&) = delete;
@@ -785,12 +785,8 @@ public:
             if (io_deadline_.has_value() && (!until.has_value() || *io_deadline_ < *until)) {
                 until = io_deadline_;
             }
-            std::optional<std::chrono::milliseconds> wait_timeout;
-            if (until.has_value()) {
-                wait_timeout = worker_timer_ceil_milliseconds(*until - now);
-            }
             group.wait_deadline_ = until;
-            return socket_wait(*this, slot, io_type::socket(pool_, slot), wanted, wait_timeout);
+            return socket_wait(*this, slot, io_type::socket(pool_, slot), wanted, until);
         } catch (...) {
             fail(std::current_exception());
         }

@@ -134,17 +134,6 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::p
         fields_value.data(), fields_value.size(), column_names.data(), column_names.size());
 }
 
-[[nodiscard]] std::optional<std::chrono::milliseconds> earlier_timeout(
-    std::optional<std::chrono::milliseconds> left, std::optional<std::chrono::milliseconds> right) noexcept {
-    if (!left.has_value()) {
-        return right;
-    }
-    if (!right.has_value()) {
-        return left;
-    }
-    return std::min(*left, *right);
-}
-
 [[nodiscard]] bool flush_postgresql(pg_conn& connection) {
     const auto status = PQflush(&connection);
     if (status < 0) {
@@ -199,13 +188,12 @@ struct postgresql_socket_wait final {
 
 [[nodiscard]] postgresql_socket_wait wait_for_postgresql(postgresql_pool& pool, std::size_t index,
     db_socket_readiness wanted, const operation_timeout& deadline_value) {
-    const auto remaining = deadline_value.remaining();
-    if (remaining.has_value() && remaining->count() <= 0) {
+    if (deadline_value.expired()) {
         throw pool.timed_out();
     }
     return postgresql_socket_wait{pool,
         pool.wait_socket(index, postgresql_pipeline_io::socket(pool, index), wanted,
-            earlier_timeout(remaining, db_io_timeout(pool.config(), wanted)), deadline_value)};
+            deadline_value.constrained_by(db_io_timeout(pool.config(), wanted)).deadline(), deadline_value)};
 }
 
 // Called only after PQflush() reports pending output: waits for read or write

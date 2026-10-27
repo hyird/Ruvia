@@ -239,21 +239,20 @@ public:
         }
     }
 
-    // Replaces the slot's deadline. An absent remaining time leaves the slot
-    // without a deadline; an exhausted one leaves it without a deadline and
-    // returns false so the caller reports its own timeout. A failure to
-    // schedule rolls the slot back to no deadline before propagating.
+    // Replaces the slot's absolute deadline. An absent deadline leaves the
+    // slot unarmed; an expired one returns false so the caller reports its own
+    // timeout. A scheduling failure rolls the slot back before propagating.
     [[nodiscard]] bool arm_deadline(
-        std::size_t slot, std::optional<std::chrono::milliseconds> remaining, deadline_kind_type kind) {
+        std::size_t slot, std::optional<std::chrono::steady_clock::time_point> deadline, deadline_kind_type kind) {
         auto& state = slots_[slot];
         (void)clear_deadline(slot);
-        if (!remaining.has_value()) {
+        if (!deadline.has_value()) {
             return true;
         }
-        if (remaining->count() <= 0) {
+        if (*deadline <= std::chrono::steady_clock::now()) {
             return false;
         }
-        const auto deadline_value = worker_timer_deadline_after(*remaining);
+        const auto deadline_value = *deadline;
         state.deadline_.arm(deadline_value, kind);
         try {
             (void)worker_.schedule_timer(state.deadline_timer_, deadline_value,
