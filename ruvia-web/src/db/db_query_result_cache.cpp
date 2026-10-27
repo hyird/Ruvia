@@ -149,6 +149,9 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
             }
             co_return std::move(*rows);
         }
+        // An ignored corrupt entry cannot contribute to the fallback result.
+        // Release its storage before awaiting the database.
+        bytes_value.reset();
     }
     if (deadline.expired()) {
         throw_db_query_timeout();
