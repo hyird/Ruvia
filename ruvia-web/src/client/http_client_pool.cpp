@@ -48,19 +48,14 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
     return config.connection_count_ * config.max_concurrent_http2_streams_per_connection_;
 }
 
-[[nodiscard]] task<std::size_t> acquire_http1_exchange_slot(
-    pool_lease_scheduler& scheduler, const operation_timeout& timeout, stop_token stop_token_value) {
-    const auto result_value = co_await scheduler.acquire(timeout.remaining(), std::move(stop_token_value));
-    if (result_value.has_value()) {
-        co_return result_value.value();
-    }
-    if (result_value.status() == worker_wait_status::timed_out) {
+[[noreturn]] void throw_http1_acquire_failure(worker_wait_status status) {
+    if (status == worker_wait_status::timed_out) {
         throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 connection acquire timed out");
     }
-    if (result_value.status() == worker_wait_status::cancelled) {
+    if (status == worker_wait_status::cancelled) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP/1 request cancelled");
     }
-    if (result_value.status() == worker_wait_status::closed) {
+    if (status == worker_wait_status::closed) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closing");
     }
     std::terminate();
@@ -394,8 +389,12 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
                 --connection_.http1_operations_;
             }
         } operation{*this, connection_value, must_buffer};
-        const auto slot =
-            co_await acquire_http1_exchange_slot(connection_value.http1_scheduler_, acquire_timeout, stop_token_value);
+        const auto acquired =
+            co_await connection_value.http1_scheduler_.acquire(acquire_timeout.remaining(), stop_token_value);
+        if (!acquired.has_value()) {
+            throw_http1_acquire_failure(acquired.status());
+        }
+        const auto slot = acquired.value();
         if (operation.buffered_) {
             --requests_buffered_;
             ++requests_in_flight_;
