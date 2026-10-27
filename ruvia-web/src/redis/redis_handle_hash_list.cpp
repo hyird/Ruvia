@@ -78,10 +78,13 @@ task<std::pmr::vector<std::pmr::string>> redis_handle::hvals(std::string_view ke
 task<std::int64_t> redis_handle::hincr_by(
     std::string_view key, std::string_view field, std::int64_t value) const {
     registration_.require_active();
-    auto amount = detail::redis_int_string(value, resource_);
-    return scoped(detail::redis_integer_command(executor(),
-        detail::own_redis_args({"HINCRBY", key, field, std::string_view(amount)}, resource_),
-        resource_));
+    std::pmr::vector<std::pmr::string> args(resource_);
+    args.reserve(4);
+    detail::emplace_redis_string(args, "HINCRBY");
+    detail::emplace_redis_string(args, key);
+    detail::emplace_redis_string(args, field);
+    args.emplace_back(detail::redis_int_string(value, resource_));
+    return scoped(detail::redis_integer_command(executor(), std::move(args), resource_));
 }
 
 task<std::int64_t> redis_handle::lpush(
@@ -133,10 +136,13 @@ task<std::optional<std::pmr::string>> redis_handle::lindex(
 task<void> redis_handle::lset(
     std::string_view key, std::int64_t index, std::string_view value) const {
     registration_.require_active();
-    auto index_value = detail::redis_int_string(index, resource_);
-    return scoped(detail::redis_ok_command(executor(),
-        detail::own_redis_args({"LSET", key, std::string_view(index_value), value}, resource_),
-        resource_));
+    std::pmr::vector<std::pmr::string> args(resource_);
+    args.reserve(4);
+    detail::emplace_redis_string(args, "LSET");
+    detail::emplace_redis_string(args, key);
+    args.emplace_back(detail::redis_int_string(index, resource_));
+    detail::emplace_redis_string(args, value);
+    return scoped(detail::redis_ok_command(executor(), std::move(args), resource_));
 }
 
 task<void> redis_handle::ltrim(
@@ -149,10 +155,13 @@ task<void> redis_handle::ltrim(
 task<std::int64_t> redis_handle::lrem(
     std::string_view key, std::int64_t count, std::string_view value) const {
     registration_.require_active();
-    auto count_value = detail::redis_int_string(count, resource_);
-    return scoped(detail::redis_integer_command(executor(),
-        detail::own_redis_args({"LREM", key, std::string_view(count_value), value}, resource_),
-        resource_));
+    std::pmr::vector<std::pmr::string> args(resource_);
+    args.reserve(4);
+    detail::emplace_redis_string(args, "LREM");
+    detail::emplace_redis_string(args, key);
+    args.emplace_back(detail::redis_int_string(count, resource_));
+    detail::emplace_redis_string(args, value);
+    return scoped(detail::redis_integer_command(executor(), std::move(args), resource_));
 }
 
 }  // namespace ruvia

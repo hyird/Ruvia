@@ -48,25 +48,39 @@ redis_owned_command make_owned_redis_command(std::pmr::memory_resource* resource
 
 redis_owned_command make_redis_integer_command(std::string_view command,
     std::string_view key, std::int64_t value, std::pmr::memory_resource* resource) {
-    auto amount = redis_int_string(value, resource);
-    return {own_redis_args({command, key, std::string_view(amount)}, resource)};
+    std::pmr::vector<std::pmr::string> args(resource);
+    args.reserve(3);
+    emplace_redis_string(args, command);
+    emplace_redis_string(args, key);
+    args.emplace_back(redis_int_string(value, resource));
+    return {std::move(args)};
 }
 
 redis_owned_command make_redis_range_command(std::string_view command,
     std::string_view key, std::int64_t start, std::int64_t stop, std::pmr::memory_resource* resource,
     bool with_scores) {
-    auto start_value = redis_int_string(start, resource);
-    auto stop_value = redis_int_string(stop, resource);
+    std::pmr::vector<std::pmr::string> args(resource);
+    args.reserve(with_scores ? 5 : 4);
+    emplace_redis_string(args, command);
+    emplace_redis_string(args, key);
+    args.emplace_back(redis_int_string(start, resource));
+    args.emplace_back(redis_int_string(stop, resource));
     if (with_scores) {
-        return {own_redis_args({command, key, std::string_view(start_value), std::string_view(stop_value), "WITHSCORES"}, resource)};
+        emplace_redis_string(args, "WITHSCORES");
     }
-    return {own_redis_args({command, key, std::string_view(start_value), std::string_view(stop_value)}, resource)};
+    return {std::move(args)};
 }
 
 redis_owned_command make_redis_zadd_command(std::string_view key, double score,
     std::string_view member, std::pmr::memory_resource* resource) {
     auto score_value = redis_score_string(score, resource);
-    return {own_redis_args({"ZADD", key, std::string_view(score_value), member}, resource)};
+    std::pmr::vector<std::pmr::string> args(resource);
+    args.reserve(4);
+    emplace_redis_string(args, "ZADD");
+    emplace_redis_string(args, key);
+    args.emplace_back(std::move(score_value));
+    emplace_redis_string(args, member);
+    return {std::move(args)};
 }
 
 std::pmr::vector<std::pmr::string> own_redis_args(

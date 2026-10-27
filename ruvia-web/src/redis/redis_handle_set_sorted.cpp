@@ -123,10 +123,13 @@ task<std::int64_t> redis_handle::zcount(
     registration_.require_active();
     auto min_text = detail::redis_score_string(min_value, resource_);
     auto max_text = detail::redis_score_string(max_value, resource_);
-    return scoped(detail::redis_integer_command(executor(),
-        detail::own_redis_args(
-            {"ZCOUNT", key, std::string_view(min_text), std::string_view(max_text)}, resource_),
-        resource_));
+    std::pmr::vector<std::pmr::string> args(resource_);
+    args.reserve(4);
+    detail::emplace_redis_string(args, "ZCOUNT");
+    detail::emplace_redis_string(args, key);
+    args.emplace_back(std::move(min_text));
+    args.emplace_back(std::move(max_text));
+    return scoped(detail::redis_integer_command(executor(), std::move(args), resource_));
 }
 
 }  // namespace ruvia

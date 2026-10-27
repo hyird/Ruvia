@@ -270,18 +270,24 @@ task<bool> redis_handle::rename_nx(std::string_view key, std::string_view new_ke
 task<bool> redis_handle::expire(std::string_view key, std::chrono::seconds ttl) const {
     registration_.require_active();
     require_positive_redis_ttl(ttl, "redis expire TTL must be greater than zero");
-    auto ttl_value = detail::redis_seconds_string(ttl, resource_);
-    return scoped(detail::execute_redis_integer_bool(executor(),
-        detail::own_redis_args({"EXPIRE", key, std::string_view(ttl_value)}, resource_), resource_));
+    std::pmr::vector<std::pmr::string> args(resource_);
+    args.reserve(3);
+    detail::emplace_redis_string(args, "EXPIRE");
+    detail::emplace_redis_string(args, key);
+    args.emplace_back(detail::redis_seconds_string(ttl, resource_));
+    return scoped(detail::execute_redis_integer_bool(executor(), std::move(args), resource_));
 }
 
 task<bool> redis_handle::expire_at(
     std::string_view key, std::chrono::system_clock::time_point expires_at) const {
     registration_.require_active();
-    auto value = detail::redis_milliseconds_string(
-        std::chrono::ceil<std::chrono::milliseconds>(expires_at.time_since_epoch()), resource_);
-    return scoped(detail::execute_redis_integer_bool(executor(),
-        detail::own_redis_args({"PEXPIREAT", key, std::string_view(value)}, resource_), resource_));
+    std::pmr::vector<std::pmr::string> args(resource_);
+    args.reserve(3);
+    detail::emplace_redis_string(args, "PEXPIREAT");
+    detail::emplace_redis_string(args, key);
+    args.emplace_back(detail::redis_milliseconds_string(
+        std::chrono::ceil<std::chrono::milliseconds>(expires_at.time_since_epoch()), resource_));
+    return scoped(detail::execute_redis_integer_bool(executor(), std::move(args), resource_));
 }
 
 task<bool> redis_handle::persist(std::string_view key) const {
