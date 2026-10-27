@@ -142,8 +142,8 @@ bool http2_sans_io_session_engine::writer_should_exit() const noexcept {
     return lifecycle_.stopping() && active_handler_tasks_ == 0;
 }
 
-task<void> http2_sans_io_session_engine::wait_for_write() {
-    co_await write_signal_.wait();
+worker_signal::wait_operation http2_sans_io_session_engine::wait_for_write() {
+    return write_signal_.wait();
 }
 
 void http2_sans_io_session_engine::output_write_completed() noexcept {

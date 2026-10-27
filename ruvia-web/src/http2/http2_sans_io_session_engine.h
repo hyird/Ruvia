@@ -52,7 +52,7 @@ public:
     void take_output(std::pmr::string& output);
     [[nodiscard]] bool write_failed() const noexcept;
     [[nodiscard]] bool writer_should_exit() const noexcept;
-    [[nodiscard]] task<void> wait_for_write();
+    [[nodiscard]] worker_signal::wait_operation wait_for_write();
     void writer_write_failed(std::error_code error) noexcept;
     void output_write_completed() noexcept;
     void writer_submitting() noexcept;

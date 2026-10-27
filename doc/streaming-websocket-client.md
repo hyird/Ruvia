@@ -63,6 +63,8 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 | `stop_token cancel_on_peer_eof() &` | 显式启用读侧终止取消，返回供业务等待使用的组合 token，语义见下文 |
 | `task<void> end(std::span<const http_header_view> trailers = {}) &` | 正常结束流式响应，可选附带响应 Trailer 字段 |
 
+HTTP/2 服务端写循环直接等待 Worker 信号；没有输出时不创建额外的等待协程。
+
 ---
 
 ### 1.3 Server-Sent Events（`sse_writer`）
