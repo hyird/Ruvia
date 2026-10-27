@@ -104,7 +104,7 @@ public:
     task<redis_value> execute_borrowed(redis_command_args_view args, std::pmr::memory_resource* resource,
         operation_options options, operation_timeout deadline);
     task<std::pmr::vector<redis_value>> execute_pipeline(
-        std::span<const redis_owned_command> commands, operation_options options,
+        std::pmr::vector<redis_owned_command> commands, operation_options options,
         std::pmr::memory_resource* resource);
     task<std::pmr::vector<redis_value>> execute_pipeline(
         std::span<const redis_command_args_view> commands, operation_options options,

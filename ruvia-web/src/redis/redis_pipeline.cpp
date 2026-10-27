@@ -79,8 +79,7 @@ task<std::pmr::vector<redis_value>> redis_batch<mode>::execute_owned(
     auto* resource = payload_value.commands_.get_allocator().resource();
     if constexpr (mode == redis_batch_mode::pipeline) {
         co_return co_await payload_value.pool_.get().execute_pipeline(
-            std::span<const redis_owned_command>(payload_value.commands_),
-            std::move(payload_value.options_), resource);
+            std::move(payload_value.commands_), std::move(payload_value.options_), resource);
     } else {
         std::pmr::vector<redis_command_args_view> framed(resource);
         framed.reserve(payload_value.commands_.size() + 2);

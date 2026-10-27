@@ -72,7 +72,7 @@ task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
 
 // Own one lease, cancellation registration and failure cleanup for both a
 // single command and a pipeline. Borrowed sources remain owned by their
-// enclosing caller; an owned single command can be released after encoding.
+// enclosing caller; owned commands can be released after encoding.
 template <typename result_type, typename command_source_type>
 task<result_type> redis_pool::execute_commands(command_source_type source, operation_options options,
     std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
@@ -82,16 +82,19 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
     const auto commands = [&] {
         if constexpr (single_reply) {
             return std::array{redis_command_args_view{redis_arg_span(source)}};
+        } else if constexpr (std::is_same_v<command_source_type, std::pmr::vector<redis_owned_command>>) {
+            return std::span<const redis_owned_command>(source);
         } else {
             return source;
         }
     }();
+    const auto reply_count = commands.size();
     auto* const resolved = pmr_resource_or_default(resource);
     result_type result(resolved);
     if constexpr (!single_reply) {
-        result.reserve(commands.size());
+        result.reserve(reply_count);
     }
-    if (commands.empty()) {
+    if (reply_count == 0) {
         co_return result;
     }
 
@@ -122,10 +125,10 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
             const std::span<const std::pmr::string> args = command.args_;
             append_resp_command(write_buffer, args);
         }
-        if constexpr (std::is_same_v<command_source_type, std::pmr::vector<std::pmr::string>>) {
-            static_assert(single_reply);
-            // The wire buffer now owns every argument; no later step uses the
-            // borrowed views in commands.
+        if constexpr (std::is_same_v<command_source_type, std::pmr::vector<std::pmr::string>> ||
+                      std::is_same_v<command_source_type, std::pmr::vector<redis_owned_command>>) {
+            // The wire buffer owns every argument; the command views are no
+            // longer used and the reply count has already been saved.
             source.clear();
         }
 
@@ -135,7 +138,7 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
             result = co_await connection.read_reply(deadline_value, resolved);
             slots_.throw_if_aborted(slot);
         } else {
-            while (result.size() < commands.size()) {
+            while (result.size() < reply_count) {
                 result.emplace_back(co_await connection.read_reply(deadline_value, resolved));
                 slots_.throw_if_aborted(slot);
             }
@@ -149,9 +152,9 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
 }
 
 task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline(
-    std::span<const redis_owned_command> commands, operation_options options,
+    std::pmr::vector<redis_owned_command> commands, operation_options options,
     std::pmr::memory_resource* resource) {
-    return execute_commands<std::pmr::vector<redis_value>>(commands, std::move(options), std::nullopt, resource, std::nullopt);
+    return execute_commands<std::pmr::vector<redis_value>>(std::move(commands), std::move(options), std::nullopt, resource, std::nullopt);
 }
 
 task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline(

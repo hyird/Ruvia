@@ -420,7 +420,8 @@ ruvia::task<void> check_owned_pipeline(ruvia::redis_client& client,
     ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
     const std::string binary_key("key\0binary", 10);
-    const std::string binary_value("value\0binary", 12);
+    std::string binary_value(64 * 1024, 'v');
+    binary_value[5] = '\0';
     auto cold = [&] {
         auto pipeline = client.handle().pipeline();
         auto key = binary_key;
