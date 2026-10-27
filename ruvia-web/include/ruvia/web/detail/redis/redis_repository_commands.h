@@ -33,9 +33,11 @@ struct redis_orm_script final {
 [[nodiscard]] const redis_orm_script& redis_orm_delete_script();
 
 // Both argument lists start with EVALSHA and the script digest.
-[[nodiscard]] redis_orm_arguments_type redis_orm_write_arguments(std::string_view key, std::string_view mode,
-    redis_write_options options, std::pmr::memory_resource* resource);
-[[nodiscard]] redis_orm_arguments_type redis_orm_delete_arguments(std::string_view key, std::pmr::memory_resource* resource);
+[[nodiscard]] redis_orm_arguments_type redis_orm_write_arguments(std::string_view prefix, std::string_view id,
+    std::string_view mode, redis_write_options options, std::size_t extra_arguments,
+    std::pmr::memory_resource* resource);
+[[nodiscard]] redis_orm_arguments_type redis_orm_delete_arguments(
+    std::string_view prefix, std::string_view id, std::pmr::memory_resource* resource);
 // Runs an EVALSHA argument list for `script`; a NOSCRIPT reply loads the body
 // through EVAL once within the same operation.
 [[nodiscard]] task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script,

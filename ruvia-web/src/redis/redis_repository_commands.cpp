@@ -8,6 +8,7 @@
 
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/detail/integration/request_io_metrics.h"
+#include "ruvia/web/detail/redis/redis_entity_key.h"
 #include "ruvia/web/redis/redis_repository.h"
 
 #include "redis/redis_handle_helpers.h"
@@ -100,14 +101,16 @@ const redis_orm_script& redis_orm_delete_script() {
     return digest.script();
 }
 
-redis_orm_arguments_type redis_orm_write_arguments(std::string_view key, std::string_view mode,
-    redis_write_options options, std::pmr::memory_resource* resource) {
+redis_orm_arguments_type redis_orm_write_arguments(std::string_view prefix, std::string_view id,
+    std::string_view mode, redis_write_options options, std::size_t extra_arguments,
+    std::pmr::memory_resource* resource) {
     if (options.ttl_ && (options.persist_ || options.ttl_->count() <= 0 || options.ttl_->count() > 9007199254740991LL)) {
         throw std::invalid_argument("entity TTL must be positive, at most 2^53-1 milliseconds, and cannot combine with persist");
     }
     redis_orm_arguments_type args(resource);
+    args.reserve(7 + extra_arguments);
     append_redis_orm_script_call(args, redis_orm_write_script());
-    args.emplace_back(key);
+    args.push_back(redis_entity_key(prefix, id, resource));
     args.emplace_back(mode);
     args.emplace_back(options.ttl_ ? "expire" : options.persist_ ? "persist"
                                                                  : "keep");
@@ -115,10 +118,12 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view key, std::st
     return args;
 }
 
-redis_orm_arguments_type redis_orm_delete_arguments(std::string_view key, std::pmr::memory_resource* resource) {
+redis_orm_arguments_type redis_orm_delete_arguments(
+    std::string_view prefix, std::string_view id, std::pmr::memory_resource* resource) {
     redis_orm_arguments_type args(resource);
+    args.reserve(4);
     append_redis_orm_script_call(args, redis_orm_delete_script());
-    args.emplace_back(key);
+    args.push_back(redis_entity_key(prefix, id, resource));
     return args;
 }
 
@@ -139,7 +144,7 @@ task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_scr
     // EVAL runs the body and caches it under the same digest for later calls.
     args[0].assign("EVAL");
     args[1].assign(script.body_);
-    co_return co_await pool.execute_borrowed(redis_command_args_view{args}, resource, std::move(options), deadline);
+    co_return co_await pool.execute_owned(std::move(args), resource, std::move(options), std::nullopt, nullptr, deadline);
 }
 
 redis_write_result redis_orm_exec_result(redis_value&& reply, std::pmr::memory_resource*) {

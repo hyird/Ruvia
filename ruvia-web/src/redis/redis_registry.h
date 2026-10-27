@@ -98,7 +98,7 @@ public:
     task<redis_value> execute_owned(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource, operation_options options = {},
         std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt,
-        operation_scope* scope = nullptr);
+        operation_scope* scope = nullptr, std::optional<operation_timeout> deadline = std::nullopt);
     // The caller keeps `args` alive until the operation completes. `deadline`
     // is copied, so repeated commands share the operation's absolute bound.
     task<redis_value> execute_borrowed(redis_command_args_view args, std::pmr::memory_resource* resource,

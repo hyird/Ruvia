@@ -60,9 +60,10 @@ void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) no
 
 task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource, operation_options options,
-    std::optional<std::chrono::milliseconds> reply_timeout, operation_scope* scope) {
+    std::optional<std::chrono::milliseconds> reply_timeout, operation_scope* scope,
+    std::optional<operation_timeout> deadline) {
     return execute_commands<redis_value>(
-        std::move(args), std::move(options), reply_timeout, resource, std::nullopt, scope);
+        std::move(args), std::move(options), reply_timeout, resource, deadline, scope);
 }
 
 task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,

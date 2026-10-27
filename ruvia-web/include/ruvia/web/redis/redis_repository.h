@@ -561,18 +561,14 @@ private:
 
     [[nodiscard]] task<redis_write_result> delete_by_id(
         std::string_view id, std::pmr::memory_resource* memory) const {
-        const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
         return handle_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(),
-            detail::redis_orm_delete_arguments(key, memory), detail::redis_orm_delete_result);
+            detail::redis_orm_delete_arguments(mapping().prefix_, id, memory), detail::redis_orm_delete_result);
     }
 
     [[nodiscard]] task<redis_write_result> write(
         std::string_view mode, std::string_view id, const entity_type& entity,
         redis_write_options options) const {
         auto* memory = resource();
-        const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
-        auto args = detail::redis_orm_write_arguments(key, mode, options, memory);
-
         static constexpr std::size_t required = [] {
             std::size_t count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
@@ -582,6 +578,9 @@ private:
             });
             return count;
         }();
+        static constexpr std::size_t column_count = std::tuple_size_v<typename entity_type::columns_type>;
+        auto args = detail::redis_orm_write_arguments(
+            mapping().prefix_, id, mode, options, 1 + required + column_count * 3, memory);
         args.emplace_back(detail::encode_redis_scalar(required, memory));
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
             if constexpr (!column_type::options.nullable_) {
