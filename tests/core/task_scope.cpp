@@ -29,6 +29,10 @@ public:
         callback_ = std::move(callback);
     }
 
+    void fail_next_allocation() noexcept {
+        upstream_.fail_after(0);
+    }
+
     [[nodiscard]] std::size_t live_allocations() const noexcept {
         return upstream_.live_allocations();
     }
@@ -86,10 +90,12 @@ ruvia::task<void> verify_spawn_rechecks_join_after_allocation(
     ruvia::task_scope primary(worker_value, {.resource_ = &resource});
     ruvia::task_scope observer(worker_value);
     bool join_completed = false;
+    bool joined_during_allocation = false;
     int starts = 0;
     auto child = record_child_start(std::pmr::string(1024, 'x', &resource), starts);
     resource.before_next_allocation([&] {
         observer.spawn(observe_join(primary.join(), join_completed));
+        joined_during_allocation = join_completed;
     });
 
     bool rejected = false;
@@ -104,8 +110,33 @@ ruvia::task<void> verify_spawn_rechecks_join_after_allocation(
         // child. Retire it before reporting the failed admission check.
         co_await primary.join();
     }
-    success = join_completed && rejected && starts == 0 &&
+    success = join_completed && !joined_during_allocation && rejected && starts == 0 &&
               primary.size() == 0 && resource.live_allocations() == 0;
+}
+
+ruvia::task<void> verify_reentrant_join_on_failed_allocation(
+    ruvia::worker_handle worker_value, bool& success) {
+    reentrant_memory_resource resource;
+    ruvia::task_scope primary(worker_value, {.resource_ = &resource});
+    ruvia::task_scope observer(worker_value);
+    bool join_completed = false;
+    bool joined_during_allocation = false;
+    int starts = 0;
+    auto child = record_child_start(std::pmr::string(1024, 'x', &resource), starts);
+    resource.before_next_allocation([&] {
+        observer.spawn(observe_join(primary.join(), join_completed));
+        joined_during_allocation = join_completed;
+    });
+    resource.fail_next_allocation();
+    bool allocation_failed = false;
+    try {
+        primary.spawn(std::move(child));
+    } catch (const std::bad_alloc&) {
+        allocation_failed = true;
+    }
+    co_await observer.join();
+    success = allocation_failed && join_completed && !joined_during_allocation &&
+              starts == 0 && primary.size() == 0 && resource.live_allocations() == 0;
 }
 
 ruvia::task<void> join_and_destroy_on_failure(std::optional<ruvia::task_scope>& primary,
@@ -361,11 +392,13 @@ int main() {
     bool success = false;
     bool reentrant_spawn_safe = false;
     bool reentrant_stop_join_safe = false;
+    bool reentrant_failed_spawn_safe = false;
     ruvia::test::run_worker_tasks(runtime,
         ruvia::test::task_scope_tests::exercise(worker_value, success),
         ruvia::test::task_scope_tests::verify_spawn_rechecks_join_after_allocation(worker_value, reentrant_spawn_safe),
         ruvia::test::task_scope_tests::verify_stop_callback_reentrant_join_waits_for_finish(
-            worker_value, reentrant_stop_join_safe));
+            worker_value, reentrant_stop_join_safe),
+        ruvia::test::task_scope_tests::verify_reentrant_join_on_failed_allocation(worker_value, reentrant_failed_spawn_safe));
     runtime.detach();
-    return success && reentrant_spawn_safe && reentrant_stop_join_safe ? 0 : 1;
+    return success && reentrant_spawn_safe && reentrant_stop_join_safe && reentrant_failed_spawn_safe ? 0 : 1;
 }

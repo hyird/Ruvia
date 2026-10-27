@@ -51,15 +51,25 @@ void task_scope::spawn(task<void> task_value) & {
     }
     task_value.prepare_direct_start();
 
+    // Admission must remain visible while the allocator can reenter join.
+    ++active_;
     std::pmr::polymorphic_allocator<node_type> allocator(resource_);
-    auto* node_value = allocator.new_object<node_type>(*this, std::move(task_value));
-    // The scope's resource may reenter it and start a join while allocating;
-    // that join owns the scope, so the unstarted child is discarded.
+    node_type* node_value = nullptr;
+    try {
+        node_value = allocator.new_object<node_type>(*this, std::move(task_value));
+    } catch (...) {
+        // Destroy the still-cold child before allowing a join to retire its owner.
+        {
+            task<void> discarded(std::move(task_value));
+        }
+        release_spawn_reservation();
+        throw;
+    }
     if (join_started()) {
         allocator.delete_object(node_value);
+        release_spawn_reservation();
         throw std::logic_error("cannot spawn a task after task scope join started");
     }
-    ++active_;
 
     node_value->task_.handle_.promise().control_.set_completion(node_value, &task_scope::child_complete);
     node_value->task_.start();
@@ -125,6 +135,20 @@ void task_scope::join_awaiter_type::await_resume() {
         std::terminate();
     }
     scope_.rethrow_failure();
+}
+
+void task_scope::release_spawn_reservation() noexcept {
+    if (--active_ != 0) {
+        return;
+    }
+    auto* joining = std::get_if<task_scope_joining_type>(&lifecycle_);
+    if (joining == nullptr) {
+        return;
+    }
+    auto continuation = joining->continuation();
+    lifecycle_.template emplace<task_scope_joined_type>();
+    // The joiner may destroy this scope inline.
+    continuation.resume();
 }
 
 void task_scope::child_complete(void* raw) noexcept {

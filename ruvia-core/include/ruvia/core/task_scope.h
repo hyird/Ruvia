@@ -51,11 +51,13 @@ public:
     stop_token get_stop_token() const&& = delete;
     [[nodiscard]] bool stop_requested() const& noexcept;
     bool stop_requested() const&& = delete;
+    // Includes a spawn currently acquiring its child node.
     [[nodiscard]] std::size_t size() const& noexcept;
     std::size_t size() const&& = delete;
     // Cold join tasks do not close spawn admission. Starting a join claims the
-    // scope exactly once and prevents further spawning; the scope and worker
-    // must remain alive until that task and all children have completed.
+    // scope exactly once and prevents further spawning; it waits for in-progress
+    // spawn admission as well as children. The scope and worker must remain
+    // alive until that task and all children have completed.
     [[nodiscard]] task<void> join() &;
     task<void> join() && = delete;
 
@@ -87,6 +89,7 @@ private:
     static void child_complete(void* raw) noexcept;
     [[nodiscard]] static task<void> join_scope(task_scope& scope);
     void finish(node_type* node) noexcept;
+    void release_spawn_reservation() noexcept;
     void rethrow_failure();
 
     using lifecycle_type = std::variant<task_scope_open_type, task_scope_joining_type, task_scope_joined_type>;
