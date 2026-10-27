@@ -126,33 +126,39 @@ std::pmr::vector<std::pmr::string> redis_mset_args(
 
 std::pmr::vector<std::pmr::string> redis_set_args(std::string_view key, std::string_view value,
     const redis_set_options& options, std::pmr::memory_resource* resource) {
-    std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(8);
-    emplace_redis_string(args, "SET");
-    emplace_redis_string(args, key);
-    emplace_redis_string(args, value);
-    if (options.expiration_) {
-        if (const auto* duration = options.expiration_->duration()) {
-            emplace_redis_string(args, "PX");
-            args.emplace_back(redis_milliseconds_string(*duration, resource));
-        }
-    }
+    std::string_view condition_token;
     if (options.condition_) {
         switch (*options.condition_) {
             case redis_set_condition::if_absent:
-                emplace_redis_string(args, "NX");
+                condition_token = "NX";
                 break;
             case redis_set_condition::if_present:
-                emplace_redis_string(args, "XX");
+                condition_token = "XX";
                 break;
             default:
                 throw std::invalid_argument("redis set condition is invalid");
         }
     }
-    if (redis_set_returns_previous(options.previous_value_)) {
+    const bool returns_previous = redis_set_returns_previous(options.previous_value_);
+    const auto* duration = options.expiration_ ? options.expiration_->duration() : nullptr;
+    const bool keeps_existing = options.expiration_ && options.expiration_->keeps_existing();
+    std::pmr::vector<std::pmr::string> args(resource);
+    args.reserve(3 + (duration != nullptr ? 2 : 0) + (!condition_token.empty() ? 1 : 0) +
+                 (returns_previous ? 1 : 0) + (keeps_existing ? 1 : 0));
+    emplace_redis_string(args, "SET");
+    emplace_redis_string(args, key);
+    emplace_redis_string(args, value);
+    if (duration != nullptr) {
+        emplace_redis_string(args, "PX");
+        args.emplace_back(redis_milliseconds_string(*duration, resource));
+    }
+    if (!condition_token.empty()) {
+        emplace_redis_string(args, condition_token);
+    }
+    if (returns_previous) {
         emplace_redis_string(args, "GET");
     }
-    if (options.expiration_ && options.expiration_->keeps_existing()) {
+    if (keeps_existing) {
         emplace_redis_string(args, "KEEPTTL");
     }
     return args;

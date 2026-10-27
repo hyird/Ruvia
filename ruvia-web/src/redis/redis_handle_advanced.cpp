@@ -16,11 +16,19 @@
 namespace ruvia {
 namespace {
 
+[[nodiscard]] std::size_t redis_scan_option_arg_count(const redis_scan_options& options) {
+    if (options.count_.has_value() && *options.count_ == 0) {
+        throw std::invalid_argument("configured redis scan count must be greater than zero");
+    }
+    return (!options.match_.empty() ? 2U : 0U) + (options.count_.has_value() ? 2U : 0U);
+}
+
 [[nodiscard]] std::pmr::vector<std::pmr::string> redis_scan_args(std::string_view command,
     const redis_scan_options& options, std::pmr::memory_resource* resource) {
+    const auto option_args = redis_scan_option_arg_count(options);
     auto cursor_value = detail::redis_cursor_string(options.cursor_, resource);
     std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(6);
+    args.reserve(2 + option_args);
     detail::emplace_redis_string(args, command);
     args.emplace_back(std::move(cursor_value));
     detail::append_redis_scan_options(args, options, resource);
@@ -29,9 +37,10 @@ namespace {
 
 [[nodiscard]] std::pmr::vector<std::pmr::string> redis_key_scan_args(std::string_view command,
     std::string_view key, const redis_scan_options& options, std::pmr::memory_resource* resource) {
+    const auto option_args = redis_scan_option_arg_count(options);
     auto cursor_value = detail::redis_cursor_string(options.cursor_, resource);
     std::pmr::vector<std::pmr::string> args(resource);
-    args.reserve(7);
+    args.reserve(3 + option_args);
     detail::emplace_redis_string(args, command);
     detail::emplace_redis_string(args, key);
     args.emplace_back(std::move(cursor_value));
