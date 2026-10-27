@@ -71,6 +71,7 @@ public:
     worker_runtime& operator=(worker_runtime&&) = delete;
 
     // Configure once, before publishing the runtime or starting/stopping it.
+    // Hook target moves may query failure() during configuration.
     void configure(worker_runtime_hooks hooks);
     // Launches the owner thread. Returns false when a stop already closed the
     // runtime before launch; a second start throws std::logic_error.

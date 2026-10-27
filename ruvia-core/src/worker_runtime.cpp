@@ -154,16 +154,20 @@ public:
     }
 
     void configure(worker_runtime_hooks hooks) {
-        const std::lock_guard lock(mutex_);
-        if (configured_ || lifecycle_.state() != worker_runtime_state::ready) {
-            throw std::logic_error("worker runtime hooks must be configured once before launch");
+        {
+            const std::lock_guard lock(mutex_);
+            if (configured_ || lifecycle_.state() != worker_runtime_state::ready) {
+                throw std::logic_error("worker runtime hooks must be configured once before launch");
+            }
+            configured_ = true;
         }
+        // Configuration precedes publication and launch. The reservation
+        // rejects reentry; callable moves run without the runtime mutex.
         stop_.configure({
             .stop_admission_ = std::move(hooks.stop_admission_),
             .finalize_ = std::move(hooks.finalize_),
         });
         hooks_ = std::move(hooks);
-        configured_ = true;
     }
 
     [[nodiscard]] bool start() {

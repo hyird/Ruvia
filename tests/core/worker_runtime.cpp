@@ -26,6 +26,49 @@ namespace worker_runtime_test {
 
 using state = ruvia::worker_runtime_state;
 
+RUVIA_TEST(worker_runtime_hook_moves_can_query_failure_during_configuration) {
+    ruvia::worker_runtime runtime;
+    bool armed = false;
+    bool started = false;
+    struct hook final {
+        ruvia::worker_runtime* runtime_;
+        bool* armed_;
+        bool* started_;
+
+        hook(ruvia::worker_runtime& runtime_value, bool& armed_value, bool* started_value)
+            : runtime_(&runtime_value),
+              armed_(&armed_value),
+              started_(started_value) {}
+        hook(const hook&) = delete;
+        hook(hook&& other) noexcept
+            : runtime_(other.runtime_),
+              armed_(other.armed_),
+              started_(other.started_) {
+            if (*armed_) {
+                (void)runtime_->failure();
+            }
+        }
+        void operator()() {
+            if (started_ != nullptr) {
+                *started_ = true;
+                runtime_->mark_ready();
+            } else {
+                runtime_->finalize();
+            }
+        }
+    };
+    ruvia::worker_runtime_hooks hooks;
+    hooks.startup_ = hook(runtime, armed, &started);
+    hooks.stop_admission_ = hook(runtime, armed, nullptr);
+    armed = true;
+    runtime.configure(std::move(hooks));
+    RUVIA_CHECK(runtime.start());
+    RUVIA_CHECK(runtime.wait_until_ready());
+    runtime.request_stop();
+    runtime.join();
+    RUVIA_CHECK(started);
+}
+
 RUVIA_TEST(worker_runtime_drains_accepted_work_before_start) {
     ruvia::worker_runtime runtime;
     const auto worker_value = runtime.handle();
