@@ -131,6 +131,8 @@ public:
     // allocator matches the connection; all other cases copy the selected bytes.
     // On copy failure the output cursor and observer are untouched. The cursor
     // always rests on a frame boundary; take_output() drains every pending frame.
+    // The cursor is committed before DATA observations. An observer may
+    // submit or drain more output; those frames remain independent of this batch.
     // A client preface is treated as one indivisible segment.
     [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes,
         std::pmr::string& output, http2_data_output_observer_type observer = nullptr,

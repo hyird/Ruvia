@@ -3993,6 +3993,116 @@ RUVIA_TEST(http2_public_completed_response_keeps_final_queued_data_drain_notific
     RUVIA_CHECK(client.take_drained_data_streams().empty());
 }
 
+RUVIA_TEST(http2_output_observer_can_submit_new_data_without_losing_it) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    const auto request = client.submit_request_head(ruvia::http2_regular_request_head_view{
+        .method_ = "POST", .scheme_ = "https", .authority_ = "example.test", .target_ = "/batch", .content_ = ruvia::http2_request_content::streaming()});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(request));
+    if (!std::holds_alternative<std::uint32_t>(request)) {
+        return;
+    }
+    const auto id = std::get<std::uint32_t>(request);
+    (void)ruvia::testing::drain_output(client);
+    RUVIA_CHECK(client.submit_data(id, "first", ruvia::http2_end_stream::keep_open) ==
+                ruvia::http2_data_submit_status::accepted);
+    struct observation final {
+        ruvia::http2_connection* client_;
+        std::optional<ruvia::http2_data_submit_status> submitted_;
+        bool failed_{};
+    } observed{&client};
+    std::pmr::string first(&resource);
+    const auto batch = client.take_output_batch(16384, first, [](void* context, std::uint32_t stream, std::size_t) noexcept {
+            auto& state = *static_cast<observation*>(context);
+            try {
+                state.submitted_ = state.client_->submit_data(
+                    stream, "second", ruvia::http2_end_stream::end_stream);
+            } catch (...) {
+                state.failed_ = true;
+            } }, &observed);
+    RUVIA_CHECK(batch.status_ == ruvia::http2_output_batch_status::taken);
+    RUVIA_CHECK(!observed.failed_);
+    RUVIA_CHECK(observed.submitted_ == ruvia::http2_data_submit_status::accepted);
+    RUVIA_CHECK(client.wants_write());
+    std::pmr::string second(&resource);
+    client.take_output(second);
+    const auto frame = ruvia::parse_http2_frame_header(std::span<const char>(second.data(), second.size()));
+    RUVIA_CHECK(frame && frame->stream_id_ == id && frame->length_ == 6);
+    if (frame) {
+        RUVIA_CHECK(std::string_view(second).substr(ruvia::http2_frame_header_bytes) == "second");
+    }
+}
+
+RUVIA_TEST(http2_output_observer_can_recursively_drain_and_append_frames) {
+    std::pmr::unsynchronized_pool_resource resource;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    const auto request = client.submit_request_head(ruvia::http2_regular_request_head_view{
+        .method_ = "POST", .scheme_ = "https", .authority_ = "example.test", .target_ = "/batch", .content_ = ruvia::http2_request_content::streaming()});
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(request));
+    if (!std::holds_alternative<std::uint32_t>(request)) {
+        return;
+    }
+    const auto id = std::get<std::uint32_t>(request);
+    (void)ruvia::testing::drain_output(client);
+    for (const auto payload : {"a", "b", "c", "d"}) {
+        RUVIA_CHECK(client.submit_data(id, payload, ruvia::http2_end_stream::keep_open) ==
+                    ruvia::http2_data_submit_status::accepted);
+    }
+    struct observation final {
+        ruvia::http2_connection* client_;
+        std::pmr::string* nested_;
+        std::size_t calls_{};
+        bool failed_{};
+        static void on_data(void* context, std::uint32_t stream, std::size_t bytes) noexcept {
+            auto& state = *static_cast<observation*>(context);
+            ++state.calls_;
+            if (bytes != 1) {
+                state.failed_ = true;
+            }
+            if (state.calls_ != 1) {
+                return;
+            }
+            try {
+                const auto batch = state.client_->take_output_batch(16384, *state.nested_, &on_data, context);
+                state.failed_ |= batch.status_ != ruvia::http2_output_batch_status::taken;
+                for (int i = 0; i < 40; ++i) {
+                    state.failed_ |= state.client_->submit_data(stream, "x", ruvia::http2_end_stream::keep_open) !=
+                                     ruvia::http2_data_submit_status::accepted;
+                }
+                state.failed_ |= state.client_->submit_data(stream, "z", ruvia::http2_end_stream::end_stream) !=
+                                 ruvia::http2_data_submit_status::accepted;
+            } catch (...) {
+                state.failed_ = true;
+            }
+        }
+    };
+    std::pmr::string nested(&resource);
+    observation observed{&client, &nested};
+    std::pmr::string first(&resource);
+    const auto batch = client.take_output_batch(20, first, &observation::on_data, &observed);
+    RUVIA_CHECK(batch.status_ == ruvia::http2_output_batch_status::taken);
+    RUVIA_CHECK(!observed.failed_);
+    RUVIA_CHECK_EQ(observed.calls_, std::size_t{4});
+    RUVIA_CHECK_EQ(first.size(), std::size_t{20});
+    RUVIA_CHECK_EQ(nested.size(), std::size_t{20});
+    std::pmr::string remaining(&resource);
+    client.take_output(remaining);
+    std::string payload;
+    std::size_t offset = 0;
+    while (offset < remaining.size()) {
+        const auto frame = ruvia::parse_http2_frame_header(
+            std::span<const char>(remaining.data() + offset, remaining.size() - offset));
+        if (!frame || frame->stream_id_ != id || frame->length_ != 1 ||
+            remaining.size() - offset < ruvia::http2_frame_header_bytes + frame->length_) {
+            break;
+        }
+        payload.push_back(remaining[offset + ruvia::http2_frame_header_bytes]);
+        offset += ruvia::http2_frame_header_bytes + frame->length_;
+    }
+    RUVIA_CHECK_EQ(offset, remaining.size());
+    RUVIA_CHECK(payload == std::string(40, 'x') + "z");
+}
+
 RUVIA_TEST(http2_public_full_output_batch_transfers_storage_and_accounts_data) {
     toggle_allocation_resource resource;
     {

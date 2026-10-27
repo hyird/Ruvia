@@ -52,10 +52,10 @@ public:
         }
         const auto physical_checkpoint = checkpoint - base_offset_;
         bytes_.resize(physical_checkpoint);
-        while (!segments_.empty() && segments_.back().begin_ >= physical_checkpoint) {
+        while (segments_.size() > segment_offset_ && segments_.back().begin_ >= physical_checkpoint) {
             segments_.pop_back();
         }
-        if (!segments_.empty() && segments_.back().end_ > physical_checkpoint) {
+        if (segments_.size() > segment_offset_ && segments_.back().end_ > physical_checkpoint) {
             std::terminate();
         }
     }
@@ -81,7 +81,8 @@ public:
         if (additional > segments_.max_size() - segments_.size()) {
             throw std::length_error("HTTP/2 output segment count overflow");
         }
-        if (segment_offset_ >= 32 && segment_offset_ >= segments_.size() - segment_offset_) {
+        if (observer_depth_ == 0 && segment_offset_ >= 32 &&
+            segment_offset_ >= segments_.size() - segment_offset_) {
             const auto remaining = segments_.size() - segment_offset_;
             std::move(segments_.begin() + static_cast<std::ptrdiff_t>(segment_offset_),
                 segments_.end(), segments_.begin());
@@ -153,6 +154,7 @@ public:
                 break;
             }
         }
+        const auto first_segment = segment_offset_;
         const auto batch_bytes = end - consumed_;
         const bool transfer_storage = consumed_ == 0 && end == bytes_.size() &&
                                       into.empty() && into.get_allocator() == bytes_.get_allocator();
@@ -164,18 +166,32 @@ public:
             into.append(bytes_.data() + consumed_, batch_bytes);
         }
         if (observer != nullptr) {
-            for (std::size_t i = 0; i < segment_count; ++i) {
-                const auto& segment = segments_[segment_offset_ + i];
-                if (segment.is_data_) {
-                    observer(observer_context, segment.stream_id_,
-                        segment.end_ - segment.begin_ - http2_frame_header_bytes);
-                }
-            }
+            ++observer_depth_;
         }
         if (transfer_storage) {
             reset_after_drain(logical_end);
         } else {
             consume_batch(batch_bytes);
+        }
+        if (observer != nullptr) {
+            // A callback may append or drain more frames. Their vector may
+            // reallocate, so retain indices and snapshot each entry by value.
+            for (std::size_t i = 0; i < segment_count; ++i) {
+                const auto segment = segments_[first_segment + i];
+                if (segment.is_data_) {
+                    observer(observer_context, segment.stream_id_,
+                        segment.end_ - segment.begin_ - http2_frame_header_bytes);
+                }
+            }
+            --observer_depth_;
+            if (observer_depth_ == 0) {
+                if (segment_offset_ == segments_.size()) {
+                    segments_.clear();
+                    segment_offset_ = 0;
+                } else {
+                    compact_consumed_prefix();
+                }
+            }
         }
         return {http2_output_batch_status::taken, batch_bytes};
     }
@@ -208,8 +224,12 @@ private:
 
     void reset_after_drain(std::size_t logical_end) noexcept {
         bytes_.clear();
-        segments_.clear();
-        segment_offset_ = 0;
+        if (observer_depth_ == 0) {
+            segments_.clear();
+            segment_offset_ = 0;
+        } else {
+            segment_offset_ = segments_.size();
+        }
         consumed_ = 0;
         base_offset_ = logical_end;
     }
@@ -221,7 +241,7 @@ private:
     }
 
     void compact_consumed_prefix() noexcept {
-        if (consumed_ < 64 * 1024 || consumed_ < bytes_.size() - consumed_) {
+        if (observer_depth_ != 0 || consumed_ < 64 * 1024 || consumed_ < bytes_.size() - consumed_) {
             return;
         }
         const auto prefix = consumed_;
@@ -247,6 +267,7 @@ private:
     std::size_t segment_offset_{0};
     std::size_t consumed_{0};
     std::size_t base_offset_{0};
+    std::size_t observer_depth_{0};
 };
 
 }  // namespace ruvia::detail
