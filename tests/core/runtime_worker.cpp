@@ -1074,7 +1074,14 @@ ruvia::task<void> exercise_signal_pending_latch(
         auto cold_wait = signal.wait();
         static_cast<void>(cold_wait);
     }
-    co_await signal.wait();
+    auto completed_wait = signal.wait();
+    co_await completed_wait;
+    bool repeated_wait_rejected = false;
+    try {
+        co_await completed_wait;
+    } catch (const std::logic_error&) {
+        repeated_wait_rejected = true;
+    }
 
     bool resumed = false;
     ruvia::task_scope scope(signal.worker());
@@ -1084,7 +1091,7 @@ ruvia::task<void> exercise_signal_pending_latch(
     signal.notify();
     co_await scope.join();
     co_await signal.wait();
-    success = second_wait_suspended && resumed;
+    success = second_wait_suspended && resumed && repeated_wait_rejected;
     attachment.stop();
 }
 
@@ -1097,6 +1104,34 @@ bool test_worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_w
     asio::co_spawn(context,
         ruvia::as_awaitable(exercise_signal_pending_latch(signal, attachment, success)),
         asio::detached);
+    context.run();
+    return success;
+}
+
+ruvia::task<void> release_signal_after_wait(const ruvia::worker_handle& worker,
+    ruvia::event_loop_attachment& attachment, bool& success) {
+    for (const bool deferred : {false, true}) {
+        auto signal = std::make_unique<ruvia::worker_signal>(worker);
+        auto wait = signal->wait();
+        if (deferred) {
+            auto loop = attachment.loop();
+            asio::post(loop.io_context(), [&signal] { signal->notify(); });
+        } else {
+            signal->notify();
+        }
+        co_await wait;
+        signal.reset();
+    }
+    success = true;
+    attachment.stop();
+}
+
+bool test_completed_signal_wait_releases_owner() {
+    asio::io_context context;
+    auto attachment = ruvia::attach_event_loop(context);
+    const auto worker = attachment.loop().handle();
+    bool success = false;
+    asio::co_spawn(context, ruvia::as_awaitable(release_signal_after_wait(worker, attachment, success)), asio::detached);
     context.run();
     return success;
 }
@@ -1126,7 +1161,7 @@ bool test_worker_signal_has_no_arbitrary_waiter_limit() {
     return true;
 }
 
-ruvia::task<void> start_cold_signal_wait(ruvia::task<void> cold_wait, bool& rejected) {
+ruvia::task<void> start_cold_signal_wait(ruvia::worker_signal::wait_operation cold_wait, bool& rejected) {
     try {
         co_await std::move(cold_wait);
     } catch (const std::logic_error&) {
@@ -1141,7 +1176,7 @@ bool test_worker_signal_rechecks_affinity_when_cold_wait_starts() {
     auto other_attachment = ruvia::attach_event_loop(other_context);
     const auto owner_handle = owner_attachment.loop().handle();
     ruvia::worker_signal signal(owner_handle);
-    std::optional<ruvia::task<void>> cold_wait;
+    std::optional<ruvia::worker_signal::wait_operation> cold_wait;
 
     asio::post(owner_context, [&] {
         cold_wait.emplace(signal.wait());
@@ -2283,6 +2318,7 @@ int main() {
                    run("worker_signal_is_worker_affine", test_worker_signal_is_worker_affine) &&
                    run("worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake",
                        test_worker_signal_pending_latch_survives_cold_wait_discard_and_scheduled_wake) &&
+                   run("completed_signal_wait_releases_owner", test_completed_signal_wait_releases_owner) &&
                    run("worker_signal_has_no_waiter_limit",
                        test_worker_signal_has_no_arbitrary_waiter_limit) &&
                    run("worker_signal_rechecks_cold_wait_affinity",
