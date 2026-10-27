@@ -81,21 +81,12 @@ task<std::pmr::vector<redis_value>> redis_batch<mode>::execute_owned(
         co_return co_await payload_value.pool_.get().execute_pipeline(
             std::move(payload_value.commands_), std::move(payload_value.options_), resource);
     } else {
-        std::pmr::vector<redis_command_args_view> framed(resource);
-        framed.reserve(payload_value.commands_.size() + 2);
-        auto append_command_view = [&framed](const redis_owned_command& command) {
-            framed.emplace_back(command.args_);
-        };
-        auto multi = make_owned_redis_command(resource, "MULTI");
-        auto exec = make_owned_redis_command(resource, "EXEC");
-        append_command_view(multi);
-        for (const auto& command : payload_value.commands_) {
-            append_command_view(command);
-        }
-        append_command_view(exec);
-
+        auto& commands = payload_value.commands_;
+        commands.reserve(commands.size() + 2);
+        commands.insert(commands.begin(), make_owned_redis_command(resource, "MULTI"));
+        commands.push_back(make_owned_redis_command(resource, "EXEC"));
         auto replies = co_await payload_value.pool_.get().execute_pipeline(
-            std::span<const redis_command_args_view>(framed), std::move(payload_value.options_), resource);
+            std::move(commands), std::move(payload_value.options_), resource);
         if (replies.empty()) {
             throw redis_error(redis_error::code_type::protocol_error, "redis transaction returned no replies");
         }

@@ -106,9 +106,6 @@ public:
     task<std::pmr::vector<redis_value>> execute_pipeline(
         std::pmr::vector<redis_owned_command> commands, operation_options options,
         std::pmr::memory_resource* resource);
-    task<std::pmr::vector<redis_value>> execute_pipeline(
-        std::span<const redis_command_args_view> commands, operation_options options,
-        std::pmr::memory_resource* resource);
 
 private:
     // Every deadline belongs to a connection's transport; the slot pool only

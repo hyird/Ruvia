@@ -82,10 +82,8 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
     const auto commands = [&] {
         if constexpr (single_reply) {
             return std::array{redis_command_args_view{redis_arg_span(source)}};
-        } else if constexpr (std::is_same_v<command_source_type, std::pmr::vector<redis_owned_command>>) {
-            return std::span<const redis_owned_command>(source);
         } else {
-            return source;
+            return std::span<const redis_owned_command>(source);
         }
     }();
     const auto reply_count = commands.size();
@@ -129,7 +127,8 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
                       std::is_same_v<command_source_type, std::pmr::vector<redis_owned_command>>) {
             // The wire buffer owns every argument; the command views are no
             // longer used and the reply count has already been saved.
-            source.clear();
+            command_source_type empty(source.get_allocator());
+            source.swap(empty);
         }
 
         const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_).constrained_by(reply_timeout);
@@ -155,12 +154,6 @@ task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline(
     std::pmr::vector<redis_owned_command> commands, operation_options options,
     std::pmr::memory_resource* resource) {
     return execute_commands<std::pmr::vector<redis_value>>(std::move(commands), std::move(options), std::nullopt, resource, std::nullopt);
-}
-
-task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline(
-    std::span<const redis_command_args_view> commands, operation_options options,
-    std::pmr::memory_resource* resource) {
-    return execute_commands<std::pmr::vector<redis_value>>(commands, std::move(options), std::nullopt, resource, std::nullopt);
 }
 
 }  // namespace ruvia::detail

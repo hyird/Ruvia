@@ -450,7 +450,8 @@ ruvia::task<void> check_owned_transaction(ruvia::redis_client& client, redis_pee
     ruvia::testing::test_context& ruvia_ctx) {
     co_await client.connect();
     const std::string binary_key("key\0binary", 10);
-    const std::string binary_value("value\0binary", 12);
+    std::string binary_value(64 * 1024, 'v');
+    binary_value[5] = '\0';
     auto cold = [&] {
         auto transaction = client.handle().transaction();
         auto key = binary_key;
@@ -737,7 +738,8 @@ RUVIA_TEST(redis_transaction_owns_framing_and_handles_exec_outcomes) {
         pool.loop(0).start(check_owned_transaction(client, mode, ruvia_ctx)).get();
         pool.join();
         const std::string key("key\0binary", 10);
-        const std::string value("value\0binary", 12);
+        std::string value(64 * 1024, 'v');
+        value[5] = '\0';
         const std::vector<std::vector<std::string>> expected{
             {"MULTI"},
             {"SET", key, value},
