@@ -5,18 +5,20 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <memory_resource>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/detail/worker/worker_wait_awaiter.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/mpsc_ring_queue.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -36,6 +38,9 @@ template <typename t_type>
 class channel_sender;
 
 struct channel_options final {
+    // Bounds buffered and reserved sends. One extra slot permits a value
+    // already assigned to a receiver while the buffer fills again.
+    // A send may report full while every slot is temporarily in use.
     std::size_t capacity_{0};
     std::pmr::memory_resource* resource_{nullptr};
 };
@@ -52,29 +57,120 @@ struct channel_worker_stopping final {};
 
 template <typename t_type>
 struct channel_state final {
+    struct node final {
+        std::optional<t_type> value_;
+        node* next_{nullptr};
+    };
+
+    static std::size_t slot_count(std::size_t capacity) {
+        if (capacity == 0) {
+            throw std::invalid_argument("channel capacity must be nonzero");
+        }
+        if (capacity == std::numeric_limits<std::size_t>::max()) {
+            throw std::length_error("channel capacity is too large");
+        }
+        return capacity + 1;
+    }
+
     channel_state(
         worker_handle target, std::size_t requested_capacity, std::pmr::memory_resource* resource)
         : worker_(std::move(target)),
-          queue_(requested_capacity, resource) {
+          slots_(slot_count(requested_capacity), resource),
+          capacity_(requested_capacity) {
         if (!worker_.valid()) {
             throw std::invalid_argument("channel requires a valid worker");
         }
+        for (auto& slot : slots_) {
+            slot.next_ = free_;
+            free_ = &slot;
+        }
     }
 
-    // The queue lock also guards the lifecycle, receiver, and wait slot, so checking
-    // admission and publishing a value stay one critical section.
-    [[nodiscard]] typename mpsc_ring_queue<t_type>::locked_access lock_state() {
-        return queue_.lock();
+    [[nodiscard]] std::unique_lock<std::mutex> lock_state() {
+        return std::unique_lock(mutex_);
     }
+
+    // Called under mutex_. Reservations hold capacity until publication.
+    [[nodiscard]] node* reserve_node() noexcept {
+        if (queued_ + reserved_ == capacity_ || free_ == nullptr) {
+            return nullptr;
+        }
+        auto* slot = free_;
+        free_ = slot->next_;
+        slot->next_ = nullptr;
+        ++reserved_;
+        return slot;
+    }
+
+    void enqueue(node* slot) noexcept {
+        slot->next_ = nullptr;
+        if (tail_ != nullptr) {
+            tail_->next_ = slot;
+        } else {
+            head_ = slot;
+        }
+        tail_ = slot;
+        ++queued_;
+    }
+
+    [[nodiscard]] node* dequeue() noexcept {
+        auto* slot = head_;
+        if (slot == nullptr) {
+            return nullptr;
+        }
+        head_ = slot->next_;
+        if (head_ == nullptr) {
+            tail_ = nullptr;
+        }
+        slot->next_ = nullptr;
+        --queued_;
+        return slot;
+    }
+
+    void recycle(node* slot) noexcept {
+        slot->next_ = free_;
+        free_ = slot;
+    }
+
+    // Owns one reserved or claimed slot; user destruction runs without mutex_.
+    class node_guard final {
+    public:
+        node_guard(channel_state& state, node* slot) noexcept
+            : state_(state),
+              slot_(slot) {}
+        node_guard(const node_guard&) = delete;
+        node_guard& operator=(const node_guard&) = delete;
+        ~node_guard() {
+            if (slot_ != nullptr) {
+                slot_->value_.reset();
+                auto lock = state_.lock_state();
+                state_.recycle(slot_);
+            }
+        }
+        void release() noexcept {
+            slot_ = nullptr;
+        }
+
+    private:
+        channel_state& state_;
+        node* slot_;
+    };
 
     // First member: unlinks from the worker registry after every other member is gone.
     worker_shutdown_hook shutdown_hook_;
     worker_handle worker_;
-    mpsc_ring_queue<t_type> queue_;
+    std::mutex mutex_;
+    std::pmr::vector<node> slots_;
+    const std::size_t capacity_;
+    node* free_{nullptr};
+    node* head_{nullptr};
+    node* tail_{nullptr};
+    std::size_t queued_{0};
+    std::size_t reserved_{0};
     using lifecycle_type = std::variant<channel_open, channel_closed, channel_worker_stopping>;
     lifecycle_type lifecycle_;
     bool receiver_closed_{false};
-    worker_wait_slot<t_type, channel_state<t_type>> wait_slot_;
+    worker_wait_slot<node*, channel_state<t_type>> wait_slot_;
 
     void close(bool retire_receiver);
     void worker_stopping() noexcept;
@@ -85,7 +181,9 @@ private:
 
 template <typename t_type>
 struct channel_receive_awaiter final {
-    using wait_type = worker_single_wait_awaiter<t_type, channel_state<t_type>>;
+    using state_type = channel_state<t_type>;
+    using node = typename state_type::node;
+    using wait_type = worker_single_wait_awaiter<node*, state_type>;
 
     channel_receive_awaiter(std::shared_ptr<channel_state<t_type>> value,
         std::optional<std::chrono::steady_clock::duration> timeout_value, stop_token stop_token_value)
@@ -93,25 +191,15 @@ struct channel_receive_awaiter final {
 
     [[nodiscard]] bool await_ready() {
         auto& owner_value = wait_.state();
-        auto queue = owner_value.lock_state();
+        auto lock = owner_value.lock_state();
         if (owner_value.receiver_closed_) {
             (void)wait_.complete_status(std::holds_alternative<channel_worker_stopping>(owner_value.lifecycle_)
                                             ? worker_wait_status::worker_stopping
                                             : worker_wait_status::closed);
             return true;
         }
-        if (auto* item = queue.front()) {
-            // Building the result moves the item several times; a later move may
-            // throw after an earlier one emptied it, so the front is consumed on
-            // every exit rather than left for the next receive.
-            struct front_consumption final {
-                typename mpsc_ring_queue<t_type>::locked_access& queue_;
-                ~front_consumption() {
-                    queue_.pop();
-                }
-            } consumption{queue};
-            (void)wait_.complete_result(
-                worker_wait_result_access::value(std::move(*item)));
+        if (auto* item = owner_value.dequeue()) {
+            (void)wait_.complete_result(worker_wait_result_access::value(item));
             return true;
         }
         if (std::holds_alternative<channel_worker_stopping>(owner_value.lifecycle_)) {
@@ -131,7 +219,13 @@ struct channel_receive_awaiter final {
     }
 
     [[nodiscard]] worker_wait_result<t_type> await_resume() {
-        return wait_.take_result();
+        auto result = wait_.take_result();
+        if (!result.has_value()) {
+            return worker_wait_result_access::outcome<t_type>(result.status());
+        }
+        auto* item = result.value();
+        typename state_type::node_guard guard(wait_.state(), item);
+        return worker_wait_result_access::value(std::move(*item->value_));
     }
 
 private:
@@ -171,15 +265,15 @@ void channel_state<t_type>::close(bool retire_receiver) {
 template <typename t_type>
 void channel_state<t_type>::discard_buffered() {
     for (;;) {
-        std::optional<t_type>* retired = nullptr;
+        node* retired;
         {
-            auto queue = lock_state();
-            if (queue.front() == nullptr) {
-                return;
-            }
-            retired = &queue.detach_front();
+            auto lock = lock_state();
+            retired = dequeue();
         }
-        retired->reset();
+        if (retired == nullptr) {
+            return;
+        }
+        node_guard guard(*this, retired);
     }
 }
 
@@ -197,32 +291,59 @@ class channel_sender final {
 public:
     channel_sender() noexcept = default;
 
+    // The sender must remain alive throughout the call, including payload
+    // moves and destruction. Concurrent sends are delivered in publication
+    // order; closure during a payload move returns that value as rejected.
     [[nodiscard]] channel_send_result<t_type> send(t_type value) const {
-        if (!state_) {
+        auto* const state = state_.get();
+        if (state == nullptr) {
             return channel_send_result<t_type>::reject(channel_send_status::closed, std::move(value));
         }
+        using state_type = detail::channel_state<t_type>;
+        typename state_type::node* slot = nullptr;
         std::optional<channel_send_status> rejection;
         {
-            auto queue = state_->lock_state();
-            if (std::holds_alternative<detail::channel_closed>(state_->lifecycle_)) {
+            auto lock = state->lock_state();
+            if (std::holds_alternative<detail::channel_closed>(state->lifecycle_)) {
                 rejection = channel_send_status::closed;
-            } else if (std::holds_alternative<detail::channel_worker_stopping>(state_->lifecycle_)) {
+            } else if (std::holds_alternative<detail::channel_worker_stopping>(state->lifecycle_) ||
+                       !state->worker_.accepting()) {
                 rejection = channel_send_status::worker_stopping;
-            } else if (!state_->worker_.accepting()) {
-                rejection = channel_send_status::worker_stopping;
-            } else if (state_->wait_slot_.occupied()) {
-                state_->wait_slot_.complete(detail::worker_wait_result_access::value(std::move(value)));
-            } else {
-                assert(std::holds_alternative<detail::channel_open>(state_->lifecycle_));
-                if (!queue.try_push(std::move(value))) {
-                    rejection = channel_send_status::full;
-                }
+            } else if ((slot = state->reserve_node()) == nullptr) {
+                rejection = channel_send_status::full;
             }
         }
         if (rejection) {
-            // The status is decided; owning the returned payload needs no queue
-            // lock, and its user-defined move may close the channel again.
             return channel_send_result<t_type>::reject(*rejection, std::move(value));
+        }
+
+        typename state_type::node_guard guard(*state, slot);
+        try {
+            slot->value_.emplace(std::move(value));
+        } catch (...) {
+            auto lock = state->lock_state();
+            --state->reserved_;
+            throw;
+        }
+        {
+            auto lock = state->lock_state();
+            --state->reserved_;
+            if (std::holds_alternative<detail::channel_closed>(state->lifecycle_)) {
+                rejection = channel_send_status::closed;
+            } else if (std::holds_alternative<detail::channel_worker_stopping>(state->lifecycle_) ||
+                       !state->worker_.accepting()) {
+                rejection = channel_send_status::worker_stopping;
+            } else if (state->wait_slot_.occupied()) {
+                state->wait_slot_.complete(detail::worker_wait_result_access::value(slot));
+            } else {
+                state->enqueue(slot);
+            }
+            if (!rejection) {
+                guard.release();
+            }
+        }
+        if (rejection) {
+            return channel_send_result<t_type>::reject(*rejection, std::move(*slot->value_));
         }
         return channel_send_result<t_type>::accept();
     }

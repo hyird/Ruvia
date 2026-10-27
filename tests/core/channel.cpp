@@ -147,6 +147,13 @@ ruvia::task<void> receive_last(ruvia::channel_receiver<int>& receiver, bool& suc
               closed.status() == ruvia::worker_wait_status::closed;
 }
 
+ruvia::task<void> receive_one(ruvia::channel_receiver<int>& receiver, int& value) {
+    const auto result = co_await receiver.receive();
+    if (result.has_value()) {
+        value = result.value();
+    }
+}
+
 ruvia::task<void> receive_queued_then_stopping(ruvia::worker_runtime_context& runtime,
     ruvia::channel_receiver<int>& receiver, bool& success) {
     const auto value = co_await receiver.receive();
@@ -486,6 +493,23 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     }
 
     {
+        auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
+        int delivered = 0;
+        ruvia::task_scope scope(worker_value);
+        scope.spawn(receive_one(receiver, delivered));
+        const bool first_sent = sender.send(1).accepted();
+        const bool second_sent = sender.send(2).accepted();
+        const auto full = sender.send(3);
+        sender.close();
+        co_await scope.join();
+        const auto buffered = co_await receiver.receive();
+        if (!first_sent || !second_sent || full.status() != ruvia::channel_send_status::full ||
+            delivered != 1 || !buffered.has_value() || buffered.value() != 2) {
+            co_return;
+        }
+    }
+
+    {
         ruvia::stop_source source;
         auto [same_stack_sender, same_stack_receiver] =
             ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
@@ -559,6 +583,161 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
         closed_send.rejected() == nullptr || *closed_send.rejected() != 4) {
         success = false;
     }
+}
+
+class bounded_reentrant_close final {
+public:
+    explicit bounded_reentrant_close(std::function<void()> close)
+        : close_(std::move(close)),
+          closer_([this] {
+              requested_.acquire();
+              close_();
+              completed_.release();
+          }) {}
+
+    ~bounded_reentrant_close() {
+        if (!requested_callback_) {
+            requested_.release();
+        }
+        closer_.join();
+    }
+
+    void invoke() {
+        requested_callback_ = true;
+        requested_.release();
+        completed_during_callback_ = completed_.try_acquire_for(std::chrono::milliseconds(300));
+        if (completed_during_callback_) {
+            close_();
+        }
+    }
+
+    [[nodiscard]] bool completed_during_callback() const noexcept {
+        return completed_during_callback_;
+    }
+
+private:
+    std::function<void()> close_;
+    std::binary_semaphore requested_{0};
+    std::binary_semaphore completed_{0};
+    bool requested_callback_{false};
+    bool completed_during_callback_{false};
+    std::thread closer_;
+};
+
+struct reentrant_payload final {
+    int value_;
+    std::function<void()>* on_move_;
+    std::function<void()>* on_destroy_;
+
+    reentrant_payload(int value, std::function<void()>& on_move, std::function<void()>& on_destroy)
+        : value_(value),
+          on_move_(&on_move),
+          on_destroy_(&on_destroy) {}
+    reentrant_payload(const reentrant_payload&) = delete;
+    reentrant_payload(reentrant_payload&& other)
+        : value_(std::exchange(other.value_, 0)),
+          on_move_(other.on_move_),
+          on_destroy_(other.on_destroy_) {
+        if (*on_move_) {
+            auto callback = std::move(*on_move_);
+            *on_move_ = {};
+            callback();
+        }
+    }
+    ~reentrant_payload() {
+        if (*on_destroy_) {
+            auto callback = std::move(*on_destroy_);
+            *on_destroy_ = {};
+            callback();
+        }
+    }
+};
+
+ruvia::task<void> verify_reentrant_receive(
+    ruvia::channel_receiver<reentrant_payload>& receiver, bool& success) {
+    const auto first = co_await receiver.receive();
+    const auto second = co_await receiver.receive();
+    const auto closed = co_await receiver.receive();
+    success = first.has_value() && first.value().value_ == 1 &&
+              second.has_value() && second.value().value_ == 2 &&
+              closed.status() == ruvia::worker_wait_status::closed;
+}
+
+bool test_reentrant_payload_moves_and_destruction() {
+    asio::io_context io;
+    ruvia::worker_runtime_context runtime(io, 8);
+    bool success = true;
+    {
+        auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(runtime.handle(), {.capacity_ = 1});
+        bounded_reentrant_close move_close([&] { sender.close(); });
+        std::function<void()> on_move = [&] { move_close.invoke(); };
+        std::function<void()> on_destroy;
+        const auto result = sender.send(reentrant_payload(42, on_move, on_destroy));
+        success = result.status() == ruvia::channel_send_status::closed &&
+                  result.rejected() != nullptr && result.rejected()->value_ == 42 &&
+                  move_close.completed_during_callback();
+        receiver.close();
+    }
+    {
+        auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(runtime.handle(), {.capacity_ = 2});
+        bounded_reentrant_close move_close([&] { sender.close(); });
+        bounded_reentrant_close destroy_close([&] { sender.close(); });
+        std::function<void()> on_move;
+        std::function<void()> on_destroy;
+        success = sender.send(reentrant_payload(1, on_move, on_destroy)).accepted() && success;
+        success = sender.send(reentrant_payload(2, on_move, on_destroy)).accepted() && success;
+        on_move = [&] { move_close.invoke(); };
+        on_destroy = [&] { destroy_close.invoke(); };
+        bool received = false;
+        ruvia::test::run_worker_tasks(runtime, verify_reentrant_receive(receiver, received));
+        success = received && !on_move && !on_destroy && move_close.completed_during_callback() &&
+                  destroy_close.completed_during_callback() && success;
+    }
+    runtime.detach();
+    return success;
+}
+
+ruvia::task<void> verify_commit_order(
+    ruvia::channel_receiver<reentrant_payload>& receiver, bool& success) {
+    const auto first = co_await receiver.receive();
+    const auto second = co_await receiver.receive();
+    success = first.has_value() && first.value().value_ == 2 &&
+              second.has_value() && second.value().value_ == 1;
+}
+
+bool test_send_reservation_does_not_block_other_producers() {
+    asio::io_context io;
+    ruvia::worker_runtime_context runtime(io, 8);
+    auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(runtime.handle(), {.capacity_ = 2});
+    std::binary_semaphore entered{0};
+    std::binary_semaphore proceed{0};
+    std::binary_semaphore second_completed{0};
+    std::function<void()> first_move = [&] {
+        entered.release();
+        proceed.acquire();
+    };
+    std::function<void()> no_move;
+    std::function<void()> no_destroy;
+    bool first_sent = false;
+    std::thread producer([&] {
+        first_sent = sender.send(reentrant_payload(1, first_move, no_destroy)).accepted();
+    });
+    entered.acquire();
+    bool second_sent = false;
+    std::thread second_producer([&] {
+        second_sent = sender.send(reentrant_payload(2, no_move, no_destroy)).accepted();
+        second_completed.release();
+    });
+    const bool concurrent = second_completed.try_acquire_for(std::chrono::milliseconds(300));
+    proceed.release();
+    producer.join();
+    second_producer.join();
+    sender.close();
+    bool ordered = false;
+    ruvia::test::run_worker_tasks(runtime, verify_commit_order(receiver, ordered));
+    receiver.close();
+    runtime.detach();
+    return first_sent && second_sent && concurrent && ordered;
 }
 
 }  // namespace ruvia::test::channel_tests
@@ -658,6 +837,8 @@ int main() {
                             move_failed && recovered_value && recovered_send && late_move_consumed_once &&
                             test_rejected_payload_moves_can_close_the_channel() &&
                             test_retired_receiver_storage_is_released() &&
-                            test_retired_payload_destructors_can_tear_down_the_channel();
+                            test_retired_payload_destructors_can_tear_down_the_channel() &&
+                            test_reentrant_payload_moves_and_destruction() &&
+                            test_send_reservation_does_not_block_other_producers();
     return all_passed ? 0 : 1;
 }
