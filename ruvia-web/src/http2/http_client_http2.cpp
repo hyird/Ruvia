@@ -117,6 +117,9 @@ void http_client_connection::consume_http2_data(
     const auto limit = pool_.config().max_response_bytes_;
     const auto retained = state_value.buffered_.size() - state_value.offset_ + state_value.pending_.size();
     if (state_value.collect_all_ && bytes_value.size() > limit - std::min(retained, limit)) {
+        // Complete collection failed before any encoded bytes were exposed.
+        // Retaining the now-unusable prefix only holds response-budget memory.
+        state_value.discard_response_body();
         stream->error_ = http_client_error::code_type::response_too_large;
         http2_.submit_reset(stream_id);
         stream->signal_.notify();

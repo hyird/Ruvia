@@ -96,6 +96,9 @@ void publish_body_progress(http_client_response_state& state_value,
         const auto retained = state_value.buffered_.size() - state_value.offset_ + state_value.pending_.size();
         if (state_value.collect_all_ &&
             bytes_value.size() > max_response_bytes - std::min(retained, max_response_bytes)) {
+            // The encoded body was never exposed and can no longer produce a
+            // valid collected result. Release its storage with the failure.
+            state_value.discard_response_body();
             throw http_client_error(
                 http_client_error::code_type::response_too_large, "HTTP response exceeds configured byte limit");
         }
