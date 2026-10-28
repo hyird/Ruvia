@@ -3,7 +3,7 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
-#include <unordered_map>
+#include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
 
@@ -178,7 +178,8 @@ public:
         : sql_(resource),
           params_(resource),
           driver_(driver),
-          mode_(mode) {
+          mode_(mode),
+          parameter_positions_(resource) {
         require_db_dialect(driver);
     }
 
@@ -241,10 +242,12 @@ public:
             return;
         }
         if (pg() && node != nullptr) {
-            if (parameter_positions_.has_value()) {
-                if (const auto found = parameter_positions_->find(node); found != parameter_positions_->end()) {
-                    pg_parameter(found->second, value, cast);
-                    return;
+            if (!parameter_positions_.empty()) {
+                for (const auto& [existing_node, position] : parameter_positions_) {
+                    if (existing_node == node) {
+                        pg_parameter(position, value, cast);
+                        return;
+                    }
                 }
             } else {
                 for (std::size_t i = 0; i < inline_parameter_count_; ++i) {
@@ -260,17 +263,15 @@ public:
         }
         params_.push_back(clone_db_value_for_resource(value, params_.get_allocator().resource()));
         if (pg() && node != nullptr) {
-            if (parameter_positions_.has_value()) {
-                parameter_positions_->emplace(node, params_.size());
+            if (!parameter_positions_.empty()) {
+                parameter_positions_.emplace_back(node, params_.size());
             } else if (inline_parameter_count_ < inline_parameter_capacity) {
                 inline_parameter_positions_[inline_parameter_count_++] = {node, params_.size()};
             } else {
-                auto& map = parameter_positions_.emplace(params_.get_allocator().resource());
-                map.reserve(inline_parameter_capacity * 2U);
-                for (const auto& entry : inline_parameter_positions_) {
-                    map.emplace(entry.first, entry.second);
-                }
-                map.emplace(node, params_.size());
+                parameter_positions_.reserve((std::max)(expected_params_, inline_parameter_capacity * 2U));
+                parameter_positions_.assign(
+                    inline_parameter_positions_.begin(), inline_parameter_positions_.end());
+                parameter_positions_.emplace_back(node, params_.size());
             }
         }
         if (pg()) {
@@ -331,15 +332,15 @@ private:
         }
     }
 
-    static constexpr std::size_t inline_parameter_capacity = 16;
+    static constexpr std::size_t inline_parameter_capacity = 32;
     db_driver driver_;
     db_parameter_mode mode_;
     std::array<std::pair<const db_query_node*, std::size_t>, inline_parameter_capacity> inline_parameter_positions_{};
     std::size_t inline_parameter_count_{0};
-    // PostgreSQL numbers a reused node's parameter once. Small queries use
-    // inline_parameter_positions_ without heap allocations; larger queries
-    // spill into parameter_positions_.
-    std::optional<std::pmr::unordered_map<const db_query_node*, std::size_t>> parameter_positions_;
+    // PostgreSQL numbers a reused node's parameter once. Queries with up to 32
+    // distinct parameter nodes use inline_parameter_positions_ without heap
+    // allocations; larger queries spill into a single contiguous vector.
+    std::pmr::vector<std::pair<const db_query_node*, std::size_t>> parameter_positions_;
 };
 
 }  // namespace

@@ -24,6 +24,17 @@ namespace {
            value == ';' || value == '=' || value == ':' || value == '@';
 }
 
+[[nodiscard]] constexpr std::size_t url_for_encoded_size(
+    std::string_view value, bool keep_slashes) noexcept {
+    std::size_t size = value.size();
+    for (const char byte : value) {
+        if (!is_url_for_segment_byte(byte) && !(keep_slashes && byte == '/')) {
+            size += 2U;
+        }
+    }
+    return size;
+}
+
 void append_url_for_value(std::pmr::string& output, std::string_view value, bool keep_slashes) {
     while (!value.empty()) {
         const auto escaped = std::ranges::find_if_not(value, [keep_slashes](char byte) noexcept {
@@ -90,7 +101,7 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
                 throw std::invalid_argument("url_for '*' value has a separator the route cannot capture");
             }
             if (!value.empty()) {
-                estimated_size += 1U + value.size();
+                estimated_size += 1U + url_for_encoded_size(value, /*keep_slashes=*/true);
             } else if (estimated_size == 0) {
                 estimated_size += 1U;
             }
@@ -111,7 +122,7 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
             if (is_url_for_dot_segment(value)) {
                 throw std::invalid_argument("url_for route parameter value must not be '.' or '..'");
             }
-            estimated_size += value.size();
+            estimated_size += url_for_encoded_size(value, /*keep_slashes=*/false);
         } else {
             if (is_url_for_dot_segment(segment)) {
                 throw std::invalid_argument("url_for pattern must not contain a '.' or '..' segment");

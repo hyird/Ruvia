@@ -437,8 +437,26 @@ void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const
         throw std::invalid_argument("SQL must not contain NUL bytes");
     }
     validate_mariadb_sql_length(sql.size());
+    const bool backslash_escapes = (connection.server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) == 0;
     std::size_t size_hint = sql.size();
+    std::size_t scan_offset = 0;
     for (const auto& param : params) {
+        const auto placeholder = find_sql_syntax_byte(sql, '?', backslash_escapes, scan_offset);
+        if (placeholder == std::string_view::npos) {
+            throw std::invalid_argument("SQL parameter count does not match placeholders");
+        }
+        scan_offset = placeholder + 1;
+        if (db_value_access::type(param) == db_value_type::string) {
+            const auto value = db_value_access::text(param);
+            if (value.find('\0') != std::string_view::npos) {
+                throw std::invalid_argument("MariaDB string parameter must not contain NUL bytes");
+            }
+            if (backslash_escapes && charset == nullptr &&
+                value.find('\\') != std::string_view::npos && ambiguous_backslash(value)) {
+                throw std::logic_error(
+                    "MariaDB string parameter needs the session's character set to be escaped");
+            }
+        }
         const auto literal_size_hint = value_literal_size_hint(param);
         if (size_hint > (std::numeric_limits<std::size_t>::max)() - literal_size_hint) {
             throw std::length_error("MariaDB SQL size calculation overflowed");
@@ -446,29 +464,18 @@ void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const
         size_hint += literal_size_hint;
         validate_mariadb_sql_length(size_hint);
     }
+    if (find_sql_syntax_byte(sql, '?', backslash_escapes, scan_offset) != std::string_view::npos) {
+        throw std::invalid_argument("SQL parameter count does not match placeholders");
+    }
     output.clear();
     output.reserve(size_hint);
 
-    // Only a '?' at statement level is a placeholder. One inside a literal, a
-    // quoted identifier or a comment is data the statement wants to keep, and
-    // substituting it there would push every later parameter one slot along --
-    // valid SQL that reads and writes the wrong rows. The literal rules follow
-    // the session's NO_BACKSLASH_ESCAPES, which every response reports; they
-    // only differ for a statement with a backslash.
-    const bool backslash_escapes = (connection.server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) == 0;
     std::size_t offset = 0;
     for (const auto& param : params) {
         const auto placeholder = find_sql_syntax_byte(sql, '?', backslash_escapes, offset);
-        if (placeholder == std::string_view::npos) {
-            throw std::invalid_argument("SQL parameter count does not match placeholders");
-        }
         output.append(sql.data() + offset, placeholder - offset);
         append_value_literal(output, param, backslash_escapes, charset);
         offset = placeholder + 1;
-    }
-
-    if (find_sql_syntax_byte(sql, '?', backslash_escapes, offset) != std::string_view::npos) {
-        throw std::invalid_argument("SQL parameter count does not match placeholders");
     }
 
     output.append(sql.data() + offset, sql.size() - offset);

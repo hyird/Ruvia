@@ -116,8 +116,30 @@ postgresql_params encode_postgresql_params(
     std::span<const db_value> params, std::pmr::memory_resource* resource) {
     auto* resolved = pmr_resource_or_default(resource);
     postgresql_params output(resolved);
+    if (params.empty()) {
+        return output;
+    }
+    std::size_t numeric_count = 0;
+    for (const auto& param : params) {
+        const auto type = db_value_access::type(param);
+        if (type == db_value_type::string) {
+            const auto& value = db_value_access::owned_text(param);
+            if (value.find('\0') != std::string_view::npos) {
+                throw std::invalid_argument("PostgreSQL string parameter must not contain NUL bytes");
+            }
+            if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+                throw std::length_error("PostgreSQL parameter is too large");
+            }
+        } else if (type == db_value_type::signed_value || type == db_value_type::unsigned_value ||
+                   type == db_value_type::double_value) {
+            ++numeric_count;
+        }
+    }
     output.values_.reserve(params.size());
     output.types_.reserve(params.size());
+    if (numeric_count != 0) {
+        output.encoded_.reserve(numeric_count);
+    }
 
     for (const auto& param : params) {
         const auto type = db_value_access::type(param);
@@ -128,12 +150,6 @@ postgresql_params encode_postgresql_params(
                 break;
             case db_value_type::string: {
                 const auto& value = db_value_access::owned_text(param);
-                if (value.find('\0') != std::string_view::npos) {
-                    throw std::invalid_argument("PostgreSQL string parameter must not contain NUL bytes");
-                }
-                if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-                    throw std::length_error("PostgreSQL parameter is too large");
-                }
                 text = value.c_str();
                 break;
             }
@@ -143,11 +159,6 @@ postgresql_params encode_postgresql_params(
             case db_value_type::signed_value:
             case db_value_type::unsigned_value:
             case db_value_type::double_value: {
-                // Reserve before publishing the first number's c_str: vector
-                // growth would invalidate pointers into short string storage.
-                if (output.encoded_.empty()) {
-                    output.encoded_.reserve(params.size());
-                }
                 auto& value = output.encoded_.emplace_back();
                 if (type == db_value_type::signed_value) {
                     append_db_number(value, db_value_access::signed_value(param));
