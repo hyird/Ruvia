@@ -29,12 +29,16 @@ public:
 
 private:
     struct stored_cookie final {
-        stored_cookie(
-            std::string_view name, std::string_view value, std::pmr::memory_resource* resource)
+        stored_cookie(std::string_view name, std::string_view value,
+            std::pmr::memory_resource* resource)
+            : stored_cookie(name, value, "/", {}, resource) {}
+        stored_cookie(std::string_view name, std::string_view value,
+            std::string_view path, std::string_view domain,
+            std::pmr::memory_resource* resource)
             : name_(name, resource),
               value_(value, resource),
-              path_("/", resource),
-              domain_(resource) {}
+              path_(path, resource),
+              domain_(domain, resource) {}
         std::pmr::string name_;
         std::pmr::string value_;
         std::pmr::string path_;

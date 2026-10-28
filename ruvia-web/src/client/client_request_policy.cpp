@@ -164,7 +164,7 @@ void client_request_policy::add_cookie(std::string_view name, std::string_view v
     if (match == cookies_.end()) {
         reserve_cookie_slot();
         cookies_.emplace_back(name, value, resource_);
-    } else {
+    } else if (match->value_ != value) {
         std::pmr::string replacement_value(value, resource_);
         match->value_.swap(replacement_value);
     }
@@ -220,29 +220,32 @@ http_client_request_view client_request_policy::prepare_request(const http_clien
     auto field_count = input_headers.size();
     bool add_user_agent = !config_.user_agent_.empty();
     cookie_header.clear();
+    std::size_t cookie_header_bytes = 0;
     // Request storage preserves caller field-name spelling.
     for (const auto& field : input_headers) {
         const auto name = field.name();
-        if (add_user_agent && http_ascii_equals_ignore_case(name, "user-agent")) {
+        if (add_user_agent && name.size() == 10U && http_ascii_equals_ignore_case(name, "user-agent")) {
             add_user_agent = false;
         }
-        if (!http_ascii_equals_ignore_case(name, "cookie")) {
+        if (name.size() != 6U || !http_ascii_equals_ignore_case(name, "cookie")) {
             continue;
         }
         --field_count;
-        if (!cookie_header.empty()) {
-            cookie_header.append("; ");
+        if (cookie_header_bytes != 0) {
+            cookie_header_bytes += 2;
         }
-        cookie_header.append(field.value());
+        cookie_header_bytes += field.value().size();
     }
     const bool has_input_cookie = field_count != input_headers.size();
 
     // RFC 9110 §9.3.8: TRACE reflects the request, so stored credentials stay
     // out; caller-written Cookie fields above remain the caller's choice.
     // Empty jars have no expiry or path constraints to inspect.
-    if (!cookies_.empty() && request.method() != "TRACE") {
+    const bool check_jar = !cookies_.empty() && request.method() != "TRACE";
+    std::string_view path;
+    if (check_jar) {
         discard_expired(std::chrono::system_clock::now());
-        const auto path = request_path_only(request.target());
+        path = request_path_only(request.target());
         for (const auto& cookie : cookies_) {
             if (!cookie.configured_ &&
                 config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
@@ -256,7 +259,39 @@ http_client_request_view client_request_policy::prepare_request(const http_clien
             if (!cookie_path_matches(path, cookie.path_)) {
                 continue;
             }
-            append_cookie_request_pair(cookie_header, cookie.name_, cookie.value_);
+            if (cookie_header_bytes != 0) {
+                cookie_header_bytes += 2;
+            }
+            cookie_header_bytes += cookie.name_.size() + 1U + cookie.value_.size();
+        }
+    }
+    if (cookie_header_bytes != 0) {
+        cookie_header.reserve(cookie_header_bytes);
+        if (has_input_cookie) {
+            for (const auto& field : input_headers) {
+                if (field.name().size() != 6U || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
+                    continue;
+                }
+                if (!cookie_header.empty()) {
+                    cookie_header.append("; ");
+                }
+                cookie_header.append(field.value());
+            }
+        }
+        if (check_jar) {
+            for (const auto& cookie : cookies_) {
+                if (!cookie.configured_ &&
+                    config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
+                    continue;
+                }
+                if (cookie.secure_ && config_.scheme_ != http_scheme::https) {
+                    continue;
+                }
+                if (!cookie_path_matches(path, cookie.path_)) {
+                    continue;
+                }
+                append_cookie_request_pair(cookie_header, cookie.name_, cookie.value_);
+            }
         }
     }
     const bool add_cookie = !cookie_header.empty();
@@ -337,13 +372,12 @@ void client_request_policy::store_received_cookie(const client_received_cookie& 
         return;
     }
 
-    stored_cookie replacement(cookie.name_, cookie.value_, resource_);
-    replacement.path_.assign(cookie.path_);
-    replacement.domain_.assign(cookie.domain_);
-    replacement.expires_ = cookie.expires_;
-    replacement.secure_ = cookie.secure_;
-    replacement.configured_ = false;
     if (match == cookies_.end()) {
+        stored_cookie replacement(
+            cookie.name_, cookie.value_, cookie.path_, cookie.domain_, resource_);
+        replacement.expires_ = cookie.expires_;
+        replacement.secure_ = cookie.secure_;
+        replacement.configured_ = false;
         // Longer paths first, so more specific cookies lead the Cookie header
         // (RFC 6265 section 5.4 step 2).
         const auto insertion = std::ranges::find_if(cookies_,
@@ -352,8 +386,19 @@ void client_request_policy::store_received_cookie(const client_received_cookie& 
         reserve_cookie_slot();
         cookies_.emplace(cookies_.begin() + insertion_index, std::move(replacement));
     } else {
-        // Every string shares resource_, so the move steals buffers and cannot throw.
-        *match = std::move(replacement);
+        std::optional<std::pmr::string> replacement_value;
+        if (match->value_ != cookie.value_) {
+            replacement_value.emplace(cookie.value_, resource_);
+        }
+        if (match->domain_ != cookie.domain_) {
+            std::pmr::string replacement_domain(cookie.domain_, resource_);
+            match->domain_.swap(replacement_domain);
+        }
+        if (replacement_value.has_value()) {
+            match->value_.swap(*replacement_value);
+        }
+        match->expires_ = cookie.expires_;
+        match->secure_ = cookie.secure_;
     }
     cookie_bytes_ = cookie_bytes_ - replaced_bytes + replacement_bytes;
 }

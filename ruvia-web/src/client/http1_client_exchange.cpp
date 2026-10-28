@@ -148,12 +148,22 @@ void publish_body_progress(http_client_response_state& state_value,
         state_value.pending_.append(bytes_value);
         state_value.data_signal_.notify();
     } else if (const auto* trailers = decoded.trailers()) {
-        const auto ok = visit_http_response_trailers(trailers->bytes(), [&](std::string_view name, std::string_view value) {
-            state_value.trailers_.emplace_back(name, value, state_value.resource_);
-            return true;
-        });
+        std::size_t retained_count = 0;
+        const auto ok = visit_http_response_trailers(
+            trailers->bytes(), [&retained_count](std::string_view, std::string_view) noexcept {
+                ++retained_count;
+                return true;
+            });
         if (!ok) {
             throw std::logic_error("HTTP decoder published invalid response trailers");
+        }
+        if (retained_count != 0) {
+            state_value.trailers_.reserve(state_value.trailers_.size() + retained_count);
+            (void)visit_http_response_trailers(
+                trailers->bytes(), [&](std::string_view name, std::string_view value) {
+                    state_value.trailers_.emplace_back(name, value, state_value.resource_);
+                    return true;
+                });
         }
     } else if (const auto* failure = decoded.protocol_failure()) {
         throw http_client_error(http_client_error::code_type::protocol_error,

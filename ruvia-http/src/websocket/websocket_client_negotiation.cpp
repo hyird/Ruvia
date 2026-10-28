@@ -155,10 +155,10 @@ websocket_client_negotiation::websocket_client_negotiation(websocket_client_nego
     : deflate_(config.deflate_),
       protocols_(resource ? resource : std::pmr::get_default_resource()),
       fields_(protocols_.get_allocator().resource()) {
+    validate_configuration(config);
     auto* const memory = protocols_.get_allocator().resource();
     protocols_.reserve(config.subprotocols_.size());
     fields_.reserve(1U + (config.subprotocols_.empty() ? 0U : 1U) + (config.deflate_.enabled_ ? 1U : 0U));
-    std::pmr::string joined(memory);
     validate_and_visit_config(config, [&](std::string_view protocol_view) { protocols_.emplace_back(protocol_view); }, [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
             if (name == "Sec-WebSocket-Protocol") {
                 if (config.subprotocols_.size() == 1U) {
@@ -166,6 +166,23 @@ websocket_client_negotiation::websocket_client_negotiation(websocket_client_nego
                         name, config.subprotocols_.front(), memory));
                     return;
                 }
+                static constexpr std::size_t inline_joined_capacity = 256;
+                if (value_bytes <= inline_joined_capacity) {
+                    std::array<char, inline_joined_capacity> joined_buffer{};
+                    std::size_t offset = 0;
+                    for (const auto protocol_view : config.subprotocols_) {
+                        if (offset != 0) {
+                            joined_buffer[offset++] = ',';
+                            joined_buffer[offset++] = ' ';
+                        }
+                        std::memcpy(joined_buffer.data() + offset, protocol_view.data(), protocol_view.size());
+                        offset += protocol_view.size();
+                    }
+                    fields_.push_back(http_header::copy_with_lowercase_name(
+                        name, std::string_view(joined_buffer.data(), offset), memory));
+                    return;
+                }
+                std::pmr::string joined(memory);
                 joined.reserve(value_bytes);
                 for (const auto protocol_view : config.subprotocols_) {
                     if (!joined.empty()) {

@@ -32,6 +32,16 @@ bool is_reserved_handshake_header(std::string_view name, detail::request_header_
             return is_http_protocol_managed_request_field(name);
     }
 }
+
+std::pmr::memory_resource* validated_handshake_resource(
+    const http1_websocket_client_handshake_config_view& options,
+    std::pmr::memory_resource* resource) {
+    websocket_client_negotiation::validate_configuration(
+        {.subprotocols_ = options.subprotocols_, .deflate_ = options.deflate_});
+    http1_websocket_client_handshake::validate_configuration(
+        options.headers_, options.subprotocols_, options.user_agent_);
+    return resource != nullptr ? resource : std::pmr::get_default_resource();
+}
 }  // namespace
 
 void http1_websocket_client_handshake::validate_configuration(
@@ -61,11 +71,10 @@ void http1_websocket_client_handshake::validate_configuration(
 
 http1_websocket_client_handshake::http1_websocket_client_handshake(
     http1_websocket_client_handshake_config_view options, std::pmr::memory_resource* resource)
-    : resource_(resource != nullptr ? resource : std::pmr::get_default_resource()),
+    : resource_(validated_handshake_resource(options, resource)),
       negotiation_({.subprotocols_ = options.subprotocols_, .deflate_ = options.deflate_}, resource_),
       headers_(resource_),
       user_agent_(options.user_agent_, resource_) {
-    validate_configuration(options.headers_, options.subprotocols_, options.user_agent_);
     http_base64_encode(key_.data(), options.nonce_);
     headers_.reserve(options.headers_.size());
     for (auto header : options.headers_) {
