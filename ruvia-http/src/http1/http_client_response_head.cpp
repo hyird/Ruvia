@@ -50,6 +50,25 @@ namespace {
         .protocol_version_ = version[7] == '0' ? http_protocol_version::http10 : http_protocol_version::http11};
 }
 
+[[nodiscard]] bool request_offers_protocol(
+    const http1_client_exchange_state& exchange_state, const http_upgrade_protocol& selected) noexcept {
+    const auto offered_protocols =
+        http1_client_exchange_state_access::offered_upgrade_protocols(exchange_state);
+    if (offered_protocols.empty()) {
+        return false;
+    }
+    bool offered = false;
+    http_upgrade_protocols protocols;
+    if (protocols.parse_field(offered_protocols, http_field_list_role::sender,
+            [&selected, &offered](const http_upgrade_protocol& candidate_value) noexcept {
+                offered = offered || http_upgrade_protocol_equals(candidate_value, selected);
+                return true;
+            }) != http_field_list_parse_status::ok) {
+        return false;
+    }
+    return protocols.has_protocol() && offered;
+}
+
 }  // namespace
 
 http1_client_parsed_response_head::http1_client_parsed_response_head(
@@ -144,8 +163,17 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                 }
                 break;
             case request_header_kind::upgrade:
-                if (output.upgrade_protocols_.parse_field(value, http_field_list_role::recipient) !=
-                    http_field_list_parse_status::ok) {
+                if (output.upgrade_protocols_.parse_field(value, http_field_list_role::recipient,
+                        [&exchange_state, &output,
+                            check_offered = content_semantics ==
+                                            http_response_content_semantics::protocol_switch](
+                            const http_upgrade_protocol& selected) noexcept {
+                            if (check_offered && output.all_upgrade_protocols_offered_ &&
+                                !request_offers_protocol(exchange_state, selected)) {
+                                output.all_upgrade_protocols_offered_ = false;
+                            }
+                            return true;
+                        }) != http_field_list_parse_status::ok) {
                     return http1_client_response_parse_error::invalid_upgrade;
                 }
                 break;

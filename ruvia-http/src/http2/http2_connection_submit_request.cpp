@@ -9,6 +9,7 @@
 #include "field/http_expect_token.h"
 #include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
+#include "http2/http2_flow_control.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_request_headers.h"
@@ -428,11 +429,17 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         stream->reserve_push(http2_push_reservation::local);
         std::array<char, 4> promised;
         http2_write32(promised.data(), next_push_stream_id_);
+        const std::size_t max_frame = peer_settings_.max_frame_size();
+        const auto encoded_bytes =
+            http2_header_frame_encoded_bytes(block.size(), max_frame, promised.size());
+        const auto encoded_segments = http2_header_frame_count(encoded_bytes, max_frame);
+        output_.reserve_additional(encoded_bytes);
+        output_.reserve_segments_additional(encoded_segments);
         std::size_t offset = 0;
         bool first = true;
         while (offset < block.size()) {
             const auto prefix = first ? std::string_view(promised.data(), promised.size()) : std::string_view{};
-            const auto count = std::min<std::size_t>(block.size() - offset, peer_settings_.max_frame_size() - prefix.size());
+            const auto count = std::min<std::size_t>(block.size() - offset, max_frame - prefix.size());
             output_.append_frame(first ? http2_frame_type::push_promise : http2_frame_type::continuation,
                 offset + count == block.size() ? http2_flag_end_headers : 0, associated_stream_id,
                 prefix, std::string_view(block).substr(offset, count));

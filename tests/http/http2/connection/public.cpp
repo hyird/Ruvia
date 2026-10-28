@@ -4428,7 +4428,8 @@ RUVIA_TEST(http2_public_outbound_request_headers_and_trailers_lowercase_standard
     const auto submitted = client.submit_request_head(ruvia::http2_regular_request_head_view{
         .method_ = "POST", .scheme_ = "https", .authority_ = "example.test", .target_ = "/mixed", .headers_ = headers, .content_ = ruvia::http2_request_content::streaming()});
     RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
-    const std::array<ruvia::http_header_view, 1> trailers{{{"X-Mixed-Trailer", "tail-value"}}};
+    const std::array<ruvia::http_header_view, 2> trailers{
+        {{"X-Mixed-Trailer", "tail-value"}, {"X-Second-Trailer", "tail-two"}}};
     RUVIA_CHECK(client.finish_request(1, trailers) == ruvia::http2_finish_status::accepted);
     exchange_value(client, server);
 
@@ -4440,10 +4441,12 @@ RUVIA_TEST(http2_public_outbound_request_headers_and_trailers_lowercase_standard
             RUVIA_CHECK_EQ(built.header("x-custom-head").value_or(""), "short");
             parent.emplace(std::move(*head));
         } else if (const auto* end = event->message_end()) {
-            RUVIA_CHECK_EQ(end->trailers().size(), std::size_t{1});
-            if (!end->trailers().empty()) {
+            RUVIA_CHECK_EQ(end->trailers().size(), std::size_t{2});
+            if (end->trailers().size() == 2) {
                 RUVIA_CHECK_EQ(end->trailers()[0].name(), "x-mixed-trailer");
                 RUVIA_CHECK_EQ(end->trailers()[0].value(), "tail-value");
+                RUVIA_CHECK_EQ(end->trailers()[1].name(), "x-second-trailer");
+                RUVIA_CHECK_EQ(end->trailers()[1].value(), "tail-two");
             }
         }
     }

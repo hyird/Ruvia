@@ -17,25 +17,6 @@ namespace ruvia::detail {
 
 namespace {
 
-[[nodiscard]] bool request_offers_protocol(
-    const http1_client_exchange_state& exchange_state, const http_upgrade_protocol& selected) noexcept {
-    const auto offered_protocols =
-        http1_client_exchange_state_access::offered_upgrade_protocols(exchange_state);
-    if (offered_protocols.empty()) {
-        return false;
-    }
-    bool offered = false;
-    http_upgrade_protocols protocols;
-    if (protocols.parse_field(offered_protocols, http_field_list_role::sender,
-            [&selected, &offered](const http_upgrade_protocol& candidate_value) noexcept {
-                offered = offered || http_upgrade_protocol_equals(candidate_value, selected);
-                return true;
-            }) != http_field_list_parse_status::ok) {
-        return false;
-    }
-    return protocols.has_protocol() && offered;
-}
-
 [[nodiscard]] bool request_allows_protocol_switch(const http1_client_exchange_state& exchange_state,
     const http1_client_parsed_response_head& response,
     http1_client_request_content_phase request_content_phase,
@@ -55,20 +36,7 @@ namespace {
         !response.upgrade_protocols_.has_protocol()) {
         return false;
     }
-
-    http_upgrade_protocols selected_protocols;
-    for (const auto& header_value : response.headers_.view()) {
-        if (!http_ascii_equals_ignore_case(header_value.name(), "Upgrade")) {
-            continue;
-        }
-        if (selected_protocols.parse_field(header_value.value(), http_field_list_role::recipient,
-                [&exchange_state](const http_upgrade_protocol& selected) noexcept {
-                    return request_offers_protocol(exchange_state, selected);
-                }) != http_field_list_parse_status::ok) {
-            return false;
-        }
-    }
-    return selected_protocols.has_protocol();
+    return response.all_upgrade_protocols_offered_;
 }
 
 [[nodiscard]] std::optional<http_client_request_content_signal> request_content_signal(

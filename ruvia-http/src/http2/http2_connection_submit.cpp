@@ -487,13 +487,18 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
         throw std::invalid_argument("HTTP/2 request ended before declared Content-Length");
     }
     http_header_section_size size;
+    std::size_t reserve_bytes = 0;
     for (const auto& field : trailers) {
         if (!http2_is_valid_outbound_regular_header(field.name(), field.value()) ||
             is_forbidden_http_request_trailer_name(field.name()) || !size.add(field.name(), field.value())) {
             throw std::invalid_argument("invalid HTTP/2 request trailer");
         }
+        reserve_bytes += field.name().size() + field.value().size() + 6U;
     }
     std::pmr::string block(resource_);
+    if (reserve_bytes > 15U) {
+        block.reserve(reserve_bytes);
+    }
     std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
     std::pmr::string lower_name_scratch(resource_);
     for (const auto& field : trailers) {
