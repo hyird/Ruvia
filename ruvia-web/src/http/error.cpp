@@ -46,38 +46,44 @@ namespace {
         .validation_issues_ = error.validation_issues()});
 }
 
-RUVIA_MODEL(http_validation_issue_response_model, RUVIA_REQUIRED_FIELD(field, ruvia::string),
-    RUVIA_REQUIRED_FIELD(code, ruvia::string), RUVIA_REQUIRED_FIELD(message, ruvia::string));
-
-RUVIA_MODEL(http_error_response_model,
-    RUVIA_REQUIRED_FIELD(type, ruvia::string),
-    RUVIA_REQUIRED_FIELD(title, ruvia::string),
-    RUVIA_REQUIRED_FIELD(status, ruvia::int32),
-    RUVIA_REQUIRED_FIELD(detail, ruvia::string),
-    RUVIA_REQUIRED_FIELD(code, ruvia::string),
-    RUVIA_OPTIONAL_FIELD(errors, ruvia::array<http_validation_issue_response_model>));
-
 [[nodiscard]] std::pmr::string serialize_error_response(
     http_error_info error, std::pmr::memory_resource* resource) {
-    http_error_response_model model({.resource_ = resource});
     const auto phrase = http_reason_phrase(error.status());
-    model.set<"type">("about:blank")
-        .set<"title">(phrase.empty() ? std::string_view("HTTP Error") : phrase)
-        .set<"status">(error.status().value())
-        .set<"detail">(error.message())
-        .set<"code">(error.code());
-    if (!error.validation_issues().empty()) {
-        auto& details = model.ensure<"errors">();
-        const auto issues = error.validation_issues();
-        details.reserve(issues.size());
-        for (const auto& issue : issues) {
-            details.emplace_back(model_options{.resource_ = resource})
-                .set<"field">(issue.field())
-                .set<"code">(issue.code())
-                .set<"message">(issue.message());
-        }
+    const auto title = phrase.empty() ? std::string_view("HTTP Error") : phrase;
+    const auto issues = error.validation_issues();
+    std::size_t reserve_size = 72U + title.size() + error.message().size() + error.code().size();
+    for (const auto& issue : issues) {
+        reserve_size += 36U + issue.field().size() + issue.code().size() + issue.message().size();
     }
-    return to_json(model, {.resource_ = resource});
+    std::pmr::string out(resource);
+    out.reserve(reserve_size);
+    out.append("{\"type\":\"about:blank\",\"title\":");
+    detail::append_json_string(out, title);
+    out.append(",\"status\":");
+    http_append_formatted_number(out, static_cast<std::int32_t>(error.status().value()),
+        "failed to format HTTP error status");
+    out.append(",\"detail\":");
+    detail::append_json_string(out, error.message());
+    out.append(",\"code\":");
+    detail::append_json_string(out, error.code());
+    if (!issues.empty()) {
+        out.append(",\"errors\":[");
+        for (std::size_t i = 0; i < issues.size(); ++i) {
+            if (i != 0) {
+                out.push_back(',');
+            }
+            out.append("{\"field\":");
+            detail::append_json_string(out, issues[i].field());
+            out.append(",\"code\":");
+            detail::append_json_string(out, issues[i].code());
+            out.append(",\"message\":");
+            detail::append_json_string(out, issues[i].message());
+            out.push_back('}');
+        }
+        out.push_back(']');
+    }
+    out.push_back('}');
+    return out;
 }
 
 [[nodiscard]] std::string_view default_error_code_value(http_status_code status) noexcept {

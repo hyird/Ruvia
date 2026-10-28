@@ -1,3 +1,4 @@
+#include <array>
 #include <string_view>
 #include <utility>
 
@@ -14,35 +15,6 @@
 namespace ruvia {
 namespace {
 
-// The name the client sends back in Cookie is the wire name: an enum prefix
-// becomes part of the name at serialization. Request-side lookups and the MAC
-// of a signed cookie must both use it; the bare name never reaches the client.
-[[nodiscard]] std::string_view cookie_wire_name(
-    std::pmr::string& storage, std::string_view name, const ruvia::cookie_options& options) {
-    if (!options.prefix_) {
-        return name;
-    }
-    const auto prefix = ruvia::http_cookie_prefix_text(*options.prefix_);
-    storage.reserve(prefix.size() + name.size());
-    storage.append(prefix.data(), prefix.size());
-    storage.append(name.data(), name.size());
-    return storage;
-}
-
-[[nodiscard]] std::pmr::string compose_signed_cookie_value(std::pmr::memory_resource* resource,
-    std::string_view name, std::string_view value, std::string_view secret) {
-    std::pmr::string signed_value(resource);
-    signed_value.reserve(value.size() + 1 + detail::cookie_signature_size);
-    if (!value.empty()) {
-        signed_value.append(value.data(), value.size());
-    }
-    signed_value.push_back('.');
-    char signature[detail::cookie_signature_size];
-    detail::write_cookie_signature(signature, secret, name, value, resource);
-    signed_value.append(signature, sizeof(signature));
-    return signed_value;
-}
-
 void write_cookie(detail::context_response_state& state_value, std::string_view name, std::string_view value,
     const cookie_options& options) {
     const set_cookie_plan plan(name, value, options);
@@ -56,14 +28,47 @@ void context::set_cookie(set_cookie_options options) {
 }
 
 void context::set_signed_cookie(set_signed_cookie_options options) {
-    std::pmr::string wire_name(pool());
     const auto name = options.name_.view();
     const auto value = options.value_.view();
     const auto secret = options.secret_.view();
-    write_cookie(response_state(), name,
-        compose_signed_cookie_value(
-            pool(), cookie_wire_name(wire_name, name, options.attributes_), value, secret),
-        options.attributes_);
+    std::array<char, 128> wire_name_inline{};
+    std::pmr::string wire_name_heap(pool());
+    std::string_view wire_name = name;
+    if (options.attributes_.prefix_) {
+        const auto prefix = ruvia::http_cookie_prefix_text(*options.attributes_.prefix_);
+        const auto wire_size = prefix.size() + name.size();
+        if (wire_size <= wire_name_inline.size()) {
+            prefix.copy(wire_name_inline.data(), prefix.size());
+            name.copy(wire_name_inline.data() + prefix.size(), name.size());
+            wire_name = std::string_view(wire_name_inline.data(), wire_size);
+        } else {
+            wire_name_heap.reserve(wire_size);
+            wire_name_heap.append(prefix);
+            wire_name_heap.append(name);
+            wire_name = wire_name_heap;
+        }
+    }
+    char signature[detail::cookie_signature_size];
+    detail::write_cookie_signature(signature, secret, wire_name, value, pool());
+    const auto signed_size = value.size() + 1U + detail::cookie_signature_size;
+    std::array<char, 256> signed_inline{};
+    std::pmr::string signed_heap(pool());
+    std::string_view signed_view;
+    if (signed_size <= signed_inline.size()) {
+        if (!value.empty()) {
+            value.copy(signed_inline.data(), value.size());
+        }
+        signed_inline[value.size()] = '.';
+        std::char_traits<char>::copy(signed_inline.data() + value.size() + 1U, signature, sizeof(signature));
+        signed_view = std::string_view(signed_inline.data(), signed_size);
+    } else {
+        signed_heap.reserve(signed_size);
+        signed_heap.append(value);
+        signed_heap.push_back('.');
+        signed_heap.append(signature, sizeof(signature));
+        signed_view = signed_heap;
+    }
+    write_cookie(response_state(), name, signed_view, options.attributes_);
 }
 
 void context::delete_cookie(delete_cookie_options options) {

@@ -163,9 +163,15 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     // Route names and unencoded captures already borrow stable route/request
     // storage. Own only decoded values. Invalid percent-escapes fail in decode
     // rather than in a separate pre-scan of the same captures.
+    std::size_t decoded_count = 0;
+    for (std::size_t i = 0; i < param_count; ++i) {
+        decoded_count += has_url_encoding(param_values[i], url_decode_mode::percent);
+    }
     std::pmr::vector<std::pmr::string> storage(context_value.arena());
     auto params = detail::request_name_value_list_access::make(context_value.arena());
-    storage.reserve(param_count);
+    if (decoded_count != 0) {
+        storage.reserve(decoded_count);
+    }
     detail::request_name_value_list_access::reserve(params, param_count);
     for (std::size_t i = 0; i < param_count; ++i) {
         auto value = param_values[i];
