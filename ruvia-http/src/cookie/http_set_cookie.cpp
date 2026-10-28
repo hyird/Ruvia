@@ -212,43 +212,61 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
             contains_rejected_received_cookie_control(argument)) {
             return std::nullopt;
         }
-        if (argument.size() > detail::max_cookie_attribute_value_bytes) {
-            // Ignore this cookie-av and continue with later attributes.
-        } else if (http_ascii_equals_ignore_case(attribute, "Path")) {
-            // RFC 6265 section 5.2.4: a value that is empty or does not start
-            // with '/' selects the default-path; the last Path attribute wins.
-            if (argument.empty() || argument.front() != '/') {
-                result.path_ = {};
-                result.clear(http_set_cookie_attribute::path);
-            } else {
-                result.path_ = argument;
-                result.set(http_set_cookie_attribute::path);
+        if (argument.size() <= detail::max_cookie_attribute_value_bytes) {
+            switch (attribute.size()) {
+                case 4U:
+                    if (http_ascii_equals_ignore_case(attribute, "Path")) {
+                        // RFC 6265 section 5.2.4: a value that is empty or does not start
+                        // with '/' selects the default-path; the last Path attribute wins.
+                        if (argument.empty() || argument.front() != '/') {
+                            result.path_ = {};
+                            result.clear(http_set_cookie_attribute::path);
+                        } else {
+                            result.path_ = argument;
+                            result.set(http_set_cookie_attribute::path);
+                        }
+                    }
+                    break;
+                case 6U:
+                    if (http_ascii_equals_ignore_case(attribute, "Domain")) {
+                        // RFC 6265 section 5.2.3: an empty value ignores this cookie-av; a
+                        // leading '.' is dropped, so "Domain=." yields a host-only cookie.
+                        // Domain-match against the request host is the storage step's job.
+                        if (!argument.empty()) {
+                            result.domain_ = argument.front() == '.' ? argument.substr(1) : argument;
+                        }
+                    } else if (http_ascii_equals_ignore_case(attribute, "Secure")) {
+                        result.set(http_set_cookie_attribute::secure);
+                    }
+                    break;
+                case 7U:
+                    if (http_ascii_equals_ignore_case(attribute, "Expires")) {
+                        if (const auto expires = parse_cookie_date(argument)) {
+                            result.expires_ = expires;
+                        }
+                    } else if (http_ascii_equals_ignore_case(attribute, "Max-Age")) {
+                        if (const auto seconds = parse_max_age_seconds(argument)) {
+                            result.max_age_seconds_ = seconds;
+                        }
+                    }
+                    break;
+                case 8U:
+                    if (http_ascii_equals_ignore_case(attribute, "SameSite")) {
+                        if (http_ascii_equals_ignore_case(argument, "None")) {
+                            result.set(http_set_cookie_attribute::same_site_none);
+                        } else {
+                            result.clear(http_set_cookie_attribute::same_site_none);
+                        }
+                    }
+                    break;
+                case 11U:
+                    if (http_ascii_equals_ignore_case(attribute, "Partitioned")) {
+                        result.set(http_set_cookie_attribute::partitioned);
+                    }
+                    break;
+                default:
+                    break;
             }
-        } else if (http_ascii_equals_ignore_case(attribute, "Domain")) {
-            // RFC 6265 section 5.2.3: an empty value ignores this cookie-av; a
-            // leading '.' is dropped, so "Domain=." yields a host-only cookie.
-            // Domain-match against the request host is the storage step's job.
-            if (!argument.empty()) {
-                result.domain_ = argument.front() == '.' ? argument.substr(1) : argument;
-            }
-        } else if (http_ascii_equals_ignore_case(attribute, "Expires")) {
-            if (const auto expires = parse_cookie_date(argument)) {
-                result.expires_ = expires;
-            }
-        } else if (http_ascii_equals_ignore_case(attribute, "Max-Age")) {
-            if (const auto seconds = parse_max_age_seconds(argument)) {
-                result.max_age_seconds_ = seconds;
-            }
-        } else if (http_ascii_equals_ignore_case(attribute, "SameSite")) {
-            if (http_ascii_equals_ignore_case(argument, "None")) {
-                result.set(http_set_cookie_attribute::same_site_none);
-            } else {
-                result.clear(http_set_cookie_attribute::same_site_none);
-            }
-        } else if (http_ascii_equals_ignore_case(attribute, "Secure")) {
-            result.set(http_set_cookie_attribute::secure);
-        } else if (http_ascii_equals_ignore_case(attribute, "Partitioned")) {
-            result.set(http_set_cookie_attribute::partitioned);
         }
         if (end == std::string_view::npos) {
             break;
