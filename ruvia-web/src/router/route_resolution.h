@@ -22,6 +22,23 @@ class route_entry;
 
 class route_match final {
 public:
+    constexpr route_match() noexcept = default;
+
+    constexpr route_match(const route_match& other) noexcept
+        : param_count_(other.param_count_) {
+        for (std::size_t i = 0; i < param_count_; ++i) {
+            param_values_[i] = other.param_values_[i];
+        }
+    }
+
+    constexpr route_match& operator=(const route_match& other) noexcept {
+        param_count_ = other.param_count_;
+        for (std::size_t i = 0; i < param_count_; ++i) {
+            param_values_[i] = other.param_values_[i];
+        }
+        return *this;
+    }
+
     [[nodiscard]] std::span<const std::string_view> values() const& noexcept {
         return std::span<const std::string_view>(param_values_.data(), param_count_);
     }
@@ -113,6 +130,10 @@ public:
 private:
     friend class route_resolution;
 
+    resolved_route(const route_entry& route, void* handler_target) noexcept
+        : route_(&route),
+          handler_target_(handler_target) {}
+
     resolved_route(const route_entry& route, void* handler_target, const route_match& match) noexcept
         : route_(&route),
           handler_target_(handler_target),
@@ -127,6 +148,11 @@ class route_resolution final {
 public:
     route_resolution() noexcept
         : value_(route_not_found{}) {}
+
+    [[nodiscard]] static route_resolution resolved(
+        const route_entry& route, void* handler_target) noexcept {
+        return route_resolution(resolved_route(route, handler_target));
+    }
 
     [[nodiscard]] static route_resolution resolved(
         const route_entry& route, void* handler_target, const route_match& match) noexcept {

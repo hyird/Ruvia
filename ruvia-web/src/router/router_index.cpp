@@ -21,6 +21,11 @@ detail::route_stream_handler detail::resolved_route::stream_handler() const noex
 }
 
 detail::route_resolution detail::route_table::resolved(
+    const route_entry& route) const noexcept {
+    return route_resolution::resolved(route, handler_targets_[route.index()]);
+}
+
+detail::route_resolution detail::route_table::resolved(
     const route_entry& route, const route_match& match) const noexcept {
     return route_resolution::resolved(route, handler_targets_[route.index()], match);
 }

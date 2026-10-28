@@ -142,7 +142,8 @@ private:
     // Distinct tokens of the extension routes on `path`, precomputed in the
     // plan; empty when none is registered there.
     [[nodiscard]] std::span<const std::string_view> extension_methods_for(std::string_view path) const noexcept;
-    [[nodiscard]] route_resolution resolved(const route_entry& route, const route_match& match = {}) const noexcept;
+    [[nodiscard]] route_resolution resolved(const route_entry& route) const noexcept;
+    [[nodiscard]] route_resolution resolved(const route_entry& route, const route_match& match) const noexcept;
 
     static constexpr std::size_t routable_method_count = compiled_route_plan::routable_method_count;
     static constexpr std::size_t no_route_index = compiled_route_plan::no_route_index;

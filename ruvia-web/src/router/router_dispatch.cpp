@@ -47,7 +47,8 @@ struct document_root_probe final {
 
 [[nodiscard]] document_root_probe probe_document_root_resource(
     const detail::document_root_binding& document_root, const http_request& request,
-    request_memory& memory, std::optional<std::pmr::string>& decoded, std::pmr::string& storage) {
+    request_memory& memory, std::optional<std::pmr::string>& decoded,
+    std::optional<std::pmr::string>& storage) {
     const auto* const root = document_root.root();
     // Only an origin-form path names a document-root resource: a CONNECT
     // authority or "OPTIONS *" reaches here unrouted as well and must not be
@@ -67,7 +68,8 @@ struct document_root_probe final {
         }
         relative = std::string_view(*decoded).substr(1);
     }
-    auto entry_value = detail::static_root_access::try_resolve(*root, relative, storage);
+    auto entry_value = detail::static_root_access::try_resolve(
+        *root, relative, storage.emplace(memory.upstream_resource()));
     if (!entry_value.has_value()) {
         return {};
     }
@@ -108,12 +110,13 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             // like every other answer to a request no route matched. A
             // rejected target is answered by the not-found path alone.
             std::optional<std::pmr::string> decoded_fallback_path;
-            std::pmr::string fallback_path_storage(memory.upstream_resource());
-            const auto fallback_probe = resolution.rejected() != nullptr
-                                            ? document_root_probe{}
-                                            : probe_document_root_resource(
-                                                  document_root, request, memory,
-                                                  decoded_fallback_path, fallback_path_storage);
+            std::optional<std::pmr::string> fallback_path_storage;
+            const auto fallback_probe =
+                resolution.rejected() != nullptr || document_root.root() == nullptr
+                    ? document_root_probe{}
+                    : probe_document_root_resource(
+                          document_root, request, memory,
+                          decoded_fallback_path, fallback_path_storage);
             const auto method = request.known_method();
             if (fallback_probe.entry_.has_value() &&
                 (method == http_known_method::get || method == http_known_method::head)) {
