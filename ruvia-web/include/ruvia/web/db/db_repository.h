@@ -259,13 +259,17 @@ struct db_map_projection final {
     static_assert(sql_entity<e_type> || sql_projection<e_type>, "SQL results require a SQL entity or a db_projection");
     explicit db_map_projection(std::span<const std::pmr::string> selected, bool allow_extra_columns = false, bool wildcard = false)
         : wildcard_(wildcard) {
+        if (!wildcard && selected.empty()) {
+            selected_columns_.fill(true);
+            return;
+        }
         if (!allow_extra_columns) {
             for (const auto& name : selected) {
                 require_entity_column<e_type>(name);
             }
         }
         for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t index> {
-            selected_columns_[index] = (!wildcard && selected.empty()) || std::ranges::find(selected, c_type::name.view()) != selected.end();
+            selected_columns_[index] = std::ranges::find(selected, c_type::name.view()) != selected.end();
         });
     }
     entity_rows<e_type> operator()(const db_rows& rows, std::pmr::memory_resource* resource) const {

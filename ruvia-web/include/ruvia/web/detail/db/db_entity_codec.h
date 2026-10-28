@@ -250,10 +250,15 @@ public:
         const auto names = db_result_access::column_names(row);
         if (!schema_ || schema_->data() != names.data() || schema_->size() != names.size()) {
             for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
-                indices_[i] = missing_column;
                 if (!selected_[i] && !wildcard_) {
+                    indices_[i] = missing_column;
                     return;
                 }
+                if (!wildcard_ && i < names.size() && names[i] == column_type::name.view()) {
+                    indices_[i] = i;
+                    return;
+                }
+                indices_[i] = missing_column;
                 for (std::size_t index = 0; index < names.size(); ++index) {
                     if (names[index] == column_type::name.view()) {
                         if (wildcard_ && indices_[i] != missing_column) {
@@ -285,7 +290,7 @@ public:
 
 private:
     std::array<bool, column_count> selected_{};
-    std::array<std::size_t, column_count> indices_{};
+    std::array<std::size_t, column_count> indices_;
     bool wildcard_{false};
     // Used only while synchronously mapping a live, immutable db_rows result.
     std::optional<std::span<const std::pmr::string>> schema_{};

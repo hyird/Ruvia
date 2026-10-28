@@ -78,9 +78,7 @@ public:
                 throw std::invalid_argument("a relation join alias must be one identifier");
             }
             auto normalized = normalize(root_alias, path);
-            std::array<std::string_view, 256> components{};
-            std::size_t component_count = 0;
-            validate_path<entity_type>(normalized, 0, components, component_count);
+            validate_path<entity_type>(normalized, 0);
             if (!alias.empty() && uses_source_name(query, alias)) {
                 bool same = false;
                 for (const auto& node : nodes_) {
@@ -93,8 +91,7 @@ public:
             if (nodes_.empty()) {
                 column_count_ = std::tuple_size_v<typename entity_type::columns_type>;
             }
-            add_path<entity_type>(query, root_alias,
-                std::span<const std::string_view>(components.data(), component_count), root, alias, join, condition);
+            add_path<entity_type>(query, root_alias, normalized, root, alias, join, condition);
         }
     }
 
@@ -180,9 +177,8 @@ private:
         std::span<const std::string_view> primary_key, std::string_view root_alias, db_driver driver);
 
     template <typename entity_type>
-    static void validate_path(std::string_view path, std::size_t depth,
-        std::array<std::string_view, 256>& components, std::size_t& count) {
-        if (path.empty() || depth >= components.size()) {
+    static void validate_path(std::string_view path, std::size_t depth) {
+        if (path.empty() || depth >= 256) {
             throw std::invalid_argument("relation path is empty or exceeds query nesting depth");
         }
         const auto dot = path.find('.');
@@ -191,8 +187,6 @@ private:
         if (name.empty() || (dot != std::string_view::npos && rest.empty())) {
             throw std::invalid_argument("relation path contains an empty component");
         }
-        components[depth] = name;
-        count = depth + 1;
         bool found = false;
         for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t> {
             if (name != relation_type::name.view()) {
@@ -204,7 +198,7 @@ private:
             if constexpr (db_primary_key_count<target_type>() == 0) {
                 throw std::invalid_argument("relation loading requires a primary key on every selected target");
             } else if (!rest.empty()) {
-                validate_path<target_type>(rest, depth + 1, components, count);
+                validate_path<target_type>(rest, depth + 1);
             }
         });
         if (!found) {
@@ -255,10 +249,11 @@ private:
     }
 
     template <typename entity_type>
-    void add_path(db_query& query, std::string_view root_alias, std::span<const std::string_view> components,
+    void add_path(db_query& query, std::string_view root_alias, std::string_view path,
         std::size_t parent_value, std::string_view requested_alias, db_join_type requested_join, db_expression condition) {
-        const auto name = components.front();
-        const auto rest = components.subspan(1);
+        const auto dot = path.find('.');
+        const auto name = path.substr(0, dot);
+        const auto rest = dot == std::string_view::npos ? std::string_view{} : path.substr(dot + 1);
         for_each_descriptor<typename entity_type::relations_type>([&]<typename relation_type, std::size_t i> {
             if (name != relation_type::name.view()) {
                 return;
@@ -326,6 +321,8 @@ public:
             return result;
         }
         resolve_columns<entity_type>(rows.front());
+        key_.reserve(64);
+        identities_.reserve(rows.size());
         for (const auto& row : rows) {
             if (!make_key<entity_type>(row, 0, 0, db_relation_plan::root)) {
                 throw std::invalid_argument("NULL root primary key in a relation query");
