@@ -141,6 +141,7 @@ client_request_policy::client_request_policy(const http_client_config_storage& c
     : config_(config),
       resource_(resource),
       cookies_(resource) {
+    cookies_.reserve(config.cookies_.size());
     for (const auto& cookie : config.cookies_) {
         add_cookie(cookie.name(), cookie.value());
     }
@@ -166,8 +167,12 @@ void client_request_policy::add_cookie(std::string_view name, std::string_view v
         reserve_cookie_slot();
         cookies_.emplace_back(name, value, resource_);
     } else if (match->value_ != value) {
-        std::pmr::string replacement_value(value, resource_);
-        match->value_.swap(replacement_value);
+        if (value.size() <= match->value_.capacity()) {
+            match->value_.assign(value);
+        } else {
+            std::pmr::string replacement_value(value, resource_);
+            match->value_.swap(replacement_value);
+        }
     }
     cookie_bytes_ = cookie_bytes_ - replaced_bytes + replacement_bytes;
 }
@@ -201,7 +206,7 @@ void client_request_policy::reserve_cookie_slot() {
     // Capacity was checked before insertion. Grow geometrically without
     // retaining slots beyond the configured cookie count.
     const auto remaining = config_.max_cookies_ - cookies_.size();
-    const auto growth = std::min(remaining, std::max(std::size_t{1}, cookies_.size() / 2));
+    const auto growth = std::min(remaining, std::max(std::size_t{4}, cookies_.size()));
     cookies_.reserve(cookies_.size() + growth);
 }
 
@@ -452,15 +457,22 @@ void client_request_policy::store_received_cookie(const client_received_cookie& 
         cookies_.emplace(cookies_.begin() + insertion_index, std::move(replacement));
     } else {
         std::optional<std::pmr::string> replacement_value;
-        if (match->value_ != cookie.value_) {
+        if (match->value_ != cookie.value_ && cookie.value_.size() > match->value_.capacity()) {
             replacement_value.emplace(cookie.value_, resource_);
         }
-        if (match->domain_ != cookie.domain_) {
-            std::pmr::string replacement_domain(cookie.domain_, resource_);
-            match->domain_.swap(replacement_domain);
+        std::optional<std::pmr::string> replacement_domain;
+        if (match->domain_ != cookie.domain_ && cookie.domain_.size() > match->domain_.capacity()) {
+            replacement_domain.emplace(cookie.domain_, resource_);
         }
         if (replacement_value.has_value()) {
             match->value_.swap(*replacement_value);
+        } else if (match->value_ != cookie.value_) {
+            match->value_.assign(cookie.value_);
+        }
+        if (replacement_domain.has_value()) {
+            match->domain_.swap(*replacement_domain);
+        } else if (match->domain_ != cookie.domain_) {
+            match->domain_.assign(cookie.domain_);
         }
         match->expires_ = cookie.expires_;
         match->secure_ = cookie.secure_;

@@ -967,8 +967,19 @@ RUVIA_TEST(http_client_merges_explicit_cookie_fields_without_losing_other_header
     test_worker worker(io);
     scripted_head_peer peer(io, worker.handle_,
         {"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"});
+    auto invalid_overridden = local_http_client_config(peer.port());
+    invalid_overridden.cookies_ = {{"sid", "bad value"}, {"sid", "stored"}};
+    bool rejected_invalid_overridden = false;
+    try {
+        ruvia::http_client rejected(worker.attachment_.loop(), invalid_overridden);
+    } catch (const std::invalid_argument&) {
+        rejected_invalid_overridden = true;
+    }
+    RUVIA_CHECK(rejected_invalid_overridden);
     auto config = local_http_client_config(peer.port());
-    config.cookies_ = {{"sid", "stored"}};
+    config.max_cookies_ = 2;
+    config.max_cookie_bytes_ = 16;
+    config.cookies_ = {{"sid", "obsolete-long-value"}, {"mode", "1"}, {"sid", "stored"}};
     ruvia::http_client client(worker.attachment_.loop(), config);
     peer.start();
     auto operation = [&]() -> ruvia::task<void> {
@@ -997,7 +1008,7 @@ RUVIA_TEST(http_client_merges_explicit_cookie_fields_without_losing_other_header
                     const auto value = line.substr(colon + 1);
                     if (ruvia::http_ascii_equals_ignore_case(name, "cookie")) {
                         ++cookie_count;
-                        merged = value == " a=1; b=2; sid=stored";
+                        merged = value == " a=1; b=2; sid=stored; mode=1";
                     } else if (ruvia::http_ascii_equals_ignore_case(name, "x-test")) {
                         other_header = value == " present";
                     }

@@ -133,9 +133,40 @@ private:
           received_cookies_(source_value.received_cookies_),
           user_agent_(user_agent_view(source_value), resource),
           cookies_(resource) {
-        cookies_.reserve(source_value.cookies_.size());
-        for (const auto& cookie : source_value.cookies_) {
-            cookies_.emplace_back(cookie.name(), cookie.value(), resource);
+        std::size_t unique_cookies = 0;
+        for (std::size_t i = 0; i < source_value.cookies_.size(); ++i) {
+            const auto name = source_value.cookies_[i].name();
+            bool seen = false;
+            for (std::size_t k = 0; k < i; ++k) {
+                if (source_value.cookies_[k].name() == name) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen) {
+                ++unique_cookies;
+            }
+        }
+        cookies_.reserve(unique_cookies);
+        for (std::size_t i = 0; i < source_value.cookies_.size(); ++i) {
+            const auto name = source_value.cookies_[i].name();
+            bool seen = false;
+            for (std::size_t k = 0; k < i; ++k) {
+                if (source_value.cookies_[k].name() == name) {
+                    seen = true;
+                    break;
+                }
+            }
+            if (seen) {
+                continue;
+            }
+            auto value = source_value.cookies_[i].value();
+            for (std::size_t j = i + 1; j < source_value.cookies_.size(); ++j) {
+                if (source_value.cookies_[j].name() == name) {
+                    value = source_value.cookies_[j].value();
+                }
+            }
+            cookies_.emplace_back(name, value, resource);
         }
     }
 };

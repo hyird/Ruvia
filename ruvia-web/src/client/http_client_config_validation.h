@@ -80,16 +80,28 @@ inline void validate_http_client_config(const http_client_config& config) {
         std::optional{config.connect_timeout_}, config.write_timeout_, config.request_timeout_,
         config.acquire_timeout_);
     validate_http_client_user_agent(config.user_agent_.view());
-    if (config.cookies_.size() > config.max_cookies_) {
-        throw std::invalid_argument(
-            "configured HTTP client cookies exceed the client cookie limit");
-    }
+    std::size_t unique_cookies = 0;
     std::size_t cookie_bytes = 0;
-    for (const auto& cookie : config.cookies_) {
-        const auto name = cookie.name();
-        const auto value = cookie.value();
+    for (std::size_t i = 0; i < config.cookies_.size(); ++i) {
+        const auto name = config.cookies_[i].name();
+        const auto value = config.cookies_[i].value();
         if (!is_valid_http_header_name(name) || !::ruvia::is_valid_cookie_value(value)) {
             throw std::invalid_argument("configured HTTP client cookie is invalid");
+        }
+        bool overridden = false;
+        for (std::size_t j = i + 1; j < config.cookies_.size(); ++j) {
+            if (config.cookies_[j].name() == name) {
+                overridden = true;
+                break;
+            }
+        }
+        if (overridden) {
+            continue;
+        }
+        ++unique_cookies;
+        if (unique_cookies > config.max_cookies_) {
+            throw std::invalid_argument(
+                "configured HTTP client cookies exceed the client cookie limit");
         }
         if (name.size() > config.max_cookie_bytes_ - cookie_bytes) {
             throw std::invalid_argument(
