@@ -42,7 +42,18 @@ public:
     // A copy shares the source's owning resource, mirroring the move
     // constructor; construct directly to place the copy in another resource.
     http_header(const http_header& other)
-        : http_header(other.name(), other.value(), other.resource_) {}
+        : resource_(other.resource_),
+          bytes_(other.resource_ == nullptr ? other.bytes_ : nullptr),
+          name_size_(other.name_size_),
+          value_size_(other.value_size_) {
+        if (resource_ != nullptr) {
+            const auto size = name_size_ + value_size_;
+            if (size != 0) {
+                bytes_ = static_cast<char*>(resource_->allocate(size, alignof(char)));
+                std::memcpy(bytes_, other.bytes_, size);
+            }
+        }
+    }
 
     http_header(http_header&& other) noexcept
         : resource_(other.resource_),
@@ -52,16 +63,27 @@ public:
 
     http_header& operator=(const http_header& other) {
         if (this != &other) {
-            http_header replacement(other.name(), other.value(), resource_);
-            swap_storage(replacement);
+            if (other.resource_ == nullptr) {
+                release();
+                resource_ = nullptr;
+                bytes_ = other.bytes_;
+                name_size_ = other.name_size_;
+                value_size_ = other.value_size_;
+            } else {
+                http_header replacement(other.name(), other.value(),
+                    resource_ != nullptr ? resource_ : other.resource_);
+                swap_storage(replacement);
+            }
         }
         return *this;
     }
 
     http_header& operator=(http_header&& other) {
         if (this != &other) {
-            if (resource_->is_equal(*other.resource_)) {
+            if (resource_ == nullptr || other.resource_ == nullptr ||
+                resource_->is_equal(*other.resource_)) {
                 release();
+                resource_ = other.resource_;
                 bytes_ = std::exchange(other.bytes_, nullptr);
                 name_size_ = std::exchange(other.name_size_, 0);
                 value_size_ = std::exchange(other.value_size_, 0);
@@ -100,8 +122,19 @@ public:
     std::string_view value() const&& = delete;
 
 private:
+    friend class websocket_client_negotiation;
+
+    constexpr http_header() noexcept = default;
+
+    constexpr http_header(
+        const char* static_bytes, std::size_t name_size, std::size_t value_size) noexcept
+        : resource_(nullptr),
+          bytes_(const_cast<char*>(static_bytes)),
+          name_size_(name_size),
+          value_size_(value_size) {}
+
     void release() noexcept {
-        if (bytes_ != nullptr) {
+        if (bytes_ != nullptr && resource_ != nullptr) {
             resource_->deallocate(bytes_, name_size_ + value_size_, alignof(char));
         }
         bytes_ = nullptr;
@@ -110,12 +143,13 @@ private:
     }
 
     void swap_storage(http_header& other) noexcept {
+        std::swap(resource_, other.resource_);
         std::swap(bytes_, other.bytes_);
         std::swap(name_size_, other.name_size_);
         std::swap(value_size_, other.value_size_);
     }
 
-    std::pmr::memory_resource* resource_;
+    std::pmr::memory_resource* resource_{nullptr};
     char* bytes_{nullptr};
     std::size_t name_size_{};
     std::size_t value_size_{};

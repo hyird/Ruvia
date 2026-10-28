@@ -51,9 +51,20 @@ std::optional<websocket_compression> parse_response_extension(std::string_view t
 
     return result_value;
 }
+[[nodiscard]] bool subprotocol_offered(
+    std::string_view offered_list, std::string_view selected) noexcept {
+    if (selected.empty()) {
+        return false;
+    }
+    return !detail::http_find_header_token(offered_list, [selected](std::string_view token) noexcept {
+        return token == selected;
+    }).empty();
+}
+
 template <class fields, class name_type, class value_type>
-std::variant<websocket_client_negotiation_result_view, error_type> validate(const fields& fields_value, name_type name, value_type value,
-    const std::pmr::vector<std::pmr::string>& protocols, websocket_client_deflate_offer offer, bool extended) {
+std::variant<websocket_client_negotiation_result_view, error_type> validate(const fields& fields_value,
+    name_type name, value_type value, std::string_view offered_subprotocols, bool has_subprotocols,
+    websocket_client_deflate_offer offer, bool extended) {
     websocket_client_negotiation_result_view result;
     std::size_t selected = 0, extensions = 0;
     for (const auto& field : fields_value) {
@@ -63,11 +74,8 @@ std::variant<websocket_client_negotiation_result_view, error_type> validate(cons
         if (kind == detail::request_header_kind::sec_websocket_protocol) {
             ++selected;
             result.selected_subprotocol_ = http_trim_ows(v);
-            bool found = false;
-            for (const auto& protocol : protocols) {
-                found = found || protocol == result.selected_subprotocol_;
-            }
-            if (selected > 1 || !found) {
+            if (selected > 1 || !has_subprotocols ||
+                !subprotocol_offered(offered_subprotocols, result.selected_subprotocol_)) {
                 return error_type::subprotocol;
             }
         } else if (kind == detail::request_header_kind::sec_websocket_extensions) {
@@ -151,19 +159,24 @@ void validate_and_visit_config(const websocket_client_negotiation_config_view& c
 void websocket_client_negotiation::validate_configuration(websocket_client_negotiation_config_view config) {
     validate_and_visit_config(config, [](std::string_view) {}, [](std::string_view, std::string_view, std::size_t) {});
 }
-websocket_client_negotiation::websocket_client_negotiation(websocket_client_negotiation_config_view config, std::pmr::memory_resource* resource)
-    : deflate_(config.deflate_),
-      protocols_(resource ? resource : std::pmr::get_default_resource()),
-      fields_(protocols_.get_allocator().resource()) {
-    validate_configuration(config);
-    auto* const memory = protocols_.get_allocator().resource();
-    protocols_.reserve(config.subprotocols_.size());
-    fields_.reserve(1U + (config.subprotocols_.empty() ? 0U : 1U) + (config.deflate_.enabled_ ? 1U : 0U));
-    validate_and_visit_config(config, [&](std::string_view protocol_view) { protocols_.emplace_back(protocol_view); }, [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
-            if (name == "Sec-WebSocket-Protocol") {
+websocket_client_negotiation::websocket_client_negotiation(
+    websocket_client_negotiation_config_view config, std::pmr::memory_resource* resource)
+    : resource_(resource ? resource : std::pmr::get_default_resource()),
+      deflate_(config.deflate_) {
+    auto* const memory = resource_;
+    static constexpr std::string_view version_storage = "sec-websocket-version13";
+    static constexpr std::string_view protocol_header_name = "sec-websocket-protocol";
+    static constexpr std::string_view extensions_header_name = "sec-websocket-extensions";
+    validate_and_visit_config(
+        config, [](std::string_view) {},
+        [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
+            if (name == "Sec-WebSocket-Version") {
+                fields_[field_count_++] = http_header(version_storage.data(), 21, 2);
+            } else if (name == "Sec-WebSocket-Protocol") {
+                has_subprotocols_ = true;
                 if (config.subprotocols_.size() == 1U) {
-                    fields_.push_back(http_header::copy_with_lowercase_name(
-                        name, config.subprotocols_.front(), memory));
+                    fields_[field_count_++] =
+                        http_header(protocol_header_name, config.subprotocols_.front(), memory);
                     return;
                 }
                 static constexpr std::size_t inline_joined_capacity = 256;
@@ -175,11 +188,12 @@ websocket_client_negotiation::websocket_client_negotiation(websocket_client_nego
                             joined_buffer[offset++] = ',';
                             joined_buffer[offset++] = ' ';
                         }
-                        std::memcpy(joined_buffer.data() + offset, protocol_view.data(), protocol_view.size());
+                        std::memcpy(
+                            joined_buffer.data() + offset, protocol_view.data(), protocol_view.size());
                         offset += protocol_view.size();
                     }
-                    fields_.push_back(http_header::copy_with_lowercase_name(
-                        name, std::string_view(joined_buffer.data(), offset), memory));
+                    fields_[field_count_++] = http_header(protocol_header_name,
+                        std::string_view(joined_buffer.data(), offset), memory);
                     return;
                 }
                 std::pmr::string joined(memory);
@@ -190,32 +204,39 @@ websocket_client_negotiation::websocket_client_negotiation(websocket_client_nego
                     }
                     joined.append(protocol_view);
                 }
-                fields_.push_back(http_header::copy_with_lowercase_name(name, joined, memory));
+                fields_[field_count_++] = http_header(protocol_header_name, joined, memory);
             } else if (name == "Sec-WebSocket-Extensions" && value_bytes > value.size()) {
                 static constexpr std::string_view suffix = "; client_max_window_bits";
                 std::array<char, 128> offer_buffer{};
                 std::memcpy(offer_buffer.data(), value.data(), value.size());
                 std::memcpy(offer_buffer.data() + value.size(), suffix.data(), suffix.size());
-                fields_.push_back(http_header::copy_with_lowercase_name(
-                    name, std::string_view(offer_buffer.data(), value_bytes), memory));
+                fields_[field_count_++] = http_header(
+                    extensions_header_name, std::string_view(offer_buffer.data(), value_bytes), memory);
             } else {
-                fields_.push_back(http_header::copy_with_lowercase_name(name, value, memory));
-            } });
+                fields_[field_count_++] = http_header(extensions_header_name, value, memory);
+            }
+        });
 }
-std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_fields(std::span<const http_header> fields_value) const {
-    return validate(fields_value, [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, false);
+std::variant<websocket_client_negotiation_result_view, error_type>
+websocket_client_negotiation::validate_fields(std::span<const http_header> fields_value) const {
+    const auto offered = has_subprotocols_ ? fields_[1].value() : std::string_view{};
+    return validate(
+        fields_value, [](const auto& field) { return field.name(); },
+        [](const auto& field) { return field.value(); }, offered, has_subprotocols_, deflate_, false);
 }
-std::variant<std::uint32_t, http2_request_head_submit_error> websocket_client_negotiation::submit_http2_request(
-    http2_connection& connection, std::string_view scheme, std::string_view authority,
-    std::string_view target, std::span<const http_header_view> application_headers) const {
+std::variant<std::uint32_t, http2_request_head_submit_error>
+websocket_client_negotiation::submit_http2_request(http2_connection& connection,
+    std::string_view scheme, std::string_view authority, std::string_view target,
+    std::span<const http_header_view> application_headers) const {
     static constexpr std::size_t inline_header_capacity = 16;
-    const std::size_t total_headers = fields_.size() + application_headers.size();
+    const auto negotiation_fields = request_fields();
+    const std::size_t total_headers = negotiation_fields.size() + application_headers.size();
     std::array<http_header_view, inline_header_capacity> inline_headers{};
-    std::pmr::vector<http_header_view> heap_headers(protocols_.get_allocator().resource());
+    std::pmr::vector<http_header_view> heap_headers(resource_);
     std::span<const http_header_view> active_headers{};
     if (total_headers <= inline_headers.size()) {
         std::size_t index = 0;
-        for (const auto& f : fields_) {
+        for (const auto& f : negotiation_fields) {
             inline_headers[index++] = http_header_view{f.name(), f.value()};
         }
         for (const auto& f : application_headers) {
@@ -224,7 +245,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> websocket_client_ne
         active_headers = std::span<const http_header_view>(inline_headers.data(), total_headers);
     } else {
         heap_headers.reserve(total_headers);
-        for (const auto& f : fields_) {
+        for (const auto& f : negotiation_fields) {
             heap_headers.emplace_back(f.name(), f.value());
         }
         heap_headers.insert(heap_headers.end(), application_headers.begin(), application_headers.end());
@@ -245,6 +266,9 @@ std::variant<websocket_client_negotiation_result_view, error_type> websocket_cli
     if (!stream_open) {
         return error_type::stream_closed;
     }
-    return validate(head.headers(), [](const auto& field) { return field.name(); }, [](const auto& field) { return field.value(); }, protocols_, deflate_, true);
+    const auto offered = has_subprotocols_ ? fields_[1].value() : std::string_view{};
+    return validate(
+        head.headers(), [](const auto& field) { return field.name(); },
+        [](const auto& field) { return field.value(); }, offered, has_subprotocols_, deflate_, true);
 }
 }  // namespace ruvia

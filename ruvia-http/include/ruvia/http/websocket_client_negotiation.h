@@ -58,7 +58,7 @@ public:
     websocket_client_negotiation(const websocket_client_negotiation&) = delete;
     websocket_client_negotiation& operator=(const websocket_client_negotiation&) = delete;
     [[nodiscard]] std::span<const http_header> request_fields() const& noexcept {
-        return fields_;
+        return std::span<const http_header>(fields_.data(), field_count_);
     }
     std::span<const http_header> request_fields() const&& = delete;
     [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_negotiation_error>
@@ -71,9 +71,11 @@ public:
     validate_response(const http_client_response_head& head, bool stream_open) const;
 
 private:
+    std::pmr::memory_resource* resource_;
     websocket_client_deflate_offer deflate_;
-    std::pmr::vector<std::pmr::string> protocols_;
-    std::pmr::vector<http_header> fields_;
+    std::array<http_header, 3> fields_{};
+    std::size_t field_count_{0};
+    bool has_subprotocols_{false};
 };
 
 class http1_parsed_client_response_head;

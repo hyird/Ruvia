@@ -420,35 +420,46 @@ std::optional<std::string_view> context_request::negotiate(
                                 ? http_accept_token_match_mode::language_prefix
                                 : http_accept_token_match_mode::exact;
 
-    bool saw_field = false;
+    static constexpr std::size_t inline_value_capacity = 8;
+    std::array<std::string_view, inline_value_capacity> inline_values{};
+    std::size_t matching_count = 0;
     const auto headers = context_->request_.headers();
     for (const auto& header_field : headers) {
-        if (http_ascii_equals_ignore_case(header_field.name(), header_name)) {
-            saw_field = true;
-            break;
+        if (!http_ascii_equals_ignore_case(header_field.name(), header_name) ||
+            header_field.value().empty()) {
+            continue;
         }
-    }
-
-    if (!saw_field) {
-        return supported.front();
+        if (matching_count < inline_values.size()) {
+            inline_values[matching_count] = header_field.value();
+        }
+        ++matching_count;
     }
 
     std::optional<std::string_view> best;
     int best_quality = 0;
+    const bool use_inline_values = matching_count <= inline_values.size();
     for (const auto offered : supported) {
         http_accept_match match;
         http_accepted_encoding_quality encoding_quality;
-        for (const auto& header_field : headers) {
-            if (!http_ascii_equals_ignore_case(header_field.name(), header_name) ||
-                header_field.value().empty()) {
-                continue;
-            }
+        const auto accumulate = [&](std::string_view field_value) noexcept {
             if (media_type) {
-                match.update_media_type(header_field.value(), offered);
+                match.update_media_type(field_value, offered);
             } else if (encoding) {
-                encoding_quality.update(header_field.value(), offered);
+                encoding_quality.update(field_value, offered);
             } else {
-                match.update_token(header_field.value(), offered, token_mode);
+                match.update_token(field_value, offered, token_mode);
+            }
+        };
+        if (use_inline_values) {
+            for (std::size_t i = 0; i < matching_count; ++i) {
+                accumulate(inline_values[i]);
+            }
+        } else {
+            for (const auto& header_field : headers) {
+                if (http_ascii_equals_ignore_case(header_field.name(), header_name) &&
+                    !header_field.value().empty()) {
+                    accumulate(header_field.value());
+                }
             }
         }
         const auto quality = encoding ? encoding_quality.quality(http_ascii_equals_ignore_case(offered, "identity"))
