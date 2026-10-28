@@ -52,6 +52,7 @@ public:
     std::optional<request_field_cache> route_params_;
     bool query_invalid_{false};
     bool route_params_invalid_{false};
+    bool route_params_unencoded_{false};
 };
 
 }  // namespace ruvia::detail

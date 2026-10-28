@@ -150,19 +150,15 @@ void ensure_request_query(const context& context_value, const http_request& requ
     cache.emplace(std::move(storage), std::move(query));
 }
 
-void ensure_route_params(const context& context_value, const std::string_view* param_names,
+[[nodiscard]] bool verify_unencoded_route_params(const std::string_view* param_names,
     const std::string_view* param_values, std::size_t param_count,
     detail::context_request_storage& request_storage) {
-    auto& cache = request_storage.route_params_;
-    if (cache) {
-        return;
+    if (request_storage.route_params_unencoded_) {
+        return true;
     }
     if (request_storage.route_params_invalid_) {
         detail::throw_invalid_param();
     }
-    // Route names and unencoded captures already borrow stable route/request
-    // storage. Own only decoded values. Invalid percent-escapes fail in decode
-    // rather than in a separate pre-scan of the same captures.
     std::size_t decoded_count = 0;
     for (std::size_t i = 0; i < param_count; ++i) {
         const auto value = param_values[i];
@@ -177,6 +173,31 @@ void ensure_route_params(const context& context_value, const std::string_view* p
         }
         ++decoded_count;
     }
+    if (decoded_count == 0) {
+        request_storage.route_params_unencoded_ = true;
+        return true;
+    }
+    return false;
+}
+
+void ensure_route_params(const context& context_value, const std::string_view* param_names,
+    const std::string_view* param_values, std::size_t param_count,
+    detail::context_request_storage& request_storage) {
+    auto& cache = request_storage.route_params_;
+    if (cache) {
+        return;
+    }
+    // Route names and unencoded captures already borrow stable route/request
+    // storage. Own only decoded values. Invalid percent-escapes fail in decode
+    // rather than in a separate pre-scan of the same captures.
+    const bool all_unencoded =
+        verify_unencoded_route_params(param_names, param_values, param_count, request_storage);
+    std::size_t decoded_count = 0;
+    if (!all_unencoded) {
+        for (std::size_t i = 0; i < param_count; ++i) {
+            decoded_count += has_url_encoding(param_values[i], url_decode_mode::percent);
+        }
+    }
     std::pmr::vector<std::pmr::string> storage(context_value.arena());
     auto params = detail::request_name_value_list_access::make(context_value.arena());
     if (decoded_count != 0) {
@@ -185,7 +206,7 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     detail::request_name_value_list_access::reserve(params, param_count);
     for (std::size_t i = 0; i < param_count; ++i) {
         auto value = param_values[i];
-        if (has_url_encoding(value, url_decode_mode::percent)) {
+        if (!all_unencoded && has_url_encoding(value, url_decode_mode::percent)) {
             auto decoded = decode_url_component(
                 value, {.mode_ = url_decode_mode::percent, .resource_ = context_value.arena()});
             value = storage.emplace_back(std::move(*decoded));
@@ -310,12 +331,18 @@ const request_name_value_list& context_request::query_fields() const {
 }
 
 std::optional<std::string_view> context_request::query(std::string_view name) const {
+    if (context_->request_.query_string().empty()) {
+        return std::nullopt;
+    }
     auto& storage = context_->request_storage();
     ensure_request_query(*context_, context_->request_, storage);
     return storage.query_->fields().get(name);
 }
 
 std::span<const std::string_view> context_request::queries(std::string_view name) const {
+    if (context_->request_.query_string().empty()) {
+        return {};
+    }
     auto& storage = context_->request_storage();
     ensure_request_query(*context_, context_->request_, storage);
     return storage.query_->values().values(name);
@@ -368,7 +395,22 @@ const request_name_value_list& context_request::param_fields() const {
 }
 
 std::optional<std::string_view> context_request::param(std::string_view name) const {
+    if (context_->param_count_ == 0) {
+        return std::nullopt;
+    }
     auto& storage = context_->request_storage();
+    if (storage.route_params_) {
+        return storage.route_params_->fields_.get(name);
+    }
+    if (verify_unencoded_route_params(
+            context_->param_names_, context_->param_values_, context_->param_count_, storage)) {
+        for (std::size_t i = context_->param_count_; i > 0; --i) {
+            if (context_->param_names_[i - 1] == name) {
+                return context_->param_values_[i - 1];
+            }
+        }
+        return std::nullopt;
+    }
     ensure_route_params(*context_, context_->param_names_, context_->param_values_, context_->param_count_, storage);
     return storage.route_params_->fields_.get(name);
 }
