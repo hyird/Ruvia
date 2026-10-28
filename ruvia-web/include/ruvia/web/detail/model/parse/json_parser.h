@@ -226,10 +226,9 @@ private:
     [[nodiscard]] static bool visit_json_field(model_type& value, std::string_view key,
         std::string_view& value_input, std::pmr::memory_resource* resource, std::size_t depth,
         model_string_storage string_storage, json_parse_budget& budget) {
-        const auto key_hash = model::model_field_name_hash(key);
         bool field_result = true;
         const bool matched = model::visit_model_field_by_wire_name(value,
-            model::model_access::schema<model_type>(), key_hash, key, field_result,
+            model::model_access::schema<model_type>(), key, field_result,
             [&](auto& slot) -> bool {
                 return parse_json_field_slot(slot, value_input, resource, depth, string_storage, budget);
             });
@@ -297,7 +296,7 @@ private:
         }
         bool field_result = true;
         (void)model::visit_model_field_by_wire_name(value, model::model_access::schema<model_type>(),
-            model::model_field_name_hash(key), key, field_result, [&](auto& slot) -> bool {
+            key, field_result, [&](auto& slot) -> bool {
                 bind_form_field_slot(slot, field_value, encoding, resource, string_storage);
                 return true;
             });

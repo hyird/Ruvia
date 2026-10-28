@@ -168,7 +168,9 @@ void append_utf8(output_t_type& output, std::uint32_t code_point) {
     std::string_view input, std::pmr::memory_resource* resource) {
     std::pmr::string output(pmr_resource_or_default(resource));
     output.reserve(input.size());
-    for (std::size_t i = 0; i < input.size(); ++i) {
+    std::size_t chunk_begin = 0;
+    std::size_t i = 0;
+    while ((i = find_json_string_token_byte(input, i)) != std::string_view::npos) {
         const char c = input[i];
         if (c != '\\') {
             const auto uc = static_cast<unsigned char>(c);
@@ -182,16 +184,18 @@ void append_utf8(output_t_type& output, std::uint32_t code_point) {
                 if (!sequence.well_formed_) {
                     return std::nullopt;
                 }
-                output.append(input.data() + i, sequence.length_);
-                i += sequence.length_ - 1;  // the loop's ++i steps past the final byte
+                i += sequence.length_;
                 continue;
             }
-            output.push_back(c);
+            ++i;
             continue;
         }
 
         if (i + 1 >= input.size()) {
             return std::nullopt;
+        }
+        if (i > chunk_begin) {
+            output.append(input.data() + chunk_begin, i - chunk_begin);
         }
         const char escape = input[++i];
         switch (escape) {
@@ -240,6 +244,10 @@ void append_utf8(output_t_type& output, std::uint32_t code_point) {
             default:
                 return std::nullopt;
         }
+        chunk_begin = ++i;
+    }
+    if (chunk_begin < input.size()) {
+        output.append(input.data() + chunk_begin, input.size() - chunk_begin);
     }
     return output;
 }

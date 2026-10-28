@@ -56,7 +56,6 @@ struct model_field_descriptor final {
 
     static constexpr auto source_name = field_source_name;
     static constexpr auto wire_name = field_wire_name;
-    static constexpr auto wire_hash = model_field_name_hash(wire_name.view());
     static constexpr bool required = is_required;
     static constexpr bool nullable = options_type::nullable;
     static constexpr bool has_field_rules = !std::is_same_v<rules_type, rules<>>;
@@ -184,15 +183,15 @@ constexpr void visit_model_fields(
 
 template <std::size_t index, typename descriptor_type, typename... remaining_types, typename model_type,
     typename visitor_type>
-[[nodiscard]] bool visit_model_field_by_wire_name_impl(model_type& model, std::uint64_t wire_hash,
+[[nodiscard]] bool visit_model_field_by_wire_name_impl(model_type& model,
     std::string_view wire_name, bool& visit_result, visitor_type& visitor) {
-    if (wire_hash == descriptor_type::wire_hash && wire_name == descriptor_type::wire_name.view()) {
+    if (wire_name == descriptor_type::wire_name.view()) {
         visit_result = visitor(model_access::slot<index>(model));
         return true;
     }
     if constexpr (sizeof...(remaining_types) > 0) {
         return visit_model_field_by_wire_name_impl<index + 1, remaining_types...>(
-            model, wire_hash, wire_name, visit_result, visitor);
+            model, wire_name, visit_result, visitor);
     } else {
         return false;
     }
@@ -200,13 +199,13 @@ template <std::size_t index, typename descriptor_type, typename... remaining_typ
 
 template <typename model_type, typename... descriptor_types, typename visitor_type>
 [[nodiscard]] bool visit_model_field_by_wire_name(model_type& model, model_schema<descriptor_types...>,
-    std::uint64_t wire_hash, std::string_view wire_name, bool& visit_result, visitor_type&& visitor) {
+    std::string_view wire_name, bool& visit_result, visitor_type&& visitor) {
     if constexpr (sizeof...(descriptor_types) == 0) {
         return false;
     } else {
         auto& visitor_ref = visitor;
         return visit_model_field_by_wire_name_impl<0, descriptor_types...>(
-            model, wire_hash, wire_name, visit_result, visitor_ref);
+            model, wire_name, visit_result, visitor_ref);
     }
 }
 

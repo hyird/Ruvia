@@ -11,18 +11,12 @@
 
 #include "ruvia/web/detail/model/model_options.h"
 #include "ruvia/web/detail/model/parse/field_assign.h"
-#include "ruvia/web/detail/util/fnv1a.h"
 
 namespace ruvia::detail::model {
 
 template <typename... descriptor_types>
 class model_storage;
 
-[[nodiscard]] constexpr std::uint64_t model_field_name_hash(std::string_view name) noexcept {
-    // FNV-1a is only a dispatch prefilter. The parser still compares the full
-    // decoded key before binding, so collisions cannot change JSON semantics.
-    return detail::fnv1a_accumulate(detail::fnv1a_offset_basis, name);
-}
 template <fixed_string wire_name>
 [[nodiscard]] consteval std::array<char, wire_name.view().size() + 3>
 make_quoted_wire_name_colon() noexcept {
