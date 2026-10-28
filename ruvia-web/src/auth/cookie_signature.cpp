@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory_resource>
 #include <span>
@@ -47,21 +48,33 @@ void write_cookie_signature(
             std::numeric_limits<std::size_t>::max() - name_len_bytes.size() - name.size()) {
         throw std::length_error("signed cookie message is too large");
     }
-    std::array<std::byte, 512> message_buffer;
-    std::pmr::monotonic_buffer_resource message_arena(message_buffer.data(), message_buffer.size(), resource);
-    std::pmr::string message(&message_arena);
     const auto message_size = name_len_bytes.size() + name.size() + value.size();
     if (message_size > hmac_max_input_size) {
         throw std::length_error("signed cookie message is too large for HMAC");
     }
-    message.reserve(message_size);
-    message.append(name_len_bytes.data(), name_len_bytes.size());
-    message.append(name.data(), name.size());
-    message.append(value.data(), value.size());
+    std::array<char, 512> inline_message{};
+    std::pmr::string heap_message(resource);
+    std::string_view message_view;
+    if (message_size <= inline_message.size()) {
+        std::memcpy(inline_message.data(), name_len_bytes.data(), name_len_bytes.size());
+        if (!name.empty()) {
+            std::memcpy(inline_message.data() + name_len_bytes.size(), name.data(), name.size());
+        }
+        if (!value.empty()) {
+            std::memcpy(
+                inline_message.data() + name_len_bytes.size() + name.size(), value.data(), value.size());
+        }
+        message_view = std::string_view(inline_message.data(), message_size);
+    } else {
+        heap_message.reserve(message_size);
+        heap_message.append(name_len_bytes.data(), name_len_bytes.size());
+        heap_message.append(name.data(), name.size());
+        heap_message.append(value.data(), value.size());
+        message_view = heap_message;
+    }
 
     std::array<std::uint8_t, hmac_digest_size(hmac_digest::sha256)> digest{};
-    if (!compute_hmac(hmac_digest::sha256, secret, message, digest)) {
-        throw std::runtime_error("signed cookie HMAC failed");
+    if (!compute_hmac(hmac_digest::sha256, secret, message_view, digest)) {
     }
     http_base64_encode(output, std::span<const std::uint8_t>(digest));
 }

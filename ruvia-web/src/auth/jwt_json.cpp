@@ -37,17 +37,26 @@ template <typename visitor_type>
     // that lives for one visitor call, so only those are copied; list nodes keep
     // each copy at a stable address.
     static constexpr std::size_t inline_capacity = 16;
+    using field_pair_type = std::pair<std::string_view, std::string_view>;
+    std::array<field_pair_type, inline_capacity> inline_fields{};
     std::array<std::string_view, inline_capacity> inline_names{};
     std::size_t inline_count = 0;
+    std::pmr::vector<field_pair_type> heap_fields(resource);
     std::pmr::vector<std::string_view> heap_names(resource);
     std::pmr::forward_list<std::pmr::string> decoded_names(resource);
     const std::less_equal<> not_after;
-    const auto record_name = [&](std::string_view stored_name) {
-        if (!heap_names.empty()) {
+    const auto record_field = [&](std::string_view stored_name, std::string_view value) {
+        if (!heap_fields.empty()) {
+            heap_fields.emplace_back(stored_name, value);
             heap_names.push_back(stored_name);
         } else if (inline_count < inline_capacity) {
-            inline_names[inline_count++] = stored_name;
+            inline_fields[inline_count] = field_pair_type{stored_name, value};
+            inline_names[inline_count] = stored_name;
+            ++inline_count;
         } else {
+            heap_fields.reserve(inline_capacity * 2U);
+            heap_fields.assign(inline_fields.begin(), inline_fields.end());
+            heap_fields.emplace_back(stored_name, value);
             heap_names.reserve(inline_capacity * 2U);
             heap_names.assign(inline_names.begin(), inline_names.end());
             heap_names.push_back(stored_name);
@@ -57,22 +66,35 @@ template <typename visitor_type>
         [&](std::string_view name, std::string_view value) {
             if (not_after(json.data(), name.data()) &&
                 not_after(name.data() + name.size(), json.data() + json.size())) {
-                record_name(name);
+                record_field(name, value);
             } else {
-                record_name(decoded_names.emplace_front(name));
+                record_field(decoded_names.emplace_front(name), value);
             }
-            visitor(name, value);
         });
     if (visited != json_object_visit_result::complete) {
         return false;
     }
-    if (heap_names.empty()) {
-        const std::span<std::string_view> active(inline_names.data(), inline_count);
-        std::ranges::sort(active);
-        return std::ranges::adjacent_find(active) == active.end();
+    std::span<const field_pair_type> fields_view;
+    if (heap_fields.empty()) {
+        const std::span<std::string_view> active_names(inline_names.data(), inline_count);
+        std::ranges::sort(active_names);
+        if (std::ranges::adjacent_find(active_names) != active_names.end()) {
+            return false;
+        }
+        fields_view = std::span<const field_pair_type>(inline_fields.data(), inline_count);
+    } else {
+        std::ranges::sort(heap_names);
+        if (std::ranges::adjacent_find(heap_names) != heap_names.end()) {
+            return false;
+        }
+        fields_view = heap_fields;
     }
-    std::ranges::sort(heap_names);
-    return std::ranges::adjacent_find(heap_names) == heap_names.end();
+    for (const auto& [name, value] : fields_view) {
+        if (!dispatch_json_object_field_visitor(visitor, name, value)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] std::optional<std::chrono::system_clock::time_point> jwt_parse_json_numeric_date(
@@ -140,7 +162,7 @@ template <typename visitor_type>
 }
 
 void jwt_append_json_member(
-    std::pmr::string& out, bool& first, std::string_view name, std::string_view value) {
+    jwt_json_buffer& out, bool& first, std::string_view name, std::string_view value) {
     if (!first) {
         out.push_back(',');
     }
@@ -151,14 +173,19 @@ void jwt_append_json_member(
 }
 
 void jwt_append_json_member(
-    std::pmr::string& out, bool& first, std::string_view name, std::int64_t value) {
+    jwt_json_buffer& out, bool& first, std::string_view name, std::int64_t value) {
     if (!first) {
         out.push_back(',');
     }
     first = false;
     append_json_string<json_hex_case::lower>(out, name);
     out.push_back(':');
-    http_append_formatted_number(out, value, "failed to format JWT numeric claim");
+    std::array<char, 32> buffer{};
+    const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+    if (ec != std::errc{}) {
+        throw std::logic_error("failed to format JWT numeric claim");
+    }
+    out.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
 }
 
 std::pmr::string jwt_parse_jose_algorithm(std::string_view json, std::pmr::memory_resource* resource) {
@@ -173,15 +200,20 @@ std::pmr::string jwt_parse_jose_algorithm(std::string_view json, std::pmr::memor
                 if (auto decoded = jwt_decode_json_string_value(value, resource)) {
                     algorithm = std::move(*decoded);
                     algorithm_valid = true;
+                    return true;
                 }
-            } else if (name == "crit" || name == "b64") {
+                return false;
+            }
+            if (name == "crit" || name == "b64") {
                 // No critical extensions are implemented. RFC 7797 section 7
                 // forbids b64=false in JWTs; section 6 requires crit whenever
                 // b64 is present, even when true. Reject this extension also
                 // when crit is missing, rather than silently decoding a payload
                 // whose header declares different encoding semantics.
                 unsupported_extension = true;
+                return false;
             }
+            return true;
         });
     if (!valid || !algorithm_seen || !algorithm_valid || unsupported_extension) {
         throw jwt_error(jwt_error::code_type::invalid_header, "JWT JOSE header is invalid");
@@ -212,6 +244,24 @@ namespace {
         return false;
     }
 
+    auto preflight = value;
+    std::size_t element_count = 0;
+    const bool preflight_ok = detail::consume_json_array_elements(preflight, 0,
+        [&element_count](std::string_view& element) noexcept {
+            const auto parsed_value = detail::parse_json_string(element);
+            if (!parsed_value.has_value()) {
+                return false;
+            }
+            ++element_count;
+            return true;
+        });
+    detail::skip_json_whitespace(preflight);
+    // RFC 7519 §4.1.3: an "aud" claim with no value identifies nobody, so the
+    // token is rejected rather than treated as unaudienced.
+    if (!preflight_ok || !preflight.empty() || element_count == 0) {
+        return false;
+    }
+    out.reserve(out.size() + element_count);
     const bool consumed = detail::consume_json_array_elements(value, 0,
         [&out, resource](std::string_view& element) {
             const auto parsed_value = detail::parse_json_string(element);
@@ -225,10 +275,7 @@ namespace {
             out.push_back(std::move(*decoded));
             return true;
         });
-    detail::skip_json_whitespace(value);
-    // RFC 7519 §4.1.3: an "aud" claim with no value identifies nobody, so the
-    // token is rejected rather than treated as unaudienced.
-    if (!consumed || !value.empty() || out.empty()) {
+    if (!consumed || out.empty()) {
         out.clear();
         return false;
     }
@@ -306,14 +353,11 @@ bool detail::jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_v
 jwt_payload detail::jwt_payload_access::decode_payload_json(
     std::string_view json, std::pmr::memory_resource* resolved) {
     jwt_payload payload_value(resolved);
-    bool claim_invalid = false;
     const bool valid = detail::visit_unique_jwt_json_object_fields(
         json, resolved, [&](std::string_view key, std::string_view value) {
-            if (!decode_jwt_payload_claim(payload_value, key, value, resolved)) {
-                claim_invalid = true;
-            }
+            return decode_jwt_payload_claim(payload_value, key, value, resolved);
         });
-    if (!valid || claim_invalid) {
+    if (!valid) {
         throw jwt_error(
             jwt_error::code_type::invalid_payload, "JWT payload is not a valid unique claims object");
     }

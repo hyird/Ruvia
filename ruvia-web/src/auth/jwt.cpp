@@ -204,13 +204,7 @@ struct jwt_decoded_section final {
     throw std::invalid_argument("unsupported JWT algorithm");
 }
 
-// Encodes the base64url signature into `out`. Throws std::invalid_argument for
-// a key shorter than the selected digest and std::length_error when the secret
-// or signing input exceeds OpenSSL's HMAC length parameters.
-[[nodiscard]] std::string_view jwt_hmac_sign(jwt_algorithm algorithm, std::string_view secret,
-    std::string_view data, std::array<char, 88>& out) {
-    const auto digest = jwt_hmac_digest(algorithm);
-    const auto digest_size = hmac_digest_size(digest);
+void validate_jwt_hmac_secret(std::size_t digest_size, std::string_view secret) {
     if (secret.size() > hmac_max_input_size) {
         throw std::length_error("JWT secret is too large");
     }
@@ -218,6 +212,16 @@ struct jwt_decoded_section final {
     if (secret.size() < digest_size) {
         throw std::invalid_argument("JWT secret is shorter than the selected algorithm's digest");
     }
+}
+
+// Encodes the base64url signature into `out`. Throws std::invalid_argument for
+// a key shorter than the selected digest and std::length_error when the secret
+// or signing input exceeds OpenSSL's HMAC length parameters.
+[[nodiscard]] std::string_view jwt_hmac_sign(jwt_algorithm algorithm, std::string_view secret,
+    std::string_view data, std::array<char, 88>& out) {
+    const auto digest = jwt_hmac_digest(algorithm);
+    const auto digest_size = hmac_digest_size(digest);
+    validate_jwt_hmac_secret(digest_size, secret);
     if (data.size() > hmac_max_input_size) {
         throw std::length_error("JWT signing input is too large");
     }
@@ -333,19 +337,19 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
         throw std::invalid_argument("JWT signing time offsets must not be negative");
     }
     const auto digest = detail::jwt_hmac_digest(options.algorithm_);
+    detail::validate_jwt_hmac_secret(detail::hmac_digest_size(digest), options.secret_);
     const auto header = detail::jwt_header_json(options.algorithm_);
     auto* resolved = pmr_resource_or_default(options.resource_);
     const auto now = std::chrono::system_clock::now();
 
-    std::size_t payload_reserve = 32U + options.issuer_.size() + options.subject_.size() +
+    std::size_t payload_reserve = 64U + options.issuer_.size() + options.subject_.size() +
                                   options.audience_.size() + options.id_.size() +
                                   (options.expires_in_.has_value() ? 20U : 0U) +
                                   (options.not_before_delay_.has_value() ? 20U : 0U);
     for (const auto& claim : options.claims_) {
         payload_reserve += claim.name_.size() + claim.value_.size() + 8U;
     }
-    std::pmr::string payload(resolved);
-    payload.reserve(payload_reserve);
+    detail::jwt_json_buffer payload(resolved, payload_reserve);
     payload.push_back('{');
     bool first = true;
     if (!options.issuer_.empty()) {
@@ -402,7 +406,7 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
     token.resize(signing_input_size + 1 + signature_size);
     detail::jwt_base64_url_encode_into(token.data(), header);
     token[encoded_header_size] = '.';
-    detail::jwt_base64_url_encode_into(token.data() + encoded_header_size + 1, payload);
+    detail::jwt_base64_url_encode_into(token.data() + encoded_header_size + 1, payload.view());
     std::array<char, 88> signature_buf{};
     const auto signature = detail::jwt_hmac_sign(
         options.algorithm_, options.secret_, std::string_view(token.data(), signing_input_size), signature_buf);
