@@ -54,9 +54,9 @@ constexpr std::size_t response_read_chunk_bytes = 16384;
 [[nodiscard]] auto prepare_client_head(http_client_pool& pool, const http_client_request_storage& request,
     const http_client_upload_state* upload, std::pmr::memory_resource* response_resource,
     http_io_buffer& write_buffer) {
-    std::pmr::vector<http_header_view> headers(pool.resource());
-    std::pmr::string cookie_header(pool.resource());
-    auto source = pool.policy().prepare_request(request, headers, cookie_header);
+    client_prepared_request_scratch scratch(pool.resource());
+    auto source = pool.policy().prepare_request(request, scratch);
+    const auto headers = static_cast<std::span<const http_header_view>>(source.headers_);
     auto origin = pool.origin();
     const bool connect_udp = request.udp_tunnel();
     if (connect_udp) {

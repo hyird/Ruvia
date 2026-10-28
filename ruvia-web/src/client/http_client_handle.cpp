@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -396,12 +397,11 @@ http_client_handle http_client_handle::with_options(operation_options options) c
 
 task<http_client_response> http_client_handle::send(
     const http_client_request_view& view) const {
-    registration_.require_active();
+    validate_operation_options(options_);
     detail::http_client_request_storage request(view.method_.view(), view.target_.view(), view.headers_, resource_);
     if (const auto* bytes = view.content_.borrowed_bytes()) {
         request.set_body(bytes->value());
     }
-    validate_operation_options(options_);
     return ::ruvia::make_scoped_operation(
         registration_.scope(), pool_->execute(std::move(request), options_));
 }
@@ -423,15 +423,31 @@ task<http_client_tunnel_result> http_client_handle::open_udp_tunnel(const http_c
         config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
         throw std::invalid_argument("invalid CONNECT-UDP request or tunnel policy");
     }
-    std::pmr::vector<http_header_view> fields(resource_);
-    fields.reserve(head.headers_.size() + 1);
     for (const auto& field : head.headers_) {
         if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
             throw std::invalid_argument("CONNECT-UDP Capsule-Protocol is driver-owned");
         }
-        fields.push_back(field);
     }
-    fields.emplace_back("Capsule-Protocol", "?1");
+    static constexpr std::size_t inline_field_capacity = 16;
+    const std::size_t total_fields = head.headers_.size() + 1U;
+    std::array<http_header_view, inline_field_capacity> inline_fields{};
+    std::pmr::vector<http_header_view> heap_fields(resource_);
+    std::span<const http_header_view> fields{};
+    if (total_fields <= inline_fields.size()) {
+        std::size_t index = 0;
+        for (const auto& field : head.headers_) {
+            inline_fields[index++] = field;
+        }
+        inline_fields[index++] = http_header_view{"Capsule-Protocol", "?1"};
+        fields = std::span<const http_header_view>(inline_fields.data(), total_fields);
+    } else {
+        heap_fields.reserve(total_fields);
+        for (const auto& field : head.headers_) {
+            heap_fields.push_back(field);
+        }
+        heap_fields.emplace_back("Capsule-Protocol", "?1");
+        fields = heap_fields;
+    }
     // open_tunnel owns all fields before this temporary preparation storage dies.
     return open_tunnel({.authority_ = pool_->config().authority_, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config);
 }

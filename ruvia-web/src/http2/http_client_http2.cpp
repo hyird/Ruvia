@@ -396,15 +396,11 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
     const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value) {
     const auto& config = pool_.config();
     auto* const resource = pool_.resource();
-    std::pmr::vector<http_header_view> headers(resource);
-    std::pmr::string cookie_header(resource);
-    auto source_value = pool_.policy().prepare_request(request, headers, cookie_header);
     const std::string_view scheme = config.scheme_ == http_scheme::https ? "https" : "http";
-    const auto* body = source_value.content_.borrowed_bytes();
     const auto content = request.upload() != nullptr
                              ? ::ruvia::http2_request_content::streaming(request.upload()->config_.content_length_)
-                         : body != nullptr ? ::ruvia::http2_request_content::known_length(body->value().size())
-                                           : ::ruvia::http2_request_content::none();
+                         : request.has_body() ? ::ruvia::http2_request_content::known_length(request.body().size())
+                                              : ::ruvia::http2_request_content::none();
 
     for (int attempt_value = 0; attempt_value < 2; ++attempt_value) {
         if (!http2_.usable()) {
@@ -466,30 +462,34 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             }
             const auto expectation = request.upload() != nullptr ? request.upload()->config_.expectation_
                                                                  : http_client_request_expectation::none;
-            const auto submitted =
-                !request.is_tunnel()
-                    ? connection.submit_request_head(::ruvia::http2_regular_request_head_view{
-                          .method_ = source_value.method_,
-                          .scheme_ = scheme,
-                          .authority_ = borrowed_text(std::string_view(config.authority_)),
-                          .target_ = source_value.target_,
-                          .headers_ = headers,
-                          .content_ = content,
-                          .expectation_ = expectation})
-                : request.tunnel_protocol().empty()
-                    ? connection.submit_request_head(http2_connect_request_head_view{
-                          .authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers})
-                    : connection.submit_request_head(http2_extended_connect_request_head_view{
-                          .protocol_ = borrowed_text(request.tunnel_protocol()),
-                          .scheme_ = scheme,
-                          .authority_ = borrowed_text(request.tunnel_authority()),
-                          .target_ = source_value.target_,
-                          .headers_ = headers});
+            const auto submitted = [&]() {
+                client_prepared_request_scratch scratch(resource);
+                const auto source_value = pool_.policy().prepare_request(request, scratch);
+                const auto headers = static_cast<std::span<const http_header_view>>(source_value.headers_);
+                return !request.is_tunnel()
+                           ? connection.submit_request_head(::ruvia::http2_regular_request_head_view{
+                                 .method_ = source_value.method_,
+                                 .scheme_ = scheme,
+                                 .authority_ = borrowed_text(std::string_view(config.authority_)),
+                                 .target_ = source_value.target_,
+                                 .headers_ = headers,
+                                 .content_ = content,
+                                 .expectation_ = expectation})
+                       : request.tunnel_protocol().empty()
+                           ? connection.submit_request_head(http2_connect_request_head_view{
+                                 .authority_ = borrowed_text(request.tunnel_authority()), .headers_ = headers})
+                           : connection.submit_request_head(http2_extended_connect_request_head_view{
+                                 .protocol_ = borrowed_text(request.tunnel_protocol()),
+                                 .scheme_ = scheme,
+                                 .authority_ = borrowed_text(request.tunnel_authority()),
+                                 .target_ = source_value.target_,
+                                 .headers_ = headers});
+            }();
             if (const auto* accepted = std::get_if<std::uint32_t>(&submitted)) {
                 stream.stream_id_ = *accepted;
                 state_value.stream_id_ = stream.stream_id_;
-                if (body != nullptr && !body->value().empty()) {
-                    co_await send_http2_buffered_request_body(stream, body->value());
+                if (request.has_body() && !request.body().empty()) {
+                    co_await send_http2_buffered_request_body(stream, request.body());
                 } else {
                     http2_.wake_writer();
                 }

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -214,12 +215,12 @@ void client_request_policy::discard_expired(std::chrono::system_clock::time_poin
     });
 }
 
-http_client_request_view client_request_policy::prepare_request(const http_client_request_storage& request,
-    std::pmr::vector<http_header_view>& headers, std::pmr::string& cookie_header) {
+http_client_request_view client_request_policy::prepare_request(
+    const http_client_request_storage& request, client_prepared_request_scratch& scratch) {
     const auto& input_headers = request.headers();
     auto field_count = input_headers.size();
     bool add_user_agent = !config_.user_agent_.empty();
-    cookie_header.clear();
+    scratch.overflow_cookie_header_.clear();
     std::size_t cookie_header_bytes = 0;
     // Request storage preserves caller field-name spelling.
     for (const auto& field : input_headers) {
@@ -265,54 +266,118 @@ http_client_request_view client_request_policy::prepare_request(const http_clien
             cookie_header_bytes += cookie.name_.size() + 1U + cookie.value_.size();
         }
     }
+    std::string_view cookie_header_view{};
     if (cookie_header_bytes != 0) {
-        cookie_header.reserve(cookie_header_bytes);
-        if (has_input_cookie) {
-            for (const auto& field : input_headers) {
-                if (field.name().size() != 6U || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
-                    continue;
+        if (cookie_header_bytes <= scratch.inline_cookie_header_.size()) {
+            std::size_t cursor = 0;
+            const auto append_inline = [&](std::string_view text) noexcept {
+                if (!text.empty()) {
+                    std::memcpy(scratch.inline_cookie_header_.data() + cursor, text.data(), text.size());
+                    cursor += text.size();
                 }
-                if (!cookie_header.empty()) {
-                    cookie_header.append("; ");
+            };
+            if (has_input_cookie) {
+                for (const auto& field : input_headers) {
+                    if (field.name().size() != 6U || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
+                        continue;
+                    }
+                    if (cursor != 0) {
+                        append_inline("; ");
+                    }
+                    append_inline(field.value());
                 }
-                cookie_header.append(field.value());
             }
-        }
-        if (check_jar) {
-            for (const auto& cookie : cookies_) {
-                if (!cookie.configured_ &&
-                    config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
-                    continue;
+            if (check_jar) {
+                for (const auto& cookie : cookies_) {
+                    if (!cookie.configured_ &&
+                        config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
+                        continue;
+                    }
+                    if (cookie.secure_ && config_.scheme_ != http_scheme::https) {
+                        continue;
+                    }
+                    if (!cookie_path_matches(path, cookie.path_)) {
+                        continue;
+                    }
+                    if (cursor != 0) {
+                        append_inline("; ");
+                    }
+                    append_inline(cookie.name_);
+                    scratch.inline_cookie_header_[cursor++] = '=';
+                    append_inline(cookie.value_);
                 }
-                if (cookie.secure_ && config_.scheme_ != http_scheme::https) {
-                    continue;
-                }
-                if (!cookie_path_matches(path, cookie.path_)) {
-                    continue;
-                }
-                append_cookie_request_pair(cookie_header, cookie.name_, cookie.value_);
             }
+            cookie_header_view = std::string_view(scratch.inline_cookie_header_.data(), cursor);
+        } else {
+            auto& cookie_header = scratch.overflow_cookie_header_;
+            cookie_header.reserve(cookie_header_bytes);
+            if (has_input_cookie) {
+                for (const auto& field : input_headers) {
+                    if (field.name().size() != 6U || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
+                        continue;
+                    }
+                    if (!cookie_header.empty()) {
+                        cookie_header.append("; ");
+                    }
+                    cookie_header.append(field.value());
+                }
+            }
+            if (check_jar) {
+                for (const auto& cookie : cookies_) {
+                    if (!cookie.configured_ &&
+                        config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
+                        continue;
+                    }
+                    if (cookie.secure_ && config_.scheme_ != http_scheme::https) {
+                        continue;
+                    }
+                    if (!cookie_path_matches(path, cookie.path_)) {
+                        continue;
+                    }
+                    append_cookie_request_pair(cookie_header, cookie.name_, cookie.value_);
+                }
+            }
+            cookie_header_view = cookie_header;
         }
     }
-    const bool add_cookie = !cookie_header.empty();
+    const bool add_cookie = !cookie_header_view.empty();
     field_count += static_cast<std::size_t>(add_user_agent) + static_cast<std::size_t>(add_cookie);
-    headers.clear();
-    headers.reserve(field_count);
-    for (const auto& field : input_headers) {
-        if (!has_input_cookie || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
-            headers.emplace_back(field.name(), field.value());
+    std::span<const http_header_view> prepared_headers{};
+    if (field_count <= scratch.inline_headers_.size()) {
+        std::size_t index = 0;
+        for (const auto& field : input_headers) {
+            if (!has_input_cookie || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
+                scratch.inline_headers_[index++] = http_header_view{field.name(), field.value()};
+            }
         }
-    }
-    if (add_user_agent) {
-        headers.emplace_back("user-agent", config_.user_agent_);
-    }
-    if (!cookie_header.empty()) {
-        headers.emplace_back("cookie", cookie_header);
+        if (add_user_agent) {
+            scratch.inline_headers_[index++] = http_header_view{"user-agent", config_.user_agent_};
+        }
+        if (add_cookie) {
+            scratch.inline_headers_[index++] = http_header_view{"cookie", cookie_header_view};
+        }
+        prepared_headers = std::span<const http_header_view>(scratch.inline_headers_.data(), index);
+    } else {
+        auto& headers = scratch.overflow_headers_;
+        headers.clear();
+        headers.reserve(field_count);
+        for (const auto& field : input_headers) {
+            if (!has_input_cookie || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
+                headers.emplace_back(field.name(), field.value());
+            }
+        }
+        if (add_user_agent) {
+            headers.emplace_back("user-agent", config_.user_agent_);
+        }
+        if (add_cookie) {
+            headers.emplace_back("cookie", cookie_header_view);
+        }
+        prepared_headers = std::span<const http_header_view>(headers);
     }
     http_client_request_view result;
     result.method_ = request.method();
     result.target_ = request.target();
-    result.headers_ = std::span<const http_header_view>(headers);
+    result.headers_ = prepared_headers;
     result.content_ = request.has_body() ? http_client_request_content_view::bytes(request.body())
                                          : http_client_request_content_view::none();
     return result;

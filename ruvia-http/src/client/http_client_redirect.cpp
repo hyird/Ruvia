@@ -34,6 +34,10 @@ void normalize_http_client_absolute_path(
     std::string_view path, std::size_t extra_reserve, std::pmr::string& normalized) {
     normalized.clear();
     normalized.reserve((path.empty() ? 1U : path.size()) + extra_reserve);
+    if (!path.empty() && path.find("/.") == std::string_view::npos) {
+        normalized.append(path.data(), path.size());
+        return;
+    }
     auto remaining = path;
     while (!remaining.empty()) {
         // RFC 3986 section 5.2.4 deliberately moves one path segment at a
