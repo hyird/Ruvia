@@ -293,6 +293,18 @@ RUVIA_TEST(hpack_public_dynamic_entries_own_fields_after_input_changes) {
                                 return name == std::string(24, 'n') && value == std::string(24, 'v');
                             })
                 .has_value());
+
+        {
+            // RFC 7541 Appendix C.4.1: ":authority: www.example.com" with a
+            // 12-byte Huffman literal value (max decoded bound 19 > SSO 15).
+            constexpr std::string_view huffman_authority(
+                "\x41\x8c\xf1\xe3\xc2\xe5\xf2\x3a\x6b\xa0\xab\x90\xf4\xff", 14);
+            RUVIA_CHECK(
+                !decoder.decode(huffman_authority, [](std::string_view name, std::string_view value) {
+                            return name == ":authority" && value == "www.example.com";
+                        })
+                    .has_value());
+        }
     }
 }
 

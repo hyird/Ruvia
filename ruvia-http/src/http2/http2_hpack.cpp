@@ -1,6 +1,7 @@
 #include "http2/http2_hpack.h"
 
 #include <algorithm>
+#include <array>
 #include <exception>
 #include <variant>
 
@@ -92,7 +93,8 @@ hpack_decoder::step_result_type hpack_decoder::decode_integer(const unsigned cha
 }
 
 hpack_decoder::step_result_type hpack_decoder::decode_string(const unsigned char*& cursor_value,
-    const unsigned char* end, std::pmr::string& scratch, std::string_view& value) {
+    const unsigned char* end, std::span<char> inline_buffer, std::pmr::string& scratch,
+    std::string_view& value) {
     if (cursor_value == end) {
         return hpack_decode_error::need_more;
     }
@@ -112,8 +114,17 @@ hpack_decoder::step_result_type hpack_decoder::decode_string(const unsigned char
         return std::nullopt;
     }
 
+    const auto max_decoded = encoded.size() + (encoded.size() * 3U) / 5U;
+    if (max_decoded <= inline_buffer.size()) {
+        std::size_t decoded_size = 0;
+        if (!decode_hpack_huffman(encoded, inline_buffer.data(), decoded_size)) {
+            return hpack_decode_error::invalid_huffman;
+        }
+        value = std::string_view(inline_buffer.data(), decoded_size);
+        return std::nullopt;
+    }
+
     scratch.clear();
-    scratch.reserve(encoded.size() + (encoded.size() * 3U) / 5U);
     if (!append_hpack_huffman(encoded, scratch)) {
         return hpack_decode_error::invalid_huffman;
     }
@@ -130,9 +141,14 @@ hpack_decoder::step_result_type hpack_decoder::decode_literal_header(const unsig
         return error;
     }
 
+    static constexpr std::size_t inline_huffman_capacity = 256;
+    std::array<char, inline_huffman_capacity> name_inline{};
+    std::array<char, inline_huffman_capacity> value_inline{};
     std::string_view name;
     if (name_index == 0) {
-        if (const auto error = decode_string(cursor_value, end, name_scratch_, name); (error.has_value())) {
+        if (const auto error =
+                decode_string(cursor_value, end, name_inline, name_scratch_, name);
+            (error.has_value())) {
             return error;
         }
     } else if (const auto error = indexed_name(name_index, name); (error.has_value())) {
@@ -140,7 +156,9 @@ hpack_decoder::step_result_type hpack_decoder::decode_literal_header(const unsig
     }
 
     std::string_view value;
-    if (const auto error = decode_string(cursor_value, end, value_scratch_, value); (error.has_value())) {
+    if (const auto error =
+            decode_string(cursor_value, end, value_inline, value_scratch_, value);
+        (error.has_value())) {
         return error;
     }
     // Suppress the callback once rejected, but ALWAYS apply the dynamic-table insertion

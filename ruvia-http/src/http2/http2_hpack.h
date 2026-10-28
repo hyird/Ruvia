@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -143,7 +144,7 @@ private:
     [[nodiscard]] step_result_type decode_integer(const unsigned char*& cursor, const unsigned char* end,
         std::uint8_t prefix_bits, std::uint32_t& value) const noexcept;
     [[nodiscard]] step_result_type decode_string(const unsigned char*& cursor, const unsigned char* end,
-        std::pmr::string& scratch, std::string_view& value);
+        std::span<char> inline_buffer, std::pmr::string& scratch, std::string_view& value);
     // `rejected` is an in/out latch: once a callback has returned false, no further
     // callbacks fire, BUT the block keeps decoding and dynamic-table insertions still
     // apply (including this entry's) so the connection-global table stays consistent

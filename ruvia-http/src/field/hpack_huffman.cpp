@@ -134,15 +134,17 @@ constexpr auto transitions = build_transitions();
 
 }  // namespace
 
-bool append_hpack_huffman(std::string_view encoded, std::pmr::string& output) {
+bool decode_hpack_huffman(
+    std::string_view encoded, char* output, std::size_t& decoded_size) noexcept {
     std::uint8_t state_value = 0;
     std::uint8_t flags = accepting;
-    const auto advance = [&](std::uint8_t nibble) {
+    char* cursor_value = output;
+    const auto advance = [&](std::uint8_t nibble) noexcept {
         const auto step = transitions[state_value][nibble];
         state_value = step.state_;
         flags = step.flags_;
         if ((flags & emit) != 0) {
-            output.push_back(static_cast<char>(step.symbol_));
+            *cursor_value++ = static_cast<char>(step.symbol_);
         } else if ((flags & invalid) != 0) {
             return false;
         }
@@ -151,10 +153,21 @@ bool append_hpack_huffman(std::string_view encoded, std::pmr::string& output) {
     for (const auto byte_value : encoded) {
         const auto byte = static_cast<std::uint8_t>(byte_value);
         if (!advance(byte >> 4) || !advance(byte & 0xfU)) {
+            decoded_size = static_cast<std::size_t>(cursor_value - output);
             return false;
         }
     }
+    decoded_size = static_cast<std::size_t>(cursor_value - output);
     return (flags & accepting) != 0;
 }
 
+bool append_hpack_huffman(std::string_view encoded, std::pmr::string& output) {
+    const auto start_size = output.size();
+    const auto max_decoded = encoded.size() + (encoded.size() * 3U) / 5U;
+    output.resize(start_size + max_decoded);
+    std::size_t decoded_size = 0;
+    const bool ok = decode_hpack_huffman(encoded, output.data() + start_size, decoded_size);
+    output.resize(start_size + decoded_size);
+    return ok;
+}
 }  // namespace ruvia::detail
