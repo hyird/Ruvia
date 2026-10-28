@@ -163,7 +163,18 @@ struct request_head_write_plan final {
 
 [[nodiscard]] std::pmr::string own_offered_upgrade_protocols(
     std::span<const http_header_view> headers, std::pmr::memory_resource* resource) {
+    std::size_t total_size = 0;
+    for (const auto& header : headers) {
+        if (!http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
+            continue;
+        }
+        if (total_size != 0) {
+            ++total_size;
+        }
+        total_size += header.value().size();
+    }
     std::pmr::string result(resource);
+    result.reserve(total_size);
     for (const auto& header : headers) {
         if (!http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
             continue;
@@ -427,8 +438,6 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
     if (const auto error = validate_non_connect_request_line("GET", target.view(), {}, known_method)) {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
-    std::pmr::vector<http_header_view> fields(resource_);
-    fields.reserve(headers.size() + 3);
     for (const auto& field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "connection")) {
             return detail::http1_client_request_prepare_result_access::failure(
@@ -438,14 +447,34 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
             return detail::http1_client_request_prepare_result_access::failure(
                 http1_client_request_prepare_error::invalid_upgrade);
         }
-        fields.push_back(field);
     }
-    fields.emplace_back(detail::http_connection_field_name, detail::http_connection_upgrade_option);
-    fields.emplace_back("Upgrade", "connect-udp");
-    const auto emitted_headers = std::span<const http_header_view>(fields);
-    fields.emplace_back("Host", origin.host());
+    static constexpr std::size_t inline_field_capacity = 16;
+    const std::size_t total_fields = headers.size() + 3U;
+    std::array<http_header_view, inline_field_capacity> inline_fields{};
+    std::pmr::vector<http_header_view> heap_fields(resource_);
+    std::span<const http_header_view> all_fields{};
+    if (total_fields <= inline_fields.size()) {
+        std::size_t index = 0;
+        for (const auto& field : headers) {
+            inline_fields[index++] = field;
+        }
+        inline_fields[index++] =
+            http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option};
+        inline_fields[index++] = http_header_view{"Upgrade", "connect-udp"};
+        inline_fields[index++] = http_header_view{"Host", origin.host()};
+        all_fields = std::span<const http_header_view>(inline_fields.data(), total_fields);
+    } else {
+        heap_fields.reserve(total_fields);
+        heap_fields.insert(heap_fields.end(), headers.begin(), headers.end());
+        heap_fields.emplace_back(
+            detail::http_connection_field_name, detail::http_connection_upgrade_option);
+        heap_fields.emplace_back("Upgrade", "connect-udp");
+        heap_fields.emplace_back("Host", origin.host());
+        all_fields = heap_fields;
+    }
+    const auto emitted_headers = all_fields.first(total_fields - 1U);
     return prepare_request(origin, "GET", known_method, target.view(), emitted_headers,
-        http_client_request_content_view::none(), head_buffer, {}, resource_, nullptr, fields);
+        http_client_request_content_view::none(), head_buffer, {}, resource_, nullptr, all_fields);
 }
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,

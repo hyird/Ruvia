@@ -77,22 +77,49 @@ std::variant<prepared_http1_client_request, http1_client_request_buffer_too_smal
     http1_client_request_prepare_error>
 http1_websocket_client_handshake::prepare_request(
     const http_origin_view& origin, std::string_view target, std::span<char> head_buffer) const {
-    std::pmr::vector<http_header_view> headers(resource_);
-    headers.reserve(headers_.size() + 6);
-    for (const auto& header : headers_) {
-        headers.emplace_back(header.name(), header.value());
-    }
-    headers.emplace_back("Upgrade", "websocket");
-    headers.emplace_back(detail::http_connection_field_name, detail::http_connection_upgrade_option);
-    headers.emplace_back("Sec-WebSocket-Key", std::string_view(key_.data(), key_.size()));
-    for (const auto& field : negotiation_.request_fields()) {
-        headers.emplace_back(field.name(), field.value());
-    }
-    if (!user_agent_.empty()) {
-        headers.emplace_back("User-Agent", user_agent_);
+    static constexpr std::size_t inline_header_capacity = 16;
+    const auto negotiation_fields = negotiation_.request_fields();
+    const std::size_t total_headers =
+        headers_.size() + 3U + negotiation_fields.size() + (user_agent_.empty() ? 0U : 1U);
+    std::array<http_header_view, inline_header_capacity> inline_headers{};
+    std::pmr::vector<http_header_view> heap_headers(resource_);
+    std::span<const http_header_view> active_headers{};
+    if (total_headers <= inline_headers.size()) {
+        std::size_t index = 0;
+        for (const auto& header : headers_) {
+            inline_headers[index++] = http_header_view{header.name(), header.value()};
+        }
+        inline_headers[index++] = http_header_view{"Upgrade", "websocket"};
+        inline_headers[index++] =
+            http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option};
+        inline_headers[index++] =
+            http_header_view{"Sec-WebSocket-Key", std::string_view(key_.data(), key_.size())};
+        for (const auto& field : negotiation_fields) {
+            inline_headers[index++] = http_header_view{field.name(), field.value()};
+        }
+        if (!user_agent_.empty()) {
+            inline_headers[index++] = http_header_view{"User-Agent", user_agent_};
+        }
+        active_headers = std::span<const http_header_view>(inline_headers.data(), total_headers);
+    } else {
+        heap_headers.reserve(total_headers);
+        for (const auto& header : headers_) {
+            heap_headers.emplace_back(header.name(), header.value());
+        }
+        heap_headers.emplace_back("Upgrade", "websocket");
+        heap_headers.emplace_back(
+            detail::http_connection_field_name, detail::http_connection_upgrade_option);
+        heap_headers.emplace_back("Sec-WebSocket-Key", std::string_view(key_.data(), key_.size()));
+        for (const auto& field : negotiation_fields) {
+            heap_headers.emplace_back(field.name(), field.value());
+        }
+        if (!user_agent_.empty()) {
+            heap_headers.emplace_back("User-Agent", user_agent_);
+        }
+        active_headers = heap_headers;
     }
     return http1_client_request_writer(resource_)
-        .prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = headers}, head_buffer);
+        .prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = active_headers}, head_buffer);
 }
 
 std::variant<websocket_client_negotiation_result_view, http1_websocket_client_handshake_error>
