@@ -137,17 +137,19 @@ int bind_session_to_server_name(SSL* ssl, int* alert, void*) noexcept {
         if (name_size != extension_size - 5 || name_size > TLSEXT_MAXLEN_host_name) {
             return SSL_CLIENT_HELLO_SUCCESS;
         }
-        std::array<unsigned char, TLSEXT_MAXLEN_host_name> name;
-        for (std::size_t i = 0; i < name_size; ++i) {
-            name[i] = http_ascii_to_lower(extension[5 + i]);
-        }
         if (name_size == 0) {
             // An empty name differs from an absent one: two NUL bytes.
             context_size = 2;
         } else if (name_size <= context.size()) {
-            std::copy_n(name.begin(), name_size, context.begin());
+            for (std::size_t i = 0; i < name_size; ++i) {
+                context[i] = http_ascii_to_lower(extension[5 + i]);
+            }
             context_size = name_size;
         } else {
+            std::array<unsigned char, TLSEXT_MAXLEN_host_name> name;
+            for (std::size_t i = 0; i < name_size; ++i) {
+                name[i] = http_ascii_to_lower(extension[5 + i]);
+            }
             unsigned int digest_size = 0;
             if (EVP_Digest(name.data(), name_size, context.data(), &digest_size, EVP_sha256(), nullptr) != 1 ||
                 digest_size != context.size()) {
@@ -177,10 +179,10 @@ int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
     if (name == nullptr) {
         return SSL_TLSEXT_ERR_OK;
     }
+    const std::string_view server_name(name);
     const auto& lookup = *static_cast<const sni_context_lookup_type*>(arg);
     for (const auto& [host, context] : lookup) {
-        if (http_ascii_equals_ignore_case(host, name)) {
-            // A failed switch must not handshake with the default identity
+        if (http_ascii_equals_ignore_case(host, server_name)) {
             // for a name that has its own certificate: fail the handshake.
             if (SSL_set_SSL_CTX(ssl, context->native_handle()) == nullptr) {
                 return SSL_TLSEXT_ERR_ALERT_FATAL;
@@ -556,8 +558,9 @@ task<void> worker_connections::run_tls_session(
             }
         }
         std::pmr::string client_certificate(memory_.allocator<char>());
-        extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
-        // After any SNI switch: the leaf this handshake presented.
+        if (listener_value.tls()->client_certificates_.has_value()) {
+            extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
+        }
         tls_served_certificate served_certificate(SSL_get_certificate(tls_stream.native_handle()));
         const auto services = capabilities_.make_context_services(stop_token_)
                                   .with_tls_transport(remote_address, client_certificate, remote_port, served_certificate);

@@ -41,7 +41,7 @@ private:
     static constexpr std::size_t cache_size = 4;
 
     struct cached_verdict final {
-        std::array<char, cached_key_capacity> key_{};
+        std::array<char, cached_key_capacity> key_;
         std::uint8_t key_size_{0};
         http_target_host_kind kind_{http_target_host_kind::dns_name};
         bool covered_{false};
@@ -50,7 +50,7 @@ private:
     [[nodiscard]] bool check(const http_target_origin& origin) const noexcept;
 
     X509* certificate_;
-    std::array<cached_verdict, cache_size> cache_{};
+    std::array<cached_verdict, cache_size> cache_;
     std::size_t cached_{0};
     std::size_t next_{0};
 };
