@@ -578,25 +578,10 @@ http_response context::static_file(const static_root& root, static_file_response
     return static_file(root, options, mode);
 }
 
-http_response context::static_file(const static_root& root, static_file_response_options options,
-    detail::static_file_selection_mode mode) const {
-    // relative_path_ is a decoded file path -- a wildcard capture from
-    // req().param("*") is passed as is -- so it is never percent-decoded here:
-    // a second decode would turn "%252E%252E" into a ".." no route or path
-    // scope ever saw. normalize_static_relative_path rejects "." and ".."
-    // segments, absolute paths and NUL, and the lookup is a byte-exact
-    // index compare that never joins the path onto the filesystem.
-    const auto content_type_value = options.content_type_.view();
-    std::pmr::string relative_storage(pool());
-    auto relative = options.relative_path_.view();
-    const auto entry_value = detail::static_root_access::resolve(root, relative, relative_storage);
-    if (!entry_value.has_value()) {
-        throw http_error({.status_ = ruvia::http_status::not_found,
-            .code_ = "not_found",
-            .message_ = "file not found"});
-    }
-    const auto& base_entry = *entry_value;
-
+http_response detail::context_access::static_file_resolved(
+    const context& context_value, const static_root& root, std::string_view relative,
+    std::string_view content_type_value, detail::static_root_entry_view base_entry,
+    detail::static_file_selection_mode mode) {
     // Serve a precompressed variant when the client accepts one; the bytes and
     // validators come from the variant, the Content-Type from the base entry.
     // Admission already folded Accept-Encoding; only a context created outside
@@ -605,11 +590,11 @@ http_response context::static_file(const static_root& root, static_file_response
         if (mode == detail::static_file_selection_mode::identity_only) {
             return static_file_representation(base_entry, http_content_coding::identity);
         }
-        if (const auto* admitted = services().response_coding()) {
-            return select_static_file_representation(root, relative, *admitted, pool(), base_entry);
+        if (const auto* admitted = context_value.services().response_coding()) {
+            return select_static_file_representation(root, relative, *admitted, context_value.pool(), base_entry);
         }
         return select_static_file_representation(
-            root, relative, http_response_coding_selection_for(request_), pool(), base_entry);
+            root, relative, http_response_coding_selection_for(context_value.request_), context_value.pool(), base_entry);
     }();
     if (!served.has_value()) {
         throw http_error(detail::http_not_acceptable_coding_error());
@@ -628,7 +613,7 @@ http_response context::static_file(const static_root& root, static_file_response
     const auto response_last_modified =
         memory_variant == nullptr ? served_entry.last_modified() : memory_variant->last_modified();
 
-    return make_file_response(*this,
+    return make_file_response(context_value,
         file_response_source{
             .body_ = memory_variant != nullptr ? file_response_body_source::bytes_value(memory_variant->bytes())
                      : resident_bytes != nullptr
@@ -650,6 +635,27 @@ http_response context::static_file(const static_root& root, static_file_response
             .negotiates_encoding_ = true,
             .validate_indexed_file_for_bodyless_response_ = memory_variant == nullptr && resident_bytes == nullptr,
         });
+}
+
+http_response context::static_file(const static_root& root, static_file_response_options options,
+    detail::static_file_selection_mode mode) const {
+    // relative_path_ is a decoded file path -- a wildcard capture from
+    // req().param("*") is passed as is -- so it is never percent-decoded here:
+    // a second decode would turn "%252E%252E" into a ".." no route or path
+    // scope ever saw. normalize_static_relative_path rejects "." and ".."
+    // segments, absolute paths and NUL, and the lookup is a byte-exact
+    // index compare that never joins the path onto the filesystem.
+    const auto content_type_value = options.content_type_.view();
+    std::pmr::string relative_storage(pool());
+    auto relative = options.relative_path_.view();
+    const auto entry_value = detail::static_root_access::resolve(root, relative, relative_storage);
+    if (!entry_value.has_value()) {
+        throw http_error({.status_ = ruvia::http_status::not_found,
+            .code_ = "not_found",
+            .message_ = "file not found"});
+    }
+    return detail::context_access::static_file_resolved(
+        *this, root, relative, content_type_value, *entry_value, mode);
 }
 
 }  // namespace ruvia

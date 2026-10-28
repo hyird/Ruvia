@@ -31,10 +31,10 @@ struct context_access final {
             route_rate_limit_scope, services);
     }
 
-    [[nodiscard]] static http_response static_file_with_precompressed_variants(
-        context& context_value, const static_root& root, static_file_response_options options) {
-        return context_value.static_file(root, options, static_file_selection_mode::precompressed);
-    }
+    [[nodiscard]] static http_response static_file_resolved(
+        const context& context_value, const static_root& root, std::string_view relative,
+        std::string_view content_type_value, static_root_entry_view base_entry,
+        static_file_selection_mode mode);
 
     [[nodiscard]] static http_response make_static_json_response(
         const context& context_value, std::string_view json_body) {

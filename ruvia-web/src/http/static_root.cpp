@@ -288,19 +288,15 @@ bool detail::static_root_access::is_indexed_directory(
     return contains_static_directory(root.state_->directories_, relative_path);
 }
 
-std::optional<detail::static_root_entry_view> detail::static_root_access::resolve(
-    const static_root& root, std::string_view& relative, std::pmr::string& storage) {
-    const bool directory_slash =
-        !relative.empty() && (relative.back() == '/' || relative.back() == '\\');
-    relative = normalize_static_relative_path(relative, storage);
-    if (relative.empty() && !has_directory_index(root)) {
-        throw_invalid_static_file_path();
-    }
+namespace {
+
+[[nodiscard]] std::optional<detail::static_root_entry_view> resolve_normalized_static_root_entry(
+    const static_root& root, bool directory_slash, std::string_view& relative, std::pmr::string& storage) {
     auto entry_value =
-        directory_slash ? std::optional<detail::static_root_entry_view>{} : find(root, relative);
-    if (!entry_value.has_value() && is_indexed_directory(root, relative)) {
+        directory_slash ? std::optional<detail::static_root_entry_view>{} : detail::static_root_access::find(root, relative);
+    if (!entry_value.has_value() && detail::static_root_access::is_indexed_directory(root, relative)) {
         // A normalized path never ends with '/'.
-        const auto index = index_file(root);
+        const auto index = detail::static_root_access::index_file(root);
         storage.reserve(relative.size() + (relative.empty() ? 0U : 1U) + index.size());
         if (relative.data() != storage.data()) {
             storage.assign(relative.data(), relative.size());
@@ -310,9 +306,37 @@ std::optional<detail::static_root_entry_view> detail::static_root_access::resolv
         }
         storage.append(index.data(), index.size());
         relative = storage;
-        entry_value = find(root, relative);
+        entry_value = detail::static_root_access::find(root, relative);
     }
     return entry_value;
+}
+
+}  // namespace
+
+std::optional<detail::static_root_entry_view> detail::static_root_access::resolve(
+    const static_root& root, std::string_view& relative, std::pmr::string& storage) {
+    const bool directory_slash =
+        !relative.empty() && (relative.back() == '/' || relative.back() == '\\');
+    relative = normalize_static_relative_path(relative, storage);
+    if (relative.empty() && !has_directory_index(root)) {
+        throw_invalid_static_file_path();
+    }
+    return resolve_normalized_static_root_entry(root, directory_slash, relative, storage);
+}
+
+std::optional<detail::static_root_entry_view> detail::static_root_access::try_resolve(
+    const static_root& root, std::string_view& relative, std::pmr::string& storage) {
+    const bool directory_slash =
+        !relative.empty() && (relative.back() == '/' || relative.back() == '\\');
+    const auto normalized = try_normalize_static_relative_path(relative, storage);
+    if (!normalized.has_value()) {
+        return std::nullopt;
+    }
+    relative = *normalized;
+    if (relative.empty() && !has_directory_index(root)) {
+        return std::nullopt;
+    }
+    return resolve_normalized_static_root_entry(root, directory_slash, relative, storage);
 }
 
 std::uint64_t detail::static_root_access::fingerprint(const static_root& root) noexcept {

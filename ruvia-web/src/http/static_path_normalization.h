@@ -62,13 +62,13 @@ namespace ruvia::detail {
 // every caller fails closed instead of resolving it. A final separator names
 // the directory itself and is dropped. The input is borrowed when it is
 // already canonical; only a '\\' separator rebuilds it in `storage`.
-[[nodiscard]] inline std::string_view normalize_static_relative_path(
+[[nodiscard]] inline std::optional<std::string_view> try_normalize_static_relative_path(
     std::string_view input, std::pmr::string& storage) {
     if (input.empty()) {
         return input;
     }
     if (input.front() == '/' || input.front() == '\\' || is_windows_drive_path(input)) {
-        throw_invalid_static_file_path();
+        return std::nullopt;
     }
 
     constexpr std::string_view stop_bytes("/\\\0", 3);
@@ -79,13 +79,13 @@ namespace ruvia::detail {
         const auto end = stop == std::string_view::npos ? input.size() : stop;
         const auto segment = input.substr(cursor_value, end - cursor_value);
         if (segment == "." || segment == "..") {
-            throw_invalid_static_file_path();
+            return std::nullopt;
         }
         if (stop == std::string_view::npos) {
             break;
         }
         if (input[stop] == '\0' || segment.empty()) {
-            throw_invalid_static_file_path();
+            return std::nullopt;
         }
         backslash = backslash || input[stop] == '\\';
         cursor_value = stop + 1;
@@ -101,6 +101,15 @@ namespace ruvia::detail {
     storage.assign(canonical.data(), canonical.size());
     std::ranges::replace(storage, '\\', '/');
     return storage;
+}
+
+[[nodiscard]] inline std::string_view normalize_static_relative_path(
+    std::string_view input, std::pmr::string& storage) {
+    const auto normalized = try_normalize_static_relative_path(input, storage);
+    if (!normalized.has_value()) {
+        throw_invalid_static_file_path();
+    }
+    return *normalized;
 }
 
 }  // namespace ruvia::detail

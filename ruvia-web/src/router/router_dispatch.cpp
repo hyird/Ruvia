@@ -40,17 +40,15 @@ constexpr std::uint32_t document_root_method_mask =
 // Outcome of probing the document root for an unrouted request: nothing there,
 // a complete GET/HEAD response, or an existing resource asked with another
 // method, which the dispatcher answers with 405 or an OPTIONS Allow set.
-struct document_root_fallback final {
-    std::optional<http_response> response_;
-    bool resource_exists_{false};
+struct document_root_probe final {
+    std::optional<detail::static_root_entry_view> entry_;
+    std::string_view relative_{};
 };
 
-[[nodiscard]] document_root_fallback select_document_root_fallback(
+[[nodiscard]] document_root_probe probe_document_root_resource(
     const detail::document_root_binding& document_root, const http_request& request,
-    request_memory& memory, const detail::context_services& services,
-    detail::static_file_selection_mode static_file_mode) {
+    request_memory& memory, std::optional<std::pmr::string>& decoded, std::pmr::string& storage) {
     const auto* const root = document_root.root();
-    const auto method = request.known_method();
     // Only an origin-form path names a document-root resource: a CONNECT
     // authority or "OPTIONS *" reaches here unrouted as well and must not be
     // probed as a file name. resolve() has already rejected dot segments.
@@ -62,46 +60,18 @@ struct document_root_fallback final {
     }
     auto relative = request.path();
     relative.remove_prefix(1);
-    std::optional<std::pmr::string> decoded;
     if (has_url_encoding(relative, url_decode_mode::percent)) {
-        decoded = detail::decode_request_path(request.path(), memory.resource());
+        decoded = detail::decode_request_path(request.path(), memory.upstream_resource());
         if (!decoded) {
             return {};
         }
         relative = std::string_view(*decoded).substr(1);
     }
-
-    if (method != http_known_method::get && method != http_known_method::head) {
-        // RFC 9110 15.5.5/15.5.6 and 9.3.7: a resource that GET would serve
-        // exists, so another method is 405 and OPTIONS describes it, instead
-        // of the 404 a missing resource gets.
-        std::pmr::string storage(memory.resource());
-        try {
-            return {.response_ = std::nullopt, .resource_exists_ = detail::static_root_access::resolve(*root, relative, storage).has_value()};
-        } catch (const http_error&) {
-            return {};
-        }
+    auto entry_value = detail::static_root_access::try_resolve(*root, relative, storage);
+    if (!entry_value.has_value()) {
+        return {};
     }
-
-    auto context_value = detail::context_access::make(memory, request, services);
-    try {
-        if (static_file_mode == detail::static_file_selection_mode::precompressed) {
-            return {.response_ = detail::context_access::static_file_with_precompressed_variants(
-                        context_value, *root, {.relative_path_ = relative})};
-        }
-        return {.response_ = context_value.static_file(*root, {.relative_path_ = relative})};
-    } catch (const http_error& error) {
-        // A document-root miss is allowed to fall through to the router's
-        // normal not-found path. A real response error (for example 406 when
-        // every Accept-Encoding choice is forbidden, or 412 from a file
-        // precondition) must retain its status instead of being rewritten as
-        // 404 by the fallback probe.
-        const auto status = error.info().status();
-        if (status == ruvia::http_status::forbidden || status == ruvia::http_status::not_found) {
-            return {};
-        }
-        throw;
-    }
+    return {.entry_ = entry_value, .relative_ = relative};
 }
 
 }  // namespace
@@ -137,11 +107,29 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             // responses that still pass through the unmatched-request chain,
             // like every other answer to a request no route matched. A
             // rejected target is answered by the not-found path alone.
-            auto fallback = resolution.rejected() != nullptr
-                                ? document_root_fallback{}
-                                : select_document_root_fallback(
-                                      document_root, request, memory, services, static_file_mode);
-            auto& unmatched_response = fallback.response_;
+            std::optional<std::pmr::string> decoded_fallback_path;
+            std::pmr::string fallback_path_storage(memory.upstream_resource());
+            const auto fallback_probe = resolution.rejected() != nullptr
+                                            ? document_root_probe{}
+                                            : probe_document_root_resource(
+                                                  document_root, request, memory,
+                                                  decoded_fallback_path, fallback_path_storage);
+            const auto method = request.known_method();
+            if (fallback_probe.entry_.has_value() &&
+                (method == http_known_method::get || method == http_known_method::head)) {
+                auto context_value =
+                    detail::context_access::make(memory, request, services.with_routes(*this));
+                auto fallback_response = detail::context_access::static_file_resolved(
+                    context_value, *document_root.root(), fallback_probe.relative_, {},
+                    *fallback_probe.entry_, static_file_mode);
+                auto terminal = [&fallback_response](context&) -> task<http_response> {
+                    co_return std::move(fallback_response);
+                };
+                response = co_await run_unmatched_chain(
+                    context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+                co_return;
+            }
+            std::optional<http_response> unmatched_response;
             // One handle_error co_await serves both rejection kinds: each
             // co_await expression reserves its own slots for the call's
             // temporaries in the frame, so distinct inline sites would each
@@ -149,10 +137,8 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             std::optional<http_error_info> error;
             std::uint32_t allowed_methods = 0;
             std::span<const std::string_view> extension_methods;
-            if (unmatched_response) {
-                // Served from the document root, or OPTIONS on one of its files.
-            } else if (request.known_method() == http_known_method::unknown &&
-                       !recognizes_method_token(request.method())) {
+            if (request.known_method() == http_known_method::unknown &&
+                !recognizes_method_token(request.method())) {
                 // RFC 9110 15.5.6/15.6.2: 405 says the method is known here but
                 // unsupported by this resource; a token no route registered is
                 // not known here at all, so it stays 501 whatever the path holds.
@@ -165,7 +151,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 // advertise methods most resources reject; answer without one.
                 unmatched_response.emplace(http_response(memory.resource()));
                 unmatched_response->status(ruvia::http_status::no_content);
-            } else if (resolution.method_not_allowed() != nullptr || fallback.resource_exists_) {
+            } else if (resolution.method_not_allowed() != nullptr || fallback_probe.entry_.has_value()) {
                 // The method is known here (registered as an extension token
                 // or built in) but this resource -- a routed path or a
                 // document-root file -- does not support it. Allow names what
@@ -175,7 +161,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                     extension_methods = method_not_allowed->extension_methods();
                     allowed_methods = method_not_allowed->allowed_methods();
                 }
-                if (fallback.resource_exists_) {
+                if (fallback_probe.entry_.has_value()) {
                     allowed_methods |= document_root_method_mask;
                 }
                 if (request.known_method() == http_known_method::options) {

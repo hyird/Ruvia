@@ -313,6 +313,8 @@ public:
     // rewritten). Throws the forbidden http_error for a path outside the root.
     [[nodiscard]] static std::optional<static_root_entry_view> resolve(
         const static_root& root, std::string_view& relative, std::pmr::string& storage);
+    [[nodiscard]] static std::optional<static_root_entry_view> try_resolve(
+        const static_root& root, std::string_view& relative, std::pmr::string& storage);
     [[nodiscard]] static std::uint64_t fingerprint(const static_root& root) noexcept;
     [[nodiscard]] static bool same_snapshot(
         const static_root& left, const static_root& right) noexcept;
