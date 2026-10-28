@@ -105,7 +105,7 @@ public:
         operation_options options, operation_timeout deadline);
     task<std::pmr::vector<redis_value>> execute_pipeline(
         std::pmr::vector<redis_owned_command> commands, operation_options options,
-        std::pmr::memory_resource* resource);
+        std::pmr::memory_resource* resource, bool wrap_transaction = false);
 
 private:
     // Every deadline belongs to a connection's transport; the slot pool only
@@ -125,7 +125,8 @@ private:
     template <typename result_type, typename command_source_type>
     task<result_type> execute_commands(command_source_type source, operation_options options,
         std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
-        std::optional<operation_timeout> deadline, operation_scope* scope = nullptr);
+        std::optional<operation_timeout> deadline, operation_scope* scope = nullptr,
+        bool wrap_transaction = false);
 
     const redis_config_storage& config_;
     std::optional<std::chrono::milliseconds> command_timeout_;

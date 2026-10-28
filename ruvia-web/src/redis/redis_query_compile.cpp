@@ -174,13 +174,14 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
 }
 
 // Primary keys are text or integer columns (is_redis_entity_primary_key_scalar).
-[[nodiscard]] std::pmr::string canonical_primary_key(
-    const redis_literal& value, redis_column_kind column_kind, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::string_view canonical_primary_key(
+    const redis_literal& value, redis_column_kind column_kind,
+    std::span<char, redis_scalar_scratch_size> scratch) {
     if (column_kind == redis_column_kind::text) {
         if (value.kind() != redis_literal_kind::string) {
             throw std::invalid_argument("Redis TEXT predicate requires a string value");
         }
-        return std::pmr::string(value.text(), resource);
+        return value.text();
     }
     constexpr auto max_signed = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     switch (value.kind()) {
@@ -188,12 +189,12 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
             if (column_kind == redis_column_kind::unsigned_value && value.signed_value() < 0) {
                 throw std::invalid_argument("Redis integer primary key is invalid");
             }
-            return encode_redis_number(value.signed_value(), resource);
+            return encode_redis_number(value.signed_value(), scratch);
         case redis_literal_kind::unsigned_integer:
             if (column_kind == redis_column_kind::signed_value && value.unsigned_value() > max_signed) {
                 throw std::invalid_argument("Redis integer primary key is invalid");
             }
-            return encode_redis_number(value.unsigned_value(), resource);
+            return encode_redis_number(value.unsigned_value(), scratch);
         case redis_literal_kind::real: {
             const double number = value.real_value();
             if (!std::isfinite(number) || std::trunc(number) != number ||
@@ -201,7 +202,7 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
                 (column_kind == redis_column_kind::unsigned_value && number < 0.0)) {
                 throw std::invalid_argument("Redis integer primary key is invalid");
             }
-            return encode_redis_number(static_cast<std::int64_t>(number), resource);
+            return encode_redis_number(static_cast<std::int64_t>(number), scratch);
         }
         default:
             throw std::invalid_argument("Redis primary key requires a string or integer value");
@@ -708,9 +709,9 @@ std::pmr::vector<std::pmr::string> compile_redis_index(
     return args;
 }
 
-std::optional<std::pmr::string> redis_primary_key(
-    const redis_mapping& mapping, const redis_predicate& predicate, std::pmr::memory_resource* resource) {
-    resource = pmr_resource_or_default(resource);
+std::optional<std::string_view> redis_primary_key(
+    const redis_mapping& mapping, const redis_predicate& predicate,
+    std::span<char, redis_scalar_scratch_size> scratch) {
     const auto* storage = redis_predicate_access::storage(predicate);
     if (storage == nullptr) {
         return std::nullopt;
@@ -727,7 +728,7 @@ std::optional<std::pmr::string> redis_primary_key(
     if (value.kind() == redis_literal_kind::null) {
         throw std::invalid_argument("Redis primary key cannot be NULL");
     }
-    auto result_value = canonical_primary_key(value, comparison.column_.kind_, resource);
+    const auto result_value = canonical_primary_key(value, comparison.column_.kind_, scratch);
     if (result_value.empty()) {
         throw std::invalid_argument("Redis primary key cannot be empty");
     }

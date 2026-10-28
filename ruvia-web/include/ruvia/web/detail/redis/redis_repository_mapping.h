@@ -58,8 +58,9 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
         }
     });
     try {
-        const auto id = redis_entity_id(entity, resource);
-        if (redis_entity_key(prefix, id, resource) != key) {
+        redis_scalar_scratch_type id_scratch{};
+        const auto id = redis_entity_id(entity, id_scratch);
+        if (!redis_entity_key_matches(prefix, id, key)) {
             throw redis_error(redis_error::code_type::protocol_error, "entity ID does not match its Redis key");
         }
     } catch (const std::invalid_argument&) {

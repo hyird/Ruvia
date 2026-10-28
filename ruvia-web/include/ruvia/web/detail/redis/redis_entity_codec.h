@@ -1,11 +1,13 @@
 #pragma once
 
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
-#include <iterator>
 #include <limits>
 #include <memory_resource>
+#include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -21,28 +23,31 @@ namespace ruvia::detail {
     throw redis_error(redis_error::code_type::protocol_error, message);
 }
 
+inline constexpr std::size_t redis_scalar_scratch_size = 128;
+using redis_scalar_scratch_type = std::array<char, redis_scalar_scratch_size>;
+
 template <typename t_type>
-[[nodiscard]] std::pmr::string encode_redis_number(
-    t_type value, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::string_view encode_redis_number(
+    t_type value, std::span<char, redis_scalar_scratch_size> scratch) {
     if constexpr (std::is_floating_point_v<t_type>) {
         if (!std::isfinite(value)) {
             throw_invalid_redis_scalar("non-finite Redis scalar");
         }
-        char buffer[128]{};
-        const auto result_value = std::to_chars(buffer, std::end(buffer), value, std::chars_format::general,
-            std::numeric_limits<t_type>::max_digits10);
+        const auto result_value = std::to_chars(scratch.data(), scratch.data() + scratch.size(), value,
+            std::chars_format::general, std::numeric_limits<t_type>::max_digits10);
         if (result_value.ec != std::errc{}) {
             throw_invalid_redis_scalar("failed to encode Redis scalar");
         }
-        return std::pmr::string(buffer, static_cast<std::size_t>(result_value.ptr - buffer), resource);
+        return {scratch.data(), static_cast<std::size_t>(result_value.ptr - scratch.data())};
+    } else if constexpr (std::is_unsigned_v<t_type>) {
+        return http_format_unsigned(
+            std::span<char, http_max_unsigned_decimal_size>(scratch.data(), http_max_unsigned_decimal_size), value);
     } else {
-        std::pmr::string result_value(resource);
-        if constexpr (std::is_unsigned_v<t_type>) {
-            http_append_unsigned(result_value, value);
-        } else {
-            http_append_formatted_number(result_value, value, "failed to encode Redis scalar");
+        const auto [ptr, ec] = std::to_chars(scratch.data(), scratch.data() + scratch.size(), value);
+        if (ec != std::errc{}) {
+            throw std::logic_error("failed to encode Redis scalar");
         }
-        return result_value;
+        return {scratch.data(), static_cast<std::size_t>(ptr - scratch.data())};
     }
 }
 
@@ -65,27 +70,24 @@ template <typename t_type>
 }
 
 template <typename t_type>
-[[nodiscard]] std::pmr::string encode_redis_scalar(
-    const t_type& value, std::pmr::memory_resource* resource) {
-    auto* const memory_resource = pmr_resource_or_default(resource);
+[[nodiscard]] std::string_view encode_redis_scalar(
+    const t_type& value, std::span<char, redis_scalar_scratch_size> scratch) {
     using scalar_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<scalar_type, string>) {
-        const auto text = value.view();
-        return std::pmr::string(text.data(), text.size(), memory_resource);
-    } else if constexpr (std::is_same_v<scalar_type, std::pmr::string>) {
-        return std::pmr::string(value.data(), value.size(), memory_resource);
-    } else if constexpr (std::is_same_v<scalar_type, std::string> ||
+        return value.view();
+    } else if constexpr (std::is_same_v<scalar_type, std::pmr::string> ||
+                         std::is_same_v<scalar_type, std::string> ||
                          std::is_same_v<scalar_type, std::string_view>) {
-        return std::pmr::string(value.data(), value.size(), memory_resource);
+        return value;
     } else if constexpr (std::is_same_v<scalar_type, bool>) {
-        return std::pmr::string(value ? "1" : "0", memory_resource);
+        return value ? std::string_view("1") : std::string_view("0");
     } else if constexpr (std::is_same_v<scalar_type, bool_value>) {
-        return std::pmr::string(static_cast<bool>(value) ? "1" : "0", memory_resource);
+        return static_cast<bool>(value) ? std::string_view("1") : std::string_view("0");
     } else if constexpr (is_ruvia_scalar<scalar_type>) {
         using raw_type = model_scalar_value_type<scalar_type>;
-        return encode_redis_number(static_cast<raw_type>(value), memory_resource);
+        return encode_redis_number(static_cast<raw_type>(value), scratch);
     } else if constexpr (is_redis_entity_native_number<scalar_type>) {
-        return encode_redis_number(value, memory_resource);
+        return encode_redis_number(value, scratch);
     } else {
         static_assert(always_false<scalar_type>, "unsupported Redis scalar type");
     }

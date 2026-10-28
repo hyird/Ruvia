@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ruvia/web/detail/entity/value_storage.h"
+#include "ruvia/web/detail/redis/redis_entity_codec.h"
 #include "ruvia/web/detail/redis/redis_entity_traits.h"
 #include "ruvia/web/detail/redis/redis_repository_commands.h"
 
@@ -95,8 +96,9 @@ struct redis_mapping final {
     const redis_mapping& mapping, std::pmr::memory_resource* resource);
 
 // The canonical ID when the predicate is exactly `primary key == literal`.
-[[nodiscard]] std::optional<std::pmr::string> redis_primary_key(
-    const redis_mapping& mapping, const redis_predicate& predicate, std::pmr::memory_resource* resource);
+[[nodiscard]] std::optional<std::string_view> redis_primary_key(
+    const redis_mapping& mapping, const redis_predicate& predicate,
+    std::span<char, redis_scalar_scratch_size> scratch);
 
 // Appends the write-script triples for one entity field: the value (or its
 // deletion when absent), its presence marker and, for TAG-encodable columns,
