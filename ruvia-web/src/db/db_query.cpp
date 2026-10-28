@@ -52,6 +52,35 @@ struct node_index_map final {
     }
 };
 
+struct node_visit_set final {
+    static constexpr std::size_t inline_capacity = 64;
+    std::uint64_t inline_{0};
+    std::pmr::vector<bool> heap_;
+
+    node_visit_set(std::size_t count, std::pmr::memory_resource* resource)
+        : heap_(resource) {
+        if (count > inline_capacity) {
+            heap_.assign(count, false);
+        }
+    }
+
+    [[nodiscard]] bool mark(std::size_t index) noexcept {
+        if (heap_.empty()) {
+            const std::uint64_t bit = std::uint64_t{1} << index;
+            if ((inline_ & bit) != 0) {
+                return false;
+            }
+            inline_ |= bit;
+            return true;
+        }
+        if (heap_[index]) {
+            return false;
+        }
+        heap_[index] = true;
+        return true;
+    }
+};
+
 struct qualified_expression_importer final {
     const std::pmr::vector<db_query_node>& source_nodes_;
     const std::pmr::vector<db_query>& source_queries_;
@@ -91,16 +120,15 @@ struct qualified_expression_importer final {
         }
     }
 
-    void rewrite_subquery_node(db_query_storage& query_storage, std::pmr::vector<bool>& visited,
+    void rewrite_subquery_node(db_query_storage& query_storage, node_visit_set& visited,
         bool source_bound, bool target_bound, std::size_t node, std::size_t node_depth) {
         if (node == no_db_node) {
             return;
         }
         require_depth(node_depth);
-        if (visited[node]) {
+        if (!visited.mark(node)) {
             return;
         }
-        visited[node] = true;
         auto& sub_node = query_storage.nodes_[node];
         if (!source_bound && !sub_node.explicit_alias_ &&
             (sub_node.kind_ == db_node_kind::column || sub_node.kind_ == db_node_kind::star) &&
@@ -129,7 +157,7 @@ struct qualified_expression_importer final {
         }
     }
 
-    void rewrite_subquery_source(db_query_storage& query_storage, std::pmr::vector<bool>& visited,
+    void rewrite_subquery_source(db_query_storage& query_storage, node_visit_set& visited,
         bool outer_source_bound, bool outer_target_bound, bool source_bound, bool target_bound,
         const db_query_source& src, std::size_t subquery_depth) {
         rewrite_subquery_node(
@@ -156,7 +184,7 @@ struct qualified_expression_importer final {
         }
         // Only reachable expressions participate: abandoned builder nodes cannot
         // introduce a capture or an otherwise invisible nested query.
-        std::pmr::vector<bool> visited(query_storage.nodes_.size(), false, target_.resource_);
+        node_visit_set visited(query_storage.nodes_.size(), target_.resource_);
         for (const auto node : query_storage.projections_) {
             rewrite_subquery_node(query_storage, visited, source_bound, target_bound, node, subquery_depth + 1);
         }
@@ -1651,12 +1679,14 @@ db_expression db_query::import_expression(db_expression expression, std::string_
 
 db_query& db_query::select(std::span<const db_expression> projections) {
     auto& s = storage();
-    std::pmr::vector<std::size_t> owned(s.resource_);
-    owned.reserve(projections.size());
     for (const auto expression : projections) {
-        owned.push_back(require_expression(expression));
+        (void)require_expression(expression);
     }
-    s.projections_ = std::move(owned);
+    s.projections_.clear();
+    s.projections_.reserve(projections.size());
+    for (const auto expression : projections) {
+        s.projections_.push_back(expression.node_);
+    }
     return *this;
 }
 db_query& db_query::add_select(db_expression projection) {
@@ -1764,12 +1794,15 @@ db_query& db_query::or_where(db_expression predicate) {
     return where(previous == no_db_node ? predicate : binary(db_expression(storage_.get(), previous), db_binary_operator::or_value, predicate));
 }
 db_query& db_query::group_by(std::span<const db_expression> expressions) {
-    std::pmr::vector<std::size_t> groups(resource());
-    groups.reserve(expressions.size());
+    auto& s = storage();
     for (const auto expression : expressions) {
-        groups.push_back(require_expression(expression));
+        (void)require_expression(expression);
     }
-    storage().groups_ = std::move(groups);
+    s.groups_.clear();
+    s.groups_.reserve(expressions.size());
+    for (const auto expression : expressions) {
+        s.groups_.push_back(expression.node_);
+    }
     return *this;
 }
 db_query& db_query::add_group_by(db_expression expression) {
@@ -1827,23 +1860,28 @@ db_query& db_query::distinct_on(std::span<const db_expression> expressions) {
     if (expressions.empty()) {
         throw std::invalid_argument("DISTINCT ON requires an expression");
     }
-    std::pmr::vector<std::size_t> columns(resource());
-    columns.reserve(expressions.size());
-    for (const auto expression : expressions) {
-        columns.push_back(require_expression(expression));
-    }
     auto& s = storage();
-    s.distinct_on_ = std::move(columns);
+    for (const auto expression : expressions) {
+        (void)require_expression(expression);
+    }
+    s.distinct_on_.clear();
+    s.distinct_on_.reserve(expressions.size());
+    for (const auto expression : expressions) {
+        s.distinct_on_.push_back(expression.node_);
+    }
     s.distinct_ = false;
     return *this;
 }
 db_query& db_query::returning(std::span<const db_expression> expressions) {
-    std::pmr::vector<std::size_t> columns(resource());
-    columns.reserve(expressions.size());
+    auto& s = storage();
     for (const auto expression : expressions) {
-        columns.push_back(require_expression(expression));
+        (void)require_expression(expression);
     }
-    storage().returning_ = std::move(columns);
+    s.returning_.clear();
+    s.returning_.reserve(expressions.size());
+    for (const auto expression : expressions) {
+        s.returning_.push_back(expression.node_);
+    }
     return *this;
 }
 db_query& db_query::insert_into(std::string_view table_value, std::span<const std::string_view> columns, std::string_view alias) {
@@ -1851,20 +1889,23 @@ db_query& db_query::insert_into(std::string_view table_value, std::span<const st
     if (!alias.empty()) {
         detail::require_name(alias);
     }
-    auto& s = storage();
-    std::pmr::vector<std::pmr::string> names(s.resource_);
-    names.reserve(columns.size());
-    for (const auto column : columns) {
-        detail::require_name(column);
-        if (std::ranges::any_of(names, [&](const auto& name) { return name == column; })) {
-            throw std::invalid_argument("duplicate INSERT column");
+    for (std::size_t i = 0; i < columns.size(); ++i) {
+        detail::require_name(columns[i]);
+        for (std::size_t j = 0; j < i; ++j) {
+            if (columns[j] == columns[i]) {
+                throw std::invalid_argument("duplicate INSERT column");
+            }
         }
-        names.emplace_back(column);
     }
+    auto& s = storage();
     s.kind_ = db_query_kind::insert;
     s.target_ = table_value;
     s.target_alias_ = alias;
-    s.columns_ = std::move(names);
+    s.columns_.clear();
+    s.columns_.reserve(columns.size());
+    for (const auto column : columns) {
+        s.columns_.emplace_back(column);
+    }
     return *this;
 }
 db_query& db_query::values(std::span<const db_expression> row) {

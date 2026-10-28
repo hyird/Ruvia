@@ -76,6 +76,15 @@ public:
         if (values.size() != columns_.size()) {
             throw std::invalid_argument("db_values_builder row width differs from column count");
         }
+        static constexpr std::size_t inline_capacity = 16;
+        if (values.size() <= inline_capacity) {
+            std::array<db_expression, inline_capacity> imported{};
+            for (std::size_t i = 0; i < values.size(); ++i) {
+                imported[i] = values[i].expression(query_);
+            }
+            query_.values(std::span<const db_expression>(imported.data(), values.size()));
+            return *this;
+        }
         std::pmr::vector<db_expression> imported(query_.resource());
         imported.reserve(values.size());
         for (const auto& value : values) {
@@ -478,6 +487,13 @@ public:
         return select(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
     }
     db_query_builder& select(std::span<const std::string_view> columns) {
+        if (columns.size() <= column_capacity) {
+            std::array<db_selection, column_capacity> selections{};
+            for (std::size_t i = 0; i < columns.size(); ++i) {
+                selections[i] = db_selection{columns[i]};
+            }
+            return select(std::span<const db_selection>(selections.data(), columns.size()));
+        }
         std::pmr::vector<db_selection> selections(query_.resource());
         selections.reserve(columns.size());
         for (const auto column : columns) {
@@ -501,6 +517,7 @@ public:
         detail::db_projection implicit(query_.resource());
         const auto* previous = &selected_;
         if (selected_.empty()) {
+            implicit.columns_.reserve(column_capacity);
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
                 implicit.columns_.emplace_back(c_type::name.view());
             });
@@ -667,7 +684,17 @@ public:
         return *this;
     }
     db_query_builder& group_by(std::span<const db_expression> expressions) {
+        static constexpr std::size_t inline_capacity = 16;
+        if (expressions.size() <= inline_capacity) {
+            std::array<db_expression, inline_capacity> imported{};
+            for (std::size_t i = 0; i < expressions.size(); ++i) {
+                imported[i] = query_.import_expression(expressions[i]);
+            }
+            query_.group_by(std::span<const db_expression>(imported.data(), expressions.size()));
+            return *this;
+        }
         std::pmr::vector<db_expression> imported(query_.resource());
+        imported.reserve(expressions.size());
         for (auto expression : expressions) {
             imported.push_back(query_.import_expression(expression));
         }
@@ -678,6 +705,15 @@ public:
         return group_by(std::span<const db_expression>(expressions.begin(), expressions.size()));
     }
     db_query_builder& group_by(std::span<const std::string_view> columns) {
+        if (columns.size() <= column_capacity) {
+            std::array<db_expression, column_capacity> expressions{};
+            for (std::size_t i = 0; i < columns.size(); ++i) {
+                detail::require_entity_column<entity_type>(columns[i]);
+                expressions[i] = query_.column(columns[i], alias_);
+            }
+            query_.group_by(std::span<const db_expression>(expressions.data(), columns.size()));
+            return *this;
+        }
         std::pmr::vector<db_expression> expressions(query_.resource());
         expressions.reserve(columns.size());
         for (const auto column : columns) {
@@ -730,6 +766,15 @@ public:
         return *this;
     }
     db_query_builder& distinct_on(std::span<const db_expression> expressions) {
+        static constexpr std::size_t inline_capacity = 16;
+        if (expressions.size() <= inline_capacity) {
+            std::array<db_expression, inline_capacity> imported{};
+            for (std::size_t i = 0; i < expressions.size(); ++i) {
+                imported[i] = query_.import_expression(expressions[i]);
+            }
+            query_.distinct_on(std::span<const db_expression>(imported.data(), expressions.size()));
+            return *this;
+        }
         std::pmr::vector<db_expression> imported(query_.resource());
         imported.reserve(expressions.size());
         for (const auto expression : expressions) {
@@ -742,6 +787,15 @@ public:
         return distinct_on(std::span<const db_expression>(expressions.begin(), expressions.size()));
     }
     db_query_builder& distinct_on(std::span<const std::string_view> columns) {
+        if (columns.size() <= column_capacity) {
+            std::array<db_expression, column_capacity> expressions{};
+            for (std::size_t i = 0; i < columns.size(); ++i) {
+                detail::require_entity_column<entity_type>(columns[i]);
+                expressions[i] = query_.column(columns[i], alias_);
+            }
+            query_.distinct_on(std::span<const db_expression>(expressions.data(), columns.size()));
+            return *this;
+        }
         std::pmr::vector<db_expression> expressions(query_.resource());
         expressions.reserve(columns.size());
         for (const auto column : columns) {
@@ -928,6 +982,7 @@ public:
     }
 
 private:
+    static constexpr std::size_t column_capacity = std::tuple_size_v<typename entity_type::columns_type>;
     friend class db_repository<entity_type, executor_type>;
     template <typename, typename>
     friend class db_query_builder;
@@ -1191,16 +1246,18 @@ public:
         if (entities.empty()) {
             throw std::invalid_argument("repository insert requires an entity");
         }
-        std::array<bool, std::tuple_size_v<typename entity_type::columns_type>> selected{};
-        std::pmr::vector<std::string_view> columns(query_.resource());
+        std::array<bool, column_capacity> selected{};
+        std::array<std::string_view, column_capacity> columns_buf{};
+        std::size_t column_count = 0;
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
             if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
                 if (std::ranges::any_of(entities, [](const entity_type& entity) { return entity.template is_set<c_type::name>(); })) {
                     selected[index] = true;
-                    columns.push_back(c_type::name.view());
+                    columns_buf[column_count++] = c_type::name.view();
                 }
             }
         });
+        const std::span<const std::string_view> columns(columns_buf.data(), column_count);
         record_inserted_columns(columns);
         query_.insert_into(entity_type::table_name(), columns, alias_);
         if (columns.empty()) {
@@ -1210,16 +1267,16 @@ public:
             return *this;
         }
         for (const auto& entity : entities) {
-            std::pmr::vector<db_expression> row(query_.resource());
-            row.reserve(columns.size());
+            std::array<db_expression, column_capacity> row{};
+            std::size_t row_count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
                 if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
                     if (selected[index]) {
-                        row.push_back(detail::entity_column_value<entity_type, c_type>(query_, entity));
+                        row[row_count++] = detail::entity_column_value<entity_type, c_type>(query_, entity);
                     }
                 }
             });
-            query_.values(row);
+            query_.values(std::span<const db_expression>(row.data(), row_count));
         }
         return *this;
     }
@@ -1260,12 +1317,9 @@ public:
         if (!inserting_) {
             throw std::invalid_argument("on_conflict requires an insert builder");
         }
-        std::pmr::vector<std::string_view> columns(query_.resource());
-        columns.reserve(inserted_columns_.size());
-        for (const auto& column : inserted_columns_) {
-            columns.push_back(column);
-        }
-        detail::apply_entity_upsert<entity_type>(query_, columns, options, executor_.query_driver(), qualifier());
+        detail::apply_entity_upsert<entity_type>(
+            query_, std::span<const std::string_view>(inserted_columns_.data(), inserted_column_count_),
+            options, executor_.query_driver(), qualifier());
         return *this;
     }
     template <typename source, typename source_executor_type>
@@ -1289,8 +1343,10 @@ public:
     }
     db_write_query_builder& returning(std::span<const db_selection> fields = {}) {
         if (fields.empty()) {
-            std::pmr::vector<db_expression> expressions(query_.resource());
-            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> { expressions.push_back(query_.column(c_type::name.view(), qualifier())); });
+            std::array<db_expression, column_capacity> expressions{};
+            detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
+                expressions[index] = query_.column(c_type::name.view(), qualifier());
+            });
             query_.returning(expressions);
             selected_.columns_.clear();
             selected_.wildcard_ = false;
@@ -1308,6 +1364,13 @@ public:
         return returning(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
     }
     db_write_query_builder& returning(std::span<const std::string_view> columns) {
+        if (columns.size() <= column_capacity) {
+            std::array<db_selection, column_capacity> selections{};
+            for (std::size_t i = 0; i < columns.size(); ++i) {
+                selections[i] = db_selection{columns[i]};
+            }
+            return returning(std::span<const db_selection>(selections.data(), columns.size()));
+        }
         std::pmr::vector<db_selection> selections(query_.resource());
         selections.reserve(columns.size());
         for (const auto column : columns) {
@@ -1382,6 +1445,7 @@ public:
     const db_query& query() const&& = delete;
 
 private:
+    static constexpr std::size_t column_capacity = std::tuple_size_v<typename entity_type::columns_type>;
     friend class db_repository<entity_type, executor_type>;
     template <typename, typename>
     friend class db_query_builder;
@@ -1393,8 +1457,7 @@ private:
           query_(std::move(query)),
           inserting_(inserting),
           alias_(alias, query_.resource()),
-          selected_(query_.resource()),
-          inserted_columns_(query_.resource()) {
+          selected_(query_.resource()) {
         record_inserted_columns(inserted_columns);
     }
     std::string_view qualifier() const {
@@ -1431,12 +1494,15 @@ private:
             }
         }
     }
-    void record_inserted_columns(std::span<const std::string_view> columns) {
-        inserted_columns_.clear();
-        inserted_columns_.reserve(columns.size());
-        for (const auto column : columns) {
-            inserted_columns_.emplace_back(column);
-        }
+    void record_inserted_columns(std::span<const std::string_view> columns) noexcept {
+        inserted_column_count_ = 0;
+        detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
+            if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
+                if (std::ranges::find(columns, c_type::name.view()) != columns.end()) {
+                    inserted_columns_[inserted_column_count_++] = c_type::name.view();
+                }
+            }
+        });
     }
     void require_condition(const db_predicate& condition) const {
         if (inserting_ || condition.empty()) {
@@ -1453,7 +1519,8 @@ private:
     bool inserting_;
     std::pmr::string alias_;
     detail::db_projection selected_;
-    std::pmr::vector<std::pmr::string> inserted_columns_;
+    std::array<std::string_view, column_capacity> inserted_columns_{};
+    std::size_t inserted_column_count_{0};
 };
 
 template <typename entity_type, typename executor_type>
@@ -1714,12 +1781,20 @@ private:
         auto builder = query_builder();
         builder.with_deleted(options.with_deleted_);
         if (!options.select_.empty()) {
-            std::pmr::vector<db_selection> selections(builder.query_.resource());
-            selections.reserve(options.select_.size());
-            for (const auto& col : options.select_) {
-                selections.emplace_back(col);
+            if (options.select_.size() <= column_capacity) {
+                std::array<db_selection, column_capacity> selections{};
+                for (std::size_t i = 0; i < options.select_.size(); ++i) {
+                    selections[i] = db_selection{options.select_[i]};
+                }
+                builder.select(std::span<const db_selection>(selections.data(), options.select_.size()));
+            } else {
+                std::pmr::vector<db_selection> selections(builder.query_.resource());
+                selections.reserve(options.select_.size());
+                for (const auto& col : options.select_) {
+                    selections.emplace_back(col);
+                }
+                builder.select(selections);
             }
-            builder.select(selections);
         }
         detail::apply_find_options<entity_type>(builder.query_, options, builder.alias_);
         if (!options.relations_.empty()) {
