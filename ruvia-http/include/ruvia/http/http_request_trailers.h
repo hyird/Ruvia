@@ -27,9 +27,15 @@ public:
     explicit http_request_trailers(std::pmr::memory_resource* resource);
     http_request_trailers(const http_request_trailers&) = delete;
     http_request_trailers& operator=(const http_request_trailers&) = delete;
-    // Appends one field. A name not permitted in request trailers
-    // (RFC 9110 section 6.5.1) reports forbidden_field.
+    // Appends one field or a span of fields all-or-nothing. A name not permitted
+    // in request trailers (RFC 9110 section 6.5.1) reports forbidden_field.
     [[nodiscard]] std::optional<http_request_trailer_error> append(std::string_view name, std::string_view value);
+    [[nodiscard]] std::optional<http_request_trailer_error> append(std::span<const http_header_view> fields);
+    template <detail::http_temporary_owning_range<http_header_view> fields_type>
+    std::optional<http_request_trailer_error> append(fields_type&&) = delete;
+    [[nodiscard]] std::optional<http_request_trailer_error> append(std::span<const http_header> fields);
+    template <detail::http_temporary_owning_range<http_header> fields_type>
+    std::optional<http_request_trailer_error> append(fields_type&&) = delete;
     // Appends a received HTTP/1 trailer block all-or-nothing. Every received
     // field is charged to the byte budget; fields not permitted in request
     // trailers are discarded rather than retained (RFC 9112 section 7.1.2), so

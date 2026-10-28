@@ -722,10 +722,24 @@ task<void> http_client_connection::stream_http2_upload(
                     finish_accepted = finished == http2_data_submit_status::accepted ||
                                       finished == http2_data_submit_status::queued;
                 } else {
-                    std::pmr::vector<http_header_view> trailers(state_value.resource_);
-                    trailers.reserve(request.upload()->trailers_.size());
-                    for (const auto& field : request.upload()->trailers_) {
-                        trailers.emplace_back(field.name(), field.value());
+                    constexpr std::size_t inline_trailer_capacity = 8;
+                    std::array<http_header_view, inline_trailer_capacity> inline_trailers;
+                    std::pmr::vector<http_header_view> overflow_trailers(state_value.resource_);
+                    std::span<const http_header_view> trailers;
+                    const auto& upload_trailers = request.upload()->trailers_;
+                    if (upload_trailers.size() <= inline_trailers.size()) {
+                        for (std::size_t i = 0; i < upload_trailers.size(); ++i) {
+                            inline_trailers[i] = http_header_view{
+                                upload_trailers[i].name(), upload_trailers[i].value()};
+                        }
+                        trailers = std::span<const http_header_view>(
+                            inline_trailers.data(), upload_trailers.size());
+                    } else {
+                        overflow_trailers.reserve(upload_trailers.size());
+                        for (const auto& field : upload_trailers) {
+                            overflow_trailers.emplace_back(field.name(), field.value());
+                        }
+                        trailers = overflow_trailers;
                     }
                     const auto finished = connection.finish_request(stream.stream_id_, trailers);
                     finish_accepted =

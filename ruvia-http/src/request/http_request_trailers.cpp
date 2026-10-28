@@ -5,24 +5,61 @@
 #include "ruvia/http/http_field_syntax.h"
 
 namespace ruvia {
+namespace {
+
+template <typename field_type>
+[[nodiscard]] std::optional<http_request_trailer_error> append_trailer_fields(
+    std::pmr::vector<http_header>& retained, http_field_section_budget& retained_budget,
+    std::span<const field_type> fields) {
+    auto budget = retained_budget;
+    for (const auto& field : fields) {
+        if (!is_valid_http_header_name(field.name()) || !is_valid_http_header_value(field.value())) {
+            return http_request_trailer_error::invalid_field;
+        }
+        if (detail::is_forbidden_http_request_trailer_name(field.name())) {
+            return http_request_trailer_error::forbidden_field;
+        }
+        if (!budget.add_field(field.name(), field.value())) {
+            return http_request_trailer_error::section_too_large;
+        }
+    }
+    if (fields.empty()) {
+        return std::nullopt;
+    }
+    const auto field_count = retained.size();
+    const auto roll_back = [&]() noexcept {
+        retained.erase(retained.begin() + static_cast<std::ptrdiff_t>(field_count), retained.end());
+    };
+    try {
+        retained.reserve(field_count + fields.size());
+        auto* const resource = retained.get_allocator().resource();
+        for (const auto& field : fields) {
+            retained.push_back(http_header::copy_with_lowercase_name(field.name(), field.value(), resource));
+        }
+        retained_budget = budget;
+        return std::nullopt;
+    } catch (...) {
+        roll_back();
+        throw;
+    }
+}
+
+}  // namespace
+
 http_request_trailers::http_request_trailers(std::pmr::memory_resource* resource)
     : fields_(resource != nullptr ? resource : std::pmr::get_default_resource()) {}
 
 std::optional<http_request_trailer_error> http_request_trailers::append(std::string_view name, std::string_view value) {
-    if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
-        return http_request_trailer_error::invalid_field;
-    }
-    if (detail::is_forbidden_http_request_trailer_name(name)) {
-        return http_request_trailer_error::forbidden_field;
-    }
-    auto budget = budget_;
-    if (!budget.add_field(name, value)) {
-        return http_request_trailer_error::section_too_large;
-    }
-    fields_.push_back(
-        http_header::copy_with_lowercase_name(name, value, fields_.get_allocator().resource()));
-    budget_ = budget;
-    return std::nullopt;
+    const http_header_view field{name, value};
+    return append(std::span<const http_header_view>(&field, 1));
+}
+
+std::optional<http_request_trailer_error> http_request_trailers::append(std::span<const http_header_view> fields) {
+    return append_trailer_fields(fields_, budget_, fields);
+}
+
+std::optional<http_request_trailer_error> http_request_trailers::append(std::span<const http_header> fields) {
+    return append_trailer_fields(fields_, budget_, fields);
 }
 
 std::optional<http_request_trailer_error> http_request_trailers::append_http1(std::string_view block) {

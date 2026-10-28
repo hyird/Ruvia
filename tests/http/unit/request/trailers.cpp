@@ -45,11 +45,37 @@ RUVIA_TEST(request_trailers_own_fields_preserve_duplicates_and_bound_section_siz
         RUVIA_CHECK(!trailers.append_http1("x-checksum: final\r\nx-extra: yes\r\n\r\n").has_value());
         RUVIA_CHECK_EQ(trailers.field("X-Checksum").value_or(""), "final");
         RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{3});
+        const auto allocations_before_rejected_batches = resource.allocations_;
+        const std::array forbidden_batch{
+            ruvia::http_header_view{"X-Batch", "1"},
+            ruvia::http_header_view{"Content-Length", "3"},
+        };
+        RUVIA_CHECK(trailers.append(forbidden_batch) == ruvia::http_request_trailer_error::forbidden_field);
+        const std::array invalid_batch{
+            ruvia::http_header_view{"X-Batch", "1"},
+            ruvia::http_header_view{"x-ok", "bad\r\nvalue"},
+        };
+        RUVIA_CHECK(trailers.append(invalid_batch) == ruvia::http_request_trailer_error::invalid_field);
+        const std::string large_value(65536, 'x');
+        const std::array oversized_batch{
+            ruvia::http_header_view{"X-Batch", "1"},
+            ruvia::http_header_view{"x-large", large_value},
+        };
+        RUVIA_CHECK(trailers.append(oversized_batch) == ruvia::http_request_trailer_error::section_too_large);
+        RUVIA_CHECK_EQ(resource.allocations_, allocations_before_rejected_batches);
         RUVIA_CHECK(trailers.append("Content-Length", "3").has_value());
         RUVIA_CHECK(trailers.append("bad name", "x").has_value());
         RUVIA_CHECK(trailers.append("x-ok", "bad\r\nvalue").has_value());
-        RUVIA_CHECK(trailers.append("x-large", std::string(65536, 'x')).has_value());
+        RUVIA_CHECK(trailers.append("x-large", large_value).has_value());
         RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{3});
+        const std::array accepted_batch{
+            ruvia::http_header_view{"X-Batch-One", "1"},
+            ruvia::http_header_view{"X-Batch-Two", "2"},
+            ruvia::http_header_view{"X-Batch-Three", "3"},
+        };
+        RUVIA_CHECK(!trailers.append(accepted_batch).has_value());
+        RUVIA_CHECK_EQ(trailers.fields().size(), std::size_t{6});
+        RUVIA_CHECK_EQ(trailers.field("x-batch-three").value_or(""), "3");
     }
     RUVIA_CHECK_EQ(resource.allocations_, resource.deallocations_);
 }

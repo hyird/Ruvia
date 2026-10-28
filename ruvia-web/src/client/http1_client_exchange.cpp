@@ -678,17 +678,36 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                 upload.output_.acknowledge_chunk();
                 continue;
             }
-            std::pmr::vector<http_header_view> trailers(state_value.resource_);
-            trailers.reserve(upload.trailers_.size());
-            for (const auto& field : upload.trailers_) {
-                trailers.emplace_back(field.name(), field.value());
+            constexpr std::size_t inline_trailer_capacity = 8;
+            std::array<http_header_view, inline_trailer_capacity> inline_trailers;
+            std::pmr::vector<http_header_view> overflow_trailers(state_value.resource_);
+            auto section_budget = http_trailer_section_budget();
+            (void)section_budget.add(http1_last_chunk_prefix.size());
+            std::span<const http_header_view> trailers;
+            if (upload.trailers_.size() <= inline_trailers.size()) {
+                for (std::size_t i = 0; i < upload.trailers_.size(); ++i) {
+                    const auto& field = upload.trailers_[i];
+                    inline_trailers[i] = http_header_view{field.name(), field.value()};
+                    (void)section_budget.add_field(field.name(), field.value());
+                }
+                trailers = std::span<const http_header_view>(inline_trailers.data(), upload.trailers_.size());
+            } else {
+                overflow_trailers.reserve(upload.trailers_.size());
+                for (const auto& field : upload.trailers_) {
+                    overflow_trailers.emplace_back(field.name(), field.value());
+                    (void)section_budget.add_field(field.name(), field.value());
+                }
+                trailers = overflow_trailers;
             }
-            // Without trailers, HTTP owns an empty or fixed-size last-chunk ending.
-            // Keep that small storage in this operation; only trailers need a buffer.
-            std::array<char, http1_last_chunk_prefix.size() + http1_trailer_section_terminator.size()> inline_ending;
+            // Keep the last-chunk line and small trailer sections in this
+            // operation; larger trailer sections allocate only their exact wire size.
+            constexpr std::size_t inline_ending_bytes = 256;
+            std::array<char, inline_ending_bytes> inline_ending;
             http_io_buffer scratch(state_value.resource_);
-            const auto finish_buffer = trailers.empty() ? std::span<char>(inline_ending)
-                                                        : scratch.prepare(max_client_request_head_bytes);
+            const auto required_bytes = section_budget.bytes();
+            const auto finish_buffer = required_bytes <= inline_ending.size()
+                                           ? std::span<char>(inline_ending.data(), required_bytes)
+                                           : scratch.prepare(required_bytes);
             const auto ending = writer.plan_finish(finish_buffer, trailers);
             if (ending.index() != 0) {
                 throw http_client_error(

@@ -1907,48 +1907,57 @@ RUVIA_TEST(http_client_upload_exchange_owns_chunks_and_trailers_and_drives_conti
 }
 
 RUVIA_TEST(http1_small_upload_completes_with_a_bounded_response_budget) {
-    auto& io = ruvia::test::new_test_io_context();
-    test_worker worker(io);
-    upload_peer peer(io, worker.handle_, upload_peer::mode_type::known_length);
-    auto config = local_http_client_config(peer.port());
-    config.max_response_bytes_ = 1024;
-    // Completing a six-byte upload must not require a header-section-sized buffer.
-    ruvia::http_client client(worker.attachment_.loop(), config,
-        {.max_retained_bytes_ = 4096, .max_in_flight_bytes_ = 32 * 1024});
-    peer.start();
-    auto operation = [&]() -> ruvia::task<void> {
-        std::exception_ptr failure;
-        try {
-            auto exchange = co_await client.handle().open_request(
-                {.method_ = "POST", .target_ = "/upload"}, {.content_length_ = 6, .max_chunk_bytes_ = 3});
-            co_await exchange.body().write("abc");
-            co_await exchange.body().write("def");
-            co_await exchange.body().end();
-            RUVIA_CHECK(exchange.body().complete());
-            auto response = co_await exchange.response();
-            RUVIA_CHECK(response.status() == ruvia::http_status::ok);
-            auto bytes = co_await response.body().read_all(16);
-            RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(bytes.bytes().data()), bytes.size()), "ok");
-        } catch (...) {
-            failure = std::current_exception();
-        }
-        co_await client.shutdown();
-        if (failure) {
-            peer.stop();
-        }
-        try {
-            co_await peer.wait();
-        } catch (...) {
-            if (!failure) {
+    for (const auto mode : {upload_peer::mode_type::known_length, upload_peer::mode_type::chunked}) {
+        const bool known = mode == upload_peer::mode_type::known_length;
+        auto& io = ruvia::test::new_test_io_context();
+        test_worker worker(io);
+        upload_peer peer(io, worker.handle_, mode);
+        auto config = local_http_client_config(peer.port());
+        config.max_response_bytes_ = 1024;
+        // Completing a six-byte upload (with or without trailers) must not
+        // require a header-section-sized buffer from the response budget.
+        ruvia::http_client client(worker.attachment_.loop(), config,
+            {.max_retained_bytes_ = 4096, .max_in_flight_bytes_ = 32 * 1024});
+        peer.start();
+        auto operation = [&]() -> ruvia::task<void> {
+            std::exception_ptr failure;
+            try {
+                auto exchange = co_await client.handle().open_request(
+                    {.method_ = "POST", .target_ = "/upload"},
+                    {.content_length_ = known ? std::optional<std::uint64_t>{6} : std::nullopt,
+                        .max_chunk_bytes_ = 3});
+                co_await exchange.body().write("abc");
+                co_await exchange.body().write("def");
+                const std::array<ruvia::http_header_view, 1> trailers{{{"X-End", "retained"}}};
+                co_await exchange.body().end(known ? std::span<const ruvia::http_header_view>{}
+                                                   : std::span<const ruvia::http_header_view>(trailers));
+                RUVIA_CHECK(exchange.body().complete());
+                auto response = co_await exchange.response();
+                RUVIA_CHECK(response.status() == ruvia::http_status::ok);
+                auto bytes = co_await response.body().read_all(16);
+                RUVIA_CHECK_EQ(
+                    std::string_view(reinterpret_cast<const char*>(bytes.bytes().data()), bytes.size()), "ok");
+            } catch (...) {
                 failure = std::current_exception();
             }
-        }
-        if (failure) {
-            std::rethrow_exception(failure);
-        }
-        RUVIA_CHECK_EQ(peer.body_, "abcdef");
-    };
-    run_operation(worker, io, operation);
+            co_await client.shutdown();
+            if (failure) {
+                peer.stop();
+            }
+            try {
+                co_await peer.wait();
+            } catch (...) {
+                if (!failure) {
+                    failure = std::current_exception();
+                }
+            }
+            if (failure) {
+                std::rethrow_exception(failure);
+            }
+            RUVIA_CHECK_EQ(peer.body_, known ? "abcdef" : "3\r\nabc\r\n3\r\ndef\r\n0\r\nx-end: retained\r\n\r\n");
+        };
+        run_operation(worker, io, operation);
+    }
 }
 
 RUVIA_TEST(http_client_tunnel_claims_output_when_started_and_retires_after_abort) {

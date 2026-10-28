@@ -999,10 +999,8 @@ void http2_sans_io_session_engine::on_message_end(const http2_message_end_event&
     if (stream_runtimes_.mark_request_body_closed(stream_id)) {
         set_inactivity_phase();
     }
-    for (const auto& field : message_end.trailers()) {
-        if (stream_runtime->trailers().append(field.name(), field.value()).has_value()) {
-            throw std::logic_error("HTTP/2 decoder published invalid request trailers");
-        }
+    if (stream_runtime->trailers().append(message_end.trailers()).has_value()) {
+        throw std::logic_error("HTTP/2 decoder published invalid request trailers");
     }
     if (auto* selected_route = stream_runtime->selected_route()) {
         if (auto* streaming_body = selected_route->body().streaming()) {

@@ -135,10 +135,8 @@ task<void> http_client_request_body_writer::end(std::span<const http_header_view
     }
     require_writable(*state_);
     http_request_trailers validation(state_->resource_);
-    for (const auto& field : fields_value) {
-        if (validation.append(field.name(), field.value()).has_value()) {
-            throw std::invalid_argument("invalid request trailer section");
-        }
+    if (validation.append(fields_value).has_value()) {
+        throw std::invalid_argument("invalid request trailer section");
     }
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
         detail::finish_client_output<upload_output_policy>(state_, detail::http_client_upload_end_input{http_client_response(state_), std::move(validation).take_fields()}));
