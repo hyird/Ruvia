@@ -462,6 +462,7 @@ std::optional<mariadb_statement_cache::handle> mariadb_statement_cache::find(
     }
     auto& types = cache.types_;
     types.clear();
+    types.reserve(params.size());
     for (const auto& param : params) {
         const auto type = bound_type(param);
         if (!type.has_value()) {
@@ -469,36 +470,27 @@ std::optional<mariadb_statement_cache::handle> mariadb_statement_cache::find(
         }
         types.push_back(*type);
     }
-    // Looked up without being inserted first: a statement that may not run
-    // prepared is refused before it could take the place of one that may.
-    mariadb_statement_traits traits{};
-    std::size_t hash = 0;
-    const auto make = [&traits, &hash](
-                          std::string_view, std::span<const unsigned int>, std::pmr::memory_resource*) noexcept {
-        return mariadb_statement{nullptr, traits.integer_params_, hash};
-    };
-    auto found = cache.statements_.find(sql, types, false, make);
-    if (!may_prepare) {
-        return std::nullopt;
-    }
-    if (!found.statement_.has_value()) {
-        if (!found.repeated_ || cache.refused(found.hash_)) {
+    // A statement that may not run prepared is refused inside make() before it
+    // could take the place of one that may.
+    const auto make = [&cache](std::string_view candidate_sql, std::span<const unsigned int>,
+                          std::size_t hash, std::pmr::memory_resource*) -> std::optional<mariadb_statement> {
+        if (cache.refused(hash)) {
             return std::nullopt;
         }
-        hash = found.hash_;
-        traits = mariadb_statement_traits_of(sql);
+        const auto traits = mariadb_statement_traits_of(candidate_sql);
         if (!traits.preparable_) {
             cache.refuse(hash);
             return std::nullopt;
         }
         cache.reserve_retired();
-        found = cache.statements_.find(sql, types, true, make);
-        if (found.evicted_.has_value()) {
-            cache.retire(found.evicted_->handle_);
-        }
-        if (!found.statement_.has_value()) {
-            return std::nullopt;
-        }
+        return mariadb_statement{nullptr, traits.integer_params_, hash};
+    };
+    auto found = cache.statements_.find(sql, types, may_prepare, make);
+    if (found.evicted_.has_value()) {
+        cache.retire(found.evicted_->handle_);
+    }
+    if (!may_prepare || !found.statement_.has_value()) {
+        return std::nullopt;
     }
     const auto& statement = *cache.statements_.payload(*found.statement_);
     for (std::size_t index = 0; index < types.size() && index < 64; ++index) {

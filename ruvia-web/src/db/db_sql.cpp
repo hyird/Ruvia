@@ -439,11 +439,17 @@ void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const
     validate_mariadb_sql_length(sql.size());
     const bool backslash_escapes = (connection.server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) == 0;
     std::size_t size_hint = sql.size();
+    static constexpr std::size_t inline_placeholder_capacity = 32;
+    std::array<std::size_t, inline_placeholder_capacity> inline_placeholders{};
     std::size_t scan_offset = 0;
-    for (const auto& param : params) {
+    for (std::size_t i = 0; i < params.size(); ++i) {
+        const auto& param = params[i];
         const auto placeholder = find_sql_syntax_byte(sql, '?', backslash_escapes, scan_offset);
         if (placeholder == std::string_view::npos) {
             throw std::invalid_argument("SQL parameter count does not match placeholders");
+        }
+        if (i < inline_placeholder_capacity) {
+            inline_placeholders[i] = placeholder;
         }
         scan_offset = placeholder + 1;
         if (db_value_access::type(param) == db_value_type::string) {
@@ -471,13 +477,14 @@ void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const
     output.reserve(size_hint);
 
     std::size_t offset = 0;
-    for (const auto& param : params) {
-        const auto placeholder = find_sql_syntax_byte(sql, '?', backslash_escapes, offset);
+    for (std::size_t i = 0; i < params.size(); ++i) {
+        const auto placeholder = i < inline_placeholder_capacity
+                                     ? inline_placeholders[i]
+                                     : find_sql_syntax_byte(sql, '?', backslash_escapes, offset);
         output.append(sql.data() + offset, placeholder - offset);
-        append_value_literal(output, param, backslash_escapes, charset);
+        append_value_literal(output, params[i], backslash_escapes, charset);
         offset = placeholder + 1;
     }
-
     output.append(sql.data() + offset, sql.size() - offset);
     validate_mariadb_sql_length(output.size());
 }

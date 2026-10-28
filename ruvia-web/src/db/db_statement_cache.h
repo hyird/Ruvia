@@ -10,6 +10,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -84,26 +85,58 @@ public:
             return {std::nullopt, false, std::nullopt, hash, true};
         }
         auto* resource = entries_.get_allocator().resource();
-        entry added{std::pmr::string(sql, resource), std::pmr::vector<unsigned int>(types.begin(), types.end(), resource),
-            hash, clock_, generation_ + 1, make(sql, types, resource)};
+        const auto free_entry = std::ranges::find(entries_, std::uint64_t{0}, &entry::generation_);
+        const bool has_free_entry = free_entry != entries_.end();
+        if (!has_free_entry && entries_.size() < capacity) {
+            entries_.reserve(entries_.size() + 1);
+        }
+        std::optional<payload_type> created_payload;
+        if constexpr (std::is_invocable_v<factory_type, std::string_view, std::span<const unsigned int>,
+                          std::size_t, std::pmr::memory_resource*>) {
+            created_payload = make(sql, types, hash, resource);
+            if (!created_payload.has_value()) {
+                return {std::nullopt, false, std::nullopt, hash, true};
+            }
+        } else {
+            created_payload.emplace(make(sql, types, resource));
+        }
+        const auto next_generation = generation_ + 1;
         // A forgotten entry is reused before the table grows; only a full
         // table evicts a statement the server still holds.
-        const auto free_entry = std::ranges::find(entries_, std::uint64_t{0}, &entry::generation_);
-        lookup result{handle{static_cast<std::size_t>(free_entry - entries_.begin()), added.generation_}, true,
-            std::nullopt, hash};
-        if (free_entry != entries_.end()) {
-            *free_entry = std::move(added);
-        } else if (entries_.size() < capacity) {
-            entries_.push_back(std::move(added));
-        } else {
-            const auto oldest = std::ranges::min_element(entries_, {}, &entry::last_use_);
-            result.statement_->index_ = static_cast<std::size_t>(oldest - entries_.begin());
-            result.evicted_.emplace(std::move(oldest->payload_));
-            *oldest = std::move(added);
+        if (has_free_entry) {
+            free_entry->sql_.assign(sql);
+            free_entry->types_.assign(types.begin(), types.end());
+            free_entry->hash_ = hash;
+            free_entry->last_use_ = clock_;
+            free_entry->generation_ = next_generation;
+            free_entry->payload_ = std::move(*created_payload);
+            *first_use = 0;
+            ++generation_;
+            return {handle{static_cast<std::size_t>(free_entry - entries_.begin()), next_generation}, true,
+                std::nullopt, hash};
         }
+        if (entries_.size() < capacity) {
+            entry added{std::pmr::string(sql, resource),
+                std::pmr::vector<unsigned int>(types.begin(), types.end(), resource), hash, clock_, next_generation,
+                std::move(*created_payload)};
+            const auto index = entries_.size();
+            entries_.push_back(std::move(added));
+            *first_use = 0;
+            ++generation_;
+            return {handle{index, next_generation}, true, std::nullopt, hash};
+        }
+        const auto oldest = std::ranges::min_element(entries_, {}, &entry::last_use_);
+        oldest->sql_.assign(sql);
+        oldest->types_.assign(types.begin(), types.end());
+        std::optional<payload_type> evicted(std::move(oldest->payload_));
+        oldest->hash_ = hash;
+        oldest->last_use_ = clock_;
+        oldest->generation_ = next_generation;
+        oldest->payload_ = std::move(*created_payload);
         *first_use = 0;
         ++generation_;
-        return result;
+        return {handle{static_cast<std::size_t>(oldest - entries_.begin()), next_generation}, true,
+            std::move(evicted), hash};
     }
 
     [[nodiscard]] payload_type* payload(handle statement) noexcept {
