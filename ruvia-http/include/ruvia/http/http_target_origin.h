@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <span>
 #include <string_view>
+#include <type_traits>
 
 namespace ruvia {
 
@@ -104,11 +105,16 @@ public:
 
 private:
     explicit constexpr http_target_origin(http_target_origin_action action) noexcept
-        : action_(action) {}
+        : action_(action) {
+        if (std::is_constant_evaluated()) {
+            decoded_host_.fill('\0');
+            address_.fill(0);
+        }
+    }
 
     std::string_view host_;
-    std::array<char, max_dns_name_size> decoded_host_{};
-    std::array<std::uint8_t, 16> address_{};
+    std::array<char, max_dns_name_size> decoded_host_;
+    std::array<std::uint8_t, 16> address_;
     std::uint8_t decoded_host_size_{0};
     std::uint8_t address_size_{0};
     http_target_origin_action action_;

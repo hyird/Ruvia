@@ -49,8 +49,10 @@ namespace {
         return http_target_origin::ip_address(http_target_host_kind::ipv4, *address);
     }
     // An absolute domain name names the same host as its relative spelling.
-    const auto name = host.size() > 1 && host.back() == '.' ? host.substr(0, host.size() - 1) : host;
-    if (!is_valid_dns_domain_name(name) || detail::parse_ipv4_address(name).has_value()) {
+    const bool trailing_dot = host.size() > 1 && host.back() == '.';
+    const auto name = trailing_dot ? host.substr(0, host.size() - 1) : host;
+    if (!is_valid_dns_domain_name(name) ||
+        (trailing_dot && detail::parse_ipv4_address(name).has_value())) {
         return http_target_origin::misdirected();
     }
     return decoded ? http_target_origin::decoded_dns_name(name) : http_target_origin::dns_name(name);
@@ -82,7 +84,7 @@ namespace {
     }
     // RFC 3986 §3.2.2 / §6.2.2.2 and RFC 9110 §4.2.3: percent-encoded
     // unreserved octets in reg-name are equivalent to their decoded characters.
-    std::array<char, http_target_origin::max_dns_name_size + 1> decoded{};
+    std::array<char, http_target_origin::max_dns_name_size + 1> decoded;
     std::size_t size = 0;
     bool decoded_any = false;
     for (std::size_t i = 0; i < host.size();) {
