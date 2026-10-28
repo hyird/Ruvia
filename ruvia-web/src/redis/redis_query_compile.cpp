@@ -1,6 +1,7 @@
 #include "ruvia/web/detail/redis/redis_query_compile.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <limits>
@@ -121,36 +122,53 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
 }
 
 // The text writes store for the same value, so a predicate matches stored data.
-[[nodiscard]] std::pmr::string canonical_numeric(
-    const redis_literal& value, redis_column_kind column_kind, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::string_view format_canonical_numeric(std::array<char, 64>& buffer,
+    const redis_literal& value, redis_column_kind column_kind, bool exclusive = false) {
+    char* const start = buffer.data() + (exclusive ? 1 : 0);
+    char* const limit = buffer.data() + buffer.size();
+    if (exclusive) {
+        buffer[0] = '(';
+    }
+    std::to_chars_result result{};
     switch (value.kind()) {
         case redis_literal_kind::signed_integer:
             require_redis_exact_number(static_cast<double>(value.signed_value()));
-            return encode_redis_number(value.signed_value(), resource);
+            result = std::to_chars(start, limit, value.signed_value());
+            break;
         case redis_literal_kind::unsigned_integer:
             require_redis_exact_number(static_cast<double>(value.unsigned_value()));
-            return encode_redis_number(value.unsigned_value(), resource);
+            result = std::to_chars(start, limit, value.unsigned_value());
+            break;
         case redis_literal_kind::real: {
             const double number = value.real_value();
             require_redis_exact_number(number);
             if (column_kind == redis_column_kind::float32) {
-                return encode_redis_number(static_cast<float>(number), resource);
+                const float float_val = static_cast<float>(number);
+                result = std::to_chars(start, limit, float_val == 0.0F ? 0.0F : float_val,
+                    std::chars_format::general);
+            } else {
+                result = std::to_chars(start, limit, number == 0.0 ? 0.0 : number,
+                    std::chars_format::general);
             }
-            return encode_redis_number(number, resource);
+            break;
         }
         default:
             throw std::invalid_argument("Redis numeric predicate requires a numeric value");
     }
+    if (result.ec != std::errc{}) {
+        throw std::runtime_error("failed to format redis number");
+    }
+    return std::string_view(buffer.data(), static_cast<std::size_t>(result.ptr - buffer.data()));
 }
 
 // TAG indexes only cover text and boolean columns.
-[[nodiscard]] std::pmr::string canonical_tag(
-    const redis_literal& value, redis_column_kind column_kind, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::string_view raw_tag_value(
+    const redis_literal& value, redis_column_kind column_kind) {
     if (value.kind() == redis_literal_kind::string && column_kind == redis_column_kind::text) {
-        return encode_redis_tag(value.text(), resource);
+        return value.text();
     }
     if (value.kind() == redis_literal_kind::boolean && column_kind == redis_column_kind::bool_value) {
-        return encode_redis_tag(value.boolean_value() ? "1" : "0", resource);
+        return value.boolean_value() ? std::string_view("1") : std::string_view("0");
     }
     throw std::invalid_argument("Redis TAG predicate value type does not match column");
 }
@@ -215,62 +233,79 @@ struct redis_column_comparison final {
     return {find_column_info(mapping.columns_, field.field_), nodes[node.operands_[1]]};
 }
 
-// `@field:{value}`
-void append_tag_term(std::pmr::string& output, std::string_view field, std::string_view value) {
-    output += '@';
-    output += field;
-    output += ":{";
-    output += value;
-    output += '}';
+// `@shadow_field:{value}`
+void append_shadow_tag_term(
+    std::pmr::string& output, std::string_view shadow, std::string_view field, std::string_view value) {
+    output.reserve(output.size() + 4U + shadow.size() + field.size() + value.size());
+    output.push_back('@');
+    output.append(shadow);
+    output.append(field);
+    output.append(":{");
+    output.append(value);
+    output.push_back('}');
+}
+
+// `@field:{x<hex>}`
+void append_encoded_tag_term(
+    std::pmr::string& output, std::string_view field, std::string_view raw_value) {
+    output.reserve(output.size() + 5U + field.size() + raw_value.size() * 2U);
+    output.push_back('@');
+    output.append(field);
+    output.append(":{x");
+    http_append_lower_hex(output, raw_value);
+    output.push_back('}');
 }
 
 // `@field:[low high]`; a bound prefixed with '(' is exclusive.
 void append_numeric_range(
     std::pmr::string& output, std::string_view field, std::string_view low, std::string_view high) {
-    output += '@';
-    output += field;
-    output += ":[";
-    output += low;
-    output += ' ';
-    output += high;
-    output += ']';
+    output.reserve(output.size() + 5U + field.size() + low.size() + high.size());
+    output.push_back('@');
+    output.append(field);
+    output.append(":[");
+    output.append(low);
+    output.push_back(' ');
+    output.append(high);
+    output.push_back(']');
 }
 
-void append_presence(std::pmr::string& output, std::string_view field, std::pmr::memory_resource* resource) {
+void append_presence(std::pmr::string& output, std::string_view field) {
     // Presence markers are written as the raw value 1. They are indexed as a
     // TAG shadow field, but are not passed through the user TAG encoding.
-    append_tag_term(output, shadow_field(present_shadow, field, resource), present_value);
+    append_shadow_tag_term(output, present_shadow, field, present_value);
 }
 
 // `field IS NULL` / `field IS NOT NULL` through the presence shadow.
 void append_null_comparison(std::pmr::string& output, std::string_view field,
-    redis_binary_operator operation, std::string_view unsupported, std::pmr::memory_resource* resource) {
+    redis_binary_operator operation, std::string_view unsupported) {
     if (operation == redis_binary_operator::equal) {
         output.push_back('-');
-        append_presence(output, field, resource);
+        append_presence(output, field);
     } else if (operation == redis_binary_operator::not_equal) {
-        append_presence(output, field, resource);
+        append_presence(output, field);
     } else {
         throw std::invalid_argument(std::string(unsupported));
     }
 }
 
 void append_tag_comparison(std::pmr::string& output, std::string_view field, const redis_literal& value,
-    redis_column_kind column_kind, redis_binary_operator operation, std::pmr::memory_resource* resource) {
+    redis_column_kind column_kind, redis_binary_operator operation) {
     if (value.kind() == redis_literal_kind::null) {
-        append_null_comparison(output, field, operation, "unsupported NULL TAG comparison", resource);
+        append_null_comparison(output, field, operation, "unsupported NULL TAG comparison");
         return;
     }
-    const auto encoded = canonical_tag(value, column_kind, resource);
+    const auto raw = raw_tag_value(value, column_kind);
     switch (operation) {
         case redis_binary_operator::equal:
-            append_tag_term(output, field, encoded);
+            append_encoded_tag_term(output, field, raw);
             return;
         case redis_binary_operator::not_equal:
+            output.reserve(
+                output.size() + 14U + present_shadow.size() + field.size() * 2U + raw.size() * 2U);
             output.push_back('(');
-            append_presence(output, field, resource);
-            output += " -";
-            append_tag_term(output, field, encoded);
+            append_presence(output, field);
+            output.append(" -");
+            append_encoded_tag_term(output, field, raw);
             output.push_back(')');
             return;
         default:
@@ -279,37 +314,48 @@ void append_tag_comparison(std::pmr::string& output, std::string_view field, con
 }
 
 void append_numeric_comparison(std::pmr::string& output, std::string_view field, const redis_literal& value,
-    redis_column_kind column_kind, redis_binary_operator operation, std::pmr::memory_resource* resource) {
+    redis_column_kind column_kind, redis_binary_operator operation) {
     if (value.kind() == redis_literal_kind::null) {
-        append_null_comparison(output, field, operation, "unsupported NULL NUMERIC comparison", resource);
+        append_null_comparison(output, field, operation, "unsupported NULL NUMERIC comparison");
         return;
     }
-    auto number = canonical_numeric(value, column_kind, resource);
+    std::array<char, 64> number_buffer{};
     switch (operation) {
-        case redis_binary_operator::equal:
+        case redis_binary_operator::equal: {
+            const auto number = format_canonical_numeric(number_buffer, value, column_kind);
             append_numeric_range(output, field, number, number);
             return;
-        case redis_binary_operator::not_equal:
+        }
+        case redis_binary_operator::not_equal: {
+            const auto number = format_canonical_numeric(number_buffer, value, column_kind);
+            output.reserve(output.size() + 23U + field.size() * 2U + number.size() * 2U);
             output.push_back('(');
             append_numeric_range(output, field, "-inf", "+inf");
-            output += " -";
+            output.append(" -");
             append_numeric_range(output, field, number, number);
             output.push_back(')');
             return;
-        case redis_binary_operator::less:
-            number.insert(number.begin(), '(');
+        }
+        case redis_binary_operator::less: {
+            const auto number = format_canonical_numeric(number_buffer, value, column_kind, true);
             append_numeric_range(output, field, "-inf", number);
             return;
-        case redis_binary_operator::less_equal:
+        }
+        case redis_binary_operator::less_equal: {
+            const auto number = format_canonical_numeric(number_buffer, value, column_kind);
             append_numeric_range(output, field, "-inf", number);
             return;
-        case redis_binary_operator::greater:
-            number.insert(number.begin(), '(');
+        }
+        case redis_binary_operator::greater: {
+            const auto number = format_canonical_numeric(number_buffer, value, column_kind, true);
             append_numeric_range(output, field, number, "+inf");
             return;
-        case redis_binary_operator::greater_equal:
+        }
+        case redis_binary_operator::greater_equal: {
+            const auto number = format_canonical_numeric(number_buffer, value, column_kind);
             append_numeric_range(output, field, number, "+inf");
             return;
+        }
         default:
             throw std::invalid_argument("unsupported Redis NUMERIC comparison");
     }
@@ -383,10 +429,10 @@ private:
         }
         switch (index_kind(mapping_, field)) {
             case redis_index_kind::tag:
-                append_tag_comparison(output, field, value, comparison.column_.kind_, node.binary_, resource_);
+                append_tag_comparison(output, field, value, comparison.column_.kind_, node.binary_);
                 return;
             case redis_index_kind::numeric:
-                append_numeric_comparison(output, field, value, comparison.column_.kind_, node.binary_, resource_);
+                append_numeric_comparison(output, field, value, comparison.column_.kind_, node.binary_);
                 return;
             default:
                 break;
@@ -394,7 +440,7 @@ private:
         // A TEXT index only answers presence tests.
         if (value.kind() == redis_literal_kind::null &&
             (node.binary_ == redis_binary_operator::equal || node.binary_ == redis_binary_operator::not_equal)) {
-            append_null_comparison(output, field, node.binary_, {}, resource_);
+            append_null_comparison(output, field, node.binary_, {});
             return;
         }
         throw std::invalid_argument("Redis TEXT predicates are not exposed by redis_predicate");
@@ -412,7 +458,7 @@ private:
         const auto kind = index_kind(mapping_, field);
         if (items.empty()) {
             // Presence markers only ever hold 1, so this matches nothing.
-            append_tag_term(output, shadow_field(present_shadow, field, resource_), "x00");
+            append_shadow_tag_term(output, present_shadow, field, "x00");
             return;
         }
         if (kind == redis_index_kind::text) {
@@ -420,7 +466,7 @@ private:
         }
         output.push_back('(');
         if (negated) {
-            append_presence(output, field, resource_);
+            append_presence(output, field);
             output += " -(";
         }
         for (std::size_t index = 0; index < items.size(); ++index) {
@@ -436,9 +482,12 @@ private:
                 throw std::invalid_argument("Redis primary key cannot be empty");
             }
             if (kind == redis_index_kind::tag) {
-                append_tag_term(output, field, canonical_tag(value, comparison.column_.kind_, resource_));
+                append_encoded_tag_term(
+                    output, field, raw_tag_value(value, comparison.column_.kind_));
             } else {
-                const auto number = canonical_numeric(value, comparison.column_.kind_, resource_);
+                std::array<char, 64> number_buffer{};
+                const auto number =
+                    format_canonical_numeric(number_buffer, value, comparison.column_.kind_);
                 append_numeric_range(output, field, number, number);
             }
         }
@@ -457,8 +506,10 @@ private:
             lower.kind() == redis_literal_kind::null || upper.kind() == redis_literal_kind::null) {
             throw std::invalid_argument("Redis BETWEEN requires a NUMERIC indexed column");
         }
-        const auto low = canonical_numeric(lower, comparison.column_.kind_, resource_);
-        const auto high = canonical_numeric(upper, comparison.column_.kind_, resource_);
+        std::array<char, 64> low_buffer{};
+        std::array<char, 64> high_buffer{};
+        const auto low = format_canonical_numeric(low_buffer, lower, comparison.column_.kind_);
+        const auto high = format_canonical_numeric(high_buffer, upper, comparison.column_.kind_);
         append_numeric_range(output, field, low, high);
     }
 

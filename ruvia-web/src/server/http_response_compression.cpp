@@ -141,8 +141,8 @@ namespace {
 // by the declared Content-Length, and drop that length: the coded size is
 // unknown and §8.6 allows omitting it.
 [[nodiscard]] http_buffered_compression_step apply_head_content_encoding(
-    const http_response_coding_selection& selection, http_response& response, const compression_config& options) {
-    const auto declared = declared_content_length(response);
+    const http_response_coding_selection& selection, http_response& response,
+    const compression_config& options, std::optional<std::uint64_t> declared) {
     const bool encode = declared.has_value()
                             ? !(((*declared == 0 || *declared < options.min_bytes_) &&
                                     selection.identity_accepted()) ||
@@ -180,13 +180,13 @@ http_response_compression_decision prepare_response_compression(
     // both of which include the content coding (RFC 9530 §1, §2, §3; legacy
     // Content-MD5 likewise covered the sent content). Encoding here would
     // leave them describing bytes that are not sent.
-    if (status_code == http_status::partial_content || status_code == http_status::reset_content ||
+    if (availability == http_response_coding_availability::identity_only ||
+        status_code == http_status::partial_content || status_code == http_status::reset_content ||
         response.header("Content-Encoding").has_value() || response.header("Content-Range").has_value() ||
         has_response_integrity_header(response) ||
         response_content_type_skips_compression(
             response.header("Content-Type").value_or(std::string_view{})) ||
-        response_cache_control(response).has(cache_control_directive::no_transform) ||
-        availability == http_response_coding_availability::identity_only) {
+        response_cache_control(response).has(cache_control_directive::no_transform)) {
         return http_response_compression_decision::fixed_representation;
     }
 
@@ -207,9 +207,11 @@ http_buffered_compression_step apply_response_compression(const http_response_co
         http_response_compression_source::buffered,
         http_response_coding_availability::identity_and_compression);
     if (decision == http_response_compression_decision::encode && request_method == http_known_method::head &&
-        body.empty() && declared_content_length(response) != std::uint64_t{0} &&
-        (response.has_head_metadata_body() || response.header("Content-Length").has_value())) {
-        return apply_head_content_encoding(selection, response, options);
+        body.empty() && (response.has_head_metadata_body() || response.header("Content-Length").has_value())) {
+        const auto declared = declared_content_length(response);
+        if (declared != std::uint64_t{0}) {
+            return apply_head_content_encoding(selection, response, options, declared);
+        }
     }
     // min_bytes_ only says when encoding stops paying off; a client that
     // refuses identity is served a coding at any size instead of a 406.
