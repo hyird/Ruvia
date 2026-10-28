@@ -54,21 +54,11 @@ namespace {
 // joins the backslash put after it.
 void append_string_literal(std::pmr::string& output, std::string_view value, bool backslash_escapes,
     const MARIADB_CHARSET_INFO* charset) {
-    if (value.find('\0') != std::string_view::npos) {
-        throw std::invalid_argument("MariaDB string parameter must not contain NUL bytes");
-    }
-    const auto literal_size_hint = mariadb_string_literal_size_hint(value.size());
-    if (output.size() > (std::numeric_limits<std::size_t>::max)() - literal_size_hint) {
-        throw std::length_error("MariaDB SQL is too large");
-    }
-    const bool escape_backslashes = backslash_escapes && value.find('\\') != std::string_view::npos;
-    const bool multibyte = escape_backslashes && charset != nullptr && charset->char_maxlen > 1;
-    if (escape_backslashes && charset == nullptr && ambiguous_backslash(value)) {
-        throw std::logic_error("MariaDB string parameter needs the session's character set to be escaped");
-    }
+    const bool multibyte = backslash_escapes && charset != nullptr && charset->char_maxlen > 1 &&
+                           value.find('\\') != std::string_view::npos;
     output.push_back('\'');
     if (!multibyte) {
-        const auto special = escape_backslashes ? std::string_view("'\\", 2) : std::string_view("'", 1);
+        const auto special = backslash_escapes ? std::string_view("'\\", 2) : std::string_view("'", 1);
         for (auto at = value.find_first_of(special); at != std::string_view::npos; at = value.find_first_of(special)) {
             output.append(value.substr(0, at + 1));
             output.push_back(value[at]);
@@ -440,7 +430,7 @@ void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const
     const bool backslash_escapes = (connection.server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) == 0;
     std::size_t size_hint = sql.size();
     static constexpr std::size_t inline_placeholder_capacity = 32;
-    std::array<std::size_t, inline_placeholder_capacity> inline_placeholders{};
+    std::array<std::size_t, inline_placeholder_capacity> inline_placeholders;
     std::size_t scan_offset = 0;
     for (std::size_t i = 0; i < params.size(); ++i) {
         const auto& param = params[i];
@@ -457,8 +447,7 @@ void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const
             if (value.find('\0') != std::string_view::npos) {
                 throw std::invalid_argument("MariaDB string parameter must not contain NUL bytes");
             }
-            if (backslash_escapes && charset == nullptr &&
-                value.find('\\') != std::string_view::npos && ambiguous_backslash(value)) {
+            if (backslash_escapes && charset == nullptr && ambiguous_backslash(value)) {
                 throw std::logic_error(
                     "MariaDB string parameter needs the session's character set to be escaped");
             }

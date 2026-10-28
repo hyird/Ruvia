@@ -56,12 +56,12 @@ inline void append_db_identifier(std::pmr::string& output, std::string_view name
     validate_db_identifier(name, driver);
     const char quote = driver == db_driver::postgresql ? '"' : '`';
     output.push_back(quote);
-    for (const char ch : name) {
-        output.push_back(ch);
-        if (ch == quote) {
-            output.push_back(quote);
-        }
+    for (auto at = name.find(quote); at != std::string_view::npos; at = name.find(quote)) {
+        output.append(name.data(), at + 1);
+        output.push_back(quote);
+        name.remove_prefix(at + 1);
     }
+    output.append(name);
     output.push_back(quote);
 }
 
@@ -93,12 +93,13 @@ inline void append_db_string_literal(std::pmr::string& output, std::string_view 
     }
     output.reserve(output.size() + 3U + value.size());
     output += "E'";
-    for (const char ch : value) {
-        if (ch == '\\' || ch == '\'') {
-            output.push_back(ch);
-        }
-        output.push_back(ch);
+    for (auto at = value.find_first_of("'\\"); at != std::string_view::npos;
+        at = value.find_first_of("'\\")) {
+        output.append(value.data(), at + 1);
+        output.push_back(value[at]);
+        value.remove_prefix(at + 1);
     }
+    output.append(value);
     output.push_back('\'');
 }
 
@@ -154,9 +155,10 @@ enum class db_sql_type_usage : std::uint8_t { column,
 void append_db_expression(std::pmr::string& output, db_expression expression, db_driver driver);
 
 inline void append_db_dollar_body(std::pmr::string& output, std::string_view body) {
-    std::array<char, 32> delimiter_buf{"$ruvia$"};
-    std::string_view delimiter(delimiter_buf.data(), 7);
+    std::string_view delimiter = "$ruvia$";
+    std::array<char, 32> delimiter_buf;
     for (std::uint64_t suffix = 1; body.find(delimiter) != std::string_view::npos; ++suffix) {
+        std::string_view("$ruvia").copy(delimiter_buf.data(), 6);
         std::array<char, http_max_unsigned_decimal_size> digits;
         const auto formatted = http_format_unsigned(digits, suffix);
         std::size_t length = 6;
