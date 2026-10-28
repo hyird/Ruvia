@@ -8,6 +8,7 @@
 #include <variant>
 
 #include "ruvia/core/operation_timeout.h"
+#include "ruvia/http/http_pmr_string.h"
 
 #include "client/websocket_client_state.h"
 
@@ -299,7 +300,7 @@ task<std::size_t> websocket_http2_transport::read(std::span<char> output) {
             std::memcpy(output.data(), received_.data() + read_offset_, count);
             read_offset_ += count;
             if (read_offset_ == received_.size()) {
-                received_.clear();
+                http_clear_pmr_string_retaining_small(received_, 2 * websocket_http2_data_chunk_bytes);
                 read_offset_ = 0;
                 received_credit_.reset();
                 session_.wake_writer();

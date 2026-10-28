@@ -109,8 +109,8 @@ public:
         }
     }
 
-    [[nodiscard]] task<void> wait_for_change() {
-        co_await changed_.wait();
+    [[nodiscard]] worker_signal::wait_operation wait_for_change() {
+        return changed_.wait();
     }
 
     void wake() noexcept {

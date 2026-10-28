@@ -1,10 +1,11 @@
 #pragma once
 
+#include <coroutine>
 #include <optional>
+#include <utility>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
 
 #include "http2/http2_sans_io_termination.h"
@@ -57,11 +58,44 @@ public:
         return termination_;
     }
 
-    [[nodiscard]] task<void> wait() {
-        if (terminated()) {
-            co_return;
+    class wait_operation final {
+    public:
+        wait_operation(const wait_operation&) = delete;
+        wait_operation& operator=(const wait_operation&) = delete;
+        wait_operation(wait_operation&&) noexcept = default;
+        wait_operation& operator=(wait_operation&&) = delete;
+
+        [[nodiscard]] bool await_ready() {
+            return !wait_.has_value() || termination_->terminated() || wait_->await_ready();
         }
-        co_await signal_.wait();
+        bool await_suspend(std::coroutine_handle<> continuation) noexcept {
+            return wait_->await_suspend(continuation);
+        }
+        void await_resume() noexcept {
+            if (wait_.has_value()) {
+                wait_->await_resume();
+            }
+        }
+
+    private:
+        friend class http2_sans_io_stream_signal;
+
+        explicit wait_operation(const http2_sans_io_termination& termination) noexcept
+            : termination_(&termination) {}
+        wait_operation(
+            const http2_sans_io_termination& termination, worker_signal::wait_operation&& wait_value) noexcept
+            : termination_(&termination),
+              wait_(std::move(wait_value)) {}
+
+        const http2_sans_io_termination* termination_;
+        std::optional<worker_signal::wait_operation> wait_;
+    };
+
+    [[nodiscard]] wait_operation wait() {
+        if (terminated()) {
+            return wait_operation(termination_);
+        }
+        return wait_operation(termination_, signal_.wait());
     }
 
 private:
