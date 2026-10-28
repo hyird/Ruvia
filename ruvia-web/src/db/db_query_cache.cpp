@@ -145,18 +145,32 @@ task<db_rows> db_cache_query::operator()(operation_options options) && {
 constexpr char db_cache_row_marker = '\2';
 
 std::pmr::string encode_db_cache_rows(const db_rows& rows, std::pmr::memory_resource* resource) {
-    std::pmr::string out("RUVIAQC2", resource);
-    number(out, rows.size());
     const auto names = rows.empty() ? std::span<const std::pmr::string>{}
                                     : db_result_access::column_names(rows.front());
-    number(out, names.size());
+    std::size_t total_bytes = 8U + 8U + 8U;
     for (const auto& name : names) {
-        text(out, name);
+        total_bytes += 8U + name.size();
     }
     for (const auto& row : rows) {
         if (row.size() != names.size()) {
             invalid_cache();
         }
+        total_bytes += 1U + row.size();
+        for (std::size_t index = 0; index < row.size(); ++index) {
+            if (const auto value = row[index].value()) {
+                total_bytes += 8U + value->size();
+            }
+        }
+    }
+    std::pmr::string out(resource);
+    out.reserve(total_bytes);
+    out.append("RUVIAQC2");
+    number(out, rows.size());
+    number(out, names.size());
+    for (const auto& name : names) {
+        text(out, name);
+    }
+    for (const auto& row : rows) {
         out.push_back(db_cache_row_marker);
         for (std::size_t index = 0; index < row.size(); ++index) {
             const auto value = row[index].value();
@@ -236,7 +250,10 @@ db_rows decode_db_cache_rows(std::pmr::string bytes_value, std::pmr::memory_reso
 }
 std::pmr::string db_cache_scope(std::string_view name_space, std::string_view alias,
     const db_config_storage& config, std::pmr::memory_resource* resource) {
+    const auto server_name = config.tls_.server_name_ ? std::string_view(*config.tls_.server_name_) : std::string_view{};
     std::pmr::string identity(resource);
+    identity.reserve(8U * 8U + name_space.size() + alias.size() + config.host_.size() +
+                     config.database_.size() + config.username_.size() + server_name.size());
     text(identity, name_space);
     text(identity, alias);
     number(identity, static_cast<std::uint64_t>(config.driver_));
@@ -244,8 +261,9 @@ std::pmr::string db_cache_scope(std::string_view name_space, std::string_view al
     number(identity, config.port_);
     text(identity, config.database_);
     text(identity, config.username_);
-    text(identity, config.tls_.server_name_ ? std::string_view(*config.tls_.server_name_) : std::string_view{});
+    text(identity, server_name);
     std::pmr::string result(resource);
+    result.reserve(digest_text_bytes);
     append_digest(result, identity);
     return result;
 }

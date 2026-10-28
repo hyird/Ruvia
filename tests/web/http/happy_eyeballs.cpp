@@ -5,6 +5,7 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 #include <asio/co_spawn.hpp>
 #include <asio/ip/address_v4.hpp>
@@ -73,12 +74,26 @@ public:
           socket_(io),
           done_(worker) {
         const bool listening_is_v6 = !first_is_v6;
-        open_acceptor(listening_, listening_is_v6);
-        listening_.bind(loopback_endpoint(listening_is_v6, 0));
-        listening_.listen();
+        std::vector<tcp::acceptor> skipped;
+        for (std::size_t attempt = 0;; ++attempt) {
+            open_acceptor(listening_, listening_is_v6);
+            listening_.bind(loopback_endpoint(listening_is_v6, 0));
+            listening_.listen();
 
-        open_acceptor(unavailable_, first_is_v6);
-        unavailable_.bind(loopback_endpoint(first_is_v6, port()));
+            open_acceptor(unavailable_, first_is_v6);
+            std::error_code ec;
+            unavailable_.bind(loopback_endpoint(first_is_v6, port()), ec);
+            if (!ec) {
+                break;
+            }
+            std::error_code ignored;
+            unavailable_.close(ignored);
+            if (ec != asio::error::address_in_use || attempt == 64) {
+                throw std::system_error(ec, "bind");
+            }
+            skipped.push_back(std::move(listening_));
+            listening_ = tcp::acceptor(io);
+        }
     }
 
     [[nodiscard]] std::uint16_t port() const {

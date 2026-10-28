@@ -1,3 +1,4 @@
+#include <array>
 #include <exception>
 #include <optional>
 #include <stdexcept>
@@ -52,10 +53,21 @@ task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr:
         return finish_delete_key_batch(std::nullopt, deadline_value);
     }
     try {
-        std::pmr::vector<std::string_view> views(resource);
-        views.reserve(keys.size());
-        for (const auto& key : keys) {
-            views.emplace_back(key);
+        static constexpr std::size_t inline_capacity = 32;
+        std::array<std::string_view, inline_capacity> inline_views{};
+        std::pmr::vector<std::string_view> heap_views(resource);
+        std::span<const std::string_view> views;
+        if (keys.size() <= inline_capacity) {
+            for (std::size_t i = 0; i < keys.size(); ++i) {
+                inline_views[i] = keys[i];
+            }
+            views = std::span<const std::string_view>(inline_views.data(), keys.size());
+        } else {
+            heap_views.reserve(keys.size());
+            for (const auto& key : keys) {
+                heap_views.emplace_back(key);
+            }
+            views = heap_views;
         }
         // DEL owns its arguments before returning its cold operation.
         auto deletion = redis.with_options(db_required_options(options, deadline_value)).del(views);
@@ -207,12 +219,14 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
 task<void> db_query_cache_state::remove(
     std::span<const std::string_view> ids, operation_scope& scope, operation_options options) {
     require_open();
-    std::pmr::vector<std::pmr::string> keys(resource_);
-    keys.reserve(ids.size() * db_cache_shapes.size());
     for (const auto id : ids) {
         if (id.empty()) {
             throw std::invalid_argument("cache identifier must not be empty");
         }
+    }
+    std::pmr::vector<std::pmr::string> keys(resource_);
+    keys.reserve(ids.size() * db_cache_shapes.size());
+    for (const auto id : ids) {
         append_db_cache_id_keys(keys, prefix_, id);
     }
     return remove_keys(redis_, std::move(keys), scope, std::move(options));
