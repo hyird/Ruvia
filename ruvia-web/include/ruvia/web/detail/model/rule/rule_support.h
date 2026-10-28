@@ -127,12 +127,30 @@ public:
     model_path(const model_path&) = delete;
     model_path& operator=(const model_path&) = delete;
 
+    [[nodiscard]] constexpr std::optional<std::string_view> single_field() const noexcept {
+        if (parent_ != nullptr && parent_->parent_ == nullptr && !indexed_) {
+            return field_;
+        }
+        return std::nullopt;
+    }
+
     void render(std::pmr::string& output) const {
         output.clear();
+        output.reserve(size_hint());
         append_to(output);
     }
 
 private:
+    [[nodiscard]] constexpr std::size_t size_hint() const noexcept {
+        if (parent_ == nullptr) {
+            return 0;
+        }
+        const auto parent_size = parent_->size_hint();
+        if (indexed_) {
+            return parent_size + 2U + http_unsigned_decimal_size(index_);
+        }
+        return parent_size + (parent_size == 0 ? 0U : 1U) + field_.size();
+    }
     void append_to(std::pmr::string& output) const {
         if (parent_ == nullptr) {
             return;
@@ -165,6 +183,10 @@ public:
         : validator_(validator_value) {}
 
     void add(const model_path& path, std::string_view code, std::string_view message) {
+        if (const auto single = path.single_field()) {
+            validator_.add(*single, code, message);
+            return;
+        }
         if (!path_) {
             path_.emplace(validator_.resource());
         }

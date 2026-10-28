@@ -68,44 +68,38 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
         throw std::invalid_argument("url_for pattern is not a registered route");
     }
 
-    auto* const target_resource = pmr_resource_or_default(resource);
-    std::pmr::string url(target_resource);
-    url.reserve(pattern.size() + 16);
-
+    // Validate every segment and value before allocating, and size the buffer
+    // from the actual parameter values so short URLs stay in SSO and rejected
+    // calls never touch a monotonic arena.
     std::size_t next_value = 0;
+    std::size_t estimated_size = 0;
     auto remaining = pattern;
     std::string_view segment;
     std::string_view rest;
     while (detail::split_path_segment(remaining, segment, rest)) {
         remaining = rest;
-
         if (segment == "*" && remaining.empty()) {
             if (next_value >= values.size()) {
                 throw std::invalid_argument("url_for is missing a value for '*'");
             }
-            auto value = values[next_value++];
+            const auto value = values[next_value++];
             if (has_url_for_dot_segment(value)) {
                 throw std::invalid_argument("url_for '*' value must not contain a '.' or '..' segment");
             }
-            // The router refuses a wildcard capture whose decoding adds a
-            // separator, so neither '\' nor a leading '/' at the root (which
-            // could only be spelled "%2F" to avoid a network-path "//") would
-            // ever route back to this value. Below the root the matcher strips
-            // one '/' before the capture, so "/a" round-trips through "//a".
-            if (value.find('\\') != std::string_view::npos || (url.empty() && value.starts_with('/'))) {
+            if (value.find('\\') != std::string_view::npos || (estimated_size == 0 && value.starts_with('/'))) {
                 throw std::invalid_argument("url_for '*' value has a separator the route cannot capture");
             }
-            // An empty capture addresses the bare mount path itself, which is
-            // exactly what the wildcard route matches for it.
             if (!value.empty()) {
-                url.push_back('/');
-                append_url_for_value(url, value, /*keep_slashes=*/true);
-            } else if (url.empty()) {
-                url.push_back('/');
+                estimated_size += 1U + value.size();
+            } else if (estimated_size == 0) {
+                estimated_size += 1U;
             }
             continue;
         }
-        url.push_back('/');
+        if (estimated_size == 0 && segment.empty()) {
+            throw std::invalid_argument("url_for pattern must not start with an empty segment");
+        }
+        estimated_size += 1U;
         if (!segment.empty() && segment.front() == ':') {
             if (next_value >= values.size()) {
                 throw std::invalid_argument("url_for is missing a route parameter value");
@@ -117,20 +111,44 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
             if (is_url_for_dot_segment(value)) {
                 throw std::invalid_argument("url_for route parameter value must not be '.' or '..'");
             }
-            append_url_for_value(url, value, /*keep_slashes=*/false);
+            estimated_size += value.size();
         } else {
             if (is_url_for_dot_segment(segment)) {
                 throw std::invalid_argument("url_for pattern must not contain a '.' or '..' segment");
             }
-            url.append(segment.data(), segment.size());
+            estimated_size += segment.size();
         }
     }
     if (next_value != values.size()) {
         throw std::invalid_argument("url_for received more values than the pattern has parameters");
     }
-    // Only a pattern starting with an empty segment can still produce "//".
-    if (url.starts_with("//")) {
-        throw std::invalid_argument("url_for pattern must not start with an empty segment");
+
+    auto* const target_resource = pmr_resource_or_default(resource);
+    std::pmr::string url(target_resource);
+    if (estimated_size > 15U) {
+        url.reserve(estimated_size);
+    }
+
+    next_value = 0;
+    remaining = pattern;
+    while (detail::split_path_segment(remaining, segment, rest)) {
+        remaining = rest;
+        if (segment == "*" && remaining.empty()) {
+            const auto value = values[next_value++];
+            if (!value.empty()) {
+                url.push_back('/');
+                append_url_for_value(url, value, /*keep_slashes=*/true);
+            } else if (url.empty()) {
+                url.push_back('/');
+            }
+            continue;
+        }
+        url.push_back('/');
+        if (!segment.empty() && segment.front() == ':') {
+            append_url_for_value(url, values[next_value++], /*keep_slashes=*/false);
+        } else {
+            url.append(segment.data(), segment.size());
+        }
     }
     return url;
 }
