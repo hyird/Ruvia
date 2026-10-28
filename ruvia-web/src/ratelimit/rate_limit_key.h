@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <span>
 #include <string_view>
@@ -12,7 +13,6 @@
 
 #include "ruvia/core/socket.h"
 #include "ruvia/http/http_hex.h"
-#include "ruvia/http/http_number_format.h"
 
 namespace ruvia::detail {
 
@@ -52,9 +52,9 @@ inline constexpr std::size_t rate_limit_key_buffer_bytes = 19;
             if (i != 0) {
                 *cursor_value++ = '.';
             }
-            std::array<char, http_max_unsigned_decimal_size> digits;
-            const auto octet = http_format_unsigned(digits, bytes_value[i]);
-            cursor_value += octet.copy(cursor_value, octet.size());
+            cursor_value = std::to_chars(
+                cursor_value, buffer + rate_limit_key_buffer_bytes, bytes_value[i])
+                               .ptr;
         }
         return std::string_view(buffer, static_cast<std::size_t>(cursor_value - buffer));
     }

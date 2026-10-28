@@ -153,11 +153,13 @@ private:
     forwarding_chain forwarded;
     forwarding_chain x_forwarded_for;
     bool has_x_for = false;
-    bool has_x_proto = false;
+    const bool trust_x_proto = trusted.trusts_x_forwarded_proto();
+    std::string_view single_x_proto_value{};
+    std::size_t x_proto_header_count = 0;
     const auto headers = request.headers();
     for (const auto& header : headers) {
         const auto name = header.name();
-        if (name.size() == 9U && http_ascii_equals_ignore_case(name, "Forwarded")) {
+        if (!has_x_for && name.size() == 9U && http_ascii_equals_ignore_case(name, "Forwarded")) {
             visit_comma_separated(header.value(), [&](std::string_view element) {
                 forwarded.append(trusted, parse_forwarded_element(element));
             });
@@ -166,8 +168,12 @@ private:
             visit_comma_separated(header.value(), [&](std::string_view element) {
                 x_forwarded_for.append(trusted, {forwarded_node_address(element), {}});
             });
-        } else if (name.size() == 17U && http_ascii_equals_ignore_case(name, "X-Forwarded-Proto")) {
-            has_x_proto = true;
+        } else if (trust_x_proto && name.size() == 17U &&
+                   http_ascii_equals_ignore_case(name, "X-Forwarded-Proto")) {
+            if (x_proto_header_count == 0) {
+                single_x_proto_value = header.value();
+            }
+            ++x_proto_header_count;
         }
     }
     if (!has_x_for) {
@@ -176,19 +182,24 @@ private:
     // Never combine an XFF address with proto from an unrelated Forwarded
     // chain. XFP is usable only under an explicit sanitizing-proxy contract.
     forwarded_client result_value{x_forwarded_for.client().address_, {}};
-    if (!trusted.trusts_x_forwarded_proto() || !has_x_proto) {
+    if (x_proto_header_count == 0) {
         return result_value;
     }
     std::size_t proto_count = 0;
-    for (const auto& header : headers) {
-        const auto name = header.name();
-        if (name.size() == 17U && http_ascii_equals_ignore_case(name, "X-Forwarded-Proto")) {
-            visit_comma_separated(header.value(), [&](std::string_view element) {
-                if (proto_count == x_forwarded_for.client_index()) {
-                    result_value.scheme_ = forwarded_http_scheme_token(element);
-                }
-                ++proto_count;
-            });
+    const auto consume_proto_element = [&](std::string_view element) {
+        if (proto_count == x_forwarded_for.client_index()) {
+            result_value.scheme_ = forwarded_http_scheme_token(element);
+        }
+        ++proto_count;
+    };
+    if (x_proto_header_count == 1) {
+        visit_comma_separated(single_x_proto_value, consume_proto_element);
+    } else {
+        for (const auto& header : headers) {
+            const auto name = header.name();
+            if (name.size() == 17U && http_ascii_equals_ignore_case(name, "X-Forwarded-Proto")) {
+                visit_comma_separated(header.value(), consume_proto_element);
+            }
         }
     }
     if (x_forwarded_for.size() != proto_count) {
