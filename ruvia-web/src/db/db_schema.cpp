@@ -205,7 +205,9 @@ void db_schema::append_constraint(std::pmr::string& s, const db_schema_constrain
 }
 
 void db_schema::create_schema(std::string_view n, bool ine) {
-    std::pmr::string s("CREATE SCHEMA ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(32U + n.size());
+    s += "CREATE SCHEMA ";
     if (ine) {
         s += "IF NOT EXISTS ";
     }
@@ -216,7 +218,9 @@ void db_schema::drop_schema(std::string_view n, db_drop_behavior b, bool ie) {
     if (driver_ == db_driver::mariadb && b == db_drop_behavior::cascade) {
         throw std::invalid_argument("MariaDB schema drops do not support CASCADE");
     }
-    std::pmr::string s("DROP SCHEMA ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(36U + n.size());
+    s += "DROP SCHEMA ";
     if (ie) {
         s += "IF EXISTS ";
     }
@@ -293,7 +297,9 @@ void db_schema::create_table(const db_table_definition& t) {
     append(std::move(s));
 }
 void db_schema::drop_table(std::string_view t, db_drop_behavior b, bool ie) {
-    std::pmr::string s("DROP TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(36U + t.size());
+    s += "DROP TABLE ";
     if (ie) {
         s += "IF EXISTS ";
     }
@@ -304,7 +310,9 @@ void db_schema::drop_table(std::string_view t, db_drop_behavior b, bool ie) {
     append(std::move(s));
 }
 void db_schema::rename_table(std::string_view t, std::string_view n) {
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(32U + t.size() * 2U + n.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " RENAME TO ";
     if (driver_ == db_driver::mariadb) {
@@ -317,7 +325,9 @@ void db_schema::rename_table(std::string_view t, std::string_view n) {
     append(std::move(s));
 }
 void db_schema::add_column(std::string_view t, const db_schema_column& c, bool ie) {
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(64U + t.size() + c.name_.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " ADD COLUMN ";
     if (ie) {
@@ -327,7 +337,9 @@ void db_schema::add_column(std::string_view t, const db_schema_column& c, bool i
     append(std::move(s));
 }
 void db_schema::drop_column(std::string_view t, std::string_view c, db_drop_behavior b, bool ie) {
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(48U + t.size() + c.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " DROP COLUMN ";
     if (ie) {
@@ -340,7 +352,9 @@ void db_schema::drop_column(std::string_view t, std::string_view c, db_drop_beha
     append(std::move(s));
 }
 void db_schema::rename_column(std::string_view t, std::string_view c, std::string_view n) {
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(40U + t.size() + c.size() + n.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " RENAME COLUMN ";
     append_db_identifier(s, c, driver_);
@@ -350,7 +364,9 @@ void db_schema::rename_column(std::string_view t, std::string_view c, std::strin
 }
 void db_schema::alter_column_type(std::string_view t, std::string_view c, const db_type_definition& ty, db_expression u) {
     require_postgresql();
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(64U + t.size() + c.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " ALTER COLUMN ";
     append_db_identifier(s, c, driver_);
@@ -364,7 +380,9 @@ void db_schema::alter_column_type(std::string_view t, std::string_view c, const 
 }
 void db_schema::set_column_nullable(std::string_view t, std::string_view c, bool n) {
     require_postgresql();
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(48U + t.size() + c.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " ALTER COLUMN ";
     append_db_identifier(s, c, driver_);
@@ -372,7 +390,9 @@ void db_schema::set_column_nullable(std::string_view t, std::string_view c, bool
     append(std::move(s));
 }
 void db_schema::set_column_default(std::string_view t, std::string_view c, db_expression e) {
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(64U + t.size() + c.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " ALTER COLUMN ";
     append_db_identifier(s, c, driver_);
@@ -381,7 +401,9 @@ void db_schema::set_column_default(std::string_view t, std::string_view c, db_ex
     append(std::move(s));
 }
 void db_schema::drop_column_default(std::string_view t, std::string_view c) {
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(48U + t.size() + c.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " ALTER COLUMN ";
     append_db_identifier(s, c, driver_);
@@ -389,14 +411,18 @@ void db_schema::drop_column_default(std::string_view t, std::string_view c) {
     append(std::move(s));
 }
 void db_schema::add_constraint(std::string_view t, const db_schema_constraint& c) {
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(64U + t.size() + c.name_.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " ADD CONSTRAINT ";
     append_constraint(s, c);
     append(std::move(s));
 }
 void db_schema::drop_constraint(std::string_view t, std::string_view n, db_drop_behavior b, bool ie) {
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(56U + t.size() + n.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " DROP CONSTRAINT ";
     if (ie) {
@@ -410,7 +436,9 @@ void db_schema::drop_constraint(std::string_view t, std::string_view n, db_drop_
 }
 void db_schema::validate_constraint(std::string_view t, std::string_view n) {
     require_postgresql();
-    std::pmr::string s("ALTER TABLE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(48U + t.size() + n.size());
+    s += "ALTER TABLE ";
     append_db_qualified_identifier(s, t, driver_);
     s += " VALIDATE CONSTRAINT ";
     append_db_identifier(s, n, driver_);
@@ -499,7 +527,9 @@ void db_schema::create_index(const db_index_definition& i) {
 }
 void db_schema::drop_index(std::string_view n, bool c, bool ie) {
     require_postgresql();
-    std::pmr::string s("DROP INDEX ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(40U + n.size());
+    s += "DROP INDEX ";
     if (c) {
         s += "CONCURRENTLY ";
     }
@@ -514,7 +544,9 @@ void db_schema::create_enum(std::string_view n, std::span<const std::string_view
     if (v.empty()) {
         throw std::invalid_argument("enum values are required");
     }
-    std::pmr::string s("CREATE TYPE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(32U + n.size() + v.size() * 12U);
+    s += "CREATE TYPE ";
     append_db_qualified_identifier(s, n, driver_);
     s += " AS ENUM (";
     for (size_t i = 0; i < v.size(); ++i) {
@@ -528,7 +560,9 @@ void db_schema::create_enum(std::string_view n, std::span<const std::string_view
 }
 void db_schema::add_enum_value(std::string_view n, std::string_view v, bool ie) {
     require_postgresql();
-    std::pmr::string s("ALTER TYPE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(48U + n.size() + v.size());
+    s += "ALTER TYPE ";
     append_db_qualified_identifier(s, n, driver_);
     s += " ADD VALUE ";
     if (ie) {
@@ -539,7 +573,9 @@ void db_schema::add_enum_value(std::string_view n, std::string_view v, bool ie) 
 }
 void db_schema::drop_enum(std::string_view n, db_drop_behavior b, bool ie) {
     require_postgresql();
-    std::pmr::string s("DROP TYPE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(36U + n.size());
+    s += "DROP TYPE ";
     if (ie) {
         s += "IF EXISTS ";
     }
@@ -551,7 +587,9 @@ void db_schema::drop_enum(std::string_view n, db_drop_behavior b, bool ie) {
 }
 void db_schema::create_extension(std::string_view n, bool ie) {
     require_postgresql();
-    std::pmr::string s("CREATE EXTENSION ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(36U + n.size());
+    s += "CREATE EXTENSION ";
     if (ie) {
         s += "IF NOT EXISTS ";
     }
@@ -586,7 +624,9 @@ void db_schema::drop_view(std::string_view n, bool mat, db_drop_behavior b, bool
     if (mat) {
         require_postgresql();
     }
-    std::pmr::string s("DROP ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(48U + n.size());
+    s += "DROP ";
     if (mat) {
         s += "MATERIALIZED ";
     }
@@ -638,7 +678,9 @@ void db_schema::create_trigger_function(std::string_view name, const db_procedur
 }
 void db_schema::drop_trigger_function(std::string_view name, db_drop_behavior behavior, bool if_exists) {
     require_postgresql();
-    std::pmr::string sql("DROP FUNCTION ", resource_);
+    std::pmr::string sql(resource_);
+    sql.reserve(40U + name.size());
+    sql += "DROP FUNCTION ";
     if (if_exists) {
         sql += "IF EXISTS ";
     }
@@ -894,7 +936,9 @@ void db_schema::create_trigger(const db_trigger_definition& trigger) {
 }
 void db_schema::drop_trigger(std::string_view table_value, std::string_view name, bool if_exists) {
     require_postgresql();
-    std::pmr::string sql("DROP TRIGGER ", resource_);
+    std::pmr::string sql(resource_);
+    sql.reserve(40U + name.size() + table_value.size());
+    sql += "DROP TRIGGER ";
     if (if_exists) {
         sql += "IF EXISTS ";
     }
@@ -919,8 +963,10 @@ std::pmr::vector<db_migration> db_schema::compile(std::string_view id) const {
             throw std::invalid_argument("unwrapped schema operation must be alone");
         }
         if (statements_.size() == 1 && !statements_[0].procedural_) {
+            out.reserve(1);
             out.emplace_back(db_migration_options{std::string(id), std::string(statements_[0].sql_), statements_[0].atomicity_});
         } else if (!statements_.empty()) {
+            out.reserve(1);
             std::size_t body_size = 12U;
             for (const auto& s : statements_) {
                 body_size += s.sql_.size() + 1U;
