@@ -7,6 +7,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "ruvia/http/hpack.h"
@@ -14,6 +15,13 @@
 namespace ruvia::detail {
 
 struct hpack_static_index final {
+    static constexpr std::uint32_t authority = 1;
+    static constexpr std::uint32_t method_get = 2;
+    static constexpr std::uint32_t method_post = 3;
+    static constexpr std::uint32_t path_root = 4;
+    static constexpr std::uint32_t path_index_html = 5;
+    static constexpr std::uint32_t scheme_http = 6;
+    static constexpr std::uint32_t scheme_https = 7;
     static constexpr std::uint32_t status_ok = 8;
     static constexpr std::uint32_t status_no_content = 9;
     static constexpr std::uint32_t status_partial_content = 10;
@@ -31,6 +39,7 @@ struct hpack_static_index final {
     static constexpr std::uint32_t content_type = 31;
     static constexpr std::uint32_t date = 33;
     static constexpr std::uint32_t etag = 34;
+    static constexpr std::uint32_t expect = 35;
     static constexpr std::uint32_t last_modified = 44;
     static constexpr std::uint32_t location = 46;
     static constexpr std::uint32_t server = 54;
@@ -101,8 +110,15 @@ private:
         static constexpr std::size_t inline_capacity = 48;
 
         union storage_type final {
-            constexpr storage_type() noexcept
-                : inline_bytes_{} {}
+            constexpr storage_type() noexcept {
+                if (std::is_constant_evaluated()) {
+                    for (char& ch : inline_bytes_) {
+                        ch = '\0';
+                    }
+                } else {
+                    inline_bytes_[0] = '\0';
+                }
+            }
             char inline_bytes_[inline_capacity];
             char* heap_;
         };

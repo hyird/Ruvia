@@ -125,6 +125,44 @@ namespace {
                fields.seen(request_header_kind::content_type));
 }
 
+void http2_encode_request_method(std::pmr::string& block, std::string_view method) {
+    if (method == "GET") {
+        hpack_encoder::encode_indexed(block, hpack_static_index::method_get);
+    } else if (method == "POST") {
+        hpack_encoder::encode_indexed(block, hpack_static_index::method_post);
+    } else {
+        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::method_get, method);
+    }
+}
+
+void http2_encode_request_scheme(std::pmr::string& block, std::string_view scheme) {
+    if (scheme == "http") {
+        hpack_encoder::encode_indexed(block, hpack_static_index::scheme_http);
+    } else if (scheme == "https") {
+        hpack_encoder::encode_indexed(block, hpack_static_index::scheme_https);
+    } else {
+        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::scheme_http, scheme);
+    }
+}
+
+void http2_encode_request_authority(std::pmr::string& block, std::string_view authority) {
+    if (authority.empty()) {
+        hpack_encoder::encode_indexed(block, hpack_static_index::authority);
+    } else {
+        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::authority, authority);
+    }
+}
+
+void http2_encode_request_path(std::pmr::string& block, std::string_view path) {
+    if (path == "/") {
+        hpack_encoder::encode_indexed(block, hpack_static_index::path_root);
+    } else if (path == "/index.html") {
+        hpack_encoder::encode_indexed(block, hpack_static_index::path_index_html);
+    } else {
+        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::path_root, path);
+    }
+}
+
 void http2_encode_outbound_request_headers(
     std::pmr::string& block, std::span<const http_header_view> headers) {
     std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
@@ -202,15 +240,16 @@ http2_connection::submit_regular_request_head(std::string_view method,
         if (reserve_bytes > 15U) {
             block.reserve(reserve_bytes);
         }
-        hpack_encoder::encode_header(block, ":method", method);
-        hpack_encoder::encode_header(block, ":scheme", scheme);
+        http2_encode_request_method(block, method);
+        http2_encode_request_scheme(block, scheme);
         if (authority.has_value()) {
-            hpack_encoder::encode_header(block, ":authority", *authority);
+            http2_encode_request_authority(block, *authority);
         }
-        hpack_encoder::encode_header(block, ":path", path);
+        http2_encode_request_path(block, path);
         http2_encode_outbound_request_headers(block, headers);
         if (expectation == http_client_request_expectation::continue_value) {
-            hpack_encoder::encode_header(block, "expect", http_continue_expectation_token);
+            hpack_encoder::encode_header_with_name_index(
+                block, hpack_static_index::expect, http_continue_expectation_token);
         }
         if (emit_length) {
             hpack_encoder::encode_header_with_name_index(block, hpack_static_index::content_length,
@@ -272,8 +311,8 @@ http2_connection::submit_connect_request_head(
         if (reserve_bytes > 15U) {
             block.reserve(reserve_bytes);
         }
-        hpack_encoder::encode_header(block, ":method", "CONNECT");
-        hpack_encoder::encode_header(block, ":authority", authority);
+        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::method_get, "CONNECT");
+        http2_encode_request_authority(block, authority);
         http2_encode_outbound_request_headers(block, headers);
         append_response_header_frames(stream, std::string_view(block), http2_end_stream::keep_open);
         http2_release_local_header_block(stream);
@@ -326,14 +365,14 @@ http2_connection::submit_extended_connect_request_head(
         if (reserve_bytes > 15U) {
             block.reserve(reserve_bytes);
         }
-        hpack_encoder::encode_header(block, ":method", "CONNECT");
+        hpack_encoder::encode_header_with_name_index(block, hpack_static_index::method_get, "CONNECT");
         // RFC 8441 registers and requires the lowercase `websocket` value. HTTP
         // protocol-name matching is case-insensitive, so accept caller spelling but
         // never put a non-canonical websocket token on the wire or in stream state.
         hpack_encoder::encode_header(block, ":protocol", encoded_protocol);
-        hpack_encoder::encode_header(block, ":scheme", scheme);
-        hpack_encoder::encode_header(block, ":authority", authority);
-        hpack_encoder::encode_header(block, ":path", path);
+        http2_encode_request_scheme(block, scheme);
+        http2_encode_request_authority(block, authority);
+        http2_encode_request_path(block, path);
         http2_encode_outbound_request_headers(block, headers);
         append_response_header_frames(stream, std::string_view(block), http2_end_stream::keep_open);
         http2_release_local_header_block(stream);
@@ -386,10 +425,10 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     if (encoder_table_size_update_pending_) {
         block.append(encoder_zero_table_size_update_);
     }
-    hpack_encoder::encode_header(block, ":method", request.method_);
-    hpack_encoder::encode_header(block, ":scheme", request.scheme_);
-    hpack_encoder::encode_header(block, ":authority", request.authority_);
-    hpack_encoder::encode_header(block, ":path", request.path_);
+    http2_encode_request_method(block, request.method_);
+    http2_encode_request_scheme(block, request.scheme_);
+    http2_encode_request_authority(block, request.authority_);
+    http2_encode_request_path(block, request.path_);
     http2_encode_outbound_request_headers(block, request.headers_);
     auto* stream = create_stream(next_push_stream_id_);
     if (!stream) {

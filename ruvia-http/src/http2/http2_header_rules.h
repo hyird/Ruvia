@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstring>
 #include <string>
 #include <string_view>
 
@@ -19,23 +20,27 @@ inline constexpr std::size_t http2_lower_header_stack_bytes = 64;
 // name continues to borrow the input, so unused scratch bytes are never read.
 [[nodiscard]] inline std::string_view http2_lower_header_name(std::string_view name,
     std::array<char, http2_lower_header_stack_bytes>& stack, std::pmr::string& scratch) {
-    const auto write_lower = [](std::string_view source_value, char* target) noexcept {
-        for (std::size_t i = 0; i < source_value.size(); ++i) {
+    const auto write_lower_from = [](std::string_view source_value, std::size_t first_upper,
+                                      char* target) noexcept {
+        if (first_upper != 0) {
+            std::memcpy(target, source_value.data(), first_upper);
+        }
+        for (std::size_t i = first_upper; i < source_value.size(); ++i) {
             target[i] = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(source_value[i])));
         }
     };
 
-    for (const auto ch : name) {
-        const auto byte = static_cast<unsigned char>(ch);
+    for (std::size_t i = 0; i < name.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(name[i]);
         if (byte < 'A' || byte > 'Z') {
             continue;
         }
         if (name.size() <= stack.size()) {
-            write_lower(name, stack.data());
+            write_lower_from(name, i, stack.data());
             return std::string_view(stack.data(), name.size());
         }
         scratch.resize(name.size());
-        write_lower(name, scratch.data());
+        write_lower_from(name, i, scratch.data());
         return scratch;
     }
     return name;
