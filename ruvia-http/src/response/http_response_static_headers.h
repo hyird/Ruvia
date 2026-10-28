@@ -60,12 +60,20 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
     static constexpr char connection_close[] = "Connectionclose";
     static constexpr char accept_ranges_bytes[] = "Accept-Rangesbytes";
     static constexpr char content_encoding_gzip[] = "Content-Encodinggzip";
+    static constexpr char content_encoding_br[] = "Content-Encodingbr";
+    static constexpr char content_encoding_zstd[] = "Content-Encodingzstd";
+    static constexpr char content_encoding_deflate[] = "Content-Encodingdeflate";
     static constexpr char transfer_encoding_chunked[] = "Transfer-Encodingchunked";
     static constexpr char cache_control_no_store[] = "Cache-Controlno-store";
+    static constexpr char cache_control_no_cache[] = "Cache-Controlno-cache";
+    static constexpr char cache_control_private[] = "Cache-Controlprivate";
+    static constexpr char vary_wildcard[] = "Vary*";
     static constexpr char vary_accept_encoding[] = "VaryAccept-Encoding";
     static constexpr char vary_origin[] = "VaryOrigin";
     static constexpr char vary_access_control_request_headers[] = "VaryAccess-Control-Request-Headers";
     static constexpr char vary_access_control_request_method[] = "VaryAccess-Control-Request-Method";
+    static constexpr char access_control_allow_origin_wildcard[] =
+        "Access-Control-Allow-Origin*";
     static constexpr char access_control_allow_credentials_true[] =
         "Access-Control-Allow-Credentialstrue";
 
@@ -131,6 +139,15 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
             if (value == "gzip") {
                 return static_response_header(content_encoding_gzip, 16, response_header_content_encoding);
             }
+            if (value == "br") {
+                return static_response_header(content_encoding_br, 16, response_header_content_encoding);
+            }
+            if (value == "zstd") {
+                return static_response_header(content_encoding_zstd, 16, response_header_content_encoding);
+            }
+            if (value == "deflate") {
+                return static_response_header(content_encoding_deflate, 16, response_header_content_encoding);
+            }
             return std::nullopt;
         case response_header_transfer_encoding:
             if (value == "chunked") {
@@ -141,8 +158,17 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
             if (value == "no-store") {
                 return static_response_header(cache_control_no_store, 13, response_header_cache_control);
             }
+            if (value == "no-cache") {
+                return static_response_header(cache_control_no_cache, 13, response_header_cache_control);
+            }
+            if (value == "private") {
+                return static_response_header(cache_control_private, 13, response_header_cache_control);
+            }
             return std::nullopt;
         case response_header_vary:
+            if (value == "*") {
+                return static_response_header(vary_wildcard, 4, response_header_vary);
+            }
             if (value == "Accept-Encoding") {
                 return static_response_header(vary_accept_encoding, 4, response_header_vary);
             }
@@ -154,6 +180,11 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
             }
             if (value == "Access-Control-Request-Method") {
                 return static_response_header(vary_access_control_request_method, 4, response_header_vary);
+            }
+            return std::nullopt;
+        case response_header_access_control_allow_origin:
+            if (value == "*") {
+                return static_response_header(access_control_allow_origin_wildcard, 27, response_header_access_control_allow_origin);
             }
             return std::nullopt;
         case response_header_access_control_allow_credentials:

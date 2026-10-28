@@ -104,6 +104,7 @@ void http1_deferred_access_log::defer(std::size_t head_end, const http_request& 
     const auto method = request.method();
     const auto path = request.path();
     const auto text_begin = text_.size();
+    text_.reserve(text_begin + method.size() + path.size() + client_address.size());
     text_.append(method);
     text_.append(path);
     text_.append(client_address);

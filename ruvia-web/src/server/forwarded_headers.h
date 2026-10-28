@@ -153,17 +153,21 @@ private:
     forwarding_chain forwarded;
     forwarding_chain x_forwarded_for;
     bool has_x_for = false;
+    bool has_x_proto = false;
     const auto headers = request.headers();
     for (const auto& header : headers) {
-        if (http_ascii_equals_ignore_case(header.name(), "Forwarded")) {
+        const auto name = header.name();
+        if (name.size() == 9U && http_ascii_equals_ignore_case(name, "Forwarded")) {
             visit_comma_separated(header.value(), [&](std::string_view element) {
                 forwarded.append(trusted, parse_forwarded_element(element));
             });
-        } else if (http_ascii_equals_ignore_case(header.name(), "X-Forwarded-For")) {
+        } else if (name.size() == 15U && http_ascii_equals_ignore_case(name, "X-Forwarded-For")) {
             has_x_for = true;
             visit_comma_separated(header.value(), [&](std::string_view element) {
                 x_forwarded_for.append(trusted, {forwarded_node_address(element), {}});
             });
+        } else if (name.size() == 17U && http_ascii_equals_ignore_case(name, "X-Forwarded-Proto")) {
+            has_x_proto = true;
         }
     }
     if (!has_x_for) {
@@ -172,12 +176,13 @@ private:
     // Never combine an XFF address with proto from an unrelated Forwarded
     // chain. XFP is usable only under an explicit sanitizing-proxy contract.
     forwarded_client result_value{x_forwarded_for.client().address_, {}};
-    if (!trusted.trusts_x_forwarded_proto()) {
+    if (!trusted.trusts_x_forwarded_proto() || !has_x_proto) {
         return result_value;
     }
     std::size_t proto_count = 0;
     for (const auto& header : headers) {
-        if (http_ascii_equals_ignore_case(header.name(), "X-Forwarded-Proto")) {
+        const auto name = header.name();
+        if (name.size() == 17U && http_ascii_equals_ignore_case(name, "X-Forwarded-Proto")) {
             visit_comma_separated(header.value(), [&](std::string_view element) {
                 if (proto_count == x_forwarded_for.client_index()) {
                     result_value.scheme_ = forwarded_http_scheme_token(element);
