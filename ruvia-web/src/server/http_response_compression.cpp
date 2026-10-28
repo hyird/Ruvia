@@ -81,6 +81,21 @@ namespace {
            http_ascii_equals_ignore_case(media_type, "application/octet-stream");
 }
 
+[[nodiscard]] bool has_response_integrity_header(const http_response& response) noexcept {
+    for (const auto& header : response.headers()) {
+        const auto name = header.name();
+        if (name.size() != 11U && name.size() != 14U) {
+            continue;
+        }
+        if (http_ascii_equals_ignore_case(name, "Content-Digest") ||
+            http_ascii_equals_ignore_case(name, "Repr-Digest") ||
+            http_ascii_equals_ignore_case(name, "Content-MD5")) {
+            return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] cache_control response_cache_control(const http_response& response) noexcept {
     cache_control_field_parser parser;
     if (!response.header("Cache-Control").has_value()) {
@@ -167,8 +182,7 @@ http_response_compression_decision prepare_response_compression(
     // leave them describing bytes that are not sent.
     if (status_code == http_status::partial_content || status_code == http_status::reset_content ||
         response.header("Content-Encoding").has_value() || response.header("Content-Range").has_value() ||
-        response.header("Content-Digest").has_value() || response.header("Repr-Digest").has_value() ||
-        response.header("Content-MD5").has_value() ||
+        has_response_integrity_header(response) ||
         response_content_type_skips_compression(
             response.header("Content-Type").value_or(std::string_view{})) ||
         response_cache_control(response).has(cache_control_directive::no_transform) ||

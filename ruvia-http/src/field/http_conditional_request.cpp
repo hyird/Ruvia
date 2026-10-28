@@ -1,5 +1,6 @@
 #include "ruvia/http/http_conditional_request.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <utility>
 
@@ -24,10 +25,18 @@ http_conditional_headers get_http_conditional_headers(const http_request& reques
     }
     // Multiple date field lines are not one HTTP-date. Do not let the
     // last-field cache turn them into an actionable 304 or 412 condition.
+    const auto headers = request.headers();
+    const auto last_unmodified = detail::http_request_access::known_header_index(
+        request, detail::request_header_kind::if_unmodified_since);
+    const auto last_modified = detail::http_request_access::known_header_index(
+        request, detail::request_header_kind::if_modified_since);
+    const auto limit = std::min(headers.size(), std::max(last_unmodified, last_modified));
+    if (limit <= 1U) {
+        return result;
+    }
     bool saw_unmodified_since = false;
     bool saw_modified_since = false;
-    const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
+    for (std::size_t i = 0; i < limit; ++i) {
         const auto kind = detail::http_request_access::header_kind(request, i);
         if (kind == static_cast<std::uint8_t>(detail::request_header_kind::if_unmodified_since)) {
             if (saw_unmodified_since) {
@@ -79,7 +88,15 @@ http_etag_preconditions get_http_etag_preconditions(
     // zero-copy views into separate wire lines. Fold them in one header scan and
     // retain whole-list validity without allocating a joined string.
     const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
+    const auto last_match = has_if_match ? detail::http_request_access::known_header_index(
+                                               request, detail::request_header_kind::if_match)
+                                         : std::size_t{0};
+    const auto last_none_match =
+        has_if_none_match ? detail::http_request_access::known_header_index(
+                                request, detail::request_header_kind::if_none_match)
+                          : std::size_t{0};
+    const auto limit = std::min(headers.size(), std::max(last_match, last_none_match));
+    for (std::size_t i = 0; i < limit; ++i) {
         const auto kind = detail::http_request_access::header_kind(request, i);
         if (has_if_match && kind == static_cast<std::uint8_t>(detail::request_header_kind::if_match)) {
             result.if_match_.update(headers[i].value(), etag, true);

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
+#include <cstring>
 #include <string>
 #include <string_view>
 
@@ -69,21 +71,44 @@ inline void add_vary_token(http_response& response, std::string_view token) {
             existing_bytes += header.value().size();
         }
     }
-    if (existing_value_count == 0 && set_known_static_vary_token(response, token)) {
+    if (existing_value_count == 0) {
+        if (!set_known_static_vary_token(response, token)) {
+            response.header("Vary", token);
+        }
         return;
     }
 
-    std::pmr::string updated(response.memory_resource());
-    updated.reserve(existing_bytes + token.size() + existing_value_count * 2);
-    if (existing_value_count != 0) {
+    static constexpr std::size_t inline_vary_capacity = 256;
+    const std::size_t total_size = existing_bytes + token.size() + existing_value_count * 2U;
+    if (total_size <= inline_vary_capacity) {
+        std::array<char, inline_vary_capacity> buffer{};
+        std::size_t length = 0;
         for (const auto& header : response.headers()) {
             if (http_response_header_access::known_bit(header) != response_header_vary ||
                 http_trim_ows(header.value()).empty()) {
                 continue;
             }
-            updated.append(header.value());
-            updated.append(", ");
+            const auto value = header.value();
+            std::memcpy(buffer.data() + length, value.data(), value.size());
+            length += value.size();
+            buffer[length++] = ',';
+            buffer[length++] = ' ';
         }
+        std::memcpy(buffer.data() + length, token.data(), token.size());
+        length += token.size();
+        response.header("Vary", std::string_view(buffer.data(), length));
+        return;
+    }
+
+    std::pmr::string updated(response.memory_resource());
+    updated.reserve(total_size);
+    for (const auto& header : response.headers()) {
+        if (http_response_header_access::known_bit(header) != response_header_vary ||
+            http_trim_ows(header.value()).empty()) {
+            continue;
+        }
+        updated.append(header.value());
+        updated.append(", ");
     }
     updated.append(token);
     response.header("Vary", updated);

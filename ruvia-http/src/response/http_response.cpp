@@ -1,6 +1,7 @@
 #include "ruvia/http/http_response.h"
 
 #include <array>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -109,19 +110,9 @@ http_response_body_plan plan_http_response_body(
 
 namespace {
 
-[[nodiscard]] std::pmr::string weak_etag_for_new_representation(
-    std::string_view current_etag, std::pmr::memory_resource* resource) {
-    std::pmr::string weak_etag(resource);
-    if (detail::http_is_strong_etag(current_etag)) {
-        weak_etag.reserve(current_etag.size() + 2);
-        weak_etag.append("W/");
-        weak_etag.append(current_etag.data(), current_etag.size());
-    }
-    return weak_etag;
-}
+inline constexpr std::size_t inline_weak_etag_capacity = 128;
 
 }  // namespace
-
 http_response::http_response(std::pmr::memory_resource* resource)
     : http_response(detail::http_resolved_pmr_resource_tag{},
           detail::http_pmr_resource_or_default(resource)) {}
@@ -253,8 +244,24 @@ void http_response::apply_encoded_representation(
             detail::http_field_list_role::sender, fields) != detail::response_field_status::ok) {
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }
-    const auto weak_etag = weak_etag_for_new_representation(
-        headers_.known_header_value(detail::response_header_etag), memory_resource());
+    const auto current_etag = headers_.known_header_value(detail::response_header_etag);
+    std::array<char, inline_weak_etag_capacity> inline_weak_etag{};
+    std::pmr::string heap_weak_etag(memory_resource());
+    std::string_view weak_etag{};
+    if (detail::http_is_strong_etag(current_etag)) {
+        const std::size_t total_size = current_etag.size() + 2U;
+        if (total_size <= inline_weak_etag.size()) {
+            inline_weak_etag[0] = 'W';
+            inline_weak_etag[1] = '/';
+            std::memcpy(inline_weak_etag.data() + 2, current_etag.data(), current_etag.size());
+            weak_etag = std::string_view(inline_weak_etag.data(), total_size);
+        } else {
+            heap_weak_etag.reserve(total_size);
+            heap_weak_etag.append("W/");
+            heap_weak_etag.append(current_etag.data(), current_etag.size());
+            weak_etag = heap_weak_etag;
+        }
+    }
 
     http_response_headers::descriptor_stage update(headers_);
     update.stage("Content-Encoding", content_encoding, detail::response_header_content_encoding);
