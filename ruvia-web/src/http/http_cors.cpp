@@ -27,7 +27,7 @@ bool has_response_header(const http_response& response, std::string_view name) {
 void set_response_header_if_missing(
     http_response& response, std::string_view name, std::string_view value) {
     if (!has_response_header(response, name)) {
-        response.header(name, value);
+        response.header_stable_view(name, value);
     }
 }
 

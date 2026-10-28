@@ -210,8 +210,14 @@ void http_response_headers::transfer_from(
             }
         } else if (mode == http_response_header_transfer::merge) {
             if (!staged.header(name)) {
-                staged.header(name, value);
+                if (!header_value.owned_) {
+                    staged.set_static_header(header_value);
+                } else {
+                    staged.header(name, value);
+                }
             }
+        } else if (!header_value.owned_) {
+            staged.set_static_header(header_value);
         } else {
             staged.header(name, value);
         }

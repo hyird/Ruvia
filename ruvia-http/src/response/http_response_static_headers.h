@@ -19,7 +19,7 @@ template <std::size_t n>
     if (name_size == 0 || name_size > n - 1 || bytes_value[n - 1] != '\0') {
         throw "invalid static response header storage";
     }
-    if (response_known_header_slot(known_bit) == response_known_header_count) {
+    if (known_bit != 0 && response_known_header_slot(known_bit) == response_known_header_count) {
         throw "static response header requires one known header bit";
     }
     return http_response_header_access::make(
@@ -190,6 +190,89 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
         case response_header_access_control_allow_credentials:
             if (value == "true") {
                 return static_response_header(access_control_allow_credentials_true, 32, response_header_access_control_allow_credentials);
+            }
+            return std::nullopt;
+        default:
+            return std::nullopt;
+    }
+}
+
+[[nodiscard]] inline std::optional<http_response_header> builtin_static_custom_response_header(
+    std::string_view name, std::string_view value) noexcept {
+    static constexpr char x_content_type_options_nosniff[] = "X-Content-Type-Optionsnosniff";
+    static constexpr char x_frame_options_deny[] = "X-Frame-OptionsDENY";
+    static constexpr char x_frame_options_sameorigin[] = "X-Frame-OptionsSAMEORIGIN";
+    static constexpr char strict_transport_security_default[] =
+        "Strict-Transport-Securitymax-age=31536000; includeSubDomains";
+    static constexpr char x_xss_protection_zero[] = "X-XSS-Protection0";
+    static constexpr char content_security_policy_self[] =
+        "Content-Security-Policydefault-src 'self'";
+    static constexpr char content_security_policy_none[] =
+        "Content-Security-Policydefault-src 'none'";
+    static constexpr char referrer_policy_strict_origin[] =
+        "Referrer-Policystrict-origin-when-cross-origin";
+    static constexpr char referrer_policy_no_referrer[] = "Referrer-Policyno-referrer";
+    static constexpr char permissions_policy_default[] =
+        "Permissions-Policygeolocation=(), microphone=(), camera=()";
+    static constexpr char access_control_allow_methods_default[] =
+        "Access-Control-Allow-MethodsGET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS";
+
+    switch (name.size()) {
+        case 15:
+            if (name == "X-Frame-Options") {
+                if (value == "DENY") {
+                    return static_response_header(x_frame_options_deny, 15, 0);
+                }
+                if (value == "SAMEORIGIN") {
+                    return static_response_header(x_frame_options_sameorigin, 15, 0);
+                }
+                return std::nullopt;
+            }
+            if (name == "Referrer-Policy") {
+                if (value == "strict-origin-when-cross-origin") {
+                    return static_response_header(referrer_policy_strict_origin, 15, 0);
+                }
+                if (value == "no-referrer") {
+                    return static_response_header(referrer_policy_no_referrer, 15, 0);
+                }
+            }
+            return std::nullopt;
+        case 16:
+            if (name == "X-XSS-Protection" && value == "0") {
+                return static_response_header(x_xss_protection_zero, 16, 0);
+            }
+            return std::nullopt;
+        case 18:
+            if (name == "Permissions-Policy" &&
+                value == "geolocation=(), microphone=(), camera=()") {
+                return static_response_header(permissions_policy_default, 18, 0);
+            }
+            return std::nullopt;
+        case 22:
+            if (name == "X-Content-Type-Options" && value == "nosniff") {
+                return static_response_header(x_content_type_options_nosniff, 22, 0);
+            }
+            return std::nullopt;
+        case 23:
+            if (name == "Content-Security-Policy") {
+                if (value == "default-src 'self'") {
+                    return static_response_header(content_security_policy_self, 23, 0);
+                }
+                if (value == "default-src 'none'") {
+                    return static_response_header(content_security_policy_none, 23, 0);
+                }
+            }
+            return std::nullopt;
+        case 25:
+            if (name == "Strict-Transport-Security" &&
+                value == "max-age=31536000; includeSubDomains") {
+                return static_response_header(strict_transport_security_default, 25, 0);
+            }
+            return std::nullopt;
+        case 28:
+            if (name == "Access-Control-Allow-Methods" &&
+                value == "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS") {
+                return static_response_header(access_control_allow_methods_default, 28, 0);
             }
             return std::nullopt;
         default:

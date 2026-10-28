@@ -1,6 +1,7 @@
 #include "ruvia/web/security_headers.h"
 
 #include <stdexcept>
+#include <type_traits>
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
@@ -14,10 +15,6 @@ namespace {
 
 [[nodiscard]] bool has_security_header(context& context_value, std::string_view name) {
     return detail::context_access::has_response_header(context_value, name);
-}
-
-[[nodiscard]] bool has_security_header(http_response& response, std::string_view name) noexcept {
-    return response.header(name).has_value();
 }
 
 [[nodiscard]] bool emits_default_security_header(default_security_header_policy policy) {
@@ -112,12 +109,17 @@ void apply_security_headers_to(target_type& target, const security_headers_polic
         if (skip_empty && value.empty()) {
             return;
         }
-        if (!replace_existing && has_security_header(target, name)) {
+        if constexpr (std::is_same_v<target_type, http_response>) {
+            if (const auto existing = target.header(name)) {
+                if (!replace_existing || *existing == value) {
+                    return;
+                }
+            }
+        } else if (!replace_existing && has_security_header(target, name)) {
             return;
         }
         target.header(name, value);
     };
-
     const auto set_secure_transport_header = [&set_header, secure_transport](
                                                  std::string_view name, std::string_view value) {
         if (!secure_transport &&

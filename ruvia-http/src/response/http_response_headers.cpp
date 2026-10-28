@@ -40,7 +40,7 @@ http_response_header http_response_headers::make_uninitialized_header(
 std::optional<http_response_header> http_response_headers::make_static_header(
     std::string_view name, std::string_view value, std::uint32_t known_bit) noexcept {
     if (known_bit == 0) {
-        return std::nullopt;
+        return detail::builtin_static_custom_response_header(name, value);
     }
     auto header_value = detail::builtin_static_response_header(known_bit, value);
     if (!header_value || header_value->name() != name) {
@@ -96,7 +96,7 @@ http_response_header& http_response_headers::append_header(http_response_header 
 
 http_response_header& http_response_headers::add(
     std::string_view name, std::string_view value, std::uint32_t known_bit) {
-    return append_header(make_owned_header(name, value, known_bit));
+    return add_stable_view(name, value, known_bit);
 }
 
 http_response_header& http_response_headers::add_stable_view(
@@ -154,12 +154,7 @@ bool http_response_headers::try_assign_owned_in_place(http_response_header& head
 
 void http_response_headers::assign(http_response_header& header_value, std::string_view name,
     std::string_view value, std::uint32_t known_bit) {
-    if (try_assign_owned_in_place(header_value, name, value, known_bit)) {
-        return;
-    }
-    const auto replacement = make_owned_header(name, value, known_bit);
-    release_header(header_value);
-    header_value = replacement;
+    assign_stable_view(header_value, name, value, known_bit);
 }
 
 void http_response_headers::assign_stable_view(http_response_header& header_value, std::string_view name,
