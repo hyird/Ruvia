@@ -59,14 +59,6 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
     if (options.body_.size() > services().max_decoded_body_bytes()) {
         throw std::invalid_argument("subrequest body exceeds the configured limit");
     }
-    // The operation is lazy and the options borrow caller storage: take owned
-    // copies now. The subrequest is built directly as a parsed request; it
-    // never round-trips through a wire format.
-    std::pmr::vector<std::pmr::string> fields(pool());
-    fields.reserve(subrequest_field_headers + 2 * options.headers_.size());
-    fields.emplace_back(options.method_);
-    fields.emplace_back(options.target_);
-    fields.emplace_back(options.body_);
     std::size_t header_bytes = options.method_.size() + options.target_.size();
     for (const auto& header : options.headers_) {
         if (!is_valid_http_header_name(header.name()) || !is_valid_http_header_value(header.value())) {
@@ -79,6 +71,16 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
         if (header_bytes > max_subrequest_header_bytes) {
             throw std::invalid_argument("subrequest headers exceed the configured limit");
         }
+    }
+    // The operation is lazy and the options borrow caller storage: take owned
+    // copies now. The subrequest is built directly as a parsed request; it
+    // never round-trips through a wire format.
+    std::pmr::vector<std::pmr::string> fields(pool());
+    fields.reserve(subrequest_field_headers + 2 * options.headers_.size());
+    fields.emplace_back(options.method_);
+    fields.emplace_back(options.target_);
+    fields.emplace_back(options.body_);
+    for (const auto& header : options.headers_) {
         fields.emplace_back(header.name());
         fields.emplace_back(header.value());
     }
@@ -91,17 +93,32 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     const std::string_view body = fields[subrequest_field_body];
     std::array<char, http_max_unsigned_decimal_size> content_length_text;
     const auto content_length = http_format_unsigned(content_length_text, body.size());
-    std::pmr::vector<http_header_view> headers(memory.resource());
-    headers.reserve(2 + (fields.size() - subrequest_field_headers) / 2);
-    headers.emplace_back("Host", "localhost");
-    for (auto index = subrequest_field_headers; index + 1 < fields.size(); index += 2) {
-        headers.emplace_back(fields[index], fields[index + 1]);
+    const auto header_count = 2U + (fields.size() - subrequest_field_headers) / 2U;
+    static constexpr std::size_t inline_header_capacity = 16;
+    std::array<http_header_view, inline_header_capacity> inline_headers{};
+    std::pmr::vector<http_header_view> heap_headers(memory.resource());
+    std::span<const http_header_view> active_headers;
+    if (header_count <= inline_header_capacity) {
+        std::size_t pos = 0;
+        inline_headers[pos++] = http_header_view("Host", "localhost");
+        for (auto index = subrequest_field_headers; index + 1 < fields.size(); index += 2) {
+            inline_headers[pos++] = http_header_view(fields[index], fields[index + 1]);
+        }
+        inline_headers[pos++] = http_header_view("Content-Length", content_length);
+        active_headers = std::span<const http_header_view>(inline_headers.data(), pos);
+    } else {
+        heap_headers.reserve(header_count);
+        heap_headers.emplace_back("Host", "localhost");
+        for (auto index = subrequest_field_headers; index + 1 < fields.size(); index += 2) {
+            heap_headers.emplace_back(fields[index], fields[index + 1]);
+        }
+        heap_headers.emplace_back("Content-Length", content_length);
+        active_headers = heap_headers;
     }
-    headers.emplace_back("Content-Length", content_length);
     const auto request = [&]() {
         try {
             return make_parsed_http_request(fields[subrequest_field_method],
-                fields[subrequest_field_target], headers,
+                fields[subrequest_field_target], active_headers,
                 std::as_bytes(std::span(body.data(), body.size())), memory.resource());
         } catch (const http_protocol_error&) {
             throw std::invalid_argument("invalid subrequest");
@@ -146,10 +163,14 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     if (response.file_body() || response.has_multipart_file_body()) {
         throw std::logic_error("dispatch requires a buffered response");
     }
+    const auto known_method = request.known_method();
+    {
+        const auto discarded = std::move(fields);
+    }
     dispatch_response result(pool());
     result.status_ = response.status();
     // As on the wire: HEAD and content-forbidden statuses carry no body.
-    if (!plan_http_response_body(request.known_method(), response.status()).body_suppressed()) {
+    if (!plan_http_response_body(known_method, response.status()).body_suppressed()) {
         result.body_.assign(response.body_bytes());
     }
     result.headers_.reserve(response.headers().size());

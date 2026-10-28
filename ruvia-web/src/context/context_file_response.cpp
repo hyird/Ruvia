@@ -229,7 +229,14 @@ public:
             return;
         }
         const auto source_value = std::get<std::string_view>(value_);
+        std::size_t total_size = 0;
+        for (const auto& segment : plan.segments()) {
+            total_size += segment.kind_ == http_multipart_byte_range_plan::segment_kind::file
+                              ? static_cast<std::size_t>(segment.file_length_)
+                              : segment.metadata_length_;
+        }
         std::pmr::string body(resource);
+        body.reserve(total_size);
         for (const auto& segment : plan.segments()) {
             if (segment.kind_ == http_multipart_byte_range_plan::segment_kind::file) {
                 body.append(source_value.substr(static_cast<std::size_t>(segment.file_offset_),
