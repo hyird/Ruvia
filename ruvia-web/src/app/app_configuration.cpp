@@ -1,5 +1,7 @@
 #include "ruvia/web/detail/app/app_configuration.h"
 
+#include <array>
+#include <memory>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -88,20 +90,60 @@ void app_configuration::apply(
     routes_value.set_error_handler(callback_access::ref(error_handler_));
     routes_value.set_not_found_handler(callback_access::ref(not_found_handler_));
     if (!prefix_error_handlers_.empty()) {
-        const auto views = prefix_handler_views<http_prefix_error_handler>(prefix_error_handlers_, resource);
-        routes_value.set_prefix_error_handlers(views);
+        static constexpr std::size_t inline_capacity = 8;
+        if (prefix_error_handlers_.size() <= inline_capacity) {
+            std::array<http_prefix_error_handler, inline_capacity> inline_views{};
+            for (std::size_t i = 0; i < prefix_error_handlers_.size(); ++i) {
+                inline_views[i] = {
+                    std::string_view(prefix_error_handlers_[i].first),
+                    callback_access::ref(prefix_error_handlers_[i].second)};
+            }
+            routes_value.set_prefix_error_handlers(
+                std::span<const http_prefix_error_handler>(inline_views.data(), prefix_error_handlers_.size()));
+        } else {
+            const auto views =
+                prefix_handler_views<http_prefix_error_handler>(prefix_error_handlers_, resource);
+            routes_value.set_prefix_error_handlers(views);
+        }
     }
     if (!prefix_not_found_handlers_.empty()) {
-        const auto views = prefix_handler_views<http_prefix_not_found_handler>(prefix_not_found_handlers_, resource);
-        routes_value.set_prefix_not_found_handlers(views);
+        static constexpr std::size_t inline_capacity = 8;
+        if (prefix_not_found_handlers_.size() <= inline_capacity) {
+            std::array<http_prefix_not_found_handler, inline_capacity> inline_views{};
+            for (std::size_t i = 0; i < prefix_not_found_handlers_.size(); ++i) {
+                inline_views[i] = {
+                    std::string_view(prefix_not_found_handlers_[i].first),
+                    callback_access::ref(prefix_not_found_handlers_[i].second)};
+            }
+            routes_value.set_prefix_not_found_handlers(std::span<const http_prefix_not_found_handler>(
+                inline_views.data(), prefix_not_found_handlers_.size()));
+        } else {
+            const auto views = prefix_handler_views<http_prefix_not_found_handler>(
+                prefix_not_found_handlers_, resource);
+            routes_value.set_prefix_not_found_handlers(views);
+        }
     }
     if (!middlewares_.empty()) {
-        std::pmr::vector<controller_middleware_descriptor> descriptors(resource);
-        descriptors.reserve(middlewares_.size());
-        for (const auto& middleware_value : middlewares_) {
-            descriptors.push_back(middleware_value.descriptor());
+        static constexpr std::size_t inline_capacity = 16;
+        if (middlewares_.size() <= inline_capacity) {
+            alignas(controller_middleware_descriptor) std::array<std::byte,
+                sizeof(controller_middleware_descriptor) * inline_capacity>
+                inline_storage{};
+            auto* const inline_descriptors =
+                reinterpret_cast<controller_middleware_descriptor*>(inline_storage.data());
+            for (std::size_t i = 0; i < middlewares_.size(); ++i) {
+                std::construct_at(inline_descriptors + i, middlewares_[i].descriptor());
+            }
+            routes_value.set_global_middlewares(std::span<const controller_middleware_descriptor>(
+                inline_descriptors, middlewares_.size()));
+        } else {
+            std::pmr::vector<controller_middleware_descriptor> descriptors(resource);
+            descriptors.reserve(middlewares_.size());
+            for (const auto& middleware_value : middlewares_) {
+                descriptors.push_back(middleware_value.descriptor());
+            }
+            routes_value.set_global_middlewares(descriptors);
         }
-        routes_value.set_global_middlewares(descriptors);
     }
 }
 

@@ -1,5 +1,6 @@
 #include "ruvia/web/testing.h"
 
+#include <array>
 #include <bit>
 #include <chrono>
 #include <exception>
@@ -138,18 +139,35 @@ struct test_app::impl_type final {
     [[nodiscard]] task<test_response> execute_request(const test_request& request) {
         const auto request_start = std::chrono::steady_clock::now();
         request_memory request_memory_value(memory_);
-        std::pmr::vector<http_header_view> headers(request_memory_value.resource());
-        headers.reserve(request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U));
-        for (const auto& [name, value] : request.headers_) {
-            headers.emplace_back(name, value);
-        }
-        if (!request.cookies_.empty()) {
-            headers.emplace_back("Cookie", request.cookies_);
+        static constexpr std::size_t inline_header_capacity = 16;
+        const std::size_t total_headers =
+            request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U);
+        std::array<http_header_view, inline_header_capacity> inline_headers{};
+        std::pmr::vector<http_header_view> heap_headers(request_memory_value.resource());
+        std::span<const http_header_view> active_headers;
+        if (total_headers <= inline_header_capacity) {
+            std::size_t index = 0;
+            for (const auto& [name, value] : request.headers_) {
+                inline_headers[index++] = http_header_view(name, value);
+            }
+            if (!request.cookies_.empty()) {
+                inline_headers[index++] = http_header_view("Cookie", request.cookies_);
+            }
+            active_headers = std::span<const http_header_view>(inline_headers.data(), total_headers);
+        } else {
+            heap_headers.reserve(total_headers);
+            for (const auto& [name, value] : request.headers_) {
+                heap_headers.emplace_back(name, value);
+            }
+            if (!request.cookies_.empty()) {
+                heap_headers.emplace_back("Cookie", request.cookies_);
+            }
+            active_headers = heap_headers;
         }
         std::optional<http_protocol_error> parse_error;
         auto parsed_value = [&]() {
             try {
-                return make_parsed_http_request(request.method_, request.target_, headers,
+                return make_parsed_http_request(request.method_, request.target_, active_headers,
                     std::as_bytes(std::span(request.body_.data(), request.body_.size())),
                     request_memory_value.resource());
             } catch (const http_protocol_error& error) {
@@ -200,9 +218,11 @@ struct test_app::impl_type final {
         // Copy everything out while the request arena is still alive.
         dispatch_response result_value(process_resource());
         result_value.status_ = response.status();
-        result_value.headers_.reserve(response.headers().size());
-        for (const auto& header : response.headers()) {
-            result_value.headers_.emplace_back(header.name(), header.value(), process_resource());
+        if (!response.headers().empty()) {
+            result_value.headers_.reserve(response.headers().size());
+            for (const auto& header : response.headers()) {
+                result_value.headers_.emplace_back(header.name(), header.value(), process_resource());
+            }
         }
         // and content-forbidden statuses, so the facade must not surface one
         // either. Writer-synthesized fields (Content-Length, Date, Connection)

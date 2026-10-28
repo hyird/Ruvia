@@ -102,22 +102,25 @@ void detail::load_env_from_file(env& env_value, const std::filesystem::path& pat
         return;
     }
 
-    const auto entries = detail::read_dotenv_entries(input, path);
+    auto entries = detail::read_dotenv_entries(input, path);
     auto& state_value = detail::env_access::state(env_value);
+    auto& variables = state_value.variables_;
+    if (!entries.empty()) {
+        variables.reserve(variables.size() + entries.size());
+    }
 
-    for (const auto& entry : entries) {
-        auto& variables = state_value.variables_;
+    for (auto& entry : entries) {
         auto it = find_variable_slot(variables, entry.name_);
         if (it != variables.end() && std::string_view(it->name_) == std::string_view(entry.name_)) {
             if (options.existing_variables_ == dotenv_existing_variable_policy::override) {
-                it->value_ = entry.value_;
+                it->value_ = std::move(entry.value_);
             }
             continue;
         }
 
         detail::env_variable variable;
-        variable.name_.assign(entry.name_.data(), entry.name_.size());
-        variable.value_.assign(entry.value_.data(), entry.value_.size());
+        variable.name_ = std::move(entry.name_);
+        variable.value_ = std::move(entry.value_);
         variables.insert(it, std::move(variable));
     }
 

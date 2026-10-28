@@ -64,26 +64,37 @@ namespace {
 
 [[nodiscard]] std::pmr::string parse_double_quoted_value(std::string_view value,
     const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
-    std::pmr::string result(process_resource());
-    result.reserve(value.size());
-
+    std::size_t decoded_size = 0;
+    std::size_t close_index = std::string_view::npos;
     for (std::size_t index = 1; index < value.size(); ++index) {
         const char current = value[index];
         if (current == '"') {
-            consumed = index + 1;
-            return result;
+            close_index = index;
+            break;
         }
+        if (current == '\\') {
+            if (index + 1 == value.size()) {
+                throw std::invalid_argument(
+                    location_message(path, line_number, "unfinished escape sequence").c_str());
+            }
+            ++index;
+        }
+        ++decoded_size;
+    }
+    if (close_index == std::string_view::npos) {
+        throw std::invalid_argument(
+            location_message(path, line_number, "unterminated double-quoted value").c_str());
+    }
 
+    consumed = close_index + 1;
+    std::pmr::string result(process_resource());
+    result.reserve(decoded_size);
+    for (std::size_t index = 1; index < close_index; ++index) {
+        const char current = value[index];
         if (current != '\\') {
             result.push_back(current);
             continue;
         }
-
-        if (index + 1 == value.size()) {
-            throw std::invalid_argument(
-                location_message(path, line_number, "unfinished escape sequence").c_str());
-        }
-
         const char escaped = value[++index];
         switch (escaped) {
             case 'n':
@@ -106,9 +117,7 @@ namespace {
                 break;
         }
     }
-
-    throw std::invalid_argument(
-        location_message(path, line_number, "unterminated double-quoted value").c_str());
+    return result;
 }
 
 [[nodiscard]] std::pmr::string parse_single_quoted_value(std::string_view value,
@@ -195,9 +204,10 @@ void strip_utf8_bom(std::string_view& line) noexcept {
             location_message(path, line_number, "invalid variable name").c_str());
     }
 
+    auto parsed_value = parse_value(line.substr(separator + 1), path, line_number);
     dotenv_entry entry;
     entry.name_.assign(key.data(), key.size());
-    entry.value_ = parse_value(line.substr(separator + 1), path, line_number);
+    entry.value_ = std::move(parsed_value);
     return entry;
 }
 

@@ -1,3 +1,5 @@
+#include <array>
+
 #include "ruvia/web/detail/util/registration_resource.h"
 #include "ruvia/web/streaming.h"
 
@@ -51,6 +53,56 @@ std::pmr::string join_controller_paths(std::string_view prefix, std::string_view
     return output;
 }
 
+struct scoped_controller_path final {
+    static constexpr std::size_t inline_capacity = 256;
+    std::array<char, inline_capacity> inline_{};
+    std::pmr::string heap_{registration_resource()};
+    std::string_view view_{};
+
+    scoped_controller_path(std::string_view prefix, std::string_view path) {
+        if (prefix.empty() || prefix == "/") {
+            if (path.empty()) {
+                view_ = "/";
+                return;
+            }
+            if (path.front() == '/') {
+                view_ = path;
+                return;
+            }
+        }
+        const std::size_t max_size = prefix.size() + path.size() + 2U;
+        if (max_size <= inline_capacity) {
+            std::size_t length = 0;
+            if (!prefix.empty() && prefix != "/") {
+                if (prefix.front() != '/') {
+                    inline_[length++] = '/';
+                }
+                prefix.copy(inline_.data() + length, prefix.size());
+                length += prefix.size();
+                if (length > 1 && inline_[length - 1] == '/') {
+                    --length;
+                }
+            }
+            if (path.empty() || path == "/") {
+                if (length == 0) {
+                    inline_[length++] = '/';
+                }
+                view_ = std::string_view(inline_.data(), length);
+                return;
+            }
+            if (path.front() == '/') {
+                path.remove_prefix(1);
+            }
+            inline_[length++] = '/';
+            path.copy(inline_.data() + length, path.size());
+            length += path.size();
+            view_ = std::string_view(inline_.data(), length);
+            return;
+        }
+        heap_ = join_controller_paths(prefix, path);
+        view_ = heap_;
+    }
+};
 [[nodiscard]] std::pmr::vector<controller_middleware_descriptor> merge_middleware_descriptors(
     std::span<const controller_middleware_descriptor> base, std::span<const controller_middleware_descriptor> extra) {
     std::pmr::vector<controller_middleware_descriptor> middlewares(registration_resource());
@@ -90,7 +142,8 @@ detail::controller_route_builder::~controller_route_builder() = default;
 void detail::controller_route_builder::register_route(http_known_method method, std::string_view path,
     route_handler handler, std::span<const controller_middleware_descriptor> middlewares) const {
     const auto body_mode = declared_request_body_mode(middlewares_, middlewares);
-    router_.register_endpoint(method, {}, join_controller_paths(prefix_, path),
+    const scoped_controller_path joined(prefix_, path);
+    router_.register_endpoint(method, {}, joined.view_,
         route_endpoint::buffered(callback_access::invoke(handler), body_mode), callback_access::target(handler),
         middlewares_, middlewares);
 }
@@ -99,7 +152,8 @@ void detail::controller_route_builder::register_route(http_known_method method, 
     route_stream_handler handler,
     std::span<const controller_middleware_descriptor> middlewares) const {
     const auto body_mode = declared_request_body_mode(middlewares_, middlewares);
-    router_.register_endpoint(method, {}, join_controller_paths(prefix_, path),
+    const scoped_controller_path joined(prefix_, path);
+    router_.register_endpoint(method, {}, joined.view_,
         route_endpoint::response_stream(callback_access::invoke(handler), body_mode),
         callback_access::target(handler), middlewares_, middlewares);
 }
@@ -108,7 +162,8 @@ void detail::controller_route_builder::register_extension_method_route(std::stri
     std::string_view path, route_handler handler,
     std::span<const controller_middleware_descriptor> middlewares) const {
     const auto body_mode = declared_request_body_mode(middlewares_, middlewares);
-    router_.register_endpoint(http_known_method::unknown, method_token, join_controller_paths(prefix_, path),
+    const scoped_controller_path joined(prefix_, path);
+    router_.register_endpoint(http_known_method::unknown, method_token, joined.view_,
         route_endpoint::buffered(callback_access::invoke(handler), body_mode), callback_access::target(handler),
         middlewares_, middlewares);
 }
@@ -117,7 +172,8 @@ void detail::controller_route_builder::register_extension_method_route(std::stri
     std::string_view path, route_stream_handler handler,
     std::span<const controller_middleware_descriptor> middlewares) const {
     const auto body_mode = declared_request_body_mode(middlewares_, middlewares);
-    router_.register_endpoint(http_known_method::unknown, method_token, join_controller_paths(prefix_, path),
+    const scoped_controller_path joined(prefix_, path);
+    router_.register_endpoint(http_known_method::unknown, method_token, joined.view_,
         route_endpoint::response_stream(callback_access::invoke(handler), body_mode),
         callback_access::target(handler), middlewares_, middlewares);
 }
@@ -125,9 +181,14 @@ void detail::controller_route_builder::register_extension_method_route(std::stri
 void detail::controller_route_builder::register_tunnel_route(std::string_view protocol,
     std::string_view target, route_stream_handler handler,
     std::span<const controller_middleware_descriptor> middlewares, http_tunnel_route_config config) const {
-    const auto owned_target = protocol.empty() ? std::pmr::string(target, registration_resource())
-                                               : join_controller_paths(prefix_, target);
-    router_.register_endpoint(http_known_method::connect, {}, owned_target,
+    if (protocol.empty()) {
+        router_.register_endpoint(http_known_method::connect, {}, target,
+            route_endpoint::tunnel(router_.resource(), callback_access::invoke(handler), protocol, config),
+            callback_access::target(handler), middlewares_, middlewares);
+        return;
+    }
+    const scoped_controller_path joined(prefix_, target);
+    router_.register_endpoint(http_known_method::connect, {}, joined.view_,
         route_endpoint::tunnel(router_.resource(), callback_access::invoke(handler), protocol, config),
         callback_access::target(handler), middlewares_, middlewares);
 }
@@ -136,11 +197,11 @@ void detail::controller_route_builder::register_websocket_route(http_known_metho
     std::string_view path, route_stream_handler handler,
     std::span<const controller_middleware_descriptor> middlewares,
     websocket_route_config websocket_config) const {
-    router_.register_endpoint(method, {}, join_controller_paths(prefix_, path),
+    const scoped_controller_path joined(prefix_, path);
+    router_.register_endpoint(method, {}, joined.view_,
         route_endpoint::websocket(router_.resource(), callback_access::invoke(handler), std::move(websocket_config)),
         callback_access::target(handler), middlewares_, middlewares);
 }
-
 detail::controller_route_builder detail::controller_route_builder::create_scope(
     std::string_view prefix, std::span<const controller_middleware_descriptor> middlewares) const {
     auto merged = merge_middleware_descriptors(middlewares_, middlewares);

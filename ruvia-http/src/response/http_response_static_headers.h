@@ -90,6 +90,8 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
         "Access-Control-Allow-Origin*";
     static constexpr char access_control_allow_credentials_true[] =
         "Access-Control-Allow-Credentialstrue";
+    static constexpr char access_control_allow_methods_default[] =
+        "Access-Control-Allow-MethodsGET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS";
 
     switch (known_bit) {
         case response_header_content_type:
@@ -245,6 +247,11 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
                 return static_response_header(access_control_allow_credentials_true, 32, response_header_access_control_allow_credentials);
             }
             return std::nullopt;
+        case response_header_access_control_allow_methods:
+            if (value == "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS") {
+                return static_response_header(access_control_allow_methods_default, 28, response_header_access_control_allow_methods);
+            }
+            return std::nullopt;
         default:
             return std::nullopt;
     }
@@ -267,10 +274,16 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
     static constexpr char referrer_policy_no_referrer[] = "Referrer-Policyno-referrer";
     static constexpr char permissions_policy_default[] =
         "Permissions-Policygeolocation=(), microphone=(), camera=()";
-    static constexpr char access_control_allow_methods_default[] =
-        "Access-Control-Allow-MethodsGET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS";
+    static constexpr char retry_after_one[] = "Retry-After1";
+    static constexpr char x_ratelimit_reset_one[] = "X-RateLimit-Reset1";
+    static constexpr char x_ratelimit_remaining_zero[] = "X-RateLimit-Remaining0";
 
     switch (name.size()) {
+        case 11:
+            if (name == "Retry-After" && value == "1") {
+                return static_response_header(retry_after_one, 11, 0);
+            }
+            return std::nullopt;
         case 15:
             if (name == "X-Frame-Options") {
                 if (value == "DENY") {
@@ -295,10 +308,20 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
                 return static_response_header(x_xss_protection_zero, 16, 0);
             }
             return std::nullopt;
+        case 17:
+            if (name == "X-RateLimit-Reset" && value == "1") {
+                return static_response_header(x_ratelimit_reset_one, 17, 0);
+            }
+            return std::nullopt;
         case 18:
             if (name == "Permissions-Policy" &&
                 value == "geolocation=(), microphone=(), camera=()") {
                 return static_response_header(permissions_policy_default, 18, 0);
+            }
+            return std::nullopt;
+        case 21:
+            if (name == "X-RateLimit-Remaining" && value == "0") {
+                return static_response_header(x_ratelimit_remaining_zero, 21, 0);
             }
             return std::nullopt;
         case 22:
@@ -320,12 +343,6 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
             if (name == "Strict-Transport-Security" &&
                 value == "max-age=31536000; includeSubDomains") {
                 return static_response_header(strict_transport_security_default, 25, 0);
-            }
-            return std::nullopt;
-        case 28:
-            if (name == "Access-Control-Allow-Methods" &&
-                value == "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS") {
-                return static_response_header(access_control_allow_methods_default, 28, 0);
             }
             return std::nullopt;
         default:
