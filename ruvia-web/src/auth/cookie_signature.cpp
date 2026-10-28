@@ -75,6 +75,7 @@ void write_cookie_signature(
 
     std::array<std::uint8_t, hmac_digest_size(hmac_digest::sha256)> digest{};
     if (!compute_hmac(hmac_digest::sha256, secret, message_view, digest)) {
+        throw std::runtime_error("signed cookie HMAC computation failed");
     }
     http_base64_encode(output, std::span<const std::uint8_t>(digest));
 }
