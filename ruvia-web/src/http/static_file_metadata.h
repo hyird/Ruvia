@@ -89,6 +89,18 @@ struct static_file_version final {
         std::pmr::polymorphic_allocator<char8_t>(resource));
 }
 
+[[nodiscard]] inline std::pmr::string static_file_utf8_string(
+    const std::filesystem::path& path, std::pmr::memory_resource* resource) {
+    if constexpr (std::is_same_v<std::filesystem::path::value_type, char>) {
+        return path.generic_string<char, std::char_traits<char>,
+            std::pmr::polymorphic_allocator<char>>(
+            std::pmr::polymorphic_allocator<char>(resource));
+    } else {
+        const auto utf8 = static_file_utf8_path(path, resource);
+        return std::pmr::string(
+            reinterpret_cast<const char*>(utf8.data()), utf8.size(), resource);
+    }
+}
 template <typename char_value_type>
 [[nodiscard]] inline std::basic_string_view<char_value_type> static_file_extension(
     std::basic_string_view<char_value_type> path) noexcept {
@@ -122,28 +134,28 @@ template <typename char_value_type>
     return true;
 }
 
-[[nodiscard]] inline std::pmr::string lower_static_file_extension(
-    const std::filesystem::path& path, std::pmr::memory_resource* resource) {
-    // On Windows the native path uses wchar_t. Narrowing those code units one
-    // by one can alias unrelated Unicode extensions to an ASCII allow-listed
-    // type (for example U+0168 has the same low byte as 'h'). Convert the full
-    // path to UTF-8 first so extension policy and MIME lookup compare the
-    // actual filename bytes on every platform.
-    const auto utf8_path = static_file_utf8_path(path, resource);
-    const auto source_value = static_file_extension(std::u8string_view(utf8_path.data(), utf8_path.size()));
+[[nodiscard]] inline std::pmr::string lower_static_file_extension_from_utf8(
+    std::string_view utf8_path, std::pmr::memory_resource* resource) {
+    const auto source_value = static_file_extension(utf8_path);
     if (source_value.empty()) {
         return std::pmr::string(resource);
     }
     std::pmr::string extension(resource);
     extension.reserve(source_value.size());
-    for (const auto c : source_value) {
+    for (const char c : source_value) {
         auto out = c;
-        if (out >= static_cast<char8_t>('A') && out <= static_cast<char8_t>('Z')) {
-            out = static_cast<char8_t>(out + static_cast<char8_t>('a' - 'A'));
+        if (out >= 'A' && out <= 'Z') {
+            out = static_cast<char>(out + ('a' - 'A'));
         }
-        extension.push_back(static_cast<char>(out));
+        extension.push_back(out);
     }
     return extension;
+}
+
+[[nodiscard]] inline std::pmr::string lower_static_file_extension(
+    const std::filesystem::path& path, std::pmr::memory_resource* resource) {
+    const auto utf8_name = static_file_utf8_string(path.filename(), resource);
+    return lower_static_file_extension_from_utf8(utf8_name, resource);
 }
 
 template <typename char_value_type>

@@ -55,6 +55,20 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
     static constexpr char jpeg_content_type[] = "Content-Typeimage/jpeg";
     static constexpr char gif_content_type[] = "Content-Typeimage/gif";
     static constexpr char svg_content_type[] = "Content-Typeimage/svg+xml";
+    static constexpr char apng_content_type[] = "Content-Typeimage/apng";
+    static constexpr char avif_content_type[] = "Content-Typeimage/avif";
+    static constexpr char webp_content_type[] = "Content-Typeimage/webp";
+    static constexpr char bmp_content_type[] = "Content-Typeimage/bmp";
+    static constexpr char ico_content_type[] = "Content-Typeimage/vnd.microsoft.icon";
+    static constexpr char woff_content_type[] = "Content-Typefont/woff";
+    static constexpr char woff2_content_type[] = "Content-Typefont/woff2";
+    static constexpr char ttf_content_type[] = "Content-Typefont/ttf";
+    static constexpr char otf_content_type[] = "Content-Typefont/otf";
+    static constexpr char eot_content_type[] = "Content-Typeapplication/vnd.ms-fontobject";
+    static constexpr char xml_utf8_content_type[] = "Content-Typetext/xml; charset=utf-8";
+    static constexpr char manifest_json_content_type[] =
+        "Content-Typeapplication/manifest+json; charset=utf-8";
+    static constexpr char problem_json_content_type[] = "Content-Typeapplication/problem+json";
     static constexpr char wasm_content_type[] = "Content-Typeapplication/wasm";
     static constexpr char octet_stream_content_type[] = "Content-Typeapplication/octet-stream";
     static constexpr char connection_close[] = "Connectionclose";
@@ -123,6 +137,45 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
             }
             if (value == "application/octet-stream") {
                 return static_response_header(octet_stream_content_type, 12, response_header_content_type);
+            }
+            if (value == "application/problem+json") {
+                return static_response_header(problem_json_content_type, 12, response_header_content_type);
+            }
+            if (value == "image/apng") {
+                return static_response_header(apng_content_type, 12, response_header_content_type);
+            }
+            if (value == "image/avif") {
+                return static_response_header(avif_content_type, 12, response_header_content_type);
+            }
+            if (value == "image/webp") {
+                return static_response_header(webp_content_type, 12, response_header_content_type);
+            }
+            if (value == "image/bmp") {
+                return static_response_header(bmp_content_type, 12, response_header_content_type);
+            }
+            if (value == "image/vnd.microsoft.icon") {
+                return static_response_header(ico_content_type, 12, response_header_content_type);
+            }
+            if (value == "font/woff") {
+                return static_response_header(woff_content_type, 12, response_header_content_type);
+            }
+            if (value == "font/woff2") {
+                return static_response_header(woff2_content_type, 12, response_header_content_type);
+            }
+            if (value == "font/ttf") {
+                return static_response_header(ttf_content_type, 12, response_header_content_type);
+            }
+            if (value == "font/otf") {
+                return static_response_header(otf_content_type, 12, response_header_content_type);
+            }
+            if (value == "application/vnd.ms-fontobject") {
+                return static_response_header(eot_content_type, 12, response_header_content_type);
+            }
+            if (value == "text/xml; charset=utf-8") {
+                return static_response_header(xml_utf8_content_type, 12, response_header_content_type);
+            }
+            if (value == "application/manifest+json; charset=utf-8") {
+                return static_response_header(manifest_json_content_type, 12, response_header_content_type);
             }
             return std::nullopt;
         case response_header_connection:

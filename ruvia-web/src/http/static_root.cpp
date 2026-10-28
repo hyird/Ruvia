@@ -523,9 +523,8 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         if (std::filesystem::is_symlink(status)) {
             continue;
         }
-        const auto relative_utf8 = detail::static_file_utf8_path(
+        auto relative = detail::static_file_utf8_string(
             file_path.lexically_relative(canonical_root), upstream);
-        std::pmr::string relative(as_chars(std::as_bytes(std::span(relative_utf8))), upstream);
         if (relative.empty() || relative.starts_with("../")) {
             continue;
         }
@@ -546,12 +545,14 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         if (!std::filesystem::is_regular_file(status)) {
             continue;
         }
-        const auto extension = detail::lower_static_file_extension(file_path, upstream);
+        const auto extension = detail::lower_static_file_extension_from_utf8(relative, upstream);
         const bool directly_servable = detail::file_type_allowed(extension, config);
         bool usable_as_sidecar = false;
         if (!directly_servable && detail::is_precompressed_sidecar_extension(extension)) {
+            const auto stem_view =
+                std::string_view(relative).substr(0, relative.size() - extension.size());
             usable_as_sidecar = detail::file_type_allowed(
-                detail::lower_static_file_extension(file_path.stem(), upstream), config);
+                detail::lower_static_file_extension_from_utf8(stem_view, upstream), config);
         }
         if (!directly_servable && !usable_as_sidecar) {
             continue;
@@ -579,6 +580,9 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
             if (const auto date = format_http_date(snapshot.modified_seconds_)) {
                 entry.last_modified_.assign(date->data(), date->size());
             }
+        }
+        if (state_value.entries_.empty()) {
+            state_value.entries_.reserve(8);
         }
         state_value.entries_.push_back(std::move(entry));
     }
