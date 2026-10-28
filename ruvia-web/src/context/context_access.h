@@ -89,6 +89,10 @@ struct context_access final {
         return context_value.response_state().active_response().header(name).has_value();
     }
 
+    static void set_stable_response_header(
+        context& context_value, std::string_view name, std::string_view value) {
+        (void)context_value.set_stable_response_header(name, value);
+    }
     // The status the handler set; a file response sends it for the full body.
     [[nodiscard]] static http_status_code response_status(const context& context_value) noexcept {
         return context_value.response_state().metadata().status();

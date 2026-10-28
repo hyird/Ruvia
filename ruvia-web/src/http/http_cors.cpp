@@ -20,6 +20,11 @@
 namespace ruvia::detail {
 namespace {
 
+constexpr std::string_view allow_origin_header_name = "Access-Control-Allow-Origin";
+constexpr std::string_view allow_headers_header_name = "Access-Control-Allow-Headers";
+constexpr std::string_view expose_headers_header_name = "Access-Control-Expose-Headers";
+constexpr std::string_view max_age_header_name = "Access-Control-Max-Age";
+
 bool has_response_header(const http_response& response, std::string_view name) {
     return response.header(name).has_value();
 }
@@ -31,20 +36,19 @@ void set_response_header_if_missing(
     }
 }
 
+void set_prefixed_response_header_if_missing(
+    http_response& response, std::string_view stored, std::size_t name_size) {
+    if (stored.size() <= name_size) {
+        return;
+    }
+    set_response_header_if_missing(
+        response, stored.substr(0, name_size), stored.substr(name_size));
+}
+
 void add_vary_tokens(http_response& response, const std::string_view* tokens, std::size_t count) {
     for (std::size_t i = 0; i < count; ++i) {
         response.add_vary_token(tokens[i]);
     }
-}
-
-void set_cors_max_age(http_response& response, const std::optional<std::chrono::seconds>& max_age) {
-    if (!max_age.has_value() || has_response_header(response, "Access-Control-Max-Age")) {
-        return;
-    }
-    // make_cors_options rejects negative max ages.
-    std::array<char, http_max_unsigned_decimal_size> buffer;
-    response.header("Access-Control-Max-Age",
-        http_format_unsigned(buffer, static_cast<std::uint64_t>(max_age->count())));
 }
 
 // Validate the whole list before reflecting any prefix. One request field may
@@ -130,23 +134,25 @@ void validate_cors_header_names(const std::vector<std::string>& names, const cha
     }
 }
 
-void append_cors_header_names(std::pmr::string& output, const std::vector<std::string>& names) {
+void append_cors_header_names(std::pmr::string& output, std::string_view header_name,
+    const std::vector<std::string>& names) {
     if (names.empty()) {
         return;
     }
-    std::size_t total_size = output.size();
+    std::size_t total_size = header_name.size();
     for (std::size_t i = 0; i < names.size(); ++i) {
-        if (total_size != 0 || i != 0) {
+        if (i != 0) {
             total_size += 2U;
         }
         total_size += names[i].size();
     }
     output.reserve(total_size);
-    for (const auto& name : names) {
-        if (!output.empty()) {
+    output.append(header_name);
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (i != 0) {
             output.append(", ");
         }
-        output.append(name);
+        output.append(names[i]);
     }
 }
 
@@ -197,15 +203,28 @@ cors_options make_cors_options(const cors_config& config, std::pmr::memory_resou
     cors_options stored(resource);
     stored.origin_mode_ = config.origin_.mode_;
     if (config.origin_.mode_ != cors_origin_mode::any) {
-        stored.origin_ = config.origin_.value_.view();
+        const auto origin_value = config.origin_.value_.view();
+        stored.origin_.reserve(allow_origin_header_name.size() + origin_value.size());
+        stored.origin_.append(allow_origin_header_name);
+        stored.origin_.append(origin_value);
     }
 
     stored.request_headers_mode_ = config.request_headers_.mode_;
     if (config.request_headers_.mode_ == cors_request_headers_mode::fixed) {
-        append_cors_header_names(stored.request_headers_, config.request_headers_.names_);
+        append_cors_header_names(stored.request_headers_, allow_headers_header_name,
+            config.request_headers_.names_);
     }
-    append_cors_header_names(stored.expose_headers_, config.expose_headers_);
-    stored.max_age_ = config.max_age_;
+    append_cors_header_names(
+        stored.expose_headers_, expose_headers_header_name, config.expose_headers_);
+    if (config.max_age_.has_value()) {
+        // validate_cors_config rejects negative max ages.
+        std::array<char, http_max_unsigned_decimal_size> buffer;
+        const auto formatted =
+            http_format_unsigned(buffer, static_cast<std::uint64_t>(config.max_age_->count()));
+        stored.max_age_.reserve(max_age_header_name.size() + formatted.size());
+        stored.max_age_.append(max_age_header_name);
+        stored.max_age_.append(formatted);
+    }
     return stored;
 }
 
@@ -227,7 +246,6 @@ void apply_cors_headers(const http_request& request, http_response& response, co
         return;
     }
     const bool wildcard_origin = cors.origin_mode_ == cors_origin_mode::any;
-    const auto allow_origin = wildcard_origin ? std::string_view("*") : std::string_view(cors.origin_);
     std::array<std::string_view, 3> vary_tokens{};
     std::size_t vary_token_count = 0;
     const bool options = request.known_method() == http_known_method::options;
@@ -238,7 +256,12 @@ void apply_cors_headers(const http_request& request, http_response& response, co
             vary_tokens[vary_token_count++] = "Access-Control-Request-Headers";
         }
     }
-    set_response_header_if_missing(response, "Access-Control-Allow-Origin", allow_origin);
+    if (wildcard_origin) {
+        set_response_header_if_missing(response, allow_origin_header_name, "*");
+    } else {
+        set_prefixed_response_header_if_missing(
+            response, cors.origin_, allow_origin_header_name.size());
+    }
     if (cors.origin_mode_ == cors_origin_mode::credentialed_exact) {
         set_response_header_if_missing(response, "Access-Control-Allow-Credentials", "true");
     }
@@ -250,18 +273,23 @@ void apply_cors_headers(const http_request& request, http_response& response, co
             set_response_header_if_missing(response, "Access-Control-Allow-Methods", *allow);
         }
         if (cors.request_headers_mode_ == cors_request_headers_mode::fixed) {
-            set_response_header_if_missing(response, "Access-Control-Allow-Headers", cors.request_headers_);
+            set_prefixed_response_header_if_missing(
+                response, cors.request_headers_, allow_headers_header_name.size());
         } else {
             reflect_cors_request_header_names(request, response, *request_header_names_size);
         }
         add_vary_tokens(response, vary_tokens.data(), vary_token_count);
-        set_cors_max_age(response, cors.max_age_);
+        if (!cors.max_age_.empty()) {
+            set_prefixed_response_header_if_missing(
+                response, cors.max_age_, max_age_header_name.size());
+        }
         return;
     }
 
     add_vary_tokens(response, vary_tokens.data(), vary_token_count);
     if (!cors.expose_headers_.empty()) {
-        set_response_header_if_missing(response, "Access-Control-Expose-Headers", cors.expose_headers_);
+        set_prefixed_response_header_if_missing(
+            response, cors.expose_headers_, expose_headers_header_name.size());
     }
 }
 

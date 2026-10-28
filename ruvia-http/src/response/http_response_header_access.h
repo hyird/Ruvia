@@ -39,6 +39,21 @@ inline void validate_response_header_storage_size(std::size_t name_size, std::si
         {name.data(), name.size() + header_value.value().size()}, value);
 }
 
+[[nodiscard]] inline bool response_header_views_contiguous(
+    std::string_view name, std::string_view value) noexcept {
+    if (name.data() == nullptr) {
+        return false;
+    }
+    if (value.empty()) {
+        return true;
+    }
+    if (value.data() == nullptr) {
+        return false;
+    }
+    return reinterpret_cast<std::uintptr_t>(value.data()) ==
+           reinterpret_cast<std::uintptr_t>(name.data() + name.size());
+}
+
 struct http_response_header_access final {
     [[nodiscard]] static constexpr http_response_header make(const char* bytes_value, std::uint32_t name_size,
         std::uint32_t value_size, std::uint32_t known_bit, bool owned) noexcept {
