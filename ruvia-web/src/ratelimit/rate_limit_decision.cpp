@@ -55,11 +55,14 @@ void apply_rate_limit_rejection_headers(http_response& response, const rate_limi
 
 void apply_route_rate_limit_rejection_headers(
     http_response& response, const rate_limit_rejection& rejection, std::size_t max_requests) {
-    const auto retry_after = retry_after_seconds(rejection.retry_after());
-    set_unsigned_header(response, "Retry-After", retry_after);
+    response.reserve_headers(response.headers().size() + 4U);
+    std::array<char, http_max_unsigned_decimal_size> retry_buffer{};
+    const auto retry_after_text =
+        http_format_unsigned(retry_buffer, retry_after_seconds(rejection.retry_after()));
+    response.header("Retry-After", retry_after_text);
     set_unsigned_header(response, "X-RateLimit-Limit", max_requests);
-    set_unsigned_header(response, "X-RateLimit-Remaining", 0);
-    set_unsigned_header(response, "X-RateLimit-Reset", retry_after);
+    response.header("X-RateLimit-Remaining", "0");
+    response.header("X-RateLimit-Reset", retry_after_text);
 }
 
 bool apply_route_rate_limit(

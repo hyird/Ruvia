@@ -1,5 +1,6 @@
 #include "ruvia/http/http_connect_udp.h"
 
+#include <array>
 #include <variant>
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
@@ -159,7 +160,15 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
     if (!valid_host(target.host_) || !target.port_) {
         return http_connect_udp_error::invalid_target;
     }
-    std::pmr::string result_value(prefix, resource ? resource : std::pmr::get_default_resource());
+    std::size_t encoded_host_size = 0;
+    for (const unsigned char c : target.host_) {
+        encoded_host_size += detail::is_unreserved_byte(c) ? 1U : 3U;
+    }
+    std::array<char, http_max_unsigned_decimal_size> port_buffer{};
+    const auto port_digits = http_format_unsigned(port_buffer, target.port_);
+    std::pmr::string result_value(resource ? resource : std::pmr::get_default_resource());
+    result_value.reserve(prefix.size() + encoded_host_size + 1U + port_digits.size() + 1U);
+    result_value.append(prefix);
     for (const unsigned char c : target.host_) {
         if (detail::is_unreserved_byte(c)) {
             result_value.push_back(static_cast<char>(c));
@@ -168,7 +177,7 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
         }
     }
     result_value.push_back('/');
-    http_append_unsigned(result_value, target.port_);
+    result_value.append(port_digits);
     result_value.push_back('/');
     return result_value;
 }

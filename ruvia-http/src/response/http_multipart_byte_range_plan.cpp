@@ -23,8 +23,11 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     http_multipart_byte_range_plan plan(resource);
     auto& storage = *plan.state_;
     auto& metadata = storage.metadata_;
-    storage.content_type_.append("multipart/byteranges; boundary=");
+    static constexpr std::string_view content_type_prefix = "multipart/byteranges; boundary=";
     const bool boundary_is_token = http_token_prefix_size(boundary) == boundary.size();
+    storage.content_type_.reserve(
+        content_type_prefix.size() + boundary.size() + (boundary_is_token ? 0U : 2U));
+    storage.content_type_.append(content_type_prefix);
     if (!boundary_is_token) {
         storage.content_type_.push_back('"');
     }
@@ -33,7 +36,7 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
         storage.content_type_.push_back('"');
     }
     storage.segments_.reserve(ranges.size() * 2 + 1);
-
+    metadata.reserve(ranges.size() * (boundary.size() + media_type.size() + 64U) + boundary.size() + 8U);
     const auto record_metadata = [&storage](std::size_t offset) {
         const auto length = storage.metadata_.size() - offset;
         if (storage.content_length_ >

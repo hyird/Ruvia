@@ -1,5 +1,6 @@
 #include "ruvia/http/sse.h"
 
+#include <array>
 #include <cstddef>
 #include <stdexcept>
 #include <string_view>
@@ -11,6 +12,23 @@
 
 namespace ruvia {
 namespace {
+
+[[nodiscard]] std::size_t sse_data_encoded_size(std::string_view data) noexcept {
+    std::size_t total = 0;
+    while (true) {
+        const auto next_value = data.find_first_of("\r\n");
+        const auto line_size = next_value == std::string_view::npos ? data.size() : next_value;
+        total += 6U + line_size + 1U;
+        if (next_value == std::string_view::npos) {
+            return total;
+        }
+        auto advance = next_value + 1U;
+        if (data[next_value] == '\r' && next_value + 1U < data.size() && data[next_value + 1U] == '\n') {
+            advance = next_value + 2U;
+        }
+        data.remove_prefix(advance);
+    }
+}
 
 void append_sse_data(std::pmr::string& frame, std::string_view data) {
     while (true) {
@@ -51,7 +69,26 @@ std::pmr::string format_sse_message(const sse_message& message, sse_format_optio
         throw std::invalid_argument("SSE fields must be valid UTF-8");
     }
 
+    std::array<char, http_max_unsigned_decimal_size> retry_buffer{};
+    std::string_view retry_digits{};
+    std::size_t total_size = 1U;
+    if (!message.event_.empty()) {
+        total_size += 7U + message.event_.size() + 1U;
+    }
+    if (message.id_.has_value()) {
+        total_size += 3U + (message.id_->empty() ? 0U : 1U + message.id_->size()) + 1U;
+    }
+    if (message.retry_.has_value()) {
+        retry_digits = http_format_unsigned(
+            retry_buffer, static_cast<std::uint64_t>(message.retry_->count()));
+        total_size += 7U + retry_digits.size() + 1U;
+    }
+    if (message.data_.has_value()) {
+        total_size += sse_data_encoded_size(message.data_->view());
+    }
+
     std::pmr::string frame(detail::http_pmr_resource_or_default(options.resource_));
+    frame.reserve(total_size);
     if (!message.event_.empty()) {
         frame.append("event: ");
         frame.append(message.event_.data(), message.event_.size());
@@ -67,7 +104,7 @@ std::pmr::string format_sse_message(const sse_message& message, sse_format_optio
     }
     if (message.retry_.has_value()) {
         frame.append("retry: ");
-        http_append_unsigned(frame, static_cast<std::uint64_t>(message.retry_->count()));
+        frame.append(retry_digits);
         frame.push_back('\n');
     }
     if (message.data_.has_value()) {
