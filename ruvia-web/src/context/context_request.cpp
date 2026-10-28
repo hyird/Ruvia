@@ -80,6 +80,12 @@ namespace detail {
 
 namespace {
 
+[[nodiscard]] const request_name_value_list& empty_request_fields() noexcept {
+    static const request_name_value_list empty =
+        detail::request_name_value_list_access::make(process_resource());
+    return empty;
+}
+
 // Storage capacity is fixed by ensure_request_query before any view escapes.
 [[nodiscard]] std::optional<std::string_view> borrow_or_decode_query_component(
     std::pmr::vector<std::pmr::string>& storage, std::string_view input) {
@@ -325,6 +331,9 @@ const request_name_value_list& context_request::header_fields() const {
 }
 
 const request_name_value_list& context_request::query_fields() const {
+    if (context_->request_.query_string().empty()) {
+        return empty_request_fields();
+    }
     auto& storage = context_->request_storage();
     ensure_request_query(*context_, context_->request_, storage);
     return storage.query_->fields();
@@ -353,33 +362,44 @@ std::optional<std::string_view> context_request::cookie(std::string_view name) c
 }
 
 const request_name_value_list& context_request::cookie_fields() const {
+    if (!context_->request_.header("Cookie").has_value()) {
+        return empty_request_fields();
+    }
     auto& cache = context_->request_storage().cookies_;
     if (!cache) {
         auto cookies = detail::request_name_value_list_access::make(context_->arena());
-        if (context_->request_.header("Cookie").has_value()) {
-            std::size_t cookie_count = 0;
-            for (const auto& header_field : context_->request_.headers()) {
-                if (!http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
-                    continue;
-                }
-                http_visit_cookie_pairs(
-                    header_field.value(), [&cookie_count](std::string_view, std::string_view) {
-                        ++cookie_count;
-                        return true;
-                    });
+        std::size_t cookie_count = 0;
+        std::size_t cookie_header_count = 0;
+        std::string_view single_cookie_value{};
+        for (const auto& header_field : context_->request_.headers()) {
+            if (!http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
+                continue;
             }
-            if (cookie_count != 0) {
-                detail::request_name_value_list_access::reserve(cookies, cookie_count);
+            if (cookie_header_count == 0) {
+                single_cookie_value = header_field.value();
+            }
+            ++cookie_header_count;
+            http_visit_cookie_pairs(
+                header_field.value(), [&cookie_count](std::string_view, std::string_view) {
+                    ++cookie_count;
+                    return true;
+                });
+        }
+        if (cookie_count != 0) {
+            detail::request_name_value_list_access::reserve(cookies, cookie_count);
+            const auto append_cookie_pair = [&cookies](std::string_view key, std::string_view value) {
+                detail::request_name_value_list_access::push_back(
+                    cookies, http_header_view{key, value});
+                return true;
+            };
+            if (cookie_header_count == 1) {
+                http_visit_cookie_pairs(single_cookie_value, append_cookie_pair);
+            } else {
                 for (const auto& header_field : context_->request_.headers()) {
                     if (!http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
                         continue;
                     }
-                    http_visit_cookie_pairs(
-                        header_field.value(), [&cookies](std::string_view key, std::string_view value) {
-                            detail::request_name_value_list_access::push_back(
-                                cookies, http_header_view{key, value});
-                            return true;
-                        });
+                    http_visit_cookie_pairs(header_field.value(), append_cookie_pair);
                 }
             }
         }
@@ -389,6 +409,9 @@ const request_name_value_list& context_request::cookie_fields() const {
 }
 
 const request_name_value_list& context_request::param_fields() const {
+    if (context_->param_count_ == 0) {
+        return empty_request_fields();
+    }
     auto& storage = context_->request_storage();
     ensure_route_params(*context_, context_->param_names_, context_->param_values_, context_->param_count_, storage);
     return storage.route_params_->fields_;
