@@ -188,6 +188,21 @@ public:
         }
     }
 
+    void throw_if_invalid(validation_failure_options options = {}) && {
+        if (!ok()) {
+            if (*resource() == *process_resource()) {
+                auto moved_issues = std::move(issues_);
+                issues_.clear();
+                throw http_error(options.status_, options.code_.view(), options.message_.view(),
+                    {}, std::move(moved_issues), process_resource());
+            }
+            throw http_error({.status_ = options.status_,
+                .code_ = options.code_,
+                .message_ = options.message_,
+                .validation_issues_ = issues_});
+        }
+    }
+
 private:
     issue_list_type issues_;
 };
@@ -206,9 +221,9 @@ template <typename t_type>
     if (!parsed_value) {
         throw std::invalid_argument("invalid form value");
     }
-    validator validator_value({.resource_ = resource});
+    validator validator_value;
     validate_model(*parsed_value, validator_value);
-    validator_value.throw_if_invalid();
+    std::move(validator_value).throw_if_invalid();
     return std::move(*parsed_value);
 }
 
@@ -225,9 +240,9 @@ template <typename t_type>
         throw std::invalid_argument("invalid JSON value");
     }
     if constexpr (detail::model_validation_access::contains_model<t_type>()) {
-        validator validator_value({.resource_ = resource});
+        validator validator_value;
         detail::model_validation_access::validate_value(*parsed_value, validator_value);
-        validator_value.throw_if_invalid();
+        std::move(validator_value).throw_if_invalid();
     }
     return std::move(*parsed_value);
 }

@@ -48,9 +48,9 @@ task<std::optional<t_type>> context_request::json_if() const {
             // explicitly JSON request into a successful fallback.
             detail::throw_invalid_json_body();
         }
-        validator validator_value({.resource_ = resource});
+        validator validator_value;
         detail::model_validation_access::validate_model(*parsed_value, validator_value);
-        validator_value.throw_if_invalid();
+        std::move(validator_value).throw_if_invalid();
         co_return std::move(*parsed_value);
     };
     return ::ruvia::make_scoped_operation(context_->operation_scope_, run(context_));
@@ -74,9 +74,9 @@ task<std::optional<t_type>> context_request::form_if() const {
             // nullopt is reserved for a different Content-Type.
             detail::throw_invalid_form_body();
         }
-        validator validator_value({.resource_ = resource});
+        validator validator_value;
         detail::model_validation_access::validate_model(*parsed_value, validator_value);
-        validator_value.throw_if_invalid();
+        std::move(validator_value).throw_if_invalid();
         co_return std::move(*parsed_value);
     };
     return ::ruvia::make_scoped_operation(context_->operation_scope_, run(context_));
@@ -151,9 +151,9 @@ task<void> model_validation_middleware<target, body_type>::handle(context& c, ne
             detail::throw_invalid_json_body();
         }
         body_type body = std::move(*parsed_value);
-        validator validator_value({.resource_ = c.arena()});
+        validator validator_value;
         validate(body, validator_value);
-        validator_value.throw_if_invalid();
+        std::move(validator_value).throw_if_invalid();
         auto binding = detail::bind_validated_model(c, body);
         co_await next_value();
     } else if constexpr (target == validation_target::form) {
@@ -168,16 +168,16 @@ task<void> model_validation_middleware<target, body_type>::handle(context& c, ne
             detail::throw_invalid_form_body();
         }
         body_type body = std::move(*parsed_value);
-        validator validator_value({.resource_ = c.arena()});
+        validator validator_value;
         validate(body, validator_value);
-        validator_value.throw_if_invalid();
+        std::move(validator_value).throw_if_invalid();
         auto binding = detail::bind_validated_model(c, body);
         co_await next_value();
     } else {
         body_type body = parse_validated_fields<target, body_type>(c);
-        validator validator_value({.resource_ = c.arena()});
+        validator validator_value;
         validate(body, validator_value);
-        validator_value.throw_if_invalid();
+        std::move(validator_value).throw_if_invalid();
         auto binding = detail::bind_validated_model(c, body);
         co_await next_value();
     }

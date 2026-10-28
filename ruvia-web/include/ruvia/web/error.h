@@ -232,6 +232,10 @@ public:
     }
 
 private:
+    friend class validator;
+    http_error(http_status_code status, std::string_view code, std::string_view message,
+        std::string_view status_text, std::pmr::vector<validation_issue>&& issues,
+        std::pmr::memory_resource* resource);
     http_status_code status_{http_status::internal_server_error};
     std::pmr::string status_text_;
     std::pmr::string code_;

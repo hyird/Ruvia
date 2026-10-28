@@ -146,7 +146,12 @@ template <typename model_type>
 std::size_t model_json_access::size_hint(const model_type& value) {
     std::size_t size = 2;
     model::visit_serialized_fields(value, [&size](const auto& slot, auto kind, bool comma) {
-        size += std::size_t{comma} + json_string_size_hint(slot.wire_name()) + 1;
+        using slot_type = std::remove_cvref_t<decltype(slot)>;
+        if constexpr (slot_type::has_plain_wire_name()) {
+            size += std::size_t{comma} + slot_type::quoted_wire_name_colon().size();
+        } else {
+            size += std::size_t{comma} + json_string_size_hint(slot.wire_name()) + 1;
+        }
         size += kind == model::serialized_field_kind::value
                     ? json_size_hint_value(*slot.value())
                     : 4;
@@ -158,11 +163,17 @@ template <typename model_type>
 void model_json_access::append(std::pmr::string& output, const model_type& value) {
     output.push_back('{');
     model::visit_serialized_fields(value, [&output](const auto& slot, auto kind, bool comma) {
-        if (comma) {
-            output.push_back(',');
+        using slot_type = std::remove_cvref_t<decltype(slot)>;
+        if constexpr (slot_type::has_plain_wire_name()) {
+            output.append(comma ? slot_type::comma_quoted_wire_name_colon()
+                                : slot_type::quoted_wire_name_colon());
+        } else {
+            if (comma) {
+                output.push_back(',');
+            }
+            append_json_string(output, slot.wire_name());
+            output.push_back(':');
         }
-        append_json_string(output, slot.wire_name());
-        output.push_back(':');
         if (kind == model::serialized_field_kind::value) {
             append_json_value(output, *slot.value());
         } else {

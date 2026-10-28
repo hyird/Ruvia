@@ -148,6 +148,15 @@ http_error::http_error(http_error_info_options options, std::pmr::memory_resourc
       validation_issues_(
           detail::clone_validation_issues(options.validation_issues_.view(), resource)) {}
 
+http_error::http_error(http_status_code status, std::string_view code, std::string_view message,
+    std::string_view status_text, std::pmr::vector<validation_issue>&& issues,
+    std::pmr::memory_resource* resource)
+    : status_(status),
+      status_text_(status_text, resource),
+      code_(code, resource),
+      message_(message, resource),
+      validation_issues_(std::move(issues)) {}
+
 http_error::http_error(const http_error& other)
     : http_error(other, other.resource()) {}
 

@@ -1,8 +1,11 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
+#include <cstring>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -134,13 +137,6 @@ public:
         return std::nullopt;
     }
 
-    void render(std::pmr::string& output) const {
-        output.clear();
-        output.reserve(size_hint());
-        append_to(output);
-    }
-
-private:
     [[nodiscard]] constexpr std::size_t size_hint() const noexcept {
         if (parent_ == nullptr) {
             return 0;
@@ -151,6 +147,43 @@ private:
         }
         return parent_size + (parent_size == 0 ? 0U : 1U) + field_.size();
     }
+
+    [[nodiscard]] std::string_view render_to(std::span<char> buffer) const noexcept {
+        std::size_t length = 0;
+        append_to_buffer(buffer, length);
+        return std::string_view(buffer.data(), length);
+    }
+
+    void render(std::pmr::string& output) const {
+        output.clear();
+        output.reserve(size_hint());
+        append_to(output);
+    }
+
+private:
+    void append_to_buffer(std::span<char> buffer, std::size_t& length) const noexcept {
+        if (parent_ == nullptr) {
+            return;
+        }
+        parent_->append_to_buffer(buffer, length);
+        if (indexed_) {
+            buffer[length++] = '[';
+            std::array<char, http_max_unsigned_decimal_size> digits;
+            const auto formatted = http_format_unsigned(digits, index_);
+            std::memcpy(buffer.data() + length, formatted.data(), formatted.size());
+            length += formatted.size();
+            buffer[length++] = ']';
+            return;
+        }
+        if (length != 0) {
+            buffer[length++] = '.';
+        }
+        if (!field_.empty()) {
+            std::memcpy(buffer.data() + length, field_.data(), field_.size());
+            length += field_.size();
+        }
+    }
+
     void append_to(std::pmr::string& output) const {
         if (parent_ == nullptr) {
             return;
@@ -174,8 +207,8 @@ private:
     bool indexed_{false};
 };
 
-// Forwards issues to a validator, rendering their paths into one scratch
-// string that is created by the first issue and reused for later ones.
+// Forwards issues to a validator, rendering typical paths into a stack buffer
+// and spilling only oversized paths to a reusable string.
 template <typename validator_type>
 class model_issue_sink final {
 public:
@@ -185,6 +218,12 @@ public:
     void add(const model_path& path, std::string_view code, std::string_view message) {
         if (const auto single = path.single_field()) {
             validator_.add(*single, code, message);
+            return;
+        }
+        static constexpr std::size_t inline_capacity = 128;
+        if (path.size_hint() <= inline_capacity) {
+            std::array<char, inline_capacity> buffer{};
+            validator_.add(path.render_to(buffer), code, message);
             return;
         }
         if (!path_) {

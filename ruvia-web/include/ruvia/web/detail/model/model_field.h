@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -22,6 +23,34 @@ class model_storage;
     // decoded key before binding, so collisions cannot change JSON semantics.
     return detail::fnv1a_accumulate(detail::fnv1a_offset_basis, name);
 }
+template <fixed_string wire_name>
+[[nodiscard]] consteval std::array<char, wire_name.view().size() + 3>
+make_quoted_wire_name_colon() noexcept {
+    constexpr auto view = wire_name.view();
+    std::array<char, view.size() + 3> out{};
+    out[0] = '"';
+    for (std::size_t i = 0; i < view.size(); ++i) {
+        out[i + 1] = view[i];
+    }
+    out[view.size() + 1] = '"';
+    out[view.size() + 2] = ':';
+    return out;
+}
+
+template <fixed_string wire_name>
+[[nodiscard]] consteval std::array<char, wire_name.view().size() + 4>
+make_comma_quoted_wire_name_colon() noexcept {
+    constexpr auto view = wire_name.view();
+    std::array<char, view.size() + 4> out{};
+    out[0] = ',';
+    out[1] = '"';
+    for (std::size_t i = 0; i < view.size(); ++i) {
+        out[i + 2] = view[i];
+    }
+    out[view.size() + 2] = '"';
+    out[view.size() + 3] = ':';
+    return out;
+}
 
 template <typename field_value_type, bool is_required, typename options_type, fixed_string field_wire_name>
 class model_field final {
@@ -35,6 +64,25 @@ public:
 
     [[nodiscard]] constexpr std::string_view wire_name() const noexcept {
         return field_wire_name.view();
+    }
+    [[nodiscard]] static consteval bool has_plain_wire_name() noexcept {
+        for (const char ch : field_wire_name.view()) {
+            const auto byte = static_cast<unsigned char>(ch);
+            if (byte < 0x20 || byte >= 0x80 || ch == '"' || ch == '\\') {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] static constexpr std::string_view quoted_wire_name_colon() noexcept {
+        return std::string_view(
+            quoted_wire_name_colon_storage_.data(), quoted_wire_name_colon_storage_.size());
+    }
+
+    [[nodiscard]] static constexpr std::string_view comma_quoted_wire_name_colon() noexcept {
+        return std::string_view(comma_quoted_wire_name_colon_storage_.data(),
+            comma_quoted_wire_name_colon_storage_.size());
     }
 
     [[nodiscard]] detail::model_field_state state() const noexcept {
@@ -198,6 +246,10 @@ private:
         state_ = detail::model_field_state::missing;
     }
 
+    static constexpr auto quoted_wire_name_colon_storage_ =
+        make_quoted_wire_name_colon<field_wire_name>();
+    static constexpr auto comma_quoted_wire_name_colon_storage_ =
+        make_comma_quoted_wire_name_colon<field_wire_name>();
     detail::model_field_state state_{detail::model_field_state::missing};
     bool present_{false};
     std::optional<field_value_type> value_;
