@@ -39,8 +39,7 @@ template <typename visitor_type, typename prepare_type = std::nullptr_t>
     // each copy at a stable address.
     static constexpr std::size_t inline_capacity = 16;
     using field_pair_type = std::pair<std::string_view, std::string_view>;
-    std::array<field_pair_type, inline_capacity> inline_fields{};
-    std::array<std::string_view, inline_capacity> inline_names{};
+    std::array<field_pair_type, inline_capacity> inline_fields;
     std::size_t inline_count = 0;
     std::pmr::vector<field_pair_type> heap_fields(resource);
     std::pmr::vector<std::string_view> heap_names(resource);
@@ -52,14 +51,16 @@ template <typename visitor_type, typename prepare_type = std::nullptr_t>
             heap_names.push_back(stored_name);
         } else if (inline_count < inline_capacity) {
             inline_fields[inline_count] = field_pair_type{stored_name, value};
-            inline_names[inline_count] = stored_name;
             ++inline_count;
         } else {
             heap_fields.reserve(inline_capacity * 2U);
             heap_fields.assign(inline_fields.begin(), inline_fields.end());
             heap_fields.emplace_back(stored_name, value);
             heap_names.reserve(inline_capacity * 2U);
-            heap_names.assign(inline_names.begin(), inline_names.end());
+            for (const auto& [existing_name, existing_value] : inline_fields) {
+                (void)existing_value;
+                heap_names.push_back(existing_name);
+            }
             heap_names.push_back(stored_name);
         }
     };
@@ -77,10 +78,24 @@ template <typename visitor_type, typename prepare_type = std::nullptr_t>
     }
     std::span<const field_pair_type> fields_view;
     if (heap_fields.empty()) {
-        const std::span<std::string_view> active_names(inline_names.data(), inline_count);
-        std::ranges::sort(active_names);
-        if (std::ranges::adjacent_find(active_names) != active_names.end()) {
-            return false;
+        if (inline_count <= 8) {
+            for (std::size_t i = 1; i < inline_count; ++i) {
+                for (std::size_t j = 0; j < i; ++j) {
+                    if (inline_fields[i].first == inline_fields[j].first) {
+                        return false;
+                    }
+                }
+            }
+        } else {
+            std::array<std::string_view, inline_capacity> inline_names;
+            for (std::size_t i = 0; i < inline_count; ++i) {
+                inline_names[i] = inline_fields[i].first;
+            }
+            const std::span<std::string_view> active_names(inline_names.data(), inline_count);
+            std::ranges::sort(active_names);
+            if (std::ranges::adjacent_find(active_names) != active_names.end()) {
+                return false;
+            }
         }
         fields_view = std::span<const field_pair_type>(inline_fields.data(), inline_count);
     } else {
@@ -185,7 +200,7 @@ void jwt_append_json_member(
     first = false;
     append_json_string<json_hex_case::lower>(out, name);
     out.push_back(':');
-    std::array<char, 32> buffer{};
+    std::array<char, 32> buffer;
     const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
     if (ec != std::errc{}) {
         throw std::logic_error("failed to format JWT numeric claim");
@@ -329,50 +344,52 @@ namespace {
 
 bool detail::jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_value, std::string_view key,
     std::string_view value, std::pmr::memory_resource* resolved) {
-    if (key == "iss") {
-        if (auto issuer = detail::jwt_decode_json_string_value(value, resolved)) {
-            payload_value.issuer_ = std::move(*issuer);
-            return true;
+    if (key.size() == 3) {
+        if (key == "iss") {
+            if (auto issuer = detail::jwt_decode_json_string_value(value, resolved)) {
+                payload_value.issuer_ = std::move(*issuer);
+                return true;
+            }
+            return false;
         }
-        return false;
-    }
-    if (key == "sub") {
-        if (auto subject = detail::jwt_decode_json_string_value(value, resolved)) {
-            payload_value.subject_ = std::move(*subject);
-            return true;
+        if (key == "sub") {
+            if (auto subject = detail::jwt_decode_json_string_value(value, resolved)) {
+                payload_value.subject_ = std::move(*subject);
+                return true;
+            }
+            return false;
         }
-        return false;
-    }
-    if (key == "aud") {
-        return jwt_decode_audiences(payload_value.audiences_, value, resolved);
-    }
-    if (key == "jti") {
-        if (auto id = detail::jwt_decode_json_string_value(value, resolved)) {
-            payload_value.id_ = std::move(*id);
-            return true;
+        if (key == "aud") {
+            return jwt_decode_audiences(payload_value.audiences_, value, resolved);
         }
-        return false;
-    }
-    if (key == "exp") {
-        if (const auto exp = detail::jwt_parse_json_numeric_date(value)) {
-            payload_value.expires_at_ = *exp;
-            return true;
+        if (key == "jti") {
+            if (auto id = detail::jwt_decode_json_string_value(value, resolved)) {
+                payload_value.id_ = std::move(*id);
+                return true;
+            }
+            return false;
         }
-        return false;
-    }
-    if (key == "nbf") {
-        if (const auto nbf = detail::jwt_parse_json_numeric_date(value)) {
-            payload_value.not_before_ = *nbf;
-            return true;
+        if (key == "exp") {
+            if (const auto exp = detail::jwt_parse_json_numeric_date(value)) {
+                payload_value.expires_at_ = *exp;
+                return true;
+            }
+            return false;
         }
-        return false;
-    }
-    if (key == "iat") {
-        if (const auto iat = detail::jwt_parse_json_numeric_date(value)) {
-            payload_value.issued_at_ = *iat;
-            return true;
+        if (key == "nbf") {
+            if (const auto nbf = detail::jwt_parse_json_numeric_date(value)) {
+                payload_value.not_before_ = *nbf;
+                return true;
+            }
+            return false;
         }
-        return false;
+        if (key == "iat") {
+            if (const auto iat = detail::jwt_parse_json_numeric_date(value)) {
+                payload_value.issued_at_ = *iat;
+                return true;
+            }
+            return false;
+        }
     }
     // A claim value can be any JSON value (RFC 7519 §2), and claims that are
     // not understood MUST be ignored (§4). The object visit already checked
@@ -404,8 +421,9 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
         [&](std::span<const std::pair<std::string_view, std::string_view>> fields_view) {
             std::size_t custom_claim_count = 0;
             for (const auto& [key, value] : fields_view) {
-                if (key == "iss" || key == "sub" || key == "aud" || key == "jti" ||
-                    key == "exp" || key == "nbf" || key == "iat") {
+                if (key.size() == 3 &&
+                    (key == "iss" || key == "sub" || key == "aud" || key == "jti" ||
+                        key == "exp" || key == "nbf" || key == "iat")) {
                     continue;
                 }
                 auto string_value = value;

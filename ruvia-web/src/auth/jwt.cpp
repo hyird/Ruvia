@@ -139,7 +139,7 @@ void jwt_base64_url_encode_into(char* out, std::string_view input) noexcept {
 
 struct jwt_decoded_section final {
     static constexpr std::size_t inline_capacity = 256;
-    std::array<char, inline_capacity> inline_{};
+    std::array<char, inline_capacity> inline_;
     std::pmr::string heap_;
     std::size_t size_{0};
 
@@ -225,7 +225,7 @@ void validate_jwt_hmac_secret(std::size_t digest_size, std::string_view secret) 
     if (data.size() > hmac_max_input_size) {
         throw std::length_error("JWT signing input is too large");
     }
-    std::array<std::uint8_t, hmac_max_digest_size> mac{};
+    std::array<std::uint8_t, hmac_max_digest_size> mac;
     if (!compute_hmac(digest, secret, data, mac)) {
         throw std::runtime_error("JWT HMAC signing failed");
     }

@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -52,8 +53,8 @@ void write_cookie_signature(
     if (message_size > hmac_max_input_size) {
         throw std::length_error("signed cookie message is too large for HMAC");
     }
-    std::array<char, 512> inline_message{};
-    std::pmr::string heap_message(resource);
+    std::array<char, 512> inline_message;
+    std::optional<std::pmr::string> heap_message;
     std::string_view message_view;
     if (message_size <= inline_message.size()) {
         std::memcpy(inline_message.data(), name_len_bytes.data(), name_len_bytes.size());
@@ -66,14 +67,15 @@ void write_cookie_signature(
         }
         message_view = std::string_view(inline_message.data(), message_size);
     } else {
-        heap_message.reserve(message_size);
-        heap_message.append(name_len_bytes.data(), name_len_bytes.size());
-        heap_message.append(name.data(), name.size());
-        heap_message.append(value.data(), value.size());
-        message_view = heap_message;
+        auto& message = heap_message.emplace(resource);
+        message.reserve(message_size);
+        message.append(name_len_bytes.data(), name_len_bytes.size());
+        message.append(name.data(), name.size());
+        message.append(value.data(), value.size());
+        message_view = message;
     }
 
-    std::array<std::uint8_t, hmac_digest_size(hmac_digest::sha256)> digest{};
+    std::array<std::uint8_t, hmac_digest_size(hmac_digest::sha256)> digest;
     if (!compute_hmac(hmac_digest::sha256, secret, message_view, digest)) {
         throw std::runtime_error("signed cookie HMAC computation failed");
     }
