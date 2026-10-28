@@ -89,6 +89,9 @@ task<std::optional<std::pmr::string>> http_tunnel::read() & {
 }
 task<void> http_tunnel::write(std::string_view bytes_value) & {
     require_active();
+    if (send_ended_) {
+        throw std::logic_error("HTTP tunnel send direction has ended");
+    }
     return write_owned(std::pmr::string(bytes_value, &resource_));
 }
 task<void> http_tunnel::write(std::span<const std::byte> bytes_value) & {
@@ -261,7 +264,9 @@ task<void> http_capsule_stream::write_frame(std::string_view prefix, std::string
             throw;
         }
     };
-    std::pmr::string bytes_value(prefix, state_->resource_);
+    std::pmr::string bytes_value(state_->resource_);
+    bytes_value.reserve(prefix.size() + payload_value.size());
+    bytes_value.append(prefix);
     bytes_value.append(payload_value);
     return ::ruvia::make_scoped_operation(state_->output_scope_, write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(bytes_value)}));
 }

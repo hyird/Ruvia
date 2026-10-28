@@ -288,7 +288,8 @@ struct file_validators final {
 };
 
 [[nodiscard]] file_validators compute_file_validators(const file_response_source& source_value,
-    std::pmr::string& etag_storage, std::array<char, http_imf_fixdate_size>& last_modified_storage) {
+    std::array<char, detail::static_file_etag_size>& etag_storage,
+    std::array<char, http_imf_fixdate_size>& last_modified_storage) noexcept {
     file_validators validators;
     // RFC 9110 §8.8.2.1 forbids an origin server from emitting a
     // Last-Modified value later than the message origination time. Filesystems
@@ -303,9 +304,9 @@ struct file_validators final {
     validators.modified_seconds_ = last_modified_is_actual ? source_value.modified_seconds_ : response_seconds;
     if (source_value.response_validators_ == static_response_validator_policy::emit) {
         if (source_value.precomputed_etag_.empty()) {
-            etag_storage = detail::make_static_file_snapshot_etag(etag_storage.get_allocator().resource(),
+            etag_storage = detail::format_static_file_snapshot_etag(
                 source_value.size_, source_value.modified_token_, source_value.body_.identity());
-            validators.etag_ = etag_storage;
+            validators.etag_ = std::string_view(etag_storage.data(), etag_storage.size());
         } else {
             validators.etag_ = source_value.precomputed_etag_;
         }
@@ -351,12 +352,13 @@ enum class file_header_set : std::uint8_t {
 }
 
 void add_file_headers(http_response& response, const file_response_source& source_value,
-    const file_validators& validators, file_header_set header_set = file_header_set::full) {
+    const file_validators& validators, file_header_set header_set = file_header_set::full,
+    bool emit_content_type = true) {
     const bool full = header_set == file_header_set::full;
     const bool carries_content =
         header_set == file_header_set::full || header_set == file_header_set::if_range_partial;
     response.reserve_headers(file_response_header_reserve);
-    if (full) {
+    if (full && emit_content_type) {
         response.header("Content-Type", file_media_type(source_value));
     }
     if (!source_value.cache_control_.empty()) {
@@ -442,14 +444,13 @@ void validate_indexed_file_for_bodyless_response(
     if (!token) {
         throw std::runtime_error("secure multipart boundary generation failed");
     }
-    std::pmr::string boundary(*token, context_value.arena());
     http_response response(context_value.arena());
-    add_file_headers(response, source_value, validators, header_set);
+    add_file_headers(response, source_value, validators, header_set, false);
     apply_file_response_state(context_value, source_value, response, http_status::partial_content);
     const auto media_type = response.header("Content-Type");
     const auto selected_media_type = media_type.value_or(file_media_type(source_value));
     auto multipart_plan = make_http_multipart_byte_range_plan(
-        ranges, source_value.size_, selected_media_type, boundary, context_value.arena());
+        ranges, source_value.size_, selected_media_type, *token, context_value.arena());
 
     // The outer representation is the multipart body, which is not
     // content-coded; coded representations never reach this path.
@@ -464,7 +465,7 @@ void validate_indexed_file_for_bodyless_response(
 
 [[nodiscard]] http_response make_file_response(const context& context_value, file_response_source source_value) {
     const auto& request = detail::context_access::request(context_value);
-    std::pmr::string etag_storage(context_value.pool());
+    std::array<char, detail::static_file_etag_size> etag_storage{};
     std::array<char, http_imf_fixdate_size> last_modified_storage{};
     const auto validators = compute_file_validators(source_value, etag_storage, last_modified_storage);
     const bool honor_range_requests = source_value.range_requests_ == static_range_request_policy::honor;

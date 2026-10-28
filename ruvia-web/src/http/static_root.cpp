@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <limits>
@@ -126,11 +127,24 @@ namespace {
 [[nodiscard]] const detail::static_root_entry* find_fresh_sidecar_entry(
     const detail::static_root_state& state_value, const detail::static_root_entry& identity,
     std::string_view suffix) {
+    static constexpr std::size_t inline_path_capacity = 256;
+    std::array<char, inline_path_capacity> inline_path{};
     std::pmr::string variant_path(process_resource());
-    variant_path.reserve(identity.relative_path_.size() + suffix.size());
-    variant_path.append(identity.relative_path_.data(), identity.relative_path_.size());
-    variant_path.append(suffix.data(), suffix.size());
-    const auto* variant = find_static_root_entry(state_value.entries_, variant_path);
+    const std::size_t total_size = identity.relative_path_.size() + suffix.size();
+    std::string_view lookup_path;
+    if (total_size <= inline_path.size()) {
+        if (!identity.relative_path_.empty()) {
+            std::memcpy(inline_path.data(), identity.relative_path_.data(), identity.relative_path_.size());
+        }
+        std::memcpy(inline_path.data() + identity.relative_path_.size(), suffix.data(), suffix.size());
+        lookup_path = std::string_view(inline_path.data(), total_size);
+    } else {
+        variant_path.reserve(total_size);
+        variant_path.append(identity.relative_path_.data(), identity.relative_path_.size());
+        variant_path.append(suffix.data(), suffix.size());
+        lookup_path = variant_path;
+    }
+    const auto* variant = find_static_root_entry(state_value.entries_, lookup_path);
     if (variant == nullptr ||
         !static_root_entry_version(*variant).at_least_as_new_as(static_root_entry_version(identity))) {
         return nullptr;
@@ -286,13 +300,14 @@ std::optional<detail::static_root_entry_view> detail::static_root_access::resolv
         directory_slash ? std::optional<detail::static_root_entry_view>{} : find(root, relative);
     if (!entry_value.has_value() && is_indexed_directory(root, relative)) {
         // A normalized path never ends with '/'.
+        const auto index = index_file(root);
+        storage.reserve(relative.size() + (relative.empty() ? 0U : 1U) + index.size());
         if (relative.data() != storage.data()) {
             storage.assign(relative.data(), relative.size());
         }
         if (!storage.empty()) {
             storage.push_back('/');
         }
-        const auto index = index_file(root);
         storage.append(index.data(), index.size());
         relative = storage;
         entry_value = find(root, relative);

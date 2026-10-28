@@ -239,9 +239,11 @@ template <typename char_value_type>
 // representation) content coding, so any change to one of them yields a new
 // ETag. Hashing keeps the field short and does not disclose the volume and
 // file index the identity words carry.
-[[nodiscard]] inline std::pmr::string make_static_file_snapshot_etag(
-    std::pmr::memory_resource* resource, std::uint64_t size, std::uint64_t modified_token,
-    http_response_file_identity identity, http_content_coding coding = http_content_coding::identity) {
+inline constexpr std::size_t static_file_etag_size = 2U + 2U * sizeof(std::uint64_t);
+
+[[nodiscard]] inline std::array<char, static_file_etag_size> format_static_file_snapshot_etag(
+    std::uint64_t size, std::uint64_t modified_token, http_response_file_identity identity,
+    http_content_coding coding = http_content_coding::identity) noexcept {
     auto hash = fnv1a_accumulate_integer(fnv1a_offset_basis, size);
     hash = fnv1a_accumulate_integer(hash, modified_token);
     for (const auto word : identity.words()) {
@@ -254,9 +256,18 @@ template <typename char_value_type>
     for (std::size_t i = 0; i < digest.size(); ++i) {
         digest[i] = static_cast<unsigned char>(hash >> ((digest.size() - 1 - i) * 8U));
     }
-    std::pmr::string output(2 + 2 * digest.size(), '"', resource);
+    std::array<char, static_file_etag_size> output{};
+    output.front() = '"';
     http_encode_lower_hex(output.data() + 1, digest);
+    output.back() = '"';
     return output;
+}
+
+[[nodiscard]] inline std::pmr::string make_static_file_snapshot_etag(
+    std::pmr::memory_resource* resource, std::uint64_t size, std::uint64_t modified_token,
+    http_response_file_identity identity, http_content_coding coding = http_content_coding::identity) {
+    const auto formatted = format_static_file_snapshot_etag(size, modified_token, identity, coding);
+    return std::pmr::string(formatted.data(), formatted.size(), resource);
 }
 
 }  // namespace ruvia::detail

@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstddef>
+#include <cstring>
 
 #include "ruvia/http/http_accept_encoding.h"
 
@@ -37,6 +38,8 @@ std::optional<static_file_representation> select_static_file_representation(cons
     }
 
     auto available = http_response_coding_candidates::identity_only();
+    static constexpr std::size_t inline_path_capacity = 256;
+    std::array<char, inline_path_capacity> inline_path{};
     std::pmr::string variant_path(resource);
     for (std::size_t i = 0; i < candidates.size(); ++i) {
         auto& candidate = candidates[i];
@@ -44,10 +47,21 @@ std::optional<static_file_representation> select_static_file_representation(cons
             continue;
         }
         const auto suffix = detail::static_precompression_sidecars[i].suffix_;
-        variant_path.reserve(relative.size() + suffix.size());
-        variant_path.assign(relative.data(), relative.size());
-        variant_path.append(suffix.data(), suffix.size());
-        if (const auto entry_value = detail::static_root_access::find_variant(root, variant_path);
+        const std::size_t total_size = relative.size() + suffix.size();
+        std::string_view lookup_path;
+        if (total_size <= inline_path.size()) {
+            if (!relative.empty()) {
+                std::memcpy(inline_path.data(), relative.data(), relative.size());
+            }
+            std::memcpy(inline_path.data() + relative.size(), suffix.data(), suffix.size());
+            lookup_path = std::string_view(inline_path.data(), total_size);
+        } else {
+            variant_path.reserve(total_size);
+            variant_path.assign(relative.data(), relative.size());
+            variant_path.append(suffix.data(), suffix.size());
+            lookup_path = variant_path;
+        }
+        if (const auto entry_value = detail::static_root_access::find_variant(root, lookup_path);
             entry_value.has_value()) {
             if (!entry_version(*entry_value).at_least_as_new_as(entry_version(identity))) {
                 if (auto memory_variant = identity.memory_variant(candidate.content_coding_);
