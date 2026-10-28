@@ -1,41 +1,43 @@
 #include <stdexcept>
+#include <string>
+#include <string_view>
 
 #include "ruvia/web/context.h"
-#include "ruvia/web/model.h"
+#include "ruvia/web/detail/json/json_escape.h"
+
+#include "context/context_access.h"
 
 namespace ruvia {
-namespace {
-
-RUVIA_MODEL(health_response_model, RUVIA_REQUIRED_FIELD(status, ruvia::string),
-    RUVIA_OPTIONAL_FIELD(reason, ruvia::string));
-
-}  // namespace
 
 http_response make_health_response(context& context_value) {
-    health_response_model model({.resource_ = context_value.arena()});
-    model.set<"status">("ok");
-    return context_value.json(model);
+    return detail::context_access::make_static_json_response(context_value, R"({"status":"ok"})");
 }
 
 http_response make_readiness_response(context& context_value, readiness_response_options options) {
-    health_response_model model({.resource_ = context_value.arena()});
     switch (options.state_) {
         case readiness_state::ready:
-            model.set<"status">("ready");
-            return context_value.json(model);
+            return detail::context_access::make_static_json_response(
+                context_value, R"({"status":"ready"})");
         case readiness_state::unavailable:
             break;
         default:
             throw std::invalid_argument("readiness state is invalid");
     }
 
-    model.set<"status">("not_ready");
-    const auto reason = options.unavailable_reason_.view();
-    if (!reason.empty()) {
-        model.set<"reason">(reason);
-    }
     context_value.status(http_status::service_unavailable);
-    return context_value.json(model);
+    const auto reason = options.unavailable_reason_.view();
+    if (reason.empty()) {
+        return detail::context_access::make_static_json_response(
+            context_value, R"({"status":"not_ready"})");
+    }
+
+    static constexpr std::string_view prefix = R"({"status":"not_ready","reason":)";
+    std::pmr::string body(context_value.arena());
+    body.reserve(prefix.size() + detail::json_string_size_hint(reason) + 1U);
+    body.append(prefix);
+    detail::append_json_string(body, reason);
+    body.push_back('}');
+    return detail::context_access::make_owned_json_response(context_value, body);
 }
 
 }  // namespace ruvia

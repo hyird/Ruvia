@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory_resource>
 #include <optional>
@@ -80,6 +81,27 @@ void reflect_cors_request_header_names(
     if (size == 0 || has_response_header(response, "Access-Control-Allow-Headers")) {
         return;
     }
+    static constexpr std::size_t inline_capacity = 256;
+    if (size <= inline_capacity) {
+        std::array<char, inline_capacity> buffer{};
+        std::size_t length = 0;
+        for (const auto& field : request.headers()) {
+            if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
+                continue;
+            }
+            http_field_name_list names(field.value());
+            while (const auto name = names.next()) {
+                if (length != 0) {
+                    buffer[length++] = ',';
+                    buffer[length++] = ' ';
+                }
+                std::memcpy(buffer.data() + length, name->data(), name->size());
+                length += name->size();
+            }
+        }
+        response.header("Access-Control-Allow-Headers", std::string_view(buffer.data(), length));
+        return;
+    }
     std::pmr::string value(response.memory_resource());
     value.reserve(size);
     for (const auto& field : request.headers()) {
@@ -109,6 +131,17 @@ void validate_cors_header_names(const std::vector<std::string>& names, const cha
 }
 
 void append_cors_header_names(std::pmr::string& output, const std::vector<std::string>& names) {
+    if (names.empty()) {
+        return;
+    }
+    std::size_t total_size = output.size();
+    for (std::size_t i = 0; i < names.size(); ++i) {
+        if (total_size != 0 || i != 0) {
+            total_size += 2U;
+        }
+        total_size += names[i].size();
+    }
+    output.reserve(total_size);
     for (const auto& name : names) {
         if (!output.empty()) {
             output.append(", ");
@@ -189,9 +222,7 @@ void apply_cors_headers(const http_request& request, http_response& response, co
     if (requested_method && !is_valid_http_method_token(*requested_method)) {
         return;
     }
-    const auto request_header_names_size = request.header("Access-Control-Request-Headers")
-                                               ? cors_request_header_names_size(request)
-                                               : std::optional<std::size_t>{0};
+    const auto request_header_names_size = cors_request_header_names_size(request);
     if (!request_header_names_size) {
         return;
     }

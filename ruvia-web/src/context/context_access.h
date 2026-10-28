@@ -36,6 +36,20 @@ struct context_access final {
         return context_value.static_file(root, options, static_file_selection_mode::precompressed);
     }
 
+    [[nodiscard]] static http_response make_static_json_response(
+        const context& context_value, std::string_view json_body) {
+        http_response response(context_value.arena());
+        response.content_type(http_content_type::application_json);
+        response.static_body(json_body);
+        context_value.apply_response_state(response, std::nullopt);
+        return response;
+    }
+
+    [[nodiscard]] static http_response make_owned_json_response(
+        const context& context_value, std::pmr::string& json_body) {
+        return context_value.json_serialized(json_body);
+    }
+
     [[nodiscard]] static http_interim_response_output* interim_output(context& context_value) noexcept {
         return context_value.services().interim_output();
     }

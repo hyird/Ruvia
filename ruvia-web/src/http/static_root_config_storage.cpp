@@ -51,7 +51,9 @@ static_root_config_storage store_validated_static_root_config(
     for (const auto& mime : source_value.mime_types_) {
         auto& stored = result.mime_types_.emplace_back(stored_resource);
         const auto ext = mime.extension_.view();
-        if (!ext.starts_with('.')) {
+        const bool has_dot = ext.starts_with('.');
+        stored.extension_.reserve(ext.size() + (has_dot ? 0U : 1U));
+        if (!has_dot) {
             stored.extension_.push_back('.');
         }
         stored.extension_.append(ext);

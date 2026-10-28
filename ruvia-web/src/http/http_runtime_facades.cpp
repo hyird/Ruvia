@@ -196,7 +196,9 @@ task<void> response_stream_writer::write_owned(std::pmr::string&& chunk) {
 
 task<void> response_stream_writer::writeln(std::string_view chunk) & {
     require_active();
-    std::pmr::string owned(chunk, resource_);
+    std::pmr::string owned(resource_);
+    owned.reserve(chunk.size() + 1U);
+    owned.append(chunk);
     owned.push_back('\n');
     return write_owned(std::move(owned));
 }
