@@ -26,7 +26,7 @@ public:
             return;
         }
         static constexpr std::size_t inline_order_capacity = 32;
-        std::array<std::size_t, inline_order_capacity> inline_order{};
+        std::array<std::size_t, inline_order_capacity> inline_order;
         std::pmr::vector<std::size_t> heap_order(resource);
         std::span<std::size_t> order;
         if (fields.size() <= inline_order_capacity) {

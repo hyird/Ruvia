@@ -60,44 +60,34 @@ struct cors_request_fields final {
 };
 
 [[nodiscard]] std::optional<cors_request_fields> scan_cors_request_fields(const http_request& request) {
-    cors_request_fields result;
+    cors_request_fields result{
+        .origin_ = request.header("Origin"),
+        .requested_method_ = request.header("Access-Control-Request-Method"),
+    };
+    if (!request.header("Access-Control-Request-Headers").has_value()) {
+        return result;
+    }
     bool first_header_name = true;
     for (const auto& field : request.headers()) {
-        const auto name = field.name();
-        switch (name.size()) {
-            case 6:
-                if (http_ascii_equals_ignore_case(name, "Origin")) {
-                    result.origin_ = field.value();
-                }
-                break;
-            case 29:
-                if (http_ascii_equals_ignore_case(name, "Access-Control-Request-Method")) {
-                    result.requested_method_ = field.value();
-                }
-                break;
-            case 30:
-                if (http_ascii_equals_ignore_case(name, "Access-Control-Request-Headers")) {
-                    http_field_name_list names(field.value());
-                    bool saw_name = false;
-                    while (const auto header_name = names.next()) {
-                        saw_name = true;
-                        const auto separator_size = first_header_name ? std::size_t{0} : std::size_t{2};
-                        const auto maximum = (std::numeric_limits<std::size_t>::max)();
-                        if (header_name->size() > maximum - separator_size ||
-                            result.request_header_names_size_ >
-                                maximum - separator_size - header_name->size()) {
-                            return std::nullopt;
-                        }
-                        result.request_header_names_size_ += separator_size + header_name->size();
-                        first_header_name = false;
-                    }
-                    if (!saw_name || !names.valid()) {
-                        return std::nullopt;
-                    }
-                }
-                break;
-            default:
-                break;
+        if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
+            continue;
+        }
+        http_field_name_list names(field.value());
+        bool saw_name = false;
+        while (const auto header_name = names.next()) {
+            saw_name = true;
+            const auto separator_size = first_header_name ? std::size_t{0} : std::size_t{2};
+            const auto maximum = (std::numeric_limits<std::size_t>::max)();
+            if (header_name->size() > maximum - separator_size ||
+                result.request_header_names_size_ >
+                    maximum - separator_size - header_name->size()) {
+                return std::nullopt;
+            }
+            result.request_header_names_size_ += separator_size + header_name->size();
+            first_header_name = false;
+        }
+        if (!saw_name || !names.valid()) {
+            return std::nullopt;
         }
     }
     return result;
@@ -110,7 +100,7 @@ void reflect_cors_request_header_names(
     }
     static constexpr std::size_t inline_capacity = 256;
     if (size <= inline_capacity) {
-        std::array<char, inline_capacity> buffer{};
+        std::array<char, inline_capacity> buffer;
         std::size_t length = 0;
         for (const auto& field : request.headers()) {
             if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {

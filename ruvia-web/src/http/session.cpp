@@ -72,7 +72,7 @@ namespace {
 
 struct session_key_buffer final {
     static constexpr std::size_t inline_capacity = 128;
-    std::array<char, inline_capacity> inline_{};
+    std::array<char, inline_capacity> inline_;
     std::pmr::string heap_;
     std::size_t size_{0};
 
