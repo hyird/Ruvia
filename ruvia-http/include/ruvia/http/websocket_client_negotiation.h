@@ -116,6 +116,19 @@ public:
         std::span<const std::string_view> subprotocols,
         std::string_view user_agent = {});
 
+    [[nodiscard]] static std::variant<prepared_http1_client_request,
+        http1_client_request_buffer_too_small, http1_client_request_prepare_error>
+    prepare_request(const http_origin_view& origin, std::string_view target,
+        std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
+        std::span<const http_header> headers, std::string_view user_agent,
+        std::span<char> head_buffer, std::pmr::memory_resource* resource);
+
+    [[nodiscard]] static std::variant<websocket_client_negotiation_result_view,
+        http1_websocket_client_handshake_error>
+    validate_response(std::span<const char, 24> encoded_key,
+        const websocket_client_negotiation& negotiation,
+        const http1_parsed_client_response_head& response);
+
     [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
         http1_client_request_prepare_error>
     prepare_request(

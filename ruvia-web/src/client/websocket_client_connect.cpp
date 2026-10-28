@@ -10,6 +10,7 @@
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http1_request_connection_plan.h"
+#include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/websocket_client_negotiation.h"
@@ -83,20 +84,20 @@ task<void> websocket_client_state::perform_handshake() {
             "failed to generate WebSocket handshake key");
     }
 
-    http1_websocket_client_handshake handshake({.nonce_ = nonce,
-                                                   .headers_ = config_.header_views_,
-                                                   .subprotocols_ = config_.subprotocol_views_,
-                                                   .user_agent_ = config_.user_agent_,
-                                                   .deflate_ = config_.deflate_},
-        memory_.resource());
+    std::array<char, 24> encoded_key{};
+    http_base64_encode(encoded_key.data(), nonce);
 
     // Uninitialized worker storage, released when the handshake ends: the
     // frame stays small and no buffer is zero-filled.
     constexpr std::size_t max_request_head_bytes =
         max_http_header_bytes + websocket_client_handshake_request_buffer_extra_bytes;
     http_io_buffer request_buffer(memory_.resource());
-    auto prepared_result = prepare_http1_request_head(request_buffer, max_request_head_bytes,
-        [&](std::span<char> buffer) { return handshake.prepare_request(config_.origin_, config_.target_, buffer); });
+    auto prepared_result = prepare_http1_request_head(
+        request_buffer, max_request_head_bytes, [&](std::span<char> buffer) {
+            return http1_websocket_client_handshake::prepare_request(config_.origin_,
+                config_.target_, encoded_key, config_.negotiation_, config_.headers_,
+                config_.user_agent_, buffer, memory_.resource());
+        });
     auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
     if (prepared == nullptr) {
         const auto* failure = std::get_if<http1_client_request_prepare_error>(&prepared_result);
@@ -138,7 +139,8 @@ task<void> websocket_client_state::perform_handshake() {
             input_.consume(parsed_value->consumed_bytes());
             continue;
         }
-        const auto validated = handshake.validate_response(*parsed_value);
+        const auto validated = http1_websocket_client_handshake::validate_response(
+            encoded_key, config_.negotiation_, *parsed_value);
         if ((validated.index() != 0)) {
             throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
                 "invalid WebSocket handshake response");

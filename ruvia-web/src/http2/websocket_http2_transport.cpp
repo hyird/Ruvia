@@ -1,6 +1,7 @@
 #include "http2/websocket_http2_transport.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <system_error>
 #include <utility>
@@ -44,8 +45,36 @@ task<void> websocket_http2_transport::connect() {
                 websocket_client_error::code_type::protocol_error, "invalid HTTP/2 connection input");
     }
     const auto& config = owner_.config_;
-    const auto submitted = config.negotiation_.submit_http2_request(session_.connection(),
-        config.scheme_ == websocket_scheme::wss ? "https" : "http", config.authority_, config.target_, config.extended_headers_);
+    const auto submitted = [&]() {
+        static constexpr std::size_t inline_header_capacity = 16;
+        const std::size_t total_headers =
+            config.headers_.size() + (config.user_agent_.empty() ? 0U : 1U);
+        std::array<http_header_view, inline_header_capacity> inline_headers{};
+        std::pmr::vector<http_header_view> heap_headers(received_.get_allocator().resource());
+        std::span<const http_header_view> extended_headers{};
+        if (total_headers <= inline_headers.size()) {
+            std::size_t index = 0;
+            for (const auto& header : config.headers_) {
+                inline_headers[index++] = http_header_view{header.name(), header.value()};
+            }
+            if (!config.user_agent_.empty()) {
+                inline_headers[index++] = http_header_view{"user-agent", config.user_agent_};
+            }
+            extended_headers = std::span<const http_header_view>(inline_headers.data(), total_headers);
+        } else {
+            heap_headers.reserve(total_headers);
+            for (const auto& header : config.headers_) {
+                heap_headers.emplace_back(header.name(), header.value());
+            }
+            if (!config.user_agent_.empty()) {
+                heap_headers.emplace_back("user-agent", config.user_agent_);
+            }
+            extended_headers = heap_headers;
+        }
+        return config.negotiation_.submit_http2_request(session_.connection(),
+            config.scheme_ == websocket_scheme::wss ? "https" : "http", config.authority_,
+            config.target_, extended_headers);
+    }();
     if (submitted.index() != 0) {
         throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
             "could not open HTTP/2 WebSocket Extended CONNECT");

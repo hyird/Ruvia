@@ -132,18 +132,25 @@ private:
           require_subprotocol_(options.require_subprotocol_),
           lifecycle_(options.lifecycle_),
           deflate_(options.deflate_) {
-        subprotocol_storage_.reserve(options.subprotocols_.size());
-        for (const auto& subprotocol : options.subprotocols_) {
-            subprotocol_storage_.emplace_back(subprotocol);
-        }
-        subprotocols_.reserve(subprotocol_storage_.size());
-        for (const auto& subprotocol : subprotocol_storage_) {
-            subprotocols_.emplace_back(subprotocol);
+        if (!options.subprotocols_.empty()) {
+            std::size_t total_bytes = 0;
+            for (const auto& subprotocol : options.subprotocols_) {
+                total_bytes += subprotocol.size();
+            }
+            subprotocol_storage_.reserve(total_bytes);
+            subprotocols_.reserve(options.subprotocols_.size());
+            for (const auto& subprotocol : options.subprotocols_) {
+                const auto offset = subprotocol_storage_.size();
+                subprotocol_storage_.insert(
+                    subprotocol_storage_.end(), subprotocol.begin(), subprotocol.end());
+                subprotocols_.emplace_back(
+                    subprotocol_storage_.data() + offset, subprotocol.size());
+            }
         }
     }
 
     route_stream_handler::invoke_type invoke_;
-    std::pmr::vector<std::pmr::string> subprotocol_storage_;
+    std::pmr::vector<char> subprotocol_storage_;
     std::pmr::vector<std::string_view> subprotocols_;
     bool require_subprotocol_;
     websocket_lifecycle_options lifecycle_;

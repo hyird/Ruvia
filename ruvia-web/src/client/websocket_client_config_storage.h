@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -42,9 +43,6 @@ struct websocket_client_config_storage final {
     std::pmr::string authority_;
     std::pmr::string target_;
     std::pmr::vector<http_header> headers_;
-    std::pmr::vector<std::pmr::string> subprotocols_;
-    std::pmr::vector<http_header_view> header_views_;
-    std::pmr::vector<std::string_view> subprotocol_views_;
     websocket_client_deflate_offer deflate_{};
     int compression_level_{6};
     std::size_t max_message_bytes_;
@@ -59,7 +57,6 @@ struct websocket_client_config_storage final {
     // Extended CONNECT (HTTP/2) request fields and response
     // validation, built once from the headers, user agent and offers above.
     websocket_client_negotiation negotiation_;
-    std::pmr::vector<http_header_view> extended_headers_;
 
 private:
     struct validated_config_tag_type final {};
@@ -88,42 +85,29 @@ private:
         return result_value;
     }
 
-    [[nodiscard]] static std::pmr::vector<std::pmr::string> copy_subprotocols(
+    [[nodiscard]] static websocket_client_negotiation make_negotiation(
         const websocket_client_config& source_value, std::pmr::memory_resource* resource) {
-        std::pmr::vector<std::pmr::string> result_value(resource);
-        result_value.reserve(source_value.subprotocols_.size());
-        for (const auto& subprotocol : source_value.subprotocols_) {
-            result_value.emplace_back(subprotocol.view());
+        static constexpr std::size_t inline_subprotocol_capacity = 65;
+        std::array<std::string_view, inline_subprotocol_capacity> inline_subprotocols{};
+        std::pmr::vector<std::string_view> heap_subprotocols(resource);
+        std::span<const std::string_view> subprotocols{};
+        if (source_value.subprotocols_.size() <= inline_subprotocols.size()) {
+            for (std::size_t i = 0; i < source_value.subprotocols_.size(); ++i) {
+                inline_subprotocols[i] = source_value.subprotocols_[i].view();
+            }
+            subprotocols = std::span<const std::string_view>(
+                inline_subprotocols.data(), source_value.subprotocols_.size());
+        } else {
+            heap_subprotocols.reserve(source_value.subprotocols_.size());
+            for (const auto& subprotocol : source_value.subprotocols_) {
+                heap_subprotocols.push_back(subprotocol.view());
+            }
+            subprotocols = heap_subprotocols;
         }
-        return result_value;
-    }
-
-    [[nodiscard]] static std::pmr::vector<http_header_view> view_headers(
-        const std::pmr::vector<http_header>& headers, std::pmr::memory_resource* resource) {
-        std::pmr::vector<http_header_view> result_value(resource);
-        result_value.reserve(headers.size());
-        for (const auto& header : headers) {
-            result_value.emplace_back(header.name(), header.value());
-        }
-        return result_value;
-    }
-
-    [[nodiscard]] static std::pmr::vector<std::string_view> view_subprotocols(
-        const std::pmr::vector<std::pmr::string>& subprotocols, std::pmr::memory_resource* resource) {
-        std::pmr::vector<std::string_view> result_value(resource);
-        result_value.reserve(subprotocols.size());
-        for (const auto& subprotocol : subprotocols) {
-            result_value.emplace_back(subprotocol);
-        }
-        return result_value;
-    }
-
-    [[nodiscard]] static websocket_client_negotiation make_negotiation(std::span<const http_header_view> headers,
-        std::span<const std::string_view> subprotocols, std::string_view user_agent,
-        const websocket_client_deflate_offer& deflate, std::pmr::memory_resource* resource) {
-        validate_websocket_client_protocols_and_headers(headers, subprotocols, user_agent, deflate);
+        validate_websocket_client_protocols_and_headers(
+            source_value.headers_, subprotocols, source_value.user_agent_.view(), source_value.deflate_);
         return websocket_client_negotiation(
-            {.subprotocols_ = subprotocols, .deflate_ = deflate}, resource);
+            {.subprotocols_ = subprotocols, .deflate_ = source_value.deflate_}, resource);
     }
 
     // The views borrow members initialized before them; element storage is
@@ -139,9 +123,6 @@ private:
           authority_(make_http_origin_authority(origin_, resource)),
           target_(source_value.target_.view(), resource),
           headers_(copy_headers(source_value, resource)),
-          subprotocols_(copy_subprotocols(source_value, resource)),
-          header_views_(view_headers(headers_, resource)),
-          subprotocol_views_(view_subprotocols(subprotocols_, resource)),
           deflate_(source_value.deflate_),
           compression_level_(source_value.compression_level_),
           max_message_bytes_(source_value.max_message_bytes_),
@@ -155,12 +136,7 @@ private:
               resource),
           tcp_(source_value.tcp_),
           user_agent_(source_value.user_agent_.view(), resource),
-          negotiation_(make_negotiation(header_views_, subprotocol_views_, user_agent_, deflate_, resource)),
-          extended_headers_(header_views_.begin(), header_views_.end(), resource) {
-        if (!user_agent_.empty()) {
-            extended_headers_.emplace_back("user-agent", user_agent_);
-        }
-    }
+          negotiation_(make_negotiation(source_value, resource)) {}
 };
 
 }  // namespace ruvia::detail
