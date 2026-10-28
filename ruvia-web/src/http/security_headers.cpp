@@ -239,8 +239,10 @@ task<void> security_headers_middleware::handle(context& context_value, next& nex
     };
     apply_security_headers_to(context_value, policy, custom_headers_, secure_transport);
     co_await next_value();
-    apply_security_headers_to(detail::context_access::response_storage(context_value), policy,
-        custom_headers_, secure_transport);
+    if (!detail::context_access::output_committed(context_value)) {
+        apply_security_headers_to(detail::context_access::response_storage(context_value), policy,
+            custom_headers_, secure_transport);
+    }
 }
 
 }  // namespace ruvia
