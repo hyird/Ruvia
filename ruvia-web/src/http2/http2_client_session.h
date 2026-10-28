@@ -18,6 +18,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_pmr_string.h"
 
 #include "client/client_tcp_transport.h"
@@ -71,6 +72,8 @@ public:
           tasks_(tasks),
           write_timeout_(write_timeout),
           resource_(resource),
+          read_buffer_(resource),
+          write_buffer_(resource),
           write_signal_(worker_value),
           state_signal_(worker_value) {
         // Checked here: an owner composing its session is complete only in its body.
@@ -96,15 +99,16 @@ public:
         generation_ = generation_ + 1 == 0 ? 1 : generation_ + 1;
         failed_ = false;
         draining_ = false;
-        std::pmr::string output(resource_);
+        read_buffer_.clear();
         // Only the prefix reported by read_some reaches the parser.
-        std::array<char, read_buffer_bytes> input;
+        const auto input = read_buffer_.prepare(read_buffer_bytes);
         for (;;) {
             while (connection_->wants_write()) {
-                take_output_batch(output);
-                const auto written = co_await transport_.write(output, timeout);
+                take_output_batch(write_buffer_);
+                const auto written = co_await transport_.write(write_buffer_, timeout);
+                http_clear_pmr_string_retaining_small(write_buffer_, 2 * write_batch_bytes);
                 if (!written.ok()) {
-                    connection_.reset();
+                    reset();
                     co_return http2_client_session_start_result{
                         .status_ = http2_client_session_start_status::transport_failed, .transport_ = written};
                 }
@@ -114,12 +118,12 @@ public:
             }
             const auto read = co_await transport_.read_some(input, timeout);
             if (!read.ok()) {
-                connection_.reset();
+                reset();
                 co_return http2_client_session_start_result{
                     .status_ = http2_client_session_start_status::transport_failed, .transport_ = read};
             }
             if (!feed(std::string_view(input.data(), read.bytes_))) {
-                connection_.reset();
+                reset();
                 co_return http2_client_session_start_result{.status_ = http2_client_session_start_status::protocol_failed};
             }
         }
@@ -216,6 +220,8 @@ public:
     void reset() noexcept {
         if (session_tasks_ == 0) {
             connection_.reset();
+            read_buffer_.clear();
+            std::pmr::string(resource_).swap(write_buffer_);
         }
     }
 
@@ -284,7 +290,7 @@ private:
 
     [[nodiscard]] task<void> run_reader(std::uint64_t generation) {
         const task_guard guard{*this, generation};
-        std::array<char, read_buffer_bytes> input;
+        const auto input = read_buffer_.prepare(read_buffer_bytes);
         const operation_timeout unbounded(std::nullopt);
         try {
             while (generation_ == generation && !failed_) {
@@ -308,18 +314,18 @@ private:
 
     [[nodiscard]] task<void> run_writer(std::uint64_t generation) {
         const task_guard guard{*this, generation};
-        std::pmr::string output(resource_);
         try {
             for (;;) {
                 while (generation_ == generation && !failed_ && connection_->wants_write()) {
-                    take_output_batch(output);
+                    take_output_batch(write_buffer_);
                     writing_ = true;
-                    const auto written = co_await transport_.write(output, operation_timeout(write_timeout_));
+                    const auto written =
+                        co_await transport_.write(write_buffer_, operation_timeout(write_timeout_));
                     writing_ = false;
                     // Retain ordinary heads and frame-sized DATA batches, but
                     // return an unexpectedly larger indivisible frame before
                     // the connection idles.
-                    http_clear_pmr_string_retaining_small(output, 2 * write_batch_bytes);
+                    http_clear_pmr_string_retaining_small(write_buffer_, 2 * write_batch_bytes);
                     if (!written.ok()) {
                         fail(generation, written, {});
                         co_return;
@@ -343,6 +349,8 @@ private:
     std::optional<std::chrono::milliseconds> write_timeout_;
     std::pmr::memory_resource* resource_;
     std::optional<::ruvia::http2_connection> connection_;
+    http_io_buffer read_buffer_;
+    std::pmr::string write_buffer_;
     worker_signal write_signal_;
     worker_signal state_signal_;
     std::uint64_t generation_{0};
