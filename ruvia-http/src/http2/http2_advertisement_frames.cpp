@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <variant>
 
 #include "ruvia/http/http2_framing.h"
@@ -36,28 +37,39 @@ void append_prefixed_origin(std::pmr::vector<char>& bytes_value, std::string_vie
 }
 std::variant<std::pmr::vector<char>, error_type> make_http2_frame(http2_frame_type type, std::uint32_t stream_id,
     std::size_t payload_size, std::pmr::memory_resource* resource) {
-    std::pmr::vector<char> bytes(resource);
-    bytes.reserve(http2_frame_header_bytes + payload_size);
-    bytes.resize(http2_frame_header_bytes);
-    if (!encode_http2_frame_header(bytes, static_cast<std::uint32_t>(payload_size), type, 0, stream_id)) {
+    std::array<char, http2_frame_header_bytes> header{};
+    if (!encode_http2_frame_header(header, static_cast<std::uint32_t>(payload_size), type, 0, stream_id)) {
         return error_type::invalid_stream;
     }
+    std::pmr::vector<char> bytes(resource);
+    bytes.reserve(http2_frame_header_bytes + payload_size);
+    bytes.insert(bytes.end(), header.begin(), header.end());
     return bytes;
 }
 }  // namespace
 std::variant<http_origin_advertisement, error_type> decode_http_origin_advertisement(std::span<const char> payload_value,
     std::pmr::memory_resource* resource) {
     resource = resource ? resource : std::pmr::get_default_resource();
-    http_origin_advertisement result(resource);
-    while (!payload_value.empty()) {
-        if (payload_value.size() < length_prefix_bytes) {
+    std::size_t valid_count = 0;
+    for (auto scan = payload_value; !scan.empty();) {
+        if (scan.size() < length_prefix_bytes) {
             return error_type::malformed_payload;
         }
+        const auto size = length(scan);
+        scan = scan.subspan(length_prefix_bytes);
+        if (size > scan.size()) {
+            return error_type::malformed_payload;
+        }
+        if (is_valid_http_serialized_origin(std::string_view(scan.data(), size))) {
+            ++valid_count;
+        }
+        scan = scan.subspan(size);
+    }
+    http_origin_advertisement result(resource);
+    result.origins_.reserve(valid_count);
+    while (!payload_value.empty()) {
         const auto size = length(payload_value);
         payload_value = payload_value.subspan(length_prefix_bytes);
-        if (size > payload_value.size()) {
-            return error_type::malformed_payload;
-        }
         const std::string_view origin(payload_value.data(), size);
         if (is_valid_http_serialized_origin(origin)) {
             result.origins_.emplace_back(origin);
