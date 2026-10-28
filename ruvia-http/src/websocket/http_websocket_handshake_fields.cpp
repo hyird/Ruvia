@@ -38,26 +38,34 @@ namespace {
     if (!extension.empty() && !size.add_field("sec-websocket-extensions", extension)) {
         throw std::length_error("WebSocket handshake response headers are too large");
     }
-    std::pmr::vector<http_header> result(resource);
-    result.reserve(headers.size());
+    static constexpr std::string_view sec_websocket_prefix = "sec-websocket-";
     for (const auto& header : headers) {
-        if (!is_valid_http_header_name(header.name()) || !is_valid_http_header_value(header.value())) {
+        const auto name = header.name();
+        if (!is_valid_http_header_name(name) || !is_valid_http_header_value(header.value())) {
             throw std::invalid_argument("invalid WebSocket handshake response header");
         }
-        auto field = http_header::copy_with_lowercase_name(header.name(), header.value(), resource);
-        const auto name = field.name();
         // Every Sec-WebSocket-* name is handshake-owned, including ones this
         // implementation does not know yet.
         const auto kind = classify_request_header(name);
+        const bool is_sec_websocket =
+            name.size() >= sec_websocket_prefix.size() &&
+            http_ascii_equals_ignore_case(
+                name.substr(0, sec_websocket_prefix.size()), sec_websocket_prefix);
         if (http_field_name_in(name, http_connection_specific_fields) ||
-            http_field_name_in(name, http_message_framing_fields) || kind == request_header_kind::trailer ||
-            kind == request_header_kind::te || name.starts_with("sec-websocket-")) {
+            http_field_name_in(name, http_message_framing_fields) ||
+            kind == request_header_kind::trailer || kind == request_header_kind::te ||
+            is_sec_websocket) {
             throw std::invalid_argument("WebSocket handshake controls this response header");
         }
         if (!size.add_field(name, header.value())) {
             throw std::length_error("WebSocket handshake response headers are too large");
         }
-        result.push_back(std::move(field));
+    }
+    std::pmr::vector<http_header> result(resource);
+    result.reserve(headers.size());
+    for (const auto& header : headers) {
+        result.push_back(
+            http_header::copy_with_lowercase_name(header.name(), header.value(), resource));
     }
     return result;
 }
@@ -260,11 +268,13 @@ websocket_handshake_validation_result websocket_request_header_validator::finish
 websocket_server_negotiation::websocket_server_negotiation(std::string_view subprotocol,
     websocket_compression compression, std::span<const http_header_view> response_headers_value,
     std::pmr::memory_resource* resource)
-    : subprotocol_(subprotocol, http_pmr_resource_or_default(resource)),
+    : subprotocol_(http_pmr_resource_or_default(resource)),
       compression_(compression),
       extensions_(compression),
       response_headers_(copy_websocket_response_headers(response_headers_value, subprotocol,
-          extensions_.view(), http_pmr_resource_or_default(resource))) {}
+          extensions_.view(), subprotocol_.get_allocator().resource())) {
+    subprotocol_.assign(subprotocol.data(), subprotocol.size());
+}
 
 websocket_server_negotiation make_websocket_server_negotiation(
     const http_request& request, websocket_server_negotiation_options options) {

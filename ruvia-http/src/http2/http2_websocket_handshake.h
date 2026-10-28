@@ -69,16 +69,28 @@ inline void http2_encode_websocket_handshake_headers(
     std::pmr::string& header_block, const websocket_server_negotiation& negotiation) {
     try {
         header_block.clear();
-        hpack_encoder::encode_status(header_block, http_status::ok);
         const auto fields_value = negotiation.response_headers();
         const bool has_date = std::ranges::any_of(fields_value, [](const http_header& field) {
             return field.name() == "date";
         });
-        if (!has_date) {
-            if (const auto date = cached_date_value(); !date.empty()) {
-                hpack_encoder::encode_header_with_name_index(
-                    header_block, hpack_static_index::date, date);
-            }
+        const auto date = has_date ? std::string_view{} : cached_date_value();
+        std::size_t reserve_bytes = 5U + (date.empty() ? 0U : date.size() + 4U) +
+                                    (negotiation.subprotocol().empty()
+                                            ? 0U
+                                            : 22U + negotiation.subprotocol().size() + 6U) +
+                                    (negotiation.extensions().empty()
+                                            ? 0U
+                                            : 24U + negotiation.extensions().size() + 6U);
+        for (const auto& field : fields_value) {
+            reserve_bytes += field.name().size() + field.value().size() + 6U;
+        }
+        if (reserve_bytes > 15U) {
+            header_block.reserve(reserve_bytes);
+        }
+        hpack_encoder::encode_status(header_block, http_status::ok);
+        if (!date.empty()) {
+            hpack_encoder::encode_header_with_name_index(
+                header_block, hpack_static_index::date, date);
         }
         if (!negotiation.subprotocol().empty()) {
             hpack_encoder::encode_header(
