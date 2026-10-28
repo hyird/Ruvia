@@ -36,8 +36,6 @@ bool is_reserved_handshake_header(std::string_view name, detail::request_header_
 std::pmr::memory_resource* validated_handshake_resource(
     const http1_websocket_client_handshake_config_view& options,
     std::pmr::memory_resource* resource) {
-    websocket_client_negotiation::validate_configuration(
-        {.subprotocols_ = options.subprotocols_, .deflate_ = options.deflate_});
     http1_websocket_client_handshake::validate_configuration(
         options.headers_, options.subprotocols_, options.user_agent_);
     return resource != nullptr ? resource : std::pmr::get_default_resource();
@@ -55,16 +53,16 @@ void http1_websocket_client_handshake::validate_configuration(
             throw std::invalid_argument("invalid or reserved WebSocket handshake header");
         }
         if (!analyze_header(header, kind, facts, error)) {
-            throw std::invalid_argument(std::string(http1_client_request_prepare_error_message(error)));
+            throw std::invalid_argument(http1_client_request_prepare_error_message(error).data());
         }
     }
     if (!finalize_headers(facts, error)) {
-        throw std::invalid_argument(std::string(http1_client_request_prepare_error_message(error)));
+        throw std::invalid_argument(http1_client_request_prepare_error_message(error).data());
     }
     if (!user_agent.empty()) {
         if (!analyze_header(
                 http_header_view{"User-Agent", user_agent}, detail::request_header_kind::user_agent, facts, error)) {
-            throw std::invalid_argument(std::string(http1_client_request_prepare_error_message(error)));
+            throw std::invalid_argument(http1_client_request_prepare_error_message(error).data());
         }
     }
 }
