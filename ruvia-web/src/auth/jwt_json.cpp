@@ -30,9 +30,10 @@ namespace detail {
 
 // Duplicate names are detected once the object is complete; any duplicate
 // rejects the object, so visiting it first changes nothing for callers.
-template <typename visitor_type>
+template <typename visitor_type, typename prepare_type = std::nullptr_t>
 [[nodiscard]] bool visit_unique_jwt_json_object_fields(
-    std::string_view json, std::pmr::memory_resource* resource, visitor_type&& visitor) {
+    std::string_view json, std::pmr::memory_resource* resource, visitor_type&& visitor,
+    prepare_type&& prepare = nullptr) {
     // Literal names are views into json. Escaped names arrive decoded in storage
     // that lives for one visitor call, so only those are copied; list nodes keep
     // each copy at a stable address.
@@ -88,6 +89,10 @@ template <typename visitor_type>
             return false;
         }
         fields_view = heap_fields;
+    }
+    if constexpr (!std::is_same_v<std::remove_cvref_t<prepare_type>, std::nullptr_t> &&
+                  std::is_invocable_v<prepare_type, std::span<const field_pair_type>>) {
+        prepare(fields_view);
     }
     for (const auto& [name, value] : fields_view) {
         if (!dispatch_json_object_field_visitor(visitor, name, value)) {
@@ -188,8 +193,10 @@ void jwt_append_json_member(
     out.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
 }
 
-std::pmr::string jwt_parse_jose_algorithm(std::string_view json, std::pmr::memory_resource* resource) {
-    std::pmr::string algorithm(resource);
+void jwt_validate_jose_header(std::string_view json,
+    std::optional<std::string_view> expected_algorithm, std::pmr::memory_resource* resource) {
+    std::optional<std::pmr::string> decoded_algorithm;
+    std::string_view algorithm_view{};
     bool algorithm_seen = false;
     bool algorithm_valid = false;
     bool unsupported_extension = false;
@@ -197,12 +204,26 @@ std::pmr::string jwt_parse_jose_algorithm(std::string_view json, std::pmr::memor
         json, resource, [&](std::string_view name, std::string_view value) {
             if (name == "alg") {
                 algorithm_seen = true;
-                if (auto decoded = jwt_decode_json_string_value(value, resource)) {
-                    algorithm = std::move(*decoded);
-                    algorithm_valid = true;
-                    return true;
+                auto remaining = value;
+                const auto parsed_value = parse_json_string(remaining);
+                if (!parsed_value.has_value()) {
+                    return false;
                 }
-                return false;
+                skip_json_whitespace(remaining);
+                if (!remaining.empty()) {
+                    return false;
+                }
+                if (parsed_value->encoding() == json_string_encoding::literal) {
+                    algorithm_view = parsed_value->raw();
+                } else {
+                    decoded_algorithm = decode_json_string(parsed_value->raw(), resource);
+                    if (!decoded_algorithm.has_value()) {
+                        return false;
+                    }
+                    algorithm_view = *decoded_algorithm;
+                }
+                algorithm_valid = true;
+                return true;
             }
             if (name == "crit" || name == "b64") {
                 // No critical extensions are implemented. RFC 7797 section 7
@@ -218,7 +239,13 @@ std::pmr::string jwt_parse_jose_algorithm(std::string_view json, std::pmr::memor
     if (!valid || !algorithm_seen || !algorithm_valid || unsupported_extension) {
         throw jwt_error(jwt_error::code_type::invalid_header, "JWT JOSE header is invalid");
     }
-    return algorithm;
+    if (expected_algorithm.has_value()) {
+        if (algorithm_view != *expected_algorithm) {
+            throw jwt_error(jwt_error::code_type::algorithm_mismatch, "JWT algorithm mismatch");
+        }
+    } else if (algorithm_view.empty()) {
+        throw jwt_error(jwt_error::code_type::invalid_header, "JWT JOSE header is invalid");
+    }
 }
 
 }  // namespace detail
@@ -244,13 +271,18 @@ namespace {
         return false;
     }
 
+    static constexpr std::size_t inline_token_capacity = 16;
+    std::array<std::optional<detail::json_string_token>, inline_token_capacity> inline_tokens{};
     auto preflight = value;
     std::size_t element_count = 0;
     const bool preflight_ok = detail::consume_json_array_elements(preflight, 0,
-        [&element_count](std::string_view& element) noexcept {
+        [&](std::string_view& element) noexcept {
             const auto parsed_value = detail::parse_json_string(element);
             if (!parsed_value.has_value()) {
                 return false;
+            }
+            if (element_count < inline_token_capacity) {
+                inline_tokens[element_count] = *parsed_value;
             }
             ++element_count;
             return true;
@@ -262,6 +294,17 @@ namespace {
         return false;
     }
     out.reserve(out.size() + element_count);
+    if (element_count <= inline_token_capacity) {
+        for (std::size_t i = 0; i < element_count; ++i) {
+            auto decoded = detail::jwt_decode_json_string_token(*inline_tokens[i], resource);
+            if (!decoded.has_value()) {
+                out.clear();
+                return false;
+            }
+            out.push_back(std::move(*decoded));
+        }
+        return true;
+    }
     const bool consumed = detail::consume_json_array_elements(value, 0,
         [&out, resource](std::string_view& element) {
             const auto parsed_value = detail::parse_json_string(element);
@@ -354,8 +397,26 @@ jwt_payload detail::jwt_payload_access::decode_payload_json(
     std::string_view json, std::pmr::memory_resource* resolved) {
     jwt_payload payload_value(resolved);
     const bool valid = detail::visit_unique_jwt_json_object_fields(
-        json, resolved, [&](std::string_view key, std::string_view value) {
+        json, resolved,
+        [&](std::string_view key, std::string_view value) {
             return decode_jwt_payload_claim(payload_value, key, value, resolved);
+        },
+        [&](std::span<const std::pair<std::string_view, std::string_view>> fields_view) {
+            std::size_t custom_claim_count = 0;
+            for (const auto& [key, value] : fields_view) {
+                if (key == "iss" || key == "sub" || key == "aud" || key == "jti" ||
+                    key == "exp" || key == "nbf" || key == "iat") {
+                    continue;
+                }
+                auto string_value = value;
+                detail::skip_json_whitespace(string_value);
+                if (!string_value.empty() && string_value.front() == '"') {
+                    ++custom_claim_count;
+                }
+            }
+            if (custom_claim_count != 0) {
+                payload_value.claims_.reserve(custom_claim_count);
+            }
         });
     if (!valid) {
         throw jwt_error(

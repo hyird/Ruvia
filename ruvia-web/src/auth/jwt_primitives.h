@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -84,8 +85,8 @@ void jwt_append_json_member(
     jwt_json_buffer& out, bool& first, std::string_view name, std::string_view value);
 void jwt_append_json_member(
     jwt_json_buffer& out, bool& first, std::string_view name, std::int64_t value);
-[[nodiscard]] std::pmr::string jwt_parse_jose_algorithm(
-    std::string_view json, std::pmr::memory_resource* resource);
+void jwt_validate_jose_header(std::string_view json,
+    std::optional<std::string_view> expected_algorithm, std::pmr::memory_resource* resource);
 
 // Saturates at the system clock's range instead of overflowing its ticks.
 [[nodiscard]] std::chrono::system_clock::time_point jwt_from_epoch_seconds(std::int64_t value);

@@ -434,10 +434,8 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
     }
     {
         const detail::jwt_decoded_section header_value(parts.header_, resolved);
-        if (detail::jwt_parse_jose_algorithm(header_value.view(), resolved) !=
-            detail::jwt_algorithm_name(options.algorithm_)) {
-            throw jwt_error(jwt_error::code_type::algorithm_mismatch, "JWT algorithm mismatch");
-        }
+        detail::jwt_validate_jose_header(
+            header_value.view(), detail::jwt_algorithm_name(options.algorithm_), resolved);
     }
     const detail::jwt_decoded_section payload_json(parts.payload_, resolved);
     auto payload_value = detail::jwt_payload_access::decode_payload_json(payload_json.view(), resolved);
@@ -480,9 +478,7 @@ jwt_payload jwt_decode_unverified(jwt_decode_unverified_options options) {
     const auto parts = detail::jwt_split_token(token);
     {
         const detail::jwt_decoded_section header_value(parts.header_, resolved);
-        if (detail::jwt_parse_jose_algorithm(header_value.view(), resolved).empty()) {
-            throw jwt_error(jwt_error::code_type::invalid_header, "JWT JOSE header is invalid");
-        }
+        detail::jwt_validate_jose_header(header_value.view(), std::nullopt, resolved);
     }
     const detail::jwt_decoded_section payload_json(parts.payload_, resolved);
     return detail::jwt_payload_access::decode_payload_json(payload_json.view(), resolved);

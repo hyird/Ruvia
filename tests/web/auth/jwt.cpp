@@ -125,6 +125,8 @@ RUVIA_TEST(jwt_sign_verify_round_trip_preserves_claims) {
     auto options = sign_options(secret);
     const jwt_claim_view claims[] = {
         {.name_ = std::string_view("role"), .value_ = std::string_view("admin")},
+        {.name_ = std::string_view("tenant"), .value_ = std::string_view("acme")},
+        {.name_ = std::string_view("scope"), .value_ = std::string_view("read:all")},
     };
     options.claims_ = claims;
     const auto token = sign(options);
@@ -132,8 +134,10 @@ RUVIA_TEST(jwt_sign_verify_round_trip_preserves_claims) {
     const auto payload_value = verify_jwt(token, verify_options(secret));
     RUVIA_CHECK_EQ(payload_value.issuer(), std::string_view("ruvia"));
     RUVIA_CHECK_EQ(payload_value.subject(), std::string_view("user-1"));
-    const auto role = payload_value.claim("role");
-    RUVIA_CHECK(role.has_value() && *role == std::string_view("admin"));
+    RUVIA_CHECK_EQ(payload_value.claims().size(), std::size_t{3});
+    RUVIA_CHECK_EQ(payload_value.claim("role").value_or(""), std::string_view("admin"));
+    RUVIA_CHECK_EQ(payload_value.claim("tenant").value_or(""), std::string_view("acme"));
+    RUVIA_CHECK_EQ(payload_value.claim("scope").value_or(""), std::string_view("read:all"));
 }
 
 RUVIA_TEST(jwt_payload_is_move_only_and_transfers_pmr_storage_without_allocating) {
