@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -35,10 +36,10 @@ namespace ruvia::detail {
 // the trailing 0x00 0x00 0xFF 0xFF flush marker removed (RFC 7692 §7.2.1).
 [[nodiscard]] inline bool websocket_deflate_message(zlib_deflate_stream& deflater, std::string_view input,
     std::pmr::string& out, std::pmr::memory_resource* resource = nullptr) {
-    std::pmr::string owned_input(resource != nullptr ? resource : out.get_allocator().resource());
+    std::optional<std::pmr::string> owned_input;
     if (http_text_overlaps(input, {out.data(), out.size() + 1})) {
-        owned_input.assign(input);
-        input = owned_input;
+        input = owned_input.emplace(
+            input, resource != nullptr ? resource : out.get_allocator().resource());
     }
     auto& stream = deflater.native();
     const zlib_borrow_scope borrow(stream);
@@ -114,10 +115,10 @@ namespace ruvia::detail {
     std::string_view input, std::pmr::string& out, protocol_byte_limit message_limit,
     std::pmr::memory_resource* resource = nullptr) {
     static constexpr unsigned char flush_marker[4] = {0x00, 0x00, 0xFF, 0xFF};
-    std::pmr::string owned_input(resource != nullptr ? resource : out.get_allocator().resource());
+    std::optional<std::pmr::string> owned_input;
     if (http_text_overlaps(input, {out.data(), out.size() + 1})) {
-        owned_input.assign(input);
-        input = owned_input;
+        input = owned_input.emplace(
+            input, resource != nullptr ? resource : out.get_allocator().resource());
     }
     const auto start = out.size();
     if (const auto result_value = websocket_inflate_chunk(

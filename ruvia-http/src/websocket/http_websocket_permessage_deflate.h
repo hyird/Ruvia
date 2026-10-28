@@ -201,39 +201,52 @@ struct permessage_deflate_params final {
         const auto parameter_value =
             has_value ? http_trim_ows(parameter.substr(equals + 1)) : std::string_view{};
 
-        if (http_ascii_equals_ignore_case(parameter_name, "server_no_context_takeover")) {
-            if (params.server_no_context_takeover_ || has_value) {
-                return std::nullopt;
-            }
-            params.server_no_context_takeover_ = true;
-        } else if (http_ascii_equals_ignore_case(parameter_name, "client_no_context_takeover")) {
-            if (params.client_no_context_takeover_ || has_value) {
-                return std::nullopt;
-            }
-            params.client_no_context_takeover_ = true;
-        } else if (http_ascii_equals_ignore_case(parameter_name, "server_max_window_bits")) {
-            // A missing or empty value fails window decoding.
-            if (params.server_max_window_bits_.has_value()) {
-                return std::nullopt;
-            }
-            params.server_max_window_bits_ = websocket_deflate_window_bits(parameter_value);
-            if (!params.server_max_window_bits_.has_value()) {
-                return std::nullopt;
-            }
-        } else if (http_ascii_equals_ignore_case(parameter_name, "client_max_window_bits")) {
-            if (params.client_max_window_bits_present_) {
-                return std::nullopt;
-            }
-            params.client_max_window_bits_present_ = true;
-            if (has_value) {
-                params.client_max_window_bits_ = websocket_deflate_window_bits(parameter_value);
-                if (!params.client_max_window_bits_.has_value()) {
-                    return std::nullopt;
+        switch (parameter_name.size()) {
+            case 22:
+                if (http_ascii_equals_ignore_case(parameter_name, "server_max_window_bits")) {
+                    // A missing or empty value fails window decoding.
+                    if (params.server_max_window_bits_.has_value()) {
+                        return std::nullopt;
+                    }
+                    params.server_max_window_bits_ = websocket_deflate_window_bits(parameter_value);
+                    if (!params.server_max_window_bits_.has_value()) {
+                        return std::nullopt;
+                    }
+                    break;
                 }
-            }
-        } else {
-            // Includes an empty parameter, such as a trailing ';'.
-            return std::nullopt;
+                if (http_ascii_equals_ignore_case(parameter_name, "client_max_window_bits")) {
+                    if (params.client_max_window_bits_present_) {
+                        return std::nullopt;
+                    }
+                    params.client_max_window_bits_present_ = true;
+                    if (has_value) {
+                        params.client_max_window_bits_ = websocket_deflate_window_bits(parameter_value);
+                        if (!params.client_max_window_bits_.has_value()) {
+                            return std::nullopt;
+                        }
+                    }
+                    break;
+                }
+                return std::nullopt;
+            case 26:
+                if (http_ascii_equals_ignore_case(parameter_name, "server_no_context_takeover")) {
+                    if (params.server_no_context_takeover_ || has_value) {
+                        return std::nullopt;
+                    }
+                    params.server_no_context_takeover_ = true;
+                    break;
+                }
+                if (http_ascii_equals_ignore_case(parameter_name, "client_no_context_takeover")) {
+                    if (params.client_no_context_takeover_ || has_value) {
+                        return std::nullopt;
+                    }
+                    params.client_no_context_takeover_ = true;
+                    break;
+                }
+                return std::nullopt;
+            default:
+                // Includes an empty parameter, such as a trailing ';'.
+                return std::nullopt;
         }
 
         start = end;

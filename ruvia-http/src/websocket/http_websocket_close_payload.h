@@ -33,7 +33,7 @@ private:
 
     websocket_encoded_close_payload(std::uint16_t code, std::string_view reason) noexcept;
 
-    std::array<char, 125> bytes_{};
+    std::array<char, 125> bytes_;
     std::uint8_t size_{0};
 };
 
