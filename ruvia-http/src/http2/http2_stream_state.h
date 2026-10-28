@@ -423,6 +423,10 @@ public:
         message_data_.assign_path(value);
     }
 
+    void take_request_target_from(http2_stream_state& other) noexcept {
+        message_data_.take_request_target_from(other.message_data_);
+    }
+
     [[nodiscard]] std::string_view request_protocol() const& noexcept {
         return message_data_.protocol();
     }

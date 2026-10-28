@@ -57,6 +57,18 @@ public:
         trailers_.swap(other.trailers_);
     }
 
+    void take_request_target_from(http2_stream_request_data& other) noexcept {
+        if (resource() != other.resource()) {
+            std::terminate();
+        }
+        method_.swap(other.method_);
+        using std::swap;
+        swap(known_method_, other.known_method_);
+        scheme_.swap(other.scheme_);
+        authority_.swap(other.authority_);
+        path_.swap(other.path_);
+    }
+
     [[nodiscard]] header_checkpoint_type header_checkpoint() const noexcept {
         return header_checkpoint_type{.headers_ = headers_.checkpoint(),
             .trailer_count_ = trailers_.size()};

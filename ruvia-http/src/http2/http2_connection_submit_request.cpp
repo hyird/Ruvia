@@ -219,6 +219,7 @@ http2_connection::submit_regular_request_head(std::string_view method,
         // above is retryable; append_response_header_frames pre-reserves the complete
         // frame sequence, so a throwing resource cannot strand a created stream.
         append_response_header_frames(stream, std::string_view(block), end_stream);
+        http2_release_local_header_block(stream);
         if (without_content) {
             stream.begin_local_content_forbidden();
         } else if (expected_length) {
@@ -263,10 +264,18 @@ http2_connection::submit_connect_request_head(
 
         auto& block = stream.local_header_block();
         block.clear();
+        std::size_t reserve_bytes = 6U + authority.size();
+        for (const auto& header : headers) {
+            reserve_bytes += header.name().size() + header.value().size() + 6U;
+        }
+        if (reserve_bytes > 15U) {
+            block.reserve(reserve_bytes);
+        }
         hpack_encoder::encode_header(block, ":method", "CONNECT");
         hpack_encoder::encode_header(block, ":authority", authority);
         http2_encode_outbound_request_headers(block, headers);
         append_response_header_frames(stream, std::string_view(block), http2_end_stream::keep_open);
+        http2_release_local_header_block(stream);
     });
 }
 
@@ -308,6 +317,14 @@ http2_connection::submit_extended_connect_request_head(
 
         auto& block = stream.local_header_block();
         block.clear();
+        std::size_t reserve_bytes =
+            16U + encoded_protocol.size() + scheme.size() + authority.size() + path.size();
+        for (const auto& header : headers) {
+            reserve_bytes += header.name().size() + header.value().size() + 6U;
+        }
+        if (reserve_bytes > 15U) {
+            block.reserve(reserve_bytes);
+        }
         hpack_encoder::encode_header(block, ":method", "CONNECT");
         // RFC 8441 registers and requires the lowercase `websocket` value. HTTP
         // protocol-name matching is case-insensitive, so accept caller spelling but
@@ -318,6 +335,7 @@ http2_connection::submit_extended_connect_request_head(
         hpack_encoder::encode_header(block, ":path", path);
         http2_encode_outbound_request_headers(block, headers);
         append_response_header_frames(stream, std::string_view(block), http2_end_stream::keep_open);
+        http2_release_local_header_block(stream);
     });
 }
 

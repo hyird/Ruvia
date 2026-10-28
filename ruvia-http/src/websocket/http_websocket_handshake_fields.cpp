@@ -72,8 +72,14 @@ namespace {
 
 [[nodiscard]] bool append_websocket_subprotocol_offers(const http_request& request,
     websocket_subprotocol_set& protocols, bool& present) noexcept {
+    if (!request_has_known_header(request, request_header_kind::sec_websocket_protocol)) {
+        return true;
+    }
     const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
+    const auto last_index =
+        http_request_access::known_header_index(request, request_header_kind::sec_websocket_protocol);
+    const auto limit = std::min(headers.size(), last_index);
+    for (std::size_t i = 0; i < limit; ++i) {
         if (http_request_access::header_kind(request, i) !=
             static_cast<std::uint8_t>(request_header_kind::sec_websocket_protocol)) {
             continue;
@@ -209,6 +215,10 @@ std::string_view choose_websocket_subprotocol(
 
 std::string_view choose_websocket_subprotocol(
     const http_request& request, std::span<const std::string_view> supported) noexcept {
+    if (supported.empty() ||
+        !request_has_known_header(request, request_header_kind::sec_websocket_protocol)) {
+        return {};
+    }
     websocket_subprotocol_set offered;
     bool present = false;
     if (!append_websocket_subprotocol_offers(request, offered, present) || !present ||

@@ -187,16 +187,13 @@ bool http2_connection::finish_push_promise(std::string_view block) {
         return true;
     }
     try {
-        stream->assign_request_method(request.method_);
-        stream->assign_request_scheme(request.scheme_);
-        stream->assign_request_authority(request.authority_);
-        stream->assign_request_path(request.path_);
+        // Pin before moving target strings out of scratch so a throwing pin
+        // leaves scratch intact for a continuation retry.
+        pin_stream(id);
+        stream->take_request_target_from(scratch);
         stream->begin_local_content_forbidden();
         (void)stream->commit_local_head_end_stream();
         stream->reserve_push(http2_push_reservation::remote);
-        // Later frames in this feed may reset the push before queued response
-        // events are materialized. Retain their stream storage at publication.
-        pin_stream(id);
         events_.push_back(http2_event(http2_push_promise_event{push_associated_stream_id_, id, std::move(request)}));
     } catch (...) {
         std::erase(pinned_streams_, id);

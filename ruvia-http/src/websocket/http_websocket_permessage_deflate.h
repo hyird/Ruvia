@@ -278,7 +278,8 @@ struct permessage_deflate_params final {
     if (config.mem_level_ < 1 || config.mem_level_ > 9) {
         throw std::invalid_argument("WebSocket deflate memory level must be between 1 and 9");
     }
-    if (!config.enabled_) {
+    if (!config.enabled_ ||
+        !request_has_known_header(request, request_header_kind::sec_websocket_extensions)) {
         return (websocket_compression{});
     }
     // RFC 6455 §9.1: extension declarations may be split across multiple
@@ -290,7 +291,10 @@ struct permessage_deflate_params final {
     bool has_extension = false;
     websocket_compression negotiated{};
     const auto headers = request.headers();
-    for (std::size_t i = 0; i < headers.size(); ++i) {
+    const auto last_index =
+        http_request_access::known_header_index(request, request_header_kind::sec_websocket_extensions);
+    const auto limit = std::min(headers.size(), last_index);
+    for (std::size_t i = 0; i < limit; ++i) {
         if (http_request_access::header_kind(request, i) !=
             static_cast<std::uint8_t>(request_header_kind::sec_websocket_extensions)) {
             continue;
