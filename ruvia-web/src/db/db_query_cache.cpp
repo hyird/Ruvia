@@ -58,7 +58,7 @@ struct reader {
     }
 };
 [[nodiscard]] std::array<unsigned char, SHA256_DIGEST_LENGTH> cache_digest(std::string_view bytes_value) {
-    std::array<unsigned char, SHA256_DIGEST_LENGTH> hash{};
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> hash;
     if (!SHA256(reinterpret_cast<const unsigned char*>(bytes_value.data()), bytes_value.size(), hash.data())) {
         throw std::runtime_error("database cache key digest failed");
     }
@@ -119,7 +119,7 @@ public:
         bytes({&byte, 1});
     }
     void append_result(std::pmr::string& output) {
-        std::array<unsigned char, SHA256_DIGEST_LENGTH> hash{};
+        std::array<unsigned char, SHA256_DIGEST_LENGTH> hash;
         unsigned length = 0;
         if (EVP_DigestFinal_ex(context_.get(), hash.data(), &length) != 1 || length != hash.size()) {
             throw std::runtime_error("database cache key digest failed");

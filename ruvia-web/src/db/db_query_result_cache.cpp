@@ -54,23 +54,22 @@ task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr:
     }
     try {
         static constexpr std::size_t inline_capacity = 32;
-        std::array<std::string_view, inline_capacity> inline_views{};
-        std::pmr::vector<std::string_view> heap_views(resource);
-        std::span<const std::string_view> views;
         if (keys.size() <= inline_capacity) {
+            std::array<std::string_view, inline_capacity> inline_views;
             for (std::size_t i = 0; i < keys.size(); ++i) {
                 inline_views[i] = keys[i];
             }
-            views = std::span<const std::string_view>(inline_views.data(), keys.size());
-        } else {
-            heap_views.reserve(keys.size());
-            for (const auto& key : keys) {
-                heap_views.emplace_back(key);
-            }
-            views = heap_views;
+            // DEL owns its arguments before returning its cold operation.
+            auto deletion = redis.with_options(db_required_options(options, deadline_value))
+                                .del(std::span<const std::string_view>(inline_views.data(), keys.size()));
+            return finish_delete_key_batch(std::move(deletion), deadline_value);
         }
-        // DEL owns its arguments before returning its cold operation.
-        auto deletion = redis.with_options(db_required_options(options, deadline_value)).del(views);
+        std::pmr::vector<std::string_view> heap_views(resource);
+        heap_views.reserve(keys.size());
+        for (const auto& key : keys) {
+            heap_views.emplace_back(key);
+        }
+        auto deletion = redis.with_options(db_required_options(options, deadline_value)).del(heap_views);
         return finish_delete_key_batch(std::move(deletion), deadline_value);
     } catch (const redis_error& error) {
         rethrow_or_timeout_redis_cache_error(error, deadline_value, false);
