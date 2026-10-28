@@ -449,22 +449,17 @@ bool context_request::accepts(std::string_view media_type) const noexcept {
         return true;
     }
     http_accept_match match;
-    bool saw_accept = false;
     const auto headers = context_->request_.headers();
     for (const auto& header_field : headers) {
         if (!http_ascii_equals_ignore_case(header_field.name(), "Accept")) {
             continue;
         }
-        saw_accept = true;
         if (!header_field.value().empty()) {
             match.update_media_type(header_field.value(), media_type);
         }
     }
     // Only absence means no preference. A present but empty Accept field is an
     // empty media-range list and therefore matches no representation.
-    if (!saw_accept) {
-        return true;
-    }
     return match.matched();
 }
 
@@ -474,12 +469,12 @@ std::optional<std::string_view> context_request::negotiate(
         return std::nullopt;
     }
 
-    const auto header_name = negotiation_header_name(field);
-    if (!context_->request_.header(header_name).has_value()) {
-        return supported.front();
-    }
     const bool media_type = field == negotiable_field::media_type;
     const bool encoding = field == negotiable_field::encoding;
+    const auto header_name = negotiation_header_name(field);
+    if ((media_type || encoding) && !context_->request_.header(header_name).has_value()) {
+        return supported.front();
+    }
     // Only Accept-Language needs prefix matching in the generic token parser.
     const auto token_mode = field == negotiable_field::language
                                 ? http_accept_token_match_mode::language_prefix
@@ -488,10 +483,14 @@ std::optional<std::string_view> context_request::negotiate(
     static constexpr std::size_t inline_value_capacity = 8;
     std::array<std::string_view, inline_value_capacity> inline_values{};
     std::size_t matching_count = 0;
+    bool saw_header = media_type || encoding;
     const auto headers = context_->request_.headers();
     for (const auto& header_field : headers) {
-        if (!http_ascii_equals_ignore_case(header_field.name(), header_name) ||
-            header_field.value().empty()) {
+        if (!http_ascii_equals_ignore_case(header_field.name(), header_name)) {
+            continue;
+        }
+        saw_header = true;
+        if (header_field.value().empty()) {
             continue;
         }
         if (matching_count < inline_values.size()) {
@@ -499,7 +498,12 @@ std::optional<std::string_view> context_request::negotiate(
         }
         ++matching_count;
     }
-
+    if (!saw_header) {
+        return supported.front();
+    }
+    if (matching_count == 0 && !encoding) {
+        return std::nullopt;
+    }
     std::optional<std::string_view> best;
     int best_quality = 0;
     const bool use_inline_values = matching_count <= inline_values.size();
