@@ -4,8 +4,6 @@
 #include <vector>
 
 #include "ruvia/http/detail/coding/http_response_content_semantics.h"
-#include "ruvia/http/detail/response/http_response_header_bits.h"
-#include "ruvia/http/detail/response/http_response_known_headers.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 
@@ -76,7 +74,6 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
         return true;
     }
     const auto kind = classify_request_header(name);
-    const auto response_known_bit = classify_response_header_name(name);
     const bool successful_connect =
         context_value->content_semantics_ == http_response_content_semantics::connect_tunnel;
     if (validate_response_field(kind, value, http_field_list_role::recipient, context_value->fields_) !=
@@ -86,7 +83,7 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
     // RFC 9110 9.3.6: successful CONNECT ignores Content-Length semantics,
     // including invalid or unrepresentable numerals. Retain the generic-byte-valid
     // field so extension validators (RFC 9297 section 3.2) can still inspect it.
-    if (response_known_bit == response_header_content_length && !successful_connect) {
+    if (kind == request_header_kind::content_length && !successful_connect) {
         http_content_length_state content_length;
         if (content_length.parse_field(value) != http_content_length_parse_status::ok) {
             return false;

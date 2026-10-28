@@ -206,7 +206,7 @@ websocket_client_negotiation::websocket_client_negotiation(
                 }
                 static constexpr std::size_t inline_joined_capacity = 256;
                 if (value_bytes <= inline_joined_capacity) {
-                    std::array<char, inline_joined_capacity> joined_buffer{};
+                    std::array<char, inline_joined_capacity> joined_buffer;
                     std::size_t offset = 0;
                     for (const auto protocol_view : config.subprotocols_) {
                         if (offset != 0) {
@@ -236,7 +236,7 @@ websocket_client_negotiation::websocket_client_negotiation(
                     static_ext->size() - extensions_header_name.size());
             } else if (name == "Sec-WebSocket-Extensions" && value_bytes > value.size()) {
                 static constexpr std::string_view suffix = "; client_max_window_bits";
-                std::array<char, 128> offer_buffer{};
+                std::array<char, 128> offer_buffer;
                 std::memcpy(offer_buffer.data(), value.data(), value.size());
                 std::memcpy(offer_buffer.data() + value.size(), suffix.data(), suffix.size());
                 fields_[field_count_++] = http_header(
@@ -260,10 +260,8 @@ websocket_client_negotiation::submit_http2_request(http2_connection& connection,
     static constexpr std::size_t inline_header_capacity = 16;
     const auto negotiation_fields = request_fields();
     const std::size_t total_headers = negotiation_fields.size() + application_headers.size();
-    std::array<http_header_view, inline_header_capacity> inline_headers{};
-    std::pmr::vector<http_header_view> heap_headers(resource_);
-    std::span<const http_header_view> active_headers{};
-    if (total_headers <= inline_headers.size()) {
+    if (total_headers <= inline_header_capacity) {
+        std::array<http_header_view, inline_header_capacity> inline_headers;
         std::size_t index = 0;
         for (const auto& f : negotiation_fields) {
             inline_headers[index++] = http_header_view{f.name(), f.value()};
@@ -271,21 +269,26 @@ websocket_client_negotiation::submit_http2_request(http2_connection& connection,
         for (const auto& f : application_headers) {
             inline_headers[index++] = f;
         }
-        active_headers = std::span<const http_header_view>(inline_headers.data(), total_headers);
-    } else {
-        heap_headers.reserve(total_headers);
-        for (const auto& f : negotiation_fields) {
-            heap_headers.emplace_back(f.name(), f.value());
-        }
-        heap_headers.insert(heap_headers.end(), application_headers.begin(), application_headers.end());
-        active_headers = heap_headers;
+        return connection.submit_request_head(http2_extended_connect_request_head_view{
+            .protocol_ = "websocket",
+            .scheme_ = scheme,
+            .authority_ = authority,
+            .target_ = target,
+            .headers_ = std::span<const http_header_view>(inline_headers.data(), total_headers),
+        });
     }
+    std::pmr::vector<http_header_view> heap_headers(resource_);
+    heap_headers.reserve(total_headers);
+    for (const auto& f : negotiation_fields) {
+        heap_headers.emplace_back(f.name(), f.value());
+    }
+    heap_headers.insert(heap_headers.end(), application_headers.begin(), application_headers.end());
     return connection.submit_request_head(http2_extended_connect_request_head_view{
         .protocol_ = "websocket",
         .scheme_ = scheme,
         .authority_ = authority,
         .target_ = target,
-        .headers_ = active_headers,
+        .headers_ = heap_headers,
     });
 }
 std::variant<websocket_client_negotiation_result_view, error_type> websocket_client_negotiation::validate_response(const http_client_response_head& head, bool stream_open) const {
