@@ -23,25 +23,30 @@ struct multipart_part_access;
 struct multipart_stream_part_access;
 }  // namespace detail
 
-// Buffered multipart parsing owns decoded Content-Disposition names. Content
-// types borrow the request body unless MIME unfolding needs owned storage;
-// part bodies always borrow the caller-owned request body.
+// Buffered multipart parsing borrows unmodified Content-Disposition names,
+// filenames, Content-Type values, and part bodies from the caller-owned
+// request body; unfolded header blocks and escaped names own PMR storage.
 class multipart_part final {
 public:
     [[nodiscard]] std::string_view name() const& noexcept {
-        return name_;
+        if (const auto* borrowed = std::get_if<std::string_view>(&name_)) {
+            return *borrowed;
+        }
+        return std::get<std::pmr::string>(name_);
     }
     [[nodiscard]] std::string_view name() const&& = delete;
 
     [[nodiscard]] std::string_view filename() const& noexcept {
-        return filename_;
+        if (const auto* borrowed = std::get_if<std::string_view>(&filename_)) {
+            return *borrowed;
+        }
+        return std::get<std::pmr::string>(filename_);
     }
     [[nodiscard]] std::string_view filename() const&& = delete;
 
     [[nodiscard]] bool has_filename() const noexcept {
         return filename_present_;
     }
-
     [[nodiscard]] std::string_view content_type() const& noexcept {
         if (const auto* borrowed = std::get_if<std::string_view>(&content_type_)) {
             return *borrowed;
@@ -57,18 +62,20 @@ public:
 private:
     friend struct detail::multipart_part_access;
 
-    using content_type_storage_type = std::variant<std::string_view, std::pmr::string>;
+    using text_storage_type = std::variant<std::string_view, std::pmr::string>;
+    using content_type_storage_type = text_storage_type;
 
-    multipart_part(std::pmr::string name, std::pmr::string filename, content_type_storage_type content_type_value,
-        std::string_view body, bool filename_present) noexcept
+    multipart_part(text_storage_type name, text_storage_type filename,
+        content_type_storage_type content_type_value, std::string_view body,
+        bool filename_present) noexcept
         : name_(std::move(name)),
           filename_(std::move(filename)),
           content_type_(std::move(content_type_value)),
           body_(body),
           filename_present_(filename_present) {}
 
-    std::pmr::string name_;
-    std::pmr::string filename_;
+    text_storage_type name_;
+    text_storage_type filename_;
     content_type_storage_type content_type_;
     std::string_view body_;
     bool filename_present_{false};
@@ -485,7 +492,9 @@ private:
     std::pmr::string current_filename_;
     std::pmr::string current_headers_;
     std::pmr::string current_content_type_;
-    std::string_view current_content_type_view_;
+    std::string_view current_name_view_{};
+    std::string_view current_filename_view_{};
+    std::string_view current_content_type_view_{};
     state_type state_{progress_state_type::boundary};
     std::size_t pending_erase_bytes_{0};
     std::size_t remaining_parts_;
@@ -495,7 +504,9 @@ private:
     std::size_t delimiter_padding_offset_{0};
     bool next_chunk_is_first_{false};
     bool first_boundary_{true};
+    bool current_name_owned_{false};
     bool current_filename_present_{false};
+    bool current_filename_owned_{false};
     bool current_content_type_owned_{false};
 };
 

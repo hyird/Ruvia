@@ -465,6 +465,12 @@ RUVIA_TEST(multipart_complete_body_parser_returns_borrowed_part_bodies) {
     RUVIA_CHECK_EQ(parts[1].body(), std::string_view("file-data"));
     RUVIA_CHECK(parts[0].body().data() >= body.data());
     RUVIA_CHECK(parts[0].body().data() < body.data() + body.size());
+    RUVIA_CHECK(parts[0].name().data() >= body.data());
+    RUVIA_CHECK(parts[0].name().data() < body.data() + body.size());
+    RUVIA_CHECK(parts[1].name().data() >= body.data());
+    RUVIA_CHECK(parts[1].name().data() < body.data() + body.size());
+    RUVIA_CHECK(parts[1].filename().data() >= body.data());
+    RUVIA_CHECK(parts[1].filename().data() < body.data() + body.size());
 }
 
 RUVIA_TEST(multipart_complete_body_parser_rejects_malformed_body) {

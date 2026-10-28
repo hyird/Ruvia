@@ -99,8 +99,32 @@ std::pmr::vector<multipart_part> parse_multipart_body(std::string_view body, mul
     for (;;) {
         auto result_value = parser.poll();
         if (const auto* part = result_value.part()) {
-            auto name = std::exchange(parser.current_name_, std::pmr::string(resource));
-            auto filename = std::exchange(parser.current_filename_, std::pmr::string(resource));
+            if (parts.empty()) {
+                const auto remaining = parser.buffer_view().substr(parser.pending_erase_bytes_);
+                if (remaining.size() <= max_multipart_header_bytes) {
+                    const auto boundary_value = parser.boundary_.value();
+                    std::size_t boundary_count = 0;
+                    std::size_t scan_offset = 0;
+                    while ((scan_offset = remaining.find(boundary_value, scan_offset)) !=
+                           std::string_view::npos) {
+                        ++boundary_count;
+                        scan_offset += boundary_value.size();
+                    }
+                    if (boundary_count > 1) {
+                        parts.reserve((std::min)(boundary_count, parser.remaining_parts_ + 1));
+                    }
+                }
+            }
+            detail::multipart_part_access::text_storage_type name(part->name());
+            if (parser.current_name_owned_) {
+                name.emplace<std::pmr::string>(
+                    std::exchange(parser.current_name_, std::pmr::string(resource)));
+            }
+            detail::multipart_part_access::text_storage_type filename(part->filename());
+            if (parser.current_filename_owned_) {
+                filename.emplace<std::pmr::string>(
+                    std::exchange(parser.current_filename_, std::pmr::string(resource)));
+            }
             parts.push_back(detail::multipart_part_access::make_decoded(std::move(name),
                 std::move(filename), part->content_type(), part->body(), part->has_filename(),
                 resource, parser.current_content_type_owned_));
@@ -311,18 +335,36 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
         }
         const auto* part_headers = parsed_headers.headers();
 
+        const bool borrowed_headers = input_.borrowed() != nullptr && !unfolded;
         current_name_.clear();
-        detail::http_append_decoded_quoted_pairs(current_name_, part_headers->name());
+        current_name_view_ = {};
+        current_name_owned_ = false;
+        if (borrowed_headers && part_headers->name().find('\\') == std::string_view::npos) {
+            current_name_view_ = part_headers->name();
+        } else {
+            detail::http_append_decoded_quoted_pairs(current_name_, part_headers->name());
+            current_name_view_ = current_name_;
+            current_name_owned_ = true;
+        }
         current_filename_.clear();
+        current_filename_view_ = {};
+        current_filename_owned_ = false;
         current_filename_present_ = part_headers->has_filename();
+        if (current_filename_present_ && !part_headers->filename().empty()) {
+            if (borrowed_headers && part_headers->filename().find('\\') == std::string_view::npos) {
+                current_filename_view_ = part_headers->filename();
+            } else {
+                detail::http_append_decoded_quoted_pairs(
+                    current_filename_, part_headers->filename());
+                current_filename_view_ = current_filename_;
+                current_filename_owned_ = true;
+            }
+        }
         current_content_type_.clear();
         current_content_type_view_ = {};
         current_content_type_owned_ = false;
-        if (current_filename_present_) {
-            detail::http_append_decoded_quoted_pairs(current_filename_, part_headers->filename());
-        }
         if (!part_headers->content_type().empty()) {
-            if (input_.borrowed() != nullptr || unfolded) {
+            if (borrowed_headers || unfolded) {
                 current_content_type_view_ = part_headers->content_type();
                 current_content_type_owned_ = unfolded;
             } else {
@@ -345,8 +387,9 @@ multipart_stream_part multipart_parser::make_part(std::string_view body, bool pa
     const auto phase =
         next_chunk_is_first_ ? (part_end ? multipart_chunk_phase::complete : multipart_chunk_phase::first)
                              : (part_end ? multipart_chunk_phase::last : multipart_chunk_phase::middle);
-    auto part = detail::multipart_stream_part_access::make(current_name_, current_filename_,
-        current_content_type_view_, body, phase, current_filename_present_);
+    auto part = detail::multipart_stream_part_access::make(current_name_view_,
+        current_filename_view_, current_content_type_view_, body, phase,
+        current_filename_present_);
     next_chunk_is_first_ = false;
     return part;
 }
