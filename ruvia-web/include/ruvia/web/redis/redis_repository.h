@@ -396,20 +396,20 @@ public:
 
     [[nodiscard]] task<redis_write_result> insert(
         const entity_type& entity, redis_write_options options = {}) const {
-        detail::redis_scalar_scratch_type id_scratch{};
+        detail::redis_scalar_scratch_type id_scratch;
         return write("insert", detail::redis_entity_id(entity, id_scratch), entity, options);
     }
 
     [[nodiscard]] task<redis_write_result> upsert(
         const entity_type& entity, redis_write_options options = {}) const {
-        detail::redis_scalar_scratch_type id_scratch{};
+        detail::redis_scalar_scratch_type id_scratch;
         return write("upsert", detail::redis_entity_id(entity, id_scratch), entity, options);
     }
 
     [[nodiscard]] task<redis_write_result> update(
         const redis_predicate& predicate, const entity_type& changes,
         redis_write_options options = {}) const {
-        detail::redis_scalar_scratch_type id_scratch{};
+        detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
         return write("update", id, changes, options);
     }
@@ -428,7 +428,7 @@ public:
         const auto memory = resource();
         const bool plain = !options.order_.has_value() && !options.skip_ && !options.take_;
         if (plain) {
-            detail::redis_scalar_scratch_type id_scratch{};
+            detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
                 auto key = detail::redis_entity_key(mapping().prefix_, *id, memory);
                 detail::redis_orm_arguments_type args(memory);
@@ -466,7 +466,7 @@ public:
         const redis_find_options& options = {}) const {
         const auto memory = resource();
         if (!options.order_.has_value() && !options.skip_ && !options.take_) {
-            detail::redis_scalar_scratch_type id_scratch{};
+            detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
                 const auto key = detail::redis_entity_key(mapping().prefix_, *id, memory);
                 return handle_.exists(key);
@@ -480,21 +480,21 @@ public:
     [[nodiscard]] task<redis_write_result> delete_by(
         const redis_predicate& predicate) const {
         auto* memory = resource();
-        detail::redis_scalar_scratch_type id_scratch{};
+        detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
         return delete_by_id(id, memory);
     }
 
     [[nodiscard]] task<redis_write_result> remove(const entity_type& entity) const {
         auto* memory = resource();
-        detail::redis_scalar_scratch_type id_scratch{};
+        detail::redis_scalar_scratch_type id_scratch;
         return delete_by_id(detail::redis_entity_id(entity, id_scratch), memory);
     }
 
     [[nodiscard]] task<bool> expire(
         const redis_predicate& predicate, std::chrono::seconds ttl) const {
         auto* memory = resource();
-        detail::redis_scalar_scratch_type id_scratch{};
+        detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
         const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
         return handle_.expire(key, ttl);
@@ -502,7 +502,7 @@ public:
 
     [[nodiscard]] task<redis_ttl> ttl(const redis_predicate& predicate) const {
         auto* memory = resource();
-        detail::redis_scalar_scratch_type id_scratch{};
+        detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
         const auto key = detail::redis_entity_key(mapping().prefix_, id, memory);
         return handle_.pttl(key);
@@ -598,7 +598,7 @@ private:
         }();
         auto args = detail::redis_orm_write_arguments(
             mapping().prefix_, id, mode, options, 1 + required + max_mutation_arguments, memory);
-        detail::redis_scalar_scratch_type scalar_scratch{};
+        detail::redis_scalar_scratch_type scalar_scratch;
         args.emplace_back(detail::encode_redis_scalar(required, scalar_scratch));
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
             if constexpr (!column_type::options.nullable_) {
@@ -612,19 +612,19 @@ private:
                 value_kind == detail::redis_column_kind::text || value_kind == detail::redis_column_kind::bool_value;
             const auto field = column_type::name.view();
             if constexpr (column_type::options.primary_key_) {
-                if (entity.template is_set<column_type::name>() &&
+                if (mode == "update" && entity.template is_set<column_type::name>() &&
                     detail::encode_redis_scalar(entity.template get<column_type::name>(), scalar_scratch) != id) {
                     throw std::invalid_argument("an entity update cannot change its ID");
                 }
                 detail::append_redis_entity_field(args, field, id,
-                    mapping().index_kind(field) == redis_index_kind::numeric, tag_shadow, memory);
+                    !tag_shadow && mapping().index_kind(field) == redis_index_kind::numeric, tag_shadow, memory);
             } else if (entity.template is_set<column_type::name>()) {
                 if (entity.template is_null<column_type::name>()) {
                     detail::append_redis_entity_field(args, field, std::nullopt, false, tag_shadow, memory);
                 } else {
                     const auto value = detail::encode_redis_scalar(entity.template get<column_type::name>(), scalar_scratch);
                     detail::append_redis_entity_field(args, field, value,
-                        mapping().index_kind(field) == redis_index_kind::numeric, tag_shadow, memory);
+                        !tag_shadow && mapping().index_kind(field) == redis_index_kind::numeric, tag_shadow, memory);
                 }
             }
         });

@@ -27,11 +27,13 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
     for (std::size_t i = 0; i < fields_value.size(); i += 2) {
         const auto name = redis_orm_string(fields_value[i]);
         const auto value = redis_orm_string(fields_value[i + 1]);
-        if (name == "__ruvia_entity") {
-            if (marker || value != "1") {
-                throw redis_error(redis_error::code_type::protocol_error, "invalid entity storage marker");
+        if (name.starts_with("__ruvia_")) {
+            if (name == "__ruvia_entity") {
+                if (marker || value != "1") {
+                    throw redis_error(redis_error::code_type::protocol_error, "invalid entity storage marker");
+                }
+                marker = true;
             }
-            marker = true;
             continue;
         }
         for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t index> {
@@ -58,7 +60,7 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
         }
     });
     try {
-        redis_scalar_scratch_type id_scratch{};
+        redis_scalar_scratch_type id_scratch;
         const auto id = redis_entity_id(entity, id_scratch);
         if (!redis_entity_key_matches(prefix, id, key)) {
             throw redis_error(redis_error::code_type::protocol_error, "entity ID does not match its Redis key");
@@ -97,10 +99,12 @@ struct redis_map_search final {
             throw redis_error(redis_error::code_type::protocol_error, "invalid entity search reply");
         }
         const auto count = redis_orm_count(values.front());
-        if (count < (values.size() - 1) / 2) {
+        const auto documents = (values.size() - 1) / 2;
+        if (count < documents) {
             throw redis_error(redis_error::code_type::protocol_error, "invalid entity search count");
         }
         entity_rows<entity_type> rows(resource);
+        rows.reserve(documents);
         for (std::size_t i = 1; i < values.size(); i += 2) {
             const auto key = redis_orm_string(values[i]);
             // A document may expire between index matching and field loading.

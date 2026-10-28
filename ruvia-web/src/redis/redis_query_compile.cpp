@@ -320,7 +320,7 @@ void append_numeric_comparison(std::pmr::string& output, std::string_view field,
         append_null_comparison(output, field, operation, "unsupported NULL NUMERIC comparison");
         return;
     }
-    std::array<char, 64> number_buffer{};
+    std::array<char, 64> number_buffer;
     switch (operation) {
         case redis_binary_operator::equal: {
             const auto number = format_canonical_numeric(number_buffer, value, column_kind);
@@ -486,7 +486,7 @@ private:
                 append_encoded_tag_term(
                     output, field, raw_tag_value(value, comparison.column_.kind_));
             } else {
-                std::array<char, 64> number_buffer{};
+                std::array<char, 64> number_buffer;
                 const auto number =
                     format_canonical_numeric(number_buffer, value, comparison.column_.kind_);
                 append_numeric_range(output, field, number, number);
@@ -507,8 +507,8 @@ private:
             lower.kind() == redis_literal_kind::null || upper.kind() == redis_literal_kind::null) {
             throw std::invalid_argument("Redis BETWEEN requires a NUMERIC indexed column");
         }
-        std::array<char, 64> low_buffer{};
-        std::array<char, 64> high_buffer{};
+        std::array<char, 64> low_buffer;
+        std::array<char, 64> high_buffer;
         const auto low = format_canonical_numeric(low_buffer, lower, comparison.column_.kind_);
         const auto high = format_canonical_numeric(high_buffer, upper, comparison.column_.kind_);
         append_numeric_range(output, field, low, high);

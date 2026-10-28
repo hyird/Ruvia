@@ -114,7 +114,11 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view prefix, std:
     args.emplace_back(mode);
     args.emplace_back(options.ttl_ ? "expire" : options.persist_ ? "persist"
                                                                  : "keep");
-    args.push_back(redis_milliseconds_string(options.ttl_.value_or(std::chrono::milliseconds(0)), resource));
+    if (options.ttl_) {
+        args.push_back(redis_milliseconds_string(*options.ttl_, resource));
+    } else {
+        args.emplace_back("0");
+    }
     return args;
 }
 
