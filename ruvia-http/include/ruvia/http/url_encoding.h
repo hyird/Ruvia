@@ -121,25 +121,40 @@ template <typename visitor_type>
 // which must outlive the returned string. On failure, no decoded prefix escapes.
 [[nodiscard]] inline std::optional<std::pmr::string> decode_url_component(
     std::string_view input, url_decode_options options = {}) {
-    std::pmr::string output(detail::http_pmr_resource_or_default(options.resource_));
-    output.resize(input.size());
-    std::size_t written = 0;
+    auto* const resource = detail::http_pmr_resource_or_default(options.resource_);
+    std::size_t decoded_size = 0;
+    bool transformed = false;
     for (std::size_t i = 0; i < input.size(); ++i) {
-        char c = input[i];
+        const char c = input[i];
         if (options.mode_ == url_decode_mode::form && c == '+') {
-            c = ' ';
+            transformed = true;
         } else if (c == '%') {
-            const auto byte = http_try_decode_percent_byte(input, i);
-            if (byte) {
-                c = static_cast<char>(*byte);
+            if (http_try_decode_percent_byte(input, i).has_value()) {
+                transformed = true;
                 i += 2;
             } else if (options.mode_ != url_decode_mode::form) {
                 return std::nullopt;
             }
         }
-        output[written++] = c;
+        ++decoded_size;
     }
-    output.resize(written);
+    if (!transformed) {
+        return std::pmr::string(input, resource);
+    }
+    std::pmr::string output(resource);
+    output.reserve(decoded_size);
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+        if (options.mode_ == url_decode_mode::form && c == '+') {
+            c = ' ';
+        } else if (c == '%') {
+            if (const auto byte = http_try_decode_percent_byte(input, i)) {
+                c = static_cast<char>(*byte);
+                i += 2;
+            }
+        }
+        output.push_back(c);
+    }
     return output;
 }
 

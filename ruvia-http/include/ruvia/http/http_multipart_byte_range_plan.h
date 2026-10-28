@@ -1,14 +1,13 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
-#include <vector>
 
 #include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_byte_range.h"
@@ -49,7 +48,9 @@ public:
     /// Ordered wire fragments, not multipart parts. Adjacent metadata may share a
     /// descriptor; consumers must not assume a fixed segment count per range.
     [[nodiscard]] std::span<const segment> segments() const& noexcept {
-        return state_ == nullptr ? std::span<const segment>{} : std::span<const segment>(state_->segments_);
+        return state_ == nullptr
+                   ? std::span<const segment>{}
+                   : std::span<const segment>(state_->segments_.data(), state_->segment_count_);
     }
     [[nodiscard]] std::span<const segment> segments() const&& = delete;
     [[nodiscard]] std::uint64_t content_length() const noexcept {
@@ -66,14 +67,16 @@ private:
         const http_byte_range_set&, std::uint64_t, std::string_view, std::string_view, std::pmr::memory_resource*);
 
     struct storage final {
+        static constexpr std::size_t max_segments = http_byte_range_set::capacity * 2 + 1;
+
         explicit storage(std::pmr::memory_resource* resource)
             : content_type_(std::string_view{}, resource),
-              metadata_(std::string_view{}, resource),
-              segments_(std::initializer_list<segment>{}, resource) {}
+              metadata_(std::string_view{}, resource) {}
 
         std::pmr::string content_type_;
         std::pmr::string metadata_;
-        std::pmr::vector<segment> segments_;
+        std::array<segment, max_segments> segments_{};
+        std::size_t segment_count_{};
         std::uint64_t content_length_{};
     };
 

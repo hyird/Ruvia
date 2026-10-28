@@ -165,7 +165,17 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     // rather than in a separate pre-scan of the same captures.
     std::size_t decoded_count = 0;
     for (std::size_t i = 0; i < param_count; ++i) {
-        decoded_count += has_url_encoding(param_values[i], url_decode_mode::percent);
+        const auto value = param_values[i];
+        if (!has_url_encoding(value, url_decode_mode::percent)) {
+            continue;
+        }
+        const bool valid = param_names[i] == "*" ? detail::is_valid_encoded_request_path(value)
+                                                 : validate_url_encoding(value);
+        if (!valid) {
+            request_storage.route_params_invalid_ = true;
+            detail::throw_invalid_param();
+        }
+        ++decoded_count;
     }
     std::pmr::vector<std::pmr::string> storage(context_value.arena());
     auto params = detail::request_name_value_list_access::make(context_value.arena());
@@ -176,17 +186,8 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     for (std::size_t i = 0; i < param_count; ++i) {
         auto value = param_values[i];
         if (has_url_encoding(value, url_decode_mode::percent)) {
-            // The wildcard capture is a path tail handed to static_file as is,
-            // so it decodes under the same request-path rule as the document
-            // root: no escape may reveal a separator the router never split on.
-            auto decoded = param_names[i] == "*"
-                               ? detail::decode_request_path(value, context_value.arena())
-                               : decode_url_component(
-                                     value, {.mode_ = url_decode_mode::percent, .resource_ = context_value.arena()});
-            if (!decoded) {
-                request_storage.route_params_invalid_ = true;
-                detail::throw_invalid_param();
-            }
+            auto decoded = decode_url_component(
+                value, {.mode_ = url_decode_mode::percent, .resource_ = context_value.arena()});
             value = storage.emplace_back(std::move(*decoded));
         }
         detail::request_name_value_list_access::push_back(params, http_header_view{param_names[i], value});
@@ -329,17 +330,30 @@ const request_name_value_list& context_request::cookie_fields() const {
     if (!cache) {
         auto cookies = detail::request_name_value_list_access::make(context_->arena());
         if (context_->request_.header("Cookie").has_value()) {
-            detail::request_name_value_list_access::reserve(cookies, 8);
+            std::size_t cookie_count = 0;
             for (const auto& header_field : context_->request_.headers()) {
                 if (!http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
                     continue;
                 }
                 http_visit_cookie_pairs(
-                    header_field.value(), [&cookies](std::string_view key, std::string_view value) {
-                        detail::request_name_value_list_access::push_back(
-                            cookies, http_header_view{key, value});
+                    header_field.value(), [&cookie_count](std::string_view, std::string_view) {
+                        ++cookie_count;
                         return true;
                     });
+            }
+            if (cookie_count != 0) {
+                detail::request_name_value_list_access::reserve(cookies, cookie_count);
+                for (const auto& header_field : context_->request_.headers()) {
+                    if (!http_ascii_equals_ignore_case(header_field.name(), "Cookie")) {
+                        continue;
+                    }
+                    http_visit_cookie_pairs(
+                        header_field.value(), [&cookies](std::string_view key, std::string_view value) {
+                            detail::request_name_value_list_access::push_back(
+                                cookies, http_header_view{key, value});
+                            return true;
+                        });
+                }
             }
         }
         cache.emplace(std::move(cookies));

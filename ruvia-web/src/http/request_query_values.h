@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <memory_resource>
 #include <optional>
@@ -21,17 +22,34 @@ public:
     request_query_values(const request_name_value_list& fields, std::pmr::memory_resource* resource)
         : groups_(resource),
           values_(resource) {
-        std::pmr::vector<std::size_t> order(resource);
-        order.reserve(fields.size());
+        if (fields.empty()) {
+            return;
+        }
+        static constexpr std::size_t inline_order_capacity = 32;
+        std::array<std::size_t, inline_order_capacity> inline_order{};
+        std::pmr::vector<std::size_t> heap_order(resource);
+        std::span<std::size_t> order;
+        if (fields.size() <= inline_order_capacity) {
+            order = std::span<std::size_t>(inline_order.data(), fields.size());
+        } else {
+            heap_order.resize(fields.size());
+            order = heap_order;
+        }
         for (std::size_t i = 0; i < fields.size(); ++i) {
-            order.push_back(i);
+            order[i] = i;
         }
         std::ranges::sort(order, [&fields](std::size_t left, std::size_t right) noexcept {
             const auto left_name = fields[left].name();
             const auto right_name = fields[right].name();
             return left_name == right_name ? left < right : left_name < right_name;
         });
-        groups_.reserve(fields.size());
+        std::size_t group_count = 1;
+        for (std::size_t i = 1; i < order.size(); ++i) {
+            if (fields[order[i]].name() != fields[order[i - 1]].name()) {
+                ++group_count;
+            }
+        }
+        groups_.reserve(group_count);
         values_.reserve(fields.size());
         for (const auto index : order) {
             const auto name = fields[index].name();

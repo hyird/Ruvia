@@ -196,9 +196,12 @@ std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect
     if (raw_host.find(':') != std::string_view::npos) {
         return http_connect_udp_error::invalid_target;
     }
-    auto host = decode_url_component(raw_host, {.resource_ = resource});
     const auto port = detail::parse_port_value(path.substr(slash + 1));
-    if (!host || !valid_host(*host) || (port.index() != 0) || !std::get<0>(port)) {
+    if ((port.index() != 0) || !std::get<0>(port)) {
+        return http_connect_udp_error::invalid_target;
+    }
+    auto host = decode_url_component(raw_host, {.resource_ = resource});
+    if (!host || !valid_host(*host)) {
         return http_connect_udp_error::invalid_target;
     }
     return http_connect_udp_target{std::move(*host), std::get<0>(port)};

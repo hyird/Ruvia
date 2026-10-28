@@ -26,8 +26,18 @@ namespace ruvia::detail {
         .message_ = "invalid static file path"});
 }
 
-[[nodiscard]] inline std::size_t count_path_separators(std::string_view path) noexcept {
-    return static_cast<std::size_t>(std::ranges::count_if(path, [](char c) noexcept { return c == '/' || c == '\\'; }));
+[[nodiscard]] inline bool is_valid_encoded_request_path(std::string_view path) noexcept {
+    for (std::size_t i = 0; i < path.size(); ++i) {
+        if (path[i] != '%') {
+            continue;
+        }
+        const auto decoded = http_try_decode_percent_byte(path, i);
+        if (!decoded || *decoded == '/' || *decoded == '\\') {
+            return false;
+        }
+        i += 2;
+    }
+    return true;
 }
 
 // Percent-decodes an encoded request path, or a wildcard tail of one, exactly
@@ -37,11 +47,10 @@ namespace ruvia::detail {
 // yields nullopt.
 [[nodiscard]] inline std::optional<std::pmr::string> decode_request_path(
     std::string_view path, std::pmr::memory_resource* resource) {
-    auto decoded = decode_url_component(path, {.mode_ = url_decode_mode::percent, .resource_ = resource});
-    if (decoded && count_path_separators(*decoded) != count_path_separators(path)) {
-        decoded.reset();
+    if (!is_valid_encoded_request_path(path)) {
+        return std::nullopt;
     }
-    return decoded;
+    return decode_url_component(path, {.mode_ = url_decode_mode::percent, .resource_ = resource});
 }
 
 // Web static-file path policy: validate a decoded file path relative to the
