@@ -251,8 +251,8 @@ public:
                 }
             } else {
                 for (std::size_t i = 0; i < inline_parameter_count_; ++i) {
-                    if (inline_parameter_positions_[i].first == node) {
-                        pg_parameter(inline_parameter_positions_[i].second, value, cast);
+                    if (inline_parameter_positions_[i].node_ == node) {
+                        pg_parameter(inline_parameter_positions_[i].position_, value, cast);
                         return;
                     }
                 }
@@ -332,15 +332,20 @@ private:
         }
     }
 
+    struct parameter_position final {
+        const db_query_node* node_;
+        std::size_t position_;
+    };
+
     static constexpr std::size_t inline_parameter_capacity = 32;
     db_driver driver_;
     db_parameter_mode mode_;
-    std::array<std::pair<const db_query_node*, std::size_t>, inline_parameter_capacity> inline_parameter_positions_{};
+    std::array<parameter_position, inline_parameter_capacity> inline_parameter_positions_;
     std::size_t inline_parameter_count_{0};
     // PostgreSQL numbers a reused node's parameter once. Queries with up to 32
     // distinct parameter nodes use inline_parameter_positions_ without heap
     // allocations; larger queries spill into a single contiguous vector.
-    std::pmr::vector<std::pair<const db_query_node*, std::size_t>> parameter_positions_;
+    std::pmr::vector<parameter_position> parameter_positions_;
 };
 
 }  // namespace

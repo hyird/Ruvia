@@ -32,7 +32,7 @@ postgresql_statement_name make_postgresql_statement_name(
     std::string_view sql, std::span<const unsigned int> types, std::pmr::memory_resource* resource) {
     const std::size_t key_size = sql.size() + 1U + types.size() * 4U;
     constexpr std::size_t stack_capacity = 512;
-    std::array<unsigned char, stack_capacity> stack_key{};
+    std::array<unsigned char, stack_capacity> stack_key;
     std::pmr::string heap_key(resource);
     unsigned char* buffer = stack_key.data();
     if (key_size > stack_capacity) {
@@ -50,15 +50,15 @@ postgresql_statement_name make_postgresql_statement_name(
         buffer[offset++] = static_cast<unsigned char>((type >> 8) & 0xffU);
         buffer[offset++] = static_cast<unsigned char>(type & 0xffU);
     }
-    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest{};
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest;
     if (SHA256(buffer, key_size, digest.data()) == nullptr) {
         throw std::runtime_error("PostgreSQL statement name digest failed");
     }
     constexpr std::string_view prefix{"ruvia_"};
-    postgresql_statement_name name{};
+    postgresql_statement_name name;
     prefix.copy(name.data(), prefix.size());
-    // Zero initialization leaves the terminating NUL after the hex digits.
     http_encode_lower_hex(name.data() + prefix.size(), std::span(digest.data(), (name.size() - prefix.size()) / 2));
+    name.back() = '\0';
     return name;
 }
 
@@ -117,31 +117,31 @@ postgresql_params::postgresql_params(
     if (params.empty()) {
         return;
     }
-    std::size_t numeric_count = 0;
-    for (const auto& param : params) {
-        const auto type = db_value_access::type(param);
-        if (type == db_value_type::string) {
-            const auto& value = db_value_access::owned_text(param);
-            if (value.find('\0') != std::string_view::npos) {
-                throw std::invalid_argument("PostgreSQL string parameter must not contain NUL bytes");
-            }
-            if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
-                throw std::length_error("PostgreSQL parameter is too large");
-            }
-        } else if (type == db_value_type::signed_value || type == db_value_type::unsigned_value ||
-                   type == db_value_type::double_value) {
-            if (type == db_value_type::double_value && !std::isfinite(db_value_access::get_double_value(param))) {
-                throw std::invalid_argument("database double value must be finite");
-            }
-            ++numeric_count;
-        }
-    }
     const bool inline_params = params.size() <= inline_capacity;
+    std::size_t numeric_count = 0;
     if (!inline_params) {
+        for (const auto& param : params) {
+            const auto type = db_value_access::type(param);
+            if (type == db_value_type::string) {
+                const auto& value = db_value_access::owned_text(param);
+                if (value.find('\0') != std::string_view::npos) {
+                    throw std::invalid_argument("PostgreSQL string parameter must not contain NUL bytes");
+                }
+                if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+                    throw std::length_error("PostgreSQL parameter is too large");
+                }
+            } else if (type == db_value_type::signed_value || type == db_value_type::unsigned_value ||
+                       type == db_value_type::double_value) {
+                if (type == db_value_type::double_value && !std::isfinite(db_value_access::get_double_value(param))) {
+                    throw std::invalid_argument("database double value must be finite");
+                }
+                ++numeric_count;
+            }
+        }
         heap_values_.reserve(params.size());
         heap_types_.reserve(params.size());
     }
-    const bool inline_numerics = numeric_count <= inline_capacity;
+    const bool inline_numerics = inline_params || numeric_count <= inline_capacity;
     if (!inline_numerics) {
         heap_encoded_.resize(numeric_count);
     }
@@ -157,6 +157,14 @@ postgresql_params::postgresql_params(
                 break;
             case db_value_type::string: {
                 const auto& value = db_value_access::owned_text(param);
+                if (inline_params) {
+                    if (value.find('\0') != std::string_view::npos) {
+                        throw std::invalid_argument("PostgreSQL string parameter must not contain NUL bytes");
+                    }
+                    if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+                        throw std::length_error("PostgreSQL parameter is too large");
+                    }
+                }
                 text = value.c_str();
                 break;
             }
@@ -166,6 +174,10 @@ postgresql_params::postgresql_params(
             case db_value_type::signed_value:
             case db_value_type::unsigned_value:
             case db_value_type::double_value: {
+                if (inline_params && type == db_value_type::double_value &&
+                    !std::isfinite(db_value_access::get_double_value(param))) {
+                    throw std::invalid_argument("database double value must be finite");
+                }
                 char* const slot = inline_numerics
                                        ? inline_encoded_.data() + numeric_index * numeric_slot_size
                                        : heap_encoded_[numeric_index].data();
