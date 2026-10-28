@@ -19,7 +19,9 @@ void db_schema::set_table_options(std::string_view table_value, std::span<const 
             }
         }
     }
-    std::pmr::string sql("ALTER TABLE ", resource_);
+    std::pmr::string sql(resource_);
+    sql.reserve(32U + table_value.size() + options.size() * 48U);
+    sql += "ALTER TABLE ";
     detail::append_db_qualified_identifier(sql, table_value, driver_);
     sql += " SET (";
     for (std::size_t i = 0; i < options.size(); ++i) {
@@ -89,6 +91,7 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
     std::size_t value_count = 1U;
     std::pmr::string segments(resource_);
     if (!options.segment_by_.empty()) {
+        segments.reserve(options.segment_by_.size() * 16U);
         for (const auto& column : options.segment_by_) {
             if (!segments.empty()) {
                 segments += ", ";
@@ -99,6 +102,7 @@ void db_schema::set_compression(std::string_view table_value, const db_compressi
     }
     std::pmr::string order(resource_);
     if (!options.order_by_.empty()) {
+        order.reserve(options.order_by_.size() * 24U);
         for (const auto& column : options.order_by_) {
             if (!order.empty()) {
                 order += ", ";

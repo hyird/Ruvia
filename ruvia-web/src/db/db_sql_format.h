@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <memory_resource>
 #include <stdexcept>
@@ -7,7 +8,9 @@
 #include <string_view>
 
 #include "ruvia/http/http_hex.h"
+#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/db/db_entity.h"
+#include "ruvia/web/db/db_query.h"
 #include "ruvia/web/detail/db/db_utils.h"
 #include "ruvia/web/detail/db/db_value_access.h"
 #include "ruvia/web/detail/json/json_byte_scan.h"
@@ -148,17 +151,24 @@ inline void append_db_literal(std::pmr::string& output, const db_value& value, d
 enum class db_sql_type_usage : std::uint8_t { column,
     cast };
 
+void append_db_expression(std::pmr::string& output, db_expression expression, db_driver driver);
+
 inline void append_db_dollar_body(std::pmr::string& output, std::string_view body) {
-    std::pmr::string delimiter("$ruvia$", output.get_allocator().resource());
+    std::array<char, 32> delimiter_buf{"$ruvia$"};
+    std::string_view delimiter(delimiter_buf.data(), 7);
     for (std::uint64_t suffix = 1; body.find(delimiter) != std::string_view::npos; ++suffix) {
-        delimiter = "$ruvia";
-        append_db_number(delimiter, suffix);
-        delimiter += '$';
+        std::array<char, http_max_unsigned_decimal_size> digits;
+        const auto formatted = http_format_unsigned(digits, suffix);
+        std::size_t length = 6;
+        formatted.copy(delimiter_buf.data() + length, formatted.size());
+        length += formatted.size();
+        delimiter_buf[length++] = '$';
+        delimiter = std::string_view(delimiter_buf.data(), length);
     }
     output.reserve(output.size() + delimiter.size() * 2U + body.size());
-    output += delimiter;
-    output += body;
-    output += delimiter;
+    output.append(delimiter);
+    output.append(body);
+    output.append(delimiter);
 }
 
 inline void append_db_type_name(std::pmr::string& output, db_data_type type,

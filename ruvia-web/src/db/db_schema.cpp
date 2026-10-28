@@ -59,8 +59,7 @@ void db_schema::append_expression(std::pmr::string& s, db_expression e) const {
     if (e.empty()) {
         throw std::invalid_argument("schema expression is required");
     }
-    auto x = db_query::render_expression(e, driver_, resource_, db_parameter_mode::literal);
-    s += x;
+    detail::append_db_expression(s, e, driver_);
 }
 void db_schema::append_type(std::pmr::string& s, const db_type_definition& t) const {
     detail::append_db_type_name(s, t.data_type_, t.custom_name_, t.length_, t.precision_, t.scale_,
@@ -424,7 +423,9 @@ void db_schema::create_index(const db_index_definition& i) {
     if (i.name_.empty() || i.table_.empty() || i.keys_.empty()) {
         throw std::invalid_argument("index name, table and keys are required");
     }
-    std::pmr::string s("CREATE ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(64U + i.name_.size() + i.table_.size() + i.keys_.size() * 24U + i.include_.size() * 16U);
+    s += "CREATE ";
     if (i.unique_) {
         s += "UNIQUE ";
     }
@@ -608,7 +609,9 @@ void db_schema::execute(const db_query& q) {
 }
 void db_schema::perform(db_expression e) {
     require_postgresql();
-    std::pmr::string s("PERFORM ", resource_);
+    std::pmr::string s(resource_);
+    s.reserve(64U);
+    s += "PERFORM ";
     append_expression(s, e);
     append(std::move(s), db_migration_atomicity::transactional, true);
 }
@@ -616,7 +619,9 @@ void db_schema::perform(db_expression e) {
 void db_schema::run(const db_procedure& procedure) {
     require_postgresql();
     auto body = procedure.body(resource_);
-    std::pmr::string sql("DO ", resource_);
+    std::pmr::string sql(resource_);
+    sql.reserve(3U + body.size() + 18U);
+    sql += "DO ";
     detail::append_db_dollar_body(sql, body);
     append(std::move(sql));
 }
@@ -810,7 +815,10 @@ void db_schema::create_trigger(const db_trigger_definition& trigger) {
             throw std::invalid_argument("trigger OLD TABLE and NEW TABLE must have distinct names");
         }
     }
-    std::pmr::string sql("CREATE TRIGGER ", resource_);
+    std::pmr::string sql(resource_);
+    sql.reserve(96U + trigger.name_.size() + trigger.table_.size() + trigger.function_.size() +
+                trigger.update_columns_.size() * 16U + trigger.arguments_.size() * 16U);
+    sql += "CREATE TRIGGER ";
     append_db_identifier(sql, trigger.name_, driver_);
     switch (trigger.timing_) {
         case db_trigger_timing::before:
@@ -925,7 +933,9 @@ std::pmr::vector<db_migration> db_schema::compile(std::string_view id) const {
                 body.push_back(';');
             }
             body += " END ";
-            std::pmr::string sql("DO ", resource_);
+            std::pmr::string sql(resource_);
+            sql.reserve(3U + body.size() + 18U);
+            sql += "DO ";
             detail::append_db_dollar_body(sql, body);
             out.emplace_back(db_migration_options{std::string(id), std::string(sql), db_migration_atomicity::transactional});
         }

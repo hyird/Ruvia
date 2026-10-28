@@ -33,6 +33,34 @@ std::string_view table_lock_mode_name(db_table_lock_mode mode) {
     }
     throw std::invalid_argument("unknown table lock mode");
 }
+class procedure_append_guard final {
+public:
+    explicit procedure_append_guard(std::pmr::string& target, std::size_t extra_reserve = 48U)
+        : target_(target),
+          initial_size_(target.size()) {
+        if (target_.capacity() - initial_size_ < extra_reserve) {
+            target_.reserve(initial_size_ + (std::max)(extra_reserve, std::size_t{64}));
+        }
+    }
+
+    procedure_append_guard(const procedure_append_guard&) = delete;
+    procedure_append_guard& operator=(const procedure_append_guard&) = delete;
+
+    void commit() noexcept {
+        committed_ = true;
+    }
+
+    ~procedure_append_guard() {
+        if (!committed_) {
+            target_.resize(initial_size_);
+        }
+    }
+
+private:
+    std::pmr::string& target_;
+    std::size_t initial_size_;
+    bool committed_{false};
+};
 }  // namespace
 
 db_procedure::db_procedure(std::pmr::memory_resource* resource)
@@ -42,7 +70,7 @@ db_procedure::db_procedure(std::pmr::memory_resource* resource)
       variables_(resource_),
       blocks_(resource_) {}
 void db_procedure::append_expression(std::pmr::string& output, db_expression value) const {
-    output += db_query::render_expression(value, pg, resource_);
+    detail::append_db_expression(output, value, pg);
 }
 void db_procedure::register_variable(std::string_view name) {
     if (std::ranges::any_of(variables_, [&](const auto& existing) { return existing == name; })) {
@@ -51,76 +79,89 @@ void db_procedure::register_variable(std::string_view name) {
     variables_.emplace_back(name);
 }
 void db_procedure::declare_variable(const db_variable_definition& variable) {
-    std::pmr::string sql(resource_);
-    detail::append_db_identifier(sql, variable.name_, pg);
-    sql += ' ';
-    const auto& t = variable.type_;
-    detail::append_db_type_name(sql, t.data_type_, t.custom_name_, t.length_, t.precision_, t.scale_, t.array_, pg);
-    if (!variable.default_value_.empty()) {
-        sql += " := ";
-        append_expression(sql, variable.default_value_);
+    if (std::ranges::any_of(variables_, [&](const auto& existing) { return existing == variable.name_; })) {
+        throw std::invalid_argument("duplicate procedure variable");
     }
-    sql += ";\n";
-    register_variable(variable.name_);
-    declarations_ += sql;
+    procedure_append_guard guard(declarations_, 32U + variable.name_.size());
+    detail::append_db_identifier(declarations_, variable.name_, pg);
+    declarations_ += ' ';
+    const auto& t = variable.type_;
+    detail::append_db_type_name(
+        declarations_, t.data_type_, t.custom_name_, t.length_, t.precision_, t.scale_, t.array_, pg);
+    if (!variable.default_value_.empty()) {
+        declarations_ += " := ";
+        append_expression(declarations_, variable.default_value_);
+    }
+    declarations_ += ";\n";
+    variables_.emplace_back(variable.name_);
+    guard.commit();
 }
 void db_procedure::declare_row(std::string_view name, std::string_view table_value) {
-    std::pmr::string sql(resource_);
-    detail::append_db_identifier(sql, name, pg);
-    sql += ' ';
-    detail::append_db_qualified_identifier(sql, table_value, pg);
-    sql += "%ROWTYPE;\n";
-    register_variable(name);
-    declarations_ += sql;
+    if (std::ranges::any_of(variables_, [&](const auto& existing) { return existing == name; })) {
+        throw std::invalid_argument("duplicate procedure variable");
+    }
+    procedure_append_guard guard(declarations_, 16U + name.size() + table_value.size());
+    detail::append_db_identifier(declarations_, name, pg);
+    declarations_ += ' ';
+    detail::append_db_qualified_identifier(declarations_, table_value, pg);
+    declarations_ += "%ROWTYPE;\n";
+    variables_.emplace_back(name);
+    guard.commit();
 }
 void db_procedure::declare_record(std::string_view name) {
     detail::validate_db_identifier(name, pg);
-    std::pmr::string sql(resource_);
-    sql.reserve(name.size() + 2U + 9U);
-    detail::append_db_identifier(sql, name, pg);
-    sql += " RECORD;\n";
-    register_variable(name);
-    declarations_ += sql;
+    if (std::ranges::any_of(variables_, [&](const auto& existing) { return existing == name; })) {
+        throw std::invalid_argument("duplicate procedure variable");
+    }
+    procedure_append_guard guard(declarations_, name.size() + 11U);
+    detail::append_db_identifier(declarations_, name, pg);
+    declarations_ += " RECORD;\n";
+    variables_.emplace_back(name);
+    guard.commit();
 }
 void db_procedure::assign(std::string_view target, db_expression value) {
-    std::pmr::string sql(resource_);
-    detail::append_db_qualified_identifier(sql, target, pg);
-    sql += " := ";
-    append_expression(sql, value);
-    sql += ";\n";
-    statements_ += sql;
+    procedure_append_guard guard(statements_, 32U + target.size());
+    detail::append_db_qualified_identifier(statements_, target, pg);
+    statements_ += " := ";
+    append_expression(statements_, value);
+    statements_ += ";\n";
+    guard.commit();
 }
 void db_procedure::select_into(const db_query& query, std::span<const std::string_view> targets, bool strict) {
     if (targets.empty() || !query.returns_rows()) {
         throw std::invalid_argument("SELECT INTO requires returned rows and target variables");
     }
     const auto statement = query.compile(pg, resource_, db_parameter_mode::literal);
-    std::pmr::string sql(statement.sql(), resource_);
-    sql += strict ? " INTO STRICT " : " INTO ";
+    procedure_append_guard guard(statements_, statement.sql().size() + 16U + targets.size() * 16U);
+    statements_ += statement.sql();
+    statements_ += strict ? " INTO STRICT " : " INTO ";
     bool first = true;
     for (const auto target : targets) {
         if (!first) {
-            sql += ", ";
+            statements_ += ", ";
         }
         first = false;
-        detail::append_db_qualified_identifier(sql, target, pg);
+        detail::append_db_qualified_identifier(statements_, target, pg);
     }
-    sql += ";\n";
-    statements_ += sql;
+    statements_ += ";\n";
+    guard.commit();
 }
 void db_procedure::execute(const db_query& query) {
     if (query.returns_rows()) {
         throw std::invalid_argument("procedure execute requires a command; consume returned rows with select_into");
     }
     const auto statement = query.compile(pg, resource_, db_parameter_mode::literal);
+    procedure_append_guard guard(statements_, statement.sql().size() + 2U);
     statements_ += statement.sql();
     statements_ += ";\n";
+    guard.commit();
 }
 void db_procedure::perform(db_expression expression) {
-    std::pmr::string sql("PERFORM ", resource_);
-    append_expression(sql, expression);
-    sql += ";\n";
-    statements_ += sql;
+    procedure_append_guard guard(statements_, 48U);
+    statements_ += "PERFORM ";
+    append_expression(statements_, expression);
+    statements_ += ";\n";
+    guard.commit();
 }
 void db_procedure::apply(const db_schema& schema) {
     if (schema.driver_ != pg) {
@@ -137,20 +178,22 @@ void db_procedure::apply(const db_schema& schema) {
     }
 }
 void db_procedure::begin_if(db_expression condition) {
-    std::pmr::string sql("IF ", resource_);
-    append_expression(sql, condition);
-    sql += " THEN\n";
+    procedure_append_guard guard(statements_, 48U);
+    statements_ += "IF ";
+    append_expression(statements_, condition);
+    statements_ += " THEN\n";
     blocks_.push_back(block_type::if_value);
-    statements_ += sql;
+    guard.commit();
 }
 void db_procedure::else_if(db_expression condition) {
     if (blocks_.empty() || blocks_.back() != block_type::if_value) {
         throw std::invalid_argument("ELSEIF requires an open IF without ELSE");
     }
-    std::pmr::string sql("ELSIF ", resource_);
-    append_expression(sql, condition);
-    sql += " THEN\n";
-    statements_ += sql;
+    procedure_append_guard guard(statements_, 48U);
+    statements_ += "ELSIF ";
+    append_expression(statements_, condition);
+    statements_ += " THEN\n";
+    guard.commit();
 }
 void db_procedure::otherwise() {
     if (blocks_.empty() || blocks_.back() != block_type::if_value) {
@@ -177,13 +220,12 @@ void db_procedure::catch_sql_state(std::string_view state_value) {
     require_sql_state(state_value);
     const std::string_view prefix = blocks_.back() == block_type::begin ? "EXCEPTION\nWHEN SQLSTATE "
                                                                         : "WHEN SQLSTATE ";
-    std::pmr::string sql(resource_);
-    sql.reserve(prefix.size() + 8U + 12U);
-    sql.append(prefix);
-    detail::append_db_string_literal(sql, state_value, pg);
-    sql += " THEN\nNULL;\n";
-    statements_ += sql;
+    procedure_append_guard guard(statements_, prefix.size() + 20U);
+    statements_.append(prefix);
+    detail::append_db_string_literal(statements_, state_value, pg);
+    statements_ += " THEN\nNULL;\n";
     blocks_.back() = block_type::exception;
+    guard.commit();
 }
 void db_procedure::end_block() {
     if (blocks_.empty() || (blocks_.back() != block_type::begin && blocks_.back() != block_type::exception)) {
@@ -198,28 +240,28 @@ void db_procedure::begin_for_query(std::string_view target, const db_query& quer
     }
     detail::validate_db_identifier(target, pg);
     const auto statement = query.compile(pg, resource_, db_parameter_mode::literal);
-    std::pmr::string sql(resource_);
-    sql.reserve(4U + target.size() + 2U + 4U + statement.sql().size() + 6U);
-    sql.append("FOR ");
-    detail::append_db_identifier(sql, target, pg);
-    sql.append(" IN ");
-    sql.append(statement.sql());
-    sql.append(" LOOP\n");
+    procedure_append_guard guard(statements_, 16U + target.size() + statement.sql().size());
+    statements_.append("FOR ");
+    detail::append_db_identifier(statements_, target, pg);
+    statements_.append(" IN ");
+    statements_.append(statement.sql());
+    statements_.append(" LOOP\n");
     blocks_.push_back(block_type::loop);
-    statements_ += sql;
+    guard.commit();
 }
 void db_procedure::begin_foreach(std::string_view target, db_expression array, unsigned slice) {
-    std::pmr::string sql("FOREACH ", resource_);
-    detail::append_db_identifier(sql, target, pg);
+    procedure_append_guard guard(statements_, 48U + target.size());
+    statements_ += "FOREACH ";
+    detail::append_db_identifier(statements_, target, pg);
     if (slice > 0) {
-        sql += " SLICE ";
-        detail::append_db_number(sql, static_cast<std::uint64_t>(slice));
+        statements_ += " SLICE ";
+        detail::append_db_number(statements_, static_cast<std::uint64_t>(slice));
     }
-    sql += " IN ARRAY ";
-    append_expression(sql, array);
-    sql += " LOOP\n";
+    statements_ += " IN ARRAY ";
+    append_expression(statements_, array);
+    statements_ += " LOOP\n";
     blocks_.push_back(block_type::loop);
-    statements_ += sql;
+    guard.commit();
 }
 void db_procedure::end_loop() {
     if (blocks_.empty() || blocks_.back() != block_type::loop) {
@@ -229,52 +271,55 @@ void db_procedure::end_loop() {
     blocks_.pop_back();
 }
 void db_procedure::execute_dynamic(db_expression command, std::span<const db_expression> using_args) {
-    std::pmr::string sql("EXECUTE ", resource_);
-    append_expression(sql, command);
+    procedure_append_guard guard(statements_, 48U + using_args.size() * 24U);
+    statements_ += "EXECUTE ";
+    append_expression(statements_, command);
     if (!using_args.empty()) {
-        sql += " USING ";
+        statements_ += " USING ";
         for (std::size_t i = 0; i < using_args.size(); ++i) {
             if (i != 0) {
-                sql += ", ";
+                statements_ += ", ";
             }
-            append_expression(sql, using_args[i]);
+            append_expression(statements_, using_args[i]);
         }
     }
-    sql += ";\n";
-    statements_ += sql;
+    statements_ += ";\n";
+    guard.commit();
 }
 void db_procedure::lock_table(std::string_view table, db_table_lock_mode mode, bool nowait) {
     const auto mode_name = table_lock_mode_name(mode);
-    std::pmr::string sql(resource_);
-    sql.reserve(11U + table.size() + 4U + 4U + mode_name.size() + 5U + (nowait ? 7U : 0U) + 2U);
-    sql.append("LOCK TABLE ");
-    detail::append_db_qualified_identifier(sql, table, pg);
-    sql.append(" IN ");
-    sql.append(mode_name);
-    sql.append(" MODE");
+    procedure_append_guard guard(
+        statements_, 11U + table.size() + 8U + mode_name.size() + 5U + (nowait ? 7U : 0U) + 2U);
+    statements_.append("LOCK TABLE ");
+    detail::append_db_qualified_identifier(statements_, table, pg);
+    statements_.append(" IN ");
+    statements_.append(mode_name);
+    statements_.append(" MODE");
     if (nowait) {
-        sql.append(" NOWAIT");
+        statements_.append(" NOWAIT");
     }
-    sql.append(";\n");
-    statements_ += sql;
+    statements_.append(";\n");
+    guard.commit();
 }
 void db_procedure::return_value(db_expression expression) {
-    std::pmr::string sql("RETURN", resource_);
+    procedure_append_guard guard(statements_, 32U);
+    statements_ += "RETURN";
     if (!expression.empty()) {
-        sql += ' ';
-        append_expression(sql, expression);
+        statements_ += ' ';
+        append_expression(statements_, expression);
     }
-    sql += ";\n";
-    statements_ += sql;
+    statements_ += ";\n";
+    guard.commit();
 }
 void db_procedure::raise_exception(std::string_view message, std::string_view sql_state) {
     require_sql_state(sql_state);
-    std::pmr::string sql("RAISE EXCEPTION USING MESSAGE = ", resource_);
-    detail::append_db_string_literal(sql, message, pg);
-    sql += ", ERRCODE = ";
-    detail::append_db_string_literal(sql, sql_state, pg);
-    sql += ";\n";
-    statements_ += sql;
+    procedure_append_guard guard(statements_, 56U + message.size() + sql_state.size());
+    statements_ += "RAISE EXCEPTION USING MESSAGE = ";
+    detail::append_db_string_literal(statements_, message, pg);
+    statements_ += ", ERRCODE = ";
+    detail::append_db_string_literal(statements_, sql_state, pg);
+    statements_ += ";\n";
+    guard.commit();
 }
 std::pmr::string db_procedure::body(std::pmr::memory_resource* resource) const {
     if (!blocks_.empty()) {

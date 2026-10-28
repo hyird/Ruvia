@@ -1521,6 +1521,25 @@ private:
         }
     }
 };
+void append_db_expression(std::pmr::string& output, db_expression expression, db_driver driver) {
+    if (expression.empty()) {
+        throw std::invalid_argument("empty database expression");
+    }
+    db_query_compiler compiler(driver, output.get_allocator().resource(), db_parameter_mode::literal);
+    const auto initial_size = output.size();
+    compiler.output_.sql_ = std::move(output);
+    try {
+        if (compiler.output_.sql_.capacity() - initial_size < 32U) {
+            compiler.output_.sql_.reserve(initial_size + 64U);
+        }
+        compiler.expression(expression);
+        output = std::move(compiler.output_.sql_);
+    } catch (...) {
+        compiler.output_.sql_.resize(initial_size);
+        output = std::move(compiler.output_.sql_);
+        throw;
+    }
+}
 
 }  // namespace ruvia::detail
 
@@ -1538,6 +1557,7 @@ std::pmr::string db_query::render_expression(db_expression expression, db_driver
         throw std::invalid_argument("standalone expression rendering requires literal mode");
     }
     detail::db_query_compiler compiler(driver, pmr_resource_or_default(resource), mode);
+    compiler.output_.sql_.reserve(64U);
     compiler.expression(expression);
     return std::move(compiler.output_.sql_);
 }
