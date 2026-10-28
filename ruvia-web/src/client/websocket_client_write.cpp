@@ -7,6 +7,7 @@
 #include "ruvia/core/operation_timeout.h"
 
 #include "client/websocket_client_state.h"
+#include "util/pmr_owned_storage.h"
 
 namespace ruvia::detail {
 
@@ -123,7 +124,7 @@ task<void> websocket_client_state::write(websocket_opcode opcode, std::string_vi
 task<void> websocket_client_state::write(websocket_opcode opcode, std::pmr::string&& payload_value,
     const operation_options& options, websocket_send_options send_options) {
     require_current();
-    std::pmr::string owned(std::move(payload_value), memory_.resource());
+    auto owned = rebind_owned_storage(payload_value, memory_.resource());
     return ::ruvia::make_scoped_operation(lifecycle_.operation_scope(),
         run_write(opcode, std::move(owned), options, send_options),
         &websocket_client_state::check_operation_affinity, &worker_);

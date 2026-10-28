@@ -16,6 +16,7 @@
 #include "client/http_client_response_state.h"
 #include "http/http_capsule_stream_state.h"
 #include "util/operation_lane_lease.h"
+#include "util/pmr_owned_storage.h"
 
 namespace ruvia {
 namespace {
@@ -102,7 +103,7 @@ task<void> http_tunnel::write_owned(std::pmr::string&& bytes_value) {
     if (send_ended_) {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
-    std::pmr::string owned(std::move(bytes_value), &resource_);
+    auto owned = detail::rebind_owned_storage(bytes_value, &resource_);
     return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_, running_operations_),
         &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
 }

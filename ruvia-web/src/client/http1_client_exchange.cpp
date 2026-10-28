@@ -167,7 +167,7 @@ void publish_body_progress(http_client_response_state& state_value,
         }
     } else if (const auto* failure = decoded.protocol_failure()) {
         throw http_client_error(http_client_error::code_type::protocol_error,
-            std::string(http1_client_response_body_error_message(failure->error())));
+            http1_client_response_body_error_message(failure->error()));
     } else if (decoded.decoder_failure() != nullptr) {
         throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/1 response body decoder failed");
     }
@@ -234,8 +234,8 @@ task<void> http1_client_exchange::run(
         const auto* failure = std::get_if<http1_client_request_prepare_error>(&prepared_result);
         throw http_client_error(http_client_error::code_type::invalid_request,
             failure != nullptr
-                ? std::string(http1_client_request_prepare_error_message(*failure))
-                : "HTTP request head is too large");
+                ? http1_client_request_prepare_error_message(*failure)
+                : std::string_view("HTTP request head is too large"));
     }
     http1_client_response_parser parser(std::move(*prepared).take_exchange_state(), response_resource);
     if (const auto* content = prepared->content_plan().immediate(); content && !content->bytes().empty()) {
@@ -417,7 +417,7 @@ std::optional<http1_parsed_client_response_head> http1_client_exchange::take_fin
         auto parse_result = parser.parse(read_buffer.view());
         if (parse_result.failure()) {
             throw http_client_error(http_client_error::code_type::protocol_error,
-                std::string(http1_client_response_parse_error_message(*parse_result.failure())));
+                http1_client_response_parse_error_message(*parse_result.failure()));
         }
         if (parse_result.need_more()) {
             if (read_buffer.size() >= max_http_header_bytes) {

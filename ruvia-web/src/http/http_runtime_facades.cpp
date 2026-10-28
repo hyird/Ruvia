@@ -1,3 +1,4 @@
+#include <array>
 #include <memory_resource>
 #include <stdexcept>
 #include <utility>
@@ -12,6 +13,7 @@
 
 #include "context/context_capabilities.h"
 #include "util/operation_lane_lease.h"
+#include "util/pmr_owned_storage.h"
 
 namespace {
 
@@ -22,28 +24,28 @@ ruvia::task<void> write_transferred_chunk(void* target,
     co_await write(target, chunk);
 }
 
-struct owned_trailers final {
-    explicit owned_trailers(
-        std::span<const ruvia::http_header_view> source_value, std::pmr::memory_resource* resource)
-        : fields_(resource),
-          views_(resource) {
-        fields_.reserve(source_value.size());
-        views_.reserve(source_value.size());
-        for (const auto& header : source_value) {
-            const auto& field = fields_.emplace_back(header.name(), header.value(), resource);
-            views_.emplace_back(field.name(), field.value());
-        }
-    }
-
-    std::pmr::vector<ruvia::http_header> fields_;
-    std::pmr::vector<ruvia::http_header_view> views_;
-};
-
 ruvia::task<void> end_owned(void* target,
-    ruvia::task<void> (*end)(void*, std::span<const ruvia::http_header_view>), owned_trailers trailers,
+    ruvia::task<void> (*end)(void*, std::span<const ruvia::http_header_view>),
+    std::pmr::vector<ruvia::http_header> fields,
     bool& output_active) {
     auto lease = ruvia::detail::claim_operation_lane(output_active, "response stream output operation is already in progress");
-    co_await end(target, trailers.views_);
+    constexpr std::size_t inline_trailer_capacity = 8;
+    std::array<ruvia::http_header_view, inline_trailer_capacity> inline_views;
+    std::pmr::vector<ruvia::http_header_view> overflow_views(fields.get_allocator());
+    std::span<const ruvia::http_header_view> views;
+    if (fields.size() <= inline_views.size()) {
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+            inline_views[i] = ruvia::http_header_view{fields[i].name(), fields[i].value()};
+        }
+        views = std::span<const ruvia::http_header_view>(inline_views.data(), fields.size());
+    } else {
+        overflow_views.reserve(fields.size());
+        for (const auto& field : fields) {
+            overflow_views.emplace_back(field.name(), field.value());
+        }
+        views = overflow_views;
+    }
+    co_await end(target, views);
 }
 
 void require_websocket_worker(void* target) noexcept {
@@ -189,7 +191,7 @@ task<void> response_stream_writer::write(std::string_view chunk) & {
 
 task<void> response_stream_writer::write_owned(std::pmr::string&& chunk) {
     require_active();
-    std::pmr::string owned(std::move(chunk), resource_);
+    auto owned = detail::rebind_owned_storage(chunk, resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
         write_transferred_chunk(target_, write_, std::move(owned), output_active_));
 }
@@ -217,7 +219,11 @@ stop_token response_stream_writer::cancel_on_peer_eof() & {
 
 task<void> response_stream_writer::end(std::span<const http_header_view> trailers) & {
     require_active();
-    auto owned_trailers_value = owned_trailers(trailers, resource_);
+    std::pmr::vector<http_header> owned_trailers_value(resource_);
+    owned_trailers_value.reserve(trailers.size());
+    for (const auto& header : trailers) {
+        owned_trailers_value.emplace_back(header.name(), header.value(), resource_);
+    }
     return ::ruvia::make_scoped_operation(
         operation_scope_, end_owned(target_, end_, std::move(owned_trailers_value), output_active_));
 }
@@ -296,7 +302,7 @@ task<void> websocket::write(websocket_opcode opcode, std::string_view payload_va
 
 task<void> websocket::write(websocket_opcode opcode, std::pmr::string&& payload_value, bool compress) {
     require_active();
-    std::pmr::string owned(std::move(payload_value), resource_);
+    auto owned = detail::rebind_owned_storage(payload_value, resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
         write_websocket_payload(target_, write_, opcode, std::move(owned), write_active_, compress),
         &require_websocket_worker, const_cast<worker_handle*>(worker_));

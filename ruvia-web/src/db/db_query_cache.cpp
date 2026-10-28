@@ -18,6 +18,7 @@
 #include "ruvia/web/detail/db/db_value_access.h"
 
 #include "db/db_config_storage.h"
+#include "util/pmr_owned_storage.h"
 
 namespace ruvia::detail {
 namespace {
@@ -211,7 +212,7 @@ db_rows decode_db_cache_rows(std::pmr::string bytes_value, std::pmr::memory_reso
         const auto consumed = bytes_value.size() - reader_value.bytes_.size();
         auto* const result_resource = pmr_resource_or_default(resource);
         auto storage = make_pmr_object<std::pmr::string>(
-            result_resource, std::move(bytes_value), result_resource);
+            result_resource, rebind_owned_storage(bytes_value, result_resource));
         reader_value.bytes_ = std::string_view(*storage).substr(consumed);
         db_result_access::own_raw_result(result_value, storage.release(), &release_cache_storage);
     }
