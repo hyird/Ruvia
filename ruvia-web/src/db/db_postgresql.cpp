@@ -4,6 +4,7 @@
 
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -107,17 +108,14 @@ db_error postgresql_error(const pg_conn& connection, std::string_view operation,
         constraint == nullptr ? std::string_view{} : std::string_view(constraint));
 }
 
-postgresql_params::postgresql_params(std::pmr::memory_resource* resource)
-    : encoded_(pmr_resource_or_default(resource)),
-      values_(pmr_resource_or_default(resource)),
-      types_(pmr_resource_or_default(resource)) {}
-
-postgresql_params encode_postgresql_params(
-    std::span<const db_value> params, std::pmr::memory_resource* resource) {
-    auto* resolved = pmr_resource_or_default(resource);
-    postgresql_params output(resolved);
+postgresql_params::postgresql_params(
+    std::span<const db_value> params, std::pmr::memory_resource* resource)
+    : count_(params.size()),
+      heap_encoded_(pmr_resource_or_default(resource)),
+      heap_values_(pmr_resource_or_default(resource)),
+      heap_types_(pmr_resource_or_default(resource)) {
     if (params.empty()) {
-        return output;
+        return;
     }
     std::size_t numeric_count = 0;
     for (const auto& param : params) {
@@ -132,18 +130,27 @@ postgresql_params encode_postgresql_params(
             }
         } else if (type == db_value_type::signed_value || type == db_value_type::unsigned_value ||
                    type == db_value_type::double_value) {
+            if (type == db_value_type::double_value && !std::isfinite(db_value_access::get_double_value(param))) {
+                throw std::invalid_argument("database double value must be finite");
+            }
             ++numeric_count;
         }
     }
-    output.values_.reserve(params.size());
-    output.types_.reserve(params.size());
-    if (numeric_count != 0) {
-        output.encoded_.reserve(numeric_count);
+    const bool inline_params = params.size() <= inline_capacity;
+    if (!inline_params) {
+        heap_values_.reserve(params.size());
+        heap_types_.reserve(params.size());
+    }
+    const bool inline_numerics = numeric_count <= inline_capacity;
+    if (!inline_numerics) {
+        heap_encoded_.resize(numeric_count);
     }
 
-    for (const auto& param : params) {
+    std::size_t numeric_index = 0;
+    for (std::size_t i = 0; i < params.size(); ++i) {
+        const auto& param = params[i];
         const auto type = db_value_access::type(param);
-        output.types_.push_back(type == db_value_type::double_value ? postgresql_float8_oid : 0U);
+        const unsigned int oid = type == db_value_type::double_value ? postgresql_float8_oid : 0U;
         const char* text = nullptr;
         switch (type) {
             case db_value_type::null:
@@ -159,21 +166,34 @@ postgresql_params encode_postgresql_params(
             case db_value_type::signed_value:
             case db_value_type::unsigned_value:
             case db_value_type::double_value: {
-                auto& value = output.encoded_.emplace_back();
+                char* const slot = inline_numerics
+                                       ? inline_encoded_.data() + numeric_index * numeric_slot_size
+                                       : heap_encoded_[numeric_index].data();
+                ++numeric_index;
+                std::to_chars_result formatted{};
                 if (type == db_value_type::signed_value) {
-                    append_db_number(value, db_value_access::signed_value(param));
+                    formatted = std::to_chars(slot, slot + numeric_slot_size - 1, db_value_access::signed_value(param));
                 } else if (type == db_value_type::unsigned_value) {
-                    append_db_number(value, db_value_access::unsigned_value(param));
+                    formatted = std::to_chars(slot, slot + numeric_slot_size - 1, db_value_access::unsigned_value(param));
                 } else {
-                    append_db_number(value, db_value_access::get_double_value(param));
+                    formatted = std::to_chars(slot, slot + numeric_slot_size - 1, db_value_access::get_double_value(param));
                 }
-                text = value.c_str();
+                if (formatted.ec != std::errc{}) {
+                    throw std::logic_error("failed to format PostgreSQL numeric parameter");
+                }
+                *formatted.ptr = '\0';
+                text = slot;
                 break;
             }
         }
-        output.values_.push_back(text);
+        if (inline_params) {
+            inline_types_[i] = oid;
+            inline_values_[i] = text;
+        } else {
+            heap_types_.push_back(oid);
+            heap_values_.push_back(text);
+        }
     }
-    return output;
 }
 
 std::uint64_t postgresql_affected_rows(const pg_result& result_value) noexcept {

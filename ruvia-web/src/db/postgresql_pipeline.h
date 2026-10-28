@@ -84,6 +84,10 @@ struct postgresql_pipeline_io final {
 
     // The statement text, kept by its caller, and its encoded parameters.
     struct statement_type final {
+        statement_type(std::string_view sql, std::span<const db_value> params, std::pmr::memory_resource* resource)
+            : sql_(sql),
+              encoded_(params, resource) {}
+
         std::string_view sql_;
         postgresql_params encoded_;
     };

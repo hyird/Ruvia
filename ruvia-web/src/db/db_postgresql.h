@@ -30,19 +30,46 @@ namespace ruvia::detail {
 // is left untyped (OID 0): the SQL decides its type, and compiled SQL casts
 // each placeholder from its value category.
 struct postgresql_params final {
-    explicit postgresql_params(std::pmr::memory_resource* resource);
+    static constexpr std::size_t inline_capacity = 8;
+    static constexpr std::size_t numeric_slot_size = 32;
 
-    std::pmr::vector<std::pmr::string> encoded_;
-    std::pmr::vector<const char*> values_;
+    postgresql_params(std::span<const db_value> params, std::pmr::memory_resource* resource);
+    postgresql_params(const postgresql_params&) = delete;
+    postgresql_params& operator=(const postgresql_params&) = delete;
+    postgresql_params(postgresql_params&&) = delete;
+    postgresql_params& operator=(postgresql_params&&) = delete;
+
+    [[nodiscard]] int count() const noexcept {
+        return static_cast<int>(count_);
+    }
+
+    [[nodiscard]] const char* const* values() const noexcept {
+        if (count_ == 0) {
+            return nullptr;
+        }
+        return count_ <= inline_capacity ? inline_values_.data() : heap_values_.data();
+    }
+
+    [[nodiscard]] const unsigned int* types() const noexcept {
+        if (count_ == 0) {
+            return nullptr;
+        }
+        return count_ <= inline_capacity ? inline_types_.data() : heap_types_.data();
+    }
+
+    [[nodiscard]] std::span<const unsigned int> type_span() const noexcept {
+        return {types(), count_};
+    }
+
+    std::size_t count_{0};
+    std::array<char, inline_capacity * numeric_slot_size> inline_encoded_{};
+    std::array<const char*, inline_capacity> inline_values_{};
+    std::array<unsigned int, inline_capacity> inline_types_{};
+    std::pmr::vector<std::array<char, numeric_slot_size>> heap_encoded_;
+    std::pmr::vector<const char*> heap_values_;
     // libpq's Oid is unsigned int; 0 leaves the type to the server.
-    std::pmr::vector<unsigned int> types_;
+    std::pmr::vector<unsigned int> heap_types_;
 };
-
-// Borrows owned string parameters from the prepared statement. The caller must
-// keep params alive and unchanged through PQsendQueryParams; numeric encodings
-// are owned by the returned object. No text-format lengths array is needed.
-[[nodiscard]] postgresql_params encode_postgresql_params(
-    std::span<const db_value> params, std::pmr::memory_resource* resource);
 
 [[nodiscard]] std::uint64_t postgresql_affected_rows(const pg_result& result_value) noexcept;
 

@@ -237,11 +237,9 @@ void validate_postgresql_statement(std::string_view sql, std::span<const db_valu
     postgresql_pool& pool, std::size_t index, std::string_view sql, std::span<const db_value> params) {
     validate_postgresql_statement(sql, params);
     auto* connection = pool.slot(index).connection_;
-    auto encoded = encode_postgresql_params(params, pool.resource());
-    const auto* values = encoded.values_.empty() ? nullptr : encoded.values_.data();
-    const auto* types = encoded.types_.empty() ? nullptr : encoded.types_.data();
+    const postgresql_params encoded(params, pool.resource());
     if (PQsendQueryParams(
-            connection, sql.data(), static_cast<int>(params.size()), types, values, nullptr, nullptr, 0) == 0) {
+            connection, sql.data(), encoded.count(), encoded.types(), encoded.values(), nullptr, nullptr, 0) == 0) {
         throw postgresql_error(*connection, "PQsendQueryParams", db_error::code_type::statement_failed);
     }
     if (PQsetSingleRowMode(connection) == 0) {
@@ -258,9 +256,9 @@ void validate_postgresql_statement(std::string_view sql, std::span<const db_valu
 [[nodiscard]] postgresql_flight queue_cached_statement(pg_conn& connection,
     postgresql_statement_cache& statements, const postgresql_statement_cache::lookup& lookup,
     std::string_view sql, const postgresql_params& encoded) {
-    const auto count = static_cast<int>(encoded.values_.size());
-    const auto* values = encoded.values_.empty() ? nullptr : encoded.values_.data();
-    const auto* types = encoded.types_.empty() ? nullptr : encoded.types_.data();
+    const auto count = encoded.count();
+    const auto* values = encoded.values();
+    const auto* types = encoded.types();
     const auto queue_failure = [&connection](std::string_view operation) {
         return postgresql_error(connection, operation, db_error::code_type::io_error);
     };
@@ -463,11 +461,11 @@ task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index,
     std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     validate_postgresql_statement(sql, params);
-    const auto encoded = encode_postgresql_params(params, pool.resource());
+    const postgresql_params encoded(params, pool.resource());
     auto* connection = pool.slot(index).connection_;
     auto& statements = pool.slot(index).session_.statements_;
     for (bool may_retry = true;; may_retry = false) {
-        const auto lookup = statements.find(sql, encoded.types_, true, &make_postgresql_statement_name);
+        const auto lookup = statements.find(sql, encoded.type_span(), true, &make_postgresql_statement_name);
         if (PQenterPipelineMode(connection) == 0) {
             throw postgresql_error(*connection, "PQenterPipelineMode", db_error::code_type::io_error);
         }
@@ -517,7 +515,7 @@ task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index,
 postgresql_pipeline_io::statement_type postgresql_pipeline_io::prepare(
     pool_type& pool, std::string_view sql, std::span<const db_value> params) {
     validate_postgresql_statement(sql, params);
-    return {sql, encode_postgresql_params(params, pool.resource())};
+    return {sql, params, pool.resource()};
 }
 
 db_slot_socket::native_socket_type postgresql_pipeline_io::socket(pool_type& pool, std::size_t slot) {
@@ -547,7 +545,7 @@ bool postgresql_pipeline_io::queue(
     state_type& state, std::size_t index, member_type&, statement_type& statement, flight_type& flight) {
     auto& slot = state.pool().slot(index);
     auto& statements = slot.session_.statements_;
-    const auto lookup = statements.find(statement.sql_, statement.encoded_.types_, true, &make_postgresql_statement_name);
+    const auto lookup = statements.find(statement.sql_, statement.encoded_.type_span(), true, &make_postgresql_statement_name);
     auto* connection = slot.connection_;
     bool flush_pending = false;
     try {
