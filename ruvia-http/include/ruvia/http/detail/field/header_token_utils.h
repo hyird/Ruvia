@@ -18,7 +18,21 @@ namespace ruvia::detail {
 // escape. (A trailing lone '\' -- only possible from malformed input -- is emitted
 // verbatim.) Used to unescape multipart Content-Disposition name/filename.
 inline void http_append_decoded_quoted_pairs(std::pmr::string& out, std::string_view value) {
-    for (std::size_t i = 0; i < value.size(); ++i) {
+    const auto first_escape = value.find('\\');
+    if (first_escape == std::string_view::npos) {
+        out.append(value.data(), value.size());
+        return;
+    }
+    std::size_t decoded_size = first_escape;
+    for (std::size_t i = first_escape; i < value.size(); ++i) {
+        if (value[i] == '\\' && i + 1 < value.size()) {
+            ++i;
+        }
+        ++decoded_size;
+    }
+    out.reserve(out.size() + decoded_size);
+    out.append(value.data(), first_escape);
+    for (std::size_t i = first_escape; i < value.size(); ++i) {
         if (value[i] == '\\' && i + 1 < value.size()) {
             ++i;
         }

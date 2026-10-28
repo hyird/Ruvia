@@ -75,7 +75,10 @@ std::optional<http_response_coding_selection> http_response_coding_selection_for
         // Every field line contributes: RFC 9110 section 5.3 combines repeated
         // list fields, and the request cache records only the last line.
         const auto headers = request.headers();
-        for (std::size_t i = 0; i < headers.size(); ++i) {
+        const auto last_index = detail::http_request_access::known_header_index(
+            request, detail::request_header_kind::accept_encoding);
+        const auto limit = last_index <= headers.size() ? last_index : headers.size();
+        for (std::size_t i = 0; i < limit; ++i) {
             if (detail::http_request_access::header_kind(request, i) ==
                 static_cast<std::uint8_t>(detail::request_header_kind::accept_encoding)) {
                 qualities.update(headers[i].value());

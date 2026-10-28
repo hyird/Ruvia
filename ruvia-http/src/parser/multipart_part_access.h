@@ -24,6 +24,17 @@ struct multipart_part_access final {
             std::move(content_type), body, filename_present);
     }
 
+    [[nodiscard]] static multipart_part make_decoded(std::pmr::string&& name,
+        std::pmr::string&& filename, std::string_view content_type_value, std::string_view body,
+        bool filename_present, std::pmr::memory_resource* resource, bool own_content_type) {
+        multipart_part::content_type_storage_type content_type(content_type_value);
+        if (own_content_type) {
+            content_type.emplace<std::pmr::string>(content_type_value, resource);
+        }
+        return multipart_part(
+            std::move(name), std::move(filename), std::move(content_type), body, filename_present);
+    }
+
     template <http_temporary_owning_char_string content_type>
     static multipart_part make_decoded(std::string_view, std::string_view, content_type&&,
         std::string_view, bool, std::pmr::memory_resource*, bool) = delete;

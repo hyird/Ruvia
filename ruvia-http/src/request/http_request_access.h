@@ -45,6 +45,12 @@ struct http_request_access final {
                request.cached_headers_[slot] <= request.headers_.size();
     }
 
+    [[nodiscard]] static std::size_t known_header_index(
+        const http_request& request, request_header_kind name) noexcept {
+        const auto slot = known_header_slot(name);
+        return slot < cached_header_slots ? request.cached_headers_[slot] : std::size_t{0};
+    }
+
     static void reset(http_request& request) noexcept {
         request = make();
     }

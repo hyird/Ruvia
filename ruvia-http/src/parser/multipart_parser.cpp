@@ -99,9 +99,11 @@ std::pmr::vector<multipart_part> parse_multipart_body(std::string_view body, mul
     for (;;) {
         auto result_value = parser.poll();
         if (const auto* part = result_value.part()) {
-            parts.push_back(detail::multipart_part_access::make_decoded(part->name(), part->filename(),
-                part->content_type(), part->body(), part->has_filename(), resource,
-                parser.current_content_type_owned_));
+            auto name = std::exchange(parser.current_name_, std::pmr::string(resource));
+            auto filename = std::exchange(parser.current_filename_, std::pmr::string(resource));
+            parts.push_back(detail::multipart_part_access::make_decoded(std::move(name),
+                std::move(filename), part->content_type(), part->body(), part->has_filename(),
+                resource, parser.current_content_type_owned_));
             continue;
         }
         if (result_value.done() != nullptr) {
