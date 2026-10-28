@@ -7,6 +7,7 @@
 #include "ruvia/http/http_field_syntax.h"
 
 #include "client/http_client_response_head.h"
+#include "field/field_value_scan.h"
 #include "field/response_field_validation.h"
 
 namespace ruvia::detail {
@@ -103,21 +104,31 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
 
     auto remaining = first_line_end == std::string_view::npos ? std::string_view{}
                                                               : head_section.substr(first_line_end + 2);
-    while (!remaining.empty()) {
-        const auto line_end = remaining.find("\r\n");
-        const auto line =
-            line_end == std::string_view::npos ? remaining : remaining.substr(0, line_end);
-        const auto colon = line.find(':');
-        if (colon == std::string_view::npos) {
+    std::size_t cursor_value = 0;
+    while (cursor_value < remaining.size()) {
+        const auto name_start = cursor_value;
+        cursor_value += http_token_prefix_size(
+            {remaining.data() + cursor_value, remaining.size() - cursor_value});
+        if (cursor_value == name_start || cursor_value >= remaining.size() ||
+            remaining[cursor_value] != ':') {
             return http1_client_response_parse_error::invalid_header;
         }
+        const auto name = remaining.substr(name_start, cursor_value - name_start);
+        ++cursor_value;
 
-        const auto name = line.substr(0, colon);
-        const auto value = http_trim_ows(line.substr(colon + 1));
-        const bool fields_valid = is_valid_http_header_name(name) && is_valid_http_header_value(value);
-        if (!fields_valid) {
+        while (cursor_value < remaining.size() && is_http_ows_char(remaining[cursor_value])) {
+            ++cursor_value;
+        }
+        const auto value_start = cursor_value;
+        cursor_value += http_field_value_prefix_size(
+            {remaining.data() + cursor_value, remaining.size() - cursor_value});
+        if (cursor_value < remaining.size() &&
+            (cursor_value + 1 >= remaining.size() || remaining[cursor_value] != '\r' ||
+                remaining[cursor_value + 1] != '\n')) {
             return http1_client_response_parse_error::invalid_header;
         }
+        // Leading OWS is already consumed, so trimming only drops trailing OWS.
+        const auto value = http_trim_ows(remaining.substr(value_start, cursor_value - value_start));
         const auto kind = classify_request_header(name);
         if (validate_response_field(kind, value, http_field_list_role::recipient,
                 response_fields) != response_field_status::ok) {
@@ -181,10 +192,10 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                 break;
         }
 
-        if (line_end == std::string_view::npos) {
+        if (cursor_value == remaining.size()) {
             break;
         }
-        remaining = remaining.substr(line_end + 2);
+        cursor_value += 2;
     }
 
     if (output.transfer_encoding_.unsupported()) {
