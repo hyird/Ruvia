@@ -77,13 +77,17 @@ enum class http_response_compression_status : std::uint8_t {
 // stacks: a client that accepts gzip but rejects br cannot be sent `gzip, br`.
 [[nodiscard]] inline bool http_known_response_content_encoding_stack_accepted(
     const http_response_coding_selection& selection, const http_response& response,
-    bool negotiation_failed = false, const http_request* request = nullptr) noexcept {
+    bool negotiation_failed = false, const http_request* request = nullptr,
+    bool* has_content_encoding = nullptr) noexcept {
+    bool saw_header = false;
     bool saw_coding = false;
     bool accepted = true;
     for (const auto& header : response.headers()) {
-        if (!http_ascii_equals_ignore_case(header.name(), "Content-Encoding")) {
+        const auto name = header.name();
+        if (name.size() != 16U || !http_ascii_equals_ignore_case(name, "Content-Encoding")) {
             continue;
         }
+        saw_header = true;
         http_visit_comma_separated_quoted_field_items(header.value(), [&](std::string_view item) noexcept {
             if (item.empty()) {
                 return true;
@@ -99,6 +103,9 @@ enum class http_response_compression_status : std::uint8_t {
         if (!accepted) {
             break;
         }
+    }
+    if (has_content_encoding != nullptr) {
+        *has_content_encoding = saw_header;
     }
     return !saw_coding || accepted;
 }
@@ -120,9 +127,11 @@ enum class http_response_compression_status : std::uint8_t {
     if (response.status() == http_status::range_not_satisfiable && response.body_bytes().empty()) {
         return false;
     }
-    if (response.header("Content-Encoding").has_value()) {
-        return !http_known_response_content_encoding_stack_accepted(
-            selection, response, negotiation_failed, request);
+    bool has_content_encoding = false;
+    const bool stack_accepted = http_known_response_content_encoding_stack_accepted(
+        selection, response, negotiation_failed, request, &has_content_encoding);
+    if (has_content_encoding) {
+        return !stack_accepted;
     }
     if (negotiation_failed) {
         return true;

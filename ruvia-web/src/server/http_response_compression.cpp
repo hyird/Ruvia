@@ -81,32 +81,49 @@ namespace {
            http_ascii_equals_ignore_case(media_type, "application/octet-stream");
 }
 
-[[nodiscard]] bool has_response_integrity_header(const http_response& response) noexcept {
+[[nodiscard]] bool response_headers_skip_compression(const http_response& response) noexcept {
+    cache_control_field_parser cache_parser;
+    bool saw_cache_control = false;
+    std::string_view content_type_value;
     for (const auto& header : response.headers()) {
         const auto name = header.name();
-        if (name.size() != 11U && name.size() != 14U) {
-            continue;
-        }
-        if (http_ascii_equals_ignore_case(name, "Content-Digest") ||
-            http_ascii_equals_ignore_case(name, "Repr-Digest") ||
-            http_ascii_equals_ignore_case(name, "Content-MD5")) {
-            return true;
+        switch (name.size()) {
+            case 11U:
+                if (http_ascii_equals_ignore_case(name, "Repr-Digest") ||
+                    http_ascii_equals_ignore_case(name, "Content-MD5")) {
+                    return true;
+                }
+                break;
+            case 12U:
+                if (http_ascii_equals_ignore_case(name, "Content-Type")) {
+                    content_type_value = header.value();
+                }
+                break;
+            case 13U:
+                if (http_ascii_equals_ignore_case(name, "Content-Range")) {
+                    return true;
+                }
+                if (http_ascii_equals_ignore_case(name, "Cache-Control")) {
+                    saw_cache_control = true;
+                    cache_parser.update(header.value());
+                }
+                break;
+            case 14U:
+                if (http_ascii_equals_ignore_case(name, "Content-Digest")) {
+                    return true;
+                }
+                break;
+            case 16U:
+                if (http_ascii_equals_ignore_case(name, "Content-Encoding")) {
+                    return true;
+                }
+                break;
+            default:
+                break;
         }
     }
-    return false;
-}
-
-[[nodiscard]] cache_control response_cache_control(const http_response& response) noexcept {
-    cache_control_field_parser parser;
-    if (!response.header("Cache-Control").has_value()) {
-        return parser.finish();
-    }
-    for (const auto& header : response.headers()) {
-        if (http_ascii_equals_ignore_case(header.name(), "Cache-Control")) {
-            parser.update(header.value());
-        }
-    }
-    return parser.finish();
+    return response_content_type_skips_compression(content_type_value) ||
+           (saw_cache_control && cache_parser.finish().has(cache_control_directive::no_transform));
 }
 
 // The single decimal Content-Length a HEAD handler declared, or nullopt.
@@ -182,11 +199,7 @@ http_response_compression_decision prepare_response_compression(
     // leave them describing bytes that are not sent.
     if (availability == http_response_coding_availability::identity_only ||
         status_code == http_status::partial_content || status_code == http_status::reset_content ||
-        response.header("Content-Encoding").has_value() || response.header("Content-Range").has_value() ||
-        has_response_integrity_header(response) ||
-        response_content_type_skips_compression(
-            response.header("Content-Type").value_or(std::string_view{})) ||
-        response_cache_control(response).has(cache_control_directive::no_transform)) {
+        response_headers_skip_compression(response)) {
         return http_response_compression_decision::fixed_representation;
     }
 

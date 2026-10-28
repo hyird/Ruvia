@@ -104,10 +104,17 @@ void http1_deferred_access_log::defer(std::size_t head_end, const http_request& 
     const auto method = request.method();
     const auto path = request.path();
     const auto text_begin = text_.size();
-    text_.reserve(text_begin + method.size() + path.size() + client_address.size());
+    const auto required_text = text_begin + method.size() + path.size() + client_address.size();
+    if (required_text > text_.capacity()) {
+        text_.reserve(
+            std::max<std::size_t>(required_text, std::max<std::size_t>(256, text_.capacity() * 2)));
+    }
     text_.append(method);
     text_.append(path);
     text_.append(client_address);
+    if (entries_.size() == entries_.capacity()) {
+        entries_.reserve(std::max<std::size_t>(8, entries_.capacity() * 2));
+    }
     entries_.push_back({
         .head_end_ = head_end,
         .text_begin_ = text_begin,
