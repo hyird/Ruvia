@@ -27,12 +27,7 @@ namespace ruvia {
 namespace {
 
 // Subrequest framing headers are owned by dispatch, as on the wire.
-constexpr std::size_t subrequest_field_method = 0;
-constexpr std::size_t subrequest_field_target = 1;
-constexpr std::size_t subrequest_field_body = 2;
-constexpr std::size_t subrequest_field_headers = 3;
 constexpr std::size_t max_subrequest_header_bytes = 64 * 1024;
-
 }  // namespace
 
 std::optional<std::string_view> dispatch_response::header(std::string_view name) const& noexcept {
@@ -75,25 +70,29 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
     // The operation is lazy and the options borrow caller storage: take owned
     // copies now. The subrequest is built directly as a parsed request; it
     // never round-trips through a wire format.
-    std::pmr::vector<std::pmr::string> fields(pool());
-    fields.reserve(subrequest_field_headers + 2 * options.headers_.size());
-    fields.emplace_back(options.method_);
-    fields.emplace_back(options.target_);
-    fields.emplace_back(options.body_);
-    for (const auto& header : options.headers_) {
-        fields.emplace_back(header.name());
-        fields.emplace_back(header.value());
+    std::pmr::string method(options.method_, pool());
+    std::pmr::string target(options.target_, pool());
+    std::pmr::string body(options.body_, pool());
+    std::pmr::vector<http_header> headers(pool());
+    if (!options.headers_.empty()) {
+        headers.reserve(options.headers_.size());
+        for (const auto& header : options.headers_) {
+            headers.emplace_back(header.name(), header.value(), pool());
+        }
     }
-    return ::ruvia::make_scoped_operation(
-        operation_scope_, dispatch_task(std::move(fields), std::move(options.stop_token_)));
+    return ::ruvia::make_scoped_operation(operation_scope_,
+        dispatch_task(std::move(method), std::move(target), std::move(body), std::move(headers),
+            std::move(options.stop_token_)));
 }
 
-task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string> fields, ::ruvia::stop_token stop_token_value) {
+task<dispatch_response> context::dispatch_task(std::pmr::string method, std::pmr::string target,
+    std::pmr::string body_storage, std::pmr::vector<http_header> headers,
+    ::ruvia::stop_token stop_token_value) {
     auto memory = memory_.fork();
-    const std::string_view body = fields[subrequest_field_body];
+    const std::string_view body = body_storage;
     std::array<char, http_max_unsigned_decimal_size> content_length_text;
     const auto content_length = http_format_unsigned(content_length_text, body.size());
-    const auto header_count = 2U + (fields.size() - subrequest_field_headers) / 2U;
+    const auto header_count = 2U + headers.size();
     static constexpr std::size_t inline_header_capacity = 16;
     std::array<http_header_view, inline_header_capacity> inline_headers{};
     std::pmr::vector<http_header_view> heap_headers(memory.resource());
@@ -101,24 +100,23 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     if (header_count <= inline_header_capacity) {
         std::size_t pos = 0;
         inline_headers[pos++] = http_header_view("Host", "localhost");
-        for (auto index = subrequest_field_headers; index + 1 < fields.size(); index += 2) {
-            inline_headers[pos++] = http_header_view(fields[index], fields[index + 1]);
+        for (const auto& header : headers) {
+            inline_headers[pos++] = http_header_view(header.name(), header.value());
         }
         inline_headers[pos++] = http_header_view("Content-Length", content_length);
         active_headers = std::span<const http_header_view>(inline_headers.data(), pos);
     } else {
         heap_headers.reserve(header_count);
         heap_headers.emplace_back("Host", "localhost");
-        for (auto index = subrequest_field_headers; index + 1 < fields.size(); index += 2) {
-            heap_headers.emplace_back(fields[index], fields[index + 1]);
+        for (const auto& header : headers) {
+            heap_headers.emplace_back(header.name(), header.value());
         }
         heap_headers.emplace_back("Content-Length", content_length);
         active_headers = heap_headers;
     }
     const auto request = [&]() {
         try {
-            return make_parsed_http_request(fields[subrequest_field_method],
-                fields[subrequest_field_target], active_headers,
+            return make_parsed_http_request(method, target, active_headers,
                 std::as_bytes(std::span(body.data(), body.size())), memory.resource());
         } catch (const http_protocol_error&) {
             throw std::invalid_argument("invalid subrequest");
@@ -165,7 +163,10 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     }
     const auto known_method = request.known_method();
     {
-        const auto discarded = std::move(fields);
+        const auto discarded_method = std::move(method);
+        const auto discarded_target = std::move(target);
+        const auto discarded_body = std::move(body_storage);
+        const auto discarded_headers = std::move(headers);
     }
     dispatch_response result(pool());
     result.status_ = response.status();
@@ -173,9 +174,11 @@ task<dispatch_response> context::dispatch_task(std::pmr::vector<std::pmr::string
     if (!plan_http_response_body(known_method, response.status()).body_suppressed()) {
         result.body_.assign(response.body_bytes());
     }
-    result.headers_.reserve(response.headers().size());
-    for (const auto& header : response.headers()) {
-        result.headers_.emplace_back(header.name(), header.value(), pool());
+    if (!response.headers().empty()) {
+        result.headers_.reserve(response.headers().size());
+        for (const auto& header : response.headers()) {
+            result.headers_.emplace_back(header.name(), header.value(), pool());
+        }
     }
     co_return result;
 }

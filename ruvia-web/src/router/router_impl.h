@@ -6,7 +6,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -93,7 +92,7 @@ private:
     [[nodiscard]] static bool same_dynamic_shape(std::string_view left, std::string_view right) noexcept;
 
     compiled_route_plan_ptr_type plan_;
-    std::pmr::unordered_multimap<std::uint64_t, std::size_t> route_indices_;
+    std::pmr::vector<std::uint64_t> route_hashes_;
     std::pmr::vector<controller_middleware_descriptor> route_middleware_descriptors_;
     std::pmr::vector<route_middleware_range_type> route_middleware_ranges_;
     std::pmr::vector<controller_middleware_descriptor> global_middleware_descriptors_;

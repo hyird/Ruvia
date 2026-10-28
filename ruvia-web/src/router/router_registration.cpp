@@ -113,9 +113,11 @@ void detail::router::register_endpoint(http_known_method method, std::string_vie
     if (!method_token.empty()) {
         hash ^= route_table::path_hash(method_token);
     }
-    const auto [first, last] = route_indices_.equal_range(hash);
-    for (auto it = first; it != last; ++it) {
-        const auto& registered = routes[it->second];
+    for (std::size_t i = 0; i < route_hashes_.size(); ++i) {
+        if (route_hashes_[i] != hash) {
+            continue;
+        }
+        const auto& registered = routes[i];
         if (registered.method() != method || registered.method_token() != method_token) {
             continue;
         }
@@ -146,7 +148,7 @@ void detail::router::register_endpoint(http_known_method method, std::string_vie
             .endpoint_ = std::move(endpoint),
             .dynamic_ = dynamic,
             .max_request_body_bytes_ = declared_request_body_limit(controller_middlewares, route_middlewares)});
-    route_indices_.emplace(hash, index);
+    route_hashes_.push_back(hash);
 }
 
 }  // namespace ruvia

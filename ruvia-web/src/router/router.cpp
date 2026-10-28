@@ -47,7 +47,7 @@ void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::span<co
 
 detail::router::router(std::pmr::memory_resource* plan_resource)
     : plan_(make_pmr_object<compiled_route_plan>(plan_resource, plan_resource)),
-      route_indices_(registration_resource()),
+      route_hashes_(registration_resource()),
       route_middleware_descriptors_(registration_resource()),
       route_middleware_ranges_(registration_resource()),
       global_middleware_descriptors_(registration_resource()) {}
@@ -82,7 +82,6 @@ void detail::router::append_route_middlewares(
     std::span<const controller_middleware_descriptor> controller_middlewares,
     std::span<const controller_middleware_descriptor> route_middlewares) {
     const auto offset = route_middleware_descriptors_.size();
-    route_middleware_descriptors_.reserve(offset + controller_middlewares.size() + route_middlewares.size());
     for (const auto middlewares : {controller_middlewares, route_middlewares}) {
         for (const auto& descriptor : middlewares) {
             // Declarations the server reads before the body is accepted.
@@ -104,6 +103,10 @@ void detail::router::append_route_middlewares(
 
 void detail::router::declare_controllers(
     std::span<const controller_registrar> registrars, const controller_store& controllers) {
+    const auto initial_route_capacity = registrars.size() * 2U;
+    plan_->routes_.reserve(initial_route_capacity);
+    route_hashes_.reserve(initial_route_capacity);
+    route_middleware_ranges_.reserve(initial_route_capacity);
     for (std::size_t slot = 0; slot < registrars.size(); ++slot) {
         controller_slot_ = slot;
         controller_target_ = controllers.instance(slot);

@@ -776,9 +776,9 @@ private:
     [[nodiscard]] http_response html_owned(std::pmr::string&& body) const;
 
     [[nodiscard]] task<http_response> not_found_task();
-    // `fields`: method, target, body, then header name/value pairs (owned copies).
-    [[nodiscard]] task<dispatch_response> dispatch_task(
-        std::pmr::vector<std::pmr::string> fields, ::ruvia::stop_token stop);
+    [[nodiscard]] task<dispatch_response> dispatch_task(std::pmr::string method,
+        std::pmr::string target, std::pmr::string body, std::pmr::vector<http_header> headers,
+        ::ruvia::stop_token stop);
     context& set_stable_response_header(std::string_view name, std::string_view value);
     void apply_response_state(http_response& response, std::optional<http_status_code> status_code) const;
 
