@@ -1,6 +1,8 @@
 #include "ruvia/http/http_client_redirect.h"
 
+#include <array>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -28,9 +30,10 @@ void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
 // `path` is always absolute: every caller builds it from a '/'-prefixed
 // reference path or base directory, so only the '/'-led dot-segment cases of
 // RFC 3986 section 5.2.4 can occur.
-void normalize_http_client_absolute_path(std::string_view path, std::pmr::string& normalized) {
+void normalize_http_client_absolute_path(
+    std::string_view path, std::size_t extra_reserve, std::pmr::string& normalized) {
     normalized.clear();
-    normalized.reserve(path.size());
+    normalized.reserve((path.empty() ? 1U : path.size()) + extra_reserve);
     auto remaining = path;
     while (!remaining.empty()) {
         // RFC 3986 section 5.2.4 deliberately moves one path segment at a
@@ -80,7 +83,10 @@ void normalize_http_client_absolute_path(std::string_view path, std::pmr::string
         return false;
     }
 
-    std::pmr::string merged_path(target_resource);
+    static constexpr std::size_t inline_path_capacity = 256;
+    std::array<char, inline_path_capacity> inline_merged_path{};
+    std::pmr::string merged_path_storage(target_resource);
+    std::string_view merged_path;
     std::string_view selected_query;
     bool has_selected_query = has_reference_query;
 
@@ -88,7 +94,7 @@ void normalize_http_client_absolute_path(std::string_view path, std::pmr::string
         if (!reference_path.empty() && reference_path.front() != '/') {
             return false;
         }
-        merged_path.assign(reference_path.empty() ? "/" : reference_path);
+        merged_path = reference_path.empty() ? std::string_view("/") : reference_path;
         selected_query = reference_query;
     } else {
         const auto base_query_at = current_target.find('?');
@@ -98,7 +104,7 @@ void normalize_http_client_absolute_path(std::string_view path, std::pmr::string
             has_base_query ? current_target.substr(base_query_at + 1) : std::string_view{};
 
         if (reference_path.empty()) {
-            merged_path.assign(base_path);
+            merged_path = base_path;
             if (has_reference_query) {
                 selected_query = reference_query;
             } else {
@@ -106,21 +112,34 @@ void normalize_http_client_absolute_path(std::string_view path, std::pmr::string
                 selected_query = base_query;
             }
         } else if (reference_path.front() == '/') {
-            merged_path.assign(reference_path);
+            merged_path = reference_path;
             selected_query = reference_query;
         } else {
-            const auto last_slash = base_path.rfind('/');
-            merged_path.assign(base_path.substr(0, last_slash + 1));
-            merged_path.append(reference_path.data(), reference_path.size());
+            const auto prefix_size = base_path.rfind('/') + 1U;
+            const auto total_path_size = prefix_size + reference_path.size();
+            if (total_path_size <= inline_merged_path.size()) {
+                std::memcpy(inline_merged_path.data(), base_path.data(), prefix_size);
+                std::memcpy(inline_merged_path.data() + prefix_size, reference_path.data(),
+                    reference_path.size());
+                merged_path = std::string_view(inline_merged_path.data(), total_path_size);
+            } else {
+                merged_path_storage.reserve(total_path_size);
+                merged_path_storage.append(base_path.data(), prefix_size);
+                merged_path_storage.append(reference_path.data(), reference_path.size());
+                merged_path = merged_path_storage;
+            }
             selected_query = reference_query;
         }
     }
 
+    const std::size_t query_extra = has_selected_query ? 1U + selected_query.size() : 0U;
     if (!has_authority && reference_path.empty()) {
         // RFC 3986 section 5.2.2 copies the base path for an empty reference path.
-        resolved = std::move(merged_path);
+        resolved.clear();
+        resolved.reserve(merged_path.size() + query_extra);
+        resolved.append(merged_path.data(), merged_path.size());
     } else {
-        normalize_http_client_absolute_path(merged_path, resolved);
+        normalize_http_client_absolute_path(merged_path, query_extra, resolved);
     }
     if (has_selected_query) {
         resolved.push_back('?');
@@ -266,7 +285,7 @@ resolve_http_client_redirect_target(
     }
 
     auto* const target_resource = detail::http_pmr_resource_or_default(options.resource_);
-    std::pmr::string host(target_resource);
+    std::string_view resolved_host = origin.host();
     auto port = origin.port();
     bool cross_origin = target_scheme != origin.scheme();
     if (has_authority) {
@@ -277,13 +296,11 @@ resolve_http_client_redirect_target(
         if (!parsed_value) {
             return http_client_redirect_resolution_error::invalid_location;
         }
-        host.assign(parsed_value->host_.data(), parsed_value->host_.size());
+        resolved_host = parsed_value->host_;
         port = parsed_value->port_;
         cross_origin = !parsed_value->same_origin_;
         reference = authority_end == std::string_view::npos ? std::string_view{}
                                                             : reference.substr(authority_end);
-    } else {
-        host.assign(origin.host().data(), origin.host().size());
     }
 
     std::pmr::string resolved(target_resource);
@@ -292,6 +309,7 @@ resolve_http_client_redirect_target(
         return http_client_redirect_resolution_error::invalid_location;
     }
 
+    std::pmr::string host(resolved_host.data(), resolved_host.size(), target_resource);
     return http_client_resolved_redirect(
         target_scheme, std::move(host), port, std::move(resolved), cross_origin);
 }

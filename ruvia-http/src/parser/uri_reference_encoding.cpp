@@ -89,6 +89,22 @@ struct uri_reference_layout final {
     }
 }
 
+[[nodiscard]] std::size_t encoded_uri_reference_size(std::string_view reference,
+    std::size_t first_encoded_index, const uri_reference_layout& layout, bool fragment_seen) noexcept {
+    std::size_t total = reference.size();
+    for (std::size_t i = first_encoded_index; i < reference.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(reference[i]);
+        const bool escape = byte == '%' && http_try_decode_percent_byte(reference, i).has_value();
+        if (escape || (byte != '%' && uri_reference_keeps_literal(byte, i, layout, fragment_seen))) {
+            if (escape) {
+                i += 2;
+            }
+            continue;
+        }
+        total += 2;
+    }
+    return total;
+}
 }  // namespace
 
 std::optional<std::pmr::string> percent_encode_uri_reference(
@@ -110,8 +126,10 @@ std::optional<std::pmr::string> percent_encode_uri_reference(
             continue;
         }
         if (!encoded.has_value()) {
+            const auto total_size =
+                encoded_uri_reference_size(reference, i, layout, fragment_seen);
             encoded.emplace(detail::http_pmr_resource_or_default(resource));
-            encoded->reserve(reference.size());
+            encoded->reserve(total_size);
             encoded->append(reference.substr(0, i));
         }
         http_append_percent_byte(*encoded, byte);
