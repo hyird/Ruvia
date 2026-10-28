@@ -218,6 +218,12 @@ namespace {
 
 constexpr std::size_t transfer_coding_scratch_bytes = 4096;
 
+struct transfer_coding_scratch_buffer final {
+    // Stage output bounds valid bytes to [begin_, end_), so default construction
+    // leaves the 4 KiB storage uninitialized instead of zero-filling it.
+    std::array<char, transfer_coding_scratch_bytes> bytes_;
+};
+
 struct transfer_coding_stage final {
     transfer_coding_stage(http_transfer_coding coding, std::pmr::memory_resource* resource,
         protocol_byte_limit decoded_limit)
@@ -275,7 +281,7 @@ struct http_transfer_coding_stack_decoder::impl_type final {
     std::span<transfer_coding_stage> stages_;
     // Only inter-stage edges own scratch. The final stage writes directly to
     // the caller's buffer, so a one-coding sequence has no internal scratch.
-    std::pmr::vector<std::array<char, transfer_coding_scratch_bytes>> buffers_;
+    std::pmr::vector<transfer_coding_scratch_buffer> buffers_;
     std::optional<http_transfer_coding_decode_error> failure_;
     bool decoder_failed_{false};
 };
@@ -324,7 +330,8 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(
                 layer_input = input.substr(wire_consumed);
             } else {
                 auto& previous = impl_->stages_[index - 1];
-                layer_input = std::string_view(impl_->buffers_[index - 1].data() + previous.begin_,
+                layer_input = std::string_view(
+                    impl_->buffers_[index - 1].bytes_.data() + previous.begin_,
                     previous.end_ - previous.begin_);
             }
             if (stage.complete_) {
@@ -336,7 +343,7 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(
             }
             const auto output = index + 1 == impl_->stages_.size()
                                     ? output_buffer
-                                    : std::span<char>(impl_->buffers_[index]);
+                                    : std::span<char>(impl_->buffers_[index].bytes_);
             const auto decoded = stage.decoder_.decode(layer_input, output);
             const auto consumed = decoded.consumed_bytes();
             if (index == 0) {

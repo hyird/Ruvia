@@ -1,5 +1,7 @@
 #include "ruvia/http/http_request_trailers.h"
 
+#include <array>
+
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
@@ -73,10 +75,15 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
     // not permitted in request trailers are discarded (RFC 9112 section 7.1.2).
     const auto field_count = fields_.size();
     auto budget = budget_;
+    static constexpr std::size_t inline_retained_capacity = 8;
+    std::array<http_header_view, inline_retained_capacity> inline_retained;
     std::size_t retained_count = 0;
     const auto preflight_status = detail::visit_http1_trailer_block(
         block, detail::is_forbidden_http_request_trailer_name, budget,
-        [&retained_count](std::string_view, std::string_view) noexcept {
+        [&inline_retained, &retained_count](std::string_view name, std::string_view value) noexcept {
+            if (retained_count < inline_retained.size()) {
+                inline_retained[retained_count] = http_header_view{name, value};
+            }
             ++retained_count;
             return true;
         });
@@ -98,13 +105,21 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
     };
     try {
         fields_.reserve(field_count + retained_count);
-        auto append_budget = budget_;
-        (void)detail::visit_http1_trailer_block(
-            block, detail::is_forbidden_http_request_trailer_name, append_budget,
-            [this](std::string_view name, std::string_view value) {
-                fields_.emplace_back(name, value, fields_.get_allocator().resource());
-                return true;
-            });
+        auto* const resource = fields_.get_allocator().resource();
+        if (retained_count <= inline_retained.size()) {
+            for (std::size_t i = 0; i < retained_count; ++i) {
+                fields_.emplace_back(
+                    inline_retained[i].name(), inline_retained[i].value(), resource);
+            }
+        } else {
+            auto append_budget = budget_;
+            (void)detail::visit_http1_trailer_block(
+                block, detail::is_forbidden_http_request_trailer_name, append_budget,
+                [this, resource](std::string_view name, std::string_view value) {
+                    fields_.emplace_back(name, value, resource);
+                    return true;
+                });
+        }
         budget_ = budget;
         return std::nullopt;
     } catch (...) {
