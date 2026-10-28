@@ -193,6 +193,14 @@ http2_connection::submit_regular_request_head(std::string_view method,
         stream.assign_request_scheme(scheme);
         auto& block = stream.local_header_block();
         block.clear();
+        std::size_t reserve_bytes = 8U + (authority.has_value() ? authority->size() + 4U : 0U) +
+                                    path.size() + (emit_length ? content_length_value.size() + 4U : 0U);
+        for (const auto& header : headers) {
+            reserve_bytes += header.name().size() + header.value().size() + 6U;
+        }
+        if (reserve_bytes > 15U) {
+            block.reserve(reserve_bytes);
+        }
         hpack_encoder::encode_header(block, ":method", method);
         hpack_encoder::encode_header(block, ":scheme", scheme);
         if (authority.has_value()) {
@@ -345,6 +353,15 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         return error_type::invalid_request;
     }
     std::pmr::string block(resource_);
+    std::size_t reserve_bytes =
+        (encoder_table_size_update_pending_ ? encoder_zero_table_size_update_.size() : 0U) +
+        8U + request.authority_.size() + request.path_.size();
+    for (const auto& header : request.headers_) {
+        reserve_bytes += header.name().size() + header.value().size() + 6U;
+    }
+    if (reserve_bytes > 15U) {
+        block.reserve(reserve_bytes);
+    }
     // PUSH_PROMISE begins a field block and therefore carries pending HPACK
     // table-size updates, just like HEADERS.
     if (encoder_table_size_update_pending_) {

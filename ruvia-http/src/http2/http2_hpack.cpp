@@ -113,7 +113,7 @@ hpack_decoder::step_result_type hpack_decoder::decode_string(const unsigned char
     }
 
     scratch.clear();
-    scratch.reserve(encoded.size());
+    scratch.reserve(encoded.size() + (encoded.size() * 3U) / 5U);
     if (!append_hpack_huffman(encoded, scratch)) {
         return hpack_decode_error::invalid_huffman;
     }

@@ -136,10 +136,17 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     auto& header_block = stream.local_header_block();
     try {
         header_block.clear();
+        const auto headers = response.headers();
+        std::size_t reserve_bytes = 5U;
+        for (std::size_t i = 0; i < headers.size(); ++i) {
+            reserve_bytes += headers[i].name().size() + headers[i].value().size() + 6U;
+        }
+        if (reserve_bytes > 15U) {
+            header_block.reserve(reserve_bytes);
+        }
         hpack_encoder::encode_status(header_block, response.status());
         std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
         std::pmr::string lower_name_scratch(header_block.get_allocator());
-        const auto headers = response.headers();
         for (std::size_t i = 0; i < headers.size(); ++i) {
             append_http2_encoded_response_header(header_block, headers[i].name(),
                 headers[i].value(), classify_response_header_name(headers[i].name()),
@@ -198,6 +205,25 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     auto& header_block = stream.local_header_block();
     try {
         header_block.clear();
+        std::size_t reserve_bytes = 5U;
+        for (const auto& header : response.headers()) {
+            const auto known_bit = http_response_header_access::known_bit(header);
+            if (known_bit == response_header_content_length) {
+                continue;
+            }
+            const auto known = get_http2_known_header_encoding(known_bit);
+            reserve_bytes += (known.hpack_name_index_ != 0 ? 0U : header.name().size()) +
+                             header.value().size() + 6U;
+        }
+        if (!generated_date.empty()) {
+            reserve_bytes += generated_date.size() + 4U;
+        }
+        if (!content_length_value.empty()) {
+            reserve_bytes += content_length_value.size() + 4U;
+        }
+        if (reserve_bytes > 15U) {
+            header_block.reserve(reserve_bytes);
+        }
         hpack_encoder::encode_status(header_block, plan.body_plan().response_status());
         std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
         std::pmr::string lower_name_scratch(header_block.get_allocator());
@@ -234,6 +260,13 @@ inline void append_http2_response_trailers(
     std::pmr::string& trailer_block, const http_response_trailer_section& section) {
     if (section.empty()) {
         return;
+    }
+    std::size_t reserve_bytes = trailer_block.size();
+    for (const auto& trailer : section.fields()) {
+        reserve_bytes += trailer.name().size() + trailer.value().size() + 6U;
+    }
+    if (reserve_bytes > 15U) {
+        trailer_block.reserve(reserve_bytes);
     }
     std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
     std::pmr::string lower_name_scratch(trailer_block.get_allocator());
