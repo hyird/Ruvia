@@ -44,8 +44,8 @@ struct http1_websocket_upgrade_commit final {
                                             .resource_ = dispatch_.memory_.resource(),
                                             .deflate_ = websocket_endpoint_.deflate()});
         context_access::commit_upgrade(context_value);
-        if (const auto ec = co_await write_websocket_handshake(
-                dispatch_.stream_, handshake, dispatch_.parsed_.body_plan_.expectations());
+        if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake,
+                dispatch_.parsed_.body_plan_.expectations(), dispatch_.memory_.resource());
             ec) {
             co_return std::nullopt;
         }
