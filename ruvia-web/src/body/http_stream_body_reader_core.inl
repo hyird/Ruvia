@@ -215,7 +215,7 @@ task<void> stream_body_reader<stream_type>::release_peer_monitor() {
     const auto monitored = monitor->pipeline();
     if (!monitored.empty()) {
         if (body_plan_.chunked() != nullptr && !initial_body_and_pipeline_.empty()) {
-            materialize_initial_remainder();
+            materialize_initial_remainder(monitored.size());
         }
         const auto current_view = buffer_.view();
         const bool transfer_in_buffer =

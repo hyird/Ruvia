@@ -44,7 +44,7 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
         if (result_value.need_more() == nullptr) {
             throw std::logic_error("unexpected HTTP/1 chunk decode result");
         }
-        materialize_initial_remainder();
+        materialize_initial_remainder(http_body_buffer_bytes);
         co_await read_more();
     }
 }

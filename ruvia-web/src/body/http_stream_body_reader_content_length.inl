@@ -31,16 +31,40 @@ task<std::string_view> stream_body_reader<stream_type>::read_known_length_all(
     // The initial segment is shorter than the body, so it is all body and no
     // pipelined bytes follow it; an earlier read() may also have left a
     // buffered remainder. Take both before reading the socket.
-    if (delivered_bytes_ < initial_body_bytes) {
-        body.append(initial_body_and_pipeline_.substr(delivered_bytes_, initial_body_bytes - delivered_bytes_));
+    const auto initial_unread =
+        delivered_bytes_ < initial_body_bytes ? initial_body_bytes - delivered_bytes_ : std::size_t{0};
+    const auto remaining_after_initial = content_length - delivered_bytes_ - initial_unread;
+    const auto buffered_unread =
+        read_cursor_ < buffer_.size() ? std::min(buffer_.size() - read_cursor_, remaining_after_initial)
+                                      : std::size_t{0};
+    const auto preread_unread = initial_unread + buffered_unread;
+    if (preread_unread != 0) {
+        const auto after_preread = body.size() + preread_unread;
+        const auto remaining_after_preread = remaining_after_initial - buffered_unread;
+        if (remaining_after_preread == 0) {
+            body.reserve(after_preread);
+        } else {
+            const auto final_size = remaining_after_preread > body.max_size() - after_preread
+                                        ? body.max_size()
+                                        : after_preread + remaining_after_preread;
+            const auto doubled =
+                after_preread > body.max_size() / 2 ? body.max_size() : after_preread * 2;
+            const auto target_capacity =
+                std::min(final_size, std::max(doubled, known_length_min_read_bytes));
+            if (target_capacity > body.capacity()) {
+                body.reserve(target_capacity);
+            }
+        }
+    }
+    if (initial_unread != 0) {
+        body.append(initial_body_and_pipeline_.substr(delivered_bytes_, initial_unread));
         delivered_bytes_ = initial_body_bytes;
     }
     initial_body_and_pipeline_ = {};
-    if (read_cursor_ < buffer_.size()) {
-        const auto chunk_bytes = std::min(buffer_.size() - read_cursor_, content_length - delivered_bytes_);
-        body.append(buffer_.data() + read_cursor_, chunk_bytes);
-        read_cursor_ += chunk_bytes;
-        delivered_bytes_ += chunk_bytes;
+    if (buffered_unread != 0) {
+        body.append(buffer_.data() + read_cursor_, buffered_unread);
+        read_cursor_ += buffered_unread;
+        delivered_bytes_ += buffered_unread;
     }
 
     // Read the rest straight into the tail of `body`, never past the declared

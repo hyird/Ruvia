@@ -85,7 +85,7 @@ private:
     [[nodiscard]] std::string_view initial_pipeline_remainder() const noexcept;
     [[nodiscard]] std::string_view buffered_pipeline_remainder() const noexcept;
     void reset_pipeline_state() noexcept;
-    void materialize_initial_remainder();
+    void materialize_initial_remainder(std::size_t extra_reserve = 0);
     task<void> read_more();
     task<std::string_view> read_known_length_all(std::pmr::string& body, std::size_t content_length);
     task<std::optional<std::span<const std::byte>>> read_known_length(std::size_t content_length);

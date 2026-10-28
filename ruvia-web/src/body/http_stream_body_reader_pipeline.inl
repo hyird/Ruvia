@@ -41,12 +41,24 @@ void stream_body_reader<stream_type>::reset_pipeline_state() noexcept {
 }
 
 template <typename stream_type>
-void stream_body_reader<stream_type>::materialize_initial_remainder() {
+void stream_body_reader<stream_type>::materialize_initial_remainder(std::size_t extra_reserve) {
     if (initial_body_and_pipeline_.empty()) {
         return;
     }
+    const auto remainder =
+        initial_body_and_pipeline_.substr(std::min(read_cursor_, initial_body_and_pipeline_.size()));
     buffer_.clear();
-    buffer_.append(initial_body_and_pipeline_.substr(read_cursor_));
+    if (!remainder.empty() || extra_reserve != 0) {
+        const auto hard_limit =
+            body_plan_.chunked() != nullptr ? chunked_encoded_buffer_bytes : body_limit_.read_ceiling();
+        const auto target_reserve = extra_reserve > hard_limit - std::min(remainder.size(), hard_limit)
+                                        ? hard_limit
+                                        : remainder.size() + extra_reserve;
+        if (target_reserve > buffer_.capacity()) {
+            buffer_.reserve(std::max(remainder.size(), target_reserve));
+        }
+        buffer_.append(remainder);
+    }
     initial_body_and_pipeline_ = {};
     read_cursor_ = 0;
 }
