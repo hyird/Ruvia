@@ -367,11 +367,12 @@ void add_file_headers(http_response& response, const file_response_source& sourc
     // A precompressed variant carries the original Content-Type with the
     // encoding declared here.
     if (carries_content && source_value.content_coding_ != http_content_coding::identity) {
-        response.header("Content-Encoding", http_content_coding_token(source_value.content_coding_));
+        response.header_stable_view(
+            "Content-Encoding", http_content_coding_token(source_value.content_coding_));
     }
     if (header_set != file_header_set::not_modified &&
         source_value.range_requests_ == static_range_request_policy::honor) {
-        response.header("Accept-Ranges", "bytes");
+        response.header_stable_view("Accept-Ranges", "bytes");
     }
     if (source_value.response_validators_ == static_response_validator_policy::emit) {
         response.header("ETag", validators.etag_);

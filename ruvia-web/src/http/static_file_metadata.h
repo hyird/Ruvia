@@ -162,80 +162,100 @@ template <typename char_value_type>
 [[nodiscard]] inline std::string_view guess_static_file_content_type_from_path_view(
     std::basic_string_view<char_value_type> path) noexcept {
     const auto extension = static_file_extension(path);
-    if (static_file_extension_equals(extension, ".html") ||
-        static_file_extension_equals(extension, ".htm")) {
-        return "text/html; charset=utf-8";
-    }
-    if (static_file_extension_equals(extension, ".css")) {
-        return "text/css; charset=utf-8";
-    }
-    if (static_file_extension_equals(extension, ".js") ||
-        static_file_extension_equals(extension, ".mjs")) {
-        return "text/javascript; charset=utf-8";
-    }
-    if (static_file_extension_equals(extension, ".json")) {
-        return "application/json; charset=utf-8";
-    }
-    if (static_file_extension_equals(extension, ".txt") ||
-        static_file_extension_equals(extension, ".log")) {
-        return "text/plain; charset=utf-8";
-    }
-    if (static_file_extension_equals(extension, ".png")) {
-        return "image/png";
-    }
-    if (static_file_extension_equals(extension, ".jpg") ||
-        static_file_extension_equals(extension, ".jpeg")) {
-        return "image/jpeg";
-    }
-    if (static_file_extension_equals(extension, ".gif")) {
-        return "image/gif";
-    }
-    if (static_file_extension_equals(extension, ".svg")) {
-        return "image/svg+xml";
-    }
-    if (static_file_extension_equals(extension, ".wasm")) {
-        return "application/wasm";
-    }
-    if (static_file_extension_equals(extension, ".apng")) {
-        return "image/apng";
-    }
-    if (static_file_extension_equals(extension, ".avif")) {
-        return "image/avif";
-    }
-    if (static_file_extension_equals(extension, ".webp")) {
-        return "image/webp";
-    }
-    if (static_file_extension_equals(extension, ".bmp")) {
-        return "image/bmp";
-    }
-    if (static_file_extension_equals(extension, ".ico") ||
-        static_file_extension_equals(extension, ".cur")) {
-        return "image/vnd.microsoft.icon";
-    }
-    if (static_file_extension_equals(extension, ".woff")) {
-        return "font/woff";
-    }
-    if (static_file_extension_equals(extension, ".woff2")) {
-        return "font/woff2";
-    }
-    if (static_file_extension_equals(extension, ".ttf")) {
-        return "font/ttf";
-    }
-    if (static_file_extension_equals(extension, ".otf")) {
-        return "font/otf";
-    }
-    if (static_file_extension_equals(extension, ".eot")) {
-        return "application/vnd.ms-fontobject";
-    }
-    if (static_file_extension_equals(extension, ".xml") ||
-        static_file_extension_equals(extension, ".xsl")) {
-        return "text/xml; charset=utf-8";
-    }
-    if (static_file_extension_equals(extension, ".map")) {
-        return "application/json; charset=utf-8";
-    }
-    if (static_file_extension_equals(extension, ".webmanifest")) {
-        return "application/manifest+json; charset=utf-8";
+    switch (extension.size()) {
+        case 3U:
+            if (static_file_extension_equals(extension, ".js")) {
+                return "text/javascript; charset=utf-8";
+            }
+            break;
+        case 4U:
+            if (static_file_extension_equals(extension, ".htm")) {
+                return "text/html; charset=utf-8";
+            }
+            if (static_file_extension_equals(extension, ".css")) {
+                return "text/css; charset=utf-8";
+            }
+            if (static_file_extension_equals(extension, ".mjs")) {
+                return "text/javascript; charset=utf-8";
+            }
+            if (static_file_extension_equals(extension, ".txt") ||
+                static_file_extension_equals(extension, ".log")) {
+                return "text/plain; charset=utf-8";
+            }
+            if (static_file_extension_equals(extension, ".png")) {
+                return "image/png";
+            }
+            if (static_file_extension_equals(extension, ".jpg")) {
+                return "image/jpeg";
+            }
+            if (static_file_extension_equals(extension, ".gif")) {
+                return "image/gif";
+            }
+            if (static_file_extension_equals(extension, ".svg")) {
+                return "image/svg+xml";
+            }
+            if (static_file_extension_equals(extension, ".bmp")) {
+                return "image/bmp";
+            }
+            if (static_file_extension_equals(extension, ".ico") ||
+                static_file_extension_equals(extension, ".cur")) {
+                return "image/vnd.microsoft.icon";
+            }
+            if (static_file_extension_equals(extension, ".ttf")) {
+                return "font/ttf";
+            }
+            if (static_file_extension_equals(extension, ".otf")) {
+                return "font/otf";
+            }
+            if (static_file_extension_equals(extension, ".eot")) {
+                return "application/vnd.ms-fontobject";
+            }
+            if (static_file_extension_equals(extension, ".xml") ||
+                static_file_extension_equals(extension, ".xsl")) {
+                return "text/xml; charset=utf-8";
+            }
+            if (static_file_extension_equals(extension, ".map")) {
+                return "application/json; charset=utf-8";
+            }
+            break;
+        case 5U:
+            if (static_file_extension_equals(extension, ".html")) {
+                return "text/html; charset=utf-8";
+            }
+            if (static_file_extension_equals(extension, ".json")) {
+                return "application/json; charset=utf-8";
+            }
+            if (static_file_extension_equals(extension, ".jpeg")) {
+                return "image/jpeg";
+            }
+            if (static_file_extension_equals(extension, ".wasm")) {
+                return "application/wasm";
+            }
+            if (static_file_extension_equals(extension, ".apng")) {
+                return "image/apng";
+            }
+            if (static_file_extension_equals(extension, ".avif")) {
+                return "image/avif";
+            }
+            if (static_file_extension_equals(extension, ".webp")) {
+                return "image/webp";
+            }
+            if (static_file_extension_equals(extension, ".woff")) {
+                return "font/woff";
+            }
+            break;
+        case 6U:
+            if (static_file_extension_equals(extension, ".woff2")) {
+                return "font/woff2";
+            }
+            break;
+        case 12U:
+            if (static_file_extension_equals(extension, ".webmanifest")) {
+                return "application/manifest+json; charset=utf-8";
+            }
+            break;
+        default:
+            break;
     }
     return "application/octet-stream";
 }

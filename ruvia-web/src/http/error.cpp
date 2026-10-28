@@ -235,7 +235,7 @@ http_response detail::make_default_error_response(
 
     http_response response(resource);
     response.status(error.status());
-    response.header("Content-Type", "application/problem+json");
+    response.header_stable_view("Content-Type", "application/problem+json");
 
     auto body = serialize_error_response(error, resource);
     response.owned_body(std::move(body));

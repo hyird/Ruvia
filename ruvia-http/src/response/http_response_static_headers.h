@@ -72,6 +72,8 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
     static constexpr char wasm_content_type[] = "Content-Typeapplication/wasm";
     static constexpr char octet_stream_content_type[] = "Content-Typeapplication/octet-stream";
     static constexpr char connection_close[] = "Connectionclose";
+    static constexpr char connection_keep_alive[] = "Connectionkeep-alive";
+    static constexpr char connection_upgrade[] = "ConnectionUpgrade";
     static constexpr char accept_ranges_bytes[] = "Accept-Rangesbytes";
     static constexpr char content_encoding_gzip[] = "Content-Encodinggzip";
     static constexpr char content_encoding_br[] = "Content-Encodingbr";
@@ -184,6 +186,12 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
             if (value == "close") {
                 return static_response_header(connection_close, 10, response_header_connection);
             }
+            if (value == "keep-alive") {
+                return static_response_header(connection_keep_alive, 10, response_header_connection);
+            }
+            if (value == "Upgrade") {
+                return static_response_header(connection_upgrade, 10, response_header_connection);
+            }
             return std::nullopt;
         case response_header_accept_ranges:
             if (value == "bytes") {
@@ -274,11 +282,26 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
     static constexpr char referrer_policy_no_referrer[] = "Referrer-Policyno-referrer";
     static constexpr char permissions_policy_default[] =
         "Permissions-Policygeolocation=(), microphone=(), camera=()";
+    static constexpr char upgrade_websocket[] = "Upgradewebsocket";
+    static constexpr char upgrade_connect_udp[] = "Upgradeconnect-udp";
     static constexpr char retry_after_one[] = "Retry-After1";
+    static constexpr char accept_encoding_all[] = "Accept-Encodinggzip, deflate, br, zstd";
+    static constexpr char accept_encoding_identity[] = "Accept-Encodingidentity";
+    static constexpr char capsule_protocol_true[] = "Capsule-Protocol?1";
     static constexpr char x_ratelimit_reset_one[] = "X-RateLimit-Reset1";
     static constexpr char x_ratelimit_remaining_zero[] = "X-RateLimit-Remaining0";
 
     switch (name.size()) {
+        case 7:
+            if (name == "Upgrade") {
+                if (value == "websocket") {
+                    return static_response_header(upgrade_websocket, 7, 0);
+                }
+                if (value == "connect-udp") {
+                    return static_response_header(upgrade_connect_udp, 7, 0);
+                }
+            }
+            return std::nullopt;
         case 11:
             if (name == "Retry-After" && value == "1") {
                 return static_response_header(retry_after_one, 11, 0);
@@ -302,10 +325,21 @@ inline constexpr char text_html_utf8_content_type[] = "Content-Typetext/html; ch
                     return static_response_header(referrer_policy_no_referrer, 15, 0);
                 }
             }
+            if (name == "Accept-Encoding") {
+                if (value == "gzip, deflate, br, zstd") {
+                    return static_response_header(accept_encoding_all, 15, 0);
+                }
+                if (value == "identity") {
+                    return static_response_header(accept_encoding_identity, 15, 0);
+                }
+            }
             return std::nullopt;
         case 16:
             if (name == "X-XSS-Protection" && value == "0") {
                 return static_response_header(x_xss_protection_zero, 16, 0);
+            }
+            if (name == "Capsule-Protocol" && value == "?1") {
+                return static_response_header(capsule_protocol_true, 16, 0);
             }
             return std::nullopt;
         case 17:

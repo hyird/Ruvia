@@ -114,7 +114,7 @@ void apply_exception_response_metadata(http_response& response, const std::excep
             std::rethrow_exception(exception);
         }
     } catch (const detail::unsupported_request_content_coding& error) {
-        response.header("Accept-Encoding", error.accepted_codings());
+        response.header_stable_view("Accept-Encoding", error.accepted_codings());
         // Classification only; the caller still owns and dispatches the exception.
         // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (...) {
