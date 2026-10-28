@@ -142,8 +142,8 @@ hpack_decoder::step_result_type hpack_decoder::decode_literal_header(const unsig
     }
 
     static constexpr std::size_t inline_huffman_capacity = 256;
-    std::array<char, inline_huffman_capacity> name_inline{};
-    std::array<char, inline_huffman_capacity> value_inline{};
+    std::array<char, inline_huffman_capacity> name_inline;
+    std::array<char, inline_huffman_capacity> value_inline;
     std::string_view name;
     if (name_index == 0) {
         if (const auto error =

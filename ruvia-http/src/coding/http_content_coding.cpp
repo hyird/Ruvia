@@ -37,20 +37,37 @@ std::string_view http_content_coding_token(http_content_coding coding) noexcept 
 }
 
 std::optional<http_content_coding> http_content_coding_from_token(std::string_view token) noexcept {
-    if (http_ascii_equals_ignore_case(token, "identity")) {
-        return http_content_coding::identity;
-    }
-    if (http_is_gzip_coding_token(token)) {
-        return http_content_coding::gzip;
-    }
-    if (http_ascii_equals_ignore_case(token, "deflate")) {
-        return http_content_coding::deflate;
-    }
-    if (http_ascii_equals_ignore_case(token, "br")) {
-        return http_content_coding::brotli;
-    }
-    if (http_ascii_equals_ignore_case(token, "zstd")) {
-        return http_content_coding::zstd;
+    switch (token.size()) {
+        case 2:
+            if (http_ascii_equals_ignore_case(token, "br")) {
+                return http_content_coding::brotli;
+            }
+            break;
+        case 4:
+            if (http_ascii_equals_ignore_case(token, "gzip")) {
+                return http_content_coding::gzip;
+            }
+            if (http_ascii_equals_ignore_case(token, "zstd")) {
+                return http_content_coding::zstd;
+            }
+            break;
+        case 6:
+            if (http_ascii_equals_ignore_case(token, "x-gzip")) {
+                return http_content_coding::gzip;
+            }
+            break;
+        case 7:
+            if (http_ascii_equals_ignore_case(token, "deflate")) {
+                return http_content_coding::deflate;
+            }
+            break;
+        case 8:
+            if (http_ascii_equals_ignore_case(token, "identity")) {
+                return http_content_coding::identity;
+            }
+            break;
+        default:
+            break;
     }
     return std::nullopt;
 }
