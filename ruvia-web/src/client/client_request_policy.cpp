@@ -400,12 +400,14 @@ void client_request_policy::retain_response_cookies(
         }
         return *now;
     };
-    if (!cookies_.empty()) {
-        discard_expired(current_time());
-    }
+    bool discarded_expired = cookies_.empty();
     for (const auto& header : headers) {
         if (!http_ascii_equals_ignore_case(header.name(), "set-cookie")) {
             continue;
+        }
+        if (!discarded_expired) {
+            discarded_expired = true;
+            discard_expired(current_time());
         }
         const auto parsed_cookie = parse_set_cookie(header.value());
         if (!parsed_cookie) {

@@ -25,9 +25,9 @@ struct client_prepared_request_scratch final {
         : overflow_headers_(resource),
           overflow_cookie_header_(resource) {}
 
-    std::array<http_header_view, inline_header_capacity> inline_headers_{};
+    std::array<http_header_view, inline_header_capacity> inline_headers_;
     std::pmr::vector<http_header_view> overflow_headers_;
-    std::array<char, inline_cookie_capacity> inline_cookie_header_{};
+    std::array<char, inline_cookie_capacity> inline_cookie_header_;
     std::pmr::string overflow_cookie_header_;
 };
 

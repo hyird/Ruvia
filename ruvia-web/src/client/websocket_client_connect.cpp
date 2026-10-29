@@ -78,13 +78,13 @@ task<void> websocket_client_state::establish() {
 }
 
 task<void> websocket_client_state::perform_handshake() {
-    std::array<std::uint8_t, websocket_client_handshake_nonce_bytes> nonce{};
+    std::array<std::uint8_t, websocket_client_handshake_nonce_bytes> nonce;
     if (!fill_random_bytes(nonce)) {
         throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
             "failed to generate WebSocket handshake key");
     }
 
-    std::array<char, 24> encoded_key{};
+    std::array<char, 24> encoded_key;
     http_base64_encode(encoded_key.data(), nonce);
 
     // Uninitialized worker storage, released when the handshake ends: the
