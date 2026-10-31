@@ -52,6 +52,29 @@ struct db_transaction_options final {
     db_transaction_access_mode access_mode_{db_transaction_access_mode::default_value};
 };
 
+enum class db_data_type : unsigned char { inferred,
+    boolean,
+    small_int,
+    integer,
+    big_int,
+    real,
+    double_value,
+    text,
+    char_value,
+    varchar,
+    numeric,
+    json,
+    jsonb,
+    uuid,
+    date,
+    timestamp,
+    timestamp_tz,
+    interval,
+    inet,
+    cidr,
+    bytea,
+    array };
+
 // Each worker owns a fixed pool per database alias. Standalone db_client uses
 // one pool on its bound event loop; db_migrator uses a dedicated connection.
 // PostgreSQL query() and execute() keep a bounded set of named server-side
@@ -223,6 +246,57 @@ private:
     code_type code_;
 };
 
+namespace detail {
+
+template <typename t_type>
+concept db_text_scalar = std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
+                         (std::is_same_v<t_type, bool> || is_model_integer<t_type> ||
+                             std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::pmr::string> ||
+                             std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>);
+
+// The one text-to-scalar conversion for database results: fields and array
+// elements accept the same boolean tokens and numeric syntax.
+template <db_text_scalar t_type>
+[[nodiscard]] t_type convert_db_text(std::string_view text, std::pmr::memory_resource* resource) {
+    if constexpr (std::is_same_v<t_type, std::string_view>) {
+        return text;
+    } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
+        return std::pmr::string(text, resource);
+    } else if constexpr (std::is_same_v<t_type, string>) {
+        return string(text, model_options{.resource_ = resource});
+    } else if constexpr (std::is_same_v<t_type, bool>) {
+        if (text == "1" || text == "t" || text == "true" || text == "TRUE") {
+            return true;
+        }
+        if (text == "0" || text == "f" || text == "false" || text == "FALSE") {
+            return false;
+        }
+        throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database text is not a boolean");
+    } else if constexpr (std::is_floating_point_v<t_type>) {
+        t_type converted{};
+        const auto* const last = text.data() + text.size();
+        const auto [end, error] = std::from_chars(text.data(), last, converted);
+        if (error != std::errc{} || end != last || !std::isfinite(converted)) {
+            throw db_conversion_error(error == std::errc::result_out_of_range && end == last
+                                          ? db_conversion_error::code_type::out_of_range
+                                          : db_conversion_error::code_type::invalid_format,
+                "database text is not a valid number");
+        }
+        return converted;
+    } else {
+        const auto parsed = parse_integer<t_type>(text);
+        if (const auto* error = std::get_if<integer_parse_error>(&parsed)) {
+            throw db_conversion_error(*error == integer_parse_error::out_of_range
+                                          ? db_conversion_error::code_type::out_of_range
+                                          : db_conversion_error::code_type::invalid_format,
+                "database text is not a valid number");
+        }
+        return std::get<t_type>(parsed);
+    }
+}
+
+}  // namespace detail
+
 class db_value final {
 private:
     using storage_type = std::variant<std::monostate, borrowed_text, std::pmr::string, std::int64_t,
@@ -302,60 +376,16 @@ public:
     [[nodiscard]] std::optional<std::string_view> value() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> value() const&& = delete;
 
-    template <typename t_type>
-        requires(std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
-                 (std::is_same_v<t_type, bool> || detail::is_model_integer<t_type> ||
-                     std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::pmr::string> ||
-                     std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>))
+    template <detail::db_text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const& {
         const auto source_value = value();
         if (!source_value) {
             return std::nullopt;
         }
-        if constexpr (std::is_same_v<t_type, std::string_view>) {
-            return *source_value;
-        } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
-            return std::pmr::string(*source_value, resource_);
-        } else if constexpr (std::is_same_v<t_type, string>) {
-            return string(*source_value, model_options{.resource_ = resource_});
-        } else if constexpr (std::is_same_v<t_type, bool>) {
-            if (*source_value == "1" || *source_value == "t" || *source_value == "true" || *source_value == "TRUE") {
-                return true;
-            }
-            if (*source_value == "0" || *source_value == "f" || *source_value == "false" || *source_value == "FALSE") {
-                return false;
-            }
-            throw db_conversion_error(
-                db_conversion_error::code_type::invalid_format, "database field is not a boolean");
-        } else if constexpr (std::is_floating_point_v<t_type>) {
-            t_type converted{};
-            const auto* first = source_value->data();
-            const auto* last = first + source_value->size();
-            const auto [end, error] = std::from_chars(first, last, converted);
-            if (error != std::errc{} || end != last || !std::isfinite(converted)) {
-                throw db_conversion_error(error == std::errc::result_out_of_range && end == last
-                                              ? db_conversion_error::code_type::out_of_range
-                                              : db_conversion_error::code_type::invalid_format,
-                    "database field has an invalid numeric value");
-            }
-            return converted;
-        } else {
-            const auto parsed = parse_integer<t_type>(*source_value);
-            if (const auto* error = std::get_if<integer_parse_error>(&parsed)) {
-                throw db_conversion_error(*error == integer_parse_error::out_of_range
-                                              ? db_conversion_error::code_type::out_of_range
-                                              : db_conversion_error::code_type::invalid_format,
-                    "database field has an invalid numeric value");
-            }
-            return std::get<t_type>(parsed);
-        }
+        return detail::convert_db_text<t_type>(*source_value, resource_);
     }
 
-    template <typename t_type>
-        requires(std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
-                    (std::is_same_v<t_type, bool> || detail::is_model_integer<t_type> ||
-                        std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::pmr::string> ||
-                        std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>))
+    template <detail::db_text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const&& = delete;
 
 private:

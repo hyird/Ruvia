@@ -12,7 +12,7 @@
 
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/model/rule/rule_types.h"
-#include "ruvia/web/detail/model/traits.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia::detail::model {
 

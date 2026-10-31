@@ -13,7 +13,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/web/detail/model/traits.h"
 #include "ruvia/web/model.h"
 
 namespace ruvia::detail {
@@ -64,10 +63,6 @@ public:
         requires std::is_floating_point_v<value_type>
     redis_literal(value_type value, std::pmr::memory_resource*)
         : storage_(static_cast<double>(value)) {}
-    template <typename value_type>
-        requires(is_ruvia_scalar<std::remove_cvref_t<value_type>>)
-    redis_literal(const value_type& value, std::pmr::memory_resource* resource)
-        : redis_literal(static_cast<model_scalar_value_type<std::remove_cvref_t<value_type>>>(value), resource) {}
     redis_literal(const string& value, std::pmr::memory_resource* resource)
         : redis_literal(value.view(), resource) {}
     redis_literal(redis_literal&&) noexcept = default;

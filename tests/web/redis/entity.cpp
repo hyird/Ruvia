@@ -16,7 +16,7 @@ RUVIA_REDIS_ENTITY(redis_user, "user",
     RUVIA_REDIS_COLUMN(name, std::pmr::string),
     RUVIA_REDIS_COLUMN(active, bool),
     RUVIA_REDIS_COLUMN(age, std::int32_t, ruvia::redis_column_options{.nullable_ = true}),
-    RUVIA_REDIS_COLUMN(score, ruvia::double_value, ruvia::redis_column_options{.nullable_ = true}));
+    RUVIA_REDIS_COLUMN(score, double, ruvia::redis_column_options{.nullable_ = true}));
 
 RUVIA_REDIS_ENTITY(nullable_redis_text, "text_value",
     RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}),
@@ -38,13 +38,13 @@ RUVIA_TEST(redis_entity_tracks_unset_value_and_null_states) {
     user_value.set<"name">("Alice");
     user_value.set<"active">(true);
     user_value.set<"age">(32);
-    user_value.set<"score">(ruvia::double_value{4.5});
+    user_value.set<"score">(4.5);
     RUVIA_CHECK(user_value.is_set<"id">());
     RUVIA_CHECK_EQ(user_value.get<"id">().view(), std::string_view("u-1"));
     RUVIA_CHECK_EQ(std::string_view(user_value.get<"name">()), std::string_view("Alice"));
     RUVIA_CHECK(user_value.get<"active">());
     RUVIA_CHECK_EQ(user_value.get<"age">(), 32);
-    RUVIA_CHECK_EQ(static_cast<double>(user_value.get<"score">()), 4.5);
+    RUVIA_CHECK_EQ(user_value.get<"score">(), 4.5);
 
     user_value.set_null<"age">();
     RUVIA_CHECK(user_value.is_set<"age">());

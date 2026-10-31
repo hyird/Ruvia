@@ -74,37 +74,9 @@ void decode_array_element(std::string_view text, t_type& value, std::pmr::memory
         auto inner = entity_value_slot<v_type>::make_value(resource);
         decode_array_element(text, inner, resource);
         value = std::move(inner);
-    } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
-        value.assign(text);
-    } else if constexpr (std::is_same_v<t_type, string>) {
-        value.assign_owned(text);
-    } else if constexpr (std::is_same_v<t_type, bool>) {
-        if (text == "1" || text == "t" || text == "true" || text == "TRUE") {
-            value = true;
-        } else if (text == "0" || text == "f" || text == "false" || text == "FALSE") {
-            value = false;
-        } else {
-            throw db_conversion_error(db_conversion_error::code_type::invalid_format, "invalid boolean array element");
-        }
-    } else if constexpr (std::is_floating_point_v<t_type>) {
-        const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
-        if (ec != std::errc{} || end != text.data() + text.size() || !std::isfinite(value)) {
-            throw db_conversion_error(ec == std::errc::result_out_of_range && end == text.data() + text.size()
-                                          ? db_conversion_error::code_type::out_of_range
-                                          : db_conversion_error::code_type::invalid_format,
-                "invalid array element");
-        }
     } else {
-        const auto parsed = parse_integer<t_type>(text);
-        if (const auto* ec = std::get_if<integer_parse_error>(&parsed)) {
-            throw db_conversion_error(*ec == integer_parse_error::out_of_range
-                                          ? db_conversion_error::code_type::out_of_range
-                                          : db_conversion_error::code_type::invalid_format,
-                "invalid array element");
-        }
-        value = std::get<t_type>(parsed);
+        value = convert_db_text<t_type>(text, resource);
     }
-    (void)resource;
 }
 
 template <typename t_type>

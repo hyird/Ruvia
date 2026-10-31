@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "ruvia/web/detail/http/context/request_bindings.h"
-#include "ruvia/web/detail/model/parse/parser.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/validation.h"
 

@@ -11,7 +11,7 @@
 
 #include "ruvia/web/detail/model/model_field.h"
 #include "ruvia/web/detail/model/rule/rule_pack.h"
-#include "ruvia/web/detail/model/traits.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia::detail::model {
 

@@ -2,9 +2,12 @@
 
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
+#include <initializer_list>
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -14,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/web/db/db_query.h"
 #include "ruvia/web/detail/entity/value_storage.h"
 #include "ruvia/web/entity_rows.h"
 #include "ruvia/web/model.h"
@@ -142,31 +146,6 @@ struct db_many_to_many final {
     using join_columns_type = std::tuple<>;
 };
 
-template <typename e_type, fixed_string name>
-class db_field_reference;
-
-enum class db_data_type : unsigned char { inferred,
-    boolean,
-    small_int,
-    integer,
-    big_int,
-    real,
-    double_value,
-    text,
-    char_value,
-    varchar,
-    numeric,
-    json,
-    jsonb,
-    uuid,
-    date,
-    timestamp,
-    timestamp_tz,
-    interval,
-    inet,
-    cidr,
-    bytea,
-    array };
 enum class db_generated_type : unsigned char { none,
     stored,
     virtual_value };
@@ -248,6 +227,24 @@ struct db_entity_type_traits<std::pmr::vector<t_type>> {
     using value_type = std::pmr::vector<t_type>;
     static constexpr db_data_type data_type = db_data_type::array;
 };
+
+// Column descriptor predicates shared by typed field references and the
+// repository builders so both agree on which columns accept writes and
+// arithmetic updates.
+template <typename c_type>
+consteval bool is_writable_db_column() noexcept {
+    return c_type::options.generated_type_ == db_generated_type::none && !c_type::options.read_only_;
+}
+template <typename c_type>
+consteval bool is_numeric_db_column() noexcept {
+    return !is_pmr_vector<typename c_type::value_type>::value &&
+           (c_type::data_type == db_data_type::small_int ||
+               c_type::data_type == db_data_type::integer ||
+               c_type::data_type == db_data_type::big_int ||
+               c_type::data_type == db_data_type::numeric ||
+               c_type::data_type == db_data_type::real ||
+               c_type::data_type == db_data_type::double_value);
+}
 
 template <typename t_type>
 struct db_relation_deleter final {
@@ -522,6 +519,340 @@ concept sql_projection = requires(const projection& value) {
     requires std::same_as<projection, typename projection::db_projection_type>;
     requires detail::sql_columns<typename projection::columns_type>;
     { value.resource() } -> std::same_as<std::pmr::memory_resource*>;
+};
+
+template <typename e_type, fixed_string field_name>
+class db_field_reference final {
+    static_assert(sql_entity<e_type>, "SQL field references require a SQL entity");
+    static_assert(e_type::template column_index<field_name>() < std::tuple_size_v<typename e_type::columns_type>);
+    using column_type = std::tuple_element_t<e_type::template column_index<field_name>(), typename e_type::columns_type>;
+    static constexpr bool is_writable = detail::is_writable_db_column<column_type>();
+    static constexpr bool is_numeric = detail::is_numeric_db_column<column_type>();
+
+public:
+    constexpr db_field_reference(std::string_view alias = {}) noexcept
+        : alias_(alias) {}
+    constexpr db_field_reference(const db_field_reference&) noexcept = default;
+    constexpr db_field_reference(db_field_reference&&) noexcept = default;
+    constexpr db_field_reference& operator=(const db_field_reference&) noexcept = default;
+    constexpr db_field_reference& operator=(db_field_reference&&) noexcept = default;
+
+    [[nodiscard]] static constexpr std::string_view name() noexcept {
+        return field_name.view();
+    }
+    [[nodiscard]] static constexpr std::string_view table_name() noexcept {
+        return e_type::table_name();
+    }
+    [[nodiscard]] constexpr std::string_view alias() const noexcept {
+        return alias_;
+    }
+    [[nodiscard]] constexpr db_field_reference with_alias(std::string_view alias) const noexcept {
+        return db_field_reference(alias);
+    }
+    [[nodiscard]] db_expression expression(db_query& query, std::string_view fallback_alias = {}) const {
+        const auto qualifier = !alias_.empty() ? alias_ : (fallback_alias.empty() ? e_type::table_name() : fallback_alias);
+        return query.column(field_name.view(), qualifier);
+    }
+    [[nodiscard]] db_expression excluded(db_query& query) const {
+        return query.excluded(field_name.view());
+    }
+    [[nodiscard]] db_expr to_expr() const {
+        return db_expr(detail::db_owned_expression::make_static_column(
+            field_name.view(), e_type::table_name(), alias_));
+    }
+    [[nodiscard]] operator db_expr() const {
+        return to_expr();
+    }
+    [[nodiscard]] db_expr excluded_expr() const noexcept {
+        return db_expr(detail::db_owned_expression::make_static_excluded(
+            field_name.view(), e_type::table_name()));
+    }
+
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_predicate is_distinct_from(v_type&& value) const {
+        return to_expr().is_distinct_from(std::forward<v_type>(value));
+    }
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_predicate is_not_distinct_from(v_type&& value) const {
+        return to_expr().is_not_distinct_from(std::forward<v_type>(value));
+    }
+    [[nodiscard]] db_predicate is_distinct_from(const db_expr& rhs) const {
+        return to_expr().is_distinct_from(rhs);
+    }
+    [[nodiscard]] db_predicate is_not_distinct_from(const db_expr& rhs) const {
+        return to_expr().is_not_distinct_from(rhs);
+    }
+
+    [[nodiscard]] db_predicate like(std::string_view pattern) const {
+        return to_expr().like(pattern);
+    }
+    [[nodiscard]] db_predicate not_like(std::string_view pattern) const {
+        return to_expr().not_like(pattern);
+    }
+    [[nodiscard]] db_predicate ilike(std::string_view pattern) const {
+        return to_expr().ilike(pattern);
+    }
+    [[nodiscard]] db_predicate not_ilike(std::string_view pattern) const {
+        return to_expr().not_ilike(pattern);
+    }
+    [[nodiscard]] db_predicate regex(std::string_view pattern) const {
+        return to_expr().regex(pattern);
+    }
+    [[nodiscard]] db_predicate iregex(std::string_view pattern) const {
+        return to_expr().iregex(pattern);
+    }
+    template <detail::db_parameter lower_type, detail::db_parameter upper_type>
+    [[nodiscard]] db_predicate between(lower_type&& lower, upper_type&& upper) const {
+        return to_expr().between(std::forward<lower_type>(lower), std::forward<upper_type>(upper));
+    }
+    template <detail::db_parameter lower_type, detail::db_parameter upper_type>
+    [[nodiscard]] db_predicate not_between(lower_type&& lower, upper_type&& upper) const {
+        return to_expr().not_between(std::forward<lower_type>(lower), std::forward<upper_type>(upper));
+    }
+    [[nodiscard]] db_predicate is_null() const {
+        return to_expr().is_null();
+    }
+    [[nodiscard]] db_predicate is_not_null() const {
+        return to_expr().is_not_null();
+    }
+    [[nodiscard]] db_predicate is_true() const {
+        return to_expr().is_true();
+    }
+    [[nodiscard]] db_predicate is_false() const {
+        return to_expr().is_false();
+    }
+    [[nodiscard]] db_predicate is_not_true() const {
+        return to_expr().is_not_true();
+    }
+    [[nodiscard]] db_predicate is_not_false() const {
+        return to_expr().is_not_false();
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate in(std::span<const t_type> values) const {
+        return compare_list(db_binary_operator::in, values);
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate in(std::initializer_list<t_type> values) const {
+        return in(std::span<const t_type>(values.begin(), values.size()));
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate not_in(std::span<const t_type> values) const {
+        return compare_list(db_binary_operator::not_in, values);
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate not_in(std::initializer_list<t_type> values) const {
+        return not_in(std::span<const t_type>(values.begin(), values.size()));
+    }
+    [[nodiscard]] db_predicate in(const db_query& subquery) const {
+        return compare_subquery(db_binary_operator::in, subquery);
+    }
+    [[nodiscard]] db_predicate not_in(const db_query& subquery) const {
+        return compare_subquery(db_binary_operator::not_in, subquery);
+    }
+    template <typename subquery_type>
+        requires requires(const subquery_type& s) {
+            { s.query() } -> std::same_as<const db_query&>;
+        }
+    [[nodiscard]] db_predicate in(const subquery_type& subquery) const {
+        return compare_subquery(db_binary_operator::in, subquery.query());
+    }
+    template <typename subquery_type>
+        requires requires(const subquery_type& s) {
+            { s.query() } -> std::same_as<const db_query&>;
+        }
+    [[nodiscard]] db_predicate not_in(const subquery_type& subquery) const {
+        return compare_subquery(db_binary_operator::not_in, subquery.query());
+    }
+
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_contains(std::span<const t_type> values) const {
+        return compare_array(db_binary_operator::array_contains, values);
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_contains(std::initializer_list<t_type> values) const {
+        return array_contains(std::span<const t_type>(values.begin(), values.size()));
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_contained_by(std::span<const t_type> values) const {
+        return compare_array(db_binary_operator::array_contained_by, values);
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_contained_by(std::initializer_list<t_type> values) const {
+        return array_contained_by(std::span<const t_type>(values.begin(), values.size()));
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_overlap(std::span<const t_type> values) const {
+        return compare_array(db_binary_operator::array_overlap, values);
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_overlap(std::initializer_list<t_type> values) const {
+        return array_overlap(std::span<const t_type>(values.begin(), values.size()));
+    }
+
+    [[nodiscard]] db_predicate json_contains(std::string_view json_text) const {
+        return compare_json(db_binary_operator::json_contains, json_text);
+    }
+    [[nodiscard]] db_predicate json_contained_by(std::string_view json_text) const {
+        return compare_json(db_binary_operator::json_contained_by, json_text);
+    }
+    [[nodiscard]] db_predicate json_has_key(std::string_view key) const {
+        return to_expr().compare_expr(db_binary_operator::json_has_key, db_expr::value(key));
+    }
+    [[nodiscard]] db_predicate json_has_any_key(std::span<const std::string_view> keys) const {
+        return compare_json_keys(db_binary_operator::json_has_any_key, keys);
+    }
+    [[nodiscard]] db_predicate json_has_any_key(std::initializer_list<std::string_view> keys) const {
+        return json_has_any_key(std::span<const std::string_view>(keys.begin(), keys.size()));
+    }
+    [[nodiscard]] db_predicate json_has_all_keys(std::span<const std::string_view> keys) const {
+        return compare_json_keys(db_binary_operator::json_has_all_keys, keys);
+    }
+    [[nodiscard]] db_predicate json_has_all_keys(std::initializer_list<std::string_view> keys) const {
+        return json_has_all_keys(std::span<const std::string_view>(keys.begin(), keys.size()));
+    }
+    [[nodiscard]] db_predicate json_text_equals(std::string_view key, std::string_view value) const {
+        return to_expr().json_get_text(key) == value;
+    }
+    [[nodiscard]] db_predicate json_path_text_equals(std::span<const std::string_view> path, std::string_view value) const {
+        return to_expr().json_path_text(path) == value;
+    }
+    [[nodiscard]] db_predicate json_path_text_equals(std::initializer_list<std::string_view> path, std::string_view value) const {
+        return json_path_text_equals(std::span<const std::string_view>(path.begin(), path.size()), value);
+    }
+
+    [[nodiscard]] db_selection select() const {
+        return as(field_name.view());
+    }
+    [[nodiscard]] db_selection as(borrowed_text alias_name) const {
+        return to_expr().as(alias_name);
+    }
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_selection coalesce(v_type&& fallback, borrowed_text alias_name = field_name.view()) const {
+        return db_expr::coalesce({to_expr(), db_expr::value(std::forward<v_type>(fallback))}).as(alias_name);
+    }
+    [[nodiscard]] db_selection coalesce_text(std::string_view fallback = {}, borrowed_text alias_name = field_name.view()) const {
+        auto col_expr = to_expr();
+        if constexpr (column_type::data_type != db_data_type::text &&
+                      column_type::data_type != db_data_type::varchar &&
+                      column_type::data_type != db_data_type::char_value) {
+            col_expr = col_expr.cast(db_data_type::text);
+        }
+        return db_expr::coalesce({col_expr, db_expr::value(fallback)}).as(alias_name);
+    }
+
+    template <detail::db_parameter v_type>
+        requires(is_writable && (!std::same_as<std::remove_cvref_t<v_type>, std::nullptr_t> || column_type::options.nullable_))
+    [[nodiscard]] db_assignment set(v_type&& value) const {
+        return db_assignment{field_name.view(), db_expr::value(std::forward<v_type>(value))};
+    }
+    template <detail::db_parameter v_type>
+        requires(is_writable && (!std::same_as<std::remove_cvref_t<v_type>, std::nullptr_t> || column_type::options.nullable_))
+    [[nodiscard]] db_assignment operator=(v_type&& value) const {
+        return set(std::forward<v_type>(value));
+    }
+    [[nodiscard]] db_assignment set(const db_expr& value) const
+        requires is_writable
+    {
+        if (value.empty()) {
+            throw std::invalid_argument("cannot assign an empty database expression");
+        }
+        return db_assignment{field_name.view(), value};
+    }
+    [[nodiscard]] db_assignment operator=(const db_expr& value) const
+        requires is_writable
+    {
+        return set(value);
+    }
+    [[nodiscard]] db_assignment set_null() const
+        requires(is_writable && column_type::options.nullable_)
+    {
+        return db_assignment{field_name.view(), db_expr::null()};
+    }
+    [[nodiscard]] db_assignment set_null_if_empty(std::string_view value) const
+        requires(is_writable && column_type::options.nullable_)
+    {
+        auto expr = db_expr::null_if(db_expr::value(value), db_expr::value(std::string_view{}));
+        if constexpr (!column_type::options.enum_name_.view().empty()) {
+            expr = expr.cast({.custom_name_ = column_type::options.enum_name_.view()});
+        } else if constexpr (column_type::data_type != db_data_type::inferred &&
+                             column_type::data_type != db_data_type::text &&
+                             column_type::data_type != db_data_type::varchar &&
+                             column_type::data_type != db_data_type::char_value) {
+            expr = expr.cast({.data_type_ = column_type::data_type,
+                .length_ = column_type::options.length_,
+                .precision_ = column_type::options.precision_,
+                .scale_ = column_type::options.scale_});
+        }
+        return db_assignment{field_name.view(), std::move(expr)};
+    }
+    [[nodiscard]] db_assignment set_default() const
+        requires is_writable
+    {
+        return db_assignment{field_name.view(), db_expr::default_value()};
+    }
+    [[nodiscard]] db_assignment set_now() const
+        requires is_writable
+    {
+        return db_assignment{field_name.view(), db_expr::now()};
+    }
+    [[nodiscard]] db_assignment set_excluded() const
+        requires is_writable
+    {
+        return db_assignment{field_name.view(), excluded_expr()};
+    }
+    template <typename number_type = std::int64_t>
+        requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
+    [[nodiscard]] db_assignment increment(number_type value = number_type{1}) const {
+        return db_assignment{field_name.view(), to_expr() + value};
+    }
+    template <typename number_type>
+        requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
+    [[nodiscard]] db_assignment operator+=(number_type value) const {
+        return increment(value);
+    }
+    template <typename number_type = std::int64_t>
+        requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
+    [[nodiscard]] db_assignment decrement(number_type value = number_type{1}) const {
+        return db_assignment{field_name.view(), to_expr() - value};
+    }
+    template <typename number_type>
+        requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
+    [[nodiscard]] db_assignment operator-=(number_type value) const {
+        return decrement(value);
+    }
+
+private:
+    template <typename t_type>
+    [[nodiscard]] db_predicate compare_list(db_binary_operator op, std::span<const t_type> values) const {
+        return db_predicate(detail::db_owned_expression::make_in_list(to_expr().owned(), op, values));
+    }
+    [[nodiscard]] db_predicate compare_subquery(db_binary_operator op, const db_query& subquery) const {
+        return db_predicate(detail::db_owned_expression::make_in_subquery(to_expr().owned(), op, subquery));
+    }
+    [[nodiscard]] db_predicate compare_json(db_binary_operator op, std::string_view json_text) const {
+        return to_expr().compare_expr(op, db_expr::value(json_text).cast(db_data_type::jsonb));
+    }
+    [[nodiscard]] db_predicate compare_json_keys(db_binary_operator op, std::span<const std::string_view> keys) const {
+        return db_predicate(detail::db_owned_expression::make_json_keys_op(to_expr().owned(), op, keys));
+    }
+    template <typename t_type>
+    db_predicate compare_array(db_binary_operator op, std::span<const t_type> values) const {
+        static_assert(detail::is_pmr_vector<typename column_type::value_type>::value, "array predicates require an array column");
+        using item_type = typename detail::is_pmr_vector<typename column_type::value_type>::value_type;
+        constexpr auto type = column_type::options.data_type_ == db_data_type::inferred || column_type::options.data_type_ == db_data_type::array
+                                  ? detail::db_entity_type_traits<item_type>::data_type
+                                  : column_type::options.data_type_;
+        const db_type_definition array_type{
+            .data_type_ = type,
+            .length_ = column_type::options.length_,
+            .precision_ = column_type::options.precision_,
+            .scale_ = column_type::options.scale_,
+            .array_ = true,
+        };
+        return db_predicate(detail::db_owned_expression::make_array_op(to_expr().owned(), op, values, array_type));
+    }
+
+    std::string_view alias_{};
 };
 
 #define RUVIA_DB_COLUMN(name, value_type, ...) ::ruvia::db_column<::ruvia::fixed_string{#name}, value_type __VA_OPT__(, ) __VA_ARGS__>

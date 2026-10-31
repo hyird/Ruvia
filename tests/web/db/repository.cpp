@@ -300,6 +300,25 @@ RUVIA_TEST(db_repository_add_select_maps_computed_dto_columns_and_rejects_duplic
     });
 }
 
+RUVIA_TEST(db_repository_relation_query_reports_missing_mapped_columns_as_conversion_error) {
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle,
+        {{.column_ = "id", .rows_ = {"1"}}});
+    repository_runtime runtime;
+    db_client client(runtime.attachment_.loop(), peer.config());
+    test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
+        auto builder = connected.handle().repository<parent>().query_builder("p");
+        builder.inner_join_and_select("children", "c");
+        bool missing = false;
+        try {
+            (void)co_await builder.get_many();
+        } catch (const db_conversion_error& error) {
+            missing = error.code() == db_conversion_error::code_type::missing_column;
+        }
+        RUVIA_CHECK(missing);
+    });
+}
+
 RUVIA_TEST(db_repository_relation_joins_validate_source_and_target_aliases) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {

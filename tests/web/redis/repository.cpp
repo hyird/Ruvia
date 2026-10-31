@@ -44,7 +44,7 @@ RUVIA_REDIS_ENTITY(test_redis_user, "users",
     RUVIA_REDIS_COLUMN(active, bool),
     RUVIA_REDIS_COLUMN(role, std::pmr::string, ruvia::redis_column_options{.nullable_ = true}),
     RUVIA_REDIS_COLUMN(age, std::int32_t, ruvia::redis_column_options{.nullable_ = true}),
-    RUVIA_REDIS_COLUMN(score, ruvia::double_value, ruvia::redis_column_options{.nullable_ = true}));
+    RUVIA_REDIS_COLUMN(score, double, ruvia::redis_column_options{.nullable_ = true}));
 
 const ruvia::redis_repository_config test_redis_repository_config{
     .prefix_ = "users",
@@ -270,7 +270,7 @@ private:
     user.set<"active">(true);
     user.set<"role">("admin");
     user.set<"age">(32);
-    user.set<"score">(ruvia::double_value{4.5});
+    user.set<"score">(4.5);
     return user;
 }
 

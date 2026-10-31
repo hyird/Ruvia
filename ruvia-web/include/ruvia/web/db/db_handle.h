@@ -183,7 +183,7 @@ private:
         auto* resource = query_resource();
         auto task_value = query_and_count_task(query, count);
         return make_scoped_operation(scope,
-            detail::map_db_query_and_count<result_type>(scope, std::move(task_value), resource, std::move(mapper)));
+            detail::map_db_query_and_count<result_type>(std::move(task_value), resource, std::move(mapper)));
     }
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> query_mapped(const db_query& query, mapper_type mapper) {
@@ -192,7 +192,7 @@ private:
         auto* resource = query_resource();
         auto task_value = query_task(query);
         return make_scoped_operation(scope,
-            detail::map_db_query<result_type>(scope, std::move(task_value), resource, std::move(mapper)));
+            detail::map_db_query<result_type>(std::move(task_value), resource, std::move(mapper)));
     }
     template <typename driver_type>
     friend class detail::db_pool;
@@ -374,7 +374,7 @@ private:
         auto& scope = registration_.scope();
         auto task_value = query_and_count_task(query, count);
         return make_scoped_operation(scope,
-            detail::map_db_query_and_count<result_type>(scope, std::move(task_value), resource_, std::move(mapper)));
+            detail::map_db_query_and_count<result_type>(std::move(task_value), resource_, std::move(mapper)));
     }
     template <typename result_type, typename mapper_type>
     [[nodiscard]] task<result_type> query_mapped(const db_query& query, mapper_type mapper) const {
@@ -382,7 +382,7 @@ private:
         auto& scope = registration_.scope();
         auto task_value = query_task(query);
         return make_scoped_operation(scope,
-            detail::map_db_query<result_type>(scope, std::move(task_value), resource_, std::move(mapper)));
+            detail::map_db_query<result_type>(std::move(task_value), resource_, std::move(mapper)));
     }
 
     // cache is nullptr when the alias has no query cache; without Redis

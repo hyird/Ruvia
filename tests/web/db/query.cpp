@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_query.h"
 
 #include "memory_resource_fixture.h"

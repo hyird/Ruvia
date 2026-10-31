@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/detail/db/db_entity_codec.h"
@@ -124,15 +125,11 @@ void require_entity_column(std::string_view name) {
         throw std::invalid_argument("unknown database entity column");
     }
 }
-template <typename c_type>
-consteval bool is_writable_entity_column_descriptor() noexcept {
-    return c_type::options.generated_type_ == db_generated_type::none && !c_type::options.read_only_;
-}
 template <typename e_type>
 bool is_generated_entity_column(std::string_view name) {
     bool generated = false;
     for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> {
-        if constexpr (!is_writable_entity_column_descriptor<c_type>()) {
+        if constexpr (!is_writable_db_column<c_type>()) {
             generated |= name == c_type::name.view();
         }
     });
@@ -142,7 +139,7 @@ template <typename e_type>
 bool is_nullable_entity_column(std::string_view name) {
     bool nullable = false;
     for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> {
-        if constexpr (is_writable_entity_column_descriptor<c_type>() && c_type::options.nullable_) {
+        if constexpr (is_writable_db_column<c_type>() && c_type::options.nullable_) {
             nullable |= name == c_type::name.view();
         }
     });
@@ -152,13 +149,8 @@ template <typename e_type>
 bool is_numeric_entity_column(std::string_view name) {
     bool numeric = false;
     for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> {
-        if (c_type::name.view() == name && is_writable_entity_column_descriptor<c_type>() && !is_pmr_vector<typename c_type::value_type>::value) {
-            numeric = c_type::data_type == db_data_type::small_int ||
-                      c_type::data_type == db_data_type::integer ||
-                      c_type::data_type == db_data_type::big_int ||
-                      c_type::data_type == db_data_type::numeric ||
-                      c_type::data_type == db_data_type::real ||
-                      c_type::data_type == db_data_type::double_value;
+        if constexpr (is_writable_db_column<c_type>() && is_numeric_db_column<c_type>()) {
+            numeric |= name == c_type::name.view();
         }
     });
     return numeric;
@@ -167,7 +159,7 @@ template <typename e_type>
 consteval std::string_view delete_date_column() noexcept {
     std::string_view result{};
     for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> {
-        if constexpr (is_writable_entity_column_descriptor<c_type>() && c_type::options.delete_date_) {
+        if constexpr (is_writable_db_column<c_type>() && c_type::options.delete_date_) {
             result = c_type::name.view();
         }
     });
@@ -177,7 +169,7 @@ template <typename e_type>
 consteval std::string_view update_date_column() noexcept {
     std::string_view result{};
     for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> {
-        if constexpr (is_writable_entity_column_descriptor<c_type>() && c_type::options.update_date_) {
+        if constexpr (is_writable_db_column<c_type>() && c_type::options.update_date_) {
             result = c_type::name.view();
         }
     });
@@ -187,7 +179,7 @@ template <typename e_type>
 consteval std::string_view version_column() noexcept {
     std::string_view result{};
     for_each_descriptor<typename e_type::columns_type>([&]<typename c_type, std::size_t> {
-        if constexpr (is_writable_entity_column_descriptor<c_type>() && c_type::options.version_) {
+        if constexpr (is_writable_db_column<c_type>() && c_type::options.version_) {
             result = c_type::name.view();
         }
     });
@@ -375,11 +367,11 @@ void append_upsert_column_from_list(db_query& query,
     if (!selected) {
         if (options.update_columns_.empty()) {
             if constexpr (!c_type::options.primary_key_ && !c_type::options.generated_ &&
-                          is_writable_entity_column_descriptor<c_type>()) {
+                          is_writable_db_column<c_type>()) {
                 selected = std::ranges::find(inserted_columns, name) != inserted_columns.end() &&
                            std::ranges::find(options.conflict_paths_, borrowed_text(name)) == options.conflict_paths_.end();
             }
-        } else if constexpr (is_writable_entity_column_descriptor<c_type>()) {
+        } else if constexpr (is_writable_db_column<c_type>()) {
             selected = std::ranges::find(options.update_columns_, borrowed_text(name)) != options.update_columns_.end();
         }
     }
@@ -1170,7 +1162,7 @@ public:
     }
     db_write_query_builder& set(const entity_type& changes) {
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
-            if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
+            if constexpr (detail::is_writable_db_column<c_type>()) {
                 if (changes.template is_set<c_type::name>()) {
                     query_.set(c_type::name.view(), detail::entity_column_value<entity_type, c_type>(query_, changes));
                 }
@@ -1254,7 +1246,7 @@ public:
         std::array<std::string_view, column_capacity> columns_buf{};
         std::size_t column_count = 0;
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
-            if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
+            if constexpr (detail::is_writable_db_column<c_type>()) {
                 if (std::ranges::any_of(entities, [](const entity_type& entity) { return entity.template is_set<c_type::name>(); })) {
                     selected[index] = true;
                     columns_buf[column_count++] = c_type::name.view();
@@ -1274,7 +1266,7 @@ public:
             std::array<db_expression, column_capacity> row{};
             std::size_t row_count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
-                if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
+                if constexpr (detail::is_writable_db_column<c_type>()) {
                     if (selected[index]) {
                         row[row_count++] = detail::entity_column_value<entity_type, c_type>(query_, entity);
                     }
@@ -1501,7 +1493,7 @@ private:
     void record_inserted_columns(std::span<const std::string_view> columns) noexcept {
         inserted_column_count_ = 0;
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
-            if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
+            if constexpr (detail::is_writable_db_column<c_type>()) {
                 if (std::ranges::find(columns, c_type::name.view()) != columns.end()) {
                     inserted_columns_[inserted_column_count_++] = c_type::name.view();
                 }
@@ -1747,7 +1739,7 @@ private:
             std::array<db_assignment, column_capacity> updates{};
             std::size_t update_count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
-                if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
+                if constexpr (detail::is_writable_db_column<c_type>()) {
                     constexpr auto name = c_type::name.view();
                     if constexpr (!upd_col.empty() && name == upd_col) {
                         updates[update_count++] = db_assignment{name, db_expr(query.call("now"), {}, true)};
@@ -1817,7 +1809,7 @@ private:
         query.update(entity_type::table_name()).where(predicate.expression(query, entity_type::table_name()));
         bool selected = false;
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
-            if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
+            if constexpr (detail::is_writable_db_column<c_type>()) {
                 if (changes.template is_set<c_type::name>()) {
                     query.set(c_type::name.view(), detail::entity_column_value<entity_type, c_type>(query, changes));
                     selected = true;
@@ -1864,7 +1856,7 @@ private:
         if (!options.do_nothing_ && options.update_columns_.empty()) {
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
                 if constexpr (!c_type::options.primary_key_ && !c_type::options.generated_ &&
-                              detail::is_writable_entity_column_descriptor<c_type>()) {
+                              detail::is_writable_db_column<c_type>()) {
                     const auto name = c_type::name.view();
                     const bool has_custom = std::ranges::any_of(options.update_expressions_, [name](const auto& item) { return item.column_ == name; });
                     if (!has_custom) {
@@ -1895,7 +1887,7 @@ private:
         std::array<std::string_view, column_capacity> columns_buf{};
         std::size_t column_count = 0;
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
-            if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
+            if constexpr (detail::is_writable_db_column<c_type>()) {
                 if (std::ranges::any_of(entities, [](const entity_type& entity) { return entity.template is_set<c_type::name>(); })) {
                     selected[index] = true;
                     columns_buf[column_count++] = c_type::name.view();
@@ -1920,7 +1912,7 @@ private:
             std::array<db_expression, column_capacity> row{};
             std::size_t row_count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t index> {
-                if constexpr (detail::is_writable_entity_column_descriptor<c_type>()) {
+                if constexpr (detail::is_writable_db_column<c_type>()) {
                     if (selected[index]) {
                         row[row_count++] = detail::entity_column_value<entity_type, c_type>(query, entity);
                     }

@@ -266,6 +266,7 @@ mixed.with("samples", samples).from_cte("samples")
 - 显式具名项仍是必需列：在映射类型内声明后，结果缺少该列时抛出 `db_conversion_error::missing_column`；具名项不在映射类型内时仍沿既有规则拒绝，`get_raw_and_entities()` 继续允许额外具名列。
 - 通配项的真实名称在构建期未知，无法静态判断它与具名项是否重名。结果若含两个同名且需要映射的列，抛出 `db_conversion_error::invalid_format`，不会任选第一列；只取 raw rows 时不替数据库重命名或丢弃列。
 - 对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
+- 关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `db_conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
 
 ---
 

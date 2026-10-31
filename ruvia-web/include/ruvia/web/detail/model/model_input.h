@@ -5,7 +5,7 @@
 #include <string_view>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/web/detail/model/traits.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia {
 class request_name_value_list;

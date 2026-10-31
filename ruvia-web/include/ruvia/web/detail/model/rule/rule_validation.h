@@ -8,8 +8,8 @@
 #include <utility>
 
 #include "ruvia/web/detail/model/pattern/pattern_matcher.h"
-#include "ruvia/web/detail/model/rule/numeric_comparison.h"
 #include "ruvia/web/detail/model/rule/rule_support.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia::detail::model {
 

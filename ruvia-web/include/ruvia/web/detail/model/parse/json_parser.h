@@ -21,7 +21,7 @@
 #include "ruvia/web/detail/model/parse/json_writer.h"
 #include "ruvia/web/detail/model/parse/model_input_visitors.h"
 #include "ruvia/web/detail/model/rule/rules.h"
-#include "ruvia/web/detail/model/traits.h"
+#include "ruvia/web/model.h"
 
 // Internal JSON value parser for RUVIA_MODEL.
 

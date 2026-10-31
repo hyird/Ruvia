@@ -325,7 +325,7 @@ public:
         identities_.reserve(rows.size());
         for (const auto& row : rows) {
             if (!make_key<entity_type>(row, 0, 0, db_relation_plan::root)) {
-                throw std::invalid_argument("NULL root primary key in a relation query");
+                throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL root primary key in a relation query");
             }
             auto position = identities_.find(key_);
             db_graph_identity identity;
@@ -353,13 +353,13 @@ private:
             for (std::size_t i = 0; i < names.size(); ++i) {
                 if (names[i] == name) {
                     if (found != names.size()) {
-                        throw std::invalid_argument("duplicate entity projection name in a relation query");
+                        throw db_conversion_error(db_conversion_error::code_type::invalid_format, "duplicate entity projection name in a relation query");
                     }
                     found = i;
                 }
             }
             if (found == names.size() || found >= row.size()) {
-                throw std::invalid_argument("relation query must select every mapped entity column");
+                throw db_conversion_error(db_conversion_error::code_type::missing_column, "relation query must select every mapped entity column");
             }
             return found;
         };
@@ -401,7 +401,7 @@ private:
             }
         });
         if (nulls != 0 && nulls != db_primary_key_count<entity_type>()) {
-            throw std::invalid_argument("partially NULL composite primary key in a relation query");
+            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "partially NULL composite primary key in a relation query");
         }
         return nulls == 0;
     }
@@ -436,7 +436,7 @@ private:
             } else {
                 if (!present) {
                     if (entity.template is_set<relation_type::name>() && !entity.template is_null<relation_type::name>()) {
-                        throw std::invalid_argument("inconsistent to-one rows in a relation query");
+                        throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "inconsistent to-one rows in a relation query");
                     }
                     db_entity_access<entity_type>::template set_relation_null<relation_type::name>(entity);
                     return;
@@ -445,7 +445,7 @@ private:
                 db_graph_identity identity;
                 if (position == identities_.end()) {
                     if (entity.template is_set<relation_type::name>()) {
-                        throw std::invalid_argument("to-one relation returned more than one target");
+                        throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "to-one relation returned more than one target");
                     }
                     identity = {0, next_scope_++};
                     auto& child_value = db_entity_access<entity_type>::template emplace_relation<relation_type::name>(entity);
@@ -484,7 +484,7 @@ struct db_map_one_related_entity final {
             return std::nullopt;
         }
         if (entities.size() != 1) {
-            throw std::invalid_argument("single-entity relation query returned multiple roots");
+            throw db_conversion_error(db_conversion_error::code_type::unexpected_row_count, "single-entity relation query returned multiple roots");
         }
         return std::optional<entity_type>(std::in_place, std::move(entities[0]));
     }

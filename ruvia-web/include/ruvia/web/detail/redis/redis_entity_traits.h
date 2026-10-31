@@ -10,7 +10,7 @@
 #include <type_traits>
 
 #include "ruvia/web/detail/entity/value_storage.h"
-#include "ruvia/web/detail/model/traits.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia::detail {
 
@@ -41,8 +41,6 @@ enum class redis_column_kind : std::uint8_t {
     float64,
 };
 
-// Model integer wrappers (int8, uint8) hold character-sized integers, so
-// they are classified by their arithmetic type without the native exclusions.
 template <typename t_type>
 consteval redis_column_kind redis_number_kind() {
     if constexpr (std::is_same_v<t_type, float>) {
@@ -61,10 +59,8 @@ consteval redis_column_kind redis_column_value_kind() {
     using value_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<value_type, string> || std::is_same_v<value_type, std::pmr::string>) {
         return redis_column_kind::text;
-    } else if constexpr (std::is_same_v<value_type, bool_value> || std::is_same_v<value_type, bool>) {
+    } else if constexpr (std::is_same_v<value_type, bool>) {
         return redis_column_kind::bool_value;
-    } else if constexpr (is_ruvia_scalar<value_type>) {
-        return redis_number_kind<model_scalar_value_type<value_type>>();
     } else if constexpr (is_redis_entity_native_number<value_type>) {
         return redis_number_kind<value_type>();
     } else {
