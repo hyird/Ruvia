@@ -245,7 +245,7 @@ void http_response::apply_encoded_representation(
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }
     const auto current_etag = headers_.known_header_value(detail::response_header_etag);
-    std::array<char, inline_weak_etag_capacity> inline_weak_etag{};
+    std::array<char, inline_weak_etag_capacity> inline_weak_etag;
     std::pmr::string heap_weak_etag(memory_resource());
     std::string_view weak_etag{};
     if (detail::http_is_strong_etag(current_etag)) {

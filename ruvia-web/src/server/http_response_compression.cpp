@@ -109,7 +109,7 @@ namespace {
                 }
                 break;
             case 14U:
-                if (http_ascii_equals_ignore_case(name, "Content-Digest")) {
+                if ((name[8] | 0x20) == 'd' && http_ascii_equals_ignore_case(name, "Content-Digest")) {
                     return true;
                 }
                 break;

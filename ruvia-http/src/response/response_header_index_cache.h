@@ -14,7 +14,6 @@ namespace ruvia::detail {
 
 using response_header_index_slot_type = std::int16_t;
 
-inline constexpr response_header_index_slot_type missing_response_header_index_slot = 0;
 inline constexpr response_header_index_slot_type overflow_response_header_index_slot = -1;
 
 template <std::size_t count>
@@ -22,10 +21,6 @@ using response_header_index_cache_type = std::array<response_header_index_slot_t
 
 [[nodiscard]] inline bool response_header_index_slot_has_value(response_header_index_slot_type slot) noexcept {
     return slot > 0;
-}
-
-[[nodiscard]] inline bool response_header_index_slot_overflowed(response_header_index_slot_type slot) noexcept {
-    return slot == overflow_response_header_index_slot;
 }
 
 [[nodiscard]] inline std::size_t response_header_index_slot_value(
@@ -37,9 +32,6 @@ template <std::size_t count>
 inline void record_response_header_index(
     response_header_index_cache_type<count>& cache, std::size_t slot, std::size_t index) noexcept {
     if (slot >= count) {
-        return;
-    }
-    if (cache[slot] != missing_response_header_index_slot) {
         return;
     }
     if (index < static_cast<std::size_t>(std::numeric_limits<response_header_index_slot_type>::max())) {
@@ -57,9 +49,6 @@ template <typename header_pointer_type, std::size_t count>
         const auto index = cache[slot];
         if (response_header_index_slot_has_value(index)) {
             return begin + response_header_index_slot_value(index);
-        }
-        if (!response_header_index_slot_overflowed(index)) {
-            return end;
         }
     }
 

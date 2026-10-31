@@ -103,7 +103,9 @@ void http_response_headers::move_from(http_response_headers&& other) noexcept {
     // The index describes the descriptor table, so it travels with it and the
     // source must not keep resolving fields into storage it no longer owns.
     known_header_bits_ = std::exchange(other.known_header_bits_, 0U);
-    known_header_indexes_ = std::exchange(other.known_header_indexes_, {});
+    if (known_header_bits_ != 0) {
+        known_header_indexes_ = other.known_header_indexes_;
+    }
     if (other.spilled_) {
         spilled_ = true;
         heap_ = std::move(other.heap_);

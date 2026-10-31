@@ -378,7 +378,7 @@ private:
     std::size_t size_{0};
     bool spilled_{false};
     std::uint32_t known_header_bits_{0};
-    std::array<std::int16_t, known_header_count> known_header_indexes_{};
+    std::array<std::int16_t, known_header_count> known_header_indexes_;
 };
 
 // Composes one header block with one body. Header rules belong to

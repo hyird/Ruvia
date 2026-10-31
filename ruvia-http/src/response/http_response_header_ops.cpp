@@ -90,7 +90,9 @@ http_response_headers http_response_headers::clone(std::size_t additional_header
         (void)copy.append_prepared_header(descriptor);
     }
     copy.known_header_bits_ = known_header_bits_;
-    copy.known_header_indexes_ = known_header_indexes_;
+    if (known_header_bits_ != 0) {
+        copy.known_header_indexes_ = known_header_indexes_;
+    }
     return copy;
 }
 
@@ -226,6 +228,9 @@ void http_response_headers::transfer_from(
 }
 
 void http_response_headers::record_known_header_index(std::uint32_t known_bit, std::size_t index) noexcept {
+    if (known_bit == 0 || (known_header_bits_ & known_bit) != 0) {
+        return;
+    }
     known_header_bits_ |= known_bit;
     detail::record_response_header_index(
         known_header_indexes_, detail::response_known_header_slot(known_bit), index);
@@ -238,6 +243,9 @@ http_response_header* http_response_headers::find_header_for_update(
 
 const http_response_header* http_response_headers::find_header_for_read(
     std::string_view key, std::uint32_t known_bit) const noexcept {
+    if (known_bit != 0 && (known_header_bits_ & known_bit) == 0) {
+        return nullptr;
+    }
     const auto* const first = begin();
     const auto* const last = end();
     const auto* const header_value = detail::find_response_header_indexed(
@@ -274,17 +282,13 @@ std::optional<std::string_view> http_response_headers::header(std::string_view n
 
 void http_response_headers::rebuild_known_header_index() noexcept {
     known_header_bits_ = 0;
-    known_header_indexes_.fill(detail::missing_response_header_index_slot);
     const auto* const first = data();
     const auto* const last = first + size();
     for (auto* cursor_value = first; cursor_value != last; ++cursor_value) {
         const auto known_bit = detail::http_response_header_access::known_bit(*cursor_value);
-        if (known_bit == 0) {
-            continue;
+        if (known_bit != 0) {
+            record_known_header_index(known_bit, static_cast<std::size_t>(cursor_value - first));
         }
-        known_header_bits_ |= known_bit;
-        detail::record_response_header_index(known_header_indexes_,
-            detail::response_known_header_slot(known_bit), static_cast<std::size_t>(cursor_value - first));
     }
 }
 
