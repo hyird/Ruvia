@@ -14,6 +14,7 @@
 #include "context/context_access.h"
 #include "http/http_error_response.h"
 #include "http/unsupported_request_content_coding.h"
+#include "ratelimit/rate_limit_decision.h"
 #include "router/route_table.h"
 #include "server/inbound_buffer_resource.h"
 #include "server/inbound_transport_error.h"
@@ -48,6 +49,10 @@ struct classified_error final {
                                          .code_ = "unsupported_content_coding",
                                          .message_ = error.what()},
                     resource)};
+    } catch (const detail::rate_limit_rejected&) {
+        const auto error = detail::rate_limit_rejection_error();
+        return {.error_ = http_error(
+                    {.status_ = error.status(), .code_ = error.code(), .message_ = error.message()}, resource)};
     } catch (const http_error& error) {
         return {.error_ = http_error(error, resource)};
     } catch (const http_protocol_error& error) {
@@ -115,6 +120,8 @@ void apply_exception_response_metadata(http_response& response, const std::excep
         }
     } catch (const detail::unsupported_request_content_coding& error) {
         response.header_stable_view("Accept-Encoding", error.accepted_codings());
+    } catch (const detail::rate_limit_rejected& rejected) {
+        detail::apply_rate_limit_rejection_headers(response, rejected.rejection());
         // Classification only; the caller still owns and dispatches the exception.
         // NOLINTNEXTLINE(bugprone-empty-catch)
     } catch (...) {

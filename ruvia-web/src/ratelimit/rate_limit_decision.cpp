@@ -3,7 +3,6 @@
 #include <array>
 #include <cstdint>
 #include <string_view>
-#include <utility>
 
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/rate_limit.h"
@@ -50,38 +49,20 @@ http_error_info rate_limit_rejection_error() noexcept {
 }
 
 void apply_rate_limit_rejection_headers(http_response& response, const rate_limit_rejection& rejection) {
-    set_unsigned_header(response, "Retry-After", retry_after_seconds(rejection.retry_after()));
-}
-
-void apply_route_rate_limit_rejection_headers(
-    http_response& response, const rate_limit_rejection& rejection, std::size_t max_requests) {
     response.reserve_headers(response.headers().size() + 4U);
     std::array<char, http_max_unsigned_decimal_size> retry_buffer{};
     const auto retry_after_text =
         http_format_unsigned(retry_buffer, retry_after_seconds(rejection.retry_after()));
     response.header("Retry-After", retry_after_text);
-    set_unsigned_header(response, "X-RateLimit-Limit", max_requests);
+    set_unsigned_header(response, "X-RateLimit-Limit", rejection.max_requests());
     response.header_stable_view("X-RateLimit-Remaining", "0");
     response.header("X-RateLimit-Reset", retry_after_text);
 }
 
-bool apply_route_rate_limit(
-    context& context_value, const void* declaration, const rate_limit_rule& rule) {
-    const auto rejection = decide_route_rate_limit(context_value, declaration, rule);
-    if (!rejection) {
-        return true;
+void enforce_route_rate_limit(context& context_value, const void* declaration, const rate_limit_rule& rule) {
+    if (const auto rejection = decide_route_rate_limit(context_value, declaration, rule)) {
+        throw rate_limit_rejected(*rejection);
     }
-
-    const auto error = rate_limit_rejection_error();
-    auto response = context_value.error({
-        .status_ = error.status(),
-        .code_ = error.code(),
-        .message_ = error.message(),
-        .status_text_ = error.status_text(),
-    });
-    apply_route_rate_limit_rejection_headers(response, *rejection, rule.max_requests_);
-    context_value.respond(std::move(response));
-    return false;
 }
 
 }  // namespace ruvia::detail

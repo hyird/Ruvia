@@ -440,18 +440,15 @@ void validate_indexed_file_for_bodyless_response(
 [[nodiscard]] http_response make_multipart_response(const context& context_value,
     file_response_source& source_value, const file_validators& validators,
     const http_byte_range_set& ranges, file_header_set header_set) {
-    std::array<char, 48> boundary_token{};
+    std::array<char, detail::secure_token_size> boundary_token;
     const auto token = detail::generate_secure_token(boundary_token);
-    if (!token) {
-        throw std::runtime_error("secure multipart boundary generation failed");
-    }
     http_response response(context_value.arena());
     add_file_headers(response, source_value, validators, header_set, false);
     apply_file_response_state(context_value, source_value, response, http_status::partial_content);
     const auto media_type = response.header("Content-Type");
     const auto selected_media_type = media_type.value_or(file_media_type(source_value));
     auto multipart_plan = make_http_multipart_byte_range_plan(
-        ranges, source_value.size_, selected_media_type, *token, context_value.arena());
+        ranges, source_value.size_, selected_media_type, token, context_value.arena());
 
     // The outer representation is the multipart body, which is not
     // content-coded; coded representations never reach this path.

@@ -216,3 +216,24 @@ RUVIA_TEST(csrf_reseed_cookie_omits_secure_on_plaintext) {
     RUVIA_CHECK(issued.reseeded_);
     RUVIA_CHECK(!set_cookie_has_secure(issued.set_cookie_));
 }
+
+RUVIA_TEST(csrf_rejection_reaches_the_error_handler) {
+    ruvia::csrf_protection csrf;
+    ruvia::test_app app;
+    std::string seen_code;
+    app.on_error([seen = &seen_code](ruvia::context& c,
+                     ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+        *seen = std::string(error.code());
+        c.status(error.status());
+        co_return c.text("handled");
+    });
+    app.use<csrf_test::csrf_test_middleware>(&csrf);
+    app.use<csrf_test::accepted_response>();
+    auto request = ruvia::test_request::method("POST", "/");
+    request.cookie("XSRF-TOKEN", "abcdef123456");
+    request.header("X-XSRF-TOKEN", "DIFFERENTtoken");
+    const auto response = app.request(request);
+    RUVIA_CHECK_EQ(response.status(), ruvia::http_status::forbidden);
+    RUVIA_CHECK_EQ(response.body(), std::string_view("handled"));
+    RUVIA_CHECK_EQ(seen_code, std::string("csrf_token_mismatch"));
+}

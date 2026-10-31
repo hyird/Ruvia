@@ -49,9 +49,8 @@ inline constexpr void validate_rate_limit_rule(const rate_limit_rule& rule) {
 }
 
 // `declaration` identifies the rule's declaration: stacked rules on one route
-// each count in their own window.
-[[nodiscard]] bool apply_route_rate_limit(
-    context& context_value, const void* declaration, const rate_limit_rule& rule);
+// each count in their own window. Throws when the rule refuses the request.
+void enforce_route_rate_limit(context& context_value, const void* declaration, const rate_limit_rule& rule);
 
 }  // namespace detail
 
@@ -71,9 +70,11 @@ inline constexpr void validate_rate_limit_rule(const rate_limit_rule& rule) {
 // address, so two routes carrying the same numbers count independently. Each
 // declaration also counts on its own: an app or controller rule stacked over a
 // route rule enforces both windows, never one shared counter. It does not
-// replace application::get_rate_limit() -- both apply, so the stricter is what a
+// replace application::rate_limit() -- both apply, so the stricter is what a
 // caller meets, the same "narrower scope may only tighten" rule body_limit
-// follows. Worker-local, like the app-wide rule.
+// follows. Worker-local, like the app-wide rule. A refused request is answered
+// like one the app-wide rule refuses: 429 through the application error
+// handler, with Retry-After and X-RateLimit-* fields.
 template <std::size_t max_requests, std::int64_t window_ms>
 class rate_limit final {
 public:
@@ -83,10 +84,7 @@ public:
     static constexpr bool ruvia_uses_route_rate_limit = true;
 
     task<void> handle(context& context_value, next& next_value) {
-        if (!detail::apply_route_rate_limit(context_value, this, rule_)) {
-            co_return;
-        }
-
+        detail::enforce_route_rate_limit(context_value, this, rule_);
         co_await next_value();
     }
 

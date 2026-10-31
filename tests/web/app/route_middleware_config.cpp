@@ -188,6 +188,28 @@ RUVIA_TEST(route_rate_limit_is_configured_without_a_generated_type) {
         rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("10"));
 }
 
+RUVIA_TEST(route_rate_limit_rejection_reaches_the_error_handler) {
+    ruvia::test_app app;
+    int calls = 0;
+    app.on_error([counter = &calls](ruvia::context& c,
+                     ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+        ++*counter;
+        c.status(error.status());
+        co_return c.text(error.code());
+    });
+    for (int i = 0; i < 10; ++i) {
+        (void)app.request(ruvia::test_request::get("/route-config/limited"));
+    }
+    RUVIA_CHECK_EQ(calls, 0);
+    const auto rejected = app.request(ruvia::test_request::get("/route-config/limited"));
+    RUVIA_CHECK_EQ(calls, 1);
+    RUVIA_CHECK_EQ(rejected.status(), ruvia::http_status::too_many_requests);
+    RUVIA_CHECK_EQ(rejected.body(), std::string_view("too_many_requests"));
+    RUVIA_CHECK(rejected.header("Retry-After").has_value());
+    RUVIA_CHECK_EQ(
+        rejected.header("X-RateLimit-Limit").value_or(std::string_view{}), std::string_view("10"));
+}
+
 RUVIA_TEST(stacked_route_rate_limits_count_each_declaration_once_per_request) {
     ruvia::test_app app;
     for (const std::string_view target : {"/stacked-limit/same", "/stacked-limit/looser"}) {

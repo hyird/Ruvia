@@ -16,16 +16,24 @@ namespace ruvia::detail {
 
 class rate_limit_rejection final {
 public:
-    explicit constexpr rate_limit_rejection(std::chrono::milliseconds retry_after) noexcept
-        : retry_after_(retry_after) {}
+    constexpr rate_limit_rejection(std::chrono::milliseconds retry_after, std::size_t max_requests) noexcept
+        : retry_after_(retry_after),
+          max_requests_(max_requests) {}
 
     [[nodiscard]] constexpr std::chrono::milliseconds retry_after() const noexcept {
         return retry_after_;
     }
 
+    // The limit of the rule that refused the request.
+    [[nodiscard]] constexpr std::size_t max_requests() const noexcept {
+        return max_requests_;
+    }
+
 private:
     std::chrono::milliseconds retry_after_;
+    std::size_t max_requests_;
 };
+
 enum class route_rate_limit_presence : std::uint8_t {
     absent,
     present,

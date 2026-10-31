@@ -77,7 +77,8 @@ void install(rate_limit_slot& slot, rate_limit_scope scope, std::string_view key
         return std::nullopt;
     }
     if (slot.count_ >= rule.max_requests_) {
-        return rate_limit_rejection(std::chrono::milliseconds(reset_after_ms(now_ms, slot.reset_at_ms_)));
+        return rate_limit_rejection(
+            std::chrono::milliseconds(reset_after_ms(now_ms, slot.reset_at_ms_)), rule.max_requests_);
     }
     ++slot.count_;
     return std::nullopt;
@@ -86,7 +87,7 @@ void install(rate_limit_slot& slot, rate_limit_scope scope, std::string_view key
 [[nodiscard]] std::optional<rate_limit_rejection> overflow_decision(const rate_limit_rule& rule) noexcept {
     return rule.overflow_policy_ == rate_limit_overflow_policy::allow
                ? std::nullopt
-               : std::optional(rate_limit_rejection(std::chrono::milliseconds(1)));
+               : std::optional(rate_limit_rejection(std::chrono::milliseconds(1), rule.max_requests_));
 }
 
 }  // namespace

@@ -8,6 +8,7 @@
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/util/registration_resource.h"
+#include "ruvia/web/error.h"
 
 #include "http/secure_token.h"
 #include "tls/tls_random.h"
@@ -15,17 +16,13 @@
 
 namespace ruvia::detail {
 
-std::optional<std::string_view> generate_secure_token(std::span<char> buffer) noexcept {
-    constexpr std::size_t random_bytes = 24;  // 24 bytes -> 48 hex characters
-    if (buffer.size() < random_bytes * 2) {
-        return std::nullopt;
-    }
-    unsigned char raw[random_bytes];
+std::string_view generate_secure_token(std::span<char, secure_token_size> buffer) {
+    std::array<unsigned char, secure_token_size / 2> raw;
     if (!fill_random_bytes(raw)) {
-        return std::nullopt;
+        throw std::runtime_error("secure random generation failed");
     }
     http_encode_lower_hex(buffer.data(), std::span<const unsigned char>(raw));
-    return std::string_view(buffer.data(), random_bytes * 2);
+    return std::string_view(buffer.data(), buffer.size());
 }
 }  // namespace ruvia::detail
 
@@ -61,10 +58,9 @@ task<void> csrf_protection::handle(context& c, next& next_value) {
         const auto header_value = c.req().header(header_name_);
         if (!cookie || cookie->empty() || !header_value || header_value->empty() ||
             !detail::constant_time_bytes_equal(*cookie, *header_value)) {
-            c.respond(c.error({.status_ = ruvia::http_status::forbidden,
+            throw http_error({.status_ = ruvia::http_status::forbidden,
                 .code_ = "csrf_token_mismatch",
-                .message_ = "CSRF token missing or invalid"}));
-            co_return;
+                .message_ = "CSRF token missing or invalid"});
         }
     } else if (!cookie || cookie->empty()) {
         // Reseed on an absent OR empty cookie. The unsafe path above already
@@ -74,14 +70,8 @@ task<void> csrf_protection::handle(context& c, next& next_value) {
         // every unsafe request would 403 on it -- a permanent wedge. Treating
         // absent and empty identically here keeps the issue and validation sides
         // of the double-submit symmetric.
-        std::array<char, 64> buffer;
+        std::array<char, detail::secure_token_size> buffer;
         const auto token = detail::generate_secure_token(buffer);
-        if (!token) {
-            c.respond(c.error({.status_ = ruvia::http_status::internal_server_error,
-                .code_ = "secure_random_failed",
-                .message_ = "secure token generation failed"}));
-            co_return;
-        }
         const auto connection = c.conn();
         // Secure follows the client's scheme, including TLS a trusted proxy
         // terminated. tls() is this hop only; using it would omit Secure behind
@@ -92,7 +82,7 @@ task<void> csrf_protection::handle(context& c, next& next_value) {
             .secure_ = connection.scheme() == http_scheme::https ? cookie_attribute_policy::emit
                                                                  : cookie_attribute_policy::omit,
         };
-        c.set_cookie({.name_ = cookie_name_, .value_ = *token, .attributes_ = options});
+        c.set_cookie({.name_ = cookie_name_, .value_ = token, .attributes_ = options});
     }
     co_await next_value();
 }

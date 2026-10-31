@@ -161,12 +161,15 @@ RUVIA_TEST(http1_clients_share_406_admission_and_rate_limit_budget) {
             // spent. A client that accepts no coding still learns why.
             const std::array<std::span<const ruvia::http_header_view>, 2> header_sets{
                 std::span<const ruvia::http_header_view>{}, refuse_every_coding};
+            const auto admitted_limit_text = std::to_string(admitted_requests);
             for (auto* client : clients) {
                 for (const auto headers : header_sets) {
                     error_handler_calls = 0;
                     auto response = co_await client->handle().send({.target_ = "/plain", .headers_ = headers});
                     RUVIA_CHECK(response.status() == ruvia::http_status::too_many_requests);
                     RUVIA_CHECK(response.header("Retry-After").has_value());
+                    RUVIA_CHECK_EQ(response.header("X-RateLimit-Limit").value_or(std::string_view{}),
+                        std::string_view(admitted_limit_text));
                     RUVIA_CHECK((co_await collect_text(response)) == "rejected");
                     RUVIA_CHECK_EQ(error_handler_calls.load(), 1);
                 }
