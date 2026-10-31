@@ -19,6 +19,7 @@ enum class worker_runtime_state : std::uint8_t {
     stopped,
 };
 
+class blocking_pool;
 class worker_group;
 class worker_runtime_context;
 
@@ -32,6 +33,9 @@ enum class worker_io_policy : std::uint8_t { synchronized,
 struct worker_runtime_options final {
     std::size_t queue_capacity_{4096};
     worker_io_policy io_policy_{worker_io_policy::synchronized};
+    // Borrowed pool for run_blocking() on this worker; it must outlive the
+    // runtime. Null leaves the worker without one.
+    blocking_pool* blocking_pool_{nullptr};
 };
 
 struct worker_runtime_hooks final {

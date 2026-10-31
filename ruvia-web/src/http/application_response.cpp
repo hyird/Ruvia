@@ -8,16 +8,18 @@ namespace ruvia::detail {
 namespace {
 
 // One synchronous representation pass: apply CORS and run the compression
-// policy up to its offload boundary.
+// policy up to its offload boundary, which only a worker with a blocking pool
+// can cross.
 [[nodiscard]] http_buffered_compression_step prepare_representation(const http_request& request,
-    const http_response_coding_policy& policy, http_response& response, const http_server_options& options) {
+    const http_response_coding_policy& policy, http_response& response, const http_server_options& options,
+    const worker_handle& worker) {
     if (options.cors_.has_value()) {
         apply_cors_headers(request, response, *options.cors_);
     }
     if (options.compression_.has_value()) {
         if (const auto* selection = policy.selection()) {
             return apply_response_compression(*selection, request.known_method(), response, *options.compression_,
-                *options.codecs_, options.blocking_pool_ != nullptr);
+                *options.codecs_, worker.has_blocking_pool());
         }
     }
     return {http_response_compression_status::not_applicable, false};
@@ -26,9 +28,9 @@ namespace {
 }  // namespace
 
 http_response_preparation http_response_tail::prepare(
-    http_response& response, const http_server_options& options) const {
+    http_response& response, const http_server_options& options, const worker_handle& worker) const {
     const auto& request = *request_;
-    const auto first_pass = prepare_representation(request, coding_policy_, response, options);
+    const auto first_pass = prepare_representation(request, coding_policy_, response, options, worker);
     if (!first_pass.offload_) {
         auto policy = coding_policy_;
         buffered_response_recovery recovery;
@@ -58,8 +60,8 @@ task<prepared_application_response> http_response_tail::finish_prepare(const htt
         } else {
             auto compression = pass.status_;
             if (pass.offload_) {
-                compression = co_await compress_response_offloaded(
-                    *policy.selection(), response, *options.blocking_pool_, services.worker());
+                compression =
+                    co_await compress_response_offloaded(*policy.selection(), response, services.worker());
             }
             step = recovery.advance(policy, request, response, compression);
         }
@@ -70,7 +72,7 @@ task<prepared_application_response> http_response_tail::finish_prepare(const htt
         if (step.action_ == buffered_response_recovery_action::handle_error) {
             response = co_await routes.handle_error(request, memory, *step.error_, services);
         }
-        pass = prepare_representation(request, policy, response, options);
+        pass = prepare_representation(request, policy, response, options, services.worker());
     }
 }
 

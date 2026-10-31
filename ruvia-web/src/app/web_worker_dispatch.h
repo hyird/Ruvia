@@ -55,7 +55,6 @@ private:
     std::pmr::memory_resource* resource_;
     worker_client_registry_view client_registries_;
     const worker_state_registry& worker_states_;
-    blocking_pool* blocking_pool_;
     task_scope& jobs_;
     const stop_token& stop_token_;
     worker_post_counters post_counters_;

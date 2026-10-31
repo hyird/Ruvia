@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "client/client_host_resolver.h"
 #include "db/db_pool_utils.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "db/db_query_cache_state.h"
@@ -113,6 +114,7 @@ detail::db_registry::entry_type::entry_type(pool_owner_type pool) noexcept
 
 void detail::db_registry::add(
     asio::io_context& io_context, const worker_handle& worker_value, db_config_storage config) {
+    require_client_host_lookup(config.host_, worker_value);
     pool_owner_type owner;
     switch (config.driver_) {
         case db_driver::unspecified:

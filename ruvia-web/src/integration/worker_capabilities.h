@@ -22,7 +22,6 @@
 #include "redis/redis_registry.h"
 
 namespace ruvia {
-class blocking_pool;
 class env;
 }  // namespace ruvia
 
@@ -44,7 +43,6 @@ struct worker_capability_options final {
     std::size_t rate_limit_capacity_{default_rate_limit_capacity_per_worker};
     std::size_t max_decoded_body_bytes_{default_max_buffered_body_bytes};
     http_client_result_budget_config http_client_result_budget_{};
-    blocking_pool* blocking_pool_{nullptr};
     const env* env_{nullptr};
     const trusted_proxy_set* trusted_proxies_{nullptr};
     bool precompressed_static_files_{false};
@@ -79,7 +77,6 @@ public:
     context_services make_context_services(stop_token&&) = delete;
     [[nodiscard]] worker_client_registry_view client_registries() noexcept;
     [[nodiscard]] const worker_state_registry& worker_states() const noexcept;
-    [[nodiscard]] blocking_pool* get_blocking_pool() const noexcept;
 
 private:
     const worker_handle& worker_;

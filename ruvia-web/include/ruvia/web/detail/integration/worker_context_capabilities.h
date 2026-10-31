@@ -8,6 +8,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
 
 namespace ruvia::detail {
@@ -19,17 +20,13 @@ class worker_state_registry;
 class worker_context_capabilities final {
 public:
     worker_context_capabilities(const worker_handle& worker_value, const ruvia::stop_token& stop_token_value,
-        const worker_state_registry* worker_states, ruvia::blocking_pool* blocking_pool_value) noexcept
+        const worker_state_registry* worker_states) noexcept
         : worker_(worker_value),
           stop_token_(stop_token_value),
-          worker_states_(worker_states),
-          blocking_pool_(blocking_pool_value) {}
-    worker_context_capabilities(worker_handle&&, const ruvia::stop_token&,
-        const worker_state_registry*, ruvia::blocking_pool*) = delete;
-    worker_context_capabilities(const worker_handle&, ruvia::stop_token&&,
-        const worker_state_registry*, ruvia::blocking_pool*) = delete;
-    worker_context_capabilities(worker_handle&&, ruvia::stop_token&&,
-        const worker_state_registry*, ruvia::blocking_pool*) = delete;
+          worker_states_(worker_states) {}
+    worker_context_capabilities(worker_handle&&, const ruvia::stop_token&, const worker_state_registry*) = delete;
+    worker_context_capabilities(const worker_handle&, ruvia::stop_token&&, const worker_state_registry*) = delete;
+    worker_context_capabilities(worker_handle&&, ruvia::stop_token&&, const worker_state_registry*) = delete;
 
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_;
@@ -43,34 +40,35 @@ public:
         return worker_states_;
     }
 
-    [[nodiscard]] ruvia::blocking_pool* blocking_pool() const noexcept {
-        return blocking_pool_;
-    }
-
     template <typename state_type>
     [[nodiscard]] state_type& worker_state() const {
         return *static_cast<state_type*>(worker_state_instance(type_key<state_type>()));
     }
 
+    // Runs on the blocking pool of this worker's event loop; without one the
+    // result reports blocking_status::unavailable.
     template <typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
-        return ruvia::run_blocking(require_blocking_pool(), worker_, stop_token_, std::move(callable));
+        return ruvia::run_blocking(worker_, {.stop_token_ = stop_token_}, std::move(callable));
     }
 
+    // The deadline rounds up to whole milliseconds; a non-positive one rejects
+    // without submitting the callable.
     template <typename rep_type, typename period_type, typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
         std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
-        return ruvia::run_blocking(require_blocking_pool(), worker_, timeout, stop_token_, std::move(callable));
+        return ruvia::run_blocking(worker_,
+            {.timeout_ = worker_timer_ceil_milliseconds(worker_timer_saturating_duration_cast(timeout)),
+                .stop_token_ = stop_token_},
+            std::move(callable));
     }
 
 private:
     [[nodiscard]] void* worker_state_instance(const void* type_key) const;
-    [[nodiscard]] ruvia::blocking_pool& require_blocking_pool() const;
 
     const worker_handle& worker_;
     const ruvia::stop_token& stop_token_;
     const worker_state_registry* worker_states_;
-    ruvia::blocking_pool* blocking_pool_;
 };
 
 }  // namespace ruvia::detail

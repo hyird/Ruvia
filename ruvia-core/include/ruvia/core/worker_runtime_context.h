@@ -11,11 +11,16 @@
 
 namespace ruvia {
 
+class blocking_pool;
+
 // Owns the worker dispatcher endpoint and detaches escaped handles on teardown.
-// The io_context remains owned by the runtime that supplied it.
+// The io_context remains owned by the runtime that supplied it, and the
+// blocking pool, when given, by its owner; both must outlive this context.
 class worker_runtime_context final {
 public:
-    worker_runtime_context(asio::io_context& io_context, std::size_t queue_capacity);
+    // `pool` is borrowed for run_blocking() on this worker and must outlive it;
+    // null leaves the worker without one.
+    worker_runtime_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool = nullptr);
     ~worker_runtime_context();
 
     worker_runtime_context(const worker_runtime_context&) = delete;

@@ -2,7 +2,6 @@
 
 #include <cstdint>
 
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_accept_encoding.h"
@@ -144,7 +143,7 @@ enum class http_response_compression_status : std::uint8_t {
 }
 
 // Outcome of the synchronous compression phase for an in-memory body. An
-// eligible body above sync_bytes_ with a blocking pool configured is left as
+// eligible body above sync_bytes_ on a worker with a blocking pool is left as
 // identity and flagged for offload; every other outcome is final here.
 struct http_buffered_compression_step final {
     http_response_compression_status status_;
@@ -153,7 +152,7 @@ struct http_buffered_compression_step final {
 
 // Applies the buffered compression policy without suspending: eligibility,
 // size bounds, and encoding up to sync_bytes_ (through max_bytes_ when
-// `offload_available` is false, i.e. no blocking pool is configured). Only an
+// `offload_available` is false, i.e. the worker has no blocking pool). Only an
 // offload result requires compress_response_offloaded(), so identity and
 // ineligible responses never create a coroutine frame. The inline encoder is
 // the worker's reusable one: its state stays in worker memory, and only the
@@ -162,14 +161,13 @@ struct http_buffered_compression_step final {
     const http_response_coding_selection& selection, http_known_method request_method,
     http_response& response, const compression_config& options, worker_codecs& codecs, bool offload_available);
 
-// Encodes the body flagged by apply_response_compression() on the bounded
-// blocking pool with a codec of its own, since worker codecs never leave the
+// Encodes the body flagged by apply_response_compression() on the worker's
+// bounded blocking pool with a codec of its own, since worker codecs never leave the
 // worker. Rejection by the pool is an intentional identity fallback;
 // encoder/commit failures remain typed failures so a client that forbids
 // identity receives a terminal error.
 [[nodiscard]] task<http_response_compression_status> compress_response_offloaded(
-    http_response_coding_selection selection, http_response& response, blocking_pool& pool,
-    const worker_handle& worker_value);
+    http_response_coding_selection selection, http_response& response, const worker_handle& worker_value);
 
 // Response compression policy. Fixed representations do not vary by coding;
 // eligible representations are annotated before deciding between identity

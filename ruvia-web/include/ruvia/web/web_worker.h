@@ -59,7 +59,8 @@ public:
     // resumes here; worker shutdown and timeout end the wait, not the callable.
     // Rejection and callable exceptions are retained in blocking_result; inspect
     // status() or use std::move(result).value() to throw. The worker stop token
-    // is bound automatically. A disabled pool is a configuration error.
+    // is bound automatically. With application::blocking_pool(nullptr) the
+    // result reports blocking_status::unavailable.
     template <typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
         return capabilities_.run_blocking(std::move(callable));
@@ -87,17 +88,13 @@ private:
 
     web_worker_context(const worker_handle& worker_value, std::pmr::memory_resource* resource,
         const detail::worker_client_registry_view& client_registries,
-        const detail::worker_state_registry* worker_states, blocking_pool* blocking_pool_value,
-        const ::ruvia::stop_token& stop_token_value) noexcept;
-    web_worker_context(worker_handle&&, std::pmr::memory_resource*,
-        const detail::worker_client_registry_view&, const detail::worker_state_registry*, blocking_pool*,
-        const ::ruvia::stop_token&) = delete;
-    web_worker_context(const worker_handle&, std::pmr::memory_resource*,
-        const detail::worker_client_registry_view&, const detail::worker_state_registry*, blocking_pool*,
-        ::ruvia::stop_token&&) = delete;
-    web_worker_context(worker_handle&&, std::pmr::memory_resource*,
-        const detail::worker_client_registry_view&, const detail::worker_state_registry*, blocking_pool*,
-        ::ruvia::stop_token&&) = delete;
+        const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept;
+    web_worker_context(worker_handle&&, std::pmr::memory_resource*, const detail::worker_client_registry_view&,
+        const detail::worker_state_registry*, const ::ruvia::stop_token&) = delete;
+    web_worker_context(const worker_handle&, std::pmr::memory_resource*, const detail::worker_client_registry_view&,
+        const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
+    web_worker_context(worker_handle&&, std::pmr::memory_resource*, const detail::worker_client_registry_view&,
+        const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
 
     // The server worker owns these values and joins every posted job before
     // retiring them. Contexts borrow them so starting a job does not copy

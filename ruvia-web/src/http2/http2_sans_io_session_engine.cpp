@@ -111,8 +111,7 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
       admission_policy_(http_request_admission_policy::server(session_.options())),
       stream_runtimes_(worker_value.resource(), termination_, &inbound_buffers_),
       buffered_response_writer_(connection_, stream_runtimes_, write_signal_, output_budget_,
-          response_file_io{.pool_ = session_.options().blocking_pool_,
-              .worker_ = session_.services().worker(),
+          response_file_io{.worker_ = session_.services().worker(),
               .stop_ = session_.services().get_stop_token(),
               .resource_ = worker_value.resource()}) {
     // A plaintext handoff reuses the HTTP/1 scanner entry. It now tracks a
@@ -715,7 +714,7 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
             request_services);
     }
 
-    auto first_preparation = admission.tail().prepare(response, options);
+    auto first_preparation = admission.tail().prepare(response, options, request_services.worker());
     auto preparation = first_preparation.ready() != nullptr ? *first_preparation.ready()
                                                             : co_await admission.tail().finish_prepare(first_preparation, response, options, routes_, request_memory_value, request_services);
     if (const auto& body_failure = stream_runtime->body_failure();
@@ -726,7 +725,7 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
             http_request_rejection::error(copy_http_protocol_error_info(
                 request_memory_value.resource(), http_request_body_protocol_error(*body_failure))),
             request_services);
-        first_preparation = admission.tail().prepare(response, options);
+        first_preparation = admission.tail().prepare(response, options, request_services.worker());
         preparation = first_preparation.ready() != nullptr
                           ? *first_preparation.ready()
                           : co_await admission.tail().finish_prepare(

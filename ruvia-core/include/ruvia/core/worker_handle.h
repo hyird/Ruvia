@@ -36,6 +36,8 @@ using post_outcome =
     worker_delivery_result<move_only_function<signature_type>, post_status, post_status::accepted>;
 using post_result_type = post_outcome<void()>;
 
+class blocking_pool;
+
 namespace detail {
 class worker_dispatcher;
 struct worker_handle_access;
@@ -49,6 +51,9 @@ public:
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] bool is_current() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
+    // Whether this worker's event loop was given a blocking pool; run_blocking()
+    // on a worker without one reports blocking_status::unavailable.
+    [[nodiscard]] bool has_blocking_pool() const noexcept;
 
     // Worker-affine timer registration. This stable handle must outlive the
     // borrowed registration; destruction unregisters without a late callback.
@@ -126,6 +131,8 @@ struct worker_handle_access {
         const worker_handle& worker, move_only_function<void()> callback);
     static void when_idle(const worker_handle& worker, move_only_function<void()> callback);
     static void wait_for_reservations(const worker_handle& worker) noexcept;
+    // The pool the worker's event loop borrows, or null.
+    [[nodiscard]] static ruvia::blocking_pool* blocking_pool(const worker_handle& worker) noexcept;
 };
 
 }  // namespace detail

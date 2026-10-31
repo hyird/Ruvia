@@ -9,7 +9,6 @@
 #include <string_view>
 #include <system_error>
 
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -22,11 +21,12 @@
 // range, or multipart/byteranges parts interleaved with in-memory boundaries)
 // used over TLS and on Linux. Windows plain TCP keeps overlapped TransmitFile.
 //
-// Opening and blocking reads run on the server's blocking pool. Each round
+// Opening and blocking reads run on the worker's blocking pool. Each round
 // trip reads ahead up to response_file_read_ahead_bytes; Linux tries later
 // reads with RWF_NOWAIT first. The owned read state moves through the pool,
-// without copying its buffered bytes. With application::blocking_pool(nullptr),
-// other platforms retain inline reads; Linux fails rather than waiting for I/O.
+// without copying its buffered bytes. On a worker without a pool
+// (application::blocking_pool(nullptr)) other platforms retain inline reads;
+// Linux fails rather than waiting for I/O.
 //
 // Every file range is re-validated against its snapshot identity on the read
 // that completes it, so the final bytes of a range are never released for a
@@ -38,9 +38,9 @@ namespace ruvia::detail {
 // pooled block range, so the buffer is recycled across responses.
 inline constexpr std::size_t response_file_read_ahead_bytes = 64 * 1024;
 
-// Where a file body's blocking reads run and what may abandon them.
+// Where a file body's blocking reads run -- the worker's blocking pool -- and
+// what may abandon them.
 struct response_file_io final {
-    blocking_pool* pool_{};
     worker_handle worker_;
     stop_token stop_;
     std::pmr::memory_resource* resource_{nullptr};

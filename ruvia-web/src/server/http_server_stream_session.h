@@ -132,7 +132,6 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
     connection_scanner::guard scanner_guard(scanner_, scanner_entry, socket);
     const auto admission_policy = http_request_admission_policy::server(options_);
     const response_file_io file_output{
-        .pool_ = options_.blocking_pool_,
         .worker_ = worker_,
         .stop_ = stop_token_,
         .resource_ = memory_.resource(),
@@ -583,7 +582,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
             bool file_response = false;
             bool head_failure_recovered = false;
             for (;;) {
-                const auto preparation = tail.prepare(response, options_);
+                const auto preparation = tail.prepare(response, options_, worker_);
                 const auto prepared = preparation.ready() != nullptr
                                           ? *preparation.ready()
                                           : co_await tail.finish_prepare(preparation, response, options_,

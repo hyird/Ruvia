@@ -62,15 +62,14 @@ void document_root_publisher::publish(document_root_snapshot snapshot) {
     // still lease it keep their own reference.
 }
 
-task<void> document_root_publisher::refresh(
-    blocking_pool& pool, const worker_handle& worker, const http_server_worker_state& state) {
+task<void> document_root_publisher::refresh(const worker_handle& worker, const http_server_worker_state& state) {
     // Shared ownership lets the blocking jobs read the previous snapshot while
     // workers keep serving it, and lets resident bytes and precompression
     // reuse its unchanged file versions.
     const auto previous = current_;
     snapshot_owner candidate(nullptr, pmr_object_deleter<static_root>{process_resource()});
     try {
-        auto rebuilt = co_await ruvia::run_blocking(pool, worker, [previous, &root = root_] {
+        auto rebuilt = co_await ruvia::run_blocking(worker, {}, [previous, &root = root_] {
             return static_root_access::make(process_resource(), root,
                 static_root_access::copy_config(*previous, process_resource()));
         });
@@ -102,7 +101,7 @@ task<void> document_root_publisher::refresh(
 
     if (precompression_.enabled() || resident_.enabled()) {
         try {
-            auto prepared = co_await ruvia::run_blocking(pool, worker,
+            auto prepared = co_await ruvia::run_blocking(worker, {},
                 [candidate = std::move(candidate), previous, precompression = precompression_,
                     resident = resident_]() mutable {
                     static_root_access::install_resident_bodies(*candidate, previous.get(), resident);
@@ -185,7 +184,7 @@ task<void> static_root_runtime::refresh() {
         std::erase_if(retired_, [](const generation_owner& generation) { return !generation->leased(); });
 
         if (refreshes_) {
-            co_await publisher_->refresh(*options_.blocking_pool_, worker_, state_);
+            co_await publisher_->refresh(worker_, state_);
             if (!http_server_worker_running(state_)) {
                 co_return;
             }

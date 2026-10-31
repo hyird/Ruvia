@@ -28,6 +28,18 @@ struct client_host_resolver::query final {
     }
 };
 
+bool client_host_needs_lookup(std::string_view host) {
+    std::error_code error;
+    (void)asio::ip::make_address(host, error);
+    return static_cast<bool>(error);
+}
+
+void require_client_host_lookup(std::string_view host, const worker_handle& worker) {
+    if (!worker.has_blocking_pool() && client_host_needs_lookup(host)) {
+        throw std::invalid_argument("a DNS host requires an event loop with a blocking pool");
+    }
+}
+
 client_host_resolver::client_host_resolver(client_host_resolver&& other) noexcept
     : worker_(other.worker_) {
     if (other.stop_) {
@@ -66,8 +78,8 @@ task<client_resolve_result> client_host_resolver::resolve_query(query input, ope
             stop_.reset();
         }
     } guard{stop_};
-    auto result = co_await run_blocking(*worker_,
-        {.timeout_ = timeout.remaining(), .stop_token_ = stop_->token()}, std::move(input));
+    auto result = co_await run_blocking(
+        *worker_, {.timeout_ = timeout.remaining(), .stop_token_ = stop_->token()}, std::move(input));
     switch (result.status()) {
         case blocking_status::completed:
             co_return std::move(result).value();

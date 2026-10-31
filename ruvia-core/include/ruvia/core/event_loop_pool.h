@@ -9,9 +9,14 @@
 
 namespace ruvia {
 
+class blocking_pool;
+
 struct event_loop_pool_options final {
     std::size_t loop_count_{0};
     std::size_t queue_capacity_{1024};
+    // One borrowed pool shared by every loop for run_blocking() and client
+    // host lookups; it must outlive the pool. Null leaves the loops without one.
+    blocking_pool* blocking_pool_{nullptr};
 };
 
 class event_loop_pool final {

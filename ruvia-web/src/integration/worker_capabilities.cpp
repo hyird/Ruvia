@@ -80,7 +80,6 @@ context_services worker_capabilities::make_context_services(const stop_token& st
                                 .env_ = options_.env_,
                                 .max_decoded_body_bytes_ = options_.max_decoded_body_bytes_,
                                 .states_ = &worker_states_,
-                                .blocking_pool_ = options_.blocking_pool_,
                                 .precompressed_static_files_ = options_.precompressed_static_files_,
                                 .trusted_proxies_ = options_.trusted_proxies_,
                             },
@@ -93,10 +92,6 @@ worker_client_registry_view worker_capabilities::client_registries() noexcept {
 
 const worker_state_registry& worker_capabilities::worker_states() const noexcept {
     return worker_states_;
-}
-
-blocking_pool* worker_capabilities::get_blocking_pool() const noexcept {
-    return options_.blocking_pool_;
 }
 
 }  // namespace ruvia::detail

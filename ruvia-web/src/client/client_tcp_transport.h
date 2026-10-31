@@ -90,7 +90,8 @@ struct client_tcp_endpoint final {
 // handshake, reads) and the write lane have independent deadlines so a
 // full-duplex exchange can bound its upload separately. A connected socket
 // stays in non-blocking mode: every operation on it is asynchronous or a
-// bounded probe. Address-stable.
+// bounded probe. Address-stable. Construction throws std::invalid_argument
+// for a DNS host on a worker without a blocking pool.
 class client_tcp_transport final {
 public:
     client_tcp_transport(asio::io_context& io, asio::ssl::context& tls, const worker_handle& worker_value,

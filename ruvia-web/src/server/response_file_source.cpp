@@ -4,14 +4,17 @@
 #include <ios>
 #include <utility>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {
 
 namespace {
 
+// Reads that travel through the blocking pool keep their buffer in the process
+// resource; inline reads on a worker without a pool may use worker memory.
 [[nodiscard]] std::pmr::memory_resource* select_file_read_resource(const response_file_io& io) noexcept {
-    return io.pool_ == nullptr && io.resource_ != nullptr ? io.resource_ : process_resource();
+    return !io.worker_.has_blocking_pool() && io.resource_ != nullptr ? io.resource_ : process_resource();
 }
 
 }  // namespace
@@ -137,7 +140,7 @@ task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
         }
     }
 #endif
-    if (io_.pool_ == nullptr) {
+    if (!io_.worker_.has_blocking_pool()) {
 #if defined(__linux__)
         state_.error_ = std::make_error_code(std::errc::operation_not_supported);
         co_return false;
@@ -146,7 +149,7 @@ task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
         co_return !state_.error_;
 #endif
     }
-    auto result = co_await run_blocking(*io_.pool_, io_.worker_, io_.stop_,
+    auto result = co_await run_blocking(io_.worker_, {.stop_token_ = io_.stop_},
         [state = std::move(state_), bytes, completes_range]() mutable {
             read_ahead(state, bytes, completes_range);
             return std::move(state);

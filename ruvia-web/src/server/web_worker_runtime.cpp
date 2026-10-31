@@ -17,14 +17,15 @@
 namespace ruvia::detail {
 
 web_worker_runtime::web_worker_runtime(const validated_http_server_configuration& configuration,
-    const route_table& routes_value, worker_capability_definitions capabilities)
-    : web_worker_runtime(configuration.listeners(), routes_value, capabilities, configuration.options()) {}
+    const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool)
+    : web_worker_runtime(configuration.listeners(), routes_value, capabilities, configuration.options(), pool) {}
 
 web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_definition> listeners,
     const route_table& routes_value, worker_capability_definitions capabilities,
-    http_server_options validated_options)
+    http_server_options validated_options, blocking_pool* pool)
     : runtime_({.queue_capacity_ = validated_options.server_.worker_queue_capacity_,
-          .io_policy_ = ruvia::worker_io_policy::single_owner}),
+          .io_policy_ = ruvia::worker_io_policy::single_owner,
+          .blocking_pool_ = pool}),
       io_context_(runtime_.io_context()),
       finalize_signal_(runtime_.handle()),
       routes_(routes_value),
@@ -42,7 +43,6 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
               .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
               .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
               .http_client_result_budget_ = options_.server_.http_client_result_budget_,
-              .blocking_pool_ = options_.blocking_pool_,
               .env_ = options_.env_,
               .trusted_proxies_ =
                   options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,

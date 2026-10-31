@@ -24,8 +24,16 @@ struct client_resolve_result final {
 
 using client_resolve_operation = std::variant<client_resolve_result, task<client_resolve_result>>;
 
+// False for an IP literal, which connects without a lookup.
+[[nodiscard]] bool client_host_needs_lookup(std::string_view host);
+
+// A DNS host is looked up on the blocking pool of the client's event loop;
+// without one the client cannot connect, so it is rejected at construction.
+void require_client_host_lookup(std::string_view host, const worker_handle& worker);
+
 // HTTP、WebSocket、Redis 和数据库共用的系统名称查询。系统 getaddrinfo 不可
-// 抢占；core 的有界卸载只携带自有输入，取消或停机先释放等待者，再丢弃迟到结果。
+// 抢占；查询卸载到客户端事件循环借用的有界阻塞池，只携带自有输入，取消或停机先
+// 释放等待者，再丢弃迟到结果。IP 字面量不查询，也不需要池。
 class client_host_resolver final {
 public:
     explicit client_host_resolver(const worker_handle& worker) noexcept

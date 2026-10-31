@@ -35,8 +35,11 @@ class web_worker_dispatch;
 // sequences every independently listening worker through one core worker_group.
 class web_worker_runtime final {
 public:
-    web_worker_runtime(const validated_http_server_configuration& configuration,
-        const route_table& routes_value, worker_capability_definitions capabilities);
+    // `pool` is the application pool the worker's event loop borrows for
+    // every offload and client host lookup; null when the application
+    // disabled it. It must outlive the worker.
+    web_worker_runtime(const validated_http_server_configuration& configuration, const route_table& routes_value,
+        worker_capability_definitions capabilities, blocking_pool* pool);
     ~web_worker_runtime();
 
     web_worker_runtime(const web_worker_runtime&) = delete;
@@ -64,7 +67,7 @@ public:
 private:
     web_worker_runtime(std::span<const http_server_listener_definition> listeners,
         const route_table& routes_value, worker_capability_definitions capabilities,
-        http_server_options validated_options);
+        http_server_options validated_options, blocking_pool* pool);
 
     void serve_on_context();
     void drain_on_context() noexcept;

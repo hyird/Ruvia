@@ -5,12 +5,14 @@
 #include <memory>
 #include <optional>
 #include <semaphore>
+#include <stdexcept>
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/websocket_client.h"
 
 #include "test_harness.h"
 
@@ -24,19 +26,17 @@ enum class stop_kind { timeout,
     worker_stop };
 
 struct held_queries final {
-    std::counting_semaphore<8> release_{0};
-    std::atomic<unsigned> submitted_{0};
+    std::binary_semaphore release_{0};
     std::atomic<unsigned> finished_{0};
     std::atomic<bool> released_{false};
     void release() {
         if (!released_.exchange(true)) {
-            release_.release(8);
+            release_.release();
         }
     }
 };
 
 ruvia::task<void> hold_executor(ruvia::worker_handle worker, std::shared_ptr<held_queries> held) {
-    ++held->submitted_;
     auto result = co_await ruvia::run_blocking(std::move(worker), {}, [held] {
         held->release_.acquire();
         ++held->finished_;
@@ -61,19 +61,17 @@ struct observation final {
     bool retired_before_release_{false};
 };
 
-ruvia::task<void> exercise(ruvia::event_loop loop, stop_kind kind, std::shared_ptr<held_queries> held,
-    observation& observed, std::promise<void>& ready, std::promise<void>& retired) {
+ruvia::task<void> exercise(ruvia::event_loop loop, const ruvia::blocking_pool& lookups, stop_kind kind,
+    std::shared_ptr<held_queries> held, observation& observed, std::promise<void>& ready,
+    std::promise<void>& retired) {
     auto worker = loop.handle();
     ruvia::task_scope occupied(worker);
-    // 默认池至多 8 个线程。八个未释放的任务让名称查询确定性地等待，
+    // 事件循环借用的单线程池被一个未释放的任务占住，名称查询确定性地排队等待，
     // 不依赖外部 DNS 服务器、网络超时或对系统解析器的进程级修改。
-    for (unsigned index = 0; index != 8; ++index) {
-        occupied.spawn(hold_executor(worker, held));
-    }
-    while (held->submitted_ != 8) {
+    occupied.spawn(hold_executor(worker, held));
+    while (lookups.stats().running_ != 1) {
         (void)co_await ruvia::sleep_for(worker, 1ms);
     }
-    (void)co_await ruvia::sleep_for(worker, 1ms);
     ruvia::http_client client(loop, {.scheme_ = ruvia::http_scheme::http, .host_ = "localhost", .port_ = 1, .connect_timeout_ = kind == stop_kind::timeout ? 30ms : 3s, .request_timeout_ = 3s, .protocol_ = ruvia::http_client_protocol::http1_only});
     ruvia::stop_source stop;
     ruvia::task_scope operations(worker);
@@ -106,7 +104,47 @@ ruvia::task<void> exercise(ruvia::event_loop loop, stop_kind kind, std::shared_p
     }
 }
 
+[[nodiscard]] ruvia::http_client_config dns_http_config() {
+    return {.scheme_ = ruvia::http_scheme::http, .host_ = "localhost", .port_ = 1};
+}
+
+[[nodiscard]] ruvia::websocket_client_config dns_websocket_config() {
+    return {.scheme_ = ruvia::websocket_scheme::ws, .host_ = "localhost", .port_ = 1};
+}
+
 }  // namespace resolve_cancellation_tests
+
+RUVIA_TEST(clients_need_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
+    using namespace resolve_cancellation_tests;
+    bool http_rejected = false;
+    bool websocket_rejected = false;
+    {
+        ruvia::event_loop_pool loops({.loop_count_ = 1});
+        try {
+            ruvia::http_client client(loops.loop(0), dns_http_config());
+        } catch (const std::invalid_argument&) {
+            http_rejected = true;
+        }
+        try {
+            ruvia::websocket_client client(loops.loop(0), dns_websocket_config());
+        } catch (const std::invalid_argument&) {
+            websocket_rejected = true;
+        }
+        loops.join();
+    }
+    RUVIA_CHECK(http_rejected);
+    RUVIA_CHECK(websocket_rejected);
+
+    // The same configurations are accepted once the loop borrows a pool.
+    ruvia::blocking_pool lookups({.thread_count_ = 1});
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &lookups});
+    {
+        ruvia::http_client http(loops.loop(0), dns_http_config());
+        ruvia::websocket_client websocket(loops.loop(0), dns_websocket_config());
+    }
+    loops.join();
+    lookups.join();
+}
 
 RUVIA_TEST(host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_finishes) {
     using namespace resolve_cancellation_tests;
@@ -117,8 +155,10 @@ RUVIA_TEST(host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fin
         auto ready_result = ready.get_future();
         std::promise<void> retired;
         auto retired_result = retired.get_future();
-        ruvia::event_loop_pool pool({.loop_count_ = 1, .queue_capacity_ = 64});
-        auto root = pool.loop(0).start(exercise(pool.loop(0), kind, held, observed, ready, retired));
+        // 循环借用查询池，池须声明在循环之前并比它活得久。
+        ruvia::blocking_pool lookups({.thread_count_ = 1});
+        ruvia::event_loop_pool pool({.loop_count_ = 1, .queue_capacity_ = 64, .blocking_pool_ = &lookups});
+        auto root = pool.loop(0).start(exercise(pool.loop(0), lookups, kind, held, observed, ready, retired));
         pool.start();
         if (kind == stop_kind::worker_stop) {
             const bool started = ready_result.wait_for(2s) == std::future_status::ready;
@@ -140,6 +180,7 @@ RUVIA_TEST(host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fin
             root.wait();
             pool.join();
         }
+        lookups.join();
         root.get();
         RUVIA_CHECK(observed.retired_before_release_);
         const auto expected = kind == stop_kind::timeout        ? ruvia::http_client_error::code_type::timeout

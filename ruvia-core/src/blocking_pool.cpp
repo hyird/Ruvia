@@ -44,11 +44,6 @@ namespace {
 
 }  // namespace
 
-blocking_pool& detail::runtime_blocking_pool() {
-    static blocking_pool pool;
-    return pool;
-}
-
 std::string_view describe_blocking_status(blocking_status status) noexcept {
     switch (status) {
         case blocking_status::completed:
@@ -63,6 +58,8 @@ std::string_view describe_blocking_status(blocking_status status) noexcept {
             return "blocking operation was cancelled";
         case blocking_status::timed_out:
             return "blocking operation timed out";
+        case blocking_status::unavailable:
+            return "worker has no blocking pool";
     }
     return "unknown";
 }

@@ -51,8 +51,9 @@ struct test_app::impl_type final {
     detail::worker_codecs codecs_{memory_.resource()};
     // The defaults a server starts from: no listener-specific policy applies.
     detail::http_server_options options_{};
-    event_loop_pool event_loop_pool_{{.loop_count_ = 1}};
-    std::optional<blocking_pool> blocking_pool_;
+    // The pool the in-memory worker's event loop borrows, created with the loop.
+    blocking_pool blocking_pool_{{.thread_count_ = 1}};
+    event_loop_pool event_loop_pool_{{.loop_count_ = 1, .blocking_pool_ = &blocking_pool_}};
     event_loop event_loop_{event_loop_pool_.loop(0)};
     worker_handle worker_{event_loop_.handle()};
     stop_source stop_source_;
@@ -74,14 +75,10 @@ struct test_app::impl_type final {
                 std::terminate();
             }
         }
-        if (blocking_pool_) {
-            blocking_pool_->stop();
-        }
+        blocking_pool_.stop();
         event_loop_pool_.stop();
         event_loop_pool_.join();
-        if (blocking_pool_) {
-            blocking_pool_->join();
-        }
+        blocking_pool_.join();
     }
 
     void require_configurable() const {
@@ -124,8 +121,6 @@ struct test_app::impl_type final {
                         options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
                     .precompressed_static_files_ = options_.compression_.has_value(),
                 });
-            blocking_pool_.emplace(blocking_pool_options{.thread_count_ = 1});
-            options_.blocking_pool_ = &*blocking_pool_;
             event_loop_pool_.start();
             event_loop_.start(capabilities_->start()).get();
             lifecycle_ = lifecycle_type::ready;
@@ -208,7 +203,7 @@ struct test_app::impl_type final {
         const auto tail = admission ? admission->tail()
                                     : detail::http_response_tail(parsed_value,
                                           detail::http_response_coding_policy::disabled(), {}, request_start);
-        const auto preparation = tail.prepare(response, options_);
+        const auto preparation = tail.prepare(response, options_, worker_);
         const auto prepared = preparation.ready() != nullptr
                                   ? *preparation.ready()
                                   : co_await tail.finish_prepare(
@@ -230,8 +225,7 @@ struct test_app::impl_type final {
         if (!prepared.write_plan_.body_suppressed()) {
             if (response.file_body() || response.has_multipart_file_body()) {
                 detail::response_file_source source(response,
-                    {.pool_ = options_.blocking_pool_,
-                        .worker_ = worker_,
+                    {.worker_ = worker_,
                         .stop_ = stop_token_,
                         .resource_ = request_memory_value.resource()});
                 for (;;) {

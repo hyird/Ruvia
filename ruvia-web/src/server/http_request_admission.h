@@ -162,7 +162,7 @@ public:
     // an uncommitted response may enter. The common response (no blocking-pool
     // encode, no recovery) completes here without a coroutine frame.
     [[nodiscard]] http_response_preparation prepare(
-        http_response& response, const http_server_options& options) const;
+        http_response& response, const http_server_options& options, const worker_handle& worker) const;
 
     // Completes a preparation whose ready() is null, with the arguments given
     // to prepare(). The application error handler runs at most once here.

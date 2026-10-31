@@ -198,6 +198,10 @@ private:
         };
 
         if (state_.document_root_config_.has_value()) {
+            // Refreshing the index reads the filesystem on the blocking pool.
+            if (!state_.blocking_pool_.has_value()) {
+                throw std::invalid_argument("document root refresh cannot run while the blocking pool is disabled");
+            }
             const auto& document_root = *state_.document_root_config_;
             // Precompressed variants are negotiated by the compression policy,
             // so without it the refresher never builds them.
@@ -213,7 +217,6 @@ private:
         if (state_.blocking_pool_.has_value()) {
             runtime->blocking_pool_ =
                 make_pmr_object<blocking_pool>(runtime_resource_, *state_.blocking_pool_);
-            prepared_options.blocking_pool_ = runtime->blocking_pool_.get();
         }
 
         const auto validated_configuration =
@@ -245,7 +248,7 @@ private:
                 .http_clients_ = std::span<const detail::http_client_definition_type>(state_.http_clients_),
             };
             auto worker_value = make_pmr_object<detail::web_worker_runtime>(
-                runtime_resource_, validated_configuration, *routes_value, capabilities);
+                runtime_resource_, validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get());
 #if defined(_WIN32)
             worker_value->attach_windows_accept(*runtime->windows_accept_, i);
 #endif

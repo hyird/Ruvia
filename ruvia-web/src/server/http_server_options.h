@@ -7,7 +7,6 @@
 #include <memory_resource>
 #include <optional>
 
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/server_config.h"
 
@@ -153,10 +152,6 @@ struct http_server_options final {
     trusted_proxy_set trusted_proxies_{};
     access_log_sink access_log_{};
     const env* env_{nullptr};
-    // Process-wide, owned by application::run() and shared by every worker. Null only
-    // when the app explicitly disabled the default pool; run_blocking() then
-    // reports that state instead of blocking the worker.
-    blocking_pool* blocking_pool_{nullptr};
     worker_failure_sink failure_{};
     connection_failure_sink connection_failure_{};
     std::optional<rate_limit_rule> default_rate_limit_per_worker_{};

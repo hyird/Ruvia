@@ -9,6 +9,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_accept_match.h"
@@ -250,14 +251,14 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     return {commit_compressed_body(response, coding, std::move(encoding)), false};
 }
 
-task<http_response_compression_status> compress_response_offloaded(http_response_coding_selection selection,
-    http_response& response, blocking_pool& pool, const worker_handle& worker_value) {
+task<http_response_compression_status> compress_response_offloaded(
+    http_response_coding_selection selection, http_response& response, const worker_handle& worker_value) {
     try {
         const auto coding = selection.coding();
         const bool identity_accepted = selection.identity_accepted();
         std::pmr::string plain(response.body_bytes(), process_resource());
         auto result_value =
-            co_await run_blocking(pool, worker_value, [coding, identity_accepted, plain = std::move(plain)]() {
+            co_await run_blocking(worker_value, {}, [coding, identity_accepted, plain = std::move(plain)]() {
                 return encode_http_content(
                     coding, plain, compressed_body_options(plain, identity_accepted, process_resource()));
             });

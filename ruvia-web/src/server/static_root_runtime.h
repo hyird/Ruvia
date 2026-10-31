@@ -18,7 +18,6 @@
 #include "server/http_server_worker_state.h"
 
 namespace ruvia {
-class blocking_pool;
 class worker_handle;
 }  // namespace ruvia
 
@@ -65,8 +64,7 @@ public:
 
     // One rebuild pass on the claiming worker. A changed tree is published; a
     // failed pass is counted and the last complete snapshot stays published.
-    [[nodiscard]] task<void> refresh(
-        blocking_pool& pool, const worker_handle& worker, const http_server_worker_state& state);
+    [[nodiscard]] task<void> refresh(const worker_handle& worker, const http_server_worker_state& state);
 
 private:
     void publish(document_root_snapshot snapshot);

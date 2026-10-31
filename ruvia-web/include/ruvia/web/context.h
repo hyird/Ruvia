@@ -559,7 +559,8 @@ public:
     // the wait without joining a still-running foreign callable.
     // Rejection and callable exceptions are retained in blocking_result. Inspect
     // status() for load shedding or use std::move(result).value() to throw.
-    // A disabled pool is a configuration error and throws before submission.
+    // With application::blocking_pool(nullptr) the result reports
+    // blocking_status::unavailable without submitting the callable.
     template <typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
         return capabilities_.run_blocking(std::move(callable));

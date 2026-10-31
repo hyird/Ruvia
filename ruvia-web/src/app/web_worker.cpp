@@ -14,9 +14,8 @@ namespace ruvia {
 
 web_worker_context::web_worker_context(const worker_handle& worker_value, std::pmr::memory_resource* resource,
     const detail::worker_client_registry_view& client_registries,
-    const detail::worker_state_registry* worker_states, blocking_pool* blocking_pool_value,
-    const ::ruvia::stop_token& stop_token_value) noexcept
-    : capabilities_(worker_value, stop_token_value, worker_states, blocking_pool_value),
+    const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept
+    : capabilities_(worker_value, stop_token_value, worker_states),
       resource_(resource),
       client_registries_(client_registries) {}
 
@@ -112,7 +111,6 @@ web_worker_dispatch::web_worker_dispatch(ruvia::worker_runtime& runtime, std::pm
       resource_(pmr_resource_or_default(resource)),
       client_registries_(capabilities.client_registries()),
       worker_states_(capabilities.worker_states()),
-      blocking_pool_(capabilities.get_blocking_pool()),
       jobs_(jobs),
       stop_token_(stop_token_value) {}
 
@@ -178,8 +176,7 @@ void web_worker_dispatch::start(job_type job) {
 ruvia::task<void> web_worker_dispatch::run(job_type job) {
     std::exception_ptr failure;
     try {
-        web_worker_context context(
-            worker_, resource_, client_registries_, &worker_states_, blocking_pool_, stop_token_);
+        web_worker_context context(worker_, resource_, client_registries_, &worker_states_, stop_token_);
         co_await job(context);
     } catch (...) {
         failure = std::current_exception();

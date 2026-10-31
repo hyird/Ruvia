@@ -26,7 +26,6 @@ namespace ruvia {
 
 class http_request;
 class http_request_trailers;
-class blocking_pool;
 class env;
 }  // namespace ruvia
 
@@ -49,7 +48,6 @@ struct context_worker_services final {
     std::pmr::memory_resource* inbound_buffer_pool_{};
     const route_table* routes_{};
     const worker_state_registry* states_{};
-    blocking_pool* blocking_pool_{};
     bool precompressed_static_files_{};
     const trusted_proxy_set* trusted_proxies_{};
 };
@@ -255,10 +253,6 @@ public:
         services.request_services_.dispatch_depth_ = request_services_.dispatch_depth_ + 1;
         services.request_services_.io_metrics_ = request_services_.io_metrics_;
         return services;
-    }
-
-    [[nodiscard]] blocking_pool* get_blocking_pool() const noexcept {
-        return worker_services_.blocking_pool_;
     }
 
     // Server-owned static-file policy. When response compression is enabled,

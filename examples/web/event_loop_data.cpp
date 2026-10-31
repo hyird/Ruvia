@@ -15,6 +15,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_repository.h"
@@ -111,7 +112,10 @@ int main(int argc, char** argv) {
             .port_ = env.get<std::uint16_t>("RUVIA_REDIS_PORT").value_or(6379),
             .tls_ = example::backend_tls("RUVIA_REDIS"),
             .pool_size_per_worker_ = 1};
-        event_loop_pool pool({.loop_count_ = 2});
+        // Both loops look DNS hosts up on this pool; IP literals need none.
+        // Declared first, it outlives the loops.
+        blocking_pool host_lookups({.thread_count_ = 1});
+        event_loop_pool pool({.loop_count_ = 2, .blocking_pool_ = &host_lookups});
         std::pmr::vector<std::unique_ptr<worker_data>> workers;
         for (std::size_t index = 0; index < pool.loop_count(); ++index) {
             workers.push_back(std::make_unique<worker_data>(pool.loop(index), sql, cache));

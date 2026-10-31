@@ -35,6 +35,7 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
@@ -61,9 +62,18 @@ namespace {
 class test_worker final {
 public:
     explicit test_worker(asio::io_context& io)
-        : attachment_(ruvia::attach_event_loop(io, {.queue_capacity_ = 8})),
+        : attachment_(ruvia::attach_event_loop(io, {.queue_capacity_ = 8, .blocking_pool_ = &host_lookups_})),
           handle_(attachment_.loop().handle()) {}
 
+    test_worker(const test_worker&) = delete;
+    test_worker& operator=(const test_worker&) = delete;
+
+    ~test_worker() {
+        host_lookups_.join();
+    }
+
+    // Declared before the attachment, which borrows it for "localhost" lookups.
+    ruvia::blocking_pool host_lookups_{{.thread_count_ = 1}};
     ruvia::event_loop_attachment attachment_;
     ruvia::worker_handle handle_;
 };
@@ -1757,7 +1767,7 @@ RUVIA_TEST(client_result_budget_rejects_zero_limit_at_client_startup) {
     test_worker worker(io);
     bool rejected_at_client_startup = false;
     try {
-        ruvia::http_client client(worker.attachment_.loop(), {.host_ = "example.test"},
+        ruvia::http_client client(worker.attachment_.loop(), {.host_ = "127.0.0.1"},
             {.max_retained_bytes_ = 0});
     } catch (const std::invalid_argument&) {
         rejected_at_client_startup = true;

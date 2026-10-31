@@ -71,7 +71,7 @@ public:
               asio::config_from_concurrency_hint(options.io_policy_ == worker_io_policy::single_owner
                                                      ? ASIO_CONCURRENCY_HINT_UNSAFE_IO
                                                      : ASIO_CONCURRENCY_HINT_DEFAULT)),
-          context_(io_context_, options.queue_capacity_),
+          context_(io_context_, options.queue_capacity_, options.blocking_pool_),
           stop_(context_) {}
 
     // Returns true for the winning failure.

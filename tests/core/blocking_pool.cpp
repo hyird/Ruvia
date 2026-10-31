@@ -49,9 +49,9 @@ struct receiver_move_failure final {
     std::thread::id receiver_;
 };
 
-task<void> exercise_receiver_move_failure(blocking_pool& pool, worker_handle worker, bool& success) {
+task<void> exercise_receiver_move_failure(worker_handle worker, bool& success) {
     const auto receiver = std::this_thread::get_id();
-    auto result = co_await run_blocking(pool, worker, [receiver] { return receiver_move_failure(receiver); });
+    auto result = co_await run_blocking(worker, {}, [receiver] { return receiver_move_failure(receiver); });
     if (result.status() != blocking_status::completed || !result.failed()) {
         co_return;
     }
@@ -62,11 +62,9 @@ task<void> exercise_receiver_move_failure(blocking_pool& pool, worker_handle wor
     }
 }
 
-task<void> exercise_completion_during_suspend(
-    blocking_pool& pool, worker_handle worker, bool& success) {
+task<void> exercise_completion_during_suspend(worker_handle worker, bool& success) {
     for (int value = 0; value < 1024; ++value) {
-        auto result = co_await run_blocking(pool, worker,
-            [value] { return yielding_result(value); });
+        auto result = co_await run_blocking(worker, {}, [value] { return yielding_result(value); });
         if (!result.completed() || std::move(result).value().value_ != value) {
             co_return;
         }
@@ -245,14 +243,14 @@ bool test_callable_move_can_stop_pool_before_publication() {
            !queued_ran.load() && state.ran_.load() == 0 && state.destroyed_.load() == 1;
 }
 
-task<void> exercise_results(blocking_pool& pool, worker_handle worker_value, bool& success) {
-    auto value = co_await ruvia::run_blocking(pool, worker_value, [] { return 42; });
+task<void> exercise_results(worker_handle worker_value, bool& success) {
+    auto value = co_await ruvia::run_blocking(worker_value, {}, [] { return 42; });
     if (!value.completed() || std::move(value).value() != 42) {
         co_return;
     }
 
     auto thrown = co_await ruvia::run_blocking(
-        pool, worker_value, []() -> int { throw std::runtime_error("blocking work failed"); });
+        worker_value, {}, []() -> int { throw std::runtime_error("blocking work failed"); });
     if (thrown.status() != blocking_status::completed || !thrown.failed()) {
         co_return;
     }
@@ -267,15 +265,14 @@ task<void> exercise_results(blocking_pool& pool, worker_handle worker_value, boo
     }
 
     std::atomic_bool ran{false};
-    auto empty = co_await ruvia::run_blocking(pool, worker_value, [flag = &ran] { flag->store(true); });
+    auto empty = co_await ruvia::run_blocking(worker_value, {}, [flag = &ran] { flag->store(true); });
     if (!empty.completed() || !ran.load()) {
         co_return;
     }
     static_cast<void>(std::move(empty).value());
 
     // A moved-only result travels back by move, not by copy.
-    auto owned =
-        co_await ruvia::run_blocking(pool, worker_value, [] { return std::make_unique<int>(7); });
+    auto owned = co_await ruvia::run_blocking(worker_value, {}, [] { return std::make_unique<int>(7); });
     if (!owned.completed()) {
         co_return;
     }
@@ -287,19 +284,19 @@ task<void> exercise_results(blocking_pool& pool, worker_handle worker_value, boo
     success = true;
 }
 
-task<void> exercise_cancellation(blocking_pool& pool, worker_handle worker_value, thread_gate& gate_value,
+task<void> exercise_cancellation(worker_handle worker_value, thread_gate& gate_value,
     ruvia::stop_source& source_value, std::atomic_bool& callable_finished,
     std::weak_ptr<int>& abandoned_resource, bool& success) {
     auto owned_resource = std::make_shared<int>(12);
     abandoned_resource = owned_resource;
-    auto result_value =
-        co_await ruvia::run_blocking(pool, worker_value, std::chrono::seconds(30), source_value.token(),
-            [&, owned_resource = std::move(owned_resource)]() mutable {
-                gate_value.started_.release();
-                gate_value.release_.acquire();
-                callable_finished.store(true, std::memory_order_release);
-                return std::move(owned_resource);
-            });
+    auto result_value = co_await ruvia::run_blocking(worker_value,
+        {.timeout_ = std::chrono::seconds(30), .stop_token_ = source_value.token()},
+        [&, owned_resource = std::move(owned_resource)]() mutable {
+            gate_value.started_.release();
+            gate_value.release_.acquire();
+            callable_finished.store(true, std::memory_order_release);
+            return std::move(owned_resource);
+        });
     if (result_value.status() != blocking_status::cancelled || result_value.completed() || result_value.failed()) {
         gate_value.release_.release();
         co_return;
@@ -315,16 +312,14 @@ task<void> exercise_cancellation(blocking_pool& pool, worker_handle worker_value
 // A wedged callable must not pin its caller forever: the wait has a deadline,
 // even though the pool thread stays occupied until the callable returns.
 task<void> exercise_timeout(
-    blocking_pool& pool, worker_handle worker_value, thread_gate& gate_value,
-    std::weak_ptr<int>& abandoned_resource, bool& success) {
+    worker_handle worker_value, thread_gate& gate_value, std::weak_ptr<int>& abandoned_resource, bool& success) {
     auto owned_resource = std::make_shared<int>(1);
     abandoned_resource = owned_resource;
-    auto timed_out =
-        co_await ruvia::run_blocking(pool, worker_value, std::chrono::milliseconds(20),
-            [&gate_value, owned_resource = std::move(owned_resource)]() mutable {
-                gate_value.release_.acquire();
-                return std::move(owned_resource);
-            });
+    auto timed_out = co_await ruvia::run_blocking(worker_value, {.timeout_ = std::chrono::milliseconds(20)},
+        [&gate_value, owned_resource = std::move(owned_resource)]() mutable {
+            gate_value.release_.acquire();
+            return std::move(owned_resource);
+        });
     if (timed_out.status() != blocking_status::timed_out || timed_out.completed()) {
         co_return;
     }
@@ -337,8 +332,7 @@ task<void> exercise_timeout(
     gate_value.release_.release();
 
     // A deadline that is not reached behaves exactly like the untimed wait.
-    auto in_time =
-        co_await ruvia::run_blocking(pool, worker_value, std::chrono::seconds(30), [] { return 9; });
+    auto in_time = co_await ruvia::run_blocking(worker_value, {.timeout_ = std::chrono::seconds(30)}, [] { return 9; });
     success = rejected && in_time.completed() && std::move(in_time).value() == 9;
 }
 
@@ -353,8 +347,8 @@ task<void> exercise_saturating_timeout(
         gate_value.release_.release();
     });
 
-    auto result_value =
-        co_await ruvia::run_blocking(pool, worker_value, std::chrono::hours::max(), [] { return 17; });
+    auto result_value = co_await ruvia::run_blocking(
+        worker_value, {.timeout_ = std::chrono::milliseconds::max()}, [] { return 17; });
     releaser.join();
     success = result_value.completed() && std::move(result_value).value() == 17;
 }
@@ -364,24 +358,23 @@ task<void> count_on_worker(std::atomic_int& order, int& observed_value) {
     co_return;
 }
 
-task<void> block_then_count(blocking_pool& pool, worker_handle worker_value, std::atomic_int& order,
-    int& observed_value, bool& completed) {
+task<void> block_then_count(worker_handle worker_value, std::atomic_int& order, int& observed_value, bool& completed) {
     auto result_value = co_await ruvia::run_blocking(
-        pool, worker_value, [] { std::this_thread::sleep_for(std::chrono::milliseconds(50)); });
+        worker_value, {}, [] { std::this_thread::sleep_for(std::chrono::milliseconds(50)); });
     completed = result_value.completed();
     observed_value = order.fetch_add(1);
 }
 
 // The point of the pool: while one handler waits on blocking work, the worker
 // keeps running other coroutines instead of sitting inside the blocking call.
-task<void> exercise_worker_stays_free(blocking_pool& pool, worker_handle worker_value, bool& success) {
+task<void> exercise_worker_stays_free(worker_handle worker_value, bool& success) {
     std::atomic_int order{0};
     int blocking_order = -1;
     int free_order = -1;
     bool blocking_completed = false;
 
     ruvia::task_scope scope(worker_value);
-    scope.spawn(block_then_count(pool, worker_value, order, blocking_order, blocking_completed));
+    scope.spawn(block_then_count(worker_value, order, blocking_order, blocking_completed));
     scope.spawn(count_on_worker(order, free_order));
     co_await scope.join();
 
@@ -402,7 +395,7 @@ task<void> exercise_stopped_pool(
 
     auto owned_resource = std::make_shared<int>(1);
     discarded_resource = owned_resource;
-    auto result_value = co_await ruvia::run_blocking(pool, worker_value,
+    auto result_value = co_await ruvia::run_blocking(worker_value, {},
         [owned_resource = std::move(owned_resource)]() mutable { return std::move(owned_resource); });
     stopper.join();
     gate_value.release_.release();
@@ -417,7 +410,7 @@ task<void> exercise_stopped_pool(
         rejected = error.status() == blocking_status::pool_stopped;
     }
     // A stopped pool refuses new work rather than queueing it forever.
-    auto refused = co_await ruvia::run_blocking(pool, worker_value, [] { return 2; });
+    auto refused = co_await ruvia::run_blocking(worker_value, {}, [] { return 2; });
     // A stopping pool is shutdown accounting, never the overload signal an
     // operator sizes the pool from.
     const auto stats = pool.stats();
@@ -430,7 +423,7 @@ task<void> exercise_queue_full(
     // One thread is occupied and the single queue slot is taken, so this one
     // has nowhere to go.
     const auto queued = pool.submit([] {});
-    auto result_value = co_await ruvia::run_blocking(pool, worker_value, [] { return 1; });
+    auto result_value = co_await ruvia::run_blocking(worker_value, {}, [] { return 1; });
     gate_value.release_.release();
     const auto stats = pool.stats();
     success = queued == blocking_submit_status::accepted &&
@@ -439,10 +432,9 @@ task<void> exercise_queue_full(
 }
 
 task<void> exercise_worker_stopping(
-    ruvia::worker_runtime_context& runtime, blocking_pool& pool,
-    worker_handle worker_value, thread_gate& gate_value, bool& success) {
+    ruvia::worker_runtime_context& runtime, worker_handle worker_value, thread_gate& gate_value, bool& success) {
     asio::post(runtime.io_context(), [&runtime] { runtime.close(); });
-    auto result_value = co_await ruvia::run_blocking(pool, worker_value, [&gate_value] {
+    auto result_value = co_await ruvia::run_blocking(worker_value, {}, [&gate_value] {
         gate_value.release_.acquire();
         return 5;
     });
@@ -452,9 +444,8 @@ task<void> exercise_worker_stopping(
 
 // Offloading from a worker that has ALREADY stopped is the same shutdown
 // outcome, not an exception the caller never asked for.
-task<void> exercise_stopped_worker(
-    blocking_pool& pool, worker_handle worker_value, std::atomic_bool& ran, bool& success) {
-    auto result_value = co_await ruvia::run_blocking(pool, worker_value, [flag = &ran] {
+task<void> exercise_stopped_worker(worker_handle worker_value, std::atomic_bool& ran, bool& success) {
+    auto result_value = co_await ruvia::run_blocking(worker_value, {}, [flag = &ran] {
         flag->store(true);
         return 1;
     });
@@ -463,18 +454,17 @@ task<void> exercise_stopped_worker(
 
 // Outcomes the wait would decide without the callable are decided before
 // submission, so the callable never occupies a pool thread for them.
-task<void> exercise_settled_before_submit(blocking_pool& pool, worker_handle worker_value,
-    worker_handle other_worker, std::atomic_bool& ran, bool& success) {
+task<void> exercise_settled_before_submit(
+    worker_handle worker_value, worker_handle other_worker, std::atomic_bool& ran, bool& success) {
     ruvia::stop_source stopped;
     stopped.request_stop();
-    auto cancelled = co_await ruvia::run_blocking(pool, worker_value, stopped.token(), [flag = &ran] {
-        flag->store(true);
-    });
+    auto cancelled = co_await ruvia::run_blocking(
+        worker_value, {.stop_token_ = stopped.token()}, [flag = &ran] { flag->store(true); });
     auto expired = co_await ruvia::run_blocking(
-        pool, worker_value, std::chrono::milliseconds(0), [flag = &ran] { flag->store(true); });
+        worker_value, {.timeout_ = std::chrono::milliseconds(0)}, [flag = &ran] { flag->store(true); });
     bool misplaced = false;
     try {
-        static_cast<void>(co_await ruvia::run_blocking(pool, other_worker, [flag = &ran] {
+        static_cast<void>(co_await ruvia::run_blocking(other_worker, {}, [flag = &ran] {
             flag->store(true);
         }));
     } catch (const std::logic_error&) {
@@ -482,6 +472,20 @@ task<void> exercise_settled_before_submit(blocking_pool& pool, worker_handle wor
     }
     success = cancelled.status() == blocking_status::cancelled && expired.status() == blocking_status::timed_out &&
               misplaced;
+}
+
+// A worker whose event loop was given no pool reports that state; the callable
+// runs nowhere else.
+task<void> exercise_worker_without_pool(worker_handle worker_value, std::atomic_bool& ran, bool& success) {
+    auto result_value = co_await ruvia::run_blocking(worker_value, {}, [flag = &ran] { flag->store(true); });
+    if (result_value.status() != blocking_status::unavailable || result_value.completed() || result_value.failed()) {
+        co_return;
+    }
+    try {
+        static_cast<void>(std::move(result_value).value());
+    } catch (const ruvia::blocking_operation_rejected& error) {
+        success = error.status() == blocking_status::unavailable;
+    }
 }
 
 bool test_destruction_does_not_join_running_callable() {
@@ -608,11 +612,10 @@ RUVIA_TEST(blocking_pool_results_and_worker_progress) {
     {
         blocking_pool pool(blocking_pool_options{.thread_count_ = 2});
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
+        ruvia::worker_runtime_context runtime(io_context, 8, &pool);
         const auto worker_value = runtime.handle();
-        ruvia::test::run_worker_tasks(runtime,
-            exercise_results(pool, worker_value, results),
-            exercise_worker_stays_free(pool, worker_value, worker_stays_free));
+        ruvia::test::run_worker_tasks(runtime, exercise_results(worker_value, results),
+            exercise_worker_stays_free(worker_value, worker_stays_free));
         pool.join();
         runtime.detach();
     }
@@ -624,9 +627,9 @@ RUVIA_TEST(blocking_pool_cross_thread_completion_preserves_results) {
     bool success = false;
     blocking_pool pool({.thread_count_ = 1});
     asio::io_context io_context;
-    ruvia::worker_runtime_context runtime(io_context, 8);
+    ruvia::worker_runtime_context runtime(io_context, 8, &pool);
     ruvia::test::run_worker_tasks(runtime,
-        ruvia::test::blocking_pool_tests::exercise_completion_during_suspend(pool, runtime.handle(), success));
+        ruvia::test::blocking_pool_tests::exercise_completion_during_suspend(runtime.handle(), success));
     pool.join();
     runtime.detach();
     RUVIA_CHECK(success);
@@ -636,9 +639,9 @@ RUVIA_TEST(blocking_pool_receiver_move_failure_is_reported) {
     bool success = false;
     blocking_pool pool({.thread_count_ = 1});
     asio::io_context io_context;
-    ruvia::worker_runtime_context runtime(io_context, 8);
-    ruvia::test::run_worker_tasks(runtime,
-        ruvia::test::blocking_pool_tests::exercise_receiver_move_failure(pool, runtime.handle(), success));
+    ruvia::worker_runtime_context runtime(io_context, 8, &pool);
+    ruvia::test::run_worker_tasks(
+        runtime, ruvia::test::blocking_pool_tests::exercise_receiver_move_failure(runtime.handle(), success));
     pool.join();
     runtime.detach();
     RUVIA_CHECK(success);
@@ -653,15 +656,14 @@ RUVIA_TEST(blocking_pool_cancellation_releases_the_waiter) {
         ruvia::stop_source source;
         blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
+        ruvia::worker_runtime_context runtime(io_context, 8, &pool);
         const auto worker_value = runtime.handle();
         std::thread canceller([&] {
             gate.started_.acquire();
             source.request_stop();
         });
-        ruvia::test::run_worker_tasks(runtime, exercise_cancellation(
-                                                   pool, worker_value, gate, source, cancelled_callable_finished,
-                                                   abandoned_resource, cancelled));
+        ruvia::test::run_worker_tasks(runtime, exercise_cancellation(worker_value, gate, source,
+                                                   cancelled_callable_finished, abandoned_resource, cancelled));
         canceller.join();
         pool.join();
         runtime.detach();
@@ -678,10 +680,9 @@ RUVIA_TEST(blocking_pool_timeout_releases_the_waiter) {
         thread_gate gate;
         blocking_pool pool(blocking_pool_options{.thread_count_ = 2});
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
+        ruvia::worker_runtime_context runtime(io_context, 8, &pool);
         const auto worker_value = runtime.handle();
-        ruvia::test::run_worker_tasks(runtime,
-            exercise_timeout(pool, worker_value, gate, abandoned_resource, timeout));
+        ruvia::test::run_worker_tasks(runtime, exercise_timeout(worker_value, gate, abandoned_resource, timeout));
         pool.join();
         runtime.detach();
     }
@@ -696,7 +697,7 @@ RUVIA_TEST(blocking_pool_timeout_saturates) {
         blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
         gate.occupy(pool);
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
+        ruvia::worker_runtime_context runtime(io_context, 8, &pool);
         const auto worker_value = runtime.handle();
         ruvia::test::run_worker_tasks(runtime,
             exercise_saturating_timeout(pool, worker_value, gate, saturating_timeout));
@@ -714,7 +715,7 @@ RUVIA_TEST(blocking_pool_stop_releases_queued_waiters) {
         blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
         gate.occupy(pool);
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
+        ruvia::worker_runtime_context runtime(io_context, 8, &pool);
         const auto worker_value = runtime.handle();
         ruvia::test::run_worker_tasks(runtime,
             exercise_stopped_pool(pool, worker_value, gate, discarded_resource, stopped_pool));
@@ -732,7 +733,7 @@ RUVIA_TEST(blocking_pool_full_queue_rejects_work) {
         blocking_pool pool(blocking_pool_options{.thread_count_ = 1, .queue_capacity_ = 1});
         gate.occupy(pool);
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
+        ruvia::worker_runtime_context runtime(io_context, 8, &pool);
         const auto worker_value = runtime.handle();
         ruvia::test::run_worker_tasks(runtime, exercise_queue_full(pool, worker_value, gate, queue_full));
         pool.join();
@@ -747,10 +748,9 @@ RUVIA_TEST(blocking_pool_worker_stop_releases_the_waiter) {
         thread_gate gate;
         blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
+        ruvia::worker_runtime_context runtime(io_context, 8, &pool);
         const auto worker_value = runtime.handle();
-        ruvia::test::run_worker_tasks(runtime,
-            exercise_worker_stopping(runtime, pool, worker_value, gate, worker_stopping));
+        ruvia::test::run_worker_tasks(runtime, exercise_worker_stopping(runtime, worker_value, gate, worker_stopping));
         gate.release_.release();
         pool.join();
         runtime.detach();
@@ -764,11 +764,11 @@ RUVIA_TEST(blocking_pool_stopped_worker_rejects_work) {
     {
         blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
+        ruvia::worker_runtime_context runtime(io_context, 8, &pool);
         const auto worker_value = runtime.handle();
         runtime.close();
-        ruvia::test::run_worker_tasks(runtime,
-            exercise_stopped_worker(pool, worker_value, stopped_worker_task_ran, stopped_worker));
+        ruvia::test::run_worker_tasks(
+            runtime, exercise_stopped_worker(worker_value, stopped_worker_task_ran, stopped_worker));
         pool.join();
         runtime.detach();
         stopped_worker =
@@ -783,12 +783,12 @@ RUVIA_TEST(blocking_pool_rejects_settled_operations_before_submission) {
     {
         blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
+        ruvia::worker_runtime_context runtime(io_context, 8, &pool);
         asio::io_context other_context;
         ruvia::worker_runtime_context other_runtime(other_context, 8);
         const auto worker_value = runtime.handle();
-        ruvia::test::run_worker_tasks(runtime, exercise_settled_before_submit(pool, worker_value,
-                                                   other_runtime.handle(), settled_task_ran, settled_before_submit));
+        ruvia::test::run_worker_tasks(runtime, exercise_settled_before_submit(worker_value, other_runtime.handle(),
+                                                   settled_task_ran, settled_before_submit));
         pool.join();
         runtime.detach();
         other_runtime.detach();
@@ -796,6 +796,17 @@ RUVIA_TEST(blocking_pool_rejects_settled_operations_before_submission) {
             settled_before_submit && !settled_task_ran.load() && pool.stats().completed_ == 0;
     }
     RUVIA_CHECK(settled_before_submit);
+}
+
+RUVIA_TEST(blocking_pool_worker_without_pool_reports_unavailable) {
+    bool unavailable = false;
+    std::atomic_bool ran{false};
+    asio::io_context io_context;
+    ruvia::worker_runtime_context runtime(io_context, 8);
+    ruvia::test::run_worker_tasks(runtime, exercise_worker_without_pool(runtime.handle(), ran, unavailable));
+    runtime.detach();
+    RUVIA_CHECK(unavailable);
+    RUVIA_CHECK(!ran.load());
 }
 
 RUVIA_TEST(blocking_pool_rejects_empty_tasks) {

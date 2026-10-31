@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <stdexcept>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/stop_token.h"
@@ -45,6 +46,32 @@ RUVIA_TEST(db_pool_rejects_zero_capacity_at_configuration) {
         RUVIA_CHECK(migrator_rejected);
     }
     pool.join();
+}
+
+RUVIA_TEST(db_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
+    for (const auto driver : database_drivers) {
+        const ruvia::db_config config{
+            .driver_ = driver, .host_ = "localhost", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
+        bool rejected = false;
+        {
+            ruvia::event_loop_pool pool({.loop_count_ = 1});
+            try {
+                ruvia::db_client client(pool.loop(0), config);
+            } catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            pool.join();
+        }
+        RUVIA_CHECK(rejected);
+        // The same configuration is accepted once the loop borrows a pool.
+        ruvia::blocking_pool lookups({.thread_count_ = 1});
+        ruvia::event_loop_pool pool({.loop_count_ = 1, .blocking_pool_ = &lookups});
+        {
+            ruvia::db_client client(pool.loop(0), config);
+        }
+        pool.join();
+        lookups.join();
+    }
 }
 
 RUVIA_TEST(db_pool_opens_the_configured_number_of_connections) {

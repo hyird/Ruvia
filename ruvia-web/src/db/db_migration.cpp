@@ -12,12 +12,14 @@
 #include <asio/io_context.hpp>
 #include <openssl/evp.h>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/detail/db/db_utils.h"
 
+#include "client/client_host_resolver.h"
 #include "db/db_config_validation.h"
 #include "db/db_migration_checksum.h"
 #include "db/db_migration_validation.h"
@@ -408,10 +410,17 @@ task<db_migration_report> stop_migration_loop_when_done(
 [[nodiscard]] db_migration_report run_migrations(detail::db_config_storage config,
     std::span<const db_migration> migrations, db_migrator_options_storage options,
     std::pmr::memory_resource* resource) {
+    // The migrator drives its own event loop, so it also owns the pool that
+    // loop borrows for a DNS host lookup; an IP literal needs none.
+    std::optional<blocking_pool> host_lookups;
+    if (detail::client_host_needs_lookup(config.host_)) {
+        host_lookups.emplace(blocking_pool_options{.thread_count_ = 1});
+    }
     asio::io_context io_context(std::allocator_arg,
         std::pmr::polymorphic_allocator<std::byte>(pmr_resource_or_default(resource)),
         asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
-    auto attachment = attach_event_loop(io_context);
+    auto attachment =
+        attach_event_loop(io_context, {.blocking_pool_ = host_lookups.has_value() ? &*host_lookups : nullptr});
     const auto loop = attachment.loop();
     const auto worker_value = loop.handle();
     auto result_value = loop.start(stop_migration_loop_when_done(

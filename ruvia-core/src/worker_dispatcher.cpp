@@ -48,10 +48,11 @@ worker_id_type next_worker_dispatcher_id() noexcept {
     return g_next_worker_id.fetch_add(1, std::memory_order_relaxed);
 }
 
-worker_dispatcher::worker_dispatcher(asio::io_context& io_context, std::size_t capacity)
+worker_dispatcher::worker_dispatcher(asio::io_context& io_context, std::size_t capacity, ruvia::blocking_pool* pool)
     : io_context_(io_context),
       timer_(make_pmr_object<asio::steady_timer>(process_resource(), io_context)),
       capacity_(checked_queue_capacity(capacity)),
+      blocking_pool_(pool),
       nodes_(process_resource()),
       worker_id_(next_worker_dispatcher_id()),
       timers_(process_resource()),

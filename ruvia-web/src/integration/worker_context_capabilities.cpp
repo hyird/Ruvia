@@ -15,11 +15,4 @@ void* worker_context_capabilities::worker_state_instance(const void* type_key) c
     return instance;
 }
 
-blocking_pool& worker_context_capabilities::require_blocking_pool() const {
-    if (blocking_pool_ == nullptr) {
-        throw std::logic_error("blocking pool is disabled");
-    }
-    return *blocking_pool_;
-}
-
 }  // namespace ruvia::detail

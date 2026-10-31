@@ -8,9 +8,9 @@
 namespace ruvia {
 
 worker_runtime_context::worker_runtime_context(
-    asio::io_context& io_context, std::size_t queue_capacity)
+    asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool)
     : io_context_(&io_context),
-      dispatcher_(std::make_shared<detail::worker_dispatcher>(io_context, queue_capacity)),
+      dispatcher_(std::make_shared<detail::worker_dispatcher>(io_context, queue_capacity, pool)),
       handle_(detail::worker_handle_access::make(dispatcher_)) {}
 
 worker_runtime_context::~worker_runtime_context() {

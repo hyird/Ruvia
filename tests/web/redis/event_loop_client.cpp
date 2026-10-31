@@ -27,6 +27,7 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/timer.h"
@@ -657,6 +658,29 @@ RUVIA_TEST(redis_client_runs_on_its_event_loop_and_retains_results) {
     pool.loop(0).start(check_commands(client, ruvia_ctx)).get();
     pool.stop();
     pool.join();
+}
+
+RUVIA_TEST(redis_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host) {
+    const ruvia::redis_config config{.host_ = "localhost", .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
+    bool rejected = false;
+    {
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        try {
+            ruvia::redis_client client(pool.loop(0), config);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        pool.join();
+    }
+    RUVIA_CHECK(rejected);
+    // The same configuration is accepted once the loop borrows a pool.
+    ruvia::blocking_pool lookups({.thread_count_ = 1});
+    ruvia::event_loop_pool pool({.loop_count_ = 1, .blocking_pool_ = &lookups});
+    {
+        ruvia::redis_client client(pool.loop(0), config);
+    }
+    pool.join();
+    lookups.join();
 }
 
 ruvia::task<void> check_self_nested_copy(ruvia::redis_client& client, ruvia::testing::test_context& ruvia_ctx) {

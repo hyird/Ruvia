@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/dotenv.h"
 #include "ruvia/web/error.h"
@@ -76,7 +77,10 @@ int main(int argc, char** argv) {
             .read_timeout_ = std::chrono::seconds(5),
             .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
         };
-        ruvia::event_loop_pool loops({.loop_count_ = 1});
+        // The loop looks "localhost" up on this pool instead of blocking in
+        // getaddrinfo; declared first, it outlives the loops.
+        ruvia::blocking_pool host_lookups({.thread_count_ = 1});
+        ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &host_lookups});
         loops.start();
         auto done = loops.loop(0).start(exchange(loops.loop(0), std::move(config)));
         done.get();

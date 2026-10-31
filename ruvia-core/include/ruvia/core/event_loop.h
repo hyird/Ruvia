@@ -233,6 +233,9 @@ private:
 
 struct event_loop_attachment_options final {
     std::size_t queue_capacity_{1024};
+    // Borrowed pool for run_blocking() and client host lookups on this loop;
+    // it must outlive the attachment. Null leaves the loop without one.
+    blocking_pool* blocking_pool_{nullptr};
 };
 
 // Binds a worker to an io_context the caller owns. The caller drives that

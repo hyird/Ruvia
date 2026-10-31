@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/http/http_client_redirect.h"
 #include "ruvia/web/dotenv.h"
@@ -165,7 +166,10 @@ int main(int argc, char** argv) {
             .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
             .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
         };
-        ruvia::event_loop_pool loops({.loop_count_ = 1});
+        // The loop looks "localhost" up on this pool instead of blocking in
+        // getaddrinfo; declared first, it outlives the loops.
+        ruvia::blocking_pool host_lookups({.thread_count_ = 1});
+        ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &host_lookups});
         loops.start();
         auto done = loops.loop(0).start(exercise(loops.loop(0), std::move(config)));
         auto body = done.get();

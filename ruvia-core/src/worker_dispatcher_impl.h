@@ -29,6 +29,10 @@
 // of it: worker_dispatcher.cpp runs the queue and the worker's lifecycle, while
 // worker_timers.cpp runs the timer heap that shares its mutex.
 
+namespace ruvia {
+class blocking_pool;
+}  // namespace ruvia
+
 namespace ruvia::detail {
 
 inline constexpr std::size_t no_timer_slot = static_cast<std::size_t>(-1);
@@ -75,7 +79,9 @@ struct timer_entry_later final {
 
 class worker_dispatcher final : public std::enable_shared_from_this<worker_dispatcher> {
 public:
-    worker_dispatcher(asio::io_context& io_context, std::size_t capacity);
+    // `pool` is borrowed: offloads from this worker run there, and it must
+    // outlive the dispatcher. Null leaves the worker without one.
+    worker_dispatcher(asio::io_context& io_context, std::size_t capacity, ruvia::blocking_pool* pool);
     ~worker_dispatcher();
 
     worker_dispatcher(const worker_dispatcher&) = delete;
@@ -145,6 +151,9 @@ public:
     [[nodiscard]] bool is_current() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
+    [[nodiscard]] ruvia::blocking_pool* blocking_pool() const noexcept {
+        return blocking_pool_;
+    }
 
 private:
     friend class worker_shutdown_hook;
@@ -202,6 +211,7 @@ private:
     asio::io_context& io_context_;
     std::unique_ptr<asio::steady_timer, pmr_object_deleter<asio::steady_timer>> timer_;
     std::size_t capacity_;
+    ruvia::blocking_pool* const blocking_pool_;
     std::pmr::vector<node_type> nodes_;
     mutable std::mutex mutex_;
     std::condition_variable pending_changed_;

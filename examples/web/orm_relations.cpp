@@ -18,6 +18,7 @@
 #include <tuple>
 #include <utility>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_repository.h"
@@ -273,7 +274,10 @@ int main(int argc, char** argv) {
         }
         if (execute) {
             asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
-            auto attachment = ruvia::attach_event_loop(context_value);
+            // The loop looks a DNS RUVIA_DB_HOST up on this pool; declared
+            // first, it outlives the attachment.
+            ruvia::blocking_pool host_lookups({.thread_count_ = 1});
+            auto attachment = ruvia::attach_event_loop(context_value, {.blocking_pool_ = &host_lookups});
             auto settings = ruvia::examples::config();
             ruvia::db_client db(attachment.loop(), settings);
             auto root = attachment.loop().start(ruvia::examples::run(db, attachment));

@@ -95,4 +95,21 @@ RUVIA_TEST(db_migrator_lock_timeout_bounds_only_the_postgresql_lock_wait) {
         RUVIA_CHECK(statements[3].sql_.starts_with("CREATE TABLE IF NOT EXISTS"));
     }
 }
+
+// The migrator drives its own event loop, so it also brings the pool that loop
+// looks a DNS host up on: a name that cannot resolve (RFC 6761 §6.4) fails the
+// lookup, not the configuration.
+RUVIA_TEST(db_migrator_looks_up_a_dns_host_on_its_own_pool) {
+    ruvia::db_config config{.driver_ = ruvia::db_driver::postgresql,
+        .host_ = "ruvia-migrator.invalid",
+        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}};
+    config.connect_timeout_ = std::chrono::seconds(1);
+    bool lookup_failed = false;
+    try {
+        (void)ruvia::db_migrator::migrate(config, std::span<const ruvia::db_migration>{});
+    } catch (const ruvia::db_error&) {
+        lookup_failed = true;
+    }
+    RUVIA_CHECK(lookup_failed);
+}
 #endif

@@ -29,6 +29,14 @@ worker_id_type worker_handle::id() const noexcept {
     return dispatcher_ ? dispatcher_->id() : 0;
 }
 
+bool worker_handle::has_blocking_pool() const noexcept {
+    return dispatcher_ && dispatcher_->blocking_pool() != nullptr;
+}
+
+blocking_pool* detail::worker_handle_access::blocking_pool(const worker_handle& worker) noexcept {
+    return worker.dispatcher_ ? worker.dispatcher_->blocking_pool() : nullptr;
+}
+
 post_result_type worker_handle::post_task(move_only_function<void()> task_value) const {
     if (!task_value) {
         throw std::invalid_argument("worker post requires a callable task");

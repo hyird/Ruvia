@@ -119,9 +119,9 @@ void external_context_claim::release(event_loop_state* state_value) noexcept {
     service_->release_state(state_value);
 }
 
-attached_context::attached_context(asio::io_context& io_context, std::size_t queue_capacity)
+attached_context::attached_context(asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool)
     : claim_(io_context),
-      runtime_(io_context, queue_capacity),
+      runtime_(io_context, queue_capacity, pool),
       stop_(runtime_) {}
 
 // The callback owner is kept alive by the completion handler until both the
@@ -245,15 +245,15 @@ private:
     std::shared_ptr<event_loop_state> active_loop_;
 };
 
-event_loop_state::event_loop_state(std::size_t queue_capacity)
+event_loop_state::event_loop_state(std::size_t queue_capacity, blocking_pool* pool)
     : context_ownership_(std::in_place_type<worker_runtime>,
-          worker_runtime_options{.queue_capacity_ = queue_capacity}),
+          worker_runtime_options{.queue_capacity_ = queue_capacity, .blocking_pool_ = pool}),
       io_context_(&owned_runtime().io_context()),
       executor_(io_context_->get_executor()),
       runtime_(owned_runtime().context()) {}
 
-event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity)
-    : context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity),
+event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool)
+    : context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity, pool),
       io_context_(std::addressof(external_context)),
       executor_(external_context.get_executor()),
       runtime_(std::get_if<attached_context>(&context_ownership_)->runtime_) {}
@@ -557,7 +557,7 @@ event_loop_attachment attach_event_loop(
     asio::io_context& io_context, event_loop_attachment_options options) {
     auto state_value = std::allocate_shared<detail::event_loop_state>(
         std::pmr::polymorphic_allocator<detail::event_loop_state>(process_resource()),
-        io_context, options.queue_capacity_);
+        io_context, options.queue_capacity_, options.blocking_pool_);
     const std::weak_ptr<detail::event_loop_state> weak_state = state_value;
     // root_task uses this sink directly; it must not call event_loop_state::report_failure,
     // which would route back through this same sink.

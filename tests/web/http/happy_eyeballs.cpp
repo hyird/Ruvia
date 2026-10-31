@@ -17,6 +17,7 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
@@ -195,7 +196,10 @@ RUVIA_TEST(http_client_fast_address_failure_immediately_starts_the_next_family) 
         return;
     }
     auto& io = ruvia::test::new_test_io_context();
-    auto attachment = ruvia::attach_event_loop(io);
+    // Looks "localhost" up on the pool the loop borrows; declared first, it
+    // outlives the attachment.
+    ruvia::blocking_pool lookups({.thread_count_ = 1});
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &lookups});
     auto loop = attachment.loop();
     auto worker = loop.handle();
     opposite_family_peer peer(io, worker, *first_is_v6);
@@ -211,6 +215,7 @@ RUVIA_TEST(http_client_fast_address_failure_immediately_starts_the_next_family) 
     auto root = loop.start(exercise(attachment, peer, ruvia_ctx, "localhost", connect_timeout));
     attachment.run();
     root.get();
+    lookups.join();
 }
 
 RUVIA_TEST(http_client_connects_to_an_ipv6_literal) {
