@@ -194,8 +194,8 @@ private:
 // caller-provided output buffer and the active immediate/continue-gated
 // alternative points into the request's borrowed content; those sources must
 // remain alive and unchanged until sent.
-// exchange_state() returns independent response-side protocol facts; head() and
-// content_plan() remain readable for the request write or an explicit retry.
+// take_exchange_state() moves out the independent response-side protocol facts;
+// head() and content_plan() remain readable for the request write or an explicit retry.
 class prepared_http1_client_request final {
 public:
     [[nodiscard]] constexpr std::string_view head() const& noexcept {
@@ -208,11 +208,6 @@ public:
     }
     [[nodiscard]] constexpr const http1_client_request_content_plan& content_plan() const&& = delete;
 
-    [[nodiscard]] http1_client_exchange_state exchange_state() const& {
-        return http1_client_exchange_state(
-            exchange_state_, exchange_state_.offered_upgrade_protocols_.get_allocator().resource());
-    }
-    http1_client_exchange_state exchange_state() const&& = delete;
     [[nodiscard]] http1_client_exchange_state take_exchange_state() && noexcept {
         return std::move(exchange_state_);
     }

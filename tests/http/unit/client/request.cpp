@@ -674,12 +674,12 @@ RUVIA_TEST(http1_client_request_writer_preserves_metadata_borrowed_from_output) 
             }
             RUVIA_CHECK(buffer == original);
 
-            const auto result = prepare(buffer);
-            const auto* prepared = std::get_if<prepared_http1_client_request>(&result);
+            auto result = prepare(buffer);
+            auto* prepared = std::get_if<prepared_http1_client_request>(&result);
             RUVIA_CHECK(prepared != nullptr);
             if (prepared != nullptr) {
                 RUVIA_CHECK_EQ(prepared->head(), std::string_view(expected));
-                auto parser = ruvia::http1_client_response_parser(prepared->exchange_state());
+                auto parser = ruvia::http1_client_response_parser(std::move(*prepared).take_exchange_state());
                 const auto response = parser.parse("HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\n");
                 RUVIA_CHECK(response.parsed() != nullptr);
                 if (response.parsed() != nullptr) {
@@ -911,10 +911,10 @@ RUVIA_TEST(http1_client_request_context_binds_the_actual_close_signal) {
     http_client_request_view request;
     request.headers_ = std::span<const ruvia::http_header_view>(&close_header, 1);
     prepared_fixture explicit_close(http_origin_view::https({.host_ = "example.test"}), request);
-    const auto* explicit_prepared = std::get_if<prepared_http1_client_request>(&explicit_close.result_);
+    auto* explicit_prepared = std::get_if<prepared_http1_client_request>(&explicit_close.result_);
     RUVIA_CHECK(explicit_prepared != nullptr);
     if (explicit_prepared != nullptr) {
-        auto parser = ruvia::http1_client_response_parser(explicit_prepared->exchange_state());
+        auto parser = ruvia::http1_client_response_parser(std::move(*explicit_prepared).take_exchange_state());
         const auto response = parser.parse("HTTP/1.1 204 No Content\r\n\r\n");
         RUVIA_CHECK(response.parsed() != nullptr);
         if (response.parsed() != nullptr) {

@@ -10,6 +10,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
@@ -31,28 +32,55 @@ using ruvia::http_client_request_content_signal;
 using ruvia::http_client_response_head;
 using ruvia::http_protocol_version;
 
-inline http1_client_response_parse_result parse_wire(std::string_view method, std::string_view wire,
-    http1_close_policy close_policy = http1_close_policy::allow_reuse,
-    std::span<const ruvia::http_header_view> request_headers = {},
-    std::pmr::memory_resource* resource = nullptr) {
-    std::array<char, 2048> request_head;
-    const auto origin = ruvia::http_origin_view::https({.host_ = "example.test"});
-    ruvia::http_client_request_view request;
-    request.method_ = method;
-    request.headers_ = request_headers;
-    auto prepared_result =
-        method == "CONNECT"
-            ? ruvia::http1_client_request_writer().prepare_connect(origin, request_headers, request_head,
-                  http1_client_request_wire_policy{.close_policy_ = close_policy})
-            : ruvia::http1_client_request_writer().prepare(origin, request, request_head,
-                  http1_client_request_wire_policy{.close_policy_ = close_policy});
+using http1_client_request_prepare_result = std::variant<ruvia::prepared_http1_client_request,
+    ruvia::http1_client_request_buffer_too_small, ruvia::http1_client_request_prepare_error>;
+
+// A prepared request feeds exactly one response parser, which takes its
+// exchange state; a test that drives several parsers from the same request
+// prepares it again for each of them.
+inline http1_client_response_parser exchange_parser(
+    http1_client_request_prepare_result prepared_result, std::pmr::memory_resource* resource = nullptr) {
     auto* prepared = std::get_if<ruvia::prepared_http1_client_request>(&prepared_result);
     if (prepared == nullptr) {
         throw std::runtime_error("test request could not be prepared");
     }
-    auto parser = http1_client_response_parser(
-        std::move(*prepared).take_exchange_state(), resource);
-    return parser.parse(wire);
+    return http1_client_response_parser(std::move(*prepared).take_exchange_state(), resource);
+}
+
+inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin,
+    const ruvia::http_client_request_view& request, http1_client_request_wire_policy policy = {},
+    std::pmr::memory_resource* resource = nullptr) {
+    std::array<char, 2048> request_head;
+    return exchange_parser(
+        ruvia::http1_client_request_writer().prepare(origin, request, request_head, policy), resource);
+}
+
+inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin,
+    const ruvia::http1_client_request_head_view& request, http1_client_request_wire_policy policy = {},
+    std::pmr::memory_resource* resource = nullptr) {
+    std::array<char, 2048> request_head;
+    return exchange_parser(
+        ruvia::http1_client_request_writer().prepare_streaming(origin, request, request_head, policy),
+        resource);
+}
+
+inline http1_client_response_parse_result parse_wire(std::string_view method, std::string_view wire,
+    http1_close_policy close_policy = http1_close_policy::allow_reuse,
+    std::span<const ruvia::http_header_view> request_headers = {},
+    std::pmr::memory_resource* resource = nullptr) {
+    const auto origin = ruvia::http_origin_view::https({.host_ = "example.test"});
+    const http1_client_request_wire_policy policy{.close_policy_ = close_policy};
+    if (method == "CONNECT") {
+        std::array<char, 2048> request_head;
+        return exchange_parser(ruvia::http1_client_request_writer().prepare_connect(
+                                   origin, request_headers, request_head, policy),
+            resource)
+            .parse(wire);
+    }
+    ruvia::http_client_request_view request;
+    request.method_ = method;
+    request.headers_ = request_headers;
+    return exchange_parser(origin, request, policy, resource).parse(wire);
 }
 
 inline http1_client_response_parse_result parse_result(std::string_view method,

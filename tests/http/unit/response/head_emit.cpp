@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
@@ -315,13 +316,13 @@ RUVIA_TEST(http1_response_head_upgrade_connection_fields_round_trip) {
         std::array<char, 256> request_buffer;
         auto request = ruvia::http1_client_request_writer().prepare(
             ruvia::http_origin_view::http({.host_ = "example.test"}), {}, request_buffer);
-        const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&request);
+        auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&request);
         RUVIA_CHECK(prepared_req != nullptr);
         if (prepared_req == nullptr) {
             continue;
         }
         ruvia::http1_client_response_parser parser(
-            prepared_req->exchange_state(), std::pmr::new_delete_resource());
+            std::move(*prepared_req).take_exchange_state(), std::pmr::new_delete_resource());
         const auto parsed = parser.parse(head);
         RUVIA_CHECK(parsed.parsed() != nullptr);
         if (const auto* accepted = parsed.parsed()) {

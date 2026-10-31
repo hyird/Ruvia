@@ -12,8 +12,6 @@
 
 namespace ruvia {
 
-class prepared_http1_client_request;
-
 namespace detail {
 
 struct http1_client_request_prepare_result_access;
@@ -41,17 +39,8 @@ public:
     http1_client_exchange_state& operator=(http1_client_exchange_state&&) = delete;
 
 private:
-    friend class prepared_http1_client_request;
     friend struct detail::http1_client_request_prepare_result_access;
     friend struct detail::http1_client_exchange_state_access;
-
-    http1_client_exchange_state(
-        const http1_client_exchange_state& other, std::pmr::memory_resource* resource)
-        : offered_upgrade_protocols_(other.offered_upgrade_protocols_, resource),
-          method_(other.method_),
-          connection_options_(other.connection_options_),
-          close_policy_(other.close_policy_),
-          content_state_(other.content_state_) {}
 
     http1_client_exchange_state(http_known_method method,
         detail::http_connection_options connection_options, http1_close_policy close_policy,

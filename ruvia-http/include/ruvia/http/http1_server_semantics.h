@@ -36,9 +36,7 @@ public:
 
 private:
     friend http1_response_stream_plan http1_plan_response_stream(
-        const http1_server_request_parse_state&, http1_close_policy) noexcept;
-    friend http1_response_stream_plan http1_plan_consumed_response_stream(
-        const http1_server_request_parse_state&, http1_close_policy) noexcept;
+        const http1_server_request_parse_state&, http1_close_policy, http1_request_body_consumption) noexcept;
 
     http1_response_stream_plan(http_response_stream_framing framing,
         http1_request_connection_plan request_connection_plan, http1_close_policy close_policy,
@@ -55,33 +53,23 @@ private:
 };
 
 // Pure HTTP/1 response-stream planning. The runtime contributes only its typed
-// product policy (for example, a per-connection request limit); HTTP retains the
-// request disposition and candidate framing until the response status is known.
-// Commit can therefore distinguish a body-allowed HTTP/1.0 stream, which requires
-// close delimiting, from a body-suppressed response that is already self-delimited.
+// product policy (for example, a per-connection request limit) and the request
+// body's consumption state; HTTP retains the request disposition and candidate
+// framing until the response status is known. Commit can therefore distinguish
+// a body-allowed HTTP/1.0 stream, which requires close delimiting, from a
+// body-suppressed response that is already self-delimited. A route that consumed
+// the complete request body before streaming passes `complete`; the parser's
+// body plan still describes the original request framing, so planning for an
+// unread body passes `body_plan_.consumption_if_unread()`.
 [[nodiscard]] inline http1_response_stream_plan http1_plan_response_stream(
-    const http1_server_request_parse_state& parsed_value, http1_close_policy close_policy) noexcept {
-    const auto request_connection_plan = apply_request_body_consumption(parsed_value.connection_plan_,
-        parsed_value.body_plan_.requires_consumption() ? http1_request_body_consumption::incomplete
-                                                       : http1_request_body_consumption::complete);
+    const http1_server_request_parse_state& parsed_value, http1_close_policy close_policy,
+    http1_request_body_consumption consumption) noexcept {
     const auto framing = parsed_value.request_.protocol_version() == http_protocol_version::http11
                              ? http_response_stream_framing::http1_chunked
                              : http_response_stream_framing::http1_close_delimited;
-    return http1_response_stream_plan(
-        framing, request_connection_plan, close_policy, parsed_value.request_.known_method());
-}
-
-// Runtime variant for a route that buffered and consumed the complete request
-// body before deciding to stream its response. The parser's body plan still
-// describes the original request framing, so this named entry point records the
-// completed consumption instead of pessimistically forcing connection close.
-[[nodiscard]] inline http1_response_stream_plan http1_plan_consumed_response_stream(
-    const http1_server_request_parse_state& parsed_value, http1_close_policy close_policy) noexcept {
-    const auto framing = parsed_value.request_.protocol_version() == http_protocol_version::http11
-                             ? http_response_stream_framing::http1_chunked
-                             : http_response_stream_framing::http1_close_delimited;
-    return http1_response_stream_plan(
-        framing, parsed_value.connection_plan_, close_policy, parsed_value.request_.known_method());
+    return http1_response_stream_plan(framing,
+        apply_request_body_consumption(parsed_value.connection_plan_, consumption), close_policy,
+        parsed_value.request_.known_method());
 }
 
 enum class http1_connection_close_field_policy : std::uint8_t { close_only,

@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -13,7 +12,6 @@
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_status.h"
 
 namespace ruvia {
@@ -144,20 +142,4 @@ private:
 // before using codings(); an empty span in either error state is not identity.
 [[nodiscard]] http_content_coding_field_result request_content_coding(
     const http_request& request) noexcept;
-
-enum class http_content_decode_error : std::uint8_t {
-    unsupported_coding,
-    invalid_content,
-    decoded_size_exceeded,
-    decoder_failure
-};
-
-struct http_content_decode_options final {
-    std::size_t max_decoded_bytes_{};
-    std::pmr::memory_resource* resource_{nullptr};
-};
-
-[[nodiscard]] std::pmr::string decode_http_request_content(
-    std::span<const http_content_coding> codings, std::string_view body,
-    http_content_decode_options options = {});
 }  // namespace ruvia

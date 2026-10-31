@@ -191,7 +191,7 @@ RUVIA_TEST(request_body_zstd_rejects_bytes_after_the_last_frame) {
         decode_error(http_content_coding::zstd, encoded) == http_content_decode_error::invalid_content);
 }
 
-RUVIA_TEST(http_request_content_decoder_owns_protocol_failure_status) {
+RUVIA_TEST(http_request_content_decode_errors_own_protocol_failure_status) {
     auto* resource = std::pmr::get_default_resource();
 
     constexpr std::array gzip{http_content_coding::gzip};
@@ -200,15 +200,13 @@ RUVIA_TEST(http_request_content_decoder_owns_protocol_failure_status) {
     const auto check_protocol_error = [&](std::span<const http_content_coding> codings,
                                           std::string_view body, std::size_t max_bytes,
                                           ruvia::http_status_code expected_status) {
-        bool caught = false;
-        try {
-            (void)decode_http_request_content(
-                codings, body, {.max_decoded_bytes_ = max_bytes, .resource_ = resource});
-        } catch (const ruvia::http_protocol_error& error) {
-            caught = true;
-            RUVIA_CHECK_EQ(error.status(), expected_status);
+        const auto result_value = decode_http_content(
+            codings, body, {.max_decoded_bytes_ = max_bytes, .resource_ = resource});
+        const auto* failure = std::get_if<http_content_decode_error>(&result_value);
+        RUVIA_CHECK(failure != nullptr);
+        if (failure != nullptr) {
+            RUVIA_CHECK_EQ(ruvia::http_request_content_decode_error(*failure).status(), expected_status);
         }
-        RUVIA_CHECK(caught);
     };
     check_protocol_error(gzip, "not-gzip", 1024, ruvia::http_status::bad_request);
     check_protocol_error(identity, "too large", 4, ruvia::http_status::content_too_large);

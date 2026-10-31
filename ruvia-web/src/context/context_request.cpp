@@ -7,19 +7,21 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/http/cookies.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/detail/http/request/request_fields_access.h"
-#include "ruvia/web/detail/model/parse/parser.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/multipart_reader.h"
 #include "ruvia/web/streaming.h"
@@ -587,10 +589,19 @@ task<std::string_view> context_request::text() const {
             context_value->body_identity_ = true;
             co_return raw;
         }
-        auto& decoded = context_value->decoded_body();
-        decoded = decode_http_request_content(codings, raw,
+        auto decode_result = decode_http_content(codings, raw,
             {.max_decoded_bytes_ = context_value->services().max_decoded_request_body_bytes(),
                 .resource_ = decode_resource});
+        auto* decoded_content = std::get_if<std::pmr::string>(&decode_result);
+        if (decoded_content == nullptr) {
+            const auto error = std::get<http_content_decode_error>(decode_result);
+            if (error == http_content_decode_error::decoder_failure) {
+                throw std::runtime_error("request content decoder failed");
+            }
+            throw http_request_content_decode_error(error);
+        }
+        auto& decoded = context_value->decoded_body();
+        decoded = std::move(*decoded_content);
         context_value->body_decoded_ = true;
         co_return std::string_view(decoded);
     };

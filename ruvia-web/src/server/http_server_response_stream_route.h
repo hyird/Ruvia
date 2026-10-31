@@ -41,7 +41,8 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
             d.routes_, d.request_memory_, d.base_route_services_, d.response_);
     }
     const auto close_policy = d.request_sequence_.next_response_close_policy();
-    const auto stream_plan = http1_plan_response_stream(d.parsed_, close_policy);
+    const auto stream_plan =
+        http1_plan_response_stream(d.parsed_, close_policy, d.parsed_.body_plan_.consumption_if_unread());
     using response_sink_type = response_stream_sink<stream_type>;
     const auto& route = resolved.route();
     const auto& endpoint = *route.endpoint().response_stream();
@@ -54,7 +55,8 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     }
     response_sink_type response_sink(d.stream_, d.memory_, *d.options_.codecs_, response_head, d.scanner_entry_,
         d.base_route_services_.worker(), d.parsed_.request_, d.options_.cors_ ? &*d.options_.cors_ : nullptr,
-        stream_plan, http1_plan_consumed_response_stream(d.parsed_, close_policy),
+        stream_plan,
+        http1_plan_response_stream(d.parsed_, close_policy, http1_request_body_consumption::complete),
         body_state.body(), d.response_coding_, d.response_coding_availability_, &d.inbound_buffer_pool_);
 
     // The handler stays in the session's idle deadman phase; the sink times

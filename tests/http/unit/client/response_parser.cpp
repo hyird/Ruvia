@@ -109,20 +109,14 @@ RUVIA_TEST(http_client_fieldless_exchange_completes_with_no_response_storage) {
     ruvia::http_client_request_view request;
     request.method_ = "POST";
     request.content_ = ruvia::http_client_request_content_view::bytes("payload");
-    std::array<char, 512> request_head;
-    const auto prepared = ruvia::http1_client_request_writer().prepare(
-        ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
-        http1_client_request_wire_policy{
-            .expectation_ = ruvia::http_client_request_expectation::continue_value});
-    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
-    RUVIA_CHECK(prepared_req != nullptr);
-    if (prepared_req == nullptr) {
-        return;
-    }
     auto* resource = ruvia::test::stl_moves_allocate_debug_metadata
                          ? std::pmr::get_default_resource()
                          : std::pmr::null_memory_resource();
-    http1_client_response_parser parser(prepared_req->exchange_state(), resource);
+    http1_client_response_parser parser = exchange_parser(
+        ruvia::http_origin_view::https({.host_ = "example.test"}), request,
+        http1_client_request_wire_policy{
+            .expectation_ = ruvia::http_client_request_expectation::continue_value},
+        resource);
     constexpr std::array<std::string_view, 3> heads{
         "HTTP/1.1 103 Early Hints\r\n\r\n",
         "HTTP/1.1 100 Continue\r\n\r\n",
@@ -302,21 +296,14 @@ RUVIA_TEST(http_client_many_response_fields_retry_every_allocation_failure_witho
     ruvia::http_client_request_view request;
     request.method_ = "POST";
     request.content_ = ruvia::http_client_request_content_view::bytes("payload");
-    std::array<char, 512> request_head;
-    const auto prepared = ruvia::http1_client_request_writer().prepare(
-        ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head,
-        http1_client_request_wire_policy{
-            .expectation_ = ruvia::http_client_request_expectation::continue_value});
-    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
-    RUVIA_CHECK(prepared_req != nullptr);
-    if (prepared_req == nullptr) {
-        return;
-    }
+    const auto origin = ruvia::http_origin_view::https({.host_ = "example.test"});
+    const http1_client_request_wire_policy continue_policy{
+        .expectation_ = ruvia::http_client_request_expectation::continue_value};
 
     counting_memory_resource counting;
     std::array<std::size_t, 2> allocation_counts{};
     {
-        http1_client_response_parser parser(prepared_req->exchange_state(), &counting);
+        http1_client_response_parser parser = exchange_parser(origin, request, continue_policy, &counting);
         for (std::size_t phase = 0; phase < wires.size(); ++phase) {
             const auto before = counting.allocation_count();
             const auto parsed = parser.parse(wires[phase]);
@@ -335,7 +322,7 @@ RUVIA_TEST(http_client_many_response_fields_retry_every_allocation_failure_witho
             }
             failing_memory_resource memory;
             {
-                http1_client_response_parser parser(prepared_req->exchange_state(), &memory);
+                http1_client_response_parser parser = exchange_parser(origin, request, continue_policy, &memory);
                 if (phase == 1) {
                     const auto interim = parser.parse(wires[0]);
                     check_many_field_response(ruvia_ctx, interim, wires[0].size(), true);
@@ -530,17 +517,8 @@ RUVIA_TEST(http_client_response_parser_failure_is_typed_and_allocation_free) {
     counting_memory_resource counting;
     ruvia::http_client_request_view request;
     request.method_ = "GET";
-    std::array<char, 512> request_head;
-    const auto prepared_result = ruvia::http1_client_request_writer().prepare(
-        ruvia::http_origin_view::https({.host_ = "example.test"}), request, request_head);
-    const auto* prepared = std::get_if<ruvia::prepared_http1_client_request>(&prepared_result);
-    RUVIA_CHECK(prepared != nullptr);
-    if (prepared == nullptr) {
-        return;
-    }
-
     auto failure_parser =
-        http1_client_response_parser(prepared->exchange_state(), &counting);
+        exchange_parser(ruvia::http_origin_view::https({.host_ = "example.test"}), request, {}, &counting);
     const auto failure = failure_parser.parse("HTTP/2 200 OK\r\n\r\n");
     RUVIA_CHECK(failure.failure() != nullptr);
     RUVIA_CHECK(
@@ -556,12 +534,8 @@ RUVIA_TEST(http_client_response_parser_enforces_the_complete_head_limit) {
 }
 
 RUVIA_TEST(http_client_response_parser_accepts_incremental_prefixes_and_resets_after_interim) {
-    std::array<char, 2048> output{};
-    auto prepared = ruvia::http1_client_request_writer().prepare(
-        ruvia::http_origin_view::https({.host_ = "example.test"}), {}, output);
-    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
-    RUVIA_CHECK(prepared_req != nullptr);
-    http1_client_response_parser parser(prepared_req->exchange_state());
+    http1_client_response_parser parser = exchange_parser(
+        ruvia::http_origin_view::https({.host_ = "example.test"}), ruvia::http_client_request_view{});
     for (const std::string_view wire : {"HTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\n",
              "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"}) {
         for (std::size_t size = 0; size < wire.size(); ++size) {

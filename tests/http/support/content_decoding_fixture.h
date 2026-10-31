@@ -33,7 +33,6 @@
 namespace content_decoding_test {
 
 using ruvia::decode_http_content;
-using ruvia::decode_http_request_content;
 using ruvia::encode_http_content;
 using ruvia::http1_chunked_body_decoder;
 using ruvia::http1_request_body_plan;

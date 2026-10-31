@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_transfer_coding_decoder.h"
 #include "ruvia/http/protocol_byte_limit.h"
@@ -253,6 +254,27 @@ enum class http_request_body_failure : std::uint8_t {
     }
     return http_protocol_error(
         http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
+}
+
+// Status for a request body whose Content-Encoding could not be decoded. A
+// decoder_failure is a codec fault rather than a protocol error; callers report
+// it as an internal failure before mapping, so it is not given a status here.
+[[nodiscard]] inline http_protocol_error http_request_content_decode_error(
+    http_content_decode_error error) noexcept {
+    switch (error) {
+        case http_content_decode_error::unsupported_coding:
+            return http_protocol_error(http_status::unsupported_media_type,
+                "unsupported_content_coding", "request Content-Encoding is not supported");
+        case http_content_decode_error::invalid_content:
+            return http_protocol_error(
+                http_status::bad_request, "invalid_content_coding", "failed to decode request body");
+        case http_content_decode_error::decoded_size_exceeded:
+            return http_request_body_protocol_error(http_request_body_failure::too_large);
+        case http_content_decode_error::decoder_failure:
+            break;
+    }
+    return http_protocol_error(
+        http_status::bad_request, "invalid_content_coding", "failed to decode request body");
 }
 
 [[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_size_failure(

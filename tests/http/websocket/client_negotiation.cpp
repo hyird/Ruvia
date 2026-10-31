@@ -15,6 +15,7 @@
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 
@@ -97,16 +98,20 @@ RUVIA_TEST(websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_s
 }
 RUVIA_TEST(websocket_h1_client_handshake_negotiates_deflate) {
     constexpr std::array<std::uint8_t, 16> nonce{'t', 'h', 'e', ' ', 's', 'a', 'm', 'p', 'l', 'e', ' ', 'n', 'o', 'n', 'c', 'e'};
-    ruvia::http1_websocket_client_handshake client({.nonce_ = nonce, .deflate_ = {.enabled_ = true}});
+    std::array<char, 24> encoded_key{};
+    ruvia::http_base64_encode(encoded_key.data(), nonce);
+    const ruvia::websocket_client_negotiation negotiation({.deflate_ = {.enabled_ = true}});
     std::array<char, 2048> buffer{};
-    auto prepared = client.prepare_request(ruvia::http_origin_view::https({.host_ = "example.com"}), "/", buffer);
-    const auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    auto prepared = ruvia::prepare_http1_websocket_client_request(
+        ruvia::http_origin_view::https({.host_ = "example.com"}), "/", encoded_key, negotiation, {}, {},
+        buffer, std::pmr::get_default_resource());
+    auto* prepared_req = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
     RUVIA_CHECK(prepared_req != nullptr);
     RUVIA_CHECK((prepared_req->head().find("sec-websocket-extensions: permessage-deflate") != std::string_view::npos));
-    ruvia::http1_client_response_parser parser(prepared_req->exchange_state());
+    ruvia::http1_client_response_parser parser(std::move(*prepared_req).take_exchange_state());
     auto response = parser.parse("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\nSec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n\r\n");
     RUVIA_CHECK(response.parsed() != nullptr);
-    auto accepted = client.validate_response(*response.parsed());
+    auto accepted = ruvia::validate_http1_websocket_client_response(encoded_key, negotiation, *response.parsed());
     RUVIA_CHECK((accepted.index() == 0));
     RUVIA_CHECK(std::get<0>(accepted).compression_.enabled_);
 }

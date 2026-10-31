@@ -85,6 +85,13 @@ public:
         return chunked() != nullptr;
     }
 
+    // The consumption a response must record when the runtime never read the
+    // request body: incomplete only if there is anything to read.
+    [[nodiscard]] constexpr http1_request_body_consumption consumption_if_unread() const noexcept {
+        return requires_consumption() ? http1_request_body_consumption::incomplete
+                                      : http1_request_body_consumption::complete;
+    }
+
     [[nodiscard]] http_request_expectations expectations() const noexcept {
         return expectations_;
     }

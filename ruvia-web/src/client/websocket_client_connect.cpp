@@ -94,9 +94,9 @@ task<void> websocket_client_state::perform_handshake() {
     http_io_buffer request_buffer(memory_.resource());
     auto prepared_result = prepare_http1_request_head(
         request_buffer, max_request_head_bytes, [&](std::span<char> buffer) {
-            return http1_websocket_client_handshake::prepare_request(config_.origin_,
-                config_.target_, encoded_key, config_.negotiation_, config_.headers_,
-                config_.user_agent_, buffer, memory_.resource());
+            return prepare_http1_websocket_client_request(config_.origin_, config_.target_,
+                encoded_key, config_.negotiation_, config_.headers_, config_.user_agent_, buffer,
+                memory_.resource());
         });
     auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
     if (prepared == nullptr) {
@@ -139,8 +139,8 @@ task<void> websocket_client_state::perform_handshake() {
             input_.consume(parsed_value->consumed_bytes());
             continue;
         }
-        const auto validated = http1_websocket_client_handshake::validate_response(
-            encoded_key, config_.negotiation_, *parsed_value);
+        const auto validated =
+            validate_http1_websocket_client_response(encoded_key, config_.negotiation_, *parsed_value);
         if ((validated.index() != 0)) {
             throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
                 "invalid WebSocket handshake response");

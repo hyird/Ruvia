@@ -369,9 +369,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                     // of whether the shared Web dispatch selected a document-root
                     // file, 404, 405, or OPTIONS response.
                     auto connection_plan = apply_request_body_consumption(
-                        parsed_value.connection_plan_, parsed_value.body_plan_.requires_consumption()
-                                                           ? http1_request_body_consumption::incomplete
-                                                           : http1_request_body_consumption::complete);
+                        parsed_value.connection_plan_, parsed_value.body_plan_.consumption_if_unread());
                     request_completion.emplace(finalize_buffered_route_response(
                         response, connection_plan, request_sequence, request_head->header_bytes()));
                     scanner_entry.touch();

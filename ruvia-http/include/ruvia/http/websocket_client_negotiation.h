@@ -6,11 +6,9 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
-#include <vector>
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http2_connection.h"
@@ -80,15 +78,6 @@ private:
 
 class http1_parsed_client_response_head;
 
-struct http1_websocket_client_handshake_config_view final {
-    // Supply fresh cryptographically random bytes for each opening handshake.
-    std::span<const std::uint8_t, 16> nonce_;
-    std::span<const http_header_view> headers_{};
-    std::span<const std::string_view> subprotocols_{};
-    std::string_view user_agent_{};
-    websocket_client_deflate_offer deflate_{};
-};
-
 enum class http1_websocket_client_handshake_error : std::uint8_t {
     response_status,
     accept,
@@ -98,52 +87,27 @@ enum class http1_websocket_client_handshake_error : std::uint8_t {
     extensions,
 };
 
-// Owns one opening handshake's key and configured fields in the supplied
-// resource; configuration views need only survive construction. The resource
-// must outlive this object and every prepared request's exchange state.
-class http1_websocket_client_handshake final {
-public:
-    http1_websocket_client_handshake(http1_websocket_client_handshake_config_view options,
-        std::pmr::memory_resource* resource = nullptr);
+// RFC 6455 section 4.1 opening handshake over HTTP/1.1 Upgrade. The caller
+// owns the base64-encoded 16-byte nonce (`encoded_key`), the negotiation and the
+// application headers for the whole exchange; subprotocols and the deflate offer
+// are validated by websocket_client_negotiation.
 
-    http1_websocket_client_handshake(const http1_websocket_client_handshake&) = delete;
-    http1_websocket_client_handshake& operator=(const http1_websocket_client_handshake&) = delete;
-    http1_websocket_client_handshake(http1_websocket_client_handshake&&) noexcept = default;
-    http1_websocket_client_handshake& operator=(http1_websocket_client_handshake&&) = delete;
+// Rejects application headers the handshake or request writer generates itself
+// (Host, framing, Expect, Upgrade/Connection and every Sec-WebSocket-* field)
+// and any header or User-Agent the request writer would refuse.
+void validate_http1_websocket_client_handshake_configuration(
+    std::span<const http_header_view> headers, std::string_view user_agent = {});
 
-    static void validate_configuration(
-        std::span<const http_header_view> headers,
-        std::span<const std::string_view> subprotocols,
-        std::string_view user_agent = {});
+[[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
+prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
+    std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
+    std::span<const http_header> headers, std::string_view user_agent, std::span<char> head_buffer,
+    std::pmr::memory_resource* resource);
 
-    [[nodiscard]] static std::variant<prepared_http1_client_request,
-        http1_client_request_buffer_too_small, http1_client_request_prepare_error>
-    prepare_request(const http_origin_view& origin, std::string_view target,
-        std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
-        std::span<const http_header> headers, std::string_view user_agent,
-        std::span<char> head_buffer, std::pmr::memory_resource* resource);
-
-    [[nodiscard]] static std::variant<websocket_client_negotiation_result_view,
-        http1_websocket_client_handshake_error>
-    validate_response(std::span<const char, 24> encoded_key,
-        const websocket_client_negotiation& negotiation,
-        const http1_parsed_client_response_head& response);
-
-    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-        http1_client_request_prepare_error>
-    prepare_request(
-        const http_origin_view& origin, std::string_view target, std::span<char> head_buffer) const;
-
-    [[nodiscard]] std::variant<websocket_client_negotiation_result_view,
-        http1_websocket_client_handshake_error>
-    validate_response(const http1_parsed_client_response_head& response) const;
-
-private:
-    std::pmr::memory_resource* resource_;
-    std::array<char, 24> key_{};
-    websocket_client_negotiation negotiation_;
-
-    std::pmr::vector<http_header> headers_;
-    std::pmr::string user_agent_;
-};
+// Validates the 101 response against the key, then the server's selection
+// against the negotiation. The result view borrows the response head.
+[[nodiscard]] std::variant<websocket_client_negotiation_result_view, http1_websocket_client_handshake_error>
+validate_http1_websocket_client_response(std::span<const char, 24> encoded_key,
+    const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response);
 }  // namespace ruvia

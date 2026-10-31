@@ -1,5 +1,3 @@
-#include "server/http_response_head.h"
-
 #include <array>
 #include <optional>
 #include <stdexcept>
@@ -129,7 +127,11 @@ void append_response_trailer_snapshot(std::pmr::string& output,
 
 }  // namespace
 
-void append_response_head(
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+void append_http1_response_head(
     const http_response& response, http_response_head_buffer& head, const http1_response_head_plan& plan) {
     const auto body_plan = plan.body_plan();
     if (response.status() != body_plan.response_status()) {
@@ -151,12 +153,12 @@ void append_response_head(
     // Its empty suppressed body then has no length of its own, so the declared
     // Content-Length is the only truthful value, and without one the field is
     // omitted rather than claiming an empty GET (RFC 9110 section 8.6).
-    const auto known_bits = response_known_header_bits(response);
+    const auto known_bits = detail::response_known_header_bits(response);
     const bool suppressed_empty_buffered_body =
         buffered != nullptr && body_plan.body_suppressed() && body_plan.status_allows_body() &&
         body_plan.explicit_content_length_allowed() && buffered->content_length() == 0 &&
         (response.has_head_metadata_body() ||
-            (known_bits & response_header_content_length) != 0);
+            (known_bits & detail::response_header_content_length) != 0);
     const bool auto_content_length_owned_by_writer =
         body_plan.auto_content_length_allowed() && !emit_chunked_transfer_encoding &&
         !suppressed_empty_buffered_body && (buffered != nullptr || !body_plan.status_allows_body());
@@ -166,10 +168,10 @@ void append_response_head(
         (plan.close_delimited_stream() == nullptr || body_plan.body_suppressed());
     const auto declared_content_length =
         (explicit_content_length_allowed || suppressed_empty_buffered_body) &&
-                (known_bits & response_header_content_length) != 0
-            ? explicit_content_length(response)
+                (known_bits & detail::response_header_content_length) != 0
+            ? detail::explicit_content_length(response)
             : std::nullopt;
-    const response_head_flags flags{.protocol_version_ = plan.protocol_version(),
+    const detail::response_head_flags flags{.protocol_version_ = plan.protocol_version(),
         .emit_chunked_transfer_encoding_ = emit_chunked_transfer_encoding,
         .emit_content_length_ = auto_content_length_owned_by_writer || declared_content_length.has_value(),
         // Buffered HEAD metadata retains the selected representation length.
@@ -181,8 +183,9 @@ void append_response_head(
                 : std::uint64_t{0})};
 
     const auto reason_phrase = http_reason_phrase(response_status);
-    const auto date_header =
-        (known_bits & response_header_date) == 0 ? cached_date_header() : std::string_view{};
+    const auto date_header = (known_bits & detail::response_header_date) == 0
+                                 ? detail::cached_date_header()
+                                 : std::string_view{};
     // Reuse the formatted token for exact measurement and emission instead of
     // separately dividing the length to count its digits.
     std::array<char, http_max_unsigned_decimal_size> content_length_buffer;
@@ -199,16 +202,16 @@ void append_response_head(
             throw std::length_error("HTTP response head is too large");
         }
     };
-    charge(head_budget.add(http1_status_line_size(reason_phrase)));
-    http_connection_options connection_options;
-    http_upgrade_protocols upgrade_protocols;
+    charge(head_budget.add(detail::http1_status_line_size(reason_phrase)));
+    detail::http_connection_options connection_options;
+    detail::http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
-        const auto known_bit = http_response_header_access::known_bit(header);
-        if (known_bit == response_header_transfer_encoding ||
-            known_bit == response_header_content_length) {
+        const auto known_bit = detail::http_response_header_access::known_bit(header);
+        if (known_bit == detail::response_header_transfer_encoding ||
+            known_bit == detail::response_header_content_length) {
             continue;
         }
-        if (!is_valid_http1_emitted_response_header(header.name(), header.value(), known_bit,
+        if (!detail::is_valid_http1_emitted_response_header(header.name(), header.value(), known_bit,
                 emit_chunked_transfer_encoding, connection_options, upgrade_protocols)) {
             throw std::invalid_argument("invalid HTTP response header");
         }
@@ -217,32 +220,23 @@ void append_response_head(
     if (upgrade_protocols.has_field() && !connection_options.upgrade()) {
         throw std::invalid_argument("HTTP Upgrade response requires Connection: Upgrade");
     }
-    if ((known_bits & response_header_date) == 0 && !date_header.empty()) {
+    if ((known_bits & detail::response_header_date) == 0 && !date_header.empty()) {
         charge(head_budget.add(date_header.size()));
     }
     if (emit_chunked_transfer_encoding) {
-        charge(head_budget.add(chunked_transfer_encoding_header.size()));
+        charge(head_budget.add(detail::chunked_transfer_encoding_header.size()));
     }
     if (flags.emit_content_length_) {
-        charge(head_budget.add_field(content_length_name.size(), content_length_value.size()));
+        charge(head_budget.add_field(detail::content_length_name.size(), content_length_value.size()));
     }
     charge(head_budget.add(2));
 
     head.append_generated(head_budget.bytes(), [&](char* cursor_value) noexcept {
-        http_raw_wire_sink sink_value(cursor_value);
-        emit_response_head(response, sink_value, response_status, reason_phrase, date_header, flags,
+        detail::http_raw_wire_sink sink_value(cursor_value);
+        detail::emit_response_head(response, sink_value, response_status, reason_phrase, date_header, flags,
             content_length_value);
-        check_http_wire_end(sink_value.position(), cursor_value + head_budget.bytes());
+        detail::check_http_wire_end(sink_value.position(), cursor_value + head_budget.bytes());
     });
-}
-
-}  // namespace ruvia::detail
-
-namespace ruvia {
-
-void append_http1_response_head(const http_response& response, http_response_head_buffer& head,
-    const http1_response_head_plan& plan) {
-    detail::append_response_head(response, head, plan);
 }
 
 void append_http1_response_trailers(

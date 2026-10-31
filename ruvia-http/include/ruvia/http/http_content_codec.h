@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -66,6 +67,21 @@ private:
     http_content_coding coding_;
     std::pmr::memory_resource* resource_;
     impl_type* impl_{nullptr};
+};
+
+// decoder_failure reports a codec that could not run (for example its state
+// could not be allocated); it is an internal failure, not a property of the
+// representation, and callers report it apart from the protocol errors.
+enum class http_content_decode_error : std::uint8_t {
+    unsupported_coding,
+    invalid_content,
+    decoded_size_exceeded,
+    decoder_failure
+};
+
+struct http_content_decode_options final {
+    std::size_t max_decoded_bytes_{};
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
 // gzip members and zstd frames are consumed through the end of input; Brotli

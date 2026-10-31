@@ -1,5 +1,7 @@
 #include "coding/http_content_coding.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <memory_resource>
 #include <string_view>
 #include <utility>
@@ -9,9 +11,11 @@
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_content_codec.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 
 #include "coding/http_content_codec.h"
+#include "request/http_request_access.h"
 #include "response/http_response_header_access.h"
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token
@@ -175,6 +179,24 @@ http_content_coding_field_result parse_http_content_coding_headers(
         if (detail::http_response_header_access::known_bit(header) ==
             detail::response_header_content_encoding) {
             parser.update(header.value());
+        }
+    }
+    return parser.finish();
+}
+
+http_content_coding_field_result request_content_coding(const http_request& request) noexcept {
+    detail::http_content_coding_field_parser parser;
+    if (!detail::request_has_known_header(request, detail::request_header_kind::content_encoding)) {
+        return parser.finish();
+    }
+    const auto headers = request.headers();
+    const auto last_index = detail::http_request_access::known_header_index(
+        request, detail::request_header_kind::content_encoding);
+    const auto limit = last_index <= headers.size() ? last_index : headers.size();
+    for (std::size_t i = 0; i < limit; ++i) {
+        if (detail::http_request_access::header_kind(request, i) ==
+            static_cast<std::uint8_t>(detail::request_header_kind::content_encoding)) {
+            parser.update(headers[i].value());
         }
     }
     return parser.finish();
