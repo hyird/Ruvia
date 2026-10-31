@@ -152,6 +152,7 @@ struct http2_header_decode_context final {
                 return false;
             }
             stream.assign_request_method(value);
+            stream.record_request_pseudo_header(http2_request_pseudo_header::method);
             return true;
         }
         if (name == ":protocol") {
@@ -159,6 +160,7 @@ struct http2_header_decode_context final {
                 return false;
             }
             stream.set_protocol(value);
+            stream.record_request_pseudo_header(http2_request_pseudo_header::protocol);
             return true;
         }
         if (name == ":scheme") {
@@ -167,6 +169,7 @@ struct http2_header_decode_context final {
             }
             stream.assign_request_scheme(value);
             stream.mark_scheme(http_uri_scheme_default_port(value));
+            stream.record_request_pseudo_header(http2_request_pseudo_header::scheme);
             return true;
         }
         if (name == ":authority") {
@@ -175,6 +178,7 @@ struct http2_header_decode_context final {
             }
             stream.assign_request_authority(value);
             stream.mark_authority();
+            stream.record_request_pseudo_header(http2_request_pseudo_header::authority);
             return true;
         }
         if (name == ":path") {
@@ -183,6 +187,7 @@ struct http2_header_decode_context final {
             }
             stream.assign_request_path(value);
             stream.mark_path();
+            stream.record_request_pseudo_header(http2_request_pseudo_header::path);
             return true;
         }
         return false;

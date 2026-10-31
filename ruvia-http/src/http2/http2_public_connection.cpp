@@ -14,12 +14,22 @@
 
 #include "client/http_client_access.h"
 #include "http2/http2_connection.h"
+#include "http2/http2_frame_codec.h"
 #include "http2/http2_request_builder.h"
 #include "http2/http2_websocket_handshake.h"
 #include "request/http_request_access.h"
 #include "websocket/websocket_server_negotiation.h"
 
 namespace ruvia {
+
+http2_setting_entry http2_received_settings::at(std::size_t index) const {
+    if (index >= size()) {
+        throw std::out_of_range("HTTP/2 received SETTINGS index out of range");
+    }
+    const auto* data = reinterpret_cast<const unsigned char*>(payload_.data() + index * 6);
+    return {.id_ = static_cast<http2_setting_id>(detail::http2_read16(data)),
+        .value_ = detail::http2_read32(data + 2)};
+}
 
 namespace {
 
@@ -61,9 +71,11 @@ namespace detail {
 class http2_connection_owner_endpoint final {
 public:
     http2_connection_owner_endpoint(std::pmr::memory_resource* resource, http2_role role,
-        bool enable_push, bool receive_origin_advertisements)
+        bool enable_push, bool receive_origin_advertisements,
+        http2_receive_observer_type receive_observer, void* receive_observer_context)
         : resource_(resource),
-          connection_(resource, role, enable_push, receive_origin_advertisements) {}
+          connection_(resource, role, enable_push, receive_origin_advertisements,
+              receive_observer, receive_observer_context) {}
     http2_connection_owner_endpoint(const http2_connection_owner_endpoint&) = delete;
     http2_connection_owner_endpoint& operator=(const http2_connection_owner_endpoint&) = delete;
 
@@ -252,17 +264,21 @@ void http2_connection::impl_deleter_type::operator()(detail::http2_connection_ow
     }
 }
 
-http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push, bool receive_origin_advertisements) {
+http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push, bool receive_origin_advertisements,
+    http2_receive_observer_type receive_observer, void* receive_observer_context) {
     auto* resolved = detail::http_pmr_resource_or_default(resource);
     impl_.reset(detail::construct_http_pmr_object<detail::http2_connection_owner_endpoint>(
-        resolved, resolved, role, enable_push, receive_origin_advertisements));
+        resolved, resolved, role, enable_push, receive_origin_advertisements,
+        receive_observer, receive_observer_context));
     impl_->connection_.begin_connection();
 }
 http2_connection http2_connection::server(http2_connection_options options) {
-    return http2_connection(options.resource_, http2_role::server, false, false);
+    return http2_connection(options.resource_, http2_role::server, false, false,
+        options.receive_observer_, options.receive_observer_context_);
 }
 http2_connection http2_connection::client(http2_connection_options options) {
-    return http2_connection(options.resource_, http2_role::client, options.enable_push_, options.receive_origin_advertisements_);
+    return http2_connection(options.resource_, http2_role::client, options.enable_push_, options.receive_origin_advertisements_,
+        options.receive_observer_, options.receive_observer_context_);
 }
 http2_connection::~http2_connection() = default;
 http2_connection::http2_connection(http2_connection&&) noexcept = default;

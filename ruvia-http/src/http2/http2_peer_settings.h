@@ -9,7 +9,7 @@
 
 #include "ruvia/http/http2_types.h"
 
-#include "http2/http2_frame_codec.h"
+#include "http2/http2_frame_types.h"
 
 namespace ruvia::detail {
 
@@ -22,20 +22,8 @@ enum class http2_peer_setting_error : std::uint8_t {
     invalid_priority_setting
 };
 
-struct http2_setting_entry final {
-    http2_setting_id id_{http2_setting_id::header_table_size};
-    std::uint32_t value_{0};
-};
-
 [[nodiscard]] inline bool http2_settings_payload_size_valid(std::string_view payload_value) noexcept {
     return payload_value.size() % 6 == 0;
-}
-
-[[nodiscard]] inline http2_setting_entry http2_read_setting_entry(
-    std::string_view payload_value, std::size_t offset) noexcept {
-    const auto* data = reinterpret_cast<const unsigned char*>(payload_value.data() + offset);
-    return http2_setting_entry{
-        .id_ = static_cast<http2_setting_id>(http2_read16(data)), .value_ = http2_read32(data + 2)};
 }
 
 [[nodiscard]] inline http2_error_code http2_peer_setting_error_code(

@@ -5,6 +5,7 @@
 #include <limits>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <utility>
 
@@ -391,6 +392,15 @@ public:
         http_unsupported_expectation_policy unsupported_policy) const noexcept {
         return expectations_.server_plan(request_content_indication(), unsupported_policy);
     }
+
+    void record_request_pseudo_header(http2_request_pseudo_header header) noexcept {
+        request_state_.record_pseudo_header(header);
+    }
+
+    [[nodiscard]] std::span<const http2_request_pseudo_header> request_pseudo_header_order() const& noexcept {
+        return request_state_.pseudo_header_order();
+    }
+    [[nodiscard]] std::span<const http2_request_pseudo_header> request_pseudo_header_order() const&& = delete;
 
     [[nodiscard]] std::string_view request_method() const& noexcept {
         return message_data_.method();

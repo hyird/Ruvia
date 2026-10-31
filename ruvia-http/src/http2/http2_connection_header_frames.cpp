@@ -41,7 +41,8 @@ bool http2_connection::complete_decoded_header_block(http2_stream_state& stream,
     return true;
 }
 
-bool http2_connection::process_headers(const http2_frame_header& header_value, std::string_view payload_value) {
+bool http2_connection::process_headers(const http2_frame_header& header_value, std::string_view payload_value,
+    http2_received_priority* received_priority) {
     if (header_value.stream_id_ == 0) {
         append_goaway(http2_error_code::protocol_error, "HEADERS stream id must be nonzero");
         return false;
@@ -53,7 +54,7 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
     }
 
     std::string_view fragment;
-    switch (http2_decode_headers_payload(header_value, payload_value, fragment)) {
+    switch (http2_decode_headers_payload(header_value, payload_value, fragment, received_priority)) {
         case http2_frame_payload_status::decoded:
             break;
         case http2_frame_payload_status::invalid_padding:

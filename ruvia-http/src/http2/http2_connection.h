@@ -92,7 +92,8 @@ class http2_connection final {
 
 public:
     explicit http2_connection(
-        std::pmr::memory_resource* resource, http2_role role = http2_role::server, bool enable_push = false, bool receive_origin_advertisements = false);
+        std::pmr::memory_resource* resource, http2_role role = http2_role::server, bool enable_push = false, bool receive_origin_advertisements = false,
+        http2_receive_observer_type receive_observer = nullptr, void* receive_observer_context = nullptr);
 
     [[nodiscard]] http2_role role() const noexcept {
         return role_;
@@ -457,7 +458,8 @@ private:
     [[nodiscard]] bool process_priority_update(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_priority(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_goaway(const http2_frame_header& header, std::string_view payload);
-    [[nodiscard]] bool process_headers(const http2_frame_header& header, std::string_view payload);
+    [[nodiscard]] bool process_headers(const http2_frame_header& header, std::string_view payload,
+        http2_received_priority* received_priority);
     [[nodiscard]] bool process_trailer_headers(
         http2_stream_state& stream, const http2_frame_header& header, std::string_view fragment);
     [[nodiscard]] bool process_continuation(
@@ -576,6 +578,11 @@ private:
     std::pmr::string input_;
     std::size_t input_offset_{0};
     bool retry_input_{false};
+    http2_receive_observer_type receive_observer_{nullptr};
+    void* receive_observer_context_{nullptr};
+    // 单帧事务的提交标记，不保留历史；消费游标前移后才同步观察。
+    std::optional<http2_receive_metadata> pending_receive_metadata_;
+    std::optional<std::uint32_t> pending_received_request_stream_;
 
     // Outbound serialization and consumed-prefix ownership are isolated from
     // connection state transitions.

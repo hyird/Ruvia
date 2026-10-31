@@ -1,14 +1,27 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
+#include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_status.h"
 namespace ruvia::detail {
 
 class http2_stream_request_state final {
 public:
+    void record_pseudo_header(http2_request_pseudo_header header) noexcept {
+        pseudo_header_order_[pseudo_header_count_++] = header;
+    }
+
+    [[nodiscard]] std::span<const http2_request_pseudo_header> pseudo_header_order() const& noexcept {
+        return {pseudo_header_order_.data(), pseudo_header_count_};
+    }
+    [[nodiscard]] std::span<const http2_request_pseudo_header> pseudo_header_order() const&& = delete;
+
     [[nodiscard]] bool has_protocol() const noexcept {
         return has_protocol_;
     }
@@ -102,6 +115,8 @@ public:
     }
 
 private:
+    std::array<http2_request_pseudo_header, 5> pseudo_header_order_{};
+    std::size_t pseudo_header_count_{0};
     bool has_protocol_ : 1 {false};
     bool has_scheme_ : 1 {false};
     bool has_authority_ : 1 {false};

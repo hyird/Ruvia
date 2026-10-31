@@ -397,6 +397,7 @@ std::optional<http2_server_request_view> http2_connection::server_request_view(
         .path_ = stream_state->request_path(),
         .authority_ = http2_effective_request_authority(*stream_state),
         .protocol_ = stream_state->request_protocol(),
+        .pseudo_header_order_ = stream_state->request_pseudo_header_order(),
     };
 }
 

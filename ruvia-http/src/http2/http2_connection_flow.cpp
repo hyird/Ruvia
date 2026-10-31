@@ -152,6 +152,10 @@ bool http2_connection::process_window_update(
                     connection_send_window_ -= static_cast<std::int32_t>(increment);
                     throw;
                 }
+                if (receive_observer_ != nullptr) {
+                    pending_receive_metadata_ = http2_received_window_update{
+                        .stream_id_ = header_value.stream_id_, .increment_ = increment};
+                }
                 return true;
             case http2_window_update_result::zero_increment:
                 append_goaway(http2_error_code::protocol_error, "zero connection WINDOW_UPDATE");
@@ -199,6 +203,10 @@ bool http2_connection::process_window_update(
             } catch (...) {
                 (void)stream->add_send_window(-static_cast<std::int64_t>(increment));
                 throw;
+            }
+            if (receive_observer_ != nullptr) {
+                pending_receive_metadata_ = http2_received_window_update{
+                    .stream_id_ = header_value.stream_id_, .increment_ = increment};
             }
             return true;
         case http2_window_update_result::zero_increment:

@@ -347,6 +347,9 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
     const bool body_open = !http2_remote_peer_half_closed(stream) &&
                            (role_ == http2_role::client || stream.tunnel().pending() == nullptr);
     events_.push_back(http2_event(http2_message_head_record{stream.id(), request_content_signal, body_open}));
+    if (role_ == http2_role::server && receive_observer_ != nullptr) {
+        pending_received_request_stream_ = stream.id();
+    }
     if (role_ == http2_role::server && stream.tunnel().pending() != nullptr) {
         // CONNECT has no request content, but that fact alone says nothing about the
         // peer send half: it can remain open for a tunnel or already carry END_STREAM.
