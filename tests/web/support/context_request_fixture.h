@@ -28,7 +28,7 @@ private:
 };
 
 template <typename callback_type>
-[[nodiscard]] inline ruvia::test_response with_context(
+[[nodiscard]] inline ruvia::dispatch_response with_context(
     const ruvia::test_request& request, callback_type&& callback) {
     ruvia::test_app app;
     app.use<context_callback<std::remove_reference_t<callback_type>>>(&callback);

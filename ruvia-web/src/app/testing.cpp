@@ -136,7 +136,7 @@ struct test_app::impl_type final {
         }
     }
 
-    [[nodiscard]] task<test_response> execute_request(const test_request& request) {
+    [[nodiscard]] task<dispatch_response> execute_request(const test_request& request) {
         const auto request_start = std::chrono::steady_clock::now();
         request_memory request_memory_value(memory_);
         static constexpr std::size_t inline_header_capacity = 16;
@@ -348,7 +348,7 @@ test_app& test_app::use_worker_state_definition(detail::worker_state_definition 
     return *this;
 }
 
-test_response test_app::request(const test_request& request) {
+dispatch_response test_app::request(const test_request& request) {
     impl_->finalize();
 
     return impl_->event_loop_.start(impl_->execute_request(request)).get();

@@ -354,7 +354,6 @@ public:
     // Trailers never replace initial headers or change route selection.
     [[nodiscard]] std::span<const http_header> trailers() const noexcept;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const noexcept;
-    [[nodiscard]] bool accepts(std::string_view media_type) const noexcept;
     // Client weights select a caller-owned supported value; server order breaks
     // ties. An absent field selects the first offer, no acceptable offer is nullopt.
     [[nodiscard]] std::optional<std::string_view> negotiate(

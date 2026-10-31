@@ -18,7 +18,7 @@ using ruvia::security_header_conflict_policy;
 using ruvia::security_headers_config;
 using ruvia::xss_protection_header_policy;
 
-[[nodiscard]] ruvia::test_response security_response(
+[[nodiscard]] ruvia::dispatch_response security_response(
     const security_headers_config& options = {}, std::string_view existing_frame_options = {}) {
     auto callback = [&](ruvia::context& ctx) -> ruvia::task<void> {
         if (!existing_frame_options.empty()) {

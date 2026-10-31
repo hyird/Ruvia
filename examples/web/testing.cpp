@@ -1,4 +1,4 @@
-// In-memory application testing: test_app/test_request/test_response drive the
+// In-memory application testing: test_app/test_request/dispatch_response drive the
 // production dispatch pipeline -- routing, params, model bodies, middleware,
 // fallbacks, url_for and worker state -- without opening a socket. This is the
 // pattern an application's own test suite uses; the example doubles as a

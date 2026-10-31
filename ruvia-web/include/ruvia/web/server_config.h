@@ -458,6 +458,6 @@ using connection_failure_callback = detail::callback<void(const connection_failu
 // and throws std::logic_error.
 using app_hook = detail::callback<void()>;
 
-static_assert(sizeof(app_hook) == 5 * sizeof(void*));
+static_assert(sizeof(app_hook) == 4 * sizeof(void*));
 
 }  // namespace ruvia

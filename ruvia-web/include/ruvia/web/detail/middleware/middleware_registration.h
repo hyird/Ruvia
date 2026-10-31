@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/http/http_response.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
 #include "ruvia/web/detail/middleware/middleware_descriptor.h"
 #include "ruvia/web/detail/util/registration_resource.h"
@@ -14,26 +13,9 @@
 
 namespace ruvia::detail {
 
-// context::respond() needs a complete context. This header is included by
-// session.h and the built-in middleware headers while context is still
-// incomplete, so the call lives in a .cpp that already has the class definition.
-void apply_middleware_response(context& context_value, http_response&& response);
-
-template <typename middleware_type>
-[[nodiscard]] task<void> invoke_response_middleware(void* target, context& context_value, next& next_value) {
-    auto* middleware_value = static_cast<middleware_type*>(target);
-    auto response = co_await middleware_value->handle(context_value, next_value);
-    apply_middleware_response(context_value, std::move(response));
-}
-
 template <middleware middleware_type>
 [[nodiscard]] task<void> invoke_middleware(void* target, context& context_value, next& next_value) {
-    auto* middleware_value = static_cast<middleware_type*>(target);
-    if constexpr (void_handle_middleware<middleware_type>) {
-        return middleware_value->handle(context_value, next_value);
-    } else {
-        return invoke_response_middleware<middleware_type>(target, context_value, next_value);
-    }
+    return static_cast<middleware_type*>(target)->handle(context_value, next_value);
 }
 
 // Constructs the middleware from the arguments use<T>(args...) captured. The

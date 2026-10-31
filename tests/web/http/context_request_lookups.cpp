@@ -231,7 +231,7 @@ RUVIA_TEST(context_request_queries_use_empty_span_only_for_missing_name) {
     });
 }
 
-RUVIA_TEST(context_request_accepts_merges_multiple_accept_field_lines) {
+RUVIA_TEST(context_request_negotiate_merges_multiple_accept_field_lines) {
     const auto accepts = [](std::vector<std::string_view> accept_lines, std::string_view media_type) {
         std::vector<http_header_view> headers;
         headers.reserve(accept_lines.size());
@@ -241,7 +241,9 @@ RUVIA_TEST(context_request_accepts_merges_multiple_accept_field_lines) {
         auto request = make_request("/", headers);
         bool accepted = false;
         (void)context_request_test::with_context(request, [&](ruvia::context& context_value) -> ruvia::task<void> {
-            accepted = context_value.req().accepts(media_type);
+            accepted = context_value.req()
+                           .negotiate(ruvia::context_request::negotiable_field::media_type, {media_type})
+                           .has_value();
             co_return;
         });
         return accepted;
@@ -373,9 +375,11 @@ RUVIA_TEST(context_request_negotiate_picks_the_client_preferred_media_type) {
         RUVIA_CHECK(chosen.has_value());
         RUVIA_CHECK_EQ(*chosen, std::string_view("application/json"));
 
-        // accepts() would have said yes to the first one tried, which is the bug
-        // this API exists to remove.
-        RUVIA_CHECK(context_value.req().accepts("text/html"));
+        // A first-acceptable-offer check would have taken html; negotiation
+        // ranks the offers by the client's weights instead.
+        RUVIA_CHECK(context_value.req()
+                .negotiate(ruvia::context_request::negotiable_field::media_type, {"text/html"})
+                .has_value());
         co_return;
     });
 }

@@ -440,31 +440,6 @@ std::optional<std::string_view> context_request::param(std::string_view name) co
     return storage.route_params_->fields_.get(name);
 }
 
-bool context_request::accepts(std::string_view media_type) const noexcept {
-    // RFC 9110 5.3: multiple Accept field lines are equivalent to a single value
-    // comma-joining them. request_known_header returns only one stored slot, so a
-    // client that sent Accept across several lines had all but one ignored. Fold
-    // every Accept line into one best-match accumulator (equivalent to the joined
-    // value, and correct for a q=0 exclusion spread across lines) without
-    // allocating to concatenate.
-    if (!context_->request_.header("Accept").has_value()) {
-        return true;
-    }
-    http_accept_match match;
-    const auto headers = context_->request_.headers();
-    for (const auto& header_field : headers) {
-        if (!http_ascii_equals_ignore_case(header_field.name(), "Accept")) {
-            continue;
-        }
-        if (!header_field.value().empty()) {
-            match.update_media_type(header_field.value(), media_type);
-        }
-    }
-    // Only absence means no preference. A present but empty Accept field is an
-    // empty media-range list and therefore matches no representation.
-    return match.matched();
-}
-
 std::optional<std::string_view> context_request::negotiate(
     negotiable_field field, std::span<const std::string_view> supported) const noexcept {
     if (supported.empty()) {

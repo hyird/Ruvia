@@ -100,9 +100,10 @@ public:
 
 class surface_return_middleware final {
 public:
-    ruvia::task<ruvia::http_response> handle(ruvia::context& c, ruvia::next&) {
+    ruvia::task<void> handle(ruvia::context& c, ruvia::next&) {
         c.status(ruvia::http_status::accepted);
-        co_return c.text("returned by middleware\n");
+        c.respond(c.text("returned by middleware\n"));
+        co_return;
     }
 };
 
@@ -203,7 +204,9 @@ private:
         body.append("\ntag-missing=");
         body.append(request.queries("missing").empty() ? "missing" : "present");
         body.append("\naccepts-json=");
-        body.append(c.req().accepts("application/json") ? "true" : "false");
+        const auto accepts_json =
+            request.negotiate(ruvia::context_request::negotiable_field::media_type, {"application/json"});
+        body.append(accepts_json.has_value() ? "true" : "false");
         body.push_back('\n');
         co_return c.text(std::move(body));
     }

@@ -188,15 +188,22 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
     {
         auto state_value = std::make_shared<int>(1);
         access_state = state_value;
-        ruvia::access_log_callback callback_value(
-            [state_value](const ruvia::access_log_record&) noexcept { (void)state_value; });
-        // Copy ownership is the behavior under test.
-        const auto copy = callback_value;  // NOLINT(performance-unnecessary-copy-initialization)
+        std::optional<ruvia::access_log_callback> moved;
+        {
+            // A move-only callable registers; moving the owner transfers the
+            // captured state instead of releasing it.
+            ruvia::access_log_callback callback_value(
+                [state_value, guard = std::make_unique<int>(2)](const ruvia::access_log_record&) noexcept {
+                    (void)state_value;
+                    (void)guard;
+                });
+            moved.emplace(std::move(callback_value));
+        }
         state_value.reset();
         RUVIA_CHECK(!access_state.expired());
-        (void)copy;
+        moved.reset();
+        RUVIA_CHECK(access_state.expired());
     }
-    RUVIA_CHECK(access_state.expired());
 
     std::weak_ptr<int> failure_state;
     {

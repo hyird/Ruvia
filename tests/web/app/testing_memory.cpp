@@ -115,7 +115,7 @@ private:
 
 RUVIA_TEST(testing_facade_reclaims_worker_owned_response_memory) {
     memory_counters counters;
-    std::optional<ruvia::test_response> retained;
+    std::optional<ruvia::dispatch_response> retained;
     {
         ruvia::test_app app;
         app.use_worker_state<memory_state>([&counters] { return memory_state(&counters); });

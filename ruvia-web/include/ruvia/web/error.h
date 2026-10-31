@@ -278,6 +278,6 @@ struct scoped_not_found_handler_options final {
     http_not_found_handler handler_{nullptr};
 };
 
-static_assert(sizeof(http_error_handler) == 5 * sizeof(void*));
-static_assert(sizeof(http_not_found_handler) == 5 * sizeof(void*));
+static_assert(sizeof(http_error_handler) == 4 * sizeof(void*));
+static_assert(sizeof(http_not_found_handler) == 4 * sizeof(void*));
 }  // namespace ruvia

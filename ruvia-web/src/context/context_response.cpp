@@ -206,12 +206,4 @@ void context::apply_response_state(
     }
 }
 
-namespace detail {
-
-void apply_middleware_response(context& context_value, http_response&& response) {
-    context_value.respond(std::move(response));
-}
-
-}  // namespace detail
-
 }  // namespace ruvia

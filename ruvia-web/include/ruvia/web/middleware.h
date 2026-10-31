@@ -13,7 +13,6 @@
 namespace ruvia {
 
 class context;
-class http_response;
 
 struct middleware_scope_options final {
     borrowed_text prefix_{};
@@ -158,25 +157,13 @@ private:
     detail::next_state state_;
     detail::next_invoke_type invoke_{nullptr};
 };
-namespace detail {
-
-template <typename middleware_type>
-concept void_handle_middleware =
-    requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::handle); };
-
-template <typename middleware_type>
-concept response_handle_middleware = requires {
-    static_cast<task<http_response> (middleware_type::*)(context&, next&)>(&middleware_type::handle);
-};
-
-}  // namespace detail
 
 // A middleware is any final class with a public
 //     task<void> handle(context&, next&)
-// or
-//     task<http_response> handle(context&, next&)
 // member. It derives from nothing: the framework composes it through per-type
-// entry points and reads its route properties from static members.
+// entry points and reads its route properties from static members. A
+// middleware that produces the response calls context::respond() before it
+// returns, so the chain has exactly one response path.
 //
 // application::use<T>() instantiates the descriptor at the call site. Built-in
 // middleware headers already include that machinery. A custom middleware's
@@ -185,8 +172,7 @@ concept response_handle_middleware = requires {
 // context so app.h does not pull it in.
 template <typename middleware_type>
 concept middleware = std::is_class_v<middleware_type> && std::is_final_v<middleware_type> &&
-                     (detail::void_handle_middleware<middleware_type> ||
-                         detail::response_handle_middleware<middleware_type>);
+                     requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::handle); };
 
 template <typename policy_type>
 concept route_policy =

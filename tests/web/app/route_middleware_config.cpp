@@ -81,13 +81,14 @@ public:
     }
 };
 
-// A middleware may answer by itself: handle() returning task<http_response>
-// produces the response without running the rest of the chain.
+// A middleware may answer by itself: respond() before returning finalizes the
+// response without running the rest of the chain.
 class response_middleware final {
 public:
-    ruvia::task<ruvia::http_response> handle(ruvia::context& c, ruvia::next&) {
+    ruvia::task<void> handle(ruvia::context& c, ruvia::next&) {
         c.status(ruvia::http_status::accepted);
-        co_return c.text("returned by middleware");
+        c.respond(c.text("returned by middleware"));
+        co_return;
     }
 };
 

@@ -1030,7 +1030,7 @@ RUVIA_TEST(testing_facade_app_wide_middleware_still_runs_everywhere) {
     ruvia::test_app app;
     app.use<testing_facade_scoped>("global");
 
-    // Bound to names: test_response owns its headers, so header() is rightly
+    // Bound to names: dispatch_response owns its headers, so header() is rightly
     // rvalue-deleted and a view into a temporary is not obtainable.
     const auto hello = app.request(ruvia::test_request::get("/t/hello"));
     RUVIA_CHECK(hello.header("X-Test-Scope").has_value());

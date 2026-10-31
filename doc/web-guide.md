@@ -148,7 +148,6 @@ ruvia::app().listen({
 - `ruvia::env`（通过 `app().env()` 或 `c.env()` 访问）：
   - `std::optional<std::string_view> get(std::string_view name) const& noexcept`
   - `template <typename T> std::optional<T> get(std::string_view name) const&`（支持 `std::string_view`、`bool`、整型、浮点型；变量存在但格式非法时抛出 `std::invalid_argument`）
-  - `template <typename T> std::optional<T> try_get(std::string_view name) const& noexcept`（格式非法时返回 `std::nullopt`）
 
 ---
 
@@ -252,7 +251,7 @@ for (const auto& worker : ruvia::app().workers()) {
 | `c.req().query(name)` / `c.req().queries(name)` / `c.req().query_fields()` | 获取单个/多个同名 URL 查询参数（已自动 URL 解码） |
 | `c.req().header(name)` / `c.req().header_fields()` | 大小写不敏感读取请求头 |
 | `c.req().cookie(name)` / `c.req().signed_cookie({.name_ = ..., .secret_ = ...})` | 读取普通 Cookie 或验证 HMAC 签名并提取 Cookie 原值 |
-| `c.req().accepts(media_type)` / `c.req().negotiate(type, supported)` | 检查 `Accept` 是否接受指定媒体类型，或在候选列表中按权重协商最佳匹配 |
+| `c.req().negotiate(type, supported)` | 在候选列表中按 `Accept*` 权重协商最佳匹配（单候选时 `has_value()` 即表示客户端接受该值） |
 | `co_await c.req().text()` / `co_await c.req().bytes()` | 读取完整缓冲请求体视图（`std::string_view` / `std::span<const std::byte>`） |
 | `co_await c.req().discard_body()` | 丢弃剩余请求体字节 |
 | `co_await c.req().multipart()` | 解析缓冲式 `multipart/form-data`，返回 `std::pmr::vector<multipart_part>` |
@@ -343,7 +342,7 @@ auto digest = std::move(result).value();
 
 ### 4.1 自定义中间件（`"ruvia/web/middleware.h"`）
 
-任何声明为 `final`、不继承基类，且提供 `handle(ruvia::context&, ruvia::next&)`（返回 `ruvia::task<void>` 或 `ruvia::task<ruvia::http_response>`）的类均满足 `ruvia::middleware` 概念：
+任何声明为 `final`、不继承基类，且提供 `ruvia::task<void> handle(ruvia::context&, ruvia::next&)` 的类均满足 `ruvia::middleware` 概念；中间件自行产生响应时在返回前调用 `c.respond(...)`：
 
 ```cpp
 class timing_middleware final {

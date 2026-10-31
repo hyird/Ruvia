@@ -62,23 +62,6 @@ public:
     template <typename t_type>
     [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> get(std::string_view) const&& = delete;
 
-    // The same lookup for a caller that treats a malformed value as absent
-    // rather than fatal -- an optional feature flag, say. Absent and malformed
-    // are indistinguishable here by design; use get<T>() when the difference
-    // matters, which is the common case for deployment settings.
-    template <typename t_type>
-    [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> try_get(
-        std::string_view name) const& noexcept {
-        const auto value = get(name);
-        if (!value.has_value()) {
-            return std::nullopt;
-        }
-        return parse_typed_value<t_type>(*value);
-    }
-
-    template <typename t_type>
-    [[nodiscard]] std::optional<std::remove_cvref_t<t_type>> try_get(std::string_view) const&& = delete;
-
     [[nodiscard]] bool loaded() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
 

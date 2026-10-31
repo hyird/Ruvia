@@ -129,10 +129,6 @@ private:
     std::string body_;
 };
 
-// One dispatched response, copied out of the request arena: safe to hold and
-// inspect after further requests.
-using test_response = dispatch_response;
-
 // One in-memory application instance. Construction is cheap; controllers are
 // instantiated and the route table finalized on the first request(), so the
 // configuration calls below may run in any order before that. Not thread-safe:
@@ -196,7 +192,7 @@ public:
     // the copied-out response. Request-level failures become the same error
     // responses a server would send. Handlers execute on one real Ruvia worker,
     // including per-worker state semantics.
-    [[nodiscard]] test_response request(const test_request& request);
+    [[nodiscard]] dispatch_response request(const test_request& request);
 
 private:
     test_app& use_middleware(detail::owned_middleware_descriptor descriptor);
