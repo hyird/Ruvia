@@ -21,9 +21,9 @@ namespace {
 // prove that its decoded bytes still describe the current resource.
 
 std::optional<static_file_representation> select_static_file_representation(const static_root& root,
-    std::string_view relative, const std::optional<http_response_coding_selection>& selection,
+    std::string_view relative, const http_response_coding_selection& selection,
     std::pmr::memory_resource* resource, detail::static_root_entry_view identity) {
-    if (!selection.has_value()) {
+    if (!selection.acceptable()) {
         return std::nullopt;
     }
 
@@ -43,7 +43,7 @@ std::optional<static_file_representation> select_static_file_representation(cons
     std::pmr::string variant_path(resource);
     for (std::size_t i = 0; i < candidates.size(); ++i) {
         auto& candidate = candidates[i];
-        if (!selection->accepts(candidate.content_coding_)) {
+        if (!selection.accepts(candidate.content_coding_)) {
             continue;
         }
         const auto suffix = detail::static_precompression_sidecars[i].suffix_;
@@ -82,15 +82,15 @@ std::optional<static_file_representation> select_static_file_representation(cons
         }
     }
 
-    if (const auto chosen = selection->select(available)) {
-        if (chosen->coding() == http_content_coding::identity) {
+    if (const auto chosen = selection.select(available); chosen.acceptable()) {
+        if (chosen.coding() == http_content_coding::identity) {
             return static_file_representation(identity, http_content_coding::identity);
         }
         for (const auto& candidate : candidates) {
-            if (candidate.content_coding_ == chosen->coding() && candidate.entry_.has_value()) {
+            if (candidate.content_coding_ == chosen.coding() && candidate.entry_.has_value()) {
                 return static_file_representation(*candidate.entry_, candidate.content_coding_);
             }
-            if (candidate.content_coding_ == chosen->coding() &&
+            if (candidate.content_coding_ == chosen.coding() &&
                 candidate.memory_variant_.has_value()) {
                 return static_file_representation(
                     identity, *candidate.memory_variant_, candidate.content_coding_);

@@ -1558,10 +1558,8 @@ RUVIA_TEST(http1_response_coding_folds_all_accept_encoding_field_lines) {
         "Accept-Encoding: br;q=0.8\r\n\r\n");
     RUVIA_CHECK(parsed_value.complete());
     const auto response_coding = parsed_value.state_.response_coding_selection();
-    RUVIA_CHECK(response_coding.has_value());
-    if (response_coding.has_value()) {
-        RUVIA_CHECK(response_coding->coding() == ruvia::http_content_coding::brotli);
-    }
+    RUVIA_CHECK(response_coding.acceptable());
+    RUVIA_CHECK(response_coding.coding() == ruvia::http_content_coding::brotli);
 }
 
 RUVIA_TEST(http1_response_coding_rejects_when_every_coding_is_forbidden) {
@@ -1570,7 +1568,7 @@ RUVIA_TEST(http1_response_coding_rejects_when_every_coding_is_forbidden) {
         "Accept-Encoding: identity;q=0, gzip;q=0, br;q=0, zstd;q=0\r\n\r\n");
     RUVIA_CHECK(parsed_value.complete());
     const auto response_coding = parsed_value.state_.response_coding_selection();
-    RUVIA_CHECK(!response_coding.has_value());
+    RUVIA_CHECK(!response_coding.acceptable());
 }
 
 RUVIA_TEST(http1_parse_header_block_too_large_rejected) {

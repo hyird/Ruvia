@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <string_view>
 
 #include "ruvia/http/http_content_coding.h"
@@ -33,17 +32,10 @@ struct http_accepted_encoding_quality {
         return wildcard_quality_ > 0 ? wildcard_quality_ : 0;
     }
 
-    [[nodiscard]] bool accepts() const noexcept {
-        return quality() > 0;
-    }
-
     [[nodiscard]] bool accepts(bool is_identity) const noexcept {
         return quality(is_identity) > 0;
     }
 };
-
-[[nodiscard]] bool http_accepts_encoding(
-    std::string_view accept_encoding, std::string_view coding) noexcept;
 
 struct http_response_coding_qualities final {
     // A missing field and an explicitly empty field have different RFC 9110
@@ -58,10 +50,6 @@ struct http_response_coding_qualities final {
     http_accepted_encoding_quality identity_;
 
     void update(std::string_view accept_encoding) noexcept;
-
-    [[nodiscard]] bool accepts(http_content_coding coding) const noexcept {
-        return score(coding) >= 0;
-    }
 
 private:
     friend class http_response_coding_selection;
@@ -152,23 +140,29 @@ private:
 // The selected coding and the identity fallback decision come from the same
 // Accept-Encoding snapshot. Keeping them together prevents a runtime from
 // selecting one coding and separately observing a stale or differently parsed
-// identity quality.
+// identity quality. A selection exists even when the client accepts none of
+// the candidates: acceptable() then reports the failed negotiation, which the
+// Web layer answers with 406 Not Acceptable once a response with content needs
+// it, and the snapshot still answers accepts() for a coding a handler applied.
 class http_response_coding_selection final {
 public:
-    [[nodiscard]] static std::optional<http_response_coding_selection> select(
+    [[nodiscard]] static http_response_coding_selection select(
         const http_response_coding_qualities& qualities) noexcept;
-    [[nodiscard]] static std::optional<http_response_coding_selection> select(
-        const http_response_coding_qualities& qualities,
-        http_response_coding_candidates candidates) noexcept;
 
     // Ranks the same Accept-Encoding snapshot over the codings one
     // representation store actually holds (for example indexed precompressed
     // files), so that store never parses the request's fields again.
-    [[nodiscard]] constexpr std::optional<http_response_coding_selection> select(
+    [[nodiscard]] constexpr http_response_coding_selection select(
         http_response_coding_candidates candidates) const noexcept {
         return rank(scores_, candidates);
     }
 
+    // False when the client accepts none of the candidates.
+    [[nodiscard]] constexpr bool acceptable() const noexcept {
+        return acceptable_;
+    }
+
+    // The selected coding; identity, as a placeholder only, when !acceptable().
     [[nodiscard]] constexpr http_content_coding coding() const noexcept {
         return coding_;
     }
@@ -191,38 +185,33 @@ private:
     // Client score per http_content_coding value; -1 marks an unacceptable coding.
     using scores_type = std::array<std::int16_t, 5>;
 
-    constexpr http_response_coding_selection(http_content_coding coding, scores_type scores) noexcept
+    constexpr http_response_coding_selection(http_content_coding coding, bool acceptable, scores_type scores) noexcept
         : scores_(scores),
-          coding_(coding) {}
+          coding_(coding),
+          acceptable_(acceptable) {}
 
-    [[nodiscard]] static constexpr std::optional<http_response_coding_selection> rank(
+    [[nodiscard]] static constexpr http_response_coding_selection rank(
         scores_type scores, http_response_coding_candidates candidates) noexcept;
 
     scores_type scores_;
     http_content_coding coding_;
+    bool acceptable_;
 };
 
-// Picks the best response coding from the supplied representation candidates.
+// Picks the best response coding among every coding the server can produce.
 // The highest client q-value wins; ties resolve by server preference br > zstd
-// > gzip > deflate > identity. A coding with q=0 or one the client never accepts is
-// excluded. nullopt means the request has no acceptable response content coding
-// and must be answered with 406 Not Acceptable by the Web layer.
-inline std::optional<http_response_coding_selection> http_response_coding_selection::select(
+// > gzip > deflate > identity. A coding with q=0 or one the client never
+// accepts is excluded.
+inline http_response_coding_selection http_response_coding_selection::select(
     const http_response_coding_qualities& qualities) noexcept {
-    return select(qualities, http_response_coding_candidates::all());
-}
-
-inline std::optional<http_response_coding_selection> http_response_coding_selection::select(
-    const http_response_coding_qualities& qualities,
-    http_response_coding_candidates candidates) noexcept {
     scores_type scores{};
     for (std::size_t index = 0; index < scores.size(); ++index) {
         scores[index] = static_cast<std::int16_t>(qualities.score(static_cast<http_content_coding>(index)));
     }
-    return rank(scores, candidates);
+    return rank(scores, http_response_coding_candidates::all());
 }
 
-constexpr std::optional<http_response_coding_selection> http_response_coding_selection::rank(
+constexpr http_response_coding_selection http_response_coding_selection::rank(
     scores_type scores, http_response_coding_candidates candidates) noexcept {
     constexpr http_content_coding preference[] = {
         http_content_coding::brotli,
@@ -245,10 +234,7 @@ constexpr std::optional<http_response_coding_selection> http_response_coding_sel
             found = true;
         }
     }
-    if (!found) {
-        return std::nullopt;
-    }
-    return http_response_coding_selection(best, scores);
+    return http_response_coding_selection(best, found, scores);
 }
 
 class http_request;
@@ -256,7 +242,6 @@ class http_request;
 // Folds every Accept-Encoding field line of a received request into one
 // quality snapshot and selects among all producible codings. HTTP/1 servers
 // may instead use the parser's incrementally folded response_coding_selection().
-[[nodiscard]] std::optional<http_response_coding_selection> http_response_coding_selection_for(
-    const http_request& request) noexcept;
+[[nodiscard]] http_response_coding_selection http_response_coding_selection_for(const http_request& request) noexcept;
 
 }  // namespace ruvia

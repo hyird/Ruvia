@@ -27,25 +27,15 @@ public:
         return http_response_coding_policy(http_response_coding_policy_disabled{});
     }
 
+    // A failed negotiation stays alive in the selection until a buffered
+    // handler has produced its response status: a 204/304 has no response
+    // content, so rejecting it before dispatch would turn a representation-free
+    // response into a false 406. The selection's identity coding is then only
+    // a placeholder that never becomes a silent identity fallback for a
+    // response that actually has a body.
     [[nodiscard]] static http_response_coding_policy selected(
         http_response_coding_selection selection) noexcept {
         return http_response_coding_policy(selection);
-    }
-
-    // Keep a negotiation failure alive until a buffered handler has produced
-    // its response status. A 204/304 has no response content, so rejecting it
-    // before dispatch would turn a representation-free response into a false
-    // 406. The identity selection is only a dispatch placeholder; the failure
-    // bit below prevents it from becoming a silent identity fallback for a
-    // response that actually has a body.
-    [[nodiscard]] static http_response_coding_policy no_acceptable_coding() noexcept {
-        http_response_coding_qualities empty_header;
-        empty_header.field_present_ = true;
-        const auto fallback = http_response_coding_selection::select(empty_header);
-        if (!fallback.has_value()) {
-            std::terminate();
-        }
-        return http_response_coding_policy(*fallback, true);
     }
 
     [[nodiscard]] const http_response_coding_selection* selection() const& noexcept {
@@ -53,22 +43,15 @@ public:
     }
     const http_response_coding_selection* selection() const&& = delete;
 
-    [[nodiscard]] bool negotiation_failed() const noexcept {
-        return negotiation_failed_;
-    }
-
 private:
     explicit http_response_coding_policy(http_response_coding_policy_disabled disabled) noexcept
         : value_(disabled) {}
 
-    explicit http_response_coding_policy(
-        http_response_coding_selection selection, bool negotiation_failed = false) noexcept
-        : value_(selection),
-          negotiation_failed_(negotiation_failed) {}
+    explicit http_response_coding_policy(http_response_coding_selection selection) noexcept
+        : value_(selection) {}
 
     using value_type = std::variant<http_response_coding_selection, http_response_coding_policy_disabled>;
     value_type value_;
-    bool negotiation_failed_{false};
 };
 
 // A selected non-identity coding is only a promise until the response policy
@@ -82,8 +65,7 @@ private:
     if (selection == nullptr) {
         return false;
     }
-    return http_response_coding_fallback_forbidden(
-        *selection, request.known_method(), response, policy.negotiation_failed(), &request);
+    return http_response_coding_fallback_forbidden(*selection, request.known_method(), response, &request);
 }
 
 [[nodiscard]] inline std::optional<http_error_info> http_buffered_response_preparation_error(

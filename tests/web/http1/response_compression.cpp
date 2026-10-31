@@ -136,8 +136,9 @@ class response_compression_routes final {
     }
     ruvia::task<ruvia::http_response> custom_coding(ruvia::context& context_value) {
         auto resp = context_value.text("custom-encoded-payload");
-        if (ruvia::http_accepts_encoding(
-                context_value.req().header("Accept-Encoding").value_or(""), "x-custom")) {
+        ruvia::http_accepted_encoding_quality quality;
+        quality.update(context_value.req().header("Accept-Encoding").value_or(""), "x-custom");
+        if (quality.accepts(false)) {
             resp.header("Content-Encoding", "x-custom");
         }
         co_return resp;

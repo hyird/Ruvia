@@ -64,7 +64,7 @@ private:
 // representation exists.
 [[nodiscard]] std::optional<static_file_representation> select_static_file_representation(
     const static_root& root, std::string_view relative,
-    const std::optional<http_response_coding_selection>& selection, std::pmr::memory_resource* resource,
+    const http_response_coding_selection& selection, std::pmr::memory_resource* resource,
     detail::static_root_entry_view identity);
 
 }  // namespace ruvia

@@ -52,7 +52,7 @@ struct http_request_admission_input final {
     const http_request& request_;
     const route_resolution& resolution_;
     // The parser or subrequest supplies the response-coding selection.
-    std::optional<http_response_coding_selection> coding_;
+    http_response_coding_selection coding_;
     // Request arena for copied rejection diagnostics.
     std::pmr::memory_resource* resource_;
     // The protocol's Expect plan, when it defers the rejection to Web.

@@ -118,11 +118,9 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // may serve an indexed precompressed sidecar even when this worker has no
     // runtime encoder; the encoder capability travels to representation
     // preparation instead of pruning the client's choices here. A failed
-    // negotiation stays typed until the response status is known: a buffered
-    // 204/205/304 carries no representation and must not become 406.
-    const auto* selection = input.coding_ ? &*input.coding_ : nullptr;
-    auto coding_policy = selection != nullptr ? http_response_coding_policy::selected(*selection)
-                                              : http_response_coding_policy::no_acceptable_coding();
+    // negotiation stays in the selection until the response status is known: a
+    // buffered 204/205/304 carries no representation and must not become 406.
+    auto coding_policy = http_response_coding_policy::selected(input.coding_);
     // Keyed on the client, not the hop: behind a trusted proxy every request
     // would otherwise share the proxy's single key. Resolved once per request
     // and bound to the services every context of this request is created from.

@@ -42,10 +42,10 @@ public:
     http_streaming_response_compression& operator=(http_streaming_response_compression&&) = delete;
 
     // Applies the representation headers before the protocol-owned stream head
-    // is committed. A forbidden identity fallback is rejected here, while the
-    // encoder itself is delayed until activate() has a final body plan.
-    void prepare(const http_request& request, http_response& response,
-        bool negotiation_failed) {
+    // is committed. A forbidden identity fallback, including a negotiation the
+    // selection already reports as failed, is rejected here, while the encoder
+    // itself is delayed until activate() has a final body plan.
+    void prepare(const http_request& request, http_response& response) {
         if (!std::holds_alternative<unprepared_type>(state_)) {
             throw std::logic_error("streaming response compression is already prepared");
         }
@@ -53,8 +53,7 @@ public:
         const auto decision = prepare_response_compression(
             selection_, request_method, response, http_response_compression_source::stream, availability_);
         if (decision != http_response_compression_decision::encode) {
-            if (http_response_coding_fallback_forbidden(
-                    selection_, request_method, response, negotiation_failed, &request)) {
+            if (http_response_coding_fallback_forbidden(selection_, request_method, response, &request)) {
                 throw http_error(http_not_acceptable_coding_error());
             }
             state_.emplace<identity_type>();
@@ -63,14 +62,6 @@ public:
 
         response.apply_content_encoding(http_content_coding_token(selection_.coding()));
         state_.emplace<pending_type>();
-    }
-
-    void prepare(const http_request& request, http_response& response) {
-        const bool negotiation_failed =
-            selection_.coding() == http_content_coding::identity &&
-            request.header("Accept-Encoding").has_value() &&
-            !http_response_coding_selection_for(request).has_value();
-        prepare(request, response, negotiation_failed);
     }
 
     // Binds encoder ownership to the protocol body plan. Body-suppressed

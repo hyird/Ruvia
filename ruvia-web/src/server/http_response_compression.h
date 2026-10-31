@@ -76,8 +76,7 @@ enum class http_response_compression_status : std::uint8_t {
 // stacks: a client that accepts gzip but rejects br cannot be sent `gzip, br`.
 [[nodiscard]] inline bool http_known_response_content_encoding_stack_accepted(
     const http_response_coding_selection& selection, const http_response& response,
-    bool negotiation_failed = false, const http_request* request = nullptr,
-    bool* has_content_encoding = nullptr) noexcept {
+    const http_request* request = nullptr, bool* has_content_encoding = nullptr) noexcept {
     bool saw_header = false;
     bool saw_coding = false;
     bool accepted = true;
@@ -93,7 +92,7 @@ enum class http_response_compression_status : std::uint8_t {
             }
             saw_coding = true;
             if (const auto coding = http_content_coding_from_token(item)) {
-                accepted = accepted && !negotiation_failed && selection.accepts(*coding);
+                accepted = accepted && selection.accepts(*coding);
             } else {
                 accepted = accepted && http_response_custom_coding_accepted(request, item);
             }
@@ -110,14 +109,12 @@ enum class http_response_compression_status : std::uint8_t {
 }
 
 // Return true when the response cannot satisfy the client's coding policy:
-// either a framework-selected coding fell back to forbidden identity, or a
-// handler supplied a pre-encoded representation the client excluded.
-// Bodyless statuses are representation-free and therefore never need a
-// content-coding fallback.
-[[nodiscard]] inline bool http_response_coding_fallback_forbidden(
-    const http_response_coding_selection& selection, http_known_method request_method,
-    const http_response& response, bool negotiation_failed = false,
-    const http_request* request = nullptr) noexcept {
+// the negotiation failed, a framework-selected coding fell back to forbidden
+// identity, or a handler supplied a pre-encoded representation the client
+// excluded. Bodyless statuses are representation-free and therefore never
+// need a content-coding fallback.
+[[nodiscard]] inline bool http_response_coding_fallback_forbidden(const http_response_coding_selection& selection,
+    http_known_method request_method, const http_response& response, const http_request* request = nullptr) noexcept {
     if (!plan_http_response_body(request_method, response.status()).status_allows_body()) {
         return false;
     }
@@ -127,12 +124,12 @@ enum class http_response_compression_status : std::uint8_t {
         return false;
     }
     bool has_content_encoding = false;
-    const bool stack_accepted = http_known_response_content_encoding_stack_accepted(
-        selection, response, negotiation_failed, request, &has_content_encoding);
+    const bool stack_accepted =
+        http_known_response_content_encoding_stack_accepted(selection, response, request, &has_content_encoding);
     if (has_content_encoding) {
         return !stack_accepted;
     }
-    if (negotiation_failed) {
+    if (!selection.acceptable()) {
         return true;
     }
     if (selection.coding() == http_content_coding::identity || selection.identity_accepted()) {

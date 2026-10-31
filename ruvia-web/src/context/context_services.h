@@ -80,10 +80,9 @@ struct context_request_services final {
     // The matched route's declared body_limit; 0 when it declares none.
     std::size_t route_body_limit_{};
     request_io_metrics* io_metrics_{nullptr};
-    // Admission's Accept-Encoding selection for this request; an empty value
-    // in a bound slot means the request accepts no response content coding.
+    // Admission's Accept-Encoding selection for this request; empty for a
+    // context created outside admission.
     std::optional<http_response_coding_selection> response_coding_{};
-    bool response_coding_bound_{false};
 };
 
 class context_services final {
@@ -263,15 +262,14 @@ public:
     }
 
     // The request's Accept-Encoding selection as admission folded it, or
-    // null for a context created outside admission. A bound empty value
-    // means no response content coding is acceptable.
-    [[nodiscard]] const std::optional<http_response_coding_selection>* response_coding() const noexcept {
-        return request_services_.response_coding_bound_ ? &request_services_.response_coding_ : nullptr;
+    // null for a context created outside admission. A failed negotiation is a
+    // selection whose acceptable() is false.
+    [[nodiscard]] const http_response_coding_selection* response_coding() const noexcept {
+        return request_services_.response_coding_ ? &*request_services_.response_coding_ : nullptr;
     }
 
-    void bind_response_coding(const std::optional<http_response_coding_selection>& selection) noexcept {
+    void bind_response_coding(const http_response_coding_selection& selection) noexcept {
         request_services_.response_coding_ = selection;
-        request_services_.response_coding_bound_ = true;
     }
 
     [[nodiscard]] const worker_state_registry* worker_states() const noexcept {

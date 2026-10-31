@@ -114,7 +114,7 @@ public:
 
     // Parsed once from the request head. Representation policy consumes this
     // complete client preference later, without rescanning Accept-Encoding.
-    [[nodiscard]] std::optional<http_response_coding_selection> response_coding_selection() const noexcept {
+    [[nodiscard]] http_response_coding_selection response_coding_selection() const noexcept {
         return http_response_coding_selection::select(response_coding_qualities_);
     }
 

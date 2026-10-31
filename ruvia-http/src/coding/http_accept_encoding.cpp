@@ -53,15 +53,6 @@ void http_accepted_encoding_quality::update(
         });
 }
 
-bool http_accepts_encoding(std::string_view accept_encoding, std::string_view coding) noexcept {
-    if (accept_encoding.empty()) {
-        return http_ascii_equals_ignore_case(coding, "identity");
-    }
-    http_accepted_encoding_quality quality;
-    quality.update(accept_encoding, coding);
-    return quality.accepts(http_ascii_equals_ignore_case(coding, "identity"));
-}
-
 void http_response_coding_qualities::update(std::string_view accept_encoding) noexcept {
     field_present_ = true;
     detail::http_visit_comma_separated_quoted(accept_encoding, [this](std::string_view item) noexcept {
