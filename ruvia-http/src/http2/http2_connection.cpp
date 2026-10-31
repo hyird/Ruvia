@@ -336,7 +336,7 @@ bool http2_connection::process_settings(const http2_frame_header& header_value, 
         // and report streams whose core-owned remainder completed.
         mark_send_window_opened();
         if (receive_observer_ != nullptr) {
-            pending_receive_metadata_ = http2_received_settings(payload_value);
+            pending_receive_notifications_.metadata_ = http2_received_settings(payload_value);
         }
         return true;
     } catch (...) {
@@ -392,7 +392,7 @@ bool http2_connection::process_priority(const http2_frame_header& header_value, 
     }
     // RFC 9113 §6.3：已废弃的优先级树不参与协议状态或调度，观察也不新增校验。
     if (receive_observer_ != nullptr) {
-        pending_receive_metadata_ = http2_decode_priority_fields(header_value.stream_id_,
+        pending_receive_notifications_.metadata_ = http2_decode_priority_fields(header_value.stream_id_,
             reinterpret_cast<const unsigned char*>(payload_value.data()));
     }
     return true;
@@ -604,8 +604,6 @@ bool http2_connection::process_priority_update(const http2_frame_header& header_
 }
 
 bool http2_connection::process_frame(const http2_frame_header& header_value, std::string_view payload_value) {
-    pending_receive_metadata_.reset();
-    pending_received_request_stream_.reset();
     if (preface_phase_ == preface_phase_type::awaiting_peer_settings &&
         header_value.type_ != static_cast<std::uint8_t>(http2_frame_type::settings)) {
         append_goaway(http2_error_code::protocol_error, "first frame must be SETTINGS");
@@ -654,7 +652,7 @@ bool http2_connection::process_frame(const http2_frame_header& header_value, std
             http2_received_priority priority;
             const bool accepted = process_headers(header_value, payload_value, &priority);
             if (accepted) {
-                pending_receive_metadata_ = priority;
+                pending_receive_notifications_.metadata_ = priority;
             }
             return accepted;
         }
@@ -669,6 +667,28 @@ bool http2_connection::process_frame(const http2_frame_header& header_value, std
         default:
             return true;
     }
+}
+
+void http2_connection::commit_receive_notifications() noexcept {
+    if (receive_observer_ == nullptr) {
+        return;
+    }
+    if (pending_receive_notifications_.metadata_) {
+        std::visit([this](const auto& metadata) noexcept {
+            receive_observer_(receive_observer_context_, http2_receive_metadata{metadata});
+        },
+            *pending_receive_notifications_.metadata_);
+    }
+    if (pending_receive_notifications_.request_stream_) {
+        const auto stream_id = *pending_receive_notifications_.request_stream_;
+        const auto request = server_request_view(stream_id);
+        if (!request) {
+            std::terminate();
+        }
+        receive_observer_(receive_observer_context_,
+            http2_received_request_head{.stream_id_ = stream_id, .request_ = *request});
+    }
+    pending_receive_notifications_ = {};
 }
 
 bool http2_connection::consume_frames(std::string_view buffer, std::size_t& offset) {
@@ -686,26 +706,12 @@ bool http2_connection::consume_frames(std::string_view buffer, std::size_t& offs
             break;  // partial frame; wait for the next feed
         }
         const auto payload_value = buffer.substr(offset + http2_frame_header_bytes, header_value.length_);
+        pending_receive_notifications_ = {};
         if (!process_frame(header_value, payload_value)) {
             return false;
         }
         offset += http2_frame_header_bytes + header_value.length_;
-        if (receive_observer_ != nullptr) {
-            if (pending_receive_metadata_) {
-                receive_observer_(receive_observer_context_, *pending_receive_metadata_);
-                pending_receive_metadata_.reset();
-            }
-            if (pending_received_request_stream_) {
-                const auto stream_id = *pending_received_request_stream_;
-                const auto request = server_request_view(stream_id);
-                if (!request) {
-                    std::terminate();
-                }
-                receive_observer_(receive_observer_context_,
-                    http2_received_request_head{.stream_id_ = stream_id, .request_ = *request});
-                pending_received_request_stream_.reset();
-            }
-        }
+        commit_receive_notifications();
         if (local_connection_state_.fatal_failure() != nullptr) {
             break;
         }

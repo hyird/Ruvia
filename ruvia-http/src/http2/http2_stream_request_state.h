@@ -1,7 +1,7 @@
 #pragma once
 
 #include <array>
-#include <cstddef>
+#include <cassert>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -14,6 +14,8 @@ namespace ruvia::detail {
 class http2_stream_request_state final {
 public:
     void record_pseudo_header(http2_request_pseudo_header header) noexcept {
+        // 解码入口已拒绝重复及未知伪首部，至多记录五个不同字段。
+        assert(pseudo_header_count_ < pseudo_header_order_.size());
         pseudo_header_order_[pseudo_header_count_++] = header;
     }
 
@@ -116,7 +118,7 @@ public:
 
 private:
     std::array<http2_request_pseudo_header, 5> pseudo_header_order_{};
-    std::size_t pseudo_header_count_{0};
+    std::uint8_t pseudo_header_count_{0};
     bool has_protocol_ : 1 {false};
     bool has_scheme_ : 1 {false};
     bool has_authority_ : 1 {false};

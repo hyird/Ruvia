@@ -442,6 +442,7 @@ private:
     // a fatal protocol error (GOAWAY queued). Shared by feed()'s fast (parse over the
     // caller's bytes) and slow (parse the buffered input_) paths.
     [[nodiscard]] bool consume_frames(std::string_view buffer, std::size_t& offset);
+    void commit_receive_notifications() noexcept;
     // Synchronous per-frame dispatch (ported 1:1 from process_frame/*; returns false
     // on a fatal protocol error, having appended GOAWAY and transitioned the
     // local connection state to fatal failure).
@@ -581,8 +582,11 @@ private:
     http2_receive_observer_type receive_observer_{nullptr};
     void* receive_observer_context_{nullptr};
     // 单帧事务的提交标记，不保留历史；消费游标前移后才同步观察。
-    std::optional<http2_receive_metadata> pending_receive_metadata_;
-    std::optional<std::uint32_t> pending_received_request_stream_;
+    struct frame_receive_notifications final {
+        std::optional<std::variant<http2_received_settings, http2_received_window_update, http2_received_priority>> metadata_;
+        std::optional<std::uint32_t> request_stream_;
+    };
+    frame_receive_notifications pending_receive_notifications_;
 
     // Outbound serialization and consumed-prefix ownership are isolated from
     // connection state transitions.

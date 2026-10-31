@@ -153,7 +153,7 @@ bool http2_connection::process_window_update(
                     throw;
                 }
                 if (receive_observer_ != nullptr) {
-                    pending_receive_metadata_ = http2_received_window_update{
+                    pending_receive_notifications_.metadata_ = http2_received_window_update{
                         .stream_id_ = header_value.stream_id_, .increment_ = increment};
                 }
                 return true;
@@ -205,7 +205,7 @@ bool http2_connection::process_window_update(
                 throw;
             }
             if (receive_observer_ != nullptr) {
-                pending_receive_metadata_ = http2_received_window_update{
+                pending_receive_notifications_.metadata_ = http2_received_window_update{
                     .stream_id_ = header_value.stream_id_, .increment_ = increment};
             }
             return true;
