@@ -114,7 +114,7 @@ class udp_tunnel_routes final {
     }
 
     ruvia::task<void> delayed(ruvia::context& c) {
-        co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(30));
+        (void)co_await ruvia::sleep_for(c.worker(), std::chrono::milliseconds(30));
         auto tunnel = c.tunnel().udp();
         co_await tunnel.finish();
     }

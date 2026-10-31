@@ -414,7 +414,7 @@ void client_tls_write_timeout_during_speculative_post_does_not_hang(
         std::string big_body(8 * 1024 * 1024, 'C');
         const auto worker = attachment.loop().handle();
         auto trigger = [&]() -> ruvia::task<void> {
-            co_await ruvia::sleep_for(worker, 5ms);
+            (void)co_await ruvia::sleep_for(worker, 5ms);
             read_32k.release();
             read_32k_done.acquire();
             std::this_thread::sleep_for(50ms);
