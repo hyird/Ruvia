@@ -714,11 +714,10 @@ bool http2_connection::consume_frames(std::string_view buffer, std::size_t& offs
 }
 
 http2_feed_result http2_connection::feed(std::string_view in) {
-    // Starting the role-specific preface is an explicit ownership boundary. In
-    // particular, do not clear prior events, reclaim input, or copy caller bytes when
-    // the driver forgot begin_connection(); the exact same span remains retryable.
+    // The facade begins the connection before it offers any input, so a core
+    // fed before begin_connection() is a driver bug, not a protocol outcome.
     if (preface_phase_ == preface_phase_type::not_started) {
-        return http2_feed_result::connection_not_started;
+        std::terminate();
     }
     // Event delivery is part of input ownership, not a best-effort side channel. An
     // unread event may carry a zero-copy view into the previous input, so accepting

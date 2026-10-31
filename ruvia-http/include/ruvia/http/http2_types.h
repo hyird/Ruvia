@@ -111,11 +111,8 @@ struct http2_send_window_state final {
 };
 
 // feed() has all-or-nothing ownership for each supplied span; it never partially
-// consumes caller input. The public facade always begins the connection, so it
-// never returns connection_not_started; the sans-I/O core can, and the caller
-// retries the same span after begin_connection().
+// consumes caller input.
 enum class http2_feed_result : std::uint8_t {
-    connection_not_started,
     events_pending,
     accepted,
     need_input,
@@ -182,7 +179,6 @@ enum class http2_stream_close_source : std::uint8_t {
 
 enum class http2_request_head_submit_error : std::uint8_t {
     invalid_state,
-    connection_not_started,
     connection_unavailable,
     peer_stream_limit_reached,
     local_stream_capacity_reached,

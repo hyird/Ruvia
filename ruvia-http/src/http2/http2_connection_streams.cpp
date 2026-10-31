@@ -1,3 +1,4 @@
+#include <exception>
 #include <utility>
 
 #include "http2/http2_connection.h"
@@ -291,8 +292,9 @@ std::optional<http2_request_head_submit_error> http2_connection::local_request_a
     if (role_ != http2_role::client) {
         return http2_request_head_submit_error::invalid_state;
     }
+    // The facade begins the connection before any local stream.
     if (preface_phase_ == preface_phase_type::not_started) {
-        return http2_request_head_submit_error::connection_not_started;
+        std::terminate();
     }
     if (local_connection_state_.fatal_failure() != nullptr || peer_goaway_.has_value() ||
         next_local_stream_id_ > 0x7fffffffU) {

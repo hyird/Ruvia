@@ -1,5 +1,3 @@
-#include <exception>
-
 #include "http2/http2_connection.h"
 #include "http2/http2_remote_receive_semantics.h"
 
@@ -9,10 +7,6 @@ void http2_connection::lease_submitted_request(
     const std::variant<std::uint32_t, http2_request_head_submit_error>& result) {
     const auto* submitted = std::get_if<std::uint32_t>(&result);
     if (submitted == nullptr) {
-        if (std::get<http2_request_head_submit_error>(result) ==
-            http2_request_head_submit_error::connection_not_started) {
-            std::terminate();
-        }
         return;
     }
     try {

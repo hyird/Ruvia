@@ -100,8 +100,8 @@ public:
     }
 
     // --- inbound ---------------------------------------------------------------
-    // Feed raw bytes read from the peer; advances the protocol. Before
-    // begin_connection(), connection_not_started retains the exact input for retry.
+    // Feed raw bytes read from the peer; advances the protocol. The connection
+    // must have begun (begin_connection()).
     // Calling while events remain returns events_pending with the same retained-input
     // guarantee; drain peek_event()/consume_event() first. accepted and need_input both accept the
     // whole input, with the latter buffering a partial preface/frame. protocol_failure

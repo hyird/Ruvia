@@ -327,9 +327,6 @@ http2_feed_result http2_connection::feed(std::string_view input) {
     auto& connection = impl_->connection_;
     connection.retry_deferred_stream_leases();
     const auto result_value = connection.feed(input);
-    if (result_value == http2_feed_result::connection_not_started) {
-        std::terminate();
-    }
     connection.retry_deferred_stream_leases();
     return result_value;
 }

@@ -40,7 +40,6 @@ enum class http_response_trailer_intent : std::uint8_t { none,
 // Body-suppressed responses (HEAD / 304) complete at the initial head
 // (message_ended) and discard trailers.
 enum class http_response_stream_head_disposition : std::uint8_t { body_open,
-    trailers_only,
     message_ended };
 
 class http_response_stream_commit_plan final {

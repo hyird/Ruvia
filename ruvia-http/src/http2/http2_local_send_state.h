@@ -30,13 +30,6 @@ private:
     constexpr http2_local_response_content_open() noexcept = default;
 };
 
-class http2_local_response_trailers_only final {
-private:
-    friend class http2_local_send_state;
-
-    constexpr http2_local_response_trailers_only() noexcept = default;
-};
-
 class http2_local_connect_pending final {
 private:
     friend class http2_local_send_state;
@@ -89,8 +82,8 @@ private:
 };
 
 // Local frame permission is one exclusive protocol state. Request content,
-// response content, response-trailers-only, and tunnel DATA are deliberately
-// distinct, so a separate message-kind enum cannot contradict the active phase.
+// response content and tunnel DATA are deliberately distinct, so a separate
+// message-kind enum cannot contradict the active phase.
 class http2_local_send_state final {
 private:
     friend class http2_stream_lifecycle;
@@ -111,14 +104,6 @@ private:
             return false;
         }
         state_ = state_type(http2_local_response_content_open());
-        return true;
-    }
-
-    [[nodiscard]] bool begin_response_trailers_only() noexcept {
-        if (head_pending() == nullptr) {
-            return false;
-        }
-        state_ = state_type(http2_local_response_trailers_only());
         return true;
     }
 
@@ -158,7 +143,7 @@ private:
     }
 
     [[nodiscard]] bool queue_end_stream() noexcept {
-        if (!content_or_trailers_open()) {
+        if (!content_open()) {
             return false;
         }
         state_ = state_type(http2_local_end_stream_queued());
@@ -166,7 +151,7 @@ private:
     }
 
     [[nodiscard]] bool commit_end_stream() noexcept {
-        if (!content_or_trailers_open() && end_stream_queued() == nullptr) {
+        if (!content_open() && end_stream_queued() == nullptr) {
             return false;
         }
         state_ = state_type(http2_local_end_stream_committed());
@@ -201,13 +186,6 @@ public:
     [[nodiscard]] constexpr const http2_local_response_content_open* response_content_open() const&& =
         delete;
 
-    [[nodiscard]] constexpr const http2_local_response_trailers_only* response_trailers_only()
-        const& noexcept {
-        return std::get_if<http2_local_response_trailers_only>(&state_);
-    }
-    [[nodiscard]] constexpr const http2_local_response_trailers_only* response_trailers_only() const&& =
-        delete;
-
     [[nodiscard]] constexpr const http2_local_connect_pending* connect_pending() const& noexcept {
         return std::get_if<http2_local_connect_pending>(&state_);
     }
@@ -236,15 +214,13 @@ public:
     [[nodiscard]] constexpr const http2_stream_aborted* aborted() const&& = delete;
 
 private:
-    [[nodiscard]] bool content_or_trailers_open() const noexcept {
-        return request_content_open() != nullptr || response_content_open() != nullptr ||
-               response_trailers_only() != nullptr || tunnel_open() != nullptr;
+    [[nodiscard]] bool content_open() const noexcept {
+        return request_content_open() != nullptr || response_content_open() != nullptr || tunnel_open() != nullptr;
     }
 
     using state_type = std::variant<http2_local_head_pending, http2_local_request_content_open,
-        http2_local_response_content_open, http2_local_response_trailers_only, http2_local_connect_pending,
-        http2_local_tunnel_open, http2_local_end_stream_queued, http2_local_end_stream_committed,
-        http2_stream_aborted>;
+        http2_local_response_content_open, http2_local_connect_pending, http2_local_tunnel_open,
+        http2_local_end_stream_queued, http2_local_end_stream_committed, http2_stream_aborted>;
 
     state_type state_;
 };

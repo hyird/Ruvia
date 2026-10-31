@@ -87,18 +87,16 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
         throw;
     }
 
-    bool initial_input_retained = false;
     std::error_code reader_terminal_error;
     std::exception_ptr reader_failure;
     try {
         engine.drain_events();
         if (!engine.connection_failed() && !initial_bytes.empty()) {
-            const auto result_value = engine.feed_and_drain(initial_bytes);
-            initial_input_retained = result_value == http2_feed_result::connection_not_started;
+            (void)engine.feed_and_drain(initial_bytes);
         }
         engine.wake_writer();
 
-        if (!engine.connection_failed() && !initial_input_retained && !engine.terminated()) {
+        if (!engine.connection_failed() && !engine.terminated()) {
             std::array<char, 4096> read_buffer;
             for (;;) {
                 engine.set_inactivity_phase();
@@ -121,10 +119,8 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
                 const auto result_value =
                     engine.feed_and_drain(std::string_view(read_buffer.data(), bytes_read));
                 engine.wake_writer();
-                if (result_value == http2_feed_result::connection_not_started ||
-                    result_value == http2_feed_result::protocol_failure || engine.write_failed()) {
-                    if (result_value == http2_feed_result::connection_not_started ||
-                        result_value == http2_feed_result::protocol_failure) {
+                if (result_value == http2_feed_result::protocol_failure || engine.write_failed()) {
+                    if (result_value == http2_feed_result::protocol_failure) {
                         reader_terminal_error = std::make_error_code(std::errc::protocol_error);
                     }
                     break;
@@ -138,9 +134,8 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
 
     if (!engine.terminated()) {
         if (!reader_terminal_error) {
-            reader_terminal_error = engine.connection_failed() || initial_input_retained
-                                        ? std::make_error_code(std::errc::protocol_error)
-                                        : std::make_error_code(std::errc::connection_aborted);
+            reader_terminal_error = engine.connection_failed() ? std::make_error_code(std::errc::protocol_error)
+                                                               : std::make_error_code(std::errc::connection_aborted);
         }
         engine.terminate(reader_terminal_error);
     }

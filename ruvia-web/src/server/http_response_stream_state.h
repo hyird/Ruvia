@@ -39,9 +39,6 @@ public:
         if (const auto* value = std::get_if<body_open_type>(&state_)) {
             return &value->plan_;
         }
-        if (const auto* value = std::get_if<trailers_only_type>(&state_)) {
-            return &value->plan_;
-        }
         if (const auto* value = std::get_if<ended_type>(&state_)) {
             return &value->plan_;
         }
@@ -87,9 +84,6 @@ public:
             case http_response_stream_head_disposition::body_open:
                 state_.emplace<body_open_type>(plan);
                 break;
-            case http_response_stream_head_disposition::trailers_only:
-                state_.emplace<trailers_only_type>(plan);
-                break;
             case http_response_stream_head_disposition::message_ended:
                 state_.emplace<ended_type>(plan);
                 break;
@@ -101,11 +95,6 @@ public:
             return;
         }
         if (auto* value = std::get_if<body_open_type>(&state_)) {
-            auto plan = value->plan_;
-            state_.emplace<ended_type>(plan);
-            return;
-        }
-        if (auto* value = std::get_if<trailers_only_type>(&state_)) {
             auto plan = value->plan_;
             state_.emplace<ended_type>(plan);
             return;
@@ -174,13 +163,6 @@ private:
         http_response_stream_commit_plan plan_;
     };
 
-    struct trailers_only_type final {
-        explicit trailers_only_type(http_response_stream_commit_plan commit_plan) noexcept
-            : plan_(commit_plan) {}
-
-        http_response_stream_commit_plan plan_;
-    };
-
     struct ended_type final {
         explicit ended_type(http_response_stream_commit_plan commit_plan) noexcept
             : plan_(commit_plan) {}
@@ -197,7 +179,7 @@ private:
         http_response_stream_commit_plan plan_;
     };
 
-    using state_type = std::variant<unbound_type, bound_type, detached_type, body_open_type, trailers_only_type, ended_type,
+    using state_type = std::variant<unbound_type, bound_type, detached_type, body_open_type, ended_type,
         aborted_before_commit_type, aborted_after_commit_type>;
 
     state_type state_;

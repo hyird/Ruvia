@@ -126,10 +126,6 @@ private:
         return local_send_.begin_response_content();
     }
 
-    [[nodiscard]] bool begin_local_response_trailers_only() noexcept {
-        return local_send_.begin_response_trailers_only();
-    }
-
     [[nodiscard]] bool commit_local_head_end_stream() noexcept {
         return local_send_.commit_head_end_stream();
     }

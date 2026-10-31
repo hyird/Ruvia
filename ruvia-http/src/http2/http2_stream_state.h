@@ -318,10 +318,6 @@ public:
         return lifecycle_.begin_local_response_content();
     }
 
-    [[nodiscard]] bool begin_local_response_trailers_only() noexcept {
-        return lifecycle_.begin_local_response_trailers_only();
-    }
-
     [[nodiscard]] bool commit_local_head_end_stream() noexcept {
         return lifecycle_.commit_local_head_end_stream();
     }

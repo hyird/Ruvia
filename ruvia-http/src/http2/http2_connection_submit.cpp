@@ -238,14 +238,10 @@ http2_connection::submit_streaming_response_head(
     } else {
         stream->begin_local_content_unbounded();
     }
-    if (commit_plan.head_disposition() == http_response_stream_head_disposition::trailers_only) {
-        (void)stream->begin_local_response_trailers_only();
+    if (http2_ends_stream(end_stream)) {
+        (void)stream->commit_local_head_end_stream();
     } else {
-        if (http2_ends_stream(end_stream)) {
-            (void)stream->commit_local_head_end_stream();
-        } else {
-            (void)stream->begin_local_response_content();
-        }
+        (void)stream->begin_local_response_content();
     }
     if (stream->tunnel().pending() != nullptr) {
         (void)stream->reject_connect();
@@ -530,17 +526,11 @@ http2_finish_status http2_connection::finish_response(
     if (stream == nullptr) {
         return http2_finish_status::closed;
     }
-    if (stream->local_send().response_content_open() == nullptr &&
-        stream->local_send().response_trailers_only() == nullptr) {
+    if (stream->local_send().response_content_open() == nullptr) {
         throw std::logic_error("HTTP/2 stream is not open for finishing response");
     }
     if (!stream->local_content().length_complete()) {
         throw std::invalid_argument("HTTP/2 response ended before declared Content-Length");
-    }
-    if (stream->local_send().response_trailers_only() != nullptr && trailers.empty()) {
-        // A trailers-only response cannot fall back to DATA(END_STREAM): its
-        // method/status explicitly forbids DATA, including an empty terminal frame.
-        throw std::logic_error("HTTP/2 trailers-only response requires non-empty trailers");
     }
     // The entire semantic trailer section was validated before the initial head
     // commit and is encoded in detached
