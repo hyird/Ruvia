@@ -3553,6 +3553,24 @@ bool http2_server_accepts_field(std::string_view name, std::string_view value) {
     return false;
 }
 
+auto submit_field_request(ruvia::http2_connection& client, unsigned entry,
+    std::span<const ruvia::http_header_view> fields, ruvia::http_request_field_source source) {
+    switch (entry) {
+        case 0:
+            return client.submit_request_head(ruvia::http2_regular_request_head_view{
+                .authority_ = "example.test", .headers_ = fields, .field_source_ = source});
+        case 1:
+            return client.submit_request_head(ruvia::http2_regular_request_head_view{
+                .method_ = "POST", .authority_ = "example.test", .headers_ = fields, .content_ = ruvia::http2_request_content::streaming(), .field_source_ = source});
+        case 2:
+            return client.submit_request_head(ruvia::http2_connect_request_head_view{
+                .authority_ = "example.test:443", .headers_ = fields, .field_source_ = source});
+        default:
+            return client.submit_request_head(ruvia::http2_extended_connect_request_head_view{
+                .protocol_ = "example", .authority_ = "example.test:443", .target_ = "/tunnel", .headers_ = fields, .field_source_ = source});
+    }
+}
+
 }  // namespace
 
 RUVIA_TEST(http2_public_client_generates_framing_and_expectation_fields_itself) {
@@ -3686,6 +3704,193 @@ RUVIA_TEST(http2_public_normalized_request_capacity_accepts_many_fields_within_b
                 RUVIA_CHECK(following_heads == 1 && following_ends == 1 && !server.connection_error());
             }
         }
+    }
+}
+
+RUVIA_TEST(http2_public_forwards_received_application_values_through_hpack) {
+    const std::array cases{
+        ruvia::http_header_view{"content-type", "not-a-media-type"},
+        ruvia::http_header_view{"origin", "https://example.test/path"},
+        ruvia::http_header_view{"access-control-request-method", "GET, POST"},
+        ruvia::http_header_view{"access-control-request-headers", "X-Good, Bad Header"},
+        ruvia::http_header_view{"content-encoding", ""},
+        ruvia::http_header_view{"content-encoding", ",,"},
+        ruvia::http_header_view{"content-encoding", ", gzip,, br,"},
+        ruvia::http_header_view{"content-encoding", ", unknown-coding,,"}};
+    for (const auto& field : cases) {
+        std::pmr::unsynchronized_pool_resource resource;
+        std::pmr::string block(&resource);
+        ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/");
+        ruvia::hpack_encoder::encode_header(block, field.name(), field.value());
+        std::pmr::string wire(ruvia::http2_client_preface, &resource);
+        append_peer_settings(wire);
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
+        auto incoming = ruvia::http2_connection::server({.resource_ = &resource});
+        RUVIA_CHECK(incoming.feed(wire) == ruvia::http2_feed_result::accepted);
+        auto event = incoming.next_event();
+        auto* received_head = event ? event->request_head() : nullptr;
+        RUVIA_CHECK(received_head != nullptr);
+        if (!received_head) {
+            continue;
+        }
+        const auto received_request = received_head->build_request(&resource);
+        const auto received = received_request.header(field.name());
+        RUVIA_CHECK(received == std::optional<std::string_view>{field.value()});
+        if (!received) {
+            continue;
+        }
+        const std::array fields{ruvia::http_header_view{field.name(), *received}};
+        for (unsigned entry = 0; entry != 4; ++entry) {
+            ruvia::testing::output_relay relay;
+            auto client = ruvia::http2_connection::client({.resource_ = &resource});
+            auto upstream = ruvia::http2_connection::server({.resource_ = &resource});
+            relay.transfer(client, upstream);
+            relay.transfer(upstream, client);
+            relay.transfer(client, upstream);
+            const auto generated = submit_field_request(client, entry, fields, ruvia::http_request_field_source::generated);
+            RUVIA_CHECK(std::get_if<ruvia::http2_request_head_submit_error>(&generated) != nullptr);
+            RUVIA_CHECK(!client.wants_write());
+            const auto forwarded = submit_field_request(client, entry, fields, ruvia::http_request_field_source::forwarded);
+            const auto* id = std::get_if<std::uint32_t>(&forwarded);
+            RUVIA_CHECK(id != nullptr);
+            if (!id) {
+                continue;
+            }
+            RUVIA_CHECK_EQ(*id, std::uint32_t{1});
+            relay.transfer(client, upstream);
+            auto forwarded_event = upstream.next_event();
+            auto* forwarded_head = forwarded_event ? forwarded_event->request_head() : nullptr;
+            RUVIA_CHECK(forwarded_head != nullptr);
+            if (forwarded_head) {
+                RUVIA_CHECK_EQ(forwarded_head->stream_id(), *id);
+                const auto request = forwarded_head->build_request(&resource);
+                RUVIA_CHECK(request.header(field.name()) == received);
+            }
+            RUVIA_CHECK(!upstream.connection_error());
+        }
+    }
+}
+
+RUVIA_TEST(http2_public_forwarding_never_relaxes_owned_hop_by_hop_or_singleton_fields) {
+    const std::array invalid{
+        ruvia::http_header_view{"x-test", "ok\r\ninjected: yes"},
+        ruvia::http_header_view{"bad name", "value"},
+        ruvia::http_header_view{"host", "other.test"},
+        ruvia::http_header_view{"content-length", "0"},
+        ruvia::http_header_view{"expect", "100-continue"},
+        ruvia::http_header_view{"transfer-encoding", "chunked"},
+        ruvia::http_header_view{"connection", "upgrade"},
+        ruvia::http_header_view{"upgrade", ",websocket,"},
+        ruvia::http_header_view{"keep-alive", "timeout=5"},
+        ruvia::http_header_view{"proxy-connection", "keep-alive"},
+        ruvia::http_header_view{"te", ",trailers,"},
+        ruvia::http_header_view{"content-encoding", ",gzip;level=9,"},
+        ruvia::http_header_view{"content-encoding", ",bad coding,"}};
+    for (unsigned entry = 0; entry != 4; ++entry) {
+        ruvia::testing::output_relay relay;
+        auto client = ruvia::http2_connection::client();
+        auto server = ruvia::http2_connection::server();
+        relay.transfer(client, server);
+        relay.transfer(server, client);
+        relay.transfer(client, server);
+        const auto reject = [&](std::span<const ruvia::http_header_view> fields,
+                                ruvia::http_request_field_source source) {
+            const auto result = submit_field_request(client, entry, fields, source);
+            const auto* error = std::get_if<ruvia::http2_request_head_submit_error>(&result);
+            RUVIA_CHECK(error != nullptr);
+            if (error) {
+                RUVIA_CHECK(*error == ruvia::http2_request_head_submit_error::invalid_message);
+            }
+            RUVIA_CHECK(!client.wants_write());
+        };
+        for (const auto& field : invalid) {
+            const std::array fields{field};
+            reject(fields, ruvia::http_request_field_source::forwarded);
+        }
+        for (const auto& field : std::array{
+                 ruvia::http_header_view{"content-type", "invalid"},
+                 ruvia::http_header_view{"origin", "invalid"},
+                 ruvia::http_header_view{"access-control-request-method", "GET, POST"},
+                 ruvia::http_header_view{"authorization", "Bearer token"},
+                 ruvia::http_header_view{"user-agent", "agent"},
+                 ruvia::http_header_view{"if-modified-since", "invalid"},
+                 ruvia::http_header_view{"if-unmodified-since", "invalid"}}) {
+            const std::array fields{field, field};
+            reject(fields, ruvia::http_request_field_source::forwarded);
+        }
+        reject({}, static_cast<ruvia::http_request_field_source>(0xff));
+        const std::array valid{ruvia::http_header_view{"content-encoding", ",gzip,,"}};
+        const auto accepted = submit_field_request(client, entry, valid, ruvia::http_request_field_source::forwarded);
+        const auto* id = std::get_if<std::uint32_t>(&accepted);
+        RUVIA_CHECK(id && *id == 1);
+        relay.transfer(client, server);
+        auto event = server.next_event();
+        RUVIA_CHECK(event && event->request_head());
+    }
+}
+
+RUVIA_TEST(http2_public_forwarded_options_content_keeps_missing_media_type) {
+    for (const auto content : {ruvia::http2_request_content::known_length(1),
+             ruvia::http2_request_content::streaming(1), ruvia::http2_request_content::streaming()}) {
+        std::pmr::unsynchronized_pool_resource resource;
+        const auto incoming_wire = server_request_wire(&resource, "x", "OPTIONS");
+        auto incoming = ruvia::http2_connection::server({.resource_ = &resource});
+        RUVIA_CHECK(incoming.feed(incoming_wire) == ruvia::http2_feed_result::accepted);
+        auto received = incoming.next_event();
+        RUVIA_CHECK(received && received->request_head());
+        std::string body;
+        while (auto next = incoming.next_event()) {
+            if (const auto* chunk = next->message_body_chunk()) {
+                body.append(chunk->bytes());
+            }
+        }
+        RUVIA_CHECK_EQ(body, "x");
+        ruvia::testing::output_relay relay;
+        auto client = ruvia::http2_connection::client({.resource_ = &resource});
+        auto upstream = ruvia::http2_connection::server({.resource_ = &resource});
+        relay.transfer(client, upstream);
+        relay.transfer(upstream, client);
+        relay.transfer(client, upstream);
+        ruvia::http2_regular_request_head_view request{
+            .method_ = "OPTIONS", .authority_ = "example.test", .content_ = content};
+        const auto generated = client.submit_request_head(request);
+        RUVIA_CHECK(std::get_if<ruvia::http2_request_head_submit_error>(&generated) != nullptr);
+        request.method_ = "TRACE";
+        request.field_source_ = ruvia::http_request_field_source::forwarded;
+        const auto trace = client.submit_request_head(request);
+        RUVIA_CHECK(std::get_if<ruvia::http2_request_head_submit_error>(&trace) != nullptr);
+        RUVIA_CHECK(!client.wants_write());
+        request.method_ = "OPTIONS";
+        const auto forwarded = client.submit_request_head(request);
+        const auto* id = std::get_if<std::uint32_t>(&forwarded);
+        RUVIA_CHECK(id && *id == 1);
+        if (!id) {
+            continue;
+        }
+        RUVIA_CHECK(client.submit_data(*id, body, ruvia::http2_end_stream::end_stream) ==
+                    ruvia::http2_data_submit_status::accepted);
+        relay.transfer(client, upstream);
+        auto event = upstream.next_event();
+        auto* head = event ? event->request_head() : nullptr;
+        RUVIA_CHECK(head != nullptr);
+        if (head) {
+            const auto forwarded_request = head->build_request(&resource);
+            RUVIA_CHECK(!forwarded_request.header("content-type"));
+        }
+        bool ended = false;
+        std::string forwarded_body;
+        while (auto next = upstream.next_event()) {
+            if (const auto* chunk = next->message_body_chunk()) {
+                forwarded_body.append(chunk->bytes());
+            }
+            ended |= next->message_end() != nullptr;
+        }
+        RUVIA_CHECK(ended);
+        RUVIA_CHECK_EQ(forwarded_body, body);
+        RUVIA_CHECK(!upstream.connection_error());
     }
 }
 

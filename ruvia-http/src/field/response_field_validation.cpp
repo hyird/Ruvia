@@ -24,7 +24,9 @@ response_field_status validate_response_field(request_header_kind kind, std::str
             }
             break;
         case request_header_kind::content_encoding:
-            if (!is_valid_http_content_encoding_field_value(value, role)) {
+            // Received metadata is interpreted by the content decoder, not framing.
+            if (role == http_field_list_role::sender &&
+                !is_valid_http_content_encoding_field_value(value, role)) {
                 return response_field_status::invalid;
             }
             break;

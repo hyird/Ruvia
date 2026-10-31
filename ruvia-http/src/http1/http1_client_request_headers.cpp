@@ -5,7 +5,8 @@
 namespace ruvia {
 
 bool analyze_header(http_header_view header, detail::request_header_kind kind,
-    request_header_facts& facts, http1_client_request_prepare_error& error) noexcept {
+    request_header_facts& facts, http1_client_request_prepare_error& error,
+    http_request_field_source source) noexcept {
     const auto name = header.name();
     const auto value = header.value();
     if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
@@ -24,7 +25,7 @@ bool analyze_header(http_header_view header, detail::request_header_kind kind,
         default:
             break;
     }
-    switch (detail::validate_request_field(kind, value, detail::http_field_list_role::sender, facts.fields_)) {
+    switch (detail::validate_request_field(kind, value, detail::http_field_list_role::sender, facts.fields_, source)) {
         case detail::request_field_status::ok:
             break;
         case detail::request_field_status::invalid:
@@ -43,7 +44,10 @@ bool analyze_header(http_header_view header, detail::request_header_kind kind,
             return false;
         }
     } else if (kind == detail::request_header_kind::upgrade) {
-        if (facts.upgrade_protocols_.parse_field(value, detail::http_field_list_role::sender) !=
+        const auto role = source == http_request_field_source::forwarded
+                              ? detail::http_field_list_role::recipient
+                              : detail::http_field_list_role::sender;
+        if (facts.upgrade_protocols_.parse_field(value, role) !=
             detail::http_field_list_parse_status::ok) {
             error = http1_client_request_prepare_error::invalid_upgrade;
             return false;
@@ -75,9 +79,9 @@ bool finalize_headers(
 }
 
 bool analyze_headers(std::span<const http_header_view> headers, request_header_facts& facts,
-    http1_client_request_prepare_error& error) noexcept {
+    http1_client_request_prepare_error& error, http_request_field_source source) noexcept {
     for (const auto& header : headers) {
-        if (!analyze_header(header, detail::classify_request_header(header.name()), facts, error)) {
+        if (!analyze_header(header, detail::classify_request_header(header.name()), facts, error, source)) {
             return false;
         }
     }

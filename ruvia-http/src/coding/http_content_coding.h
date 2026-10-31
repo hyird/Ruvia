@@ -46,8 +46,8 @@ private:
     bool invalid_{false};
 };
 
-// Admission validates generated lists. Received metadata is left to the strict
-// content-coding parser before any decoder is selected.
+// Validate list grammar without selecting decoders. Recipients/forwarders may
+// retain empty members, but every nonempty member must still be a coding token.
 [[nodiscard]] bool is_valid_http_content_encoding_field_value(
     std::string_view value, http_field_list_role role) noexcept;
 

@@ -369,7 +369,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
     auto result_value = impl_->connection_.submit_regular_request_head(request.method_.view(),
         request.scheme_.view(), authority, request.target_.view(),
         static_cast<std::span<const http_header_view>>(request.headers_), request.content_,
-        request.expectation_);
+        request.expectation_, request.field_source_);
     impl_->connection_.lease_submitted_request(result_value);
     return result_value;
 }
@@ -377,7 +377,8 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
 std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::submit_request_head(
     const http2_connect_request_head_view& request) {
     auto result_value = impl_->connection_.submit_connect_request_head(
-        request.authority_.view(), static_cast<std::span<const http_header_view>>(request.headers_));
+        request.authority_.view(), static_cast<std::span<const http_header_view>>(request.headers_),
+        request.field_source_);
     impl_->connection_.lease_submitted_request(result_value);
     return result_value;
 }
@@ -386,7 +387,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
     const http2_extended_connect_request_head_view& request) {
     auto result_value = impl_->connection_.submit_extended_connect_request_head(request.protocol_.view(),
         request.scheme_.view(), request.authority_.view(), request.target_.view(),
-        static_cast<std::span<const http_header_view>>(request.headers_));
+        static_cast<std::span<const http_header_view>>(request.headers_), request.field_source_);
     impl_->connection_.lease_submitted_request(result_value);
     return result_value;
 }

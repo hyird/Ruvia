@@ -24,6 +24,7 @@ namespace ruvia {
 struct http1_client_request_wire_policy final {
     http1_close_policy close_policy_{http1_close_policy::allow_reuse};
     http_client_request_expectation expectation_{http_client_request_expectation::none};
+    http_request_field_source field_source_{http_request_field_source::generated};
 };
 
 namespace detail {
@@ -239,7 +240,7 @@ private:
 // CONNECT uses its dedicated entry so authority form cannot be confused with an
 // origin-form target.
 // Explicit empty content emits Content-Length: 0 without triggering TRACE's
-// content prohibition or OPTIONS' Content-Type requirement.
+// content prohibition or generated OPTIONS' Content-Type requirement.
 class http1_client_request_writer final {
 public:
     explicit http1_client_request_writer(std::pmr::memory_resource* resource = nullptr) noexcept;
@@ -257,7 +258,8 @@ public:
     [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
         http1_client_request_prepare_error>
     prepare_connect_udp(const http_origin_view& origin,
-        borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer) const;
+        borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer,
+        http1_client_request_wire_policy policy = {}) const;
 
     [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
         http1_client_request_prepare_error>

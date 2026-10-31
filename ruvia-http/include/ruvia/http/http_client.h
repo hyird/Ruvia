@@ -32,6 +32,15 @@ enum class http_client_request_expectation : std::uint8_t {
     continue_value,
 };
 
+// RFC 9110 section 2.2 distinguishes forwarding received fields from generating
+// them. Forwarded Content-Type, Origin and CORS request values are preserved;
+// Content-Encoding and HTTP/1 Upgrade tolerate legal empty list members.
+// This never relaxes field-byte safety, singleton counts or writer ownership.
+// The forwarding driver still removes/rebuilds hop-by-hop fields (section 7.6.1).
+// OPTIONS Content-Type is required for generated content only (section 9.3.7).
+enum class http_request_field_source : std::uint8_t { generated,
+    forwarded };
+
 struct http_origin_options final {
     borrowed_text host_{};
     std::optional<std::uint16_t> port_{};

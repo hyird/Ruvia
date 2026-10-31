@@ -63,11 +63,13 @@ struct http2_regular_request_head_view final {
     std::span<const http_header_view> headers_{};
     http2_request_content content_{http2_request_content::none()};
     http_client_request_expectation expectation_{http_client_request_expectation::none};
+    http_request_field_source field_source_{http_request_field_source::generated};
 };
 
 struct http2_connect_request_head_view final {
     borrowed_text authority_{};
     std::span<const http_header_view> headers_{};
+    http_request_field_source field_source_{http_request_field_source::generated};
 };
 
 struct http2_extended_connect_request_head_view final {
@@ -76,6 +78,7 @@ struct http2_extended_connect_request_head_view final {
     borrowed_text authority_{};
     borrowed_text target_{"/"};
     std::span<const http_header_view> headers_{};
+    http_request_field_source field_source_{http_request_field_source::generated};
 };
 
 // Stable HTTP/2 sans-I/O driver. Feed transport bytes, drain typed events, and

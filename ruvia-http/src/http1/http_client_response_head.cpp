@@ -60,7 +60,10 @@ namespace {
     }
     bool offered = false;
     http_upgrade_protocols protocols;
-    if (protocols.parse_field(offered_protocols, http_field_list_role::sender,
+    // The writer already validated this offer. Forwarded Upgrade fields may
+    // retain empty members (RFC 9110 sections 2.2 and 5.6.1); selecting a
+    // response protocol must not reapply generation grammar to those bytes.
+    if (protocols.parse_field(offered_protocols, http_field_list_role::recipient,
             [&selected, &offered](const http_upgrade_protocol& candidate_value) noexcept {
                 offered = offered || http_upgrade_protocol_equals(candidate_value, selected);
                 return true;

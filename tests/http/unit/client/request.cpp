@@ -14,9 +14,12 @@
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
+#include "ruvia/http/http1_request_content_writer.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request_target.h"
 
+#include "http1_request_message_fixture.h"
 #include "test_harness.h"
 
 namespace {
@@ -87,6 +90,24 @@ struct prepared_fixture final {
     return *failure;
 }
 
+auto prepare_field_request(unsigned entry, std::span<const ruvia::http_header_view> fields,
+    std::span<char> output, ruvia::http_request_field_source source) {
+    const auto origin = http_origin_view::https({.host_ = "example.test"});
+    const http1_client_request_wire_policy policy{.field_source_ = source};
+    const http1_client_request_writer writer;
+    switch (entry) {
+        case 0:
+            return writer.prepare(origin, http_client_request_view{.headers_ = fields}, output, policy);
+        case 1:
+            return writer.prepare_streaming(origin,
+                ruvia::http1_client_request_head_view{.method_ = "POST", .headers_ = fields, .content_length_ = 0},
+                output, policy);
+        case 2:
+            return writer.prepare_connect(origin, fields, output, policy);
+        default:
+            return writer.prepare_connect("example.test:443", fields, output, policy);
+    }
+}
 }  // namespace
 
 RUVIA_TEST(http1_client_request_writer_emits_one_canonical_scatter_gather_plan) {
@@ -986,4 +1007,228 @@ RUVIA_TEST(http1_client_request_writer_prepare_connect_udp_preserves_specific_pr
 
     const std::array content_type_headers{valid_capsule[0], ruvia::http_header_view{"Content-Type", "application/octet-stream"}};
     expect_error("/udp", content_type_headers, http1_client_request_prepare_error::invalid_header);
+}
+
+RUVIA_TEST(http1_client_forwards_received_application_fields_without_regenerating_values) {
+    const std::array cases{
+        ruvia::http_header_view{"Content-Type", "not-a-media-type"},
+        ruvia::http_header_view{"Origin", "https://example.test/path"},
+        ruvia::http_header_view{"Access-Control-Request-Method", "GET, POST"},
+        ruvia::http_header_view{"Access-Control-Request-Headers", "X-Good, Bad Header"},
+        ruvia::http_header_view{"Content-Encoding", ""},
+        ruvia::http_header_view{"Content-Encoding", ",,"},
+        ruvia::http_header_view{"Content-Encoding", ", gzip,, br,"},
+        ruvia::http_header_view{"Content-Encoding", ", unknown-coding,,"}};
+    for (const auto& field : cases) {
+        std::string wire = "GET / HTTP/1.1\r\nHost: example.test\r\n";
+        wire.append(field.name()).append(": ").append(field.value()).append("\r\n\r\n");
+        ruvia::http1_server_request_parse_state incoming;
+        incoming.parse_head(wire);
+        RUVIA_CHECK(incoming.head_ready() != nullptr);
+        const auto received = incoming.request_.header(field.name());
+        RUVIA_CHECK(received == std::optional<std::string_view>{field.value()});
+        if (!received) {
+            continue;
+        }
+        const std::array fields{ruvia::http_header_view{field.name(), *received}};
+        for (unsigned entry = 0; entry != 4; ++entry) {
+            std::array<char, 1024> output;
+            output.fill('z');
+            const auto generated = prepare_field_request(entry, fields, output, ruvia::http_request_field_source::generated);
+            RUVIA_CHECK(std::holds_alternative<http1_client_request_prepare_error>(generated));
+            RUVIA_CHECK(std::ranges::all_of(output, [](char c) { return c == 'z'; }));
+            auto forwarded = prepare_field_request(entry, fields, output, ruvia::http_request_field_source::forwarded);
+            auto* prepared = std::get_if<prepared_http1_client_request>(&forwarded);
+            RUVIA_CHECK(prepared != nullptr);
+            if (!prepared) {
+                continue;
+            }
+            ruvia::http1_server_request_parse_state upstream;
+            upstream.parse_head(prepared->head());
+            RUVIA_CHECK(upstream.head_ready() != nullptr);
+            RUVIA_CHECK(upstream.request_.header(field.name()) == received);
+            RUVIA_CHECK(upstream.request_.header("Host") ==
+                        std::optional<std::string_view>{entry < 2 ? "example.test" : "example.test:443"});
+        }
+    }
+}
+
+RUVIA_TEST(http1_client_forwarding_retains_security_ownership_and_singleton_rules) {
+    const std::array invalid{
+        ruvia::http_header_view{"X-Test", "ok\r\nInjected: yes"},
+        ruvia::http_header_view{"Bad Name", "value"},
+        ruvia::http_header_view{"Host", "example.test"},
+        ruvia::http_header_view{"Content-Length", "0"},
+        ruvia::http_header_view{"Expect", "100-continue"},
+        ruvia::http_header_view{"Transfer-Encoding", "chunked"},
+        ruvia::http_header_view{"Content-Encoding", ", gzip;level=9,"},
+        ruvia::http_header_view{"Content-Encoding", ", bad coding,"},
+        ruvia::http_header_view{"Connection", "Content-Type"},
+        ruvia::http_header_view{"Upgrade", ",websocket,"},
+        ruvia::http_header_view{"TE", ",trailers,"}};
+    for (unsigned entry = 0; entry != 4; ++entry) {
+        std::array<char, 1024> output;
+        for (const auto& field : invalid) {
+            output.fill('z');
+            const std::array fields{field};
+            const auto result = prepare_field_request(entry, fields, output, ruvia::http_request_field_source::forwarded);
+            RUVIA_CHECK(std::holds_alternative<http1_client_request_prepare_error>(result));
+            RUVIA_CHECK(std::ranges::all_of(output, [](char c) { return c == 'z'; }));
+        }
+        for (const auto& field : std::array{
+                 ruvia::http_header_view{"Content-Type", "invalid"},
+                 ruvia::http_header_view{"Origin", "invalid"},
+                 ruvia::http_header_view{"Access-Control-Request-Method", "GET, POST"},
+                 ruvia::http_header_view{"Authorization", "Bearer token"},
+                 ruvia::http_header_view{"User-Agent", "agent"},
+                 ruvia::http_header_view{"If-Modified-Since", "invalid"},
+                 ruvia::http_header_view{"If-Unmodified-Since", "invalid"}}) {
+            const std::array fields{field, field};
+            const auto result = prepare_field_request(entry, fields, output, ruvia::http_request_field_source::forwarded);
+            RUVIA_CHECK(std::holds_alternative<http1_client_request_prepare_error>(result));
+        }
+        const auto invalid_source = prepare_field_request(entry, {}, output,
+            static_cast<ruvia::http_request_field_source>(0xff));
+        RUVIA_CHECK(std::holds_alternative<http1_client_request_prepare_error>(invalid_source));
+    }
+}
+
+RUVIA_TEST(http1_client_forwarded_upgrade_empty_members_preserve_protocol_transition) {
+    constexpr std::string_view wire =
+        "GET / HTTP/1.1\r\nHost: example.test\r\nConnection: Upgrade\r\nUpgrade: , websocket,,\r\n\r\n";
+    ruvia::http1_server_request_parse_state incoming;
+    incoming.parse_head(wire);
+    RUVIA_CHECK(incoming.head_ready() != nullptr);
+    const auto upgrade = incoming.request_.header("Upgrade");
+    RUVIA_CHECK(upgrade == std::optional<std::string_view>{", websocket,,"});
+    if (!upgrade) {
+        return;
+    }
+    const std::array fields{ruvia::http_header_view{"Connection", "Upgrade"},
+        ruvia::http_header_view{"Upgrade", *upgrade}};
+    std::array<char, 1024> output;
+    RUVIA_CHECK(std::holds_alternative<http1_client_request_prepare_error>(
+        prepare_field_request(0, fields, output, ruvia::http_request_field_source::generated)));
+    auto forwarded = prepare_field_request(0, fields, output, ruvia::http_request_field_source::forwarded);
+    auto* prepared = std::get_if<prepared_http1_client_request>(&forwarded);
+    RUVIA_CHECK(prepared != nullptr);
+    if (!prepared) {
+        return;
+    }
+    RUVIA_CHECK(prepared->head().find("Upgrade: , websocket,,\r\n") != std::string_view::npos);
+    ruvia::http1_client_response_parser response_parser(std::move(*prepared).take_exchange_state());
+    const auto response = response_parser.parse(
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n");
+    RUVIA_CHECK(response.parsed() != nullptr);
+    if (const auto* parsed = response.parsed()) {
+        RUVIA_CHECK(parsed->plan().protocol_upgrade() != nullptr);
+    }
+    auto second = prepare_field_request(0, fields, output, ruvia::http_request_field_source::forwarded);
+    auto* second_prepared = std::get_if<prepared_http1_client_request>(&second);
+    RUVIA_CHECK(second_prepared != nullptr);
+    if (second_prepared) {
+        ruvia::http1_client_response_parser unoffered_parser(std::move(*second_prepared).take_exchange_state());
+        const auto unoffered = unoffered_parser.parse(
+            "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: other\r\n\r\n");
+        RUVIA_CHECK(unoffered.failure() != nullptr);
+    }
+    const std::array invalid_fields{fields[0], ruvia::http_header_view{"Upgrade", ",websocket/,"}};
+    RUVIA_CHECK(std::holds_alternative<http1_client_request_prepare_error>(
+        prepare_field_request(0, invalid_fields, output, ruvia::http_request_field_source::forwarded)));
+}
+
+RUVIA_TEST(http1_connect_udp_forwarding_keeps_protocol_owned_fields) {
+    const auto origin = http_origin_view::https({.host_ = "example.test"});
+    const std::array fields{ruvia::http_header_view{"Capsule-Protocol", "?1"},
+        ruvia::http_header_view{"Origin", "https://example.test/path"}};
+    std::array<char, 1024> output;
+    const http1_client_request_writer writer;
+    const http1_client_request_wire_policy policy{.field_source_ = ruvia::http_request_field_source::forwarded};
+    RUVIA_CHECK(std::holds_alternative<http1_client_request_prepare_error>(
+        writer.prepare_connect_udp(origin, "/udp", fields, output)));
+    auto forwarded = writer.prepare_connect_udp(origin, "/udp", fields, output, policy);
+    const auto* prepared = std::get_if<prepared_http1_client_request>(&forwarded);
+    RUVIA_CHECK(prepared != nullptr);
+    if (prepared) {
+        ruvia::http1_server_request_parse_state upstream;
+        upstream.parse_head(prepared->head());
+        RUVIA_CHECK(upstream.head_ready() != nullptr);
+        RUVIA_CHECK(upstream.request_.header("Origin") == std::optional<std::string_view>{fields[1].value()});
+        RUVIA_CHECK(upstream.request_.header("Upgrade") == std::optional<std::string_view>{"connect-udp"});
+    }
+    for (const auto& forbidden : std::array{
+             ruvia::http_header_view{"Content-Type", "invalid"},
+             ruvia::http_header_view{"Content-Length", "0"},
+             ruvia::http_header_view{"Upgrade", "connect-udp"},
+             ruvia::http_header_view{"Connection", "Upgrade"},
+             ruvia::http_header_view{"Origin", "bad\r\nInjected: yes"}}) {
+        const std::array invalid{fields[0], forbidden};
+        RUVIA_CHECK(std::holds_alternative<http1_client_request_prepare_error>(
+            writer.prepare_connect_udp(origin, "/udp", invalid, output, policy)));
+    }
+    RUVIA_CHECK(std::holds_alternative<http1_client_request_prepare_error>(
+        writer.prepare_connect_udp(origin, "/udp", {}, output,
+            {.field_source_ = static_cast<ruvia::http_request_field_source>(0xff)})));
+}
+
+RUVIA_TEST(http1_client_forwards_options_content_without_inventing_media_type) {
+    constexpr std::string_view incoming_wire =
+        "OPTIONS / HTTP/1.1\r\nHost: example.test\r\nContent-Length: 4\r\n\r\nbody";
+    const auto incoming = ruvia::testing::parse_http1_request_message(incoming_wire);
+    RUVIA_CHECK(incoming.complete());
+    RUVIA_CHECK_EQ(incoming.body_, "body");
+    const auto origin = http_origin_view::https({.host_ = "example.test"});
+    for (unsigned entry = 0; entry != 3; ++entry) {
+        std::array<char, 1024> output;
+        const auto prepare = [&](std::string_view method, ruvia::http_request_field_source source) {
+            const http1_client_request_wire_policy policy{.field_source_ = source};
+            const http1_client_request_writer writer;
+            if (entry == 0) {
+                return writer.prepare(origin,
+                    http_client_request_view{.method_ = method, .content_ = http_client_request_content_view::bytes(incoming.body_)},
+                    output, policy);
+            }
+            return writer.prepare_streaming(origin,
+                ruvia::http1_client_request_head_view{.method_ = method,
+                    .content_length_ = entry == 1 ? std::optional<std::uint64_t>{4} : std::nullopt},
+                output, policy);
+        };
+        const auto generated = prepare("OPTIONS", ruvia::http_request_field_source::generated);
+        const auto* error = std::get_if<http1_client_request_prepare_error>(&generated);
+        RUVIA_CHECK(error && *error == http1_client_request_prepare_error::options_content_type_required);
+        const auto trace = prepare("TRACE", ruvia::http_request_field_source::forwarded);
+        const auto* trace_error = std::get_if<http1_client_request_prepare_error>(&trace);
+        RUVIA_CHECK(trace_error && *trace_error == http1_client_request_prepare_error::content_forbidden_for_method);
+        auto forwarded = prepare("OPTIONS", ruvia::http_request_field_source::forwarded);
+        const auto* prepared = std::get_if<prepared_http1_client_request>(&forwarded);
+        RUVIA_CHECK(prepared != nullptr);
+        if (!prepared) {
+            continue;
+        }
+        std::string wire(prepared->head());
+        if (entry == 0) {
+            wire.append(prepared->content_plan().immediate()->bytes());
+        } else {
+            ruvia::http1_request_content_writer content(*prepared->content_plan().streaming());
+            const auto chunk = content.plan_chunk(incoming.body_);
+            RUVIA_CHECK(chunk.index() == 0);
+            if (chunk.index() != 0) {
+                continue;
+            }
+            wire.append(std::get<0>(chunk).prefix()).append(incoming.body_).append(std::get<0>(chunk).suffix_);
+            content.commit_chunk();
+            std::array<char, 32> final_buffer;
+            const auto finish = content.plan_finish(final_buffer);
+            RUVIA_CHECK(finish.index() == 0);
+            if (finish.index() != 0) {
+                continue;
+            }
+            wire.append(std::get<0>(finish));
+            content.commit_finish();
+        }
+        const auto upstream = ruvia::testing::parse_http1_request_message(wire);
+        RUVIA_CHECK(upstream.complete());
+        RUVIA_CHECK_EQ(upstream.body_, incoming.body_);
+        RUVIA_CHECK(!upstream.state_.request_.header("Content-Type"));
+    }
 }

@@ -5,8 +5,13 @@
 
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/detail/field/request_header_kind.h"
+#include "ruvia/http/http_client.h"
 
 namespace ruvia::detail {
+
+[[nodiscard]] constexpr bool is_valid_http_request_field_source(http_request_field_source source) noexcept {
+    return source == http_request_field_source::generated || source == http_request_field_source::forwarded;
+}
 
 // The only version-dependent request-field semantics: HTTP/1.1 negotiates
 // transfer codings through TE, while HTTP/2 permits only "trailers".
@@ -36,7 +41,7 @@ public:
 
 private:
     friend request_field_status validate_request_field(request_header_kind kind, std::string_view value,
-        http_field_list_role role, request_field_state& state) noexcept;
+        http_field_list_role role, request_field_state& state, http_request_field_source source) noexcept;
 
     std::uint32_t seen_{0};
     request_field_framing framing_;
@@ -50,6 +55,7 @@ private:
 // Connection, Upgrade), Host/:authority agreement, cookie joining, and parsing
 // accepted Expect members.
 [[nodiscard]] request_field_status validate_request_field(request_header_kind kind, std::string_view value,
-    http_field_list_role role, request_field_state& state) noexcept;
+    http_field_list_role role, request_field_state& state,
+    http_request_field_source source = http_request_field_source::generated) noexcept;
 
 }  // namespace ruvia::detail

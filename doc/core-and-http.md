@@ -147,6 +147,14 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 
 HTTP/1 请求头与响应头解析的字段描述符共用内部存储（`parser/http_header_descriptor_storage.h`）：前 32 项内联，超出后整体迁入传入的 PMR（缺省为默认资源）并按实际字段数增长。服务端 `parsed_request_header_block` 与客户端 `http1_client_parsed_response_head` 均不按首部字节上限预留线程栈数组，也不增加字段数量限制；64 KiB 首部字节上限仍然生效。服务端请求视图零拷贝借用输入缓冲区，客户端最终响应头拥有字段数据，原始输入可在解析完成后释放。PMR 分配失败以 `std::bad_alloc` 传出，此时不发布 head_ready 或成功状态；释放资源后可用同一缓冲区与偏移重试，但部分元数据可能残留，不保证回滚。PMR 须存活至其拥有的描述符存储释放：服务端请求为 `http_request::reset()` 或请求对象析构，客户端响应头为 `take_headers()` 返回的向量或响应头析构。
 
+请求转发使用 `"ruvia/http/http_client.h"` 的 `enum class http_request_field_source : std::uint8_t { generated, forwarded }`，不要把收到的字段当成新配置字段逐项送入 `is_valid_http_request_application_field`：
+
+- HTTP/1 在 `http1_client_request_wire_policy::field_source_` 设置来源；`prepare`、`prepare_streaming`、两个 `prepare_connect` 重载和 `prepare_connect_udp` 均消费同一策略。HTTP/2 的 `http2_regular_request_head_view`、`http2_connect_request_head_view`、`http2_extended_connect_request_head_view` 均提供 `field_source_`。缺省 `generated` 保持新生成字段的严格语义；配置生成或重写字段须先按生成规则校验，不能借 `forwarded` 绕过配置边界。
+- `forwarded` 只切换值语义：`Content-Type`、`Origin`、`Access-Control-Request-Method`、`Access-Control-Request-Headers` 原样保留，由最终应用解释；`Content-Encoding` 和 HTTP/1 `Upgrade` 容忍合法列表空成员（包括空列表），不要求重建列表，非空成员仍须符合 coding token / upgrade protocol 语法。未知但合法的 content coding 不因本地不支持解码而被丢弃。依据 [RFC 9110 §2.2](https://www.rfc-editor.org/rfc/rfc9110.html#section-2.2)，generate 不包括 forward；[§5.6.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.6.1) 区分发送方新生成列表和接收方空成员容忍义务。OPTIONS 携带正文须有 Content-Type 是 §9.3.7 的生成要求，转发已接收请求时不补造该字段；TRACE 禁止正文的消息约束不变。
+- 来源不改变字段名/值字节与 CRLF 注入防护、字段节大小、方法/目标、Host/authority 一致性、正文分帧、Content-Length/Expect 所有权或 singleton 次数。即使接收端容忍重复 `User-Agent` 或条件日期，转发 writer 也不切换整套 recipient 规则，不额外放行这些重复字段。非法来源枚举拒绝，HTTP/1 返回 `invalid_header`，HTTP/2 返回 `invalid_message`，不写出请求或占用新流。
+- 代理仍负责按 [RFC 9110 §7.6.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-7.6.1) 移除/重建逐跳字段。`Connection`、`TE`、`Trailer` 及协议专属限制不放宽；HTTP/1 `Upgrade` 仍须有正确 `Connection: Upgrade`，响应切换仍须匹配实际 offer。HTTP/2 继续禁止 `Connection`、`Upgrade` 等逐跳字段（RFC 9113 §8.2.2）；CONNECT-UDP 的 Capsule-Protocol 与禁止表示/分帧字段规则仍生效。新生成的专用 WebSocket 握手与 PUSH_PROMISE 仍按 `generated` 检查。
+
+
 #### 4.2 HTTP/2 与 HPACK 状态机（`"ruvia/http/http2_connection.h"`, `"ruvia/http/hpack.h"`）
 
 `ruvia::http2_connection` 实现了符合 RFC 9113 / RFC 7541 / RFC 8441 的完整客户端与服务端 Sans-I/O HTTP/2 连接状态机：

@@ -95,20 +95,29 @@ namespace {
 }
 
 [[nodiscard]] bool is_valid_value(request_header_kind kind, std::string_view value,
-    http_field_list_role role, request_field_framing framing) noexcept {
+    http_field_list_role role, request_field_framing framing, http_request_field_source source) noexcept {
+    // RFC 9110 sections 2.2 and 5.6.1: forwarding is not generation. Reuse the
+    // recipient value rules only for end-to-end application metadata. Ownership
+    // and singleton checks below still use the actual sender role.
+    const auto application_role = source == http_request_field_source::forwarded
+                                      ? http_field_list_role::recipient
+                                      : role;
     switch (kind) {
         case request_header_kind::origin:
-            return role == http_field_list_role::recipient || is_valid_http_origin_field_value(value);
+            return application_role == http_field_list_role::recipient || is_valid_http_origin_field_value(value);
         case request_header_kind::access_control_request_method:
-            return role == http_field_list_role::recipient || is_valid_http_cors_request_method(value);
+            return application_role == http_field_list_role::recipient || is_valid_http_cors_request_method(value);
         case request_header_kind::access_control_request_headers:
-            return role == http_field_list_role::recipient || is_valid_http_cors_request_header_names(value);
+            return application_role == http_field_list_role::recipient || is_valid_http_cors_request_header_names(value);
         case request_header_kind::content_type:
             // Recipients interpret media types at the application boundary.
-            return role == http_field_list_role::recipient ||
+            return application_role == http_field_list_role::recipient ||
                    is_valid_http_content_type_field_value(value);
         case request_header_kind::content_encoding:
-            return is_valid_http_content_encoding_field_value(value, role);
+            // Admission leaves received metadata to the decoder. Forwarding
+            // validates the recipient list grammar, not arbitrary nonempty text.
+            return role == http_field_list_role::recipient ||
+                   is_valid_http_content_encoding_field_value(value, application_role);
         case request_header_kind::trailer:
             // The declaration neither frames content nor authorizes actual trailers.
             return role == http_field_list_role::recipient ||
@@ -133,12 +142,15 @@ bool request_field_state::seen(request_header_kind kind) const noexcept {
 }
 
 request_field_status validate_request_field(request_header_kind kind, std::string_view value,
-    http_field_list_role role, request_field_state& state) noexcept {
+    http_field_list_role role, request_field_state& state, http_request_field_source source) noexcept {
+    if (!is_valid_http_request_field_source(source)) {
+        return request_field_status::invalid;
+    }
     if (role == http_field_list_role::sender &&
         (kind == request_header_kind::expect || kind == request_header_kind::content_length)) {
         return request_field_status::managed_by_sender;
     }
-    if (!is_valid_value(kind, value, role, state.framing_)) {
+    if (!is_valid_value(kind, value, role, state.framing_, source)) {
         return request_field_status::invalid;
     }
     // Invalid date conditions, including repeated field lines, are ignored

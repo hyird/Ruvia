@@ -215,6 +215,10 @@ struct request_head_write_plan final {
     std::span<char> head_buffer, http1_client_request_wire_policy policy,
     std::pmr::memory_resource* resource, const http1_client_request_head_view* streaming = nullptr,
     std::span<const http_header_view> connect_udp_headers = {}) {
+    if (!detail::is_valid_http_request_field_source(policy.field_source_)) {
+        return detail::http1_client_request_prepare_result_access::failure(
+            http1_client_request_prepare_error::invalid_header);
+    }
     const bool connect = known_method == http_known_method::connect;
     request_header_facts header_facts;
     http1_client_request_prepare_error error = http1_client_request_prepare_error::invalid_header;
@@ -223,7 +227,7 @@ struct request_head_write_plan final {
     const auto length = streaming ? streaming->content_length_ : content_bytes ? std::optional<std::uint64_t>(content_bytes->value().size())
                                                                                : std::nullopt;
     const bool chunked = streaming && !length;
-    if (!analyze_headers(headers, header_facts, error)) {
+    if (!analyze_headers(headers, header_facts, error, policy.field_source_)) {
         return detail::http1_client_request_prepare_result_access::failure(error);
     }
     // A sender that will generate trailer fields SHOULD declare them (RFC 9110
@@ -246,7 +250,10 @@ struct request_head_write_plan final {
             return detail::http1_client_request_prepare_result_access::failure(
                 http1_client_request_prepare_error::content_forbidden_for_method);
         }
-        if (content_semantics == http_request_content_semantics::content_type_required &&
+        // RFC 9110 section 9.3.7 requires the media description when generating
+        // OPTIONS content, not when forwarding an already received request.
+        if (policy.field_source_ == http_request_field_source::generated &&
+            content_semantics == http_request_content_semantics::content_type_required &&
             !header_facts.fields_.seen(detail::request_header_kind::content_type)) {
             return detail::http1_client_request_prepare_result_access::failure(
                 http1_client_request_prepare_error::options_content_type_required);
@@ -433,9 +440,10 @@ http1_client_request_writer::prepare_streaming(const http_origin_view& origin,
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
     http1_client_request_prepare_error>
 http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
-    borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer) const {
+    borrowed_text target, std::span<const http_header_view> headers, std::span<char> head_buffer,
+    http1_client_request_wire_policy policy) const {
     http_known_method known_method = http_known_method::unknown;
-    if (const auto error = validate_non_connect_request_line("GET", target.view(), {}, known_method)) {
+    if (const auto error = validate_non_connect_request_line("GET", target.view(), policy, known_method)) {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
     for (const auto& field : headers) {
@@ -474,7 +482,7 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
     }
     const auto emitted_headers = all_fields.first(total_fields - 1U);
     return prepare_request(origin, "GET", known_method, target.view(), emitted_headers,
-        http_client_request_content_view::none(), head_buffer, {}, resource_, nullptr, all_fields);
+        http_client_request_content_view::none(), head_buffer, policy, resource_, nullptr, all_fields);
 }
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
