@@ -430,7 +430,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
     // for a missing TLS identity.
     bool duplicate_rejected = false;
     try {
-        app.listen({.address_ = "127.0.0.1", .http_ = 12345, .https_ = 12345, .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}});
+        app.listen({.address_ = "127.0.0.1", .http_ = 12345, .https_ = 12345, .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}});
     } catch (const std::invalid_argument&) {
         duplicate_rejected = true;
     }
@@ -458,7 +458,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         app.listen({.address_ = "127.0.0.1",
             .http_ = occupy_http ? occupied_port : available_endpoint.port(),
             .https_ = occupy_http ? available_endpoint.port() : occupied_port,
-            .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}});
+            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}});
         auto failed_run = std::async(std::launch::async, [&app] {
             try {
                 app.run();
@@ -559,7 +559,7 @@ RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {
         const auto tls_endpoint = tls_reservation.local_endpoint();
         reservation.close();
         tls_reservation.close();
-        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key, .client_certificates_ = {.verify_file_ = identity.ca_file_}}});
+        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}, .client_certificates_ = {.ca_file_ = identity.ca_file_}}});
         app_run run(app, *state_value);
         const auto owner_thread = run.id();
         const bool entered = state_value->hook_entered_.try_acquire_for(3s);

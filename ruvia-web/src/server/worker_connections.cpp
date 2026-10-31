@@ -51,8 +51,7 @@ namespace ruvia::detail {
 namespace {
 
 void configure_accepted_socket(asio::ip::tcp::socket& socket) {
-    if (const auto error = apply_tcp_socket_policies(
-            socket, tcp_no_delay_policy::enable, tcp_keep_alive_policy::system_default)) {
+    if (const auto error = apply_tcp_socket_policies(socket, tcp_keep_alive::system_default)) {
         throw std::system_error(error, "failed to configure accepted TCP socket");
     }
 }

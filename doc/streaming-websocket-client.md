@@ -307,7 +307,7 @@ Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.htm
 | `max_concurrent_http2_streams_per_connection_` | `std::size_t`（默认 `100`） | 单条 HTTP/2 连接并发流上限 |
 | `connect_timeout_` / `write_timeout_` / `request_timeout_` / `acquire_timeout_` | 超时配置 | 连接建立（默认 `5s`）、写入（`30s`）、完整请求（`30s`）与连接池借用等待超时（`5s`） |
 | `max_response_bytes_` | `std::size_t`（默认 `default_max_buffered_body_bytes`） | `read_all()` 默认最大响应体字节数 |
-| `tls_` / `tcp_` | `client_tls_config` / `client_tcp_config` | 客户端 TLS 证书校验（`verify_identity` / `skip_verification`）、CA 文件、mTLS 客户端证书与 TCP `no_delay_` / `keep_alive_`。HTTP、WebSocket、Redis 和数据库客户端都按 RFC 9525 校验证书 subjectAltName：DNS 名只匹配 DNS 项，IP 只匹配 IP 项，不回退到主题 CN，DNS 通配符只能是完整的最左标签。仅 TLS 1.2 / 1.3，TLS 1.2 只提供 ECDHE + AEAD 密码套件并拒绝重协商。`max_outgoing_records_`（默认 `2^23`，范围 `1..2^23`）限制每条连接发出的全部 TLS 记录，计入握手与 KeyUpdate 且更新密钥不重置；到达上限时终止连接，以低于 RFC 9846 §5.5 的 AES-GCM 单密钥用量上限 |
+| `tls_` | `client_tls_config` | 客户端 TLS 总是校验对端：`ca_file_`（缺省使用系统信任库）、mTLS 客户端身份 `identity_`（`tls_identity_config`）与 `server_name_`。HTTP、WebSocket、Redis 和数据库客户端都按 RFC 9525 校验证书 subjectAltName：DNS 名只匹配 DNS 项，IP 只匹配 IP 项，不回退到主题 CN，DNS 通配符只能是完整的最左标签。仅 TLS 1.2 / 1.3，TLS 1.2 只提供 ECDHE + AEAD 密码套件并拒绝重协商。`max_outgoing_records_`（默认 `2^23`，范围 `1..2^23`）限制每条连接发出的全部 TLS 记录，计入握手与 KeyUpdate 且更新密钥不重置；到达上限时终止连接，以低于 RFC 9846 §5.5 的 AES-GCM 单密钥用量上限。TCP 连接固定关闭 Nagle；HTTP 与 WebSocket 客户端开启 keep-alive，Redis 使用系统默认 |
 | `received_cookies_` | `http_client_received_cookie_policy`（默认 `ignore`） | 设为 `retain_and_send` 时启用客户端 Cookie Jar 自动管理 `Set-Cookie` |
 | `push_` / `advertisements_` | `http_client_push_config` / `http_client_advertisement_config` | 控制是否接收 HTTP/2 Server Push 与 `ORIGIN` / `ALTSVC` 通告 |
 

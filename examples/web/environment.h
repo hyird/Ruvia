@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <cstdlib>
+#include <filesystem>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -50,6 +51,15 @@ public:
             }
         }
         throw std::invalid_argument("invalid example setting: " + std::string(name));
+    }
+
+    // A file setting; an absent or empty value selects none.
+    std::optional<std::filesystem::path> path(std::string_view name) const {
+        const auto text = get(name);
+        if (!text || text->empty()) {
+            return std::nullopt;
+        }
+        return std::filesystem::path(*text);
     }
 
 private:

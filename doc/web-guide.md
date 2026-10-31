@@ -102,17 +102,21 @@ ruvia::app().listen({
     .http_ = 8080,
     .https_ = 8443,
     .tls_ = {
-        .certificate_chain_file_ = "certs/server.crt",
-        .private_key_file_ = "certs/server.key",
+        .identity_ = {
+            .certificate_chain_file_ = "certs/server.crt",
+            .private_key_file_ = "certs/server.key",
+        },
         .client_certificates_ = {
-            .verify_file_ = "certs/ca.crt",
+            .ca_file_ = "certs/ca.crt",
             .requirement_ = ruvia::tls_client_certificate_requirement::optional,
         },
         .sni_ = {
             {
                 .host_ = "api.example.com",
-                .certificate_chain_file_ = "certs/api.crt",
-                .private_key_file_ = "certs/api.key",
+                .identity_ = {
+                    .certificate_chain_file_ = "certs/api.crt",
+                    .private_key_file_ = "certs/api.key",
+                },
             },
         },
     },
@@ -121,6 +125,7 @@ ruvia::app().listen({
 ```
 
 - `http_` 与 `https_` 至少指定一个；同时指定且 `auto_https_redirect_ = true` 时，明文 `http_` 端口上的请求会自动重定向至 `https_` 端口。
+- 服务端与客户端共用 `ruvia/web/tls_config.h` 中的 `tls_identity_config`（证书链、私钥与可选口令）。路径为 `std::filesystem::path`，不得为空或含 NUL，以 UTF-8 交给 OpenSSL 与数据库驱动，Windows 原生路径不经过 ANSI 代码页。
 - `tls_.client_certificates_.requirement_` 支持 `tls_client_certificate_requirement::optional` 或 `required`（双向 TLS / mTLS），通过 `c.conn().tls()->client_certificate_subject()` 读取客户端证书主题。
 - `sni_` 按 SNI 主机名（ASCII 不区分大小写）选择证书；客户端未发送 server_name 或名称不匹配任何 `sni_` 项时使用主证书完成握手。这是为单证书与通配符证书部署做出的产品选择，不发送 RFC 9325 §3.7 建议的 `unrecognized_name` 告警。
 - 协议策略固定：仅 TLS 1.2 / 1.3；TLS 1.2 只协商 ECDHE + AEAD 密码套件（AES-128-GCM 优先），由服务器偏好决定；拒绝重协商；ALPN 依次选择 `h2`、`http/1.1`、`http/1.0`，三者都未提供时以 `no_application_protocol` 告警失败。

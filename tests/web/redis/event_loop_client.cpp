@@ -2,9 +2,11 @@
 #include <barrier>
 #include <chrono>
 #include <exception>
+#include <filesystem>
 #include <future>
 #include <istream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -1145,8 +1147,7 @@ RUVIA_TEST(redis_tls_authenticates_identity_and_retains_public_results) {
     ruvia::test::tls_identity identity("redis.test");
     redis_peer peer(redis_peer::mode_type::normal, &identity.context_);
     auto config = peer.config();
-    const auto ca_file = identity.ca_file_.string();
-    config.tls_ = {.ca_file_ = ca_file, .server_name_ = "redis.test"};
+    config.tls_ = {.ca_file_ = identity.ca_file_, .server_name_ = "redis.test"};
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     ruvia::redis_client client(pool.loop(0), config);
     pool.start();
@@ -1160,8 +1161,8 @@ RUVIA_TEST(redis_tls_rejects_untrusted_and_wrong_name_before_authentication) {
         redis_peer peer(redis_peer::mode_type::normal, &identity.context_);
         auto config = peer.config();
         config.password_ = "must-not-send";
-        const auto ca_file = trust_ca ? identity.ca_file_.string() : std::string{};
-        config.tls_ = {.ca_file_ = ca_file, .server_name_ = trust_ca ? "wrong.test" : "redis.test"};
+        config.tls_ = {.ca_file_ = trust_ca ? std::optional<std::filesystem::path>(identity.ca_file_) : std::nullopt,
+            .server_name_ = trust_ca ? "wrong.test" : "redis.test"};
         ruvia::event_loop_pool pool({.loop_count_ = 1});
         ruvia::redis_client client(pool.loop(0), config);
         pool.start();
@@ -1181,8 +1182,7 @@ RUVIA_TEST(redis_tls_shutdown_joins_pending_authenticated_transport_io) {
     ruvia::test::tls_identity identity("redis.test");
     redis_peer peer(redis_peer::mode_type::normal, &identity.context_);
     auto config = peer.config();
-    const auto ca_file = identity.ca_file_.string();
-    config.tls_ = {.ca_file_ = ca_file, .server_name_ = "redis.test"};
+    config.tls_ = {.ca_file_ = identity.ca_file_, .server_name_ = "redis.test"};
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     ruvia::redis_client client(pool.loop(0), config);
     {

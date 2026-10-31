@@ -20,7 +20,6 @@ inline void validate_redis_config(const redis_config& config) {
     detail::ensure_positive_size(config.max_array_depth_, "redis max array depth must be greater than zero");
     detail::ensure_positive_optional_size(
         config.max_reply_bytes_, "configured redis reply byte limit must be greater than zero");
-    validate_client_tcp_config(config.tcp_);
 }
 
 }  // namespace ruvia::detail

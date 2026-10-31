@@ -23,7 +23,7 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 #include "ruvia/http/websocket_protocol.h"
-#include "ruvia/web/client_tls_config.h"
+#include "ruvia/web/tls_config.h"
 #include "ruvia/web/websocket.h"
 
 namespace ruvia {
@@ -68,7 +68,6 @@ struct websocket_client_config final {
     websocket_heartbeat_config heartbeat_{};
     // Used for wss; client_tls_mode::disabled is rejected (select ws instead).
     client_tls_config tls_{};
-    client_tcp_config tcp_{};
     borrowed_text user_agent_{"Ruvia"};
 };
 

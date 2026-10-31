@@ -21,6 +21,7 @@
 #include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
 #include "client/client_tls_socket.h"
+#include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
 
@@ -76,7 +77,7 @@ struct client_tcp_endpoint final {
     std::uint16_t port_;
     // nullptr selects plaintext TCP.
     const client_tls_config_storage* tls_;
-    client_tcp_config tcp_;
+    tcp_keep_alive keep_alive_;
     // ALPN offered in the TLS handshake; ignored for plaintext TCP.
     client_alpn alpn_;
 };

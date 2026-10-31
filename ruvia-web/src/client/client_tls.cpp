@@ -52,8 +52,8 @@ constexpr std::array<unsigned char, 12> negotiated_http_alpn = {
            X509_VERIFY_PARAM_set1_host(parameters, host, 0) == 1;
 }
 
-[[nodiscard]] client_tls_setup_error prepare_client_tls_session(
-    SSL& ssl, std::string_view host, client_tls_mode mode) noexcept {
+// Prepares SNI and the expected peer identity; TLS always authenticates the peer.
+[[nodiscard]] client_tls_setup_error prepare_client_tls_session(SSL& ssl, std::string_view host) noexcept {
     const bool is_ip_address = is_client_ip_address(host);
     if (!is_ip_address && host.ends_with('.')) {
         host.remove_suffix(1);
@@ -70,8 +70,7 @@ constexpr std::array<unsigned char, 12> negotiated_http_alpn = {
     if (!is_ip_address && SSL_set_tlsext_host_name(&ssl, tls_host_buffer.data()) != 1) {
         return client_tls_setup_error::sni_failed;
     }
-    if (mode == client_tls_mode::verify_identity &&
-        !configure_client_tls_peer_identity(ssl, tls_host_buffer.data(), is_ip_address)) {
+    if (!configure_client_tls_peer_identity(ssl, tls_host_buffer.data(), is_ip_address)) {
         return client_tls_setup_error::peer_identity_failed;
     }
     return client_tls_setup_error::none;
@@ -108,24 +107,41 @@ public:
 client_tls_config_storage::client_tls_config_storage(
     const client_tls_config& source_value, client_tls_files files, std::pmr::memory_resource* resource)
     : mode_(source_value.mode_),
-      max_outgoing_records_(source_value.max_outgoing_records_),
-      ca_file_(source_value.ca_file_, pmr_resource_or_default(resource)),
-      certificate_chain_file_(source_value.certificate_chain_file_, pmr_resource_or_default(resource)),
-      private_key_file_(source_value.private_key_file_, pmr_resource_or_default(resource)),
-      private_key_password_(source_value.private_key_password_, pmr_resource_or_default(resource)) {
+      max_outgoing_records_(source_value.max_outgoing_records_) {
+    auto* const target = pmr_resource_or_default(resource);
+    if (source_value.ca_file_.has_value()) {
+        ca_file_.emplace(make_tls_file_name(*source_value.ca_file_, target));
+    }
+    if (source_value.identity_.has_value()) {
+        identity_.emplace(make_tls_identity_files(*source_value.identity_, target));
+    }
     if (source_value.server_name_.has_value()) {
-        server_name_.emplace(*source_value.server_name_, pmr_resource_or_default(resource));
+        server_name_.emplace(*source_value.server_name_, target);
     }
     if (files != client_tls_files::parse || mode_ == client_tls_mode::disabled) {
         return;
     }
-    if (mode_ == client_tls_mode::verify_identity) {
-        trust_store_ = ca_file_.empty() ? tls_trust_store::load_default()
-                                        : tls_trust_store::load_file(ca_file_.c_str());
+    trust_store_ = ca_file_.has_value() ? load_tls_trust_store(*ca_file_) : tls_trust_store::load_default();
+    if (identity_.has_value()) {
+        certificate_ = load_tls_certificate(*identity_, source_value.identity_->private_key_password_);
     }
-    if (!certificate_chain_file_.empty()) {
-        certificate_ = tls_certificate::load(
-            certificate_chain_file_.c_str(), private_key_file_.c_str(), private_key_password_);
+}
+
+client_tls_config_storage::client_tls_config_storage(
+    const client_tls_config_storage& source_value, std::pmr::memory_resource* resource)
+    : mode_(source_value.mode_),
+      max_outgoing_records_(source_value.max_outgoing_records_),
+      trust_store_(source_value.trust_store_),
+      certificate_(source_value.certificate_) {
+    auto* const target = pmr_resource_or_default(resource);
+    if (source_value.ca_file_.has_value()) {
+        ca_file_.emplace(*source_value.ca_file_, target);
+    }
+    if (source_value.identity_.has_value()) {
+        identity_.emplace(copy_tls_identity_files(*source_value.identity_, target));
+    }
+    if (source_value.server_name_.has_value()) {
+        server_name_.emplace(*source_value.server_name_, target);
     }
 }
 
@@ -150,19 +166,16 @@ std::pmr::string client_uri_host(std::string_view host, std::pmr::memory_resourc
 }
 
 void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config) {
-    if (config.mode_ != client_tls_mode::verify_identity && config.mode_ != client_tls_mode::skip_verification) {
+    if (config.mode_ != client_tls_mode::verify_identity) {
         throw std::invalid_argument("client TLS context requires TLS to be enabled");
     }
     apply_tls_protocol_policy(context_value, config.max_outgoing_records_);
-    const bool verify = config.mode_ == client_tls_mode::verify_identity;
-    SSL_CTX_set_verify(&context_value, verify ? SSL_VERIFY_PEER : SSL_VERIFY_NONE, nullptr);
-    if (verify) {
-        if (!config.trust_store_.has_value()) {
-            throw std::logic_error("client TLS trust store was not parsed");
-        }
-        config.trust_store_->install(context_value);
+    SSL_CTX_set_verify(&context_value, SSL_VERIFY_PEER, nullptr);
+    if (!config.trust_store_.has_value()) {
+        throw std::logic_error("client TLS trust store was not parsed");
     }
-    if (config.certificate_chain_file_.empty()) {
+    config.trust_store_->install(context_value);
+    if (!config.identity_.has_value()) {
         return;
     }
     if (!config.certificate_.has_value()) {
@@ -171,13 +184,11 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
     config.certificate_->install(context_value);
 }
 
-client_tls_setup_error prepare_client_tls_stream(
-    SSL& ssl, std::string_view host, client_tls_mode mode, client_alpn alpn) {
+client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, client_alpn alpn) {
     if (SSL_clear(&ssl) != 1) {
         return client_tls_setup_error::reset_failed;
     }
-    if (const auto prepared = prepare_client_tls_session(ssl, host, mode);
-        prepared != client_tls_setup_error::none) {
+    if (const auto prepared = prepare_client_tls_session(ssl, host); prepared != client_tls_setup_error::none) {
         return prepared;
     }
     const auto protocols = client_alpn_bytes(alpn);

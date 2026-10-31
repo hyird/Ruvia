@@ -44,7 +44,6 @@ inline void validate_websocket_client_config(const websocket_client_config& conf
     }
     validate_websocket_heartbeat_config(config.heartbeat_);
     validate_client_tls_config(config.tls_);
-    validate_client_tcp_config(config.tcp_);
     if (config.scheme_ == websocket_scheme::wss && config.tls_.mode_ == client_tls_mode::disabled) {
         throw std::invalid_argument("wss WebSocket client requires TLS; use the ws scheme for plaintext");
     }

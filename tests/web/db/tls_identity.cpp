@@ -121,7 +121,7 @@ bool sends_startup(ruvia::db_driver driver, const char* reference, const char* c
     ruvia::test::tls_identity identity(common_name, san);
     handshake_peer peer(identity.context_, driver == ruvia::db_driver::mariadb);
     ruvia::db_config config{.driver_ = driver, .host_ = "127.0.0.1", .port_ = peer.port(), .username_ = "test", .database_ = "test"};
-    config.tls_.ca_file_ = identity.ca_file_.string();
+    config.tls_.ca_file_ = identity.ca_file_;
     if (driver == ruvia::db_driver::postgresql) {
         config.tls_.server_name_ = reference;
     }

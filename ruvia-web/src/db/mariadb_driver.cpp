@@ -920,14 +920,18 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
         if (mysql_optionsv(&initialized, MYSQL_OPT_TLS_VERSION, "TLSv1.2,TLSv1.3") != 0) {
             throw mysql_error(initialized, "configuring MariaDB TLS versions", db_error::code_type::connect_failed);
         }
-        const auto set_path = [&initialized](mysql_option option, const std::pmr::string& path) {
-            if (!path.empty() && mysql_optionsv(&initialized, option, path.c_str()) != 0) {
+        const auto set_path = [&initialized](mysql_option option, const tls_file_name& path) {
+            if (mysql_optionsv(&initialized, option, tls_file_name_c_str(path)) != 0) {
                 throw mysql_error(initialized, "configuring MariaDB TLS credentials", db_error::code_type::connect_failed);
             }
         };
-        set_path(MYSQL_OPT_SSL_CA, config.tls_.ca_file_);
-        set_path(MYSQL_OPT_SSL_CERT, config.tls_.certificate_chain_file_);
-        set_path(MYSQL_OPT_SSL_KEY, config.tls_.private_key_file_);
+        if (config.tls_.ca_file_.has_value()) {
+            set_path(MYSQL_OPT_SSL_CA, *config.tls_.ca_file_);
+        }
+        if (config.tls_.identity_.has_value()) {
+            set_path(MYSQL_OPT_SSL_CERT, config.tls_.identity_->certificate_chain_file_);
+            set_path(MYSQL_OPT_SSL_KEY, config.tls_.identity_->private_key_file_);
+        }
     }
     const auto client_flags = use_tls ? static_cast<unsigned long>(CLIENT_SSL) : 0UL;
     MYSQL* connected = nullptr;

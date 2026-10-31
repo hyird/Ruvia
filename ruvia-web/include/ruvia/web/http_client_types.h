@@ -14,7 +14,7 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/web/client_tls_config.h"
+#include "ruvia/web/tls_config.h"
 namespace ruvia {
 
 enum class http_client_protocol : std::uint8_t {
@@ -101,7 +101,6 @@ struct http_client_config final {
     http_client_push_config push_{};
     // Used for https; client_tls_mode::disabled is rejected (select http instead).
     client_tls_config tls_{};
-    client_tcp_config tcp_{};
     http_client_received_cookie_policy received_cookies_{http_client_received_cookie_policy::ignore};
     borrowed_text user_agent_{"Ruvia"};
     // Client-stored like retained cookies: never sent with TRACE (RFC 9110 §9.3.8).

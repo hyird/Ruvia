@@ -75,7 +75,7 @@ int main(int argc, char** argv) {
             .port_ = tls ? 8444 : 8093,
             .target_ = "/features/ws",
             .read_timeout_ = std::chrono::seconds(5),
-            .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
+            .tls_ = {.ca_file_ = env.path("RUVIA_TLS_CA")},
         };
         // The loop looks "localhost" up on this pool instead of blocking in
         // getaddrinfo; declared first, it outlives the loops.

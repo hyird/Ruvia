@@ -55,11 +55,11 @@ bool throws_invalid(fn_type&& fn) {
 
 ruvia::tls_config tls_config(std::filesystem::path certificate_chain_file,
     std::filesystem::path private_key_file, std::string private_key_password = {}) {
-    return {
-        .certificate_chain_file_ = std::move(certificate_chain_file),
-        .private_key_file_ = std::move(private_key_file),
-        .private_key_password_ = std::move(private_key_password),
-    };
+    return {.identity_ = {
+                .certificate_chain_file_ = std::move(certificate_chain_file),
+                .private_key_file_ = std::move(private_key_file),
+                .private_key_password_ = std::move(private_key_password),
+            }};
 }
 
 }  // namespace
@@ -84,14 +84,14 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
-            .tls_ = {.certificate_chain_file_ = "cert.pem"},
+            .tls_ = {.identity_ = {.certificate_chain_file_ = "cert.pem"}},
         });
     }));
     RUVIA_CHECK(throws_invalid([] {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .http_ = 8080,
-            .tls_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
+            .tls_ = {.identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"}},
         });
     }));
     RUVIA_CHECK(throws_invalid([] {
@@ -100,8 +100,7 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
             .https_ = 8443,
             .tls_ =
                 {
-                    .certificate_chain_file_ = "cert.pem",
-                    .private_key_file_ = "key.pem",
+                    .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
                     .client_certificates_ =
                         {
                             .requirement_ = ruvia::tls_client_certificate_requirement::required,
@@ -115,8 +114,7 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
             .https_ = 8443,
             .tls_ =
                 {
-                    .certificate_chain_file_ = "cert.pem",
-                    .private_key_file_ = "key.pem",
+                    .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
                     .max_outgoing_records_ = 0,
                 },
         });
@@ -127,8 +125,7 @@ RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_constructi
             .https_ = 8443,
             .tls_ =
                 {
-                    .certificate_chain_file_ = "cert.pem",
-                    .private_key_file_ = "key.pem",
+                    .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
                     .max_outgoing_records_ = (std::uint64_t{1} << 23) + 1,
                 },
         });
@@ -147,24 +144,20 @@ RUVIA_TEST(tls_config_rejects_empty_or_duplicate_sni_identity) {
                 .https_ = 8443,
                 .tls_ =
                     {
-                        .certificate_chain_file_ = "cert.pem",
-                        .private_key_file_ = "key.pem",
+                        .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
                         .sni_ = std::move(sni),
                     },
             });
         });
     };
-    RUVIA_CHECK(rejects(
-        {{.host_ = {}, .certificate_chain_file_ = "other.pem", .private_key_file_ = "other.key"}}));
-    RUVIA_CHECK(rejects({{.host_ = "example.com:443",
-        .certificate_chain_file_ = "other.pem",
-        .private_key_file_ = "other.key"}}));
-    RUVIA_CHECK(rejects({{.host_ = "127.0.0.1",
-        .certificate_chain_file_ = "other.pem",
-        .private_key_file_ = "other.key"}}));
+    const ruvia::tls_identity_config other{.certificate_chain_file_ = "other.pem", .private_key_file_ = "other.key"};
+    RUVIA_CHECK(rejects({{.host_ = {}, .identity_ = other}}));
+    RUVIA_CHECK(rejects({{.host_ = "example.com:443", .identity_ = other}}));
+    RUVIA_CHECK(rejects({{.host_ = "127.0.0.1", .identity_ = other}}));
     RUVIA_CHECK(rejects({
-        {.host_ = "Example.com", .certificate_chain_file_ = "other.pem", .private_key_file_ = "other.key"},
-        {.host_ = "example.COM", .certificate_chain_file_ = "third.pem", .private_key_file_ = "third.key"},
+        {.host_ = "Example.com", .identity_ = other},
+        {.host_ = "example.COM",
+            .identity_ = {.certificate_chain_file_ = "third.pem", .private_key_file_ = "third.key"}},
     }));
 }
 
@@ -178,7 +171,7 @@ RUVIA_TEST(tls_identity_owns_password_independently_of_caller_resource) {
             tls_config("cert.pem", "key.pem", std::string(password.data(), password.size())));
     }
     caller_resource.release();
-    RUVIA_CHECK_EQ(identity->private_key_password_, std::string_view(expected));
+    RUVIA_CHECK_EQ(identity->identity_.private_key_password_, std::string_view(expected));
     identity.reset();
     RUVIA_CHECK(!caller_resource.deallocated_after_release());
 }

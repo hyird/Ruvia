@@ -637,6 +637,9 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
     // result text would be misinterpreted on a non-UTF-8 database (e.g. LATIN1,
     // SQL_ASCII). libpq accepts client_encoding as a connection keyword.
     const bool use_tls = config.tls_.mode_ == client_tls_mode::verify_identity;
+    const auto& identity = config.tls_.identity_;
+    const char* const root_certificate =
+        !use_tls ? "" : (config.tls_.ca_file_.has_value() ? tls_file_name_c_str(*config.tls_.ca_file_) : "system");
     {
         const auto resolved_hosts = make_postgresql_resolved_host_list(
             tls_host, co_await pool.resolve_host(index, deadline_value), pool.resource());
@@ -646,9 +649,9 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
             nullptr};
         const std::array<const char*, 14> values{resolved_hosts.hosts_.c_str(), resolved_hosts.addresses_.c_str(),
             port.data(), config.username_.c_str(), config.password_.c_str(), config.database_.c_str(), "UTF8",
-            use_tls ? "verify-full" : "disable",
-            use_tls ? (config.tls_.ca_file_.empty() ? "system" : config.tls_.ca_file_.c_str()) : "",
-            config.tls_.certificate_chain_file_.c_str(), config.tls_.private_key_file_.c_str(), "disable", "TLSv1.2",
+            use_tls ? "verify-full" : "disable", root_certificate,
+            identity.has_value() ? tls_file_name_c_str(identity->certificate_chain_file_) : "",
+            identity.has_value() ? tls_file_name_c_str(identity->private_key_file_) : "", "disable", "TLSv1.2",
             nullptr};
         // PQconnectStartParams copies the parameter strings before returning.
         native_tls_context_scope tls_scope(use_tls ? tls_host : std::string_view{}, config.tls_.max_outgoing_records_);

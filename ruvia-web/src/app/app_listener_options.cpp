@@ -32,16 +32,16 @@ asio::ip::address normalize_listen_address(std::string_view address) {
 }
 
 bool has_tls_configuration(const tls_config& config) noexcept {
-    return !config.certificate_chain_file_.empty() || !config.private_key_file_.empty() ||
-           !config.private_key_password_.empty() || config.client_certificates_.verify_file_.has_value() ||
+    return !config.identity_.certificate_chain_file_.empty() || !config.identity_.private_key_file_.empty() ||
+           !config.identity_.private_key_password_.empty() || config.client_certificates_.ca_file_.has_value() ||
            config.client_certificates_.requirement_ != tls_client_certificate_requirement::optional ||
            !config.sni_.empty();
 }
 
 tls_password_cleanser::~tls_password_cleanser() {
-    cleanse_password(config_.private_key_password_);
+    cleanse_password(config_.identity_.private_key_password_);
     for (auto& sni : config_.sni_) {
-        cleanse_password(sni.private_key_password_);
+        cleanse_password(sni.identity_.private_key_password_);
     }
 }
 

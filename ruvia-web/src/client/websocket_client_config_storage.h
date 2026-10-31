@@ -52,7 +52,6 @@ struct websocket_client_config_storage final {
     std::optional<std::chrono::milliseconds> close_handshake_timeout_;
     websocket_heartbeat_config heartbeat_;
     client_tls_config_storage tls_;
-    client_tcp_config tcp_;
     std::pmr::string user_agent_;
     // Extended CONNECT (HTTP/2) request fields and response
     // validation, built once from the headers, user agent and offers above.
@@ -134,7 +133,6 @@ private:
           tls_(source_value.tls_,
               source_value.scheme_ == websocket_scheme::wss ? client_tls_files::parse : client_tls_files::keep_paths,
               resource),
-          tcp_(source_value.tcp_),
           user_agent_(source_value.user_agent_.view(), resource),
           negotiation_(make_negotiation(source_value, resource)) {}
 };

@@ -46,7 +46,6 @@ struct http_client_config_storage final {
     http_client_advertisement_config advertisements_;
     http_client_push_config push_;
     client_tls_config_storage tls_;
-    client_tcp_config tcp_;
     http_client_received_cookie_policy received_cookies_;
     std::pmr::string user_agent_;
     // Configured name/value cookie pairs, one allocation per pair.
@@ -129,7 +128,6 @@ private:
           advertisements_(source_value.advertisements_),
           push_(source_value.push_),
           tls_(tls_storage(source_value, resource)),
-          tcp_(source_value.tcp_),
           received_cookies_(source_value.received_cookies_),
           user_agent_(user_agent_view(source_value), resource),
           cookies_(resource) {

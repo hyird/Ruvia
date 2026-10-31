@@ -25,14 +25,10 @@ inline void validate_http_client_config(const http_client_config& config) {
         (config.push_.timeout_ && config.push_.timeout_->count() <= 0)) {
         throw std::invalid_argument("HTTP push bounds and configured timeout must be positive");
     }
-    if (config.push_.enabled_ && config.scheme_ == http_scheme::https &&
-        config.tls_.mode_ != client_tls_mode::verify_identity) {
-        throw std::invalid_argument("HTTPS push requires authenticated origin authority");
-    }
     if (config.advertisements_.max_queued_advertisements_ == 0 || config.advertisements_.max_retained_bytes_ == 0) {
         throw std::invalid_argument("HTTP advertisement bounds must be positive");
     }
-    if (config.advertisements_.receive_origins_ && (config.scheme_ != http_scheme::https || config.tls_.mode_ != client_tls_mode::verify_identity)) {
+    if (config.advertisements_.receive_origins_ && config.scheme_ != http_scheme::https) {
         throw std::invalid_argument("ORIGIN advertisements require authenticated HTTPS");
     }
     const auto scheme = config.scheme_;
@@ -47,7 +43,6 @@ inline void validate_http_client_config(const http_client_config& config) {
         throw std::invalid_argument("http client protocol is invalid");
     }
     validate_client_tls_config(config.tls_);
-    validate_client_tcp_config(config.tcp_);
     if (scheme == http_scheme::https && config.tls_.mode_ == client_tls_mode::disabled) {
         throw std::invalid_argument("HTTPS client requires TLS; use the http scheme for plaintext");
     }

@@ -7,6 +7,7 @@
 #include <array>
 #include <chrono>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -126,8 +127,10 @@ int main() {
         }
         if (certificate && key) {
             listener_value.https_ = 8444;
-            listener_value.tls_.certificate_chain_file_ = std::string(*certificate);
-            listener_value.tls_.private_key_file_ = std::string(*key);
+            listener_value.tls_.identity_ = {
+                .certificate_chain_file_ = std::filesystem::path(*certificate),
+                .private_key_file_ = std::filesystem::path(*key),
+            };
         }
         app.server({.worker_count_ = 2,
                        .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})

@@ -13,7 +13,6 @@
 
 #include "client/client_happy_eyeballs.h"
 #include "tls/tls_stream_end.h"
-#include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
 
@@ -248,8 +247,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
         }
         stream_.next_layer().replace_socket(std::move(*connected.socket_));
     }
-    auto mode_error = apply_tcp_socket_policies(
-        stream_.next_layer().socket(), endpoint_.tcp_.no_delay_, endpoint_.tcp_.keep_alive_);
+    auto mode_error = apply_tcp_socket_policies(stream_.next_layer().socket(), endpoint_.keep_alive_);
     // Every socket operation is asynchronous or a bounded probe, and the TLS
     // socket layer writes records directly.
     if (!mode_error) {
@@ -259,8 +257,8 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
         co_return finish(read_, timeout, mode_error, 0, client_transport_status::connect_failed);
     }
     tls_started_ = true;
-    if (const auto prepared = prepare_client_tls_stream(*stream_.native_handle(),
-            endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.tls_->mode_, endpoint_.alpn_);
+    if (const auto prepared =
+            prepare_client_tls_stream(*stream_.native_handle(), endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.alpn_);
         prepared != client_tls_setup_error::none) {
         (void)clear(read_);
         co_return client_transport_result{.status_ = client_transport_status::tls_failed,

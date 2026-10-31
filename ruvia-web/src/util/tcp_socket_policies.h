@@ -1,44 +1,30 @@
 #pragma once
 
-#include <stdexcept>
+#include <cstdint>
 #include <system_error>
 
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/web/client_tls_config.h"
+namespace ruvia::detail {
 
-namespace ruvia {
+// Whether a connection asks the kernel to probe an idle peer. HTTP and
+// WebSocket clients do; Redis connections and accepted server sockets keep the
+// system default.
+enum class tcp_keep_alive : std::uint8_t {
+    system_default,
+    enable,
+};
 
-inline void validate_tcp_socket_policies(tcp_no_delay_policy no_delay, tcp_keep_alive_policy keep_alive) {
-    switch (no_delay) {
-        case tcp_no_delay_policy::system_default:
-        case tcp_no_delay_policy::enable:
-            break;
-        default:
-            throw std::invalid_argument("TCP no-delay policy is invalid");
-    }
-    switch (keep_alive) {
-        case tcp_keep_alive_policy::system_default:
-        case tcp_keep_alive_policy::enable:
-            break;
-        default:
-            throw std::invalid_argument("TCP keepalive policy is invalid");
-    }
-}
-
-[[nodiscard]] inline std::error_code apply_tcp_socket_policies(asio::ip::tcp::socket& socket,
-    tcp_no_delay_policy no_delay, tcp_keep_alive_policy keep_alive) noexcept {
+// Exchanges are latency bound, so every connection disables Nagle's
+// algorithm. Returns the error of the first policy that cannot be applied.
+[[nodiscard]] inline std::error_code apply_tcp_socket_policies(
+    asio::ip::tcp::socket& socket, tcp_keep_alive keep_alive) noexcept {
     std::error_code error;
-    if (no_delay == tcp_no_delay_policy::enable) {
-        socket.set_option(asio::ip::tcp::no_delay(true), error);
-        if (error) {
-            return error;
-        }
-    }
-    if (keep_alive == tcp_keep_alive_policy::enable) {
+    socket.set_option(asio::ip::tcp::no_delay(true), error);
+    if (!error && keep_alive == tcp_keep_alive::enable) {
         socket.set_option(asio::socket_base::keep_alive(true), error);
     }
     return error;
 }
 
-}  // namespace ruvia
+}  // namespace ruvia::detail

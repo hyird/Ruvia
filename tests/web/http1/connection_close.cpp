@@ -315,7 +315,7 @@ void client_cancelled_multi_record_tls_write_omits_close_notify(
                                                      .host_ = "127.0.0.1",
                                                      .port_ = endpoint.port(),
                                                      .protocol_ = ruvia::http_client_protocol::http1_only,
-                                                     .tls_ = {.mode_ = ruvia::client_tls_mode::skip_verification},
+                                                     .tls_ = {.ca_file_ = identity.ca_file_, .server_name_ = "localhost"},
                                                  });
 
     bool post_cancelled = false;
@@ -400,7 +400,7 @@ void client_tls_write_timeout_during_speculative_post_does_not_hang(
                                                      .write_timeout_ = 40ms,
                                                      .request_timeout_ = std::nullopt,
                                                      .protocol_ = ruvia::http_client_protocol::http1_only,
-                                                     .tls_ = {.mode_ = ruvia::client_tls_mode::skip_verification},
+                                                     .tls_ = {.ca_file_ = identity.ca_file_, .server_name_ = "localhost"},
                                                  });
 
     std::atomic<bool> post_completed{false};
@@ -492,7 +492,7 @@ RUVIA_TEST(server_closes_connections_gracefully) {
             .address_ = "127.0.0.1",
             .http_ = plain_endpoint.port(),
             .https_ = tls_endpoint.port(),
-            .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key},
+            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
         })
         .on_start([&started] { started.release(); });
     std::exception_ptr failure;

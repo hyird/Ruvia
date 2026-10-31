@@ -146,7 +146,7 @@ RUVIA_TEST(a_handler_after_its_interim_head_is_timed_as_a_handler_not_a_write) {
         .listen({
             .address_ = "127.0.0.1",
             .https_ = endpoint.port(),
-            .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key},
+            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
         })
         .on_start([&started] { started.release(); });
     std::exception_ptr failure;

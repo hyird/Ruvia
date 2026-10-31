@@ -40,12 +40,9 @@ private:
 
 inline void validate_db_config(const db_config& config) {
     validate_client_tls_config(config.tls_);
-    // Database TLS is always authenticated, and both drivers are configured
-    // with key files only; refuse settings they would silently ignore.
-    if (config.tls_.mode_ == client_tls_mode::skip_verification) {
-        throw std::invalid_argument("database TLS requires peer verification");
-    }
-    if (!config.tls_.private_key_password_.empty()) {
+    // Both drivers are configured with key files only; refuse a password they
+    // would silently ignore.
+    if (config.tls_.identity_.has_value() && !config.tls_.identity_->private_key_password_.empty()) {
         throw std::invalid_argument("database TLS does not support encrypted private keys");
     }
     const auto driver = config.driver_;

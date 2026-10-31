@@ -34,7 +34,7 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
     return {.host_ = config.host_,
         .port_ = config.port_,
         .tls_ = config.scheme_ == http_scheme::https ? &config.tls_ : nullptr,
-        .tcp_ = config.tcp_,
+        .keep_alive_ = tcp_keep_alive::enable,
         .alpn_ = select_client_alpn(config.protocol_)};
 }
 

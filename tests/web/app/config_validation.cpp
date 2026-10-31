@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -93,6 +94,22 @@ RUVIA_TEST(client_tls_rejects_unsafe_outgoing_record_limits) {
     };
     RUVIA_CHECK(rejects(0));
     RUVIA_CHECK(rejects((std::uint64_t{1} << 23) + 1));
+}
+
+// An engaged CA or identity path must name a file: an empty one is a mistake,
+// never a fallback to the system trust store or to no client certificate.
+RUVIA_TEST(client_tls_rejects_empty_file_paths) {
+    const auto rejects = [](ruvia::client_tls_config tls) {
+        ruvia::http_client_config config;
+        config.host_ = "example.com";
+        config.tls_ = std::move(tls);
+        return throws_invalid([&config] {
+            ruvia::app().http_client({.alias_ = "tls-empty-path", .config_ = std::move(config)});
+        });
+    };
+    RUVIA_CHECK(rejects({.ca_file_ = std::filesystem::path{}}));
+    RUVIA_CHECK(rejects({.identity_ = ruvia::tls_identity_config{.certificate_chain_file_ = "client.pem"}}));
+    RUVIA_CHECK(rejects({.identity_ = ruvia::tls_identity_config{.private_key_file_ = "client.key"}}));
 }
 
 RUVIA_TEST(app_document_root_rejects_invalid_static_options_at_configuration) {

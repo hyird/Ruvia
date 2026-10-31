@@ -172,7 +172,7 @@ void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer, b
             .read_timeout_ = std::chrono::milliseconds(2000),
             .write_timeout_ = std::chrono::milliseconds(2000)};
         if (identity) {
-            config.tls_.ca_file_ = identity->ca_file_.string();
+            config.tls_.ca_file_ = identity->ca_file_;
             config.tls_.server_name_ = "localhost";
         }
         ruvia::websocket_client client(attachment.loop(), config);

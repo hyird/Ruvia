@@ -2252,7 +2252,7 @@ void exercise_tls_response_retirement(ruvia::testing::test_context& ruvia_ctx, b
     auto config = local_http_client_config(acceptor.local_endpoint().port());
     config.scheme_ = ruvia::http_scheme::https;
     config.host_ = "localhost";
-    config.tls_.ca_file_ = identity.ca_file_.string();
+    config.tls_.ca_file_ = identity.ca_file_;
     config.max_response_bytes_ = 8192;
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
@@ -2356,7 +2356,7 @@ RUVIA_TEST(http1_tls_close_delimited_response_requires_close_notify) {
         auto config = local_http_client_config(acceptor.local_endpoint().port());
         config.scheme_ = ruvia::http_scheme::https;
         config.host_ = "localhost";
-        config.tls_.ca_file_ = identity.ca_file_.string();
+        config.tls_.ca_file_ = identity.ca_file_;
         config.request_timeout_ = std::chrono::seconds(3);
         ruvia::http_client client(worker.attachment_.loop(), config);
         auto operation = [&]() -> ruvia::task<void> {
@@ -2434,7 +2434,7 @@ RUVIA_TEST(http_client_tls_matches_dns_names_only_against_dns_id_subject_alt_nam
         });
         auto config = local_http_client_config(acceptor.local_endpoint().port());
         config.scheme_ = ruvia::http_scheme::https;
-        config.tls_.ca_file_ = identity.ca_file_.string();
+        config.tls_.ca_file_ = identity.ca_file_;
         config.tls_.server_name_ = identity_value.server_name_;
         config.request_timeout_ = std::chrono::seconds(3);
         ruvia::http_client client(worker.attachment_.loop(), config);
@@ -2536,7 +2536,7 @@ RUVIA_TEST(http_client_tls_record_budget_covers_handshake_and_replaced_connect_b
             asio::co_spawn(io, peer.serve(), [&](std::exception_ptr) { peer.finished_ = true; peer.done_.notify(); });
             auto config = local_http_client_config(peer.acceptor_.local_endpoint().port());
             config.scheme_ = ruvia::http_scheme::https;
-            config.tls_.ca_file_ = identity.ca_file_.string();
+            config.tls_.ca_file_ = identity.ca_file_;
             config.tls_.server_name_ = "localhost";
             config.tls_.max_outgoing_records_ = limit;
             config.request_timeout_ = std::chrono::seconds(3);
@@ -2587,7 +2587,7 @@ RUVIA_TEST(http_client_tls_refuses_server_initiated_renegotiation) {
     auto config = local_http_client_config(acceptor.local_endpoint().port());
     config.scheme_ = ruvia::http_scheme::https;
     config.host_ = "localhost";
-    config.tls_.ca_file_ = identity.ca_file_.string();
+    config.tls_.ca_file_ = identity.ca_file_;
     config.request_timeout_ = std::chrono::seconds(3);
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
@@ -2692,7 +2692,7 @@ RUVIA_TEST(tls_client_sends_close_notify_before_closing) {
         auto config = local_http_client_config(acceptor.local_endpoint().port());
         config.scheme_ = ruvia::http_scheme::https;
         config.host_ = "localhost";
-        config.tls_.ca_file_ = identity.ca_file_.string();
+        config.tls_.ca_file_ = identity.ca_file_;
         config.request_timeout_ = std::chrono::seconds(3);
         if (mode == peer_mode::http2) {
             config.protocol_ = ruvia::http_client_protocol::http2_only;
@@ -2982,7 +2982,7 @@ RUVIA_TEST(http_client_tls_idle_probe_retires_a_connection_with_unread_peer_reco
         auto config = local_http_client_config(acceptor.local_endpoint().port());
         config.scheme_ = ruvia::http_scheme::https;
         config.host_ = "localhost";
-        config.tls_.ca_file_ = identity.ca_file_.string();
+        config.tls_.ca_file_ = identity.ca_file_;
         config.connection_count_ = 1;
         config.request_timeout_ = std::chrono::seconds(3);
         ruvia::http_client client(worker.attachment_.loop(), config);
@@ -3116,8 +3116,7 @@ RUVIA_TEST(http_client_abandoned_request_cancels_its_connect_in_progress) {
         .port_ = acceptor.local_endpoint().port(),
         .connection_count_ = 1,
         .connect_timeout_ = std::chrono::seconds(5),
-        .request_timeout_ = std::chrono::seconds(10),
-        .tls_ = {.mode_ = ruvia::client_tls_mode::skip_verification}};
+        .request_timeout_ = std::chrono::seconds(10)};
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
         const acceptor_closer closer{acceptor};
@@ -3906,7 +3905,7 @@ RUVIA_TEST(http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_mi
     auto config = local_http_client_config(acceptor.local_endpoint().port());
     config.scheme_ = ruvia::http_scheme::https;
     config.host_ = "localhost";
-    config.tls_.ca_file_ = identity.ca_file_.string();
+    config.tls_.ca_file_ = identity.ca_file_;
     config.connection_count_ = 1;
     config.protocol_ = ruvia::http_client_protocol::negotiate;
     ruvia::http_client negotiate_client(worker.attachment_.loop(), config);

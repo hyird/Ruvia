@@ -144,7 +144,7 @@ int main() {
                         .host_ = env.get("RUVIA_UPSTREAM_HOST").value_or("localhost"),
                         .port_ = env.get<std::uint16_t>("RUVIA_UPSTREAM_PORT").value_or(tls ? 8444 : 8093),
                         .connection_count_ = 4,
-                        .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
+                        .tls_ = {.ca_file_ = env.path("RUVIA_TLS_CA")},
                     },
             })
             .run();

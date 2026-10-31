@@ -204,7 +204,7 @@ RUVIA_TEST(requests_the_connection_cannot_carry_are_answered_421) {
             .address_ = "127.0.0.1",
             .http_ = http_endpoint.port(),
             .https_ = https_endpoint.port(),
-            .tls_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key},
+            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
         })
         .on_start([&started] { started.release(); });
     const auto ip_host = "127.0.0.1:" + std::to_string(https_endpoint.port());

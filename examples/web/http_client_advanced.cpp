@@ -163,7 +163,7 @@ int main(int argc, char** argv) {
                                          : ruvia::http_client_protocol::http1_only,
             .advertisements_ = {.receive_origins_ = tls, .receive_alternative_services_ = tls},
             .push_ = {.enabled_ = true},
-            .tls_ = {.ca_file_ = std::string(env.get("RUVIA_TLS_CA").value_or(""))},
+            .tls_ = {.ca_file_ = env.path("RUVIA_TLS_CA")},
             .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
         };
         // The loop looks "localhost" up on this pool instead of blocking in

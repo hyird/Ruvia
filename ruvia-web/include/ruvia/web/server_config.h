@@ -34,6 +34,7 @@
 #include "ruvia/web/detail/callback_ref.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/static_files.h"
+#include "ruvia/web/tls_config.h"
 
 namespace ruvia {
 
@@ -134,54 +135,6 @@ namespace detail {
 struct access_log_record_access;
 struct connection_failure_record_access;
 }  // namespace detail
-
-enum class tls_client_certificate_requirement : std::uint8_t {
-    optional,
-    required,
-};
-
-struct tls_client_certificate_config final {
-    // A CA bundle used to verify presented client certificates. Optional mode
-    // admits a client without a certificate; required mode rejects it.
-    std::optional<std::filesystem::path> verify_file_{};
-    tls_client_certificate_requirement requirement_{tls_client_certificate_requirement::optional};
-};
-
-// An additional identity served when the client's server_name (RFC 6066 SNI)
-// equals host_, compared ASCII case-insensitively.
-struct tls_sni_config final {
-    std::string host_{};
-    std::filesystem::path certificate_chain_file_{};
-    std::filesystem::path private_key_file_{};
-    std::string private_key_password_{};
-};
-
-// One HTTPS listener's identities. The listener negotiates TLS 1.2 or 1.3; its
-// TLS 1.2 suites are ECDHE with AEAD only, chosen by server preference;
-// renegotiation is refused; ALPN selects h2, http/1.1 or http/1.0. A client
-// offering no server_name, or one matching no sni_ entry, is served the
-// primary certificate: a product choice for single-certificate and wildcard
-// deployments, deliberately not RFC 9325 §3.7's unrecognized_name alert, so
-// such clients still complete the handshake. Sessions resume across workers
-// of the listener, in both TLS versions only under the server_name (compared
-// ASCII case-insensitively) they were established with. Ticket keys rotate
-// every two hours (the session lifetime) and are destroyed one interval after
-// their last use for new tickets. RFC 9110 §7.4: a request whose target is
-// an "https" resource is answered 421 (Misdirected Request) unless the
-// certificate this connection presented names its host in a subjectAltName
-// DNS or IP entry (whole-label wildcards only; the subject CN is ignored);
-// on HTTP/2 only that stream is refused. Cleartext listeners answer 421 to
-// "https" targets. Peers in trusted_proxy_config are exempt from both checks.
-struct tls_config final {
-    std::filesystem::path certificate_chain_file_{};
-    std::filesystem::path private_key_file_{};
-    std::string private_key_password_{};
-    tls_client_certificate_config client_certificates_{};
-    std::vector<tls_sni_config> sni_{};
-    // 发出的 TLS 记录总上限，范围 1..2^23；含握手及控制记录，KeyUpdate 不
-    // 重置计数。达到上限后终止连接，以满足 RFC 9846 §5.5 的密钥用量约束。
-    std::uint64_t max_outgoing_records_{std::uint64_t{1} << 23};
-};
 
 // One bind address with optional HTTP and HTTPS service ports, independent of
 // the wire protocol. application validates and expands this value atomically. An

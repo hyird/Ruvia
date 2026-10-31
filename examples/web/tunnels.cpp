@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <exception>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -151,7 +152,7 @@ int main(int argc, char** argv) {
                 .request_timeout_ = std::chrono::seconds(5),
                 .protocol_ = protocol == "2" ? ruvia::http_client_protocol::http2_only
                                              : ruvia::http_client_protocol::http1_only,
-                .tls_ = {.ca_file_ = std::string(env_value.get("RUVIA_TLS_CA").value_or(""))},
+                .tls_ = {.ca_file_ = env_value.path("RUVIA_TLS_CA")},
             };
             // The loop looks "localhost" up on this pool instead of blocking in
             // getaddrinfo; declared first, it outlives the loops.
@@ -174,8 +175,10 @@ int main(int argc, char** argv) {
             }
             if (cert && key) {
                 listener_value.https_ = 8445;
-                listener_value.tls_.certificate_chain_file_ = std::string(*cert);
-                listener_value.tls_.private_key_file_ = std::string(*key);
+                listener_value.tls_.identity_ = {
+                    .certificate_chain_file_ = std::filesystem::path(*cert),
+                    .private_key_file_ = std::filesystem::path(*key),
+                };
             }
             app.server({.worker_count_ = 2,
                            .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})

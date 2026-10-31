@@ -6,7 +6,7 @@
 // RUVIA_GZIP=true enables negotiated gzip/Brotli/zstd; RUVIA_CORS=true enables
 // the CORS policy below. A .env file is optional and preserves existing values.
 // For HTTPS, set RUVIA_TLS_CERT/KEY and optionally RUVIA_HTTPS_PORT (8443).
-// RUVIA_TLS_VERIFY_FILE supplies a client CA; RUVIA_REQUIRE_CLIENT_CERT=true
+// RUVIA_TLS_CLIENT_CA supplies a client CA; RUVIA_REQUIRE_CLIENT_CERT=true
 // requires mTLS. SNI uses RUVIA_SNI_HOST/CERT/KEY. RUVIA_AUTO_HTTPS=true redirects
 // plain HTTP. Never replace certificate verification with an insecure policy.
 
@@ -29,13 +29,6 @@ void assign_if_present(std::string& target, std::optional<std::string_view> valu
     if (value) {
         target.assign(value->data(), value->size());
     }
-}
-
-std::filesystem::path path_or_empty(std::optional<std::string_view> value) {
-    if (!value) {
-        return {};
-    }
-    return std::filesystem::path(std::string_view(*value));
 }
 
 }  // namespace
@@ -126,9 +119,9 @@ int main() {
             });
         }
 
-        const auto cert = path_or_empty(env_value.get("RUVIA_TLS_CERT"));
-        const auto key = path_or_empty(env_value.get("RUVIA_TLS_KEY"));
-        if (!cert.empty() && !key.empty()) {
+        const auto cert = env_value.path("RUVIA_TLS_CERT");
+        const auto key = env_value.path("RUVIA_TLS_KEY");
+        if (cert && key) {
             std::string password;
             assign_if_present(password, env_value.get("RUVIA_TLS_PASSWORD"));
             ruvia::listen_config listener_value{
@@ -137,15 +130,17 @@ int main() {
                 .https_ = env_value.get<std::uint16_t>("RUVIA_HTTPS_PORT").value_or(8443),
                 .tls_ =
                     {
-                        .certificate_chain_file_ = cert,
-                        .private_key_file_ = key,
-                        .private_key_password_ = password,
+                        .identity_ =
+                            {
+                                .certificate_chain_file_ = *cert,
+                                .private_key_file_ = *key,
+                                .private_key_password_ = password,
+                            },
                     },
                 .auto_https_redirect_ = env_value.get<bool>("RUVIA_AUTO_HTTPS").value_or(false),
             };
-            const auto verify_file = path_or_empty(env_value.get("RUVIA_TLS_VERIFY_FILE"));
-            if (!verify_file.empty()) {
-                listener_value.tls_.client_certificates_.verify_file_ = verify_file;
+            if (const auto client_ca = env_value.path("RUVIA_TLS_CLIENT_CA")) {
+                listener_value.tls_.client_certificates_.ca_file_ = *client_ca;
                 listener_value.tls_.client_certificates_.requirement_ =
                     env_value.get<bool>("RUVIA_REQUIRE_CLIENT_CERT").value_or(false)
                         ? ruvia::tls_client_certificate_requirement::required
@@ -156,8 +151,11 @@ int main() {
                 // certificate remains the fallback for other server names.
                 listener_value.tls_.sni_.push_back({
                     .host_ = std::string(*host),
-                    .certificate_chain_file_ = path_or_empty(env_value.get("RUVIA_SNI_CERT")),
-                    .private_key_file_ = path_or_empty(env_value.get("RUVIA_SNI_KEY")),
+                    .identity_ =
+                        {
+                            .certificate_chain_file_ = env_value.path("RUVIA_SNI_CERT").value_or(std::filesystem::path{}),
+                            .private_key_file_ = env_value.path("RUVIA_SNI_KEY").value_or(std::filesystem::path{}),
+                        },
                 });
             }
             app.listen(std::move(listener_value));

@@ -1,6 +1,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -24,9 +25,12 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
+#include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 
 #include "test_harness.h"
@@ -120,6 +124,44 @@ bool throws_system_error(fn_type&& fn) {
     } catch (const std::system_error&) {
         return true;
     }
+}
+
+ruvia::task<std::string> client_get(ruvia::event_loop loop, ruvia::http_client_config config) {
+    ruvia::http_client client(loop, config);
+    std::string body;
+    std::exception_ptr failure;
+    try {
+        auto response = co_await client.handle().send({.target_ = "/tls"});
+        const auto bytes = co_await response.body().read_all();
+        body.assign(reinterpret_cast<const char*>(bytes.bytes().data()), bytes.size());
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    co_await client.shutdown();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    co_return body;
+}
+
+// The outbound client reads its CA bundle and its encrypted identity from the
+// given paths, then presents that identity to the listener. The origin is
+// "localhost", a name the server certificate covers (RFC 9110 §7.4).
+std::string client_https_get(
+    std::uint16_t port, const std::filesystem::path& ca_file, const ruvia::tls_identity_config& identity) {
+    ruvia::blocking_pool lookups({.thread_count_ = 1});
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &lookups});
+    auto root = loops.loop(0).start(client_get(loops.loop(0),
+        {.scheme_ = ruvia::http_scheme::https,
+            .host_ = "localhost",
+            .port_ = port,
+            .protocol_ = ruvia::http_client_protocol::http1_only,
+            .tls_ = {.ca_file_ = ca_file, .identity_ = identity}}));
+    loops.start();
+    root.wait();
+    loops.join();
+    lookups.join();
+    return root.get();
 }
 
 // Verifies the server chain against the test CA; `host` is both the SNI name
@@ -385,15 +427,21 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
             .https_ = endpoint.port(),
             .tls_ =
                 {
-                    .certificate_chain_file_ = std::move(chain),
-                    .private_key_file_ = private_key,
-                    .private_key_password_ = std::move(key_password),
-                    .client_certificates_ = {.verify_file_ = client_ca},
+                    .identity_ =
+                        {
+                            .certificate_chain_file_ = std::move(chain),
+                            .private_key_file_ = private_key,
+                            .private_key_password_ = std::move(key_password),
+                        },
+                    .client_certificates_ = {.ca_file_ = client_ca},
                     .sni_ = {{
                         .host_ = "sni.test",
-                        .certificate_chain_file_ = certificate,
-                        .private_key_file_ = private_key,
-                        .private_key_password_ = password,
+                        .identity_ =
+                            {
+                                .certificate_chain_file_ = certificate,
+                                .private_key_file_ = private_key,
+                                .private_key_password_ = password,
+                            },
                     }},
                     .max_outgoing_records_ = 32,
                 },
@@ -422,6 +470,11 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
         if (ready) {
             RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true)));
             RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "sni.test", false)));
+            RUVIA_CHECK_EQ(client_https_get(endpoint.port(), client_ca,
+                               {.certificate_chain_file_ = certificate,
+                                   .private_key_file_ = private_key,
+                                   .private_key_password_ = password}),
+                std::string("secure"));
             RUVIA_CHECK(refuses_with_no_application_protocol(negotiate_alpn(io, endpoint, "\x04h2xx")));
             RUVIA_CHECK_EQ(negotiate_alpn(io, endpoint, "\x02h2").selected_, std::string("h2"));
             const auto negotiated = negotiate_alpn(io, endpoint, "\x02h2\x08http/1.1");
