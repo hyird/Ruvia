@@ -14,4 +14,12 @@ namespace ruvia {
 // Field names are matched case-insensitively.
 [[nodiscard]] bool is_http_protocol_managed_request_field(std::string_view name) noexcept;
 
+// 校验应用提供的单个出站请求首部，不分配内存。字段名须为 token，
+// 字段值须符合 RFC 9110 §5.5 的规范化语法（不接受首尾 SP/HTAB），
+// 并通过请求 writer 的已知字段发送方语义校验；未知合法扩展允许空值。
+// 拒绝上面的协议托管字段，名称按大小写不敏感匹配；因此无需 HTTP 版本参数。
+// 这不是响应首部或接收方校验器。调用方负责字段间重复及完整消息约束；
+// 返回 true 不代表整个请求可发送，不保留输入或跨调用状态。
+[[nodiscard]] bool is_valid_http_request_application_field(std::string_view name, std::string_view value) noexcept;
+
 }  // namespace ruvia

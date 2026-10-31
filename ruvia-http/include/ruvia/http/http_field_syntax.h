@@ -130,4 +130,11 @@ namespace detail {
     return is_valid_http_field_value_bytes(value);
 }
 
+// 校验单个出站响应字段：上述名称/规范化值语法及响应发送方的已知字段
+// 语义（Content-Type、Content-Encoding、Trailer），不分配内存。
+// 不应用请求专属字段语义或请求托管字段黑名单，不用于接收方校验。
+// 调用方仍负责重复字段、版本相关连接/分帧规则、应用禁改字段政策和
+// 完整响应约束；返回 true 不代表该字段在任意响应上下文中都可发送。
+[[nodiscard]] bool is_valid_http_response_field(std::string_view name, std::string_view value) noexcept;
+
 }  // namespace ruvia

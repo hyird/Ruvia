@@ -104,12 +104,16 @@ pool.join();
 
 | 头文件 | 核心公开类型 / 函数 | 说明 |
 | --- | --- | --- |
-| `"ruvia/http/http_header.h"` / `"ruvia/http/http_field_syntax.h"` / `"ruvia/http/http_protocol_managed_fields.h"` | `class http_header final`、`class http_header_view final`、`is_valid_http_header_name`、`is_valid_http_header_value`、`is_http_ows_char`、`is_http_protocol_managed_request_field` | PMR 拥有型首部键值对、非拥有型首部视图、RFC 9110 字段语法校验及分帧/连接专用请求字段判定 |
+| `"ruvia/http/http_header.h"` / `"ruvia/http/http_field_syntax.h"` / `"ruvia/http/http_protocol_managed_fields.h"` | `class http_header final`、`class http_header_view final`、`is_valid_http_header_name`、`is_valid_http_header_value`、`is_http_ows_char`、`is_http_protocol_managed_request_field`、`is_valid_http_request_application_field`、`is_valid_http_response_field` | PMR 拥有型首部键值对、非拥有型首部视图、RFC 9110 字段语法校验、分帧/连接专用请求字段判定及按请求/响应方向区分的发送前单字段校验 |
 | `"ruvia/http/http_accept_match.h"` / `"ruvia/http/http_accept_encoding.h"` | `class http_accept_match final`、`http_response_coding_selection_for(request)` | `Accept` 媒体类型/语言权重匹配与 `Accept-Encoding` 响应压缩算法协商 |
 | `"ruvia/http/http_date.h"` / `"ruvia/http/http_cache.h"` | `format_http_date`、`parse_http_date`、`class cache_control final`、`parse_cache_control` | IMF-fixdate 日期格式化/解析与 `Cache-Control` 指令解析 |
 | `"ruvia/http/http_conditional_request.h"` / `"ruvia/http/http_byte_range.h"` / `"ruvia/http/http_representation_response_plan.h"` | `get_http_etag_preconditions`、`resolve_http_byte_range_set`、`plan_http_representation_response` | 条件请求（`If-Match` / `If-None-Match` / `If-Modified-Since` / `If-Unmodified-Since` / `If-Range`）与 `Range` 字节范围响应计划计算 |
 | `"ruvia/http/cookies.h"` / `"ruvia/http/http_set_cookie.h"` | `struct cookie_options`、`parse_set_cookie`、`class set_cookie_plan final` | Cookie 属性校验（含 `__Secure-` / `__Host-` 前缀规则）、`Set-Cookie` 解析与序列化计划 |
 | `"ruvia/http/http_priority.h"` | `struct http_priority`、`struct http_priority_fields`、`parse_http_priority`、`encode_http_priority` | RFC 9218 可扩展 HTTP 优先级首部与 HTTP/2 `PRIORITY_UPDATE` 帧编解码 |
+
+`is_valid_http_request_application_field(name, value)` 在应用配置或请求构造边界校验单个出站请求首部，返回 `bool`、`noexcept` 且不分配内存：检查字段名 token、规范化字段值（包括拒绝首尾 SP/HTAB 及非法控制字节），按大小写不敏感匹配拒绝 `Host`、`Content-Length`、`Transfer-Encoding`、`Trailer`、`Expect`、`Connection`、`Keep-Alive`、`Proxy-Connection`、`TE`、`Upgrade`，并复用请求 writer 的已知字段发送方语义校验（如 `Content-Type`、`Content-Encoding`、`Origin` 与 CORS 请求字段）。合法未知扩展和其空值仍允许；不引入应用配置政策。HTTP/1 与 HTTP/2 的 `TE` 差异已被托管字段边界排除，因此无版本参数。此接口不保留状态，字段间重复、完整消息约束仍由调用方及最终 writer 负责；不得用于响应首部或接收方校验，接收方仍按各协议入口的 recipient 规则处理。
+
+`is_valid_http_response_field(name, value)` 声明在 `http_field_syntax.h`，同样返回 `bool`、`noexcept` 且不分配内存；检查通用名称/规范化字段值语法并复用响应发送方的 `Content-Type`、`Content-Encoding`、`Trailer` 语义校验。它不应用请求专属的 `Origin`、CORS、`Expect` 规则或请求托管字段黑名单，不用于接收方校验，也不替代响应写出入口的版本相关连接/分帧检查（如 `Connection`、`Upgrade`、`TE`）、重复字段检查及完整消息约束。应用禁改首部政策由调用方单独保留；此谓词返回 `true` 不表示字段在任意响应上下文中都可以发送。
 
 ---
 
