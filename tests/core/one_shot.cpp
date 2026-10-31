@@ -343,7 +343,7 @@ ruvia::task<void> wait_until_closed(ruvia::one_shot_receiver<int>& receiver, boo
     success = result_value.status() == ruvia::worker_wait_status::closed;
 }
 
-ruvia::task<ruvia::worker_wait_result<int>> make_cold_wait_after_receiver_close(
+ruvia::one_shot_receiver<int>::wait_operation make_cold_wait_after_receiver_close(
     ruvia::worker_handle worker_value, bool timed, bool completed = false) {
     auto [completion, receiver] = ruvia::make_one_shot<int>(std::move(worker_value));
     if (completed) {
@@ -355,10 +355,10 @@ ruvia::task<ruvia::worker_wait_result<int>> make_cold_wait_after_receiver_close(
     return receiver.wait();
 }
 
-ruvia::task<void> verify_cold_receiver_tasks(ruvia::task<ruvia::worker_wait_result<int>> wait,
-    ruvia::task<ruvia::worker_wait_result<int>> timed_wait,
-    ruvia::task<ruvia::worker_wait_result<int>> completed_wait,
-    ruvia::task<ruvia::worker_wait_result<int>> completed_timed_wait, bool& success) {
+ruvia::task<void> verify_cold_wait_operations(ruvia::one_shot_receiver<int>::wait_operation wait,
+    ruvia::one_shot_receiver<int>::wait_operation timed_wait,
+    ruvia::one_shot_receiver<int>::wait_operation completed_wait,
+    ruvia::one_shot_receiver<int>::wait_operation completed_timed_wait, bool& success) {
     const auto cold_closed = co_await std::move(wait);
     const auto timed_cold_closed = co_await std::move(timed_wait);
     const auto completed_cold_closed = co_await std::move(completed_wait);
@@ -537,7 +537,7 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
 
 int main() {
     bool success = false;
-    bool cold_receiver_tasks_safe = false;
+    bool cold_wait_operations_safe = false;
     bool payload_retirement_safe = false;
     bool cancellation_during_completion = false;
     {
@@ -549,9 +549,9 @@ int main() {
         auto completed_cold_wait = make_cold_wait_after_receiver_close(worker_value, false, true);
         auto completed_timed_cold_wait = make_cold_wait_after_receiver_close(worker_value, true, true);
         ruvia::test::run_worker_tasks(runtime, exercise(worker_value, success),
-            verify_cold_receiver_tasks(std::move(cold_wait), std::move(timed_cold_wait),
+            verify_cold_wait_operations(std::move(cold_wait), std::move(timed_cold_wait),
                 std::move(completed_cold_wait), std::move(completed_timed_cold_wait),
-                cold_receiver_tasks_safe),
+                cold_wait_operations_safe),
             ruvia::test::one_shot_tests::exercise_payload_retirement(worker_value, payload_retirement_safe),
             ruvia::test::one_shot_tests::exercise_cancellation_during_completion(worker_value, cancellation_during_completion));
         runtime.detach();
@@ -597,7 +597,7 @@ int main() {
         completer.join();
         runtime.detach();
     }
-    const bool all_passed = success && cold_receiver_tasks_safe && payload_retirement_safe && worker_stopping && settled_outcomes_kept && cross_thread_value &&
+    const bool all_passed = success && cold_wait_operations_safe && payload_retirement_safe && worker_stopping && settled_outcomes_kept && cross_thread_value &&
                             cross_thread_completed && cancellation_during_completion &&
                             ruvia::test::one_shot_tests::test_completion_move_can_close_receiver(false) &&
                             ruvia::test::one_shot_tests::test_completion_move_can_close_receiver(true) &&

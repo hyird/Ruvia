@@ -167,7 +167,9 @@ private:
           read_(read),
           write_(write),
           close_(close),
-          abort_(abort) {}
+          abort_(abort) {
+        operation_scope_.bind_worker(worker_value);
+    }
 
     void require_active() const {
         if (!worker_->is_current()) {

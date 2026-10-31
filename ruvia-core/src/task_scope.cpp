@@ -123,41 +123,50 @@ std::size_t task_scope::size() const& noexcept {
     return active_;
 }
 
-task<void> task_scope::join() & {
+task_scope::join_operation task_scope::join() & {
     if (!worker_.is_current()) {
         throw std::logic_error("task scope join must run on its bound worker");
     }
-    return join_scope(*this);
+    return join_operation(*this);
 }
 
-task<void> task_scope::join_scope(task_scope& scope) {
-    co_await join_awaiter_type{scope};
+// Only a cold operation may move; a started one has handed its continuation
+// to the scope.
+task_scope::join_operation::join_operation(join_operation&& other) noexcept
+    : scope_(std::exchange(other.scope_, nullptr)) {
+    if (other.started_) {
+        std::terminate();
+    }
 }
 
-bool task_scope::join_awaiter_type::await_ready() const {
-    if (!scope_.worker_.is_current()) {
+bool task_scope::join_operation::await_ready() {
+    if (scope_ == nullptr || started_) {
+        throw std::logic_error("task scope join cannot be awaited");
+    }
+    if (!scope_->worker_.is_current()) {
         throw std::logic_error("task scope join must run on its bound worker");
     }
-    if (std::holds_alternative<task_scope_joining_type>(scope_.lifecycle_) ||
-        std::holds_alternative<task_scope_joined_type>(scope_.lifecycle_)) {
+    if (std::holds_alternative<task_scope_joining_type>(scope_->lifecycle_) ||
+        std::holds_alternative<task_scope_joined_type>(scope_->lifecycle_)) {
         throw std::logic_error("task scope can only be joined once");
     }
-    if (scope_.active_ == 0 && scope_.retiring_ == nullptr) {
-        scope_.lifecycle_.template emplace<task_scope_joined_type>();
+    started_ = true;
+    if (scope_->active_ == 0 && scope_->retiring_ == nullptr) {
+        scope_->lifecycle_.template emplace<task_scope_joined_type>();
         return true;
     }
     return false;
 }
 
-void task_scope::join_awaiter_type::await_suspend(std::coroutine_handle<> continuation) noexcept {
-    scope_.lifecycle_.template emplace<task_scope_joining_type>(continuation);
+void task_scope::join_operation::await_suspend(std::coroutine_handle<> continuation) noexcept {
+    scope_->lifecycle_.template emplace<task_scope_joining_type>(continuation);
 }
 
-void task_scope::join_awaiter_type::await_resume() {
-    if (!std::holds_alternative<task_scope_joined_type>(scope_.lifecycle_)) {
+void task_scope::join_operation::await_resume() {
+    if (!std::holds_alternative<task_scope_joined_type>(scope_->lifecycle_)) {
         std::terminate();
     }
-    scope_.rethrow_failure();
+    scope_->rethrow_failure();
 }
 
 void task_scope::resume_join_if_idle() noexcept {

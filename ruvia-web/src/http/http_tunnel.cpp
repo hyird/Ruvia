@@ -34,11 +34,6 @@ public:
 private:
     unsigned& count_;
 };
-void check_tunnel_worker(void* raw) noexcept {
-    if (!static_cast<const worker_handle*>(raw)->is_current()) {
-        std::terminate();
-    }
-}
 task<std::optional<std::pmr::string>> read_tunnel(void* target,
     task<std::optional<std::pmr::string>> (*read)(void*), bool& read_active, unsigned& running) {
     auto lease = detail::claim_operation_lane(read_active, tunnel_lane_in_progress);
@@ -73,7 +68,9 @@ http_tunnel::http_tunnel(std::pmr::memory_resource& resource, const worker_handl
       read_(read),
       write_(write),
       finish_(finish_value),
-      abort_(abort) {}
+      abort_(abort) {
+    operations_.bind_worker(worker_);
+}
 
 void http_tunnel::require_active() const {
     if (!worker_.is_current()) {
@@ -85,8 +82,7 @@ void http_tunnel::require_active() const {
 }
 task<std::optional<std::pmr::string>> http_tunnel::read() & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, read_active_, running_operations_),
-        &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
+    return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, read_active_, running_operations_));
 }
 task<void> http_tunnel::write(std::string_view bytes_value) & {
     require_active();
@@ -104,13 +100,11 @@ task<void> http_tunnel::write_owned(std::pmr::string&& bytes_value) {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
     auto owned = detail::rebind_owned_storage(bytes_value, &resource_);
-    return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_, running_operations_),
-        &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
+    return ::ruvia::make_scoped_operation(operations_, write_tunnel(target_, write_, std::move(owned), write_active_, send_ended_, running_operations_));
 }
 task<void> http_tunnel::finish() & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, write_active_, running_operations_),
-        &check_tunnel_worker, const_cast<worker_handle*>(&worker_));
+    return ::ruvia::make_scoped_operation(operations_, finish_tunnel(target_, finish_, send_ended_, write_active_, running_operations_));
 }
 void http_tunnel::abort() noexcept {
     abort_input(false);

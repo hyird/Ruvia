@@ -20,7 +20,6 @@
 #include "ruvia/core/detail/worker/worker_wait_awaiter.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait_result.h"
@@ -179,6 +178,9 @@ private:
     void discard_buffered();
 };
 
+// The receive operation: single-use, movable only before it is awaited, and
+// started on the receiver's worker by co_await. Dropping a cold one has no
+// effect on the channel.
 template <typename t_type>
 struct channel_receive_awaiter final {
     using state_type = channel_state<t_type>;
@@ -186,10 +188,11 @@ struct channel_receive_awaiter final {
     using wait_type = worker_single_wait_awaiter<node*, state_type>;
 
     channel_receive_awaiter(std::shared_ptr<channel_state<t_type>> value,
-        std::optional<std::chrono::steady_clock::duration> timeout_value, stop_token stop_token_value)
+        std::optional<std::chrono::steady_clock::duration> timeout_value, stop_token stop_token_value) noexcept
         : wait_(std::move(value), timeout_value, std::move(stop_token_value)) {}
 
     [[nodiscard]] bool await_ready() {
+        wait_.start("channel receive must run on its bound worker");
         auto& owner_value = wait_.state();
         auto lock = owner_value.lock_state();
         if (owner_value.receiver_closed_) {
@@ -231,15 +234,6 @@ struct channel_receive_awaiter final {
 private:
     wait_type wait_;
 };
-
-template <typename t_type>
-[[nodiscard]] task<worker_wait_result<t_type>> receive_channel_state(std::shared_ptr<channel_state<t_type>> state_value,
-    std::optional<std::chrono::steady_clock::duration> timeout, stop_token stop_token_value) {
-    if (!state_value || !state_value->worker_.is_current()) {
-        throw std::logic_error("channel receive must run on its bound worker");
-    }
-    co_return co_await channel_receive_awaiter<t_type>(std::move(state_value), timeout, std::move(stop_token_value));
-}
 
 template <typename t_type>
 void channel_state<t_type>::close(bool retire_receiver) {
@@ -377,38 +371,25 @@ public:
         close();
     }
 
-    // The task owns the shared state, but this receiver owns the receive side:
-    // destroying it prevents cold receives from consuming buffered values and
-    // closes pending receives. Require a named owner so storing a task cannot
-    // silently turn a temporary receiver into an already-closed operation.
-    [[nodiscard]] task<worker_wait_result<t_type>> receive() const& {
-        return detail::receive_channel_state<t_type>(state_, std::nullopt, {});
-    }
-    task<worker_wait_result<t_type>> receive() const&& = delete;
+    // The receiver owns the receive side: destroying it prevents cold receives
+    // from consuming buffered values and closes pending receives. Require a
+    // named owner so storing an operation cannot silently turn a temporary
+    // receiver into an already-closed operation.
+    using receive_operation = detail::channel_receive_awaiter<t_type>;
 
-    [[nodiscard]] task<worker_wait_result<t_type>> receive(stop_token stop_token_value) const& {
-        return detail::receive_channel_state<t_type>(state_, std::nullopt, std::move(stop_token_value));
+    [[nodiscard]] receive_operation receive(stop_token stop_token_value = {}) const& {
+        return receive_operation(state_, std::nullopt, std::move(stop_token_value));
     }
-    task<worker_wait_result<t_type>> receive(stop_token) const&& = delete;
+    receive_operation receive(stop_token = {}) const&& = delete;
 
     template <typename rep_type, typename period_type>
-    [[nodiscard]] task<worker_wait_result<t_type>> receive_for(
-        std::chrono::duration<rep_type, period_type> duration) const& {
-        return detail::receive_channel_state<t_type>(
-            state_, ::ruvia::worker_timer_saturating_duration_cast(duration), {});
-    }
-    template <typename rep_type, typename period_type>
-    task<worker_wait_result<t_type>> receive_for(std::chrono::duration<rep_type, period_type>) const&& = delete;
-
-    template <typename rep_type, typename period_type>
-    [[nodiscard]] task<worker_wait_result<t_type>> receive_for(
-        std::chrono::duration<rep_type, period_type> duration, stop_token stop_token_value) const& {
-        return detail::receive_channel_state<t_type>(
+    [[nodiscard]] receive_operation receive_for(
+        std::chrono::duration<rep_type, period_type> duration, stop_token stop_token_value = {}) const& {
+        return receive_operation(
             state_, ::ruvia::worker_timer_saturating_duration_cast(duration), std::move(stop_token_value));
     }
     template <typename rep_type, typename period_type>
-    task<worker_wait_result<t_type>> receive_for(
-        std::chrono::duration<rep_type, period_type>, stop_token) const&& = delete;
+    receive_operation receive_for(std::chrono::duration<rep_type, period_type>, stop_token = {}) const&& = delete;
 
     // The worker every receive must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from

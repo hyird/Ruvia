@@ -234,14 +234,12 @@ bool http_client_response_body::complete() const noexcept {
 
 task<std::optional<std::span<const std::byte>>> http_client_response_body::read() & {
     check_response_operation_affinity(state_);
-    return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
-        state_->consume_body<std::span<const std::byte>>(), check_response_operation_affinity, state_);
+    return ::ruvia::make_scoped_operation(state_->body_operation_scope_, state_->consume_body<std::span<const std::byte>>());
 }
 
 task<std::optional<std::string_view>> http_client_response_body::text() & {
     check_response_operation_affinity(state_);
-    return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
-        state_->consume_body<std::string_view>(), check_response_operation_affinity, state_);
+    return ::ruvia::make_scoped_operation(state_->body_operation_scope_, state_->consume_body<std::string_view>());
 }
 
 template <typename view>
@@ -292,8 +290,7 @@ template task<void> detail::http_client_response_state::consume_body<void>(respo
 
 task<http_client_response_bytes> http_client_response_body::read_all(std::size_t max_bytes) & {
     check_response_operation_affinity(state_);
-    return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
-        state_->read_all(max_bytes), check_response_operation_affinity, state_);
+    return ::ruvia::make_scoped_operation(state_->body_operation_scope_, state_->read_all(max_bytes));
 }
 
 task<http_client_response_bytes> detail::http_client_response_state::read_all(std::size_t max_bytes) {
@@ -345,8 +342,7 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
 
 task<void> http_client_response_body::pipe_to(response_stream_writer& output) & {
     check_response_operation_affinity(state_);
-    return ::ruvia::make_scoped_operation(state_->body_operation_scope_,
-        state_->consume_body<void>(&output), check_response_operation_affinity, state_);
+    return ::ruvia::make_scoped_operation(state_->body_operation_scope_, state_->consume_body<void>(&output));
 }
 
 std::optional<std::string_view> http_client_response::header(std::string_view name) const& noexcept {

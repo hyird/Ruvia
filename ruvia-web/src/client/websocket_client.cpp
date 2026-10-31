@@ -67,13 +67,6 @@ bool websocket_client_state::generate_mask(void*, websocket_mask_key_type& key) 
     return fill_random_bytes(std::span<unsigned char>(reinterpret_cast<unsigned char*>(key.data()), key.size()));
 }
 
-void websocket_client_state::check_operation_affinity(void* target) noexcept {
-    const auto& worker_value = *static_cast<const worker_handle*>(target);
-    if (!worker_value.is_current()) {
-        std::terminate();
-    }
-}
-
 void websocket_client_state::arm(worker_timer_registration& timer,
     std::optional<std::chrono::milliseconds> timeout, client_abort_reason reason) {
     timer.cancel();

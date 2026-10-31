@@ -83,8 +83,7 @@ task<void> websocket_client_state::close(
     require_current();
     std::pmr::string reason(options.reason_.view(), memory_.resource());
     return ::ruvia::make_scoped_operation(lifecycle_.operation_scope(),
-        run_close(options, std::move(reason), operation_options_value),
-        &websocket_client_state::check_operation_affinity, &worker_);
+        run_close(options, std::move(reason), operation_options_value));
 }
 
 task<void> websocket_client_state::run_close(websocket_close_options options, std::pmr::string reason,

@@ -82,7 +82,7 @@ ruvia::task<void> no_op() {
     co_return;
 }
 
-ruvia::task<void> observe_join(ruvia::task<void> join, bool& completed) {
+ruvia::task<void> observe_join(ruvia::task_scope::join_operation join, bool& completed) {
     co_await std::move(join);
     completed = true;
 }
@@ -268,7 +268,7 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
         ruvia::task_scope cold_join_scope(worker_value, {.resource_ = &resource});
         cold_join_scope.spawn(increment(worker_value, completed));
         auto first_join = cold_join_scope.join();
-        std::optional<ruvia::task<void>> second_join;
+        std::optional<ruvia::task_scope::join_operation> second_join;
         bool spawn_before_join_started = false;
         try {
             second_join.emplace(cold_join_scope.join());

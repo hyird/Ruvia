@@ -14,9 +14,7 @@ namespace ruvia::detail {
 task<std::optional<websocket_message>> websocket_client_state::read(
     const operation_options& options) {
     require_current();
-    return ::ruvia::make_scoped_operation(lifecycle_.operation_scope(),
-        run_read(options),
-        &websocket_client_state::check_operation_affinity, &worker_);
+    return ::ruvia::make_scoped_operation(lifecycle_.operation_scope(), run_read(options));
 }
 
 task<std::optional<websocket_message>> websocket_client_state::run_read(operation_options options) {

@@ -258,30 +258,6 @@ ruvia::task<bool> await_scoped_bool(ruvia::task<bool>& operation) {
     co_return co_await std::move(operation);
 }
 
-struct checker_target final {
-    bool alive_{true};
-    int calls_{};
-    int invalid_calls_{};
-    std::size_t allocated_bytes_at_check_{};
-    counting_resource* resource_{};
-};
-
-void check_target(void* target) noexcept {
-    auto& checker = *static_cast<checker_target*>(target);
-    ++checker.calls_;
-    if (!checker.alive_) {
-        ++checker.invalid_calls_;
-    }
-    if (checker.resource_ != nullptr) {
-        checker.allocated_bytes_at_check_ = checker.resource_->in_use_bytes_;
-    }
-}
-
-ruvia::task<void> observe_check_at_task_start(checker_target& checker, int& checks_at_start) {
-    checks_at_start = checker.calls_;
-    co_return;
-}
-
 ruvia::task<void> complete_immediately() {
     co_return;
 }
@@ -395,40 +371,6 @@ ruvia::task<void> run_reentrant_cold_drop(const ruvia::worker_handle& worker_val
 }
 
 }  // namespace
-
-RUVIA_TEST(scoped_operation_start_check_runs_before_task_body) {
-    ruvia::operation_scope scope;
-    checker_target checker;
-    int checks_at_start = 0;
-    auto operation = ruvia::make_scoped_operation(
-        scope, observe_check_at_task_start(checker, checks_at_start), &check_target, &checker);
-    auto root = ruvia::event_loop_pool({.loop_count_ = 1});
-    const auto loop = root.loop(0);
-    auto awaited = loop.start(await_scoped_operation(operation));
-    root.start();
-    awaited.get();
-    root.stop();
-    root.join();
-    RUVIA_CHECK_EQ(checks_at_start, 1);
-    RUVIA_CHECK_EQ(checker.calls_, 2);
-}
-
-RUVIA_TEST(scoped_operation_start_check_runs_before_cold_frame_destruction) {
-    ruvia::operation_scope scope;
-    counting_resource resource;
-    checker_target checker{.resource_ = &resource};
-    {
-        std::pmr::string payload_value(1024, 'p', &resource);
-        auto operation = ruvia::make_scoped_operation(
-            scope, cold_with_payload(std::move(payload_value)), &check_target, &checker);
-        RUVIA_CHECK_EQ(checker.calls_, 0);
-    }
-    RUVIA_CHECK_EQ(checker.calls_, 1);
-    RUVIA_CHECK(checker.allocated_bytes_at_check_ > 0U);
-    RUVIA_CHECK_EQ(resource.in_use_allocations_, 0U);
-    RUVIA_CHECK_EQ(resource.in_use_bytes_, 0U);
-    scope.close();
-}
 
 RUVIA_TEST(scoped_operation_close_and_join_releases_frame_before_expiring_capabilities) {
     ruvia::event_loop_pool loops({.loop_count_ = 1});
@@ -681,17 +623,15 @@ RUVIA_TEST(scoped_operation_scope_close_reclaims_cold_frame_before_capability_ex
     static_cast<void>(operation);
 }
 
-RUVIA_TEST(scoped_operation_expiration_clears_borrowed_start_check) {
+RUVIA_TEST(scoped_operation_expired_by_scope_close_rejects_start) {
     ruvia::operation_scope scope;
     counting_resource resource;
-    checker_target checker{.resource_ = &resource};
     {
         auto operation = ruvia::make_scoped_operation(scope,
-            cold_with_payload(std::pmr::string(1024, 'p', &resource)), &check_target, &checker);
+            cold_with_payload(std::pmr::string(1024, 'p', &resource)));
         RUVIA_CHECK(resource.in_use_bytes_ > 0U);
         scope.close();
         RUVIA_CHECK_EQ(resource.in_use_bytes_, 0U);
-        checker.alive_ = false;
 
         ruvia::event_loop_pool loops({.loop_count_ = 1});
         const auto loop = loops.loop(0);
@@ -707,8 +647,6 @@ RUVIA_TEST(scoped_operation_expiration_clears_borrowed_start_check) {
         loops.stop();
         loops.join();
     }
-    RUVIA_CHECK_EQ(checker.calls_, 1);
-    RUVIA_CHECK_EQ(checker.invalid_calls_, 0);
     RUVIA_CHECK_EQ(resource.in_use_allocations_, 0U);
     RUVIA_CHECK_EQ(resource.in_use_bytes_, 0U);
 }
@@ -716,12 +654,10 @@ RUVIA_TEST(scoped_operation_expiration_clears_borrowed_start_check) {
 RUVIA_TEST(scoped_operation_created_after_scope_close_discards_cold_frame) {
     ruvia::operation_scope scope;
     counting_resource resource;
-    checker_target checker{.resource_ = &resource};
     scope.close();
-    checker.alive_ = false;
 
     auto operation = ruvia::make_scoped_operation(scope,
-        cold_with_payload(std::pmr::string(1024, 'p', &resource)), &check_target, &checker);
+        cold_with_payload(std::pmr::string(1024, 'p', &resource)));
     RUVIA_CHECK_EQ(resource.in_use_allocations_, 0U);
     RUVIA_CHECK_EQ(resource.in_use_bytes_, 0U);
 
@@ -739,8 +675,6 @@ RUVIA_TEST(scoped_operation_created_after_scope_close_discards_cold_frame) {
     loops.stop();
     loops.join();
 
-    RUVIA_CHECK_EQ(checker.calls_, 0);
-    RUVIA_CHECK_EQ(checker.invalid_calls_, 0);
     RUVIA_CHECK_EQ(resource.in_use_allocations_, 0U);
     RUVIA_CHECK_EQ(resource.in_use_bytes_, 0U);
 }
@@ -778,33 +712,27 @@ RUVIA_TEST(scoped_operation_cold_frame_drop_allows_reentrant_parent_join) {
     loops.join();
 }
 
-RUVIA_TEST(scoped_operation_completion_clears_borrowed_start_check) {
+RUVIA_TEST(scoped_operation_completed_operation_rejects_second_await) {
+    ruvia::event_loop_pool loops({.loop_count_ = 1});
+    const auto loop = loops.loop(0);
+    const auto worker_value = loop.handle();
     ruvia::operation_scope scope;
-    checker_target checker;
-    {
-        auto operation = ruvia::make_scoped_operation(
-            scope, complete_immediately(), &check_target, &checker);
-        ruvia::event_loop_pool loops({.loop_count_ = 1});
-        const auto loop = loops.loop(0);
-        auto first_root = loop.start(await_scoped_operation(operation));
-        loops.start();
-        first_root.get();
-        RUVIA_CHECK_EQ(checker.calls_, 2);
-        checker.alive_ = false;
+    scope.bind_worker(worker_value);
+    auto operation = ruvia::make_scoped_operation(scope, complete_immediately());
+    auto first_root = loop.start(await_scoped_operation(operation));
+    loops.start();
+    first_root.get();
 
-        auto repeated_root = loop.start(await_scoped_operation(operation));
-        bool rejected_as_completed = false;
-        try {
-            repeated_root.get();
-        } catch (const std::logic_error&) {
-            rejected_as_completed = true;
-        }
-        RUVIA_CHECK(rejected_as_completed);
-        loops.stop();
-        loops.join();
+    auto repeated_root = loop.start(await_scoped_operation(operation));
+    bool rejected_as_completed = false;
+    try {
+        repeated_root.get();
+    } catch (const std::logic_error&) {
+        rejected_as_completed = true;
     }
-    RUVIA_CHECK_EQ(checker.calls_, 2);
-    RUVIA_CHECK_EQ(checker.invalid_calls_, 0);
+    RUVIA_CHECK(rejected_as_completed);
+    loops.stop();
+    loops.join();
     scope.close();
 }
 

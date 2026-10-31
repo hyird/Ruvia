@@ -8,15 +8,6 @@
 #include "redis/redis_subscription_connection.h"
 
 namespace ruvia {
-namespace {
-
-void require_subscription_worker(void* target) noexcept {
-    if (!static_cast<const worker_handle*>(target)->is_current()) {
-        std::terminate();
-    }
-}
-
-}  // namespace
 
 redis_subscription::redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope,
     operation_options options)
@@ -36,8 +27,7 @@ task<void> redis_subscription::send(
         throw std::invalid_argument("redis subscription requires at least one channel or pattern");
     }
     return make_scoped_operation(registration_.scope(),
-        connection_->send(detail::own_redis_args(command, names, connection_->resource())),
-        &require_subscription_worker, const_cast<worker_handle*>(&connection_->worker()));
+        connection_->send(detail::own_redis_args(command, names, connection_->resource())));
 }
 
 task<void> redis_subscription::subscribe(std::span<const std::string_view> channels) & {
@@ -58,12 +48,13 @@ task<void> redis_subscription::punsubscribe(std::span<const std::string_view> pa
 
 task<std::optional<redis_pubsub_event>> redis_subscription::read() & {
     registration_.require_active();
-    return make_scoped_operation(registration_.scope(), connection_->read(), &require_subscription_worker,
-        const_cast<worker_handle*>(&connection_->worker()));
+    return make_scoped_operation(registration_.scope(), connection_->read());
 }
 
 void redis_subscription::abort() noexcept {
-    require_subscription_worker(const_cast<worker_handle*>(&connection_->worker()));
+    if (!connection_->worker().is_current()) {
+        std::terminate();
+    }
     connection_->abort(detail::client_abort_reason::closing);
 }
 

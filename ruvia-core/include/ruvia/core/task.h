@@ -71,9 +71,6 @@ private:
     friend class task_scope;
     template <typename u_type>
     friend task<u_type> make_scoped_operation(operation_scope&, task<u_type>);
-    template <typename u_type>
-    friend task<u_type> make_scoped_operation(
-        operation_scope&, task<u_type>, void (*)(void*) noexcept, void*);
 
     explicit task(handle_type handle) noexcept
         : handle_(handle) {}
@@ -123,10 +120,8 @@ private:
         retire_cold_handle(std::addressof(handle_));
     }
 
-    void bind_scope(operation_scope& scope, void (*check_affinity)(void*) noexcept,
-        void* affinity_target) noexcept {
-        registration_.bind(
-            scope, std::addressof(handle_), &task::retire_cold_handle, check_affinity, affinity_target);
+    void bind_scope(operation_scope& scope) noexcept {
+        registration_.bind(scope, std::addressof(handle_), &task::retire_cold_handle);
     }
 
     handle_type handle_{};

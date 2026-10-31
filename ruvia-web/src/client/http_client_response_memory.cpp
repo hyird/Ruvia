@@ -226,7 +226,9 @@ http_client_response_state::http_client_response_state(http_client_response_memo
       trailers_(resource_),
       buffered_(resource_),
       pending_(resource_),
-      memory_domain_(memory_domain) {}
+      memory_domain_(memory_domain) {
+    body_operation_scope_.bind_worker(memory_domain.worker());
+}
 
 void http_client_response_state::require_owner_worker(const char* message) const {
     if (!memory_domain_.worker().is_current()) {

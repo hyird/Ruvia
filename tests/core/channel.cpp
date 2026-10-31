@@ -169,48 +169,18 @@ ruvia::task<void> receive_throwing_move(
     success = result_value.has_value() && result_value.value().value() == 6;
 }
 
-// Counts moves down to a failure, so a receive can fail after its first move
-// has already emptied the queued value.
-class late_throwing_move final {
-public:
-    explicit late_throwing_move(int value) noexcept
-        : value_(value) {}
-
-    late_throwing_move(const late_throwing_move&) = delete;
-    late_throwing_move& operator=(const late_throwing_move&) = delete;
-    // This fixture intentionally models a move that can throw.
-    late_throwing_move(late_throwing_move&& other) noexcept(false) {
-        if (moves_before_throw_ == 0) {
-            moves_before_throw_ = -1;
-            throw std::runtime_error("requested late move failure");
-        }
-        if (moves_before_throw_ > 0) {
-            --moves_before_throw_;
-        }
-        value_ = std::exchange(other.value_, 0);
-    }
-
-    [[nodiscard]] int value() const noexcept {
-        return value_;
-    }
-
-    // Negative disables failures; only the worker thread touches it.
-    static inline int moves_before_throw_{-1};
-
-private:
-    int value_{0};
-};
-
-ruvia::task<void> receive_after_late_move_failure(ruvia::channel_sender<late_throwing_move> sender,
-    ruvia::channel_receiver<late_throwing_move>& receiver, bool& success) {
+// A receive whose move out of the dequeued slot fails must still release the
+// slot: the failed value is lost, later values and closure are unaffected.
+ruvia::task<void> receive_after_move_failure(ruvia::channel_sender<throwing_move> sender,
+    ruvia::channel_receiver<throwing_move>& receiver, bool& success) {
     bool move_failed = false;
-    late_throwing_move::moves_before_throw_ = 1;
+    throwing_move::throw_on_move_.store(true, std::memory_order_relaxed);
     try {
         static_cast<void>(co_await receiver.receive());
     } catch (const std::runtime_error&) {
         move_failed = true;
     }
-    late_throwing_move::moves_before_throw_ = -1;
+    throwing_move::throw_on_move_.store(false, std::memory_order_relaxed);
     const auto next = co_await receiver.receive();
     sender.close();
     const auto closed = co_await receiver.receive();
@@ -231,7 +201,7 @@ ruvia::task<void> receive_until_closed(ruvia::channel_receiver<int>& receiver, b
     success = result_value.status() == ruvia::worker_wait_status::closed;
 }
 
-ruvia::task<ruvia::worker_wait_result<int>> make_cold_receive_after_receiver_close(
+ruvia::channel_receiver<int>::receive_operation make_cold_receive_after_receiver_close(
     ruvia::worker_handle worker_value, bool timed, bool buffered = false) {
     auto [sender, receiver] = ruvia::make_channel<int>(std::move(worker_value), {.capacity_ = 1});
     if (buffered && !sender.send(42).accepted()) {
@@ -243,8 +213,8 @@ ruvia::task<ruvia::worker_wait_result<int>> make_cold_receive_after_receiver_clo
     return receiver.receive();
 }
 
-ruvia::task<void> verify_cold_receiver_tasks(ruvia::task<ruvia::worker_wait_result<int>> receive,
-    ruvia::task<ruvia::worker_wait_result<int>> timed_receive, bool& success) {
+ruvia::task<void> verify_cold_receive_operations(ruvia::channel_receiver<int>::receive_operation receive,
+    ruvia::channel_receiver<int>::receive_operation timed_receive, bool& success) {
     const auto cold_closed = co_await std::move(receive);
     const auto timed_cold_closed = co_await std::move(timed_receive);
     success = cold_closed.status() == ruvia::worker_wait_status::closed &&
@@ -318,27 +288,27 @@ struct buffered_payload final {
 };
 
 ruvia::task<void> verify_retired_payload_receive(
-    ruvia::task<ruvia::worker_wait_result<buffered_payload>> receive, bool& success) {
+    ruvia::channel_receiver<buffered_payload>::receive_operation receive, bool& success) {
     const auto result_value = co_await std::move(receive);
     success = result_value.status() == ruvia::worker_wait_status::closed && !result_value.has_value();
 }
 
 bool test_retired_receiver_storage_is_released() {
-    enum class cold_task_retirement { absent,
+    enum class cold_operation_retirement { absent,
         discarded,
         completed };
     bool success = true;
-    for (const auto retirement : {cold_task_retirement::absent, cold_task_retirement::discarded, cold_task_retirement::completed}) {
+    for (const auto retirement : {cold_operation_retirement::absent, cold_operation_retirement::discarded, cold_operation_retirement::completed}) {
         failing_memory_resource resource;
         asio::io_context io_context;
         ruvia::worker_runtime_context runtime(io_context, 8);
         int destructions = 0;
-        std::optional<ruvia::task<ruvia::worker_wait_result<buffered_payload>>> cold_receive;
+        std::optional<ruvia::channel_receiver<buffered_payload>::receive_operation> cold_receive;
         {
             auto [sender, receiver] = ruvia::make_channel<buffered_payload>(
                 runtime.handle(), {.capacity_ = 1, .resource_ = &resource});
             success = sender.send(buffered_payload(&resource, destructions)).accepted() && success;
-            if (retirement != cold_task_retirement::absent) {
+            if (retirement != cold_operation_retirement::absent) {
                 cold_receive.emplace(receiver.receive());
             }
             receiver.close();
@@ -348,7 +318,7 @@ bool test_retired_receiver_storage_is_released() {
         }
         if (cold_receive) {
             success = resource.live_allocations() != 0 && success;
-            if (retirement == cold_task_retirement::completed) {
+            if (retirement == cold_operation_retirement::completed) {
                 bool closed = false;
                 ruvia::test::run_worker_tasks(runtime, verify_retired_payload_receive(std::move(*cold_receive), closed));
                 success = closed && success;
@@ -745,8 +715,8 @@ bool test_send_reservation_does_not_block_other_producers() {
 int main() {
     using namespace ruvia::test::channel_tests;
     bool success = false;
-    bool cold_receiver_tasks_safe = false;
-    bool buffered_cold_receiver_tasks_safe = false;
+    bool cold_receive_operations_safe = false;
+    bool buffered_cold_receive_operations_safe = false;
     bool channel_side_closure = false;
     {
         asio::io_context io_context;
@@ -757,10 +727,10 @@ int main() {
         auto buffered_cold_receive = make_cold_receive_after_receiver_close(worker_value, false, true);
         auto buffered_timed_cold_receive = make_cold_receive_after_receiver_close(worker_value, true, true);
         ruvia::test::run_worker_tasks(runtime, exercise(worker_value, success),
-            verify_cold_receiver_tasks(std::move(cold_receive), std::move(timed_cold_receive),
-                cold_receiver_tasks_safe),
-            verify_cold_receiver_tasks(std::move(buffered_cold_receive), std::move(buffered_timed_cold_receive),
-                buffered_cold_receiver_tasks_safe),
+            verify_cold_receive_operations(std::move(cold_receive), std::move(timed_cold_receive),
+                cold_receive_operations_safe),
+            verify_cold_receive_operations(std::move(buffered_cold_receive), std::move(buffered_timed_cold_receive),
+                buffered_cold_receive_operations_safe),
             verify_channel_side_closure(worker_value, channel_side_closure));
         runtime.detach();
     }
@@ -818,23 +788,23 @@ int main() {
         runtime.detach();
     }
 
-    bool late_move_consumed_once = false;
+    bool failed_receive_move_releases_slot = false;
     {
         asio::io_context io_context;
         ruvia::worker_runtime_context runtime(io_context, 8);
-        auto [sender, receiver] = ruvia::make_channel<late_throwing_move>(runtime.handle(), {.capacity_ = 2});
-        if (!sender.send(late_throwing_move(1)).accepted() || !sender.send(late_throwing_move(2)).accepted()) {
+        auto [sender, receiver] = ruvia::make_channel<throwing_move>(runtime.handle(), {.capacity_ = 2});
+        if (!sender.send(throwing_move(1)).accepted() || !sender.send(throwing_move(2)).accepted()) {
             return 1;
         }
         ruvia::test::run_worker_tasks(
-            runtime, receive_after_late_move_failure(std::move(sender), receiver, late_move_consumed_once));
+            runtime, receive_after_move_failure(std::move(sender), receiver, failed_receive_move_releases_slot));
         runtime.detach();
     }
 
-    const bool all_passed = success && cold_receiver_tasks_safe && buffered_cold_receiver_tasks_safe &&
+    const bool all_passed = success && cold_receive_operations_safe && buffered_cold_receive_operations_safe &&
                             channel_side_closure && retired_receiver_stopping &&
                             worker_stopping && stopping_send &&
-                            move_failed && recovered_value && recovered_send && late_move_consumed_once &&
+                            move_failed && recovered_value && recovered_send && failed_receive_move_releases_slot &&
                             test_rejected_payload_moves_can_close_the_channel() &&
                             test_retired_receiver_storage_is_released() &&
                             test_retired_payload_destructors_can_tear_down_the_channel() &&

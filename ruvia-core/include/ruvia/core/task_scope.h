@@ -54,12 +54,35 @@ public:
     // Includes a spawn currently acquiring its child node.
     [[nodiscard]] std::size_t size() const& noexcept;
     std::size_t size() const&& = delete;
-    // Cold join tasks do not close spawn admission. Starting a join claims the
-    // scope exactly once and prevents further spawning; it waits for in-progress
-    // spawn admission and child node retirement. The scope and worker must
-    // remain alive until that task and all children have completed.
-    [[nodiscard]] task<void> join() &;
-    task<void> join() && = delete;
+    // One join: single-use, movable only before it is awaited. A cold join
+    // does not close spawn admission; starting it claims the scope exactly
+    // once and prevents further spawning. It waits for in-progress spawn
+    // admission and child node retirement. The scope and worker must remain
+    // alive until the started operation and all children have completed.
+    class join_operation final {
+    public:
+        join_operation(const join_operation&) = delete;
+        join_operation& operator=(const join_operation&) = delete;
+        join_operation(join_operation&& other) noexcept;
+        join_operation& operator=(join_operation&&) = delete;
+
+        [[nodiscard]] bool await_ready();
+        void await_suspend(std::coroutine_handle<> continuation) noexcept;
+        void await_resume();
+
+    private:
+        friend class task_scope;
+
+        explicit join_operation(task_scope& scope) noexcept
+            : scope_(&scope) {}
+
+        task_scope* scope_;
+        bool started_{false};
+    };
+
+    // Creation and starting the join both require the bound worker.
+    [[nodiscard]] join_operation join() &;
+    join_operation join() && = delete;
 
 private:
     struct node_type;
@@ -80,15 +103,7 @@ private:
     };
     struct task_scope_joined_type final {};
 
-    struct join_awaiter_type {
-        task_scope& scope_;
-        [[nodiscard]] bool await_ready() const;
-        void await_suspend(std::coroutine_handle<> continuation) noexcept;
-        void await_resume();
-    };
-
     static void child_complete(void* raw) noexcept;
-    [[nodiscard]] static task<void> join_scope(task_scope& scope);
     void finish(node_type* node) noexcept;
     void resume_join_if_idle() noexcept;
     void rethrow_failure();

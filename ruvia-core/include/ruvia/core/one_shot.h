@@ -17,7 +17,6 @@
 #include "ruvia/core/detail/worker/worker_wait_awaiter.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait_result.h"
@@ -81,15 +80,19 @@ struct one_shot_state final {
     worker_wait_slot<std::monostate, one_shot_state<t_type>> wait_slot_;
 };
 
+// The wait operation: single-use, movable only before it is awaited, and
+// started on the receiver's worker by co_await. Dropping a cold one has no
+// effect on the exchange.
 template <typename t_type>
 struct one_shot_awaiter final {
     using wait_type = worker_single_wait_awaiter<std::monostate, one_shot_state<t_type>>;
 
     one_shot_awaiter(std::shared_ptr<one_shot_state<t_type>> value,
-        std::optional<std::chrono::steady_clock::duration> timeout_value, stop_token stop_token_value)
+        std::optional<std::chrono::steady_clock::duration> timeout_value, stop_token stop_token_value) noexcept
         : wait_(std::move(value), timeout_value, std::move(stop_token_value)) {}
 
     [[nodiscard]] bool await_ready() {
+        wait_.start("one-shot wait must run on its bound worker");
         auto& owner_value = wait_.state();
         std::unique_lock lock(owner_value.mutex_);
         if (std::holds_alternative<one_shot_ready>(owner_value.lifecycle_)) {
@@ -133,15 +136,6 @@ struct one_shot_awaiter final {
 private:
     wait_type wait_;
 };
-
-template <typename t_type>
-[[nodiscard]] task<worker_wait_result<t_type>> wait_one_shot_state(std::shared_ptr<one_shot_state<t_type>> state_value,
-    std::optional<std::chrono::steady_clock::duration> timeout, stop_token stop_token_value) {
-    if (!state_value || !state_value->worker_.is_current()) {
-        throw std::logic_error("one-shot wait must run on its bound worker");
-    }
-    co_return co_await one_shot_awaiter<t_type>(std::move(state_value), timeout, std::move(stop_token_value));
-}
 
 template <typename t_type>
 void one_shot_state<t_type>::worker_stopping() noexcept {
@@ -239,17 +233,6 @@ private:
 };
 
 template <typename t_type>
-class one_shot_receiver;
-
-namespace detail {
-template <typename t_type>
-[[nodiscard]] one_shot_awaiter<t_type> make_one_shot_awaiter(
-    const one_shot_receiver<t_type>& receiver,
-    std::optional<std::chrono::steady_clock::duration> timeout,
-    stop_token stop_token_value);
-}  // namespace detail
-
-template <typename t_type>
 class one_shot_receiver final {
 public:
     one_shot_receiver() = delete;
@@ -261,38 +244,24 @@ public:
         close();
     }
 
-    // The task owns the shared state, but this receiver owns the receive side:
-    // destroying it closes every cold or running wait. Require a named owner
-    // so storing a task cannot silently turn a temporary receiver into an
-    // already-closed operation.
-    [[nodiscard]] task<worker_wait_result<t_type>> wait() const& {
-        return detail::wait_one_shot_state<t_type>(state_, std::nullopt, {});
-    }
-    task<worker_wait_result<t_type>> wait() const&& = delete;
+    // The receiver owns the receive side: destroying it closes every cold or
+    // running wait. Require a named owner so storing an operation cannot
+    // silently turn a temporary receiver into an already-closed operation.
+    using wait_operation = detail::one_shot_awaiter<t_type>;
 
-    [[nodiscard]] task<worker_wait_result<t_type>> wait(stop_token stop_token_value) const& {
-        return detail::wait_one_shot_state<t_type>(state_, std::nullopt, std::move(stop_token_value));
+    [[nodiscard]] wait_operation wait(stop_token stop_token_value = {}) const& {
+        return wait_operation(state_, std::nullopt, std::move(stop_token_value));
     }
-    task<worker_wait_result<t_type>> wait(stop_token) const&& = delete;
+    wait_operation wait(stop_token = {}) const&& = delete;
 
     template <typename rep_type, typename period_type>
-    [[nodiscard]] task<worker_wait_result<t_type>> wait_for(
-        std::chrono::duration<rep_type, period_type> duration) const& {
-        return detail::wait_one_shot_state<t_type>(
-            state_, ::ruvia::worker_timer_saturating_duration_cast(duration), {});
-    }
-    template <typename rep_type, typename period_type>
-    task<worker_wait_result<t_type>> wait_for(std::chrono::duration<rep_type, period_type>) const&& = delete;
-
-    template <typename rep_type, typename period_type>
-    [[nodiscard]] task<worker_wait_result<t_type>> wait_for(
-        std::chrono::duration<rep_type, period_type> duration, stop_token stop_token_value) const& {
-        return detail::wait_one_shot_state<t_type>(
+    [[nodiscard]] wait_operation wait_for(
+        std::chrono::duration<rep_type, period_type> duration, stop_token stop_token_value = {}) const& {
+        return wait_operation(
             state_, ::ruvia::worker_timer_saturating_duration_cast(duration), std::move(stop_token_value));
     }
     template <typename rep_type, typename period_type>
-    task<worker_wait_result<t_type>> wait_for(
-        std::chrono::duration<rep_type, period_type>, stop_token) const&& = delete;
+    wait_operation wait_for(std::chrono::duration<rep_type, period_type>, stop_token = {}) const&& = delete;
 
     // The worker every wait must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from
@@ -334,25 +303,7 @@ private:
     std::shared_ptr<detail::one_shot_state<t_type>> state_;
     template <typename u_type>
     friend auto make_one_shot(worker_handle, one_shot_options);
-    template <typename u_type>
-    friend detail::one_shot_awaiter<u_type> detail::make_one_shot_awaiter(
-        const one_shot_receiver<u_type>&,
-        std::optional<std::chrono::steady_clock::duration>,
-        stop_token);
 };
-
-namespace detail {
-template <typename t_type>
-[[nodiscard]] one_shot_awaiter<t_type> make_one_shot_awaiter(
-    const one_shot_receiver<t_type>& receiver,
-    std::optional<std::chrono::steady_clock::duration> timeout,
-    stop_token stop_token_value) {
-    if (!receiver.state_ || !receiver.state_->worker_.is_current()) {
-        throw std::logic_error("one-shot wait must run on its bound worker");
-    }
-    return one_shot_awaiter<t_type>(receiver.state_, timeout, std::move(stop_token_value));
-}
-}  // namespace detail
 
 template <typename t_type>
 // The value parameter accepts both lvalue handles and rvalue handles before

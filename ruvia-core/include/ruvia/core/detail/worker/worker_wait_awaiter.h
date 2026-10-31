@@ -128,6 +128,9 @@ template <typename state_type, typename... arg_types>
 // without an outer-owner pointer, allocation, virtual dispatch, or type erasure.
 // State must expose worker_, lock_state() (the lock guarding wait_slot_), and
 // wait_slot_ (a worker_wait_slot<t_type, state_type>).
+//
+// The awaiter is cold until start(): nothing publishes its address before
+// then, so a cold awaiter may move; a started one must stay address-stable.
 template <typename t_type, typename state_type>
 class worker_single_wait_awaiter final {
 public:
@@ -139,8 +142,27 @@ public:
 
     worker_single_wait_awaiter(const worker_single_wait_awaiter&) = delete;
     worker_single_wait_awaiter& operator=(const worker_single_wait_awaiter&) = delete;
-    worker_single_wait_awaiter(worker_single_wait_awaiter&&) = delete;
+    worker_single_wait_awaiter(worker_single_wait_awaiter&& other) noexcept
+        : state_(std::move(other.state_)),
+          timeout_(other.timeout_),
+          stop_token_(std::move(other.stop_token_)) {
+        if (other.started_) {
+            std::terminate();
+        }
+    }
     worker_single_wait_awaiter& operator=(worker_single_wait_awaiter&&) = delete;
+
+    // The first step of every domain await_ready: a wait starts once, on the
+    // worker its state is bound to. A moved-from awaiter has no state.
+    void start(const char* affinity_message) {
+        if (started_ || !state_) {
+            throw std::logic_error("worker wait cannot be awaited");
+        }
+        if (!state_->worker_.is_current()) {
+            throw std::logic_error(affinity_message);
+        }
+        started_ = true;
+    }
 
     [[nodiscard]] state_type& state() const noexcept {
         return *state_;
@@ -287,6 +309,7 @@ private:
     std::shared_ptr<state_type> state_;
     std::optional<std::chrono::steady_clock::duration> timeout_;
     stop_token stop_token_;
+    bool started_{false};
     std::uint64_t generation_{0};
     worker_timer_registration timer_;
     worker_wait_await_state_type<t_type> completion_;

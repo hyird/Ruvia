@@ -39,8 +39,7 @@ public:
         return phase_ != phase::unscoped;
     }
 
-    void bind(operation_scope& scope, void* target, void (*retire_cold)(void*) noexcept,
-        void (*check_affinity)(void*) noexcept, void* affinity_target) noexcept;
+    void bind(operation_scope& scope, void* target, void (*retire_cold)(void*) noexcept) noexcept;
     void prepare_start() const;
     void start() noexcept;
     void prepare_completion() const noexcept;
@@ -65,8 +64,6 @@ private:
     phase phase_{phase::unscoped};
     void* frame_target_{nullptr};
     void (*retire_cold_)(void*) noexcept {nullptr};
-    void (*check_affinity_)(void*) noexcept {nullptr};
-    void* affinity_target_{nullptr};
 };
 
 [[nodiscard]] void* task_frame_allocate(std::size_t bytes_value);

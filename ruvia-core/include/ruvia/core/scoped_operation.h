@@ -12,6 +12,7 @@
 namespace ruvia {
 
 class scoped_capability_registration;
+class worker_handle;
 
 namespace detail {
 class scoped_operation_registration;
@@ -21,6 +22,8 @@ class scoped_operation_registration;
 // Close discards cold frames before capability cleanup. Started operations must
 // finish; close_and_join waits for their frames, leases and capability cleanup
 // to retire, including when invoked reentrantly by a cleanup callback.
+// bind_worker pins the scope to one worker: every operation in it then
+// terminates when started, completed or retired cold on another thread.
 class operation_scope final {
 public:
     operation_scope() noexcept = default;
@@ -48,12 +51,18 @@ public:
     [[nodiscard]] void* context() const noexcept {
         return context_;
     }
+    // Borrows the worker handle, which must outlive this scope (the same rule
+    // as task_scope). Bind once, before any operation is registered.
+    void bind_worker(const worker_handle& worker) noexcept {
+        worker_ = &worker;
+    }
 
 private:
     friend class detail::scoped_operation_registration;
     friend class scoped_capability_registration;
     struct drain_guard;
     struct join_awaiter;
+    void check_worker() const noexcept;
     void retire_cold_operations() noexcept;
     void expire_for_join() noexcept;
     void expire_capabilities() noexcept;
@@ -64,6 +73,7 @@ private:
     detail::scoped_operation_registration* head_{nullptr};
     scoped_capability_registration* capability_head_{nullptr};
     void* context_{nullptr};
+    const worker_handle* worker_{nullptr};
     std::coroutine_handle<> join_continuation_{};
     bool active_{true};
     bool expiring_capabilities_{false};
@@ -109,14 +119,7 @@ private:
 template <typename t_type>
 [[nodiscard]] task<t_type> make_scoped_operation(
     operation_scope& scope, task<t_type> task_value) {
-    task_value.bind_scope(scope, nullptr, nullptr);
-    return task_value;
-}
-
-template <typename t_type>
-[[nodiscard]] task<t_type> make_scoped_operation(
-    operation_scope& scope, task<t_type> task_value, void (*check_affinity)(void*) noexcept, void* target) {
-    task_value.bind_scope(scope, check_affinity, target);
+    task_value.bind_scope(scope);
     return task_value;
 }
 }  // namespace ruvia

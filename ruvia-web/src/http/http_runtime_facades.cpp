@@ -48,12 +48,6 @@ ruvia::task<void> end_owned(void* target,
     co_await end(target, views);
 }
 
-void require_websocket_worker(void* target) noexcept {
-    if (!static_cast<const ruvia::worker_handle*>(target)->is_current()) {
-        std::terminate();
-    }
-}
-
 ruvia::task<std::optional<ruvia::websocket_message>> read_websocket(void* target,
     ruvia::task<std::optional<ruvia::websocket_message>> (*read)(void*),
     bool& read_active) {
@@ -242,9 +236,7 @@ task<void> sse_writer::end(std::span<const http_header_view> trailers) {
 
 task<std::optional<websocket_message>> websocket::read() & {
     require_active();
-    return ::ruvia::make_scoped_operation(operation_scope_,
-        read_websocket(target_, read_, read_active_), &require_websocket_worker,
-        const_cast<worker_handle*>(worker_));
+    return ::ruvia::make_scoped_operation(operation_scope_, read_websocket(target_, read_, read_active_));
 }
 
 task<void> websocket::text(std::string_view payload_value, websocket_send_options options) & {
@@ -271,8 +263,7 @@ task<void> websocket::send(websocket_message&& message, websocket_send_options o
     require_active();
     auto read_lease = detail::claim_operation_lane(read_active_, "websocket message send cannot overlap a read");
     return ::ruvia::make_scoped_operation(operation_scope_,
-        write_websocket_message(target_, write_, message, std::move(read_lease), write_active_, options.compress_),
-        &require_websocket_worker, const_cast<worker_handle*>(worker_));
+        write_websocket_message(target_, write_, message, std::move(read_lease), write_active_, options.compress_));
 }
 
 task<void> websocket::close(websocket_close_options options) & {
@@ -280,8 +271,7 @@ task<void> websocket::close(websocket_close_options options) & {
     std::pmr::string owned(options.reason_.view(), resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
         close_websocket_with_reason(target_, close_, options, std::move(owned),
-            read_active_, write_active_, close_active_),
-        &require_websocket_worker, const_cast<worker_handle*>(worker_));
+            read_active_, write_active_, close_active_));
 }
 
 void websocket::abort() noexcept {
@@ -304,8 +294,7 @@ task<void> websocket::write(websocket_opcode opcode, std::pmr::string&& payload_
     require_active();
     auto owned = detail::rebind_owned_storage(payload_value, resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
-        write_websocket_payload(target_, write_, opcode, std::move(owned), write_active_, compress),
-        &require_websocket_worker, const_cast<worker_handle*>(worker_));
+        write_websocket_payload(target_, write_, opcode, std::move(owned), write_active_, compress));
 }
 
 task<void> sse_writer::write(const sse_message& message) {

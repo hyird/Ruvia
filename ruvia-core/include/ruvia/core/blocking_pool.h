@@ -368,7 +368,8 @@ template <typename fn_type>
     }
 
     try {
-        auto waited = co_await detail::make_one_shot_awaiter(receiver, timeout, std::move(stop_token_value));
+        auto waited = co_await (timeout ? receiver.wait_for(*timeout, std::move(stop_token_value))
+                                        : receiver.wait(std::move(stop_token_value)));
         if (waited.has_value()) {
             auto& payload_value = waited.value();
             if (payload_value.status_ != blocking_status::completed) {

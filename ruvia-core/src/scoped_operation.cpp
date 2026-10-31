@@ -3,6 +3,8 @@
 #include <exception>
 #include <stdexcept>
 
+#include "ruvia/core/worker_handle.h"
+
 namespace ruvia {
 
 // Keeps a reentrant join from publishing retirement during frame/capability
@@ -120,6 +122,12 @@ void operation_scope::resume_joiner() noexcept {
     expire_capabilities();
     join_complete_ = true;
     continuation.resume();
+}
+
+void operation_scope::check_worker() const noexcept {
+    if (worker_ != nullptr && !worker_->is_current()) {
+        std::terminate();
+    }
 }
 
 scoped_capability_registration::scoped_capability_registration(
@@ -282,8 +290,6 @@ scoped_operation_registration::scoped_operation_registration(
     phase_ = other.phase_;
     frame_target_ = other.frame_target_ != nullptr ? new_frame_target : nullptr;
     retire_cold_ = other.retire_cold_;
-    check_affinity_ = other.check_affinity_;
-    affinity_target_ = other.affinity_target_;
     if (scope_ != nullptr) {
         if (previous_ != nullptr) {
             previous_->next_ = this;
@@ -308,8 +314,7 @@ scoped_operation_registration::~scoped_operation_registration() {
 }
 
 void scoped_operation_registration::bind(operation_scope& scope, void* target,
-    void (*retire_cold)(void*) noexcept, void (*check_affinity)(void*) noexcept,
-    void* affinity_target) noexcept {
+    void (*retire_cold)(void*) noexcept) noexcept {
     if (phase_ != phase::unscoped || retire_cold == nullptr || retire_cold_ != nullptr) {
         std::terminate();
     }
@@ -322,16 +327,12 @@ void scoped_operation_registration::bind(operation_scope& scope, void* target,
     phase_ = phase::cold;
     frame_target_ = target;
     retire_cold_ = retire_cold;
-    check_affinity_ = check_affinity;
-    affinity_target_ = affinity_target;
     scope.link(*this);
 }
 
 void scoped_operation_registration::clear_frame_binding() noexcept {
     frame_target_ = nullptr;
     retire_cold_ = nullptr;
-    check_affinity_ = nullptr;
-    affinity_target_ = nullptr;
 }
 
 void scoped_operation_registration::prepare_start() const {
@@ -341,9 +342,7 @@ void scoped_operation_registration::prepare_start() const {
     if (phase_ != phase::cold) {
         throw std::logic_error("capability operation can only be awaited once");
     }
-    if (check_affinity_ != nullptr) {
-        check_affinity_(affinity_target_);
-    }
+    scope_->check_worker();
 }
 
 void scoped_operation_registration::start() noexcept {
@@ -357,9 +356,7 @@ void scoped_operation_registration::prepare_completion() const noexcept {
     if (phase_ != phase::running) {
         std::terminate();
     }
-    if (check_affinity_ != nullptr) {
-        check_affinity_(affinity_target_);
-    }
+    scope_->check_worker();
 }
 
 void scoped_operation_registration::complete() noexcept {
@@ -380,9 +377,7 @@ void scoped_operation_registration::retire_frame() noexcept {
         std::terminate();
     }
     if (phase_ == phase::cold) {
-        if (check_affinity_ != nullptr) {
-            check_affinity_(affinity_target_);
-        }
+        scope_->check_worker();
         phase_ = phase::retiring;
         const auto retire_cold = retire_cold_;
         auto* target = frame_target_;

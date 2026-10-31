@@ -39,7 +39,9 @@ public:
           loop_(loop),
           worker_(worker_value),
           close_signal_(worker_value),
-          phase_(initial) {}
+          phase_(initial) {
+        operations_.bind_worker(worker_value);
+    }
 
     ~client_lifecycle() {
         if (phase_.load(std::memory_order_acquire) != client_phase::closed ||

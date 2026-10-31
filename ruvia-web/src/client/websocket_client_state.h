@@ -188,7 +188,6 @@ private:
         client_abort_reason reason);
     void disarm(worker_timer_registration& timer) noexcept;
     [[nodiscard]] static bool generate_mask(void*, websocket_mask_key_type& key) noexcept;
-    static void check_operation_affinity(void* target) noexcept;
 
     event_loop loop_;
     worker_handle worker_;

@@ -126,8 +126,7 @@ task<void> websocket_client_state::write(websocket_opcode opcode, std::pmr::stri
     require_current();
     auto owned = rebind_owned_storage(payload_value, memory_.resource());
     return ::ruvia::make_scoped_operation(lifecycle_.operation_scope(),
-        run_write(opcode, std::move(owned), options, send_options),
-        &websocket_client_state::check_operation_affinity, &worker_);
+        run_write(opcode, std::move(owned), options, send_options));
 }
 
 task<void> websocket_client_state::run_write(websocket_opcode opcode, std::pmr::string payload_value,
