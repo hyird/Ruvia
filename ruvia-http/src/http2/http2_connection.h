@@ -12,7 +12,7 @@
 // timeouts live entirely in the caller; any runtime can drive it, nghttp2-style.
 //
 // Design mirrors nghttp2's mem_recv / mem_send: feed() ~ nghttp2_session_mem_recv,
-// take_output_batch()/take_output() ~ nghttp2_session_mem_send. Flow-control back
+// take_output_batch() ~ nghttp2_session_mem_send. Flow-control back
 // pressure has explicit ownership: submit_data either accepts the full input (possibly
 // copying a deferred suffix) or accepts none until the prior queued input drains.
 // Final response Content-Length uses the same ownership boundary: accepted bytes are
@@ -131,13 +131,9 @@ public:
         std::uint32_t stream_id) const noexcept;
 
     // --- outbound --------------------------------------------------------------
-    // Move ALL pending outbound bytes into `into` (allocator-matching swap when the
-    // cursor is at the buffer start, so the common path is copy-free) and reset the
-    // buffer. Writers own the bytes they await on; the connection never exposes a
-    // view into its outbound storage.
-    void take_output(std::pmr::string& into);
-    // Moves whole frames up to max_bytes (the first frame may exceed it); the
-    // cursor always rests on a frame boundary.
+    // Moves whole frames up to max_bytes (the first frame may exceed it) into
+    // `into`; the cursor always rests on a frame boundary. Writers own the bytes
+    // they await on; the connection never exposes a view into its outbound storage.
     [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes,
         std::pmr::string& into, http2_data_output_observer_type observer, void* observer_context);
     [[nodiscard]] bool wants_write() const noexcept {

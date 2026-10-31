@@ -133,12 +133,11 @@ public:
     template <detail::http_temporary_owning_char_string input_type>
     http2_feed_result feed(input_type&&) = delete;
     [[nodiscard]] std::optional<http2_event> next_event();
-    void take_output(std::pmr::string& output);
     // Appends whole frame boundaries (the first frame may exceed max_bytes).
     // A complete unconsumed batch swaps storage when output is empty and its
     // allocator matches the connection; all other cases copy the selected bytes.
     // On copy failure the output cursor and observer are untouched. The cursor
-    // always rests on a frame boundary; take_output() drains every pending frame.
+    // always rests on a frame boundary; an unbounded max_bytes drains every pending frame.
     // The cursor is committed before DATA observations. An observer may
     // submit or drain more output; those frames remain independent of this batch.
     // A client preface is treated as one indivisible segment.

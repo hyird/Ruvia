@@ -20,7 +20,7 @@ namespace {
 //
 // PING flood: every non-ACK PING is echoed as an ACK into the outbound buffer. Cap the
 // number of inbound PINGs seen since the owner last drained output; the counter resets on
-// every output drain (take_output_batch/take_output = ACKs flushed), so healthy keepalive
+// every output drain (take_output_batch = ACKs flushed), so healthy keepalive
 // never trips and only a peer piling on PINGs faster than we can flush the ACKs does.
 constexpr std::uint32_t http2_max_undrained_pings = 1000;
 // SETTINGS flood (CVE-2019-9515): every non-ACK SETTINGS frame is likewise echoed as a
@@ -81,12 +81,6 @@ http2_output_batch_result http2_connection::take_output_batch(std::size_t max_by
         consecutive_settings_ = 0;
     }
     return result_value;
-}
-
-void http2_connection::take_output(std::pmr::string& into) {
-    output_.take(into);
-    consecutive_pings_ = 0;     // outbound (incl. PING ACKs) has been flushed
-    consecutive_settings_ = 0;  // outbound (incl. SETTINGS ACKs) has been flushed
 }
 
 // --- event queue --------------------------------------------------------------

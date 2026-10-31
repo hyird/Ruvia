@@ -25,6 +25,7 @@
 #include "ruvia/web/http_tunnel.h"
 
 #include "http_server_fixture.h"
+#include "output_drain.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 
@@ -285,8 +286,7 @@ RUVIA_TEST(http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_i
         std::pmr::string output(&resource);
         while (!reset_error) {
             if (connection.wants_write()) {
-                output.clear();
-                connection.take_output(output);
+                ruvia::testing::drain_output(connection, output);
                 co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
             }
             std::size_t count = 0;
@@ -397,8 +397,7 @@ RUVIA_TEST(http2_client_half_closed_tunnel_resets_truncated_capsule_on_end_strea
         std::pmr::string output(&resource);
         while (!server_done) {
             if (connection.wants_write()) {
-                output.clear();
-                connection.take_output(output);
+                ruvia::testing::drain_output(connection, output);
                 co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
             }
             std::size_t count = 0;
@@ -516,8 +515,7 @@ RUVIA_TEST(http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected_
             bool sent_truncated = false;
             while (!sent_truncated) {
                 if (conn1.wants_write()) {
-                    output.clear();
-                    conn1.take_output(output);
+                    ruvia::testing::drain_output(conn1, output);
                     co_await asio::async_write(socket1, asio::buffer(output), asio::use_awaitable);
                 }
                 const auto count = co_await socket1.async_read_some(asio::buffer(input), asio::use_awaitable);
@@ -540,8 +538,7 @@ RUVIA_TEST(http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected_
                 }
             }
             if (conn1.wants_write()) {
-                output.clear();
-                conn1.take_output(output);
+                ruvia::testing::drain_output(conn1, output);
                 co_await asio::async_write(socket1, asio::buffer(output), asio::use_awaitable);
             }
             req1.reset();
@@ -558,8 +555,7 @@ RUVIA_TEST(http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected_
             std::pmr::string output(&resource);
             while (!server_done) {
                 if (conn2.wants_write()) {
-                    output.clear();
-                    conn2.take_output(output);
+                    ruvia::testing::drain_output(conn2, output);
                     co_await asio::async_write(socket2, asio::buffer(output), asio::use_awaitable);
                 }
                 std::size_t count = 0;

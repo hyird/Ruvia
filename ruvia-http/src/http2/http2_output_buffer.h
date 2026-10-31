@@ -60,11 +60,6 @@ public:
         }
     }
 
-    // Moves every pending byte into `into`. With matching allocators and no
-    // consumed prefix this swaps storage, retaining the caller's old capacity for
-    // future frames; otherwise only the pending suffix is copied.
-    void take(std::pmr::string& into);
-
     void append_bytes(std::string_view bytes_value) {
         if (!bytes_value.empty()) {
             reserve_segment();

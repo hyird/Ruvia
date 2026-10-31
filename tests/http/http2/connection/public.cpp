@@ -1656,7 +1656,7 @@ RUVIA_TEST(http2_public_dropped_request_retries_failed_abandonment) {
     toggle_allocation_resource resource;
     auto server = ruvia::http2_connection::server({.resource_ = &resource});
     std::pmr::string initial_output(&resource);
-    server.take_output(initial_output);
+    ruvia::testing::drain_output(server, initial_output);
     const auto wire = server_request_wire(&resource, {});
     RUVIA_CHECK(server.feed(wire) == ruvia::http2_feed_result::accepted);
 
@@ -1668,7 +1668,7 @@ RUVIA_TEST(http2_public_dropped_request_retries_failed_abandonment) {
     resource.reject(false);
     // Getters never mutate; the writer's next output drain retries the release.
     std::pmr::string output(&resource);
-    server.take_output(output);
+    ruvia::testing::drain_output(server, output);
     constexpr auto settings_ack_bytes = ruvia::http2_frame_header_bytes;
     RUVIA_CHECK(output.size() == settings_ack_bytes + ruvia::http2_frame_header_bytes + 4);
     const auto reset = ruvia::parse_http2_frame_header(std::span<const char>(
@@ -1857,7 +1857,7 @@ RUVIA_TEST(http2_public_output_drain_preserves_control_limits_on_copy_failure) {
             output_resource.reject(reject_copy);
             bool threw = false;
             try {
-                client.take_output(output);
+                ruvia::testing::drain_output(client, output);
             } catch (const std::bad_alloc&) {
                 threw = true;
             }
@@ -2777,7 +2777,7 @@ RUVIA_TEST(http2_public_data_credit_merge_is_linear) {
     append_frame(wire, ruvia::http2_frame_type::data, 0x1, 1, "x");
     RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
     std::pmr::string drained(&resource);
-    client.take_output(drained);
+    ruvia::testing::drain_output(client, drained);
     RUVIA_CHECK(client.next_event().has_value());
     auto first = client.next_event();
     RUVIA_CHECK(first && first->message_body_chunk() != nullptr);
@@ -3970,7 +3970,7 @@ RUVIA_TEST(http2_public_completed_response_keeps_final_queued_data_drain_notific
     const std::string payload(65536, 'b');
     RUVIA_CHECK(client.submit_data(id, payload, ruvia::http2_end_stream::end_stream) == ruvia::http2_data_submit_status::queued);
     std::pmr::string output(&resource);
-    client.take_output(output);
+    ruvia::testing::drain_output(client, output);
     auto wire = client_response_wire(&resource, {});
     RUVIA_CHECK(client.feed(wire) == ruvia::http2_feed_result::accepted);
     bool ended = false;
@@ -4025,7 +4025,7 @@ RUVIA_TEST(http2_output_observer_can_submit_new_data_without_losing_it) {
     RUVIA_CHECK(observed.submitted_ == ruvia::http2_data_submit_status::accepted);
     RUVIA_CHECK(client.wants_write());
     std::pmr::string second(&resource);
-    client.take_output(second);
+    ruvia::testing::drain_output(client, second);
     const auto frame = ruvia::parse_http2_frame_header(std::span<const char>(second.data(), second.size()));
     RUVIA_CHECK(frame && frame->stream_id_ == id && frame->length_ == 6);
     if (frame) {
@@ -4086,7 +4086,7 @@ RUVIA_TEST(http2_output_observer_can_recursively_drain_and_append_frames) {
     RUVIA_CHECK_EQ(first.size(), std::size_t{20});
     RUVIA_CHECK_EQ(nested.size(), std::size_t{20});
     std::pmr::string remaining(&resource);
-    client.take_output(remaining);
+    ruvia::testing::drain_output(client, remaining);
     std::string payload;
     std::size_t offset = 0;
     while (offset < remaining.size()) {

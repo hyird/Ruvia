@@ -52,6 +52,7 @@
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/model.h"
 
+#include "output_drain.h"
 #include "test_harness.h"
 #include "test_io_context.h"
 #include "test_tls_identity.h"
@@ -440,8 +441,7 @@ private:
         std::size_t received = 0;
         for (;;) {
             if (connection.wants_write()) {
-                output.clear();
-                connection.take_output(output);
+                ruvia::testing::drain_output(connection, output);
                 co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
             }
             if (received == requests_.size()) {
@@ -2639,8 +2639,7 @@ RUVIA_TEST(tls_client_sends_close_notify_before_closing) {
                 std::pmr::string output;
                 while (!client_end) {
                     if (connection.wants_write()) {
-                        output.clear();
-                        connection.take_output(output);
+                        ruvia::testing::drain_output(connection, output);
                         // A failed write leaves the client's end to the next read.
                         (void)co_await asio::async_write(stream, asio::buffer(output),
                             asio::redirect_error(asio::use_awaitable, write_error));
@@ -3540,7 +3539,7 @@ RUVIA_TEST(http2_client_uses_available_stream_capacity_across_connections) {
     const auto flush = [&](std::size_t index, std::optional<std::uint32_t> stream_limit = std::nullopt)
         -> asio::awaitable<void> {
         std::pmr::string output;
-        connections[index].take_output(output);
+        ruvia::testing::drain_output(connections[index], output);
         if (stream_limit.has_value()) {
             const std::array<char, 15> settings{
                 '\0', '\0', '\x06', '\x04', '\0', '\0', '\0', '\0', '\0',
@@ -3699,8 +3698,7 @@ RUVIA_TEST(http2_cold_start_cancelled_waiter_does_not_close_active_session) {
         bool answered = false;
         for (;;) {
             if (connection.wants_write()) {
-                output.clear();
-                connection.take_output(output);
+                ruvia::testing::drain_output(connection, output);
                 co_await asio::async_write(socket, asio::buffer(output), asio::use_awaitable);
             }
             if (answered && !connection.wants_write()) {
@@ -3825,8 +3823,7 @@ RUVIA_TEST(http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_mi
             bool answered = false;
             for (;;) {
                 if (connection.wants_write()) {
-                    output.clear();
-                    connection.take_output(output);
+                    ruvia::testing::drain_output(connection, output);
                     co_await asio::async_write(stream, asio::buffer(output), asio::use_awaitable);
                 }
                 // The drain ends with the final GOAWAY sent after the client's

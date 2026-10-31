@@ -351,10 +351,6 @@ std::optional<http2_event> http2_connection::next_event() {
     return std::optional<http2_event>(std::move(result_value));
 }
 
-void http2_connection::take_output(std::pmr::string& output) {
-    impl_->connection_.retry_deferred_stream_leases();
-    impl_->connection_.take_output(output);
-}
 http2_output_batch_result http2_connection::take_output_batch(std::size_t max_bytes,
     std::pmr::string& output, http2_data_output_observer_type observer, void* observer_context) {
     impl_->connection_.retry_deferred_stream_leases();

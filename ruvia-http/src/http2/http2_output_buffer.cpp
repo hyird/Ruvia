@@ -1,19 +1,8 @@
 #include "http2/http2_output_buffer.h"
 
 #include <array>
-#include <utility>
 
 namespace ruvia::detail {
-
-void http2_output_buffer::take(std::pmr::string& into) {
-    const auto logical_end = base_offset_ + bytes_.size();
-    if (consumed_ == 0 && into.get_allocator() == bytes_.get_allocator()) {
-        into.swap(bytes_);
-    } else {
-        into.assign(bytes_.data() + consumed_, bytes_.size() - consumed_);
-    }
-    reset_after_drain(logical_end);
-}
 
 void http2_output_buffer::append_goaway_frame(
     std::uint32_t last_stream_id, http2_error_code error, std::string_view debug) {

@@ -11,17 +11,20 @@
 
 namespace ruvia::testing {
 
-// Collects every pending outbound frame through the public batch drain into an
-// owning string so a test can feed, parse or compare the wire bytes.
+// Replaces `into` with every pending outbound frame through the public batch
+// drain. A single unbounded batch moves the whole buffer; on copy failure the
+// connection keeps its bytes and the exception propagates.
+inline void drain_output(ruvia::http2_connection& connection, std::pmr::string& into) {
+    into.clear();
+    (void)connection.take_output_batch(std::numeric_limits<std::size_t>::max(), into);
+}
+
+// Collects every pending outbound frame into an owning string so a test can
+// feed, parse or compare the wire bytes.
 inline std::string drain_output(ruvia::http2_connection& connection) {
     std::pmr::string batch;
-    std::string bytes;
-    while (connection.wants_write()) {
-        batch.clear();
-        (void)connection.take_output_batch(std::numeric_limits<std::size_t>::max(), batch);
-        bytes.append(batch.data(), batch.size());
-    }
-    return bytes;
+    drain_output(connection, batch);
+    return std::string(batch.data(), batch.size());
 }
 
 // Moves bytes between two connections. feed() input must outlive the events it
