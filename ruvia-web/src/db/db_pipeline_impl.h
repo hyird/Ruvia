@@ -44,10 +44,10 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/web/detail/db/db_result_access.h"
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "db/db_pipeline.h"
 #include "db/db_pool.h"
+#include "integration/request_io_metrics.h"
 
 namespace ruvia::detail {
 

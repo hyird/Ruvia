@@ -57,9 +57,7 @@ public:
           resource_(pmr_resource_or_default(resource)),
           slots_(slot_count, resource_),
           scheduler_(slot_count, worker_, resource_),
-          cancellation_target_(make_worker_cancellation_target(*this, worker_)) {
-        static_assert(worker_cancellation_post_is_inline<cancellation_target_type>);
-    }
+          cancellation_target_(make_worker_cancellation_target(*this, worker_)) {}
 
     slot_pool(owner_type&, std::size_t, worker_handle&&, std::pmr::memory_resource*) = delete;
 

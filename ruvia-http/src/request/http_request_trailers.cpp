@@ -4,7 +4,8 @@
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_field_syntax.h"
+
+#include "request/http_request_trailer_field.h"
 
 namespace ruvia {
 namespace {
@@ -15,14 +16,8 @@ template <typename field_type>
     std::span<const field_type> fields) {
     auto budget = retained_budget;
     for (const auto& field : fields) {
-        if (!is_valid_http_header_name(field.name()) || !is_valid_http_header_value(field.value())) {
-            return http_request_trailer_error::invalid_field;
-        }
-        if (detail::is_forbidden_http_request_trailer_name(field.name())) {
-            return http_request_trailer_error::forbidden_field;
-        }
-        if (!budget.add_field(field.name(), field.value())) {
-            return http_request_trailer_error::section_too_large;
+        if (const auto error = detail::charge_http_request_trailer_field(budget, field.name(), field.value())) {
+            return error;
         }
     }
     if (fields.empty()) {

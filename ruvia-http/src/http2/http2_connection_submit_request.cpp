@@ -2,7 +2,6 @@
 #include <memory_resource>
 #include <utility>
 
-#include "ruvia/http/detail/field/http_header_section_size.h"
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
@@ -10,6 +9,7 @@
 #include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_flow_control.h"
+#include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_request_headers.h"
@@ -35,7 +35,7 @@ namespace {
 
 [[nodiscard]] bool http2_are_valid_outbound_request_headers(std::optional<std::string_view> authority,
     std::uint16_t default_port, std::span<const http_header_view> headers, bool allow_host,
-    bool allow_trailers, http_header_section_size& section_size, request_field_state& fields,
+    bool allow_trailers, http2_header_list_size& section_size, request_field_state& fields,
     http_request_field_source source, bool websocket_connect = false) noexcept {
     if (!is_valid_http_request_field_source(source)) {
         return false;
@@ -92,7 +92,7 @@ namespace {
     if (path == "*" && authority.has_value()) {
         return false;
     }
-    http_header_section_size section_size;
+    http2_header_list_size section_size;
     bool expect_continue = false;
     switch (expectation) {
         case http_client_request_expectation::none:
@@ -291,7 +291,7 @@ http2_connection::submit_connect_request_head(
     }
 
     request_target_view target;
-    http_header_section_size section_size;
+    http2_header_list_size section_size;
     request_field_state fields{request_field_framing::binary};
     if (!parse_request_target(http_known_method::connect, authority, target) ||
         !section_size.add(":method", "CONNECT") || !section_size.add(":authority", authority) ||
@@ -338,7 +338,7 @@ http2_connection::submit_extended_connect_request_head(
     const bool websocket_value = http_ascii_equals_ignore_case(protocol, "websocket");
     const auto default_port = http_uri_scheme_default_port(scheme);
     const auto encoded_protocol = websocket_value ? std::string_view("websocket") : protocol;
-    http_header_section_size section_size;
+    http2_header_list_size section_size;
     request_field_state fields{request_field_framing::binary};
     if (!is_valid_http_header_name(protocol) || !is_valid_uri_scheme(scheme) ||
         (websocket_value && default_port == 0) || !http2_is_valid_request_authority(scheme, authority) ||

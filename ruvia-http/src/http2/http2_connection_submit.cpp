@@ -5,8 +5,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/coding/http_response_content_semantics.h"
-#include "ruvia/http/detail/field/http_header_section_size.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/response/http_response_body_access.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
@@ -18,10 +16,12 @@
 
 #include "http2/http2_connection.h"
 #include "http2/http2_flow_control.h"
+#include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_response_headers.h"
 #include "http2/http2_websocket_handshake.h"
+#include "response/http_response_content_semantics.h"
 #include "util/http_text_overlap.h"
 
 namespace ruvia::detail {
@@ -482,7 +482,7 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
     if (!stream->local_content().length_complete()) {
         throw std::invalid_argument("HTTP/2 request ended before declared Content-Length");
     }
-    http_header_section_size size;
+    http2_header_list_size size;
     std::size_t reserve_bytes = 0;
     for (const auto& field : trailers) {
         if (!http2_is_valid_outbound_regular_header(field.name(), field.value()) ||

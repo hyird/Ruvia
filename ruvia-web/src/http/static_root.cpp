@@ -22,7 +22,6 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_date.h"
-#include "ruvia/web/detail/util/fnv1a.h"
 
 #include "http/static_file_metadata.h"
 #include "http/static_file_types.h"
@@ -31,6 +30,7 @@
 #include "http/static_root_options_validation.h"
 #include "server/http_file_open.h"
 #include "server/http_native_file.h"
+#include "util/fnv1a.h"
 
 // A document root indexed once at construction: the directory is walked, every
 // servable file recorded with the metadata a response needs, and lookups after

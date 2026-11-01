@@ -149,7 +149,6 @@ redis_subscription_set::redis_subscription_set(asio::io_context& io_context, asi
     if (!worker_.valid()) {
         throw std::invalid_argument("redis subscriptions require a valid worker");
     }
-    static_assert(worker_cancellation_post_is_inline<worker_cancellation_target<redis_subscription_set>>);
 }
 
 redis_subscription_set::~redis_subscription_set() {

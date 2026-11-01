@@ -16,8 +16,8 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_status.h"
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 
+#include "integration/request_io_metrics.h"
 #include "router/route_resolution.h"
 
 namespace ruvia::detail {

@@ -112,7 +112,7 @@ public:
         }
 
         std::array<char, http2_frame_header_bytes> header;
-        http2_encode_frame_header(header.data(),
+        http2_write_frame_header(header.data(),
             static_cast<std::uint32_t>(first.size() + second.size()), type, flags, stream_id);
         reserve_segment();
         const auto begin = bytes_.size();
@@ -124,6 +124,22 @@ public:
         append_raw(first);
         append_raw(second);
         segments_.push_back(segment_type{begin, bytes_.size(), stream_id, type == http2_frame_type::data});
+    }
+    // Appends one complete frame whose `payload_size` payload bytes the caller
+    // serializes in place into the returned span before the next append.
+    [[nodiscard]] std::span<char> append_frame_payload(http2_frame_type type, std::uint8_t flags,
+        std::uint32_t stream_id, std::size_t payload_size) {
+        if (payload_size > http2_max_frame_size) {
+            std::terminate();
+        }
+        reserve_segment();
+        const auto begin = bytes_.size();
+        reserve_additional(http2_frame_header_bytes + payload_size);
+        bytes_.resize(begin + http2_frame_header_bytes + payload_size);
+        auto* payload = http2_write_frame_header(
+            bytes_.data() + begin, static_cast<std::uint32_t>(payload_size), type, flags, stream_id);
+        segments_.push_back(segment_type{begin, bytes_.size(), stream_id, type == http2_frame_type::data});
+        return {payload, payload_size};
     }
     void append_goaway_frame(
         std::uint32_t last_stream_id, http2_error_code error, std::string_view debug = {});

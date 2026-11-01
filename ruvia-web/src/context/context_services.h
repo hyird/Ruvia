@@ -16,9 +16,9 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "context/context_capabilities.h"
+#include "integration/request_io_metrics.h"
 #include "integration/worker_client_registry_view.h"
 #include "server/trusted_proxies.h"
 

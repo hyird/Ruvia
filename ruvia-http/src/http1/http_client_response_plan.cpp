@@ -2,12 +2,12 @@
 #include <optional>
 #include <utility>
 
-#include "ruvia/http/detail/coding/http_response_content_semantics.h"
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http_client_response_head.h"
 
 #include "client/http_client_response_head.h"
+#include "response/http_response_content_semantics.h"
 
 // Whether a parsed response head lets the exchange continue: may this 101 switch
 // protocols given what the request offered, does the body have a length, and

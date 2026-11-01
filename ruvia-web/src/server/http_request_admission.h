@@ -13,12 +13,12 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/protocol_byte_limit.h"
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 #include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/error.h"
 
 #include "context/context_services.h"
 #include "http/static_file_variant.h"
+#include "integration/request_io_metrics.h"
 #include "ratelimit/rate_limiter.h"
 #include "router/route_resolution.h"
 #include "server/http_buffered_response.h"

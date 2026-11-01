@@ -1,10 +1,10 @@
 #include <utility>
 
 #include "ruvia/web/db/db.h"
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "db/db_pool.h"
 #include "db/db_pool_utils.h"
+#include "integration/request_io_metrics.h"
 
 // A streaming query result: the rows arrive one at a time from a pooled
 // connection the result holds for as long as it is active, and every exit --

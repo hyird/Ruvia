@@ -7,8 +7,8 @@
 #include <utility>
 
 #include "ruvia/core/async.h"
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 
+#include "integration/request_io_metrics.h"
 #include "redis/redis_protocol.h"
 #include "redis/redis_registry.h"
 #include "redis/redis_utils.h"

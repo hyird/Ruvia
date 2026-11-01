@@ -7,11 +7,11 @@
 #include <variant>
 
 #include "ruvia/web/db/db_handle.h"
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 #include "ruvia/web/redis/redis_handle.h"
 
 #include "db/db_query_cache.h"
 #include "db/db_query_cache_state.h"
+#include "integration/request_io_metrics.h"
 
 namespace ruvia::detail {
 namespace {

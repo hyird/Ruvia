@@ -268,11 +268,19 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
         auto request_start = std::chrono::steady_clock::now();
         for (;;) {
             if constexpr (plain_tcp) {
-                if (!read_buffer.empty() && !session.served_keepalive_request_ && listener_value.redirect() == nullptr &&
-                    probe_http2_cleartext_preface(read_buffer.pending()) != http2_cleartext_preface_probe::http1) {
+                // The client preface must be the first bytes of the connection
+                // (RFC 9113 section 3.4). auto_https reserves the cleartext
+                // listener for HTTP/1 redirects, and a connection that already
+                // completed an HTTP/1 exchange stays HTTP/1, so both refuse
+                // prior-knowledge HTTP/2.
+                const auto preface_probe =
+                    read_buffer.empty() || session.served_keepalive_request_ || listener_value.redirect() != nullptr
+                        ? http2_cleartext_preface_probe::http1
+                        : probe_http2_cleartext_preface(read_buffer.pending());
+                if (preface_probe != http2_cleartext_preface_probe::http1) {
                     const auto protocol = co_await dispatch_cleartext_http2_preface(http2_server_session_setup<stream_type>{
-                                                                                        .stream_ = stream, .socket_ = stream, .memory_ = memory_, .routes_ = routes_, .options_ = options_, .scanner_entry_ = scanner_entry, .services_ = base_route_services},
-                        read_buffer, false);
+                                                                                        .stream_ = stream, .memory_ = memory_, .routes_ = routes_, .options_ = options_, .scanner_entry_ = scanner_entry, .services_ = base_route_services},
+                        read_buffer, preface_probe);
                     if (protocol == cleartext_http2_dispatch_result::session_finished) {
                         co_return http_connection_close::abort;
                     }

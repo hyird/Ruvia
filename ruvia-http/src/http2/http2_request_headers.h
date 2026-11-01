@@ -2,7 +2,6 @@
 
 #include <string_view>
 
-#include "ruvia/http/detail/field/http_header_section_size.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_header.h"
@@ -11,6 +10,7 @@
 #include "coding/http_content_length.h"
 #include "field/http_request_field_validation.h"
 #include "field/http_te_fields.h"
+#include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_stream_state.h"
 #include "parser/http_request_target.h"
@@ -22,7 +22,7 @@ struct http2_header_decode_context final {
         : stream_(stream_value) {}
 
     http2_stream_state& stream_;
-    http_header_section_size decoded_header_list_size_;
+    http2_header_list_size decoded_header_list_size_;
     request_field_state request_fields_{request_field_framing::binary};
 };
 

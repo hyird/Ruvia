@@ -3,7 +3,6 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/http/detail/coding/http_response_content_semantics.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 
@@ -16,6 +15,7 @@
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_request_headers.h"
 #include "http2/http2_response_headers.h"
+#include "response/http_response_content_semantics.h"
 
 // Decoding a client response head: ':status' first and once, informational
 // response events, and regular headers allowed in the stream's final table.

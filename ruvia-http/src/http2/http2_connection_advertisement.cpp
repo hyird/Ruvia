@@ -1,12 +1,8 @@
-#include <algorithm>
-#include <array>
-#include <cstring>
 #include <variant>
 
 #include "ruvia/http/http_connection_advertisement.h"
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request_target.h"
 
+#include "http2/http2_advertisement_frames.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_remote_receive_semantics.h"
 
@@ -50,45 +46,12 @@ http2_submit_status http2_connection::submit_origin_advertisement(std::span<cons
     if (preface_phase_ != preface_phase_type::ready) {
         return http2_submit_status::invalid_state;
     }
-    const std::size_t payload_limit = std::min(peer_settings_.max_frame_size(), http2_max_frame_size);
-    std::size_t remaining = payload_limit;
-    for (const auto origin : origins) {
-        if (!is_valid_http_serialized_origin(origin) || origin.size() > 0xffffU ||
-            remaining < 2U || origin.size() > remaining - 2U) {
-            return http2_submit_status::invalid_message;
-        }
-        remaining -= 2U + origin.size();
-    }
-    const std::size_t payload_size = payload_limit - remaining;
-    if (origins.size() == 1U) {
-        const auto origin = origins.front();
-        const std::array<char, 2> prefix{
-            static_cast<char>(origin.size() >> 8), static_cast<char>(origin.size())};
-        output_.append_frame(http2_frame_type::origin, 0, 0,
-            std::string_view(prefix.data(), prefix.size()), origin);
-        return http2_submit_status::accepted;
-    }
-    static constexpr std::size_t inline_payload_capacity = 256;
-    if (payload_size <= inline_payload_capacity) {
-        std::array<char, inline_payload_capacity> payload{};
-        std::size_t offset = 0;
-        for (const auto origin : origins) {
-            payload[offset++] = static_cast<char>(origin.size() >> 8);
-            payload[offset++] = static_cast<char>(origin.size());
-            if (!origin.empty()) {
-                std::memcpy(payload.data() + offset, origin.data(), origin.size());
-                offset += origin.size();
-            }
-        }
-        output_.append_frame(
-            http2_frame_type::origin, 0, 0, std::string_view(payload.data(), payload_size));
-        return http2_submit_status::accepted;
-    }
-    const auto bytes_value = encode_http2_origin_frame(origins, peer_settings_.max_frame_size(), resource_);
-    if ((bytes_value.index() != 0)) {
+    const auto payload_size = http2_origin_payload_size(origins, peer_settings_.max_frame_size());
+    if (payload_size.index() != 0) {
         return http2_submit_status::invalid_message;
     }
-    output_.append_bytes({std::get<0>(bytes_value).data(), std::get<0>(bytes_value).size()});
+    http2_write_origin_payload(
+        output_.append_frame_payload(http2_frame_type::origin, 0, 0, std::get<0>(payload_size)), origins);
     return http2_submit_status::accepted;
 }
 http2_submit_status http2_connection::submit_alternative_service_advertisement(std::uint32_t stream_id,
@@ -110,33 +73,14 @@ http2_submit_status http2_connection::submit_alternative_service_advertisement(s
                 !http2_remote_final_head_decoded(*stream) || stream->tunnel().not_connect() == nullptr))) {
         return http2_submit_status::invalid_state;
     }
-    if (stream_id > 0x7fffffffU || (stream_id == 0) != (!origin.empty()) ||
-        (!origin.empty() && !is_valid_http_serialized_origin(origin)) ||
-        !is_valid_http_header_value(value)) {
+    const auto payload_size =
+        http2_alternative_service_payload_size(stream_id, origin, value, peer_settings_.max_frame_size());
+    if (payload_size.index() != 0) {
         return http2_submit_status::invalid_message;
     }
-    const std::size_t payload_limit = std::min(peer_settings_.max_frame_size(), http2_max_frame_size);
-    if (origin.size() > 0xffffU || payload_limit < 2U || origin.size() > payload_limit - 2U ||
-        value.size() > payload_limit - 2U - origin.size()) {
-        return http2_submit_status::invalid_message;
-    }
-    static constexpr std::size_t inline_prefix_capacity = 256;
-    if (2U + origin.size() <= inline_prefix_capacity) {
-        std::array<char, inline_prefix_capacity> prefix{};
-        prefix[0] = static_cast<char>(origin.size() >> 8);
-        prefix[1] = static_cast<char>(origin.size());
-        if (!origin.empty()) {
-            std::memcpy(prefix.data() + 2, origin.data(), origin.size());
-        }
-        output_.append_frame(http2_frame_type::alternative_service, 0, stream_id,
-            std::string_view(prefix.data(), 2U + origin.size()), value);
-        return http2_submit_status::accepted;
-    }
-    const auto bytes_value = encode_http2_alternative_service_frame(stream_id, origin, value, peer_settings_.max_frame_size(), resource_);
-    if ((bytes_value.index() != 0)) {
-        return http2_submit_status::invalid_message;
-    }
-    output_.append_bytes({std::get<0>(bytes_value).data(), std::get<0>(bytes_value).size()});
+    http2_write_alternative_service_payload(
+        output_.append_frame_payload(http2_frame_type::alternative_service, 0, stream_id, std::get<0>(payload_size)),
+        origin, value);
     return http2_submit_status::accepted;
 }
 }  // namespace ruvia::detail

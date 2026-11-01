@@ -585,7 +585,7 @@ task<http_connection_close> worker_connections::run_http2(stream_type& stream, t
     connection_scanner::entry scanner_entry;
     connection_scanner::guard scanner_guard(scanner_, scanner_entry, socket);
     co_return co_await run_http2_server_session(http2_server_session_setup<stream_type>{
-        .stream_ = stream, .socket_ = socket, .memory_ = memory_, .routes_ = routes_, .options_ = options_, .scanner_entry_ = scanner_entry, .services_ = services});
+        .stream_ = stream, .memory_ = memory_, .routes_ = routes_, .options_ = options_, .scanner_entry_ = scanner_entry, .services_ = services});
 }
 
 void worker_connections::report_session_failure(

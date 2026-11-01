@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
 
 #include "ruvia/core/task.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
@@ -35,19 +34,6 @@ struct rate_limit_config final {
     std::size_t capacity_per_worker_{default_rate_limit_capacity_per_worker};
 };
 namespace detail {
-inline constexpr void validate_rate_limit_rule(const rate_limit_rule& rule) {
-    if (rule.max_requests_ == 0) {
-        throw std::invalid_argument("rate limit max requests must be greater than zero");
-    }
-    if (rule.window_.count() <= 0) {
-        throw std::invalid_argument("rate limit window must be greater than zero");
-    }
-    if (rule.overflow_policy_ != rate_limit_overflow_policy::deny &&
-        rule.overflow_policy_ != rate_limit_overflow_policy::allow) {
-        throw std::invalid_argument("rate limit overflow policy is invalid");
-    }
-}
-
 // `declaration` identifies the rule's declaration: stacked rules on one route
 // each count in their own window. Throws when the rule refuses the request.
 void enforce_route_rate_limit(context& context_value, const void* declaration, const rate_limit_rule& rule);

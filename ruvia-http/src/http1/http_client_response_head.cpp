@@ -2,13 +2,13 @@
 
 #include <variant>
 
-#include "ruvia/http/detail/coding/http_response_content_semantics.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/http_field_syntax.h"
 
 #include "client/http_client_response_head.h"
 #include "field/field_value_scan.h"
 #include "field/response_field_validation.h"
+#include "response/http_response_content_semantics.h"
 
 namespace ruvia::detail {
 

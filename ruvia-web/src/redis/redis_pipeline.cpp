@@ -1,9 +1,9 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 #include "ruvia/web/redis/redis_handle.h"
 
+#include "integration/request_io_metrics.h"
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_registry.h"
 #include "redis/redis_types_access.h"

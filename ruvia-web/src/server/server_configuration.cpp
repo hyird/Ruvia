@@ -80,26 +80,6 @@ void validate_server_limits(const server_config& config) {
 
 namespace {
 
-// server_ was validated by validate_server_limits when application::server()
-// accepted it; only what other configuration entries set is checked here, at run.
-void validate_http_server_options(const http_server_options& options) {
-    if (!std::has_single_bit(options.rate_limit_capacity_per_worker_)) {
-        throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
-    }
-    if (options.compression_.has_value()) {
-        detail::ensure_positive_size(
-            options.compression_->min_bytes_, "compression minimum size must be greater than zero");
-        if (options.compression_->sync_bytes_ < options.compression_->min_bytes_) {
-            throw std::invalid_argument(
-                "compression synchronous size must not be smaller than the minimum size");
-        }
-        if (options.compression_->max_bytes_ < options.compression_->sync_bytes_) {
-            throw std::invalid_argument(
-                "compression maximum size must not be smaller than the synchronous size");
-        }
-    }
-}
-
 void validate_http_server_listener(const http_server_listener_definition& listener_value) {
     if (const auto* redirect =
             std::get_if<http_server_listener_definition::redirect_http_to_https>(&listener_value.transport_)) {
@@ -115,7 +95,6 @@ void validate_http_server_listener(const http_server_listener_definition& listen
     for (const auto& listener : listeners) {
         validate_http_server_listener(listener);
     }
-    validate_http_server_options(options);
     return validated_http_server_configuration(listeners, std::move(options));
 }
 

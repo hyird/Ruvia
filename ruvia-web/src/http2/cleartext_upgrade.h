@@ -8,7 +8,6 @@
 #include <utility>
 
 #include <asio/buffer.hpp>
-#include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/task.h"
@@ -25,13 +24,12 @@
 namespace ruvia::detail {
 
 // What starting an HTTP/2 server session takes from the connection that hands
-// it over: the stream to speak on, the socket underneath it, the worker's
-// memory and scanner entry, and the routes, options and services every
-// request on the session will be served with.
+// it over: the (possibly TLS) stream to speak on, the worker's memory and
+// scanner entry, and the routes, options and services every request on the
+// session will be served with.
 template <typename stream_type>
 struct http2_server_session_setup final {
     stream_type& stream_;
-    asio::ip::tcp::socket& socket_;
     worker_memory& memory_;
     const route_table& routes_;
     const http_server_options& options_;
@@ -48,35 +46,24 @@ enum class cleartext_http2_dispatch_result : std::uint8_t {
     session_lingering,
 };
 
-// The client preface must be the first bytes of the connection (RFC 9113
-// §3.4). auto_https reserves the cleartext listener for HTTP/1 redirects, and a
-// connection that already completed an HTTP/1 exchange stays HTTP/1, so both
-// refuse prior-knowledge HTTP/2. Preface classification itself is protocol.
-[[nodiscard]] inline http2_cleartext_preface_probe probe_cleartext_http2_preface(
-    std::string_view current, bool http1_only) noexcept {
-    if (http1_only) {
-        return http2_cleartext_preface_probe::http1;
-    }
-    return probe_http2_cleartext_preface(current);
-}
-
 // Entry point for a direct HTTP/2 connection (TLS ALPN h2, or a cleartext client
 // preface). Runs the sans-I/O session and reports how its transport should close.
 template <typename stream_type>
 task<http_connection_close> run_http2_server_session(
     http2_server_session_setup<stream_type> setup, std::string_view initial_bytes = {}) {
-    (void)setup.socket_;  // the sans-I/O session needs only the (possibly TLS) setup.stream
     co_return co_await run_http2_sans_io_session(setup.stream_, setup.routes_, setup.memory_,
         http2_sans_io_session_context(std::move(setup.services_), setup.options_, setup.scanner_entry_),
         initial_bytes);
 }
 
+// Acts on the caller's classification of the pending bytes, so the preface is
+// probed once per read.
 template <typename stream_type>
 task<cleartext_http2_dispatch_result> dispatch_cleartext_http2_preface(
     http2_server_session_setup<stream_type> setup, connection_read_buffer& read_buffer,
-    bool http1_only) {
+    http2_cleartext_preface_probe probe) {
     const auto current = read_buffer.pending();
-    switch (probe_cleartext_http2_preface(current, http1_only)) {
+    switch (probe) {
         case http2_cleartext_preface_probe::http1:
             co_return cleartext_http2_dispatch_result::continue_http1;
         case http2_cleartext_preface_probe::complete_preface:

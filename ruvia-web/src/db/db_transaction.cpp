@@ -3,13 +3,13 @@
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/detail/db/db_result_access.h"
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 
 #include "db/db_pool.h"
 #include "db/db_pool_utils.h"
 #include "db/db_prepared_statement.h"
 #include "db/db_query_execution.h"
 #include "db/db_sql_format.h"
+#include "integration/request_io_metrics.h"
 
 // An open transaction: it owns a pooled connection until commit, rollback, or
 // destruction, and a transaction abandoned by an unwinding scope must roll back

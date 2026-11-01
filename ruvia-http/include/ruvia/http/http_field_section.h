@@ -11,10 +11,13 @@ namespace ruvia {
 // CRLF of its normalized HTTP/1 field line "name: value\r\n".
 inline constexpr std::size_t http_field_line_overhead = 4;
 
-// The single byte rule for an HTTP field section, for headers and trailers,
-// requests and responses, received and generated: the section must fit
+// The byte rule for an HTTP field section, for headers and trailers, requests
+// and responses, received and generated: the section must fit
 // max_http_header_bytes, each field costing name.size() + value.size() +
 // http_field_line_overhead (independent of received optional whitespace).
+// HTTP/2 header lists are the deliberate exception: they are charged by the
+// RFC 9113 section 6.5.2 SETTINGS_MAX_HEADER_LIST_SIZE accounting (name and
+// value plus 32 bytes per field, pseudo-fields included) against the same limit.
 // Fixed head bytes such as a start line or the terminating empty line are
 // charged with add(); a trailer section starts from
 // http_trailer_section_budget(). A failed charge leaves the budget unchanged.

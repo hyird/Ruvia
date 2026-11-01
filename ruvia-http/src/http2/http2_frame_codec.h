@@ -1,5 +1,6 @@
 #pragma once
 
+#include <exception>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -38,21 +39,21 @@ inline char* http2_write32(char* out, std::uint32_t value) noexcept {
     return out;
 }
 
-inline void http2_encode_frame_header(char* out, std::uint32_t length, http2_frame_type type,
-    std::uint8_t flags, std::uint32_t stream_id) noexcept {
-    write_http2_frame_header(std::span<char, http2_frame_header_bytes>(out, http2_frame_header_bytes),
-        length, type, flags, stream_id);
-}
-
+// RFC 9113 §4.1 frame header through the public encoder; callers have already
+// bounded `length` and `stream_id`, so a rejected header is an invariant violation.
 inline char* http2_write_frame_header(char* out, std::uint32_t length, http2_frame_type type,
     std::uint8_t flags, std::uint32_t stream_id) noexcept {
-    http2_encode_frame_header(out, length, type, flags, stream_id);
+    if (!encode_http2_frame_header(
+            std::span<char>(out, http2_frame_header_bytes), length, type, flags, stream_id & 0x7fffffffU)) {
+        std::terminate();
+    }
     return out + http2_frame_header_bytes;
 }
 
+// Decodes the first http2_frame_header_bytes of `bytes_value` through the
+// public decoder; callers have already ensured that many bytes.
 [[nodiscard]] inline http2_frame_header http2_parse_frame_header(std::string_view bytes_value) noexcept {
-    return decode_http2_frame_header(
-        std::span<const char, http2_frame_header_bytes>(bytes_value.data(), http2_frame_header_bytes));
+    return *parse_http2_frame_header(std::span<const char>(bytes_value.data(), bytes_value.size()));
 }
 
 inline char* http2_write_settings_entry(char* out, http2_setting_id id, std::uint32_t value) noexcept {

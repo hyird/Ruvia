@@ -1,5 +1,7 @@
+#include "http2/http2_advertisement_frames.h"
+
 #include <algorithm>
-#include <array>
+#include <cstring>
 #include <variant>
 
 #include "ruvia/http/http2_framing.h"
@@ -7,15 +9,13 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 
+#include "http2/http2_frame_codec.h"
+
 namespace ruvia {
 namespace {
 using error_type = http_connection_advertisement_error;
 constexpr std::size_t length_prefix_bytes = 2;
 constexpr std::size_t max_prefixed_length = 0xffff;
-void append_length(std::pmr::vector<char>& bytes_value, std::size_t length) {
-    bytes_value.push_back(static_cast<char>(length >> 8));
-    bytes_value.push_back(static_cast<char>(length));
-}
 std::size_t length(std::span<const char> bytes_value) {
     return (static_cast<unsigned char>(bytes_value[0]) << 8) | static_cast<unsigned char>(bytes_value[1]);
 }
@@ -31,19 +31,18 @@ bool reserve_prefixed_origin(std::size_t& remaining, std::string_view origin) {
     remaining -= length_prefix_bytes + origin.size();
     return true;
 }
-void append_prefixed_origin(std::pmr::vector<char>& bytes_value, std::string_view origin) {
-    append_length(bytes_value, origin.size());
-    bytes_value.insert(bytes_value.end(), origin.begin(), origin.end());
-}
-std::variant<std::pmr::vector<char>, error_type> make_http2_frame(http2_frame_type type, std::uint32_t stream_id,
-    std::size_t payload_size, std::pmr::memory_resource* resource) {
-    std::array<char, http2_frame_header_bytes> header{};
-    if (!encode_http2_frame_header(header, static_cast<std::uint32_t>(payload_size), type, 0, stream_id)) {
-        return error_type::invalid_stream;
+char* write_prefixed_origin(char* out, std::string_view origin) noexcept {
+    *out++ = static_cast<char>(origin.size() >> 8);
+    *out++ = static_cast<char>(origin.size());
+    if (!origin.empty()) {
+        std::memcpy(out, origin.data(), origin.size());
     }
-    std::pmr::vector<char> bytes(resource);
-    bytes.reserve(http2_frame_header_bytes + payload_size);
-    bytes.insert(bytes.end(), header.begin(), header.end());
+    return out + origin.size();
+}
+std::pmr::vector<char> make_http2_frame(http2_frame_type type, std::uint32_t stream_id, std::size_t payload_size,
+    std::pmr::memory_resource* resource) {
+    std::pmr::vector<char> bytes(http2_frame_header_bytes + payload_size, resource);
+    detail::http2_write_frame_header(bytes.data(), static_cast<std::uint32_t>(payload_size), type, 0, stream_id);
     return bytes;
 }
 }  // namespace
@@ -81,22 +80,12 @@ std::variant<http_origin_advertisement, error_type> decode_http_origin_advertise
 std::variant<std::pmr::vector<char>, error_type> encode_http2_origin_frame(std::span<const std::string_view> origins,
     std::uint32_t maximum, std::pmr::memory_resource* resource) {
     resource = resource ? resource : std::pmr::get_default_resource();
-    const std::size_t payload_limit = std::min(maximum, http2_max_frame_size);
-    std::size_t remaining = payload_limit;
-    for (const auto origin : origins) {
-        if (!is_valid_http_serialized_origin(origin)) {
-            return error_type::invalid_origin;
-        }
-        if (!reserve_prefixed_origin(remaining, origin)) {
-            return error_type::limit;
-        }
+    const auto payload_size = detail::http2_origin_payload_size(origins, maximum);
+    if (payload_size.index() != 0) {
+        return std::get<1>(payload_size);
     }
-    auto bytes_value = make_http2_frame(http2_frame_type::origin, 0, payload_limit - remaining, resource);
-    if ((bytes_value.index() == 0)) {
-        for (const auto origin : origins) {
-            append_prefixed_origin(std::get<0>(bytes_value), origin);
-        }
-    }
+    auto bytes_value = make_http2_frame(http2_frame_type::origin, 0, std::get<0>(payload_size), resource);
+    detail::http2_write_origin_payload(std::span(bytes_value).subspan(http2_frame_header_bytes), origins);
     return bytes_value;
 }
 std::variant<http_alternative_service_advertisement, error_type> decode_http2_alternative_service(std::uint32_t stream_id,
@@ -130,24 +119,60 @@ std::variant<http_alternative_service_advertisement, error_type> decode_http2_al
 std::variant<std::pmr::vector<char>, error_type> encode_http2_alternative_service_frame(std::uint32_t stream_id,
     std::string_view origin, std::string_view value, std::uint32_t maximum, std::pmr::memory_resource* resource) {
     resource = resource ? resource : std::pmr::get_default_resource();
+    const auto payload_size = detail::http2_alternative_service_payload_size(stream_id, origin, value, maximum);
+    if (payload_size.index() != 0) {
+        return std::get<1>(payload_size);
+    }
+    auto bytes_value =
+        make_http2_frame(http2_frame_type::alternative_service, stream_id, std::get<0>(payload_size), resource);
+    detail::http2_write_alternative_service_payload(
+        std::span(bytes_value).subspan(http2_frame_header_bytes), origin, value);
+    return bytes_value;
+}
+namespace detail {
+std::variant<std::size_t, error_type> http2_origin_payload_size(
+    std::span<const std::string_view> origins, std::uint32_t max_frame_size) {
+    const std::size_t payload_limit = std::min(max_frame_size, http2_max_frame_size);
+    std::size_t remaining = payload_limit;
+    for (const auto origin : origins) {
+        if (!is_valid_http_serialized_origin(origin)) {
+            return error_type::invalid_origin;
+        }
+        if (!reserve_prefixed_origin(remaining, origin)) {
+            return error_type::limit;
+        }
+    }
+    return payload_limit - remaining;
+}
+void http2_write_origin_payload(std::span<char> payload, std::span<const std::string_view> origins) noexcept {
+    auto* out = payload.data();
+    for (const auto origin : origins) {
+        out = write_prefixed_origin(out, origin);
+    }
+}
+std::variant<std::size_t, error_type> http2_alternative_service_payload_size(
+    std::uint32_t stream_id, std::string_view origin, std::string_view field_value, std::uint32_t max_frame_size) {
     if (!is_valid_alternative_service_stream(stream_id, !origin.empty())) {
         return error_type::invalid_stream;
     }
     if (!origin.empty() && !is_valid_http_serialized_origin(origin)) {
         return error_type::invalid_origin;
     }
-    if (!is_valid_http_header_value(value)) {
+    if (!is_valid_http_header_value(field_value)) {
         return error_type::invalid_field;
     }
-    std::size_t remaining = std::min(maximum, http2_max_frame_size);
-    if (!reserve_prefixed_origin(remaining, origin) || value.size() > remaining) {
+    std::size_t remaining = std::min(max_frame_size, http2_max_frame_size);
+    if (!reserve_prefixed_origin(remaining, origin) || field_value.size() > remaining) {
         return error_type::limit;
     }
-    auto bytes_value = make_http2_frame(http2_frame_type::alternative_service, stream_id, length_prefix_bytes + origin.size() + value.size(), resource);
-    if ((bytes_value.index() == 0)) {
-        append_prefixed_origin(std::get<0>(bytes_value), origin);
-        std::get<0>(bytes_value).insert(std::get<0>(bytes_value).end(), value.begin(), value.end());
-    }
-    return bytes_value;
+    return length_prefix_bytes + origin.size() + field_value.size();
 }
+void http2_write_alternative_service_payload(
+    std::span<char> payload, std::string_view origin, std::string_view field_value) noexcept {
+    auto* out = write_prefixed_origin(payload.data(), origin);
+    if (!field_value.empty()) {
+        std::memcpy(out, field_value.data(), field_value.size());
+    }
+}
+}  // namespace detail
 }  // namespace ruvia

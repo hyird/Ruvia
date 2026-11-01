@@ -10,7 +10,6 @@
 #include <string_view>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
-#include "ruvia/http/detail/field/http_header_section_size.h"
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
@@ -21,6 +20,7 @@
 #include "ruvia/http/http_response_server.h"
 
 #include "field/http_interim_response_validation.h"
+#include "http2/http2_header_list_size.h"
 #include "http2/http2_header_rules.h"
 #include "http2/http2_hpack.h"
 #include "http2/http2_response_head_plan.h"
@@ -108,7 +108,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     const http_interim_response_head& response) noexcept {
     const auto headers = response.headers();
     const auto status_token = http_status_code_token(response.status());
-    http_header_section_size section_size;
+    http2_header_list_size section_size;
     if (!section_size.add(":status", http_status_code_token_view(status_token))) {
         return http2_interim_response_header_encode_status::invalid_header;
     }
@@ -167,7 +167,7 @@ inline void append_http2_encoded_response_header(std::pmr::string& header_block,
     const auto known_bits = response_known_header_bits(response);
 
     const auto status_token = http_status_code_token(plan.body_plan().response_status());
-    http_header_section_size section_size;
+    http2_header_list_size section_size;
     if (!section_size.add(":status", http_status_code_token_view(status_token))) {
         return false;
     }

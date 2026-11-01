@@ -4,10 +4,10 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http1_chunked_framing.h"
 #include "ruvia/http/http_field_section.h"
 
+#include "request/http_request_trailer_field.h"
 #include "util/http_wire_sink.h"
 
 namespace ruvia {
@@ -94,11 +94,9 @@ std::variant<std::string_view, error_type> http1_request_content_writer::plan_fi
     auto section = http_trailer_section_budget();
     (void)section.add(http1_last_chunk_prefix.size());
     for (const auto& field : trailers) {
-        if (!is_valid_http_header_name(field.name()) || !is_valid_http_header_value(field.value()) || detail::is_forbidden_http_request_trailer_name(field.name())) {
-            return error_type::invalid_trailer;
-        }
-        if (!section.add_field(field.name(), field.value())) {
-            return error_type::header_too_large;
+        if (const auto error = detail::charge_http_request_trailer_field(section, field.name(), field.value())) {
+            return *error == http_request_trailer_error::section_too_large ? error_type::header_too_large
+                                                                           : error_type::invalid_trailer;
         }
     }
     const auto required = length_ ? std::size_t{0} : section.bytes();

@@ -36,7 +36,17 @@ void http_server_options::set_cors(const cors_config& config) {
 }
 
 void http_server_options::set_rate_limit(const rate_limit_config& config) {
-    validate_rate_limit_rule(config.rule_);
+    const auto& rule = config.rule_;
+    if (rule.max_requests_ == 0) {
+        throw std::invalid_argument("rate limit max requests must be greater than zero");
+    }
+    if (rule.window_.count() <= 0) {
+        throw std::invalid_argument("rate limit window must be greater than zero");
+    }
+    if (rule.overflow_policy_ != rate_limit_overflow_policy::deny &&
+        rule.overflow_policy_ != rate_limit_overflow_policy::allow) {
+        throw std::invalid_argument("rate limit overflow policy is invalid");
+    }
     if (!std::has_single_bit(config.capacity_per_worker_)) {
         throw std::invalid_argument(
             "rate-limit capacity per worker must be a power of two");

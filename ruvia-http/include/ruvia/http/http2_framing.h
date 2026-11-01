@@ -63,10 +63,12 @@ struct http2_frame_header final {
     std::uint32_t stream_id_{0};
 };
 
-namespace detail {
-
-[[nodiscard]] inline constexpr http2_frame_header decode_http2_frame_header(
-    std::span<const char, http2_frame_header_bytes> bytes_value) noexcept {
+// RFC 9113 section 4.1. The reserved stream-identifier bit is ignored.
+[[nodiscard]] inline constexpr std::optional<http2_frame_header> parse_http2_frame_header(
+    std::span<const char> bytes_value) noexcept {
+    if (bytes_value.size() < http2_frame_header_bytes) {
+        return std::nullopt;
+    }
     const auto byte = [bytes_value](std::size_t index) constexpr noexcept {
         return static_cast<std::uint32_t>(static_cast<unsigned char>(bytes_value[index]));
     };
@@ -78,8 +80,11 @@ namespace detail {
     };
 }
 
-inline constexpr void write_http2_frame_header(std::span<char, http2_frame_header_bytes> output,
-    std::uint32_t length, http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id) noexcept {
+[[nodiscard]] inline constexpr bool encode_http2_frame_header(std::span<char> output, std::uint32_t length,
+    http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id) noexcept {
+    if (output.size() < http2_frame_header_bytes || length > http2_max_frame_size || stream_id > 0x7fffffffU) {
+        return false;
+    }
     output[0] = static_cast<char>((length >> 16) & 0xff);
     output[1] = static_cast<char>((length >> 8) & 0xff);
     output[2] = static_cast<char>(length & 0xff);
@@ -89,25 +94,6 @@ inline constexpr void write_http2_frame_header(std::span<char, http2_frame_heade
     output[6] = static_cast<char>((stream_id >> 16) & 0xff);
     output[7] = static_cast<char>((stream_id >> 8) & 0xff);
     output[8] = static_cast<char>(stream_id & 0xff);
-}
-
-}  // namespace detail
-
-[[nodiscard]] inline constexpr std::optional<http2_frame_header> parse_http2_frame_header(
-    std::span<const char> bytes_value) noexcept {
-    if (bytes_value.size() < http2_frame_header_bytes) {
-        return std::nullopt;
-    }
-    return detail::decode_http2_frame_header(bytes_value.first<http2_frame_header_bytes>());
-}
-
-[[nodiscard]] inline constexpr bool encode_http2_frame_header(std::span<char> output, std::uint32_t length,
-    http2_frame_type type, std::uint8_t flags, std::uint32_t stream_id) noexcept {
-    if (output.size() < http2_frame_header_bytes || length > http2_max_frame_size ||
-        stream_id > 0x7fffffffU) {
-        return false;
-    }
-    detail::write_http2_frame_header(output.first<http2_frame_header_bytes>(), length, type, flags, stream_id);
     return true;
 }
 

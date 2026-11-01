@@ -7,10 +7,10 @@
 #include <openssl/evp.h>
 
 #include "ruvia/http/http_hex.h"
-#include "ruvia/web/detail/integration/request_io_metrics.h"
 #include "ruvia/web/detail/redis/redis_entity_key.h"
 #include "ruvia/web/redis/redis_repository.h"
 
+#include "integration/request_io_metrics.h"
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_registry.h"
 
