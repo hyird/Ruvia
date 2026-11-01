@@ -72,10 +72,6 @@ private:
     PGresult* result_;
 };
 
-[[nodiscard]] bool successful_result_status(ExecStatusType status) noexcept {
-    return status == PGRES_COMMAND_OK || status == PGRES_TUPLES_OK || status == PGRES_EMPTY_QUERY;
-}
-
 void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::pmr::memory_resource* resource) {
     const auto row_count = static_cast<std::size_t>(PQntuples(&result_value));
     const auto field_count = static_cast<std::size_t>(PQnfields(&result_value));
@@ -232,18 +228,26 @@ void validate_postgresql_statement(std::string_view sql, std::span<const db_valu
 // reaches libpq without a copy. Sending and the first flush are synchronous;
 // only pending output needs a flush_output task. The extended protocol
 // preserves the server-enforced single-statement boundary even without
-// parameters.
+// parameters. Use a pipeline Sync even though the stream owns the connection:
+// advancing past the command resets libpq's single-row mode before reuse.
+// A non-pipeline stream followed by PQenterPipelineMode leaves that mode set.
 [[nodiscard]] bool send_stream_query(
     postgresql_pool& pool, std::size_t index, std::string_view sql, std::span<const db_value> params) {
     validate_postgresql_statement(sql, params);
     auto* connection = pool.slot(index).connection_;
     const postgresql_params encoded(params, pool.resource());
+    if (PQenterPipelineMode(connection) == 0) {
+        throw postgresql_error(*connection, "PQenterPipelineMode", db_error::code_type::io_error);
+    }
     if (PQsendQueryParams(
             connection, sql.data(), encoded.count(), encoded.types(), encoded.values(), nullptr, nullptr, 0) == 0) {
         throw postgresql_error(*connection, "PQsendQueryParams", db_error::code_type::statement_failed);
     }
     if (PQsetSingleRowMode(connection) == 0) {
         throw postgresql_error(*connection, "PQsetSingleRowMode", db_error::code_type::statement_failed);
+    }
+    if (PQsendPipelineSync(connection) == 0) {
+        throw postgresql_error(*connection, "PQsendPipelineSync", db_error::code_type::io_error);
     }
     return flush_postgresql(*connection);
 }
@@ -745,10 +749,7 @@ task<std::optional<db_row>> postgresql_driver::read_stream_row(pool_type& pool, 
         co_await wait_until_result_ready(pool, index, deadline_value);
         postgresql_result_owner result_value(PQgetResult(connection));
         if (result_value.get() == nullptr) {
-            slot_released = true;
-            cancellation.finish();
-            pool.release_slot(index);
-            co_return std::nullopt;
+            throw postgresql_protocol_failure("PostgreSQL stream ended without its result");
         }
         const auto status = PQresultStatus(result_value.get());
         if (status == PGRES_SINGLE_TUPLE) {
@@ -756,16 +757,18 @@ task<std::optional<db_row>> postgresql_driver::read_stream_row(pool_type& pool, 
         }
         if (status == PGRES_TUPLES_OK || status == PGRES_COMMAND_OK || status == PGRES_EMPTY_QUERY) {
             result_value.reset();
-            while (true) {
-                co_await wait_until_result_ready(pool, index, deadline_value);
-                postgresql_result_owner remaining(PQgetResult(connection));
-                if (remaining.get() == nullptr) {
-                    break;
-                }
-                if (!successful_result_status(PQresultStatus(remaining.get()))) {
-                    throw postgresql_error(
-                        *connection, "PostgreSQL stream", db_error::code_type::statement_failed, remaining.get());
-                }
+            co_await wait_until_result_ready(pool, index, deadline_value);
+            result_value.reset(PQgetResult(connection));
+            if (result_value.get() != nullptr) {
+                throw postgresql_protocol_failure("PostgreSQL stream command boundary is missing");
+            }
+            co_await wait_until_result_ready(pool, index, deadline_value);
+            result_value.reset(PQgetResult(connection));
+            if (result_value.get() == nullptr || PQresultStatus(result_value.get()) != PGRES_PIPELINE_SYNC) {
+                throw postgresql_protocol_failure("PostgreSQL stream ended without its Sync");
+            }
+            if (PQexitPipelineMode(connection) == 0) {
+                throw postgresql_error(*connection, "PQexitPipelineMode", db_error::code_type::protocol_error);
             }
             slot_released = true;
             cancellation.finish();

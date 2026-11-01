@@ -32,6 +32,80 @@ namespace pipeline_test {
 
 }  // namespace pipeline_test
 
+RUVIA_TEST(db_postgresql_exhausted_stream_preserves_buffered_results_and_connection) {
+    using namespace ruvia;
+    using pipeline_test::peer_type;
+    for (const bool empty : {false, true}) {
+        std::vector<peer_type::postgres_reply> replies;
+        // The buffered SQL is first uncached, then prepared, then a cache hit.
+        for (int iteration = 0; iteration < 3; ++iteration) {
+            replies.push_back({.rows_ = empty ? std::vector<std::string>{} : std::vector<std::string>{"stream-a", "stream-b"},
+                .command_ = empty ? "SELECT 0" : "SELECT 2"});
+            replies.push_back({.rows_ = {"buffered-a", "buffered-b"}, .command_ = "SELECT 2"});
+        }
+        peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::move(replies));
+        auto& context = test::new_test_io_context();
+        auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+        auto config = peer.config();
+        config.pool_size_per_worker_ = 1;
+        db_client client(attachment.loop(), config);
+        test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+            const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+            for (int iteration = 0; iteration < 3; ++iteration) {
+                auto stream = co_await handle.query_stream("SELECT v FROM streamed WHERE id > $1", iteration);
+                std::vector<std::string> values;
+                while (auto row = co_await stream.read()) {
+                    values.emplace_back((*row)["v"].as<std::string_view>().value_or(""));
+                }
+                RUVIA_CHECK((values == (empty ? std::vector<std::string>{} : std::vector<std::string>{"stream-a", "stream-b"})));
+                RUVIA_CHECK(!stream.active());
+                const auto rows = co_await handle.query("SELECT v FROM buffered WHERE id > $1", iteration);
+                RUVIA_CHECK_EQ(rows.size(), std::size_t{2});
+                if (rows.size() == 2) {
+                    RUVIA_CHECK(rows[0]["v"].as<std::string_view>() == "buffered-a");
+                    RUVIA_CHECK(rows[1]["v"].as<std::string_view>() == "buffered-b");
+                }
+            }
+        });
+        RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    }
+}
+
+RUVIA_TEST(db_postgresql_exhausted_stream_allows_concurrent_pipeline_reuse) {
+    using namespace ruvia;
+    using pipeline_test::peer_type;
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
+        {{.rows_ = {"stream"}},
+            {.rows_ = {"first"}, .batch_ = 3},
+            {.rows_ = {"second"}},
+            {.column_ = "", .command_ = "UPDATE 2"}});
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    auto config = peer.config();
+    config.pool_size_per_worker_ = 1;
+    db_client client(attachment.loop(), config);
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        auto stream = co_await handle.query_stream("SELECT v FROM streamed");
+        const auto row = co_await stream.read();
+        RUVIA_CHECK(row && (*row)["v"].as<std::string_view>() == "stream");
+        RUVIA_CHECK(!(co_await stream.read()));
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM first", outcomes[0]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM second", outcomes[1]));
+        statements.spawn(pipeline_test::execute(handle, "UPDATE records SET v = 'done'", outcomes[2]));
+        co_await statements.join();
+    });
+    for (const auto& result : outcomes) {
+        RUVIA_CHECK(!result.error_.has_value());
+    }
+    RUVIA_CHECK(outcomes[0].value_ == "first");
+    RUVIA_CHECK(outcomes[1].value_ == "second");
+    RUVIA_CHECK_EQ(outcomes[2].affected_rows_, std::uint64_t{2});
+    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+}
+
 // Concurrent statements on a pool of one connection are all sent before the
 // first reply arrives -- the peer answers nothing until it has read all four
 // -- and each caller gets its own result.

@@ -95,6 +95,8 @@ while (auto row = co_await stream.read()) {
 co_await stream.close();
 ```
 
+`query_stream()` 在读取期间独占连接。持续调用 `read()` 直到返回 `std::nullopt`，才算完整消费结果（空结果集也需要读取一次）；此时流已结束，连接可用于后续普通查询或事务，PostgreSQL 的单行读取模式不会影响后续缓冲结果集。结束后 `close()` 可重复调用；提前关闭 PostgreSQL 流会关闭底层连接，而不是继续排空未读结果。
+
 ### 1.3 事务与保存点（`"ruvia/web/db/db_handle.h"`）
 
 `db_transaction` 独占一条数据库连接；若在析构或作用域退出前未调用 `co_await tx.commit()`，底层会自动回滚并回收连接：
