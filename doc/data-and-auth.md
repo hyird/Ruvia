@@ -95,7 +95,9 @@ while (auto row = co_await stream.read()) {
 co_await stream.close();
 ```
 
-`query_stream()` 在读取期间独占连接。持续调用 `read()` 直到返回 `std::nullopt`，才算完整消费结果（空结果集也需要读取一次）；此时流已结束，连接可用于后续普通查询或事务，PostgreSQL 的单行读取模式不会影响后续缓冲结果集。结束后 `close()` 可重复调用；提前关闭 PostgreSQL 流会关闭底层连接，而不是继续排空未读结果。
+`query_stream()` 在读取期间独占连接。持续调用 `read()` 直到返回 `std::nullopt`，才算完整消费结果（空结果集也需要读取一次）；此时流已结束，连接可用于后续普通查询或事务，PostgreSQL 的单行读取模式不会影响后续缓冲结果集。结束后 `close()` 可重复调用；提前关闭 PostgreSQL 流会关闭底层连接，而不是继续排空未读结果。MariaDB 的 `close()` 则异步读取并丢弃剩余行，解析行尾状态及后续结果后才归还连接，并受操作取消和超时约束。
+
+连接归还前统一检查事务状态，覆盖普通查询、流式查询被拒绝、读尽或关闭，以及显式事务提交、回滚和异常回滚。PostgreSQL 仍处于事务中的连接、MariaDB 仍有事务或已关闭 autocommit 的连接会被关闭，不会让下一调用方继承这些状态；例如 MariaDB 的 `completion_type=CHAIN` 可以使一次成功的 `COMMIT` / `ROLLBACK` 开启新事务，框架也不会复用该连接。此检查不恢复其他会话设置，结果形状错误也不撤销已经执行的 SQL。
 
 ### 1.3 事务与保存点（`"ruvia/web/db/db_handle.h"`）
 

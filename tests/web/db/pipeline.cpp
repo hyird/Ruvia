@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -69,6 +70,116 @@ RUVIA_TEST(db_postgresql_exhausted_stream_preserves_buffered_results_and_connect
         });
         RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
     }
+}
+
+RUVIA_TEST(db_postgresql_rejected_stream_transaction_does_not_reach_the_next_owner) {
+    using namespace ruvia;
+    using pipeline_test::peer_type;
+    constexpr std::string_view cached_sql = "SELECT current_setting('transaction_read_only') AS v WHERE $1::integer > 0";
+    for (const bool next_is_transaction : {false, true}) {
+        std::vector<peer_type::postgres_reply> original{
+            {.rows_ = {"off"}}, {.rows_ = {"off"}},
+            {.column_ = "", .command_ = "BEGIN", .status_ = 'T'}};
+        std::vector<peer_type::postgres_reply> replacement;
+        if (next_is_transaction) {
+            const peer_type::postgres_reply begin{.column_ = "", .command_ = "BEGIN", .status_ = 'T'};
+            original.push_back(begin);
+            replacement.push_back(begin);
+        }
+        // The original session is still read-only after a nested BEGIN; a
+        // fresh connection must also prepare the cached statement anew.
+        original.push_back({.rows_ = {"on"}, .status_ = 'T'});
+        replacement.push_back({.rows_ = {"off"}, .status_ = next_is_transaction ? 'T' : 'I'});
+        if (next_is_transaction) {
+            const peer_type::postgres_reply commit{.column_ = "", .command_ = "COMMIT"};
+            original.push_back(commit);
+            replacement.push_back(commit);
+        }
+        peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>{
+            std::move(original), std::move(replacement)});
+        auto& context = test::new_test_io_context();
+        auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+        auto config = peer.config();
+        config.pool_size_per_worker_ = 1;
+        db_client client(attachment.loop(), config);
+        test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+            const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+            // Second use creates a named statement owned by this session.
+            for (int iteration = 0; iteration < 2; ++iteration) {
+                const auto rows = co_await handle.query(cached_sql, 1);
+                RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+                if (!rows.empty()) {
+                    RUVIA_CHECK(rows[0]["v"].as<std::string_view>() == "off");
+                }
+            }
+            auto stream = co_await handle.query_stream("BEGIN READ ONLY");
+            bool rejected = false;
+            try {
+                (void)co_await stream.read();
+            } catch (const std::invalid_argument&) {
+                rejected = true;
+            }
+            RUVIA_CHECK(rejected);
+            RUVIA_CHECK(!stream.active());
+            if (next_is_transaction) {
+                auto transaction = co_await handle.begin_transaction();
+                const auto rows = co_await transaction.query(cached_sql, 1);
+                RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+                if (!rows.empty()) {
+                    RUVIA_CHECK(rows[0]["v"].as<std::string_view>() == "off");
+                }
+                co_await transaction.commit();
+                RUVIA_CHECK(!transaction.active());
+            } else {
+                const auto rows = co_await handle.query(cached_sql, 1);
+                RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+                if (!rows.empty()) {
+                    RUVIA_CHECK(rows[0]["v"].as<std::string_view>() == "off");
+                }
+            }
+        });
+        RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    }
+}
+
+RUVIA_TEST(db_postgresql_rejected_idle_stream_preserves_cached_results_and_connection) {
+    using namespace ruvia;
+    using pipeline_test::peer_type;
+    constexpr std::string_view cached_sql = "SELECT v FROM records WHERE id > $1";
+    peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
+        {{.rows_ = {"before"}}, {.rows_ = {"prepared"}},
+            {.column_ = "", .command_ = "UPDATE 1"},
+            {.rows_ = {"after-a", "after-b"}, .command_ = "SELECT 2"}});
+    auto& context = test::new_test_io_context();
+    auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+    auto config = peer.config();
+    config.pool_size_per_worker_ = 1;
+    db_client client(attachment.loop(), config);
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        for (int iteration = 0; iteration < 2; ++iteration) {
+            const auto rows = co_await handle.query(cached_sql, iteration);
+            RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+        }
+        auto stream = co_await handle.query_stream("UPDATE records SET v = 'changed'");
+        bool rejected = false;
+        try {
+            (void)co_await stream.read();
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK(!stream.active());
+        const auto rows = co_await handle.query(cached_sql, 0);
+        RUVIA_CHECK_EQ(rows.size(), std::size_t{2});
+        if (rows.size() == 2) {
+            RUVIA_CHECK(rows[0]["v"].as<std::string_view>() == "after-a");
+            RUVIA_CHECK(rows[1]["v"].as<std::string_view>() == "after-b");
+        }
+    });
+    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    RUVIA_CHECK((pipeline_test::parsed_sql(peer) ==
+                 std::vector<std::string>{std::string(cached_sql), std::string(cached_sql), "UPDATE records SET v = 'changed'"}));
 }
 
 RUVIA_TEST(db_postgresql_exhausted_stream_allows_concurrent_pipeline_reuse) {

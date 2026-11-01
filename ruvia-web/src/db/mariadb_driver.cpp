@@ -844,8 +844,8 @@ void mariadb_pipeline_io::exchange(state_type& state, std::size_t index, db_sock
 }
 
 // Responses nobody reads are still on their way while an operation runs or a
-// sent statement is unread; a statement such as BEGIN or SET autocommit=0
-// leaves the connection inside a transaction.
+// sent statement is unread. release_slot() checks the native session state
+// after the group reaches this protocol boundary.
 bool mariadb_pipeline_io::reusable(state_type& state, std::size_t index) noexcept {
     auto& slot = state.pool().slot(index);
     auto& group = slot.session_.pipeline_;
@@ -857,11 +857,7 @@ bool mariadb_pipeline_io::reusable(state_type& state, std::size_t index) noexcep
             return false;
         }
     }
-    unsigned int status = 0;
-    if (mariadb_get_infov(slot.connection_, MARIADB_CONNECTION_SERVER_STATUS, &status) != 0) {
-        return false;
-    }
-    return (status & SERVER_STATUS_IN_TRANS) == 0 && (status & SERVER_STATUS_AUTOCOMMIT) != 0;
+    return true;
 }
 
 template class db_pipeline_state<mariadb_pipeline_io>;
@@ -999,6 +995,15 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
 
 void mariadb_driver::close_connection(connection_type& connection) noexcept {
     mysql_close(&connection);
+}
+
+bool mariadb_driver::reusable_connection(connection_type& connection) noexcept {
+    unsigned int status = 0;
+    if (mysql_more_results(&connection) != 0 ||
+        mariadb_get_infov(&connection, MARIADB_CONNECTION_SERVER_STATUS, &status) != 0) {
+        return false;
+    }
+    return (status & SERVER_STATUS_IN_TRANS) == 0 && (status & SERVER_STATUS_AUTOCOMMIT) != 0;
 }
 
 namespace {
@@ -1210,17 +1215,30 @@ task<void> mariadb_driver::close_stream(pool_type& pool, std::size_t index, void
     try {
         pool.throw_if_aborted(index);
         const auto deadline_value = mysql_stream_deadline(pool, options);
-        int status = mysql_free_result_start(raw_result);
-        while (status != 0) {
-            status = mysql_free_result_cont(raw_result, co_await wait_for_mysql(pool, index, status, deadline_value));
+        // The result-set terminator carries the final server status:
+        // https://mariadb.com/docs/server/reference/clientserver-protocol/4-server-response-packets/eof_packet
+        // libmariadb's free_result drains unread rows without decoding that
+        // status, so fetch through EOF before asking whether more results
+        // follow. No rows are materialized for an explicitly closed stream.
+        while (!raw_result->eof) {
+            MYSQL_ROW row = nullptr;
+            int status = mysql_fetch_row_start(&row, raw_result);
+            while (status != 0) {
+                status = mysql_fetch_row_cont(
+                    &row, raw_result, co_await wait_for_mysql(pool, index, status, deadline_value));
+            }
+            if (row == nullptr) {
+                break;
+            }
         }
-        raw_result = nullptr;
-        // Freeing an unbuffered result drains its unread rows, and a lost
-        // connection while draining surfaces only through mysql_errno().
         auto& connection = *pool.slot(index).connection_;
         if (mysql_errno(&connection) != 0) {
-            throw mysql_error(connection, "mysql_free_result", db_error::code_type::statement_failed);
+            throw mysql_error(connection, "mysql_fetch_row", db_error::code_type::statement_failed);
         }
+        // EOF detached the native result from its connection; freeing it
+        // cannot perform I/O or discard another result's status.
+        mysql_free_result(raw_result);
+        raw_result = nullptr;
         if (co_await finish_mysql_results(pool, index, deadline_value)) {
             std::rethrow_exception(mariadb_statement_failure(nullptr, true, nullptr, true, true));
         }

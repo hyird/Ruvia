@@ -616,13 +616,12 @@ void postgresql_pipeline_io::exchange(state_type& state, std::size_t index, db_s
 }
 
 // Flights abandoned before their results arrived leave results nobody reads;
-// a connection that cannot leave pipeline mode, or was left inside a
-// transaction block by a statement such as BEGIN, is not reused either.
+// the connection must leave pipeline mode before the pool checks its session
+// state for reuse.
 bool postgresql_pipeline_io::reusable(state_type& state, std::size_t index) noexcept {
     auto& slot = state.pool().slot(index);
     auto* connection = slot.connection_;
-    return slot.session_.pipeline_.pending_ == 0 && PQexitPipelineMode(connection) != 0 &&
-           PQtransactionStatus(connection) == PQTRANS_IDLE;
+    return slot.session_.pipeline_.pending_ == 0 && PQexitPipelineMode(connection) != 0;
 }
 
 template class db_pipeline_state<postgresql_pipeline_io>;
@@ -697,6 +696,10 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
 
 void postgresql_driver::close_connection(connection_type& connection) noexcept {
     PQfinish(&connection);
+}
+
+bool postgresql_driver::reusable_connection(connection_type& connection) noexcept {
+    return PQstatus(&connection) == CONNECTION_OK && PQtransactionStatus(&connection) == PQTRANS_IDLE;
 }
 
 task<db_rows> postgresql_driver::query(pool_type& pool, std::size_t index, std::string_view sql,

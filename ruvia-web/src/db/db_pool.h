@@ -87,6 +87,8 @@ class db_pool;
 // that release_slot() gives back for a caller of its own (take_released_slot()
 // returns true), hears when a caller stops waiting for a lease, and is closed
 // by close_now().
+// Before any lease is reassigned, reusable_connection() must confirm that the
+// drained connection is outside a transaction and safe for unrelated callers.
 struct mariadb_driver final {
     using connection_type = st_mysql;
     using pool_type = db_pool<mariadb_driver>;
@@ -102,6 +104,7 @@ struct mariadb_driver final {
         request_io_metrics* io_metrics);
     static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
     static void close_connection(connection_type& connection) noexcept;
+    [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
         std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
     static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
@@ -131,6 +134,7 @@ struct postgresql_driver final {
         request_io_metrics* io_metrics);
     static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
     static void close_connection(connection_type& connection) noexcept;
+    [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
         std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
     static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,

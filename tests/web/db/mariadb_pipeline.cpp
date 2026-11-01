@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -155,6 +156,122 @@ RUVIA_TEST(db_mariadb_procedure_results_are_drained_before_the_next_statement) {
     RUVIA_CHECK(outcomes[0].value_ == "p");
     RUVIA_CHECK(outcomes[1].value_ == "after");
     RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+}
+
+// Both EOF and an explicit close consume the procedure's trailing status
+// before buffered queries share the same connection again. Retained rows
+// must not borrow either the streamed row storage or a later result.
+RUVIA_TEST(db_mariadb_stream_completion_preserves_result_boundaries_and_pipeline_reuse) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    for (const bool close_early : {false, true}) {
+        for (const bool empty : {false, true}) {
+            peer_type peer({{.rows_ = {"kept", "also kept"}},
+                               {.rows_ = empty ? std::vector<std::string>{} : std::vector<std::string>{"first", "second"},
+                                   .procedure_ = true},
+                               {.rows_ = {"after a"}, .batch_ = 2}, {.rows_ = {"after b"}}},
+                peer_type::after_startup::idle);
+            auto& context_value = test::new_test_io_context();
+            auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+            db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+            std::array<pipeline_test::outcome, 2> outcomes;
+            test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+                const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+                const auto kept = co_await handle.query("SELECT v FROM retained");
+                auto stream = co_await handle.query_stream("CALL streamed_rows()");
+                if (close_early) {
+                    co_await stream.close();
+                } else {
+                    std::vector<std::string> values;
+                    while (auto row = co_await stream.read()) {
+                        values.emplace_back((*row)["v"].as<std::string_view>().value_or(""));
+                    }
+                    RUVIA_CHECK((values == (empty ? std::vector<std::string>{}
+                                                  : std::vector<std::string>{"first", "second"})));
+                }
+                RUVIA_CHECK(!stream.active());
+                co_await stream.close();
+                task_scope statements(connected.worker());
+                statements.spawn(pipeline_test::query(handle, "SELECT v FROM after_a", outcomes[0]));
+                statements.spawn(pipeline_test::query(handle, "SELECT v FROM after_b", outcomes[1]));
+                co_await statements.join();
+                RUVIA_CHECK_EQ(kept.size(), std::size_t{2});
+                RUVIA_CHECK(kept[0]["v"].as<std::string_view>() == "kept");
+                RUVIA_CHECK(kept[1]["v"].as<std::string_view>() == "also kept");
+            });
+            RUVIA_CHECK(outcomes[0].value_ == "after a");
+            RUVIA_CHECK(outcomes[1].value_ == "after b");
+            RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+        }
+    }
+}
+
+// A rejected result shape still ran its SQL. BEGIN and disabled autocommit
+// cannot leak through that error to the next borrower, while an ordinary
+// completed write leaves its connection reusable.
+RUVIA_TEST(db_mariadb_rowless_stream_checks_session_state_before_releasing_its_connection) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    for (const std::uint16_t status : {std::uint16_t{2}, std::uint16_t{3}, std::uint16_t{0}}) {
+        const std::string_view sql = status == 3   ? "START TRANSACTION"
+                                     : status == 0 ? "SET autocommit = 0"
+                                                   : "UPDATE t SET v = 1";
+        peer_type peer({{.column_ = "", .status_ = status}, {.rows_ = {"next"}}},
+            status == 2 ? peer_type::after_startup::idle : peer_type::after_startup::reaccept);
+        auto& context_value = test::new_test_io_context();
+        auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+        db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+        pipeline_test::outcome next;
+        bool refused = false;
+        test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+            const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+            try {
+                (void)co_await handle.query_stream(sql);
+            } catch (const std::invalid_argument&) {
+                refused = true;
+            }
+            co_await pipeline_test::query(handle, "SELECT v FROM next_borrower", next);
+        });
+        RUVIA_CHECK(refused);
+        RUVIA_CHECK(next.value_ == "next");
+        RUVIA_CHECK_EQ(peer.startups(), status == 2 ? std::size_t{1} : std::size_t{2});
+    }
+}
+
+// Procedures can return rows and leave a transaction open or autocommit
+// disabled. Draining every result is necessary but not sufficient for reuse.
+RUVIA_TEST(db_mariadb_stream_completion_retires_transactional_connections) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    for (const std::uint16_t status : {std::uint16_t{3}, std::uint16_t{0}}) {
+        for (const bool close_early : {false, true}) {
+            peer_type peer({{.rows_ = {"first", "second"}, .status_ = status, .procedure_ = true},
+                               {.rows_ = {"next"}}},
+                peer_type::after_startup::reaccept);
+            auto& context_value = test::new_test_io_context();
+            auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+            db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+            pipeline_test::outcome next;
+            test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+                const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+                auto stream = co_await handle.query_stream(
+                    status == 3 ? "CALL begin_and_select()" : "CALL disable_autocommit_and_select()");
+                auto first = co_await stream.read();
+                RUVIA_CHECK(first && (*first)["v"].as<std::string_view>() == "first");
+                if (close_early) {
+                    co_await stream.close();
+                } else {
+                    auto second = co_await stream.read();
+                    RUVIA_CHECK(second && (*second)["v"].as<std::string_view>() == "second");
+                    RUVIA_CHECK(!(co_await stream.read()));
+                }
+                RUVIA_CHECK(!stream.active());
+                co_await pipeline_test::query(handle, "SELECT v FROM next_borrower", next);
+            });
+            RUVIA_CHECK(next.value_ == "next");
+            RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+        }
+    }
 }
 
 // A row set execute() did not ask for, or a missing one query() needs,

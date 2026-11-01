@@ -25,8 +25,8 @@
 //   void exchange(state_type&, std::size_t slot, db_socket_readiness ready)
 //       Continues the protocol after a readiness wake.
 //   bool reusable(state_type&, std::size_t slot) noexcept
-//       Whether the connection of a dissolving group, with no member left, can
-//       go back to the pool: nothing left on the wire, outside a transaction.
+//       Whether a dissolving group's protocol exchange is complete, with no
+//       unread results. The pool checks transaction state before reassigning it.
 // group_data has reset(), called when its group's flights are cleared.
 
 #include <algorithm>
@@ -658,9 +658,9 @@ void db_pipeline_state<io_type>::leave(member_type& member) noexcept {
     dissolve(member.slot_);
 }
 
-// The last member gives the connection back. A connection that failed, or
-// that the driver cannot reuse -- results nobody reads are still on their way,
-// or a statement left it inside a transaction block -- is closed.
+// The last member gives the connection back. A failed or incomplete protocol
+// exchange closes it here; release_slot() checks transaction state before
+// either scheduler hands it to another caller.
 template <typename io_type>
 void db_pipeline_state<io_type>::dissolve(std::size_t slot) noexcept {
     auto& connection_slot = pool_.slot(slot);

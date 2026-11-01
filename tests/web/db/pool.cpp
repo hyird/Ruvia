@@ -2,6 +2,8 @@
 #include <chrono>
 #include <cstddef>
 #include <stdexcept>
+#include <string_view>
+#include <vector>
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
@@ -130,6 +132,57 @@ RUVIA_TEST(db_pool_failed_startup_retires_already_connected_slots) {
         RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
     }
 }
+
+#ifdef RUVIA_ENABLE_MARIADB
+RUVIA_TEST(db_pool_transaction_retirement_checks_server_state_before_reuse) {
+    using namespace ruvia;
+    using peer_type = test::backend_startup_peer;
+    // Successful control commands may chain a new transaction or leave
+    // autocommit disabled. Failed statements also retire via ROLLBACK.
+    for (const unsigned short status : {2, 3, 0}) {
+        for (int ending = 0; ending < 3; ++ending) {
+            std::vector<peer_type::maria_reply> replies{{.column_ = "", .status_ = 3}};
+            if (ending == 2) {
+                replies.push_back({.error_ = "missing table", .code_ = 1146, .sql_state_ = "42S02"});
+            }
+            replies.push_back({.column_ = "", .status_ = status});
+            replies.push_back({.rows_ = {"available"}});
+            peer_type peer(std::move(replies), peer_type::after_startup::idle, status == 2 ? 1 : 2);
+            auto config = peer.config();
+            config.driver_ = db_driver::mariadb;
+            config.pool_size_per_worker_ = 1;
+            auto& io = test::new_test_io_context();
+            auto attachment = attach_event_loop(io);
+            db_client client(attachment.loop(), config);
+            test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+                const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+                auto transaction = co_await handle.begin_transaction();
+                if (ending == 0) {
+                    co_await transaction.commit();
+                } else if (ending == 1) {
+                    co_await transaction.rollback();
+                } else {
+                    bool failed = false;
+                    try {
+                        (void)co_await transaction.query("SELECT * FROM missing_table");
+                    } catch (const db_error& error) {
+                        failed = error.code() == db_error::code_type::statement_failed &&
+                                 error.sql_state() == "42S02";
+                    }
+                    RUVIA_CHECK(failed);
+                }
+                RUVIA_CHECK(!transaction.active());
+                const auto rows = co_await handle.query("SELECT v FROM records");
+                RUVIA_CHECK_EQ(rows.size(), std::size_t{1});
+                if (!rows.empty()) {
+                    RUVIA_CHECK(rows.front()["v"].as<std::string_view>() == "available");
+                }
+            });
+            RUVIA_CHECK_EQ(peer.startups(), status == 2 ? std::size_t{1} : std::size_t{2});
+        }
+    }
+}
+#endif
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 RUVIA_TEST(db_pool_allows_parallel_transactions_and_reuses_released_connections) {

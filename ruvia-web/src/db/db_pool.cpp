@@ -167,6 +167,12 @@ void db_pool<driver_type>::close_now() noexcept {
 
 template <typename driver_type>
 void db_pool<driver_type>::release_slot(std::size_t index) noexcept {
+    // A drained command can still leave a transaction open or autocommit off,
+    // including a rejected stream and COMMIT/ROLLBACK with chaining enabled.
+    // Apply the same isolation boundary before either scheduler reassigns it.
+    if (slots_[index].connected_ && !driver_type::reusable_connection(*slots_[index].connection_)) {
+        close_slot(index);
+    }
     if (!state_.take_released_slot(index)) {
         leases_.release(index);
     }

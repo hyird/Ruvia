@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -1000,6 +1001,46 @@ RUVIA_TEST(db_mariadb_session_change_drops_the_cached_statements) {
                      "execute:1:", "query:SET SESSION sql_mode = CONCAT(@@sql_mode, ',PIPES_AS_CONCAT,ANSI_QUOTES')",
                      "query:SELECT 'a' || 'b' AS v", "close:1", "prepare:SELECT 'a' || 'b' AS v", "execute:2:"}));
     RUVIA_CHECK_EQ(peer.maria_session_setups(), std::size_t{1});
+}
+
+// A rowless stream still executed SET before its shape was refused. A
+// non-transactional session flag must not retire the connection, and its
+// tracked sql_mode change must invalidate statements prepared in the old mode.
+RUVIA_TEST(db_mariadb_rowless_stream_preserves_session_changes_and_invalidates_prepared_statements) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    peer_type peer(
+        {{.rows_ = {"0"}}, {.rows_ = {"0"}},
+            {.column_ = "", .status_ = 514, .tracked_ = {{"sql_mode", "PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES"}}},
+            {.rows_ = {"ab"}, .status_ = 514}, {.rows_ = {"ab"}, .status_ = 514}},
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 4> outcomes;
+    bool refused = false;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[0]);
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[1]);
+        try {
+            (void)co_await handle.query_stream("SET SESSION sql_mode = 'PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES'");
+        } catch (const std::invalid_argument&) {
+            refused = true;
+        }
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[2]);
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[3]);
+    });
+    RUVIA_CHECK(refused);
+    RUVIA_CHECK(outcomes[0].value_ == "0");
+    RUVIA_CHECK(outcomes[1].value_ == "0");
+    RUVIA_CHECK(outcomes[2].value_ == "ab");
+    RUVIA_CHECK(outcomes[3].value_ == "ab");
+    RUVIA_CHECK((peer.maria_commands() ==
+                 std::vector<std::string>{"query:SELECT 'a' || 'b' AS v", "prepare:SELECT 'a' || 'b' AS v",
+                     "execute:1:", "query:SET SESSION sql_mode = 'PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES'",
+                     "query:SELECT 'a' || 'b' AS v", "close:1", "prepare:SELECT 'a' || 'b' AS v", "execute:2:"}));
+    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
 }
 
 // While the session's client character set is not the utf8mb4 the
