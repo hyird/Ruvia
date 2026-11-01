@@ -59,15 +59,11 @@ struct document_root_probe final {
         request.path().find("//") != std::string_view::npos) {
         return {};
     }
-    auto relative = request.path();
-    relative.remove_prefix(1);
-    if (has_url_encoding(relative, url_decode_mode::percent)) {
-        decoded = detail::decode_request_path(request.path(), memory.upstream_resource());
-        if (!decoded) {
-            return {};
-        }
-        relative = std::string_view(*decoded).substr(1);
+    const auto path = detail::decode_request_path(request.path(), decoded.emplace(memory.upstream_resource()));
+    if (!path) {
+        return {};
     }
+    auto relative = path->substr(1);
     auto entry_value = detail::static_root_access::try_resolve(
         *root, relative, storage.emplace(memory.upstream_resource()));
     if (!entry_value.has_value()) {

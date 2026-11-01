@@ -91,15 +91,12 @@ namespace {
 // Storage capacity is fixed by ensure_request_query before any view escapes.
 [[nodiscard]] std::optional<std::string_view> borrow_or_decode_query_component(
     std::pmr::vector<std::pmr::string>& storage, std::string_view input) {
-    if (!has_url_encoding(input, url_decode_mode::form)) {
-        return input;
+    std::pmr::string decoded(storage.get_allocator().resource());
+    const auto component = decode_url_component(input, decoded, url_decode_mode::form);
+    if (!component || component->data() == input.data()) {
+        return component;
     }
-    auto decoded = decode_url_component(input,
-        {.mode_ = url_decode_mode::form, .resource_ = storage.get_allocator().resource()});
-    if (!decoded) {
-        return std::nullopt;
-    }
-    return storage.emplace_back(std::move(*decoded));
+    return storage.emplace_back(std::move(decoded));
 }
 // Storage capacity is fixed by ensure_request_query before any view escapes.
 void ensure_request_query(const context& context_value, const http_request& request,
@@ -214,10 +211,15 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     detail::request_name_value_list_access::reserve(params, param_count);
     for (std::size_t i = 0; i < param_count; ++i) {
         auto value = param_values[i];
-        if (!all_unencoded && has_url_encoding(value, url_decode_mode::percent)) {
-            auto decoded = decode_url_component(
-                value, {.mode_ = url_decode_mode::percent, .resource_ = context_value.arena()});
-            value = storage.emplace_back(std::move(*decoded));
+        if (!all_unencoded) {
+            std::pmr::string decoded(context_value.arena());
+            const auto decoded_value = decode_url_component(value, decoded, url_decode_mode::percent);
+            if (!decoded_value) {
+                detail::throw_invalid_param();
+            }
+            if (decoded_value->data() != value.data()) {
+                value = storage.emplace_back(std::move(decoded));
+            }
         }
         detail::request_name_value_list_access::push_back(params, http_header_view{param_names[i], value});
     }

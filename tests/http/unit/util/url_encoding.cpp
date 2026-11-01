@@ -11,8 +11,8 @@
 namespace {
 
 std::optional<std::string> url_decode(std::string_view in, ruvia::url_decode_mode mode) {
-    auto decoded = ruvia::decode_url_component(
-        in, {.mode_ = mode, .resource_ = std::pmr::get_default_resource()});
+    std::pmr::string storage;
+    const auto decoded = ruvia::decode_url_component(in, storage, mode);
     if (!decoded.has_value()) {
         return std::nullopt;
     }
@@ -49,17 +49,45 @@ RUVIA_TEST(percent_byte_decoding_rejects_out_of_range_and_truncated_triplets) {
     RUVIA_CHECK(!ruvia::http_try_decode_percent_byte("x20", 0).has_value());
 }
 
-RUVIA_TEST(url_decode_uses_requested_resource_and_preserves_results) {
+RUVIA_TEST(url_decode_borrows_unchanged_input_and_decodes_into_storage) {
     std::pmr::monotonic_buffer_resource resource;
-    auto first = ruvia::decode_url_component("value%20one", {.resource_ = &resource});
-    auto second = ruvia::decode_url_component("value%20two", {.resource_ = &resource});
-    RUVIA_CHECK(first.has_value());
-    RUVIA_CHECK(second.has_value());
-    if (first && second) {
-        RUVIA_CHECK_EQ(first->get_allocator().resource(), &resource);
-        RUVIA_CHECK_EQ(std::string_view(*first), std::string_view("value one"));
-        RUVIA_CHECK_EQ(std::string_view(*second), std::string_view("value two"));
-    }
+    std::pmr::string storage("keep", &resource);
+    constexpr std::string_view plain = "value";
+    const auto borrowed = ruvia::decode_url_component(plain, storage);
+    RUVIA_CHECK(borrowed.has_value() && borrowed->data() == plain.data() && borrowed->size() == plain.size());
+    RUVIA_CHECK_EQ(std::string_view(storage), std::string_view("keep"));
+
+    // Malformed percent encoding leaves the storage untouched.
+    RUVIA_CHECK(!ruvia::decode_url_component("bad%2", storage).has_value());
+    RUVIA_CHECK_EQ(std::string_view(storage), std::string_view("keep"));
+
+    const auto decoded = ruvia::decode_url_component("value%20one", storage);
+    RUVIA_CHECK(decoded.has_value() && decoded->data() == storage.data());
+    RUVIA_CHECK_EQ(std::string_view(storage), std::string_view("value one"));
+    RUVIA_CHECK_EQ(storage.get_allocator().resource(), static_cast<std::pmr::memory_resource*>(&resource));
+
+    // The input may be the storage itself.
+    storage.assign("a%2Bb+c");
+    const auto aliased = ruvia::decode_url_component(storage, storage, ruvia::url_decode_mode::form);
+    RUVIA_CHECK(aliased.has_value() && aliased->data() == storage.data());
+    RUVIA_CHECK_EQ(std::string_view(storage), std::string_view("a+b c"));
+}
+
+RUVIA_TEST(uri_reference_encoding_borrows_or_writes_storage) {
+    std::pmr::string storage("keep");
+    constexpr std::string_view canonical = "/a%20b?x=1#frag";
+    const auto unchanged = ruvia::percent_encode_uri_reference(canonical, storage);
+    RUVIA_CHECK(unchanged.data() == canonical.data() && unchanged.size() == canonical.size());
+    RUVIA_CHECK_EQ(std::string_view(storage), std::string_view("keep"));
+
+    const auto encoded = ruvia::percent_encode_uri_reference("/a b?x=%zz", storage);
+    RUVIA_CHECK(encoded.data() == storage.data());
+    RUVIA_CHECK_EQ(encoded, std::string_view("/a%20b?x=%25zz"));
+
+    // The reference may be the storage itself.
+    storage.assign("/c d");
+    RUVIA_CHECK_EQ(ruvia::percent_encode_uri_reference(storage, storage), std::string_view("/c%20d"));
+    RUVIA_CHECK_EQ(std::string_view(storage), std::string_view("/c%20d"));
 }
 
 RUVIA_TEST(url_decode_invalid) {
@@ -114,21 +142,6 @@ RUVIA_TEST(url_validate_encoding) {
     RUVIA_CHECK(!validate_url_encoding("%4"));
     RUVIA_CHECK(!validate_url_encoding("%zz"));
     RUVIA_CHECK(validate_url_encoding(""));
-}
-
-RUVIA_TEST(url_components_equivalent) {
-    using m_type = ruvia::url_decode_mode;
-    using ruvia::url_components_equivalent;
-    RUVIA_CHECK(url_components_equivalent("%61pi", "api", m_type::percent));
-    RUVIA_CHECK(url_components_equivalent("api", "%61%70%69", m_type::percent));
-    RUVIA_CHECK(url_components_equivalent("%2f", "%2F", m_type::percent));
-    RUVIA_CHECK(url_components_equivalent("", "", m_type::percent));
-    RUVIA_CHECK(url_components_equivalent("a+b", "a%20b", m_type::form));
-    RUVIA_CHECK(!url_components_equivalent("a+b", "a%20b", m_type::percent));  // '+' literal
-    RUVIA_CHECK(!url_components_equivalent("%61pi", "apix", m_type::percent));
-    RUVIA_CHECK(!url_components_equivalent("apix", "%61pi", m_type::percent));
-    RUVIA_CHECK(!url_components_equivalent("%2", "%2", m_type::percent));    // truncated escape
-    RUVIA_CHECK(!url_components_equivalent("%zz", "%zz", m_type::percent));  // malformed escape
 }
 
 RUVIA_TEST(url_uri_paths_equivalent_and_ordered_by_canonical_form) {

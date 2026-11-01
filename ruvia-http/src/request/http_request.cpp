@@ -2,6 +2,7 @@
 
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/url_encoding.h"
 

@@ -41,16 +41,17 @@ namespace ruvia::detail {
 }
 
 // Percent-decodes an encoded request path, or a wildcard tail of one, exactly
-// once into the file path it names. Routing and path-scoped middleware split
-// request paths on raw '/' only, so an escape revealing '/' or '\\' would
-// forge a segment boundary they never saw; that, like a malformed escape,
-// yields nullopt.
-[[nodiscard]] inline std::optional<std::pmr::string> decode_request_path(
-    std::string_view path, std::pmr::memory_resource* resource) {
+// once into the file path it names: the path itself when it holds no escape,
+// otherwise the decoded bytes in `storage`. Routing and path-scoped middleware
+// split request paths on raw '/' only, so an escape revealing '/' or '\\'
+// would forge a segment boundary they never saw; that, like a malformed
+// escape, yields nullopt.
+[[nodiscard]] inline std::optional<std::string_view> decode_request_path(
+    std::string_view path, std::pmr::string& storage) {
     if (!is_valid_encoded_request_path(path)) {
         return std::nullopt;
     }
-    return decode_url_component(path, {.mode_ = url_decode_mode::percent, .resource_ = resource});
+    return decode_url_component(path, storage, url_decode_mode::percent);
 }
 
 // Web static-file path policy: validate a decoded file path relative to the

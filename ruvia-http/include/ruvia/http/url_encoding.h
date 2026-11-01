@@ -4,24 +4,19 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_hex.h"
 
 namespace ruvia {
 
 enum class url_decode_mode : std::uint8_t { percent,
     form };
-
-struct url_decode_options final {
-    url_decode_mode mode_{url_decode_mode::percent};
-    std::pmr::memory_resource* resource_{nullptr};
-};
 
 // Percent mode treats '+' literally; form mode decodes '+' as a space.
 [[nodiscard]] inline bool has_url_encoding(std::string_view value, url_decode_mode mode) noexcept {
@@ -62,12 +57,20 @@ struct url_decode_options final {
 
 // Appends the canonical uppercase pct-encoded triplet for byte. Callers own the
 // policy deciding which bytes need escaping.
-template <typename output_type>
-void http_append_percent_byte(output_type& output, unsigned char byte) {
+inline void http_append_percent_byte(std::pmr::string& output, unsigned char byte) {
     output.push_back('%');
     output.push_back(http_upper_hex_digit(byte >> 4));
     output.push_back(http_upper_hex_digit(byte));
 }
+
+namespace detail {
+// Whether `text` points into `storage`'s bytes, so writing `storage` would
+// destroy the input of the transformation that reads `text`.
+[[nodiscard]] inline bool url_text_aliases_storage(std::string_view text, const std::pmr::string& storage) noexcept {
+    return !text.empty() && std::less_equal<>{}(storage.data(), text.data()) &&
+           std::less<>{}(text.data(), storage.data() + storage.size());
+}
+}  // namespace detail
 
 // Repairs an application-supplied RFC 3986 URI-reference (for example a
 // Location field value) by percent-encoding every byte that cannot appear
@@ -77,11 +80,10 @@ void http_append_percent_byte(output_type& output, unsigned char byte) {
 // authority's IP-literal delimiters, ':' is encoded in the first segment of a
 // relative-path reference (section 4.2), '@' inside userinfo is encoded so only
 // the delimiting '@' remains (section 3.2.1), and only the first '#' starts the
-// fragment. Returns no value, without allocating, when the reference needs no
-// encoding; otherwise the encoded reference is allocated from `resource` (or
-// the default PMR resource).
-[[nodiscard]] std::optional<std::pmr::string> percent_encode_uri_reference(
-    std::string_view reference, std::pmr::memory_resource* resource);
+// fragment. Returns `reference` itself, without allocating, when it needs no
+// encoding; otherwise the encoded reference replaces `storage`'s contents and
+// the result views `storage`. `reference` may alias `storage`.
+[[nodiscard]] std::string_view percent_encode_uri_reference(std::string_view reference, std::pmr::string& storage);
 
 namespace detail {
 template <typename visitor_type>
@@ -112,40 +114,42 @@ template <typename visitor_type>
     return true;
 }
 
-// Returns the complete decoded component. Percent mode treats '+' literally and
-// returns no value for malformed percent encoding (RFC 3986 pct-encoded). Form
-// mode converts '+' to a space and, like the WHATWG percent-decode algorithm
-// used by application/x-www-form-urlencoded, keeps a '%' that does not start a
-// valid escape as a literal byte.
-// The result is allocated from options.resource (or the default PMR resource),
-// which must outlive the returned string. On failure, no decoded prefix escapes.
-[[nodiscard]] inline std::optional<std::pmr::string> decode_url_component(
-    std::string_view input, url_decode_options options = {}) {
-    auto* const resource = detail::http_pmr_resource_or_default(options.resource_);
+// Decodes one URL component. Returns `input` itself, without allocating, when
+// it holds nothing to decode; otherwise the decoded bytes replace `storage`'s
+// contents and the result views `storage`. Percent mode treats '+' literally
+// and returns no value for malformed percent encoding (RFC 3986 pct-encoded),
+// leaving `storage` unchanged. Form mode converts '+' to a space and, like the
+// WHATWG percent-decode algorithm used by application/x-www-form-urlencoded,
+// keeps a '%' that does not start a valid escape as a literal byte. `input`
+// may alias `storage`.
+[[nodiscard]] inline std::optional<std::string_view> decode_url_component(
+    std::string_view input, std::pmr::string& storage, url_decode_mode mode = url_decode_mode::percent) {
     std::size_t decoded_size = 0;
     bool transformed = false;
     for (std::size_t i = 0; i < input.size(); ++i) {
         const char c = input[i];
-        if (options.mode_ == url_decode_mode::form && c == '+') {
+        if (mode == url_decode_mode::form && c == '+') {
             transformed = true;
         } else if (c == '%') {
             if (http_try_decode_percent_byte(input, i).has_value()) {
                 transformed = true;
                 i += 2;
-            } else if (options.mode_ != url_decode_mode::form) {
+            } else if (mode != url_decode_mode::form) {
                 return std::nullopt;
             }
         }
         ++decoded_size;
     }
     if (!transformed) {
-        return std::pmr::string(input, resource);
+        return input;
     }
-    std::pmr::string output(resource);
-    output.reserve(decoded_size);
+    std::pmr::string output(storage.get_allocator());
+    auto& target = detail::url_text_aliases_storage(input, storage) ? output : storage;
+    target.clear();
+    target.reserve(decoded_size);
     for (std::size_t i = 0; i < input.size(); ++i) {
         char c = input[i];
-        if (options.mode_ == url_decode_mode::form && c == '+') {
+        if (mode == url_decode_mode::form && c == '+') {
             c = ' ';
         } else if (c == '%') {
             if (const auto byte = http_try_decode_percent_byte(input, i)) {
@@ -153,42 +157,12 @@ template <typename visitor_type>
                 i += 2;
             }
         }
-        output.push_back(c);
+        target.push_back(c);
     }
-    return output;
-}
-
-// Compare two percent-encoded components by their decoded bytes without
-// allocating, so differently escaped spellings of one value compare equal.
-// Percent mode treats '+' literally; form mode converts it to a space.
-// Malformed percent escapes never compare equal.
-[[nodiscard]] inline bool url_components_equivalent(
-    std::string_view left, std::string_view right, url_decode_mode mode) noexcept {
-    const auto next_byte = [mode](std::string_view input, std::size_t& i) noexcept -> int {
-        const char c = input[i];
-        if (mode == url_decode_mode::form && c == '+') {
-            return ' ';
-        }
-        if (c == '%') {
-            const auto byte = http_try_decode_percent_byte(input, i);
-            if (!byte) {
-                return -1;
-            }
-            i += 2;
-            return *byte;
-        }
-        return static_cast<unsigned char>(c);
-    };
-    std::size_t left_index = 0;
-    std::size_t right_index = 0;
-    for (; left_index < left.size() && right_index < right.size(); ++left_index, ++right_index) {
-        const auto left_byte = next_byte(left, left_index);
-        const auto right_byte = next_byte(right, right_index);
-        if (left_byte < 0 || right_byte < 0 || left_byte != right_byte) {
-            return false;
-        }
+    if (&target == &output) {
+        storage = std::move(output);
     }
-    return left_index == left.size() && right_index == right.size();
+    return std::string_view(storage);
 }
 
 // Origin-form path identity, the one canonical form shared by route matching,

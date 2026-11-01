@@ -107,11 +107,11 @@ struct uri_reference_layout final {
 }
 }  // namespace
 
-std::optional<std::pmr::string> percent_encode_uri_reference(
-    std::string_view reference, std::pmr::memory_resource* resource) {
+std::string_view percent_encode_uri_reference(std::string_view reference, std::pmr::string& storage) {
     const auto layout = find_uri_reference_layout(reference);
     bool fragment_seen = false;
-    std::optional<std::pmr::string> encoded;
+    std::pmr::string aliased_output(storage.get_allocator());
+    std::pmr::string* encoded = nullptr;
     for (std::size_t i = 0; i < reference.size(); ++i) {
         const auto byte = static_cast<unsigned char>(reference[i]);
         // A lone or malformed '%' is not an escape and is encoded like any
@@ -119,22 +119,27 @@ std::optional<std::pmr::string> percent_encode_uri_reference(
         const bool escape = byte == '%' && http_try_decode_percent_byte(reference, i).has_value();
         if (escape || (byte != '%' && uri_reference_keeps_literal(byte, i, layout, fragment_seen))) {
             const std::size_t width = escape ? 3 : 1;
-            if (encoded.has_value()) {
+            if (encoded != nullptr) {
                 encoded->append(reference.substr(i, width));
             }
             i += width - 1;
             continue;
         }
-        if (!encoded.has_value()) {
-            const auto total_size =
-                encoded_uri_reference_size(reference, i, layout, fragment_seen);
-            encoded.emplace(detail::http_pmr_resource_or_default(resource));
-            encoded->reserve(total_size);
+        if (encoded == nullptr) {
+            encoded = detail::url_text_aliases_storage(reference, storage) ? &aliased_output : &storage;
+            encoded->clear();
+            encoded->reserve(encoded_uri_reference_size(reference, i, layout, fragment_seen));
             encoded->append(reference.substr(0, i));
         }
         http_append_percent_byte(*encoded, byte);
     }
-    return encoded;
+    if (encoded == nullptr) {
+        return reference;
+    }
+    if (encoded == &aliased_output) {
+        storage = std::move(aliased_output);
+    }
+    return storage;
 }
 
 }  // namespace ruvia

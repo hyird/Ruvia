@@ -53,16 +53,17 @@ RUVIA_TEST(has_url_encoding_respects_component_bounds) {
     RUVIA_CHECK(has_url_encoding(binary, mode_type::form));
 }
 
-RUVIA_TEST(no_encoding_means_decode_is_identity) {
-    // The decode-skip fast path relies on: if has_url_encoding is false, decoding
-    // reproduces the input verbatim.
-    auto* const resource = std::pmr::get_default_resource();
+RUVIA_TEST(no_encoding_means_decode_borrows_the_input) {
+    // Callers size their decoded-storage reservations with has_url_encoding:
+    // a component it reports unencoded is returned as the input itself.
+    std::pmr::string storage;
     for (const std::string_view value : {std::string_view(""), std::string_view("plain"),
              std::string_view("a/b?c=d"), std::string_view("no-plus")}) {
-        RUVIA_CHECK(!has_url_encoding(value, mode_type::percent));
-        const auto decoded =
-            decode_url_component(value, {.mode_ = mode_type::percent, .resource_ = resource});
-        RUVIA_CHECK(decoded.has_value());
-        RUVIA_CHECK_EQ(std::string_view(*decoded), value);
+        for (const auto mode : {mode_type::percent, mode_type::form}) {
+            RUVIA_CHECK(!has_url_encoding(value, mode));
+            const auto decoded = decode_url_component(value, storage, mode);
+            RUVIA_CHECK(decoded.has_value() && decoded->data() == value.data() && decoded->size() == value.size());
+        }
     }
+    RUVIA_CHECK(storage.empty());
 }

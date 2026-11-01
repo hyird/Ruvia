@@ -67,11 +67,8 @@ http_response context::redirect(redirect_response_options options) const {
     }
     http_response response(arena());
     apply_response_state(response, status_code);
-    if (const auto encoded_location = percent_encode_uri_reference(location, pool())) {
-        response.header("Location", *encoded_location);
-    } else {
-        response.header("Location", location);
-    }
+    std::pmr::string encoded_location(pool());
+    response.header("Location", percent_encode_uri_reference(location, encoded_location));
     return response;
 }
 

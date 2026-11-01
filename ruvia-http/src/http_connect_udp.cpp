@@ -200,11 +200,15 @@ std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect
     if ((port.index() != 0) || !std::get<0>(port)) {
         return http_connect_udp_error::invalid_target;
     }
-    auto host = decode_url_component(raw_host, {.resource_ = resource});
-    if (!host || !valid_host(*host)) {
+    std::pmr::string host(resource ? resource : std::pmr::get_default_resource());
+    const auto decoded_host = decode_url_component(raw_host, host);
+    if (!decoded_host || !valid_host(*decoded_host)) {
         return http_connect_udp_error::invalid_target;
     }
-    return http_connect_udp_target{std::move(*host), std::get<0>(port)};
+    if (decoded_host->data() == raw_host.data()) {
+        host.assign(raw_host);
+    }
+    return http_connect_udp_target{std::move(host), std::get<0>(port)};
 }
 namespace {
 std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_view request, bool sending) noexcept {

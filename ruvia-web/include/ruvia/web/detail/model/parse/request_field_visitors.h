@@ -20,17 +20,13 @@ template <typename visitor_type>
     // body needs no separate percent-encoding pass.
     const bool completed = ruvia::visit_url_encoded_pairs(body, [&](std::string_view name,
                                                                     std::string_view value) {
-        if (!ruvia::has_url_encoding(name, url_decode_mode::form)) {
-            return dispatch_json_object_field_visitor(visitor_ref, name, value);
-        }
-
-        auto decoded_name =
-            ruvia::decode_url_component(name, {.mode_ = url_decode_mode::form, .resource_ = resource});
-        if (!decoded_name.has_value()) {
+        std::pmr::string decoded_name(resource);
+        const auto decoded = ruvia::decode_url_component(name, decoded_name, url_decode_mode::form);
+        if (!decoded.has_value()) {
             valid = false;
             return false;
         }
-        return dispatch_json_object_field_visitor(visitor_ref, std::string_view(*decoded_name), value);
+        return dispatch_json_object_field_visitor(visitor_ref, *decoded, value);
     });
     return completed && valid;
 }
