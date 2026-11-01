@@ -28,6 +28,7 @@ public:
     }
 
     static constexpr bool has_initial = (is_initial_rule<option_types>() || ... || false);
+    static constexpr bool has_default = (is_default_rule<option_types>() || ... || false);
 
     // The field owns assignment, nullability and allocator normalization.
     template <typename consumer_type>

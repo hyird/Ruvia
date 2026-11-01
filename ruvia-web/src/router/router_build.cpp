@@ -43,7 +43,7 @@ enum class middleware_scope_coverage : std::uint8_t {
         return detail::path_is_under_prefix(pattern, prefix) ? middleware_scope_coverage::full
                                                              : middleware_scope_coverage::none;
     }
-    if (prefix.empty() || prefix == "/") {
+    if (prefix.empty()) {
         return middleware_scope_coverage::full;
     }
 

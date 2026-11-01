@@ -15,6 +15,9 @@ namespace ruvia::detail {
 // A trailing slash does not create a different path scope; accepting both
 // spellings at one layer and not another makes duplicate fallback handlers
 // order-dependent and lets tests exercise a different route graph.
+// "/" (or any all-slash spelling) is rejected: it would scope every path and
+// silently shadow or duplicate the unscoped registration, which is the only
+// app-wide spelling.
 [[nodiscard]] inline std::string_view normalize_fallback_prefix(std::string_view prefix) {
     if (prefix.empty() || prefix.front() != '/') {
         throw std::invalid_argument("fallback prefix must start with '/'");
@@ -25,20 +28,24 @@ namespace ruvia::detail {
     while (prefix.size() > 1 && prefix.back() == '/') {
         prefix.remove_suffix(1);
     }
+    if (prefix == "/") {
+        throw std::invalid_argument("fallback prefix must not be '/'; register app-wide without a prefix");
+    }
     return prefix;
 }
 
 // The one prefix-scoping rule, shared by fallback handler selection and by
-// path-scoped middleware. `prefix` is normalized (see normalize_fallback_prefix).
+// path-scoped middleware. `prefix` is normalized (see normalize_fallback_prefix)
+// or empty for an unscoped registration, which scopes everything.
 // A prefix matches on whole path segments only, so "/api" scopes "/api" and
-// "/api/x" but never "/apix"; "/" scopes everything. Segments compare in the
+// "/api/x" but never "/apix". Segments compare in the
 // canonical form route matching and route parameters use (uri_paths_equivalent):
 // split on raw '/' and percent-decoded, so "/%61pi/x" is under "/api" exactly
 // when it routes like "/api/x", while an encoded "%2F" never acts as a segment
 // boundary.
 [[nodiscard]] inline bool path_is_under_prefix(
     std::string_view path, std::string_view prefix) noexcept {
-    if (prefix.empty() || prefix == "/") {
+    if (prefix.empty()) {
         return true;
     }
     if (path.empty() || path.front() != '/') {
@@ -73,12 +80,9 @@ namespace ruvia::detail {
     return path_is_under_prefix(left, right) && path_is_under_prefix(right, left);
 }
 
-// Segment count of a normalized prefix ("/" has none). A scope nested inside
-// another always has more segments, whatever either one's escaping.
+// Segment count of a normalized prefix. A scope nested inside another always
+// has more segments, whatever either one's escaping.
 [[nodiscard]] inline std::size_t fallback_prefix_depth(std::string_view prefix) noexcept {
-    if (prefix == "/") {
-        return 0;
-    }
     std::size_t depth = 0;
     for (const auto c : prefix) {
         depth += c == '/' ? 1U : 0U;

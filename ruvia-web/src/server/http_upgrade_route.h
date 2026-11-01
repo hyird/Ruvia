@@ -50,8 +50,10 @@ namespace ruvia::detail {
     };
 }
 
+// `datagrams` is the route's http_tunnel_route_config::datagrams_, which
+// CONNECT-UDP (`udp`) always sets.
 [[nodiscard]] inline http_response prepare_tunnel_upgrade_response_head(
-    context& context_value, http_protocol_version version, bool udp) {
+    context& context_value, http_protocol_version version, bool udp, bool datagrams) {
     auto head_response = context_access::streaming_head(context_value);
     if (udp) {
         auto negotiated = prepare_http_connect_udp_response(std::move(head_response), version);
@@ -59,6 +61,10 @@ namespace ruvia::detail {
             throw std::invalid_argument("invalid CONNECT-UDP response metadata");
         }
         head_response = std::move(std::get<0>(negotiated));
+    } else if (datagrams && head_response.status().is_successful()) {
+        // RFC 9297 section 3.4: the route's protocol uses the Capsule Protocol,
+        // so its successful response says so with exactly one ?1.
+        head_response.header_stable_view("Capsule-Protocol", "?1");
     }
     return head_response;
 }
@@ -110,8 +116,8 @@ struct tunnel_upgrade_session_operation final {
     std::optional<session_type>& session_;
 
     [[nodiscard]] task<void> operator()(context& context_value) {
-        const auto head_response =
-            prepare_tunnel_upgrade_response_head(context_value, request_.protocol_version(), udp_);
+        const auto head_response = prepare_tunnel_upgrade_response_head(
+            context_value, request_.protocol_version(), udp_, endpoint_.config().datagrams_);
         std::optional<transport_type> transport;
         if constexpr (requires { commit_upgrade_(context_value, head_response).operator co_await(); }) {
             transport.emplace(co_await commit_upgrade_(context_value, head_response));
@@ -119,8 +125,8 @@ struct tunnel_upgrade_session_operation final {
             transport.emplace(commit_upgrade_(context_value, head_response));
         }
         try {
-            session_.emplace(
-                std::move(*transport), services_.worker(), *context_value.pool(), inbound_, pending_);
+            session_.emplace(std::move(*transport), services_.worker(), *context_value.pool(), inbound_,
+                endpoint_.config().datagrams_, pending_);
         } catch (...) {
             transport->abort();
             throw;

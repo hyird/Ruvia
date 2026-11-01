@@ -61,14 +61,16 @@ task<void> finish_tunnel(void* target, task<void> (*finish_value)(void*),
 }  // namespace
 
 http_tunnel::http_tunnel(std::pmr::memory_resource& resource, const worker_handle& worker_value,
-    void* target, read_type read, write_type write, finish_type finish_value, abort_type abort) noexcept
+    void* target, read_type read, write_type write, finish_type finish_value, abort_type abort,
+    bool datagrams) noexcept
     : resource_(resource),
       worker_(worker_value),
       target_(target),
       read_(read),
       write_(write),
       finish_(finish_value),
-      abort_(abort) {
+      abort_(abort),
+      datagrams_(datagrams) {
     operations_.bind_worker(worker_);
 }
 
@@ -192,7 +194,13 @@ void http_capsule_stream::abort() & noexcept {
         state_->abort();
     }
 }
+// datagrams() and udp() build on this one gate.
 http_capsule_stream http_tunnel::capsules(http_capsule_config config) & {
+    // The route protocol owns Capsule Protocol negotiation (RFC 9297 section
+    // 3.4); a route that did not declare datagrams never advertised it.
+    if (!datagrams_) {
+        throw std::logic_error("HTTP tunnel route did not declare datagrams");
+    }
     return http_capsule_stream(*this, config);
 }
 http_capsule_stream http_client_tunnel::capsules(http_capsule_config config) && {

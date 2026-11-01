@@ -28,6 +28,9 @@ class tunnel_controller final {
 public:
     RUVIA_ROUTES_BEGIN(tunnel_controller)
     RUVIA_GET("/health", health);
+    // datagrams_ declares the Capsule Protocol (Capsule-Protocol: ?1 on the
+    // 2xx, and the tunnel's udp()/datagrams()/capsules() facades); connect-udp
+    // implies it, so here it only documents the route's protocol.
     const ruvia::http_tunnel_route_config options{
         .peer_transport_fin_timeout_ = std::chrono::seconds(2), .datagrams_ = true};
     RUVIA_CONNECT("echo.example:443", bytes);

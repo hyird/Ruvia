@@ -36,7 +36,9 @@ struct http2_connection_options final {
     // The resource must outlive the connection and any escaped events or
     // credits, including their owned heads and trailers.
     std::pmr::memory_resource* resource_{nullptr};
+    // Client-only: http2_connection::server throws std::invalid_argument when set.
     bool enable_push_{false};
+    // Client-only, like enable_push_.
     // Enable only for an authenticated h2 connection to an origin server.
     // RFC 8336 forbids using ORIGIN over h2c or through an explicit proxy.
     bool receive_origin_advertisements_{false};

@@ -179,12 +179,12 @@ public:
     test_app& trusted_proxies(trusted_proxy_config config);
     test_app& trusted_proxies(std::nullptr_t);
 
+    // Same registration rules as application: a second app-wide handler, a
+    // "/" prefix (here and in use_at) and duplicate normalized prefixes throw
+    // std::invalid_argument rather than allowing production and in-memory
+    // tests to choose different handlers by call order.
     test_app& on_error(http_error_handler handler);
     test_app& on_not_found(http_not_found_handler handler);
-    // Prefixes use the same segment and trailing-slash normalization as application;
-    // duplicate normalized registrations throw std::invalid_argument rather
-    // than allowing production and in-memory tests to choose different
-    // handlers by call order.
     test_app& on_error(scoped_error_handler_options options);
     test_app& on_not_found(scoped_not_found_handler_options options);
 

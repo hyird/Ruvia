@@ -199,7 +199,10 @@ struct http_tunnel_route_config final {
     // input. A handler may half-close and continue reading without this deadline.
     std::chrono::milliseconds peer_transport_fin_timeout_{5000};
     // Declares HTTP Datagram semantics (capsules) for an upgrade-protocol
-    // tunnel. CONNECT-UDP enables this automatically.
+    // tunnel: a 2xx response carries Capsule-Protocol: ?1 (RFC 9297 section
+    // 3.4) and the handler may use http_tunnel::datagrams(), udp() and
+    // capsules(). CONNECT-UDP enables this automatically; plain CONNECT
+    // rejects it.
     bool datagrams_{};
 };
 
@@ -234,8 +237,10 @@ public:
     task<void> finish() && = delete;
     void abort() noexcept;
     // Borrow the established route tunnel for HTTP Datagrams. The route protocol
-    // owns negotiation; use only in its negotiated datagram handler, exclusively
-    // with this tunnel. Capsule Protocol limits apply to encoded datagrams.
+    // owns negotiation: these throw std::logic_error unless the route declared
+    // http_tunnel_route_config::datagrams_. Use only in the negotiated datagram
+    // handler, exclusively with this tunnel. Capsule Protocol limits apply to
+    // encoded datagrams.
     [[nodiscard]] http_datagram_stream datagrams(http_capsule_config config = {}) &;
     http_datagram_stream datagrams(http_capsule_config = {}) && = delete;
     [[nodiscard]] http_udp_tunnel udp(http_capsule_config config = {}) &;
@@ -254,7 +259,8 @@ private:
     // malformed: the received tunnel data is malformed (RFC 9297 section 3.3).
     using abort_type = void (*)(void*, bool malformed) noexcept;
     http_tunnel(std::pmr::memory_resource& resource, const worker_handle& worker_value,
-        void* target, read_type read, write_type write, finish_type finish_value, abort_type abort) noexcept;
+        void* target, read_type read, write_type write, finish_type finish_value, abort_type abort,
+        bool datagrams) noexcept;
     [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes);
     void abort_input(bool malformed) noexcept;
     void require_active() const;
@@ -265,6 +271,7 @@ private:
     write_type write_;
     finish_type finish_;
     abort_type abort_;
+    bool datagrams_;
     bool read_active_{false};
     bool write_active_{false};
     bool send_ended_{false};

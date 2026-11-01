@@ -134,12 +134,6 @@ response_stream_writer& context::stream() {
     return output->writer();
 }
 
-response_stream_writer& context::stream_text() {
-    set_stable_response_header("Content-Type", "text/plain; charset=UTF-8");
-    set_stable_response_header("X-Content-Type-Options", "nosniff");
-    return stream();
-}
-
 sse_writer context::stream_sse() {
     set_stable_response_header("Content-Type", "text/event-stream");
     set_stable_response_header("Cache-Control", "no-cache");

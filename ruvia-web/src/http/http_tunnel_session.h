@@ -26,12 +26,13 @@ template <typename transport_type>
 class http_tunnel_session final {
 public:
     http_tunnel_session(transport_type transport, const worker_handle& worker_value,
-        std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, std::string_view pending = {})
+        std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, bool datagrams,
+        std::string_view pending = {})
         : transport_(std::move(transport)),
           inbound_(inbound),
           read_buffer_(&inbound),
           pending_(pending, &inbound),
-          facade_(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk) {}
+          facade_(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk, datagrams) {}
     [[nodiscard]] http_tunnel& tunnel() noexcept {
         return facade_;
     }

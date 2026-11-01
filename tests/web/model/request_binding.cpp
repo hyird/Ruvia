@@ -15,7 +15,7 @@ RUVIA_MODEL(request_binding_body,
     RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN(2, "name is too short")));
 
 RUVIA_MODEL(patch_binding_body,
-    RUVIA_REQUIRED_FIELD(token, ruvia::string, RUVIA_DEFAULT("not-a-required-input")),
+    RUVIA_REQUIRED_FIELD(token, ruvia::string),
     RUVIA_OPTIONAL_FIELD(retries, ruvia::uint32, RUVIA_DEFAULT(0), RUVIA_MIN(1, "must be positive")),
     RUVIA_OPTIONAL_FIELD(remark, ruvia::string, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback"), RUVIA_MIN(2, "too short")),
     RUVIA_OPTIONAL_FIELD(enabled, ruvia::bool_value));

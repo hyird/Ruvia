@@ -162,7 +162,8 @@ HTTP/1 请求头与响应头解析的字段描述符共用内部存储（`parser
 ```cpp
 #include "ruvia/http/http2_connection.h"
 
-// 构造客户端或服务端状态机：
+// 构造客户端或服务端状态机（enable_push_ 与 receive_origin_advertisements_ 仅限客户端，
+// 传给 server() 时抛出 std::invalid_argument）：
 auto conn = ruvia::http2_connection::server({.resource_ = resource});
 
 // 1. 喂入从网络收到的原始字节：

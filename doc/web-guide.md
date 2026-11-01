@@ -33,7 +33,7 @@ int main() {
 | `application& server(server_config config)` | 配置业务 worker 数量、超时、连接数/请求数上限与内存池参数 |
 | `application& listen(listen_config config)` | 注册监听端点（支持可多次调用监听多个地址/端口，重复端点会报错拒绝；TLS 证书在调用时立即加载校验） |
 | `template <middleware M, typename... Args> application& use(Args&&... args)` | 注册全局中间件（每个 worker 独立构造一份实例） |
-| `template <middleware M, typename... Args> application& use_at(middleware_scope_options options, Args&&... args)` | 注册路径前缀作用域中间件（如 `{.prefix_ = "/api"}`，按完整路径段匹配） |
+| `template <middleware M, typename... Args> application& use_at(middleware_scope_options options, Args&&... args)` | 注册路径前缀作用域中间件（如 `{.prefix_ = "/api"}`，按完整路径段匹配；前缀 `"/"` 抛出 `std::invalid_argument`，全局请用 `use`） |
 | `template <typename S, typename... Args> application& use_worker_state(Args&&... args)` | 注册 per-worker 状态类型 `S`，在每个 worker 启动时独立构造一份实例 |
 | `application& load_dotenv(dotenv_options options = {})` | 从当前目录 `.env`（或指定 `std::filesystem::path`）加载环境变量 |
 | `const ruvia::env& env() const noexcept` | 获取进程环境变量只读视图 |
@@ -46,8 +46,8 @@ int main() {
 | `application& http_client(http_client_registration_config config)` / `http_client(std::nullptr_t)` | 注册绑定到每个 worker 的出站 HTTP 客户端池（支持命名 `alias_`，默认 `"default"`） |
 | `application& database(db_registration_config config)` / `database(std::nullptr_t)` | 注册 per-worker SQL 数据库连接池（需 `RUVIA_ENABLE_DATABASE`） |
 | `application& redis(redis_registration_config config)` / `redis(std::nullptr_t)` | 注册 per-worker Redis 连接池（需 `RUVIA_ENABLE_REDIS`） |
-| `application& on_error(http_error_handler handler)` | 注册全局错误处理器（另有 `scoped_error_handler_options` 重载支持按路径前缀注册） |
-| `application& on_not_found(http_not_found_handler handler)` | 注册全局 404 处理器（另有 `scoped_not_found_handler_options` 重载支持按路径前缀注册） |
+| `application& on_error(http_error_handler handler)` | 注册全局错误处理器，重复注册抛出 `std::invalid_argument`（另有 `scoped_error_handler_options` 重载支持按路径前缀注册） |
+| `application& on_not_found(http_not_found_handler handler)` | 注册全局 404 处理器，重复注册抛出 `std::invalid_argument`（另有 `scoped_not_found_handler_options` 重载支持按路径前缀注册） |
 | `application& on_access(access_log_callback callback)` | 注册请求访问日志回调（`noexcept`） |
 | `application& on_connection_failure(connection_failure_callback callback)` | 注册连接/握手层异常回调（`noexcept`） |
 | `application& on_start(app_hook hook)` / `on_stop(app_hook hook)` | 注册启动后（accept 开始前）与停机后的生命周期钩子（在 `run()` 调用线程上执行） |
@@ -163,7 +163,7 @@ ruvia::app().listen({
 - **全局与前缀级错误/404 处理器**：
   - `on_error` 回调签名：`ruvia::task<ruvia::http_response>(ruvia::context& c, ruvia::http_error_info error)`。处理器内再次抛出 `http_error`（含校验 issues）会按该错误生成默认响应，不会变成 500；协议层错误的 `error.code()` 为具体机器码（如 `missing_host`、`conflicting_content_length`），而非按状态派生的 `bad_request`。内置中间件的拒绝同样经过 `on_error`：全局与路由级限流为 `429` / `too_many_requests`（处理器返回的响应之后会追加 `Retry-After` 与 `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`），CSRF 校验失败为 `403` / `csrf_token_mismatch`，会话冲突为 `409` / `session_conflict`。
   - `on_not_found` 回调签名：`ruvia::task<ruvia::http_response>(ruvia::context& c)`。
-  - 支持通过 `{.prefix_ = "/api", .handler_ = &api_error}` 注册前缀作用域处理器，按最长完整路径段匹配（例如 `"/api"` 匹配 `"/api/users"` 但不匹配 `"/apix"`）。
+  - 支持通过 `{.prefix_ = "/api", .handler_ = &api_error}` 注册前缀作用域处理器，按最长完整路径段匹配（例如 `"/api"` 匹配 `"/api/users"` 但不匹配 `"/apix"`）。等价前缀重复注册或前缀 `"/"`（全局只用无前缀形式）抛出 `std::invalid_argument`。
 - **异常文本格式化**：
   - `std::string ruvia::exception_text(const std::exception_ptr& exception)`：将任意捕获的异常安全格式化为 UTF-8 描述文本。
 
@@ -417,7 +417,7 @@ const auto& user = c.request_state<current_user>();
 | `RUVIA_OPTIONAL_FIELD(field, type, ...)` | 可选字段（仅允许字段缺失；若需允许 JSON `null` 须额外加 `RUVIA_NULLABLE`） |
 | `RUVIA_OPTIONAL_FIELD_NAME(wire_name, field, type, ...)` | 指定外部序列化字段名 `wire_name` 的可选字段 |
 | `RUVIA_NULLABLE` | 允许字段值为 `null`（通过 `m.is_null<"field">()` 判断） |
-| `RUVIA_DEFAULT(value)` | 反序列化时若字段缺失（非 `null`），自动填充默认值 `value`（仅用于可选字段） |
+| `RUVIA_DEFAULT(value)` | 反序列化时若字段缺失（非 `null`），自动填充默认值 `value`（仅用于可选字段；用于 `RUVIA_REQUIRED_FIELD` 时编译失败） |
 | `RUVIA_INITIAL(value)` | 在 C++ 中默认构造模型实例时将该字段初始化为 `value` |
 | `RUVIA_OMIT_EMPTY` / `RUVIA_EMIT_NULL` | 控制序列化时缺失或空值字段的输出行为 |
 

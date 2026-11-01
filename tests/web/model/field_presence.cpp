@@ -24,8 +24,6 @@ RUVIA_MODEL(nullable_default_value,
     RUVIA_OPTIONAL_FIELD(value, ruvia::string, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback"), RUVIA_MIN(2, "too short")));
 RUVIA_MODEL(invalid_default_value,
     RUVIA_OPTIONAL_FIELD(value, ruvia::uint32, RUVIA_DEFAULT(3), RUVIA_MIN(5, "too small")));
-RUVIA_MODEL(required_default_value,
-    RUVIA_REQUIRED_FIELD(value, ruvia::string, RUVIA_DEFAULT("fallback")));
 RUVIA_MODEL(named_value,
     RUVIA_OPTIONAL_FIELD_NAME("wire_value", value, ruvia::string, RUVIA_NULLABLE, RUVIA_DEFAULT("fallback")));
 RUVIA_MODEL(patch_value,
@@ -119,8 +117,6 @@ RUVIA_TEST(model_patch_public_states_distinguish_omission_clear_and_assignment) 
 }
 
 RUVIA_TEST(model_defaults_only_fill_optional_missing_values) {
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<required_default_value>("{}"); }));
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_form<required_default_value>(""); }));
     auto missing = ruvia::from_json<nullable_default_value>("{}");
     RUVIA_CHECK(missing.get<"value">()->view() == "fallback");
     RUVIA_CHECK(!missing.is_present<"value">());

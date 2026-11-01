@@ -273,6 +273,11 @@ http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_ro
     impl_->connection_.begin_connection();
 }
 http2_connection http2_connection::server(http2_connection_options options) {
+    // Server push (RFC 9113 section 8.4) and ORIGIN receipt (RFC 8336 section 2)
+    // are client roles; a server configured with them would silently ignore them.
+    if (options.enable_push_ || options.receive_origin_advertisements_) {
+        throw std::invalid_argument("HTTP/2 server connection does not accept client-only options");
+    }
     return http2_connection(options.resource_, http2_role::server, false, false,
         options.receive_observer_, options.receive_observer_context_);
 }

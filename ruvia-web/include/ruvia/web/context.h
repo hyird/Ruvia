@@ -675,6 +675,8 @@ public:
 
     [[nodiscard]] response_stream_writer& stream();
 
+    // Sends text/plain; charset=UTF-8 and X-Content-Type-Options: nosniff,
+    // like text(); an X-Content-Type-Options the application set is kept.
     [[nodiscard]] response_stream_writer& stream_text();
 
     [[nodiscard]] sse_writer stream_sse();
@@ -729,6 +731,8 @@ public:
     [[nodiscard]] http_response body(std::span<const std::byte> body) const;
     [[nodiscard]] http_response body(static_text body) const;
 
+    // text/plain; charset=UTF-8 with X-Content-Type-Options: nosniff (an
+    // application-set X-Content-Type-Options is kept), like stream_text().
     [[nodiscard]] http_response text(std::string_view body) const;
     template <std::same_as<std::pmr::string> string_type>
     [[nodiscard]] http_response text(string_type&& body_value) const {

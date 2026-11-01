@@ -51,12 +51,15 @@ public:
     RUVIA_ROUTES_BEGIN(client_tunnel_routes)
     RUVIA_CONNECT("client-target.test:443", echo);
     RUVIA_CONNECT_PROTOCOL("test-protocol", "/tunnel", echo);
-    RUVIA_CONNECT_PROTOCOL("test-capsules", "/capsules", capsules);
+    const ruvia::http_tunnel_route_config capsule_route{.datagrams_ = true};
+    RUVIA_CONNECT_PROTOCOL("test-capsules", "/capsules", capsules, capsule_route);
+    RUVIA_CONNECT_PROTOCOL("test-no-datagrams", "/no-datagrams", no_datagrams);
     RUVIA_GET("/sibling", sibling);
     RUVIA_ROUTES_END
 
     ruvia::task<void> echo(ruvia::context& c);
     ruvia::task<void> capsules(ruvia::context& c);
+    ruvia::task<void> no_datagrams(ruvia::context& c);
     ruvia::task<ruvia::http_response> sibling(ruvia::context& c) {
         co_return c.text("sibling");
     }
@@ -206,6 +209,31 @@ ruvia::task<void> client_tunnel_routes::capsules(ruvia::context& c) {
     }
     co_await stream.finish();
 }
+
+// The route protocol owns Capsule Protocol negotiation (RFC 9297 section 3.4):
+// a route that did not declare datagrams cannot open a capsule facade, and the
+// raw tunnel stays usable.
+ruvia::task<void> client_tunnel_routes::no_datagrams(ruvia::context& c) {
+    auto& tunnel = c.tunnel();
+    unsigned rejected = 0;
+    try {
+        static_cast<void>(tunnel.datagrams());
+    } catch (const std::logic_error&) {
+        ++rejected;
+    }
+    try {
+        static_cast<void>(tunnel.udp());
+    } catch (const std::logic_error&) {
+        ++rejected;
+    }
+    try {
+        static_cast<void>(tunnel.capsules());
+    } catch (const std::logic_error&) {
+        ++rejected;
+    }
+    co_await tunnel.write(rejected == 3 ? std::string_view("rejected") : std::string_view("accepted"));
+    co_await tunnel.finish();
+}
 }  // namespace
 RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after_shutdown) {
     auto& io = ruvia::test::new_test_io_context();
@@ -223,6 +251,8 @@ RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after
                 if (!result_value.tunnel()) {
                     throw std::runtime_error("capsule CONNECT rejected");
                 }
+                // RFC 9297 section 3.4: the datagram route's 2xx advertises it.
+                RUVIA_CHECK_EQ(result_value.tunnel()->header("Capsule-Protocol"), std::string_view("?1"));
                 {
                     auto stream = std::move(*result_value.tunnel()).capsules();
                     std::string bytes_value(4099, 'c');
@@ -238,6 +268,22 @@ RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after
                     RUVIA_CHECK(!(co_await stream.read()));
                     // Discarding a cold read expires its scope without running it.
                     auto pending = stream.read();
+                }
+                {
+                    // Without declared datagrams: no Capsule-Protocol, and the
+                    // handler's datagrams()/udp()/capsules() throw std::logic_error.
+                    auto plain_result = co_await client_origin.open_tunnel({.authority_ = "proxy.test", .protocol_ = "test-no-datagrams", .target_ = "/no-datagrams"});
+                    if (!plain_result.tunnel()) {
+                        throw std::runtime_error("protocol CONNECT without datagrams rejected");
+                    }
+                    auto plain = std::move(*plain_result.tunnel());
+                    RUVIA_CHECK(!plain.header("Capsule-Protocol"));
+                    std::string answer;
+                    while (auto bytes = co_await plain.read()) {
+                        answer.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+                    }
+                    RUVIA_CHECK_EQ(answer, std::string("rejected"));
+                    co_await plain.finish();
                 }
                 auto second = co_await client_origin.open_tunnel({.authority_ = "proxy.test", .protocol_ = "test-capsules", .target_ = "/capsules"});
                 if (!second.tunnel()) {

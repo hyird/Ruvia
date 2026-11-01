@@ -50,7 +50,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 ### 1.2 流式响应写入（`response_stream_writer`）
 
-使用 `RUVIA_GET(path, handler, ...)`（或 `RUVIA_POST` 等）且处理器返回 `ruvia::task<void>` 时，框架自动将其推导为流式响应路由。通过 `c.stream()`（默认二进制流）或 `c.stream_text()`（自动设置 `text/plain; charset=utf-8`）获取 `response_stream_writer&`：
+使用 `RUVIA_GET(path, handler, ...)`（或 `RUVIA_POST` 等）且处理器返回 `ruvia::task<void>` 时，框架自动将其推导为流式响应路由。通过 `c.stream()`（默认二进制流）或 `c.stream_text()`（自动设置 `text/plain; charset=UTF-8` 与 `X-Content-Type-Options: nosniff`，与缓冲的 `c.text(...)` 相同；应用已设置的 `X-Content-Type-Options` 保留）获取 `response_stream_writer&`：
 
 | 方法签名 | 说明 |
 | --- | --- |
@@ -254,7 +254,7 @@ TLS 隧道把对端未发送 `close_notify` 就关闭 TCP 视为输入结束，`
 
 ### 4.2 服务端 `CONNECT-UDP`（RFC 9298）与 Capsule 数据报隧道
 
-使用 `RUVIA_CONNECT_PROTOCOL("connect-udp", path, handler, options, ...)`（设置 `http_tunnel_route_config{.datagrams_ = true}`）注册 RFC 9298 UDP 代理隧道：
+使用 `RUVIA_CONNECT_PROTOCOL("connect-udp", path, handler, options, ...)` 注册 RFC 9298 UDP 代理隧道（`connect-udp` 路由自动设置 `http_tunnel_route_config{.datagrams_ = true}`，下例显式写出仅为说明）：
 
 ```cpp
 inline constexpr ruvia::http_tunnel_route_config udp_tunnel_options{
@@ -271,6 +271,8 @@ ruvia::task<void> handle_udp(ruvia::context& c) {
     co_await udp.finish();
 }
 ```
+
+其他升级协议隧道（HTTP/2 Extended CONNECT）通过 `http_tunnel_route_config{.datagrams_ = true}` 声明使用 Capsule 协议：该路由的 2xx 响应携带唯一的 `Capsule-Protocol: ?1`（[RFC 9297 §3.4](https://www.rfc-editor.org/rfc/rfc9297.html#section-3.4)；`connect-udp` 由 RFC 9298 握手自行生成，不重复添加），处理器才可调用 `tunnel.datagrams()`、`udp()` 或 `capsules()`；未声明的路由调用这三者抛出 `std::logic_error`（协商由路由协议负责）。普通 `CONNECT` 路由声明 `datagrams_` 时注册即抛出 `std::invalid_argument`。
 
 | 类名 | 核心方法 |
 | --- | --- |

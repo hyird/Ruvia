@@ -45,8 +45,6 @@ RUVIA_MODEL(nullable_dynamic_default,
     RUVIA_OPTIONAL_FIELD(value, ruvia::json_value, RUVIA_NULLABLE, RUVIA_DEFAULT(dynamic_null_default())));
 RUVIA_MODEL(nonnullable_dynamic_default,
     RUVIA_OPTIONAL_FIELD(value, ruvia::json_value, RUVIA_DEFAULT(dynamic_null_default())));
-RUVIA_MODEL(required_default,
-    RUVIA_REQUIRED_FIELD(value, ruvia::int32, RUVIA_DEFAULT(evaluated_default())));
 RUVIA_MODEL(failing_default_model,
     RUVIA_REQUIRED_FIELD(name, ruvia::string),
     RUVIA_OPTIONAL_FIELD(value, ruvia::int32, RUVIA_DEFAULT(failing_default_value())));
@@ -70,13 +68,11 @@ RUVIA_TEST(model_default_expression_is_not_evaluated_for_supplied_or_invalid_inp
     }
     auto null = ruvia::from_json<nullable_default>(R"({"value":null})");
     RUVIA_CHECK(null.is_null<"value">());
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_json<required_default>("{}"); }));
     RUVIA_CHECK_EQ(evaluations, std::size_t{0});
     const auto valid_form = ruvia::from_form<optional_default>("value=9");
     RUVIA_CHECK_EQ(valid_form.get<"value">()->value_, 9);
     RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_form<optional_default>("value=wrong"); }));
     RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_form<optional_default>("value=8&value=9"); }));
-    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::from_form<required_default>(""); }));
     RUVIA_CHECK_EQ(evaluations, std::size_t{0});
 }
 

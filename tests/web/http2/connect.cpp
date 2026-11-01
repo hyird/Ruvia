@@ -97,7 +97,8 @@ public:
     RUVIA_CONNECT("target.test:443", echo, options);
     RUVIA_CONNECT_PROTOCOL("test-tunnel", "/udp/:host/:port", echo);
     RUVIA_CONNECT_PROTOCOL("slow-tunnel", "/slow-tunnel", slow_tunnel);
-    RUVIA_CONNECT_PROTOCOL("capsule-tunnel", "/capsules", capsules);
+    const ruvia::http_tunnel_route_config capsule_options{.datagrams_ = true};
+    RUVIA_CONNECT_PROTOCOL("capsule-tunnel", "/capsules", capsules, capsule_options);
     RUVIA_POST("/slow-upload", slow_upload, ruvia::stream_body);
     RUVIA_GET("/after", after);
     RUVIA_POST("/expect-rejected", expect_rejected);

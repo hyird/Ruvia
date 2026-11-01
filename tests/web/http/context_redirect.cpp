@@ -1,6 +1,7 @@
 #include <cstdio>
 #include <exception>
 #include <iterator>
+#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -326,6 +327,20 @@ RUVIA_TEST(context_body_applies_context_headers) {
         RUVIA_CHECK_EQ(response.body_bytes(), std::string_view("data"));
         RUVIA_CHECK_EQ(response.header("Content-Type"), std::string_view("text/plain"));
         RUVIA_CHECK_EQ(response.header("X-Custom"), std::string_view("v"));
+        co_return;
+    });
+}
+
+RUVIA_TEST(context_text_responses_send_nosniff_unless_the_application_set_it) {
+    (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
+        const auto borrowed = context.text("plain");
+        RUVIA_CHECK_EQ(borrowed.header("Content-Type"), std::string_view("text/plain; charset=UTF-8"));
+        RUVIA_CHECK_EQ(borrowed.header("X-Content-Type-Options"), std::string_view("nosniff"));
+        const auto owned = context.text(std::pmr::string("plain", context.arena()));
+        RUVIA_CHECK_EQ(owned.header("X-Content-Type-Options"), std::string_view("nosniff"));
+        context.header("X-Content-Type-Options", "application-value");
+        const auto configured = context.text("plain");
+        RUVIA_CHECK_EQ(configured.header("X-Content-Type-Options"), std::string_view("application-value"));
         co_return;
     });
 }

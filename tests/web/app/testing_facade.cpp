@@ -930,6 +930,35 @@ RUVIA_TEST(testing_facade_rejects_duplicate_normalized_fallback_prefixes) {
     RUVIA_CHECK(rejects_malformed_prefixed_scope("/api#fragment"));
 }
 
+RUVIA_TEST(testing_facade_rejects_root_scopes_and_second_app_wide_fallbacks) {
+    const auto rejected = [](auto&& registration) {
+        try {
+            registration();
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    ruvia::test_app app;
+    // The prefix-less form is the only app-wide spelling; "/" would shadow it.
+    RUVIA_CHECK(rejected([&app] { app.on_not_found({.prefix_ = "/", .handler_ = &api_scoped_miss}); }));
+    RUVIA_CHECK(rejected([&app] { app.on_error({.prefix_ = "//", .handler_ = &facade_error}); }));
+    RUVIA_CHECK(rejected([&app] { app.use_at<testing_facade_scoped>({.prefix_ = "/"}, "root"); }));
+
+    app.on_not_found(&facade_not_found);
+    app.on_error(&facade_error);
+    RUVIA_CHECK(rejected([&app] { app.on_not_found(&api_scoped_miss); }));
+    RUVIA_CHECK(rejected([&app] { app.on_error(&facade_error); }));
+
+    // Neither the rejected scopes nor the rejected replacement took effect.
+    const auto missing = app.request(ruvia::test_request::get("/nope"));
+    RUVIA_CHECK_EQ(missing.status(), ruvia::http_status::not_found);
+    RUVIA_CHECK_EQ(missing.body(), std::string_view("custom-miss"));
+    const auto matched = app.request(ruvia::test_request::get("/t/hello"));
+    RUVIA_CHECK_EQ(matched.status(), ruvia::http_status::ok);
+    RUVIA_CHECK(!matched.header("X-Test-Scope"));
+}
+
 RUVIA_TEST(testing_facade_isolates_instances) {
     // Two TestApps own separate controller instances and worker state.
     ruvia::test_app first;

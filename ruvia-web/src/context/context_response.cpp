@@ -37,6 +37,16 @@ void finalize_context_response(detail::context_response_state& state_value, http
     state_value.finalize(std::move(response));
 }
 
+// text() and stream_text(): plain UTF-8 text plus nosniff, so a browser never
+// sniffs application text into an active content type. An
+// X-Content-Type-Options the application set keeps its value.
+void mark_plain_text(http_response& response) {
+    response.content_type(http_content_type::text_plain_utf8);
+    if (!response.header("X-Content-Type-Options")) {
+        response.header_stable_view("X-Content-Type-Options", "nosniff");
+    }
+}
+
 }  // namespace
 
 void context::status(http_status_code status_code) {
@@ -99,7 +109,7 @@ http_response context::body(static_text body) const {
 
 http_response context::text(std::string_view body) const {
     http_response response(arena());
-    response.content_type(http_content_type::text_plain_utf8);
+    mark_plain_text(response);
     response.body(body);
     apply_response_state(response, std::nullopt);
     return response;
@@ -107,7 +117,7 @@ http_response context::text(std::string_view body) const {
 
 http_response context::text_owned(std::pmr::string&& body) const {
     http_response response(arena());
-    response.content_type(http_content_type::text_plain_utf8);
+    mark_plain_text(response);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
     return response;
@@ -115,10 +125,15 @@ http_response context::text_owned(std::pmr::string&& body) const {
 
 http_response context::text(static_text body) const {
     http_response response(arena());
-    response.content_type(http_content_type::text_plain_utf8);
+    mark_plain_text(response);
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
     return response;
+}
+
+response_stream_writer& context::stream_text() {
+    response_state().update_metadata(mark_plain_text);
+    return stream();
 }
 
 http_response context::json_serialized(std::pmr::string& body) const {

@@ -1,4 +1,5 @@
 #include <array>
+#include <stdexcept>
 
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
@@ -41,6 +42,20 @@ RUVIA_TEST(http2_connection_ignores_origin_without_authenticated_origin_context)
     RUVIA_CHECK(server.submit_origin_advertisement(std::array<std::string_view, 1>{"https://example.test"}) == ruvia::http2_submit_status::accepted);
     relay.transfer(server, client);
     RUVIA_CHECK(!client.next_event());
+}
+
+RUVIA_TEST(http2_connection_server_rejects_client_only_options) {
+    const auto rejected = [](ruvia::http2_connection_options options) {
+        try {
+            static_cast<void>(ruvia::http2_connection::server(options));
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    RUVIA_CHECK(rejected({.enable_push_ = true}));
+    RUVIA_CHECK(rejected({.receive_origin_advertisements_ = true}));
+    RUVIA_CHECK(!rejected({}));
 }
 
 RUVIA_TEST(http2_connection_advertisement_validates_stream_state_and_rejects_tunnel_and_reserved_frames) {

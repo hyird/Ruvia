@@ -49,6 +49,10 @@ make_comma_quoted_wire_name_colon() noexcept {
 template <typename field_value_type, bool is_required, typename options_type, fixed_string field_wire_name>
 class model_field final {
     static_assert(std::is_empty_v<options_type>, "model field options must be stateless metadata");
+    // A default never satisfies a required input field, so accepting one would
+    // silently ignore it.
+    static_assert(!(is_required && options_type::has_default),
+        "RUVIA_DEFAULT applies only to a missing optional field; declare it with RUVIA_OPTIONAL_FIELD");
 
 public:
     using value_type = field_value_type;
@@ -160,15 +164,12 @@ public:
     }
 
     void apply_default(std::pmr::memory_resource* resource) {
-        // A default never satisfies a required input field.
-        if constexpr (!required) {
-            if (state_ != detail::model_field_state::missing) {
-                return;
-            }
-            options_type::apply_default([this, resource]<typename input_type>(input_type&& value) {
-                this->assign(std::forward<input_type>(value), resource);
-            });
+        if (state_ != detail::model_field_state::missing) {
+            return;
         }
+        options_type::apply_default([this, resource]<typename input_type>(input_type&& value) {
+            this->assign(std::forward<input_type>(value), resource);
+        });
     }
 
     [[nodiscard]] constexpr bool emit_null() const noexcept {
