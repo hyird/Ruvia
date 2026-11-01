@@ -3,14 +3,16 @@
 #include <chrono>
 #include <cstring>
 #include <limits>
+#include <memory_resource>
 #include <stdexcept>
+#include <string>
 #include <utility>
-#include <variant>
 
+#include "ruvia/http/http_date.h"
 #include "ruvia/http/http_number_format.h"
 
 #include "cookie/cookie_validation.h"
-#include "field/http_imf_fixdate.h"
+#include "util/http_text_overlap.h"
 #include "util/http_wire_sink.h"
 
 namespace ruvia {
@@ -37,12 +39,12 @@ set_cookie_plan::set_cookie_plan(
         if (!std::in_range<std::time_t>(seconds)) {
             throw std::invalid_argument("cookie Expires is not representable");
         }
-        const auto date = detail::http_format_date(static_cast<std::time_t>(seconds));
-        if ((date.index() != 0)) {
+        const auto date = format_http_date(static_cast<std::time_t>(seconds));
+        if (!date) {
             throw std::invalid_argument("cookie Expires is not representable");
         }
-        expires_size_ = std::get<0>(date).size();
-        std::memcpy(expires_buffer_.data(), std::get<0>(date).data(), expires_size_);
+        expires_size_ = date->size();
+        std::memcpy(expires_buffer_.data(), date->data(), expires_size_);
     }
     if (has_max_age_) {
         max_age_value_ = static_cast<std::uint64_t>(options.max_age_->count());
@@ -98,6 +100,21 @@ set_cookie_plan::set_cookie_plan(
     }
 
     detail::validate_cookie(name, value, options);
+}
+
+char* write_cookie_request_pair(char* out, std::string_view name, std::string_view value) {
+    const std::string_view written(out, cookie_request_pair_size(name, value));
+    if (detail::http_text_overlaps(name, written) || detail::http_text_overlaps(value, written)) {
+        // Consume the inputs before any output byte overwrites them.
+        const std::pmr::string snapshot_name(name);
+        const std::pmr::string snapshot_value(value);
+        return write_cookie_request_pair(out, snapshot_name, snapshot_value);
+    }
+    detail::http_raw_wire_sink sink(out);
+    sink.append(name);
+    sink.append('=');
+    sink.append(value);
+    return sink.position();
 }
 
 void set_cookie_plan::write(char* cursor_value) const {

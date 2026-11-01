@@ -93,37 +93,27 @@ private:
 [[nodiscard]] http_response_body_plan plan_http_response_body(
     http_known_method request_method, http_status_code response_status) noexcept;
 
+namespace detail {
+
+// A buffered response sends payload bytes only when its method/status permit a
+// body and the representation is non-empty.
+[[nodiscard]] constexpr bool http_buffered_response_sends_body(
+    const http_response_body_plan& body_plan, std::uint64_t content_length) noexcept {
+    return !body_plan.body_suppressed() && content_length != 0;
+}
+
+}  // namespace detail
+
 class http_buffered_response_write_plan final {
 public:
-    [[nodiscard]] http_known_method request_method() const noexcept {
-        return body_plan_.request_method();
-    }
-    [[nodiscard]] http_status_code response_status() const noexcept {
-        return body_plan_.response_status();
-    }
     [[nodiscard]] http_response_body_plan body_plan() const noexcept {
         return body_plan_;
     }
     [[nodiscard]] std::uint64_t content_length() const noexcept {
         return content_length_;
     }
-    [[nodiscard]] bool body_suppressed() const noexcept {
-        return body_plan_.body_suppressed();
-    }
-    [[nodiscard]] bool status_allows_body() const noexcept {
-        return body_plan_.status_allows_body();
-    }
-    [[nodiscard]] bool auto_content_length_allowed() const noexcept {
-        return body_plan_.auto_content_length_allowed();
-    }
-    [[nodiscard]] bool explicit_content_length_allowed() const noexcept {
-        return body_plan_.explicit_content_length_allowed();
-    }
-    [[nodiscard]] bool transfer_encoding_allowed() const noexcept {
-        return body_plan_.transfer_encoding_allowed();
-    }
     [[nodiscard]] bool send_body() const noexcept {
-        return !body_suppressed() && content_length_ != 0;
+        return detail::http_buffered_response_sends_body(body_plan_, content_length_);
     }
     [[nodiscard]] bool matches_response(const http_response& response) const noexcept;
 

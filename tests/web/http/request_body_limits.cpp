@@ -28,6 +28,7 @@
 
 #include "context_body_decoding_fixture.h"
 #include "http_server_fixture.h"
+#include "multipart_boundary_fixture.h"
 #include "test_io_context.h"
 
 namespace request_body_limits_test {
@@ -102,7 +103,7 @@ class body_lane_routes final {
     ruvia::task<ruvia::http_response> read_multipart(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
         ruvia::multipart_reader reader(context_value.req().body_reader(),
-            {.boundary_ = ruvia::multipart_boundary("lazy"), .resource_ = context_value.pool()});
+            {.boundary_ = ruvia::testing::make_multipart_boundary("lazy"), .resource_ = context_value.pool()});
         auto first = reader.read();
         auto last = reader.read();
         std::pmr::string body(context_value.allocator<char>());
@@ -487,10 +488,16 @@ RUVIA_TEST(server_rejects_absolute_form_targets_outside_http_schemes) {
 }
 
 RUVIA_TEST(web_request_decodes_content_coding_stacks_in_reverse_order) {
-    constexpr std::array codings{ruvia::http_content_coding::gzip,
-        ruvia::http_content_coding::deflate};
     const std::string plain(8192, 'm');
-    auto encoded = ruvia::encode_http_content(codings, plain, {.max_encoded_bytes_ = plain.size()});
+    // Applied in Content-Encoding order: gzip first, then deflate.
+    const auto gzipped = ruvia::encode_http_content(
+        ruvia::http_content_coding::gzip, plain, {.max_encoded_bytes_ = plain.size()});
+    RUVIA_CHECK(gzipped.has_value());
+    if (!gzipped.has_value()) {
+        return;
+    }
+    const auto encoded = ruvia::encode_http_content(
+        ruvia::http_content_coding::deflate, *gzipped, {.max_encoded_bytes_ = plain.size()});
     RUVIA_CHECK(encoded.has_value());
     if (!encoded.has_value()) {
         return;

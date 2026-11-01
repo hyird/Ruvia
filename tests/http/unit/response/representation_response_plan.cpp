@@ -69,8 +69,8 @@ RUVIA_TEST(representation_response_plan_resolves_supported_range_outcomes) {
     const auto partial = ruvia::plan_http_representation_response(partial_req, representation, options);
     RUVIA_CHECK(partial.partial() != nullptr);
     if (const auto* range = partial.partial()) {
-        RUVIA_CHECK_EQ(range->offset(), std::uint64_t{2});
-        RUVIA_CHECK_EQ(range->length(), std::uint64_t{3});
+        RUVIA_CHECK_EQ(range->offset_, std::uint64_t{2});
+        RUVIA_CHECK_EQ(range->length_, std::uint64_t{3});
     }
     RUVIA_CHECK_EQ(partial.status(), ruvia::http_status::partial_content);
 
@@ -391,8 +391,8 @@ RUVIA_TEST(representation_response_plan_keeps_resolved_values_after_input_lifeti
     RUVIA_CHECK_EQ(plan.status(), ruvia::http_status::partial_content);
     RUVIA_CHECK(plan.partial() != nullptr);
     if (const auto* range = plan.partial()) {
-        RUVIA_CHECK_EQ(range->offset(), std::uint64_t{2});
-        RUVIA_CHECK_EQ(range->length(), std::uint64_t{3});
+        RUVIA_CHECK_EQ(range->offset_, std::uint64_t{2});
+        RUVIA_CHECK_EQ(range->length_, std::uint64_t{3});
     }
 }
 

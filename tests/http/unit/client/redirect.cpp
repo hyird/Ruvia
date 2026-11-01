@@ -21,7 +21,7 @@ using ruvia::http_client_resolved_redirect;
 using ruvia::http_origin_view;
 using ruvia::http_scheme;
 using ruvia::http_unique_header_status;
-using ruvia::is_http_client_redirect_status;
+using ruvia::is_http_redirect_status;
 using ruvia::lookup_unique_http_client_response_header;
 using ruvia::plan_http_client_redirect_request;
 using ruvia::resolve_http_client_redirect_target;
@@ -82,14 +82,14 @@ RUVIA_TEST(http_client_redirect_status_set) {
     for (const ruvia::http_status_code status : {ruvia::http_status::moved_permanently,
              ruvia::http_status::found, ruvia::http_status::see_other,
              ruvia::http_status::temporary_redirect, ruvia::http_status::permanent_redirect}) {
-        RUVIA_CHECK(is_http_client_redirect_status(status));
+        RUVIA_CHECK(is_http_redirect_status(status));
     }
     for (const ruvia::http_status_code status :
         {ruvia::http_status::ok, ruvia::http_status::no_content,
             ruvia::http_status::multiple_choices, ruvia::http_status::not_modified,
             ruvia::http_status::use_proxy, ruvia::http_status_code::from_value(306),
             ruvia::http_status_code::from_value(399), ruvia::http_status::not_found}) {
-        RUVIA_CHECK(!is_http_client_redirect_status(status));
+        RUVIA_CHECK(!is_http_redirect_status(status));
     }
 }
 

@@ -154,10 +154,4 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
     }
 }
 
-cache_control parse_cache_control(std::string_view value) noexcept {
-    cache_control_field_parser parser;
-    parser.update(value);
-    return parser.finish();
-}
-
 }  // namespace ruvia

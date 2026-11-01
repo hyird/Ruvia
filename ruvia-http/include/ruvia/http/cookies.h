@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -46,50 +45,18 @@ inline constexpr std::chrono::system_clock::time_point cookie_deletion_expires{}
 // since the limit binds user agents, not servers.
 inline constexpr std::int64_t max_cookie_age_seconds = 34560000;
 
-// Cookie request pairs always include '=', including for an empty name.
-// Inputs may borrow header_value, including its terminating NUL.
-template <typename string>
-void append_cookie_request_pair(string& header_value, std::string_view name, std::string_view value) {
-    const auto start = header_value.size();
-    const std::size_t separator_bytes = start == 0 ? 0 : 2;
-    const auto remaining = header_value.max_size() - start;
-    if (remaining < separator_bytes + 1 || name.size() > remaining - separator_bytes - 1 ||
-        value.size() > remaining - separator_bytes - 1 - name.size()) {
-        throw std::length_error("cookie request header length is not representable");
-    }
-    const auto borrowed_offset = [&](std::string_view input) -> std::optional<std::size_t> {
-        const auto* const first = header_value.data();
-        const std::less<const char*> before;
-        if (input.empty() || before(input.data(), first) || before(first + start, input.data())) {
-            return std::nullopt;
-        }
-        return static_cast<std::size_t>(input.data() - first);
-    };
-    const auto name_offset = borrowed_offset(name);
-    const auto value_offset = borrowed_offset(value);
-    header_value.reserve(start + separator_bytes + name.size() + 1 + value.size());
-    const auto append_input = [&](std::string_view input, std::optional<std::size_t> offset) {
-        const bool borrows_nul = offset && input.size() == start - *offset + 1;
-        if (offset) {
-            input = std::string_view(header_value.data() + *offset, input.size());
-        }
-        // Punctuation overwrites the old terminator; copy its original NUL
-        // explicitly, while every borrowed prefix remains unchanged.
-        const auto prefix_size = input.size() - static_cast<std::size_t>(borrows_nul);
-        if (prefix_size != 0) {
-            header_value.append(input.data(), prefix_size);
-        }
-        if (borrows_nul) {
-            header_value.push_back('\0');
-        }
-    };
-    if (separator_bytes != 0) {
-        header_value.append("; ", 2);
-    }
-    append_input(name, name_offset);
-    header_value.push_back('=');
-    append_input(value, value_offset);
+// One Cookie request cookie-pair, "name=value". The '=' is always written,
+// including for an empty name, so a nameless value that itself looks like a
+// cookie-pair stays behind '='. Callers join pairs with "; " (RFC 6265
+// section 4.2.1).
+[[nodiscard]] constexpr std::size_t cookie_request_pair_size(std::string_view name, std::string_view value) noexcept {
+    return name.size() + 1U + value.size();
 }
+
+// Writes cookie_request_pair_size(name, value) bytes at out and returns the
+// end of the written pair. The inputs may overlap the written bytes; only that
+// case copies them first, from the default resource.
+char* write_cookie_request_pair(char* out, std::string_view name, std::string_view value);
 
 // Cookie octet validation and name-prefix rules are protocol rules shared by
 // the Set-Cookie writer and outbound cookie jar. is_valid_cookie_value accepts
@@ -166,22 +133,6 @@ public:
 
     [[nodiscard]] std::size_t size() const noexcept {
         return size_;
-    }
-
-    [[nodiscard]] std::string_view name() const noexcept {
-        return name_;
-    }
-
-    [[nodiscard]] std::string_view wire_prefix() const noexcept {
-        return prefix_text_;
-    }
-
-    [[nodiscard]] std::string_view path() const noexcept {
-        return path_;
-    }
-
-    [[nodiscard]] std::string_view domain() const noexcept {
-        return domain_;
     }
 
     // output must cover size() bytes and not overlap the borrowed inputs.

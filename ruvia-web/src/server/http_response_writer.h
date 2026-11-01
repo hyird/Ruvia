@@ -39,7 +39,7 @@ struct http1_buffered_response_write_result final {
     if (response_head_bytes == 0 || bytes_transferred < response_head_bytes) {
         return {};
     }
-    return {plan.response_status(), !error};
+    return {plan.body_plan().response_status(), !error};
 }
 // Only for a final buffered response followed immediately by send shutdown.
 // Linux can carry the response tail and FIN together; other platforms keep

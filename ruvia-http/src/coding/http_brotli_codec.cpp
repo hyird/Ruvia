@@ -36,7 +36,7 @@ std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
     std::pmr::string output("", http_pmr_resource_or_default(resource));
     brotli_decoder_stream decoder(output.get_allocator().resource());
     if (!decoder.initialized()) {
-        return http_content_decode_error::decoder_failure;
+        throw http_content_codec_error("brotli decoder initialization failed");
     }
     auto* state_value = decoder.native();
 
@@ -69,9 +69,10 @@ std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
         }
         if (result_value == BROTLI_DECODER_RESULT_ERROR) {
             decoder.rethrow_allocation_failure();
-            return brotli_allocation_failure(BrotliDecoderGetErrorCode(state_value))
-                       ? http_content_decode_error::decoder_failure
-                       : http_content_decode_error::invalid_content;
+            if (brotli_allocation_failure(BrotliDecoderGetErrorCode(state_value))) {
+                throw http_content_codec_error("brotli decoder ran out of memory");
+            }
+            return http_content_decode_error::invalid_content;
         }
         const bool progressed = produced_output || available_input != before_input;
         if (!progressed ||
@@ -96,7 +97,7 @@ std::optional<std::pmr::string> encode_brotli_content(
             &available_input, &next_input, &available_output, nullptr, nullptr);
         encoder.rethrow_allocation_failure();
         if (compressed != BROTLI_TRUE) {
-            throw http_content_encode_error("brotli encoding failed");
+            throw http_content_codec_error("brotli encoding failed");
         }
         std::size_t produced = 0;
         const auto* bytes_value = BrotliEncoderTakeOutput(state_value, &produced);
@@ -112,7 +113,7 @@ std::optional<std::pmr::string> encode_brotli_content(
             return output;
         }
         if (produced == 0 && available_input == before_input) {
-            throw http_content_encode_error("brotli encoder made no progress");
+            throw http_content_codec_error("brotli encoder made no progress");
         }
     }
 }
@@ -122,7 +123,7 @@ std::optional<std::pmr::string> encode_brotli_content(
     auto* const state_resource = http_pmr_resource_or_default(resource);
     brotli_encoder_stream encoder(state_resource);
     if (!encoder.initialized()) {
-        throw http_content_encode_error("brotli encoder initialization failed");
+        throw http_content_codec_error("brotli encoder initialization failed");
     }
     return encode_brotli_content(encoder, input, max_encoded_bytes, state_resource);
 }

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cstddef>
@@ -377,7 +378,7 @@ RUVIA_TEST(http1_compression_encodes_small_bodies_when_identity_is_refused) {
                              .value_or("");
     RUVIA_CHECK(refused.starts_with("HTTP/1.1 200 "));
     RUVIA_CHECK(has_field(head_fields(refused), "content-encoding: gzip"));
-    const auto decoded = ruvia::decode_http_content(ruvia::http_content_coding::gzip, response_body(refused),
+    const auto decoded = ruvia::decode_http_content(std::array{ruvia::http_content_coding::gzip}, response_body(refused),
         {.max_decoded_bytes_ = 64, .resource_ = std::pmr::get_default_resource()});
     const auto* plain = std::get_if<std::pmr::string>(&decoded);
     RUVIA_CHECK(plain != nullptr && std::string_view(*plain) == "hello");

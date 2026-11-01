@@ -95,7 +95,7 @@ using http2_response_head_plan_result_type =
 [[nodiscard]] inline http2_response_head_plan_result_type http2_buffered_response_head_plan(
     const http_buffered_response_write_plan& write_plan, const http_response& response) noexcept {
     const auto body_plan = write_plan.body_plan();
-    if (write_plan.response_status() != response.status()) {
+    if (body_plan.response_status() != response.status()) {
         return http2_response_head_plan_error::response_status_mismatch;
     }
     if (!write_plan.matches_response(response)) {

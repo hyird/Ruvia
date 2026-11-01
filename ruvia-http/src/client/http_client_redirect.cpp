@@ -181,12 +181,6 @@ struct http_client_redirect_authority final {
 
 }  // namespace
 
-bool is_http_client_redirect_status(http_status_code status) noexcept {
-    return status == http_status::moved_permanently || status == http_status::found ||
-           status == http_status::see_other || status == http_status::temporary_redirect ||
-           status == http_status::permanent_redirect;
-}
-
 http_client_response_header_lookup lookup_unique_http_client_response_header(
     const http_client_response_head& head, std::string_view name) noexcept {
     std::string_view found;

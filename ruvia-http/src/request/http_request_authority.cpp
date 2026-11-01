@@ -81,17 +81,6 @@ std::optional<http_authority_view> parse_http_authority(borrowed_text text) noex
     return detail::http_authority_view_access::make(host, http_authority_port_kind::value, std::get<0>(port));
 }
 
-std::optional<std::string_view> parse_http_authority_host(borrowed_text value) noexcept {
-    if (value.empty()) {
-        return value.view();
-    }
-    const auto authority = parse_http_authority(value);
-    if (!authority) {
-        return std::nullopt;
-    }
-    return authority->host();
-}
-
 bool http_authorities_equal(borrowed_text left, borrowed_text right, std::uint16_t default_port) noexcept {
     return detail::authority_matches_host(left.view(), right.view(), default_port);
 }

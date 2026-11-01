@@ -571,11 +571,7 @@ task<std::string_view> context_request::text() const {
                 .resource_ = decode_resource});
         auto* decoded_content = std::get_if<std::pmr::string>(&decode_result);
         if (decoded_content == nullptr) {
-            const auto error = std::get<http_content_decode_error>(decode_result);
-            if (error == http_content_decode_error::decoder_failure) {
-                throw std::runtime_error("request content decoder failed");
-            }
-            throw http_request_content_decode_error(error);
+            throw http_request_content_decode_error(std::get<http_content_decode_error>(decode_result));
         }
         auto& decoded = context_value->decoded_body();
         decoded = std::move(*decoded_content);

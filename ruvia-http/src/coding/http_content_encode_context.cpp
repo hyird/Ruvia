@@ -68,7 +68,7 @@ std::optional<std::pmr::string> http_content_encode_context::encode(
         case http_content_coding::brotli: {
             detail::brotli_encoder_stream encoder(resource_);
             if (!encoder.initialized()) {
-                throw http_content_encode_error("brotli encoder initialization failed");
+                throw http_content_codec_error("brotli encoder initialization failed");
             }
             return detail::encode_brotli_content(encoder, input, options.max_encoded_bytes_, options.resource_);
         }
@@ -82,7 +82,7 @@ std::optional<std::pmr::string> http_content_encode_context::encode(
             detail::http_resolved_pmr_resource_tag{}, resource_, coding_, resource_);
         if (!created->initialized()) {
             detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, created, resource_);
-            throw http_content_encode_error("content encoder initialization failed");
+            throw http_content_codec_error("content encoder initialization failed");
         }
         impl_ = created;
     }

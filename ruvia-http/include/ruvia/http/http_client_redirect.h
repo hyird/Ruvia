@@ -18,8 +18,6 @@
 
 namespace ruvia {
 
-[[nodiscard]] bool is_http_client_redirect_status(http_status_code status) noexcept;
-
 enum class http_unique_header_status : std::uint8_t {
     absent,
     found,

@@ -222,7 +222,7 @@ struct test_app::impl_type final {
         // and content-forbidden statuses, so the facade must not surface one
         // either. Writer-synthesized fields (Content-Length, Date, Connection)
         // are framing concerns and stay absent here.
-        if (!prepared.write_plan_.body_suppressed()) {
+        if (!prepared.write_plan_.body_plan().body_suppressed()) {
             if (response.file_body() || response.has_multipart_file_body()) {
                 detail::response_file_source source(response,
                     {.worker_ = worker_,

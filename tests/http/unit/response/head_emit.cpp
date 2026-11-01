@@ -262,7 +262,6 @@ RUVIA_TEST(http1_response_head_rejects_status_plan_mismatch) {
 
     response.status(ruvia::http_status::already_reported);
     RUVIA_CHECK(throws_invalid([&] { (void)emit_head(response, plan.head_plan()); }));
-    RUVIA_CHECK_EQ(plan.response_status(), ruvia::http_status::multi_status);
     RUVIA_CHECK_EQ(plan.head_plan().body_plan().response_status(), ruvia::http_status::multi_status);
 }
 

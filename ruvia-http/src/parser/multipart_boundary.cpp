@@ -12,9 +12,10 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] std::optional<multipart_boundary> decode_multipart_boundary_parameter(
-    std::string_view parameter) {
-    std::array<char, 70> decoded{};
+// Decodes a boundary parameter (token or quoted-string) into `decoded`; the
+// boundary rule itself is checked by multipart_boundary.
+[[nodiscard]] std::optional<std::string_view> decode_multipart_boundary_parameter(
+    std::string_view parameter, std::array<char, 70>& decoded) noexcept {
     std::size_t size = 0;
     if (!parameter.empty() && parameter.front() == '"') {
         if (parameter.size() < 2 || parameter.back() != '"') {
@@ -49,7 +50,7 @@ namespace {
         }
     }
 
-    return multipart_boundary::try_create(std::string_view(decoded.data(), size));
+    return std::string_view(decoded.data(), size);
 }
 
 }  // namespace
@@ -66,6 +67,7 @@ multipart_boundary_parse_result parse_multipart_boundary(std::string_view conten
     }
 
     std::optional<multipart_boundary> boundary;
+    std::array<char, 70> decoded{};
     detail::http_mime_parameter_names parameter_names;
     const auto parameters = content_type_value.substr(media_end + 1);
     std::size_t start = 0;
@@ -79,7 +81,9 @@ multipart_boundary_parse_result parse_multipart_boundary(std::string_view conten
                 return multipart_boundary_parse_result::make_failure();
             }
             if (http_ascii_equals_ignore_case(key, "boundary")) {
-                boundary = decode_multipart_boundary_parameter(value);
+                const auto decoded_value = decode_multipart_boundary_parameter(value, decoded);
+                boundary = decoded_value.has_value() ? multipart_boundary::try_create(*decoded_value)
+                                                     : std::nullopt;
                 if (!boundary) {
                     return multipart_boundary_parse_result::make_failure();
                 }

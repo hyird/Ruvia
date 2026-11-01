@@ -102,7 +102,7 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
         runtime->mark_response_committed();
     }
     wake_writer();
-    const auto committed_status = submitted_head->response_status();
+    const auto committed_status = submitted_head->body_plan().response_status();
     const auto fail_after_commit = [this, stream_id, committed_status]() noexcept -> std::optional<http_status_code> {
         submit_reset_no_throw(connection_, stream_id, http2_error_code::internal_error);
         output_budget_.release_and_reconcile(stream_id, connection_);

@@ -3,9 +3,8 @@
 #include <array>
 #include <cstring>
 #include <ctime>
-#include <variant>
 
-#include "field/http_imf_fixdate.h"
+#include "ruvia/http/http_date.h"
 
 namespace ruvia::detail {
 
@@ -41,10 +40,10 @@ std::string_view cached_date_header() noexcept {
         cache.size_ = 0;
         // RFC 9110 section 6.6.1: do not generate Date without a usable clock.
         if (now != std::time_t{-1}) {
-            if (const auto date = http_format_date(now); date.index() == 0) {
+            if (const auto date = format_http_date(now)) {
                 std::memcpy(cache.line_.data(), date_header_prefix.data(), date_header_prefix.size());
-                std::memcpy(cache.line_.data() + date_header_prefix.size(), std::get<0>(date).data(), std::get<0>(date).size());
-                cache.size_ = date_header_prefix.size() + std::get<0>(date).size();
+                std::memcpy(cache.line_.data() + date_header_prefix.size(), date->data(), date->size());
+                cache.size_ = date_header_prefix.size() + date->size();
                 cache.line_[cache.size_++] = date_header_suffix[0];
                 cache.line_[cache.size_++] = date_header_suffix[1];
             }

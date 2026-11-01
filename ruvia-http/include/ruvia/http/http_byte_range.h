@@ -20,14 +20,6 @@ namespace ruvia {
 struct http_byte_range final {
     std::uint64_t offset_{};
     std::uint64_t length_{};
-
-    [[nodiscard]] constexpr std::uint64_t offset() const noexcept {
-        return offset_;
-    }
-
-    [[nodiscard]] constexpr std::uint64_t length() const noexcept {
-        return length_;
-    }
 };
 
 // Bounded, allocation-free result for a byte-range set. The limit protects
@@ -36,7 +28,6 @@ class http_byte_range_set final {
 public:
     static constexpr std::size_t capacity = 16;
 
-    using range = http_byte_range;
     [[nodiscard]] constexpr bool ignored() const noexcept {
         return ignored_;
     }
@@ -47,7 +38,7 @@ public:
         return count_;
     }
     // Both accessors throw std::out_of_range for index >= size().
-    [[nodiscard]] constexpr const range& operator[](std::size_t index) const {
+    [[nodiscard]] constexpr const http_byte_range& operator[](std::size_t index) const {
         if (index >= count_) {
             throw std::out_of_range("HTTP byte range index out of range");
         }
@@ -57,7 +48,7 @@ public:
 private:
     friend http_byte_range_set resolve_http_byte_range_set(std::string_view, std::uint64_t) noexcept;
 
-    std::array<range, capacity> ranges_{};
+    std::array<http_byte_range, capacity> ranges_{};
     std::size_t count_{};
     bool ignored_{true};
 };
@@ -117,7 +108,7 @@ private:
         if (target == result.count_) {
             target = kept++;
         }
-        result.ranges_[target] = http_byte_range_set::range{start, end - start};
+        result.ranges_[target] = http_byte_range{start, end - start};
         result.count_ = kept;
     };
     auto specs = http_trim_ows(field_value.substr(unit.size() + 1));

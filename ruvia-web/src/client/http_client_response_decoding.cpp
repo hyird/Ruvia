@@ -107,10 +107,6 @@ void decode_http_client_response_body(http_client_response_state& state_value,
             throw http_client_error(http_client_error::code_type::response_too_large,
                 "HTTP response exceeds configured byte limit");
         }
-        if (failure != nullptr && *failure == http_content_decode_error::decoder_failure) {
-            throw http_client_error(http_client_error::code_type::protocol_error,
-                "HTTP response content-coding decoder failed");
-        }
         throw http_client_error(http_client_error::code_type::protocol_error,
             "invalid HTTP response Content-Encoding");
     } catch (...) {

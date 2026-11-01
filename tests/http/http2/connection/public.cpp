@@ -1497,7 +1497,7 @@ RUVIA_TEST(http2_public_server_submits_buffered_response_head_and_returns_write_
     const auto submitted = server.submit_response_head(1, response, write_plan);
     RUVIA_CHECK(std::holds_alternative<ruvia::http_buffered_response_write_plan>(submitted));
     if (const auto* plan = std::get_if<ruvia::http_buffered_response_write_plan>(&submitted)) {
-        RUVIA_CHECK(plan->response_status() == ruvia::http_status::ok);
+        RUVIA_CHECK(plan->body_plan().response_status() == ruvia::http_status::ok);
         RUVIA_CHECK(plan->send_body());
         RUVIA_CHECK(plan->content_length() == 7);
     }

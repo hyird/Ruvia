@@ -1,3 +1,4 @@
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -44,7 +45,7 @@ void check_encoder_alias(ruvia::testing::test_context& ruvia_ctx, ruvia::http_co
             RUVIA_CHECK_EQ(std::string_view(output).substr(padding_offset, prefix_size - padding_offset),
                 std::string(prefix_size - padding_offset, '#'));
 
-            const auto decoded = ruvia::decode_http_content(coding,
+            const auto decoded = ruvia::decode_http_content(std::array{coding},
                 std::string_view(output).substr(prefix_size),
                 {.max_decoded_bytes_ = input.size(), .resource_ = &resource});
             RUVIA_CHECK(std::holds_alternative<std::pmr::string>(decoded));

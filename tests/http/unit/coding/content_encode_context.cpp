@@ -95,8 +95,8 @@ RUVIA_TEST(http_content_encode_context_reuse_matches_one_shot_bytes) {
                 const auto actual = encode_with(context, input, input.size() + 1024);
                 RUVIA_CHECK(actual.has_value());
                 RUVIA_CHECK(actual.value_or(std::string()) == expected);
-                const auto decoded =
-                    decode_http_content(coding, actual.value_or(std::string()), {.max_decoded_bytes_ = size});
+                const auto decoded = decode_http_content(
+                    std::array{coding}, actual.value_or(std::string()), {.max_decoded_bytes_ = size});
                 RUVIA_CHECK(std::holds_alternative<std::pmr::string>(decoded));
                 if (const auto* content = std::get_if<std::pmr::string>(&decoded)) {
                     RUVIA_CHECK(std::string_view(*content) == input);
@@ -228,7 +228,7 @@ RUVIA_TEST(http_content_encode_context_unknown_coding_throws_without_allocating_
         bool threw = false;
         try {
             static_cast<void>(context.encode("plain", {.max_encoded_bytes_ = 0}));
-        } catch (const ruvia::http_content_encode_error&) {
+        } catch (const ruvia::http_content_codec_error&) {
             threw = true;
         }
         RUVIA_CHECK(threw);

@@ -256,9 +256,7 @@ enum class http_request_body_failure : std::uint8_t {
         http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
 }
 
-// Status for a request body whose Content-Encoding could not be decoded. A
-// decoder_failure is a codec fault rather than a protocol error; callers report
-// it as an internal failure before mapping, so it is not given a status here.
+// Status for a request body whose Content-Encoding could not be decoded.
 [[nodiscard]] inline http_protocol_error http_request_content_decode_error(
     http_content_decode_error error) noexcept {
     switch (error) {
@@ -270,8 +268,6 @@ enum class http_request_body_failure : std::uint8_t {
                 http_status::bad_request, "invalid_content_coding", "failed to decode request body");
         case http_content_decode_error::decoded_size_exceeded:
             return http_request_body_protocol_error(http_request_body_failure::too_large);
-        case http_content_decode_error::decoder_failure:
-            break;
     }
     return http_protocol_error(
         http_status::bad_request, "invalid_content_coding", "failed to decode request body");

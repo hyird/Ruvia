@@ -49,11 +49,10 @@ namespace ruvia::detail {
         key[prefix_end] != ':' || key.substr(prefix_end + 1U) != id) {
         return false;
     }
-    constexpr std::string_view digits = "0123456789abcdef";
     for (std::size_t i = 0; i < prefix.size(); ++i) {
         const auto byte = static_cast<unsigned char>(prefix[i]);
-        if (key[root.size() + i * 2U] != digits[byte >> 4U] ||
-            key[root.size() + i * 2U + 1U] != digits[byte & 0x0fU]) {
+        if (key[root.size() + i * 2U] != http_lower_hex_digit(byte >> 4U) ||
+            key[root.size() + i * 2U + 1U] != http_lower_hex_digit(byte)) {
             return false;
         }
     }

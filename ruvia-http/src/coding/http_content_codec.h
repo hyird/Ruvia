@@ -9,11 +9,11 @@
 
 // One compression library binding per coding, behind a uniform signature: decode
 // or encode a whole buffer through the caller's memory resource, bounded by an
-// explicit output ceiling. Decode reports failures as values; encode returns
-// nullopt only for the ceiling and throws for codec failures. Which coding a field
-// asks for is decided elsewhere; this is only the machinery each one runs on.
-// decode_http_content maps an empty representation to empty content before
-// any decoder below runs.
+// explicit output ceiling. Decode reports data errors as values; encode returns
+// nullopt only for the ceiling. Both throw http_content_codec_error when the
+// codec itself cannot run. Which coding a field asks for is decided elsewhere;
+// this is only the machinery each one runs on. decode_http_content maps an
+// empty representation to empty content before any decoder below runs.
 
 namespace ruvia::detail {
 

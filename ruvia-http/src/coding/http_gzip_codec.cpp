@@ -20,7 +20,7 @@ static std::variant<std::pmr::string, http_content_decode_error> decode_zlib_con
     std::pmr::string output("", http_pmr_resource_or_default(resource));
     zlib_inflate_stream inflater(output.get_allocator().resource(), window_bits);
     if (!inflater.initialized()) {
-        return http_content_decode_error::decoder_failure;
+        throw http_content_codec_error("zlib decoder initialization failed");
     }
     auto& stream = inflater.native();
 
@@ -56,14 +56,14 @@ static std::variant<std::pmr::string, http_content_decode_error> decode_zlib_con
             const int reset = inflateReset2(&stream, window_bits);
             if (reset != Z_OK) {
                 inflater.rethrow_allocation_failure();
-                return http_content_decode_error::decoder_failure;
+                throw http_content_codec_error("failed to reset zlib content decoder");
             }
             stream.next_in = next_input;
             stream.avail_in = available_input;
             continue;
         }
         if (status == Z_MEM_ERROR) {
-            return http_content_decode_error::decoder_failure;
+            throw http_content_codec_error("zlib decoder ran out of memory");
         }
         if (status != Z_OK && status != Z_BUF_ERROR) {
             return http_content_decode_error::invalid_content;
@@ -98,7 +98,7 @@ std::optional<std::pmr::string> encode_zlib_content(zlib_deflate_stream& deflate
                 const auto status = deflate(&stream, Z_FINISH);
                 if (status != Z_OK && status != Z_STREAM_END) {
                     deflater.rethrow_allocation_failure();
-                    throw http_content_encode_error("zlib encoding failed");
+                    throw http_content_codec_error("zlib encoding failed");
                 }
                 if (status == Z_STREAM_END && stream.avail_out == 1) {
                     return output;
@@ -120,7 +120,7 @@ std::optional<std::pmr::string> encode_zlib_content(zlib_deflate_stream& deflate
             return output;
         }
         if (status != Z_OK || (output.size() == offset && stream.avail_in == before_input)) {
-            throw http_content_encode_error("zlib encoding failed or made no progress");
+            throw http_content_codec_error("zlib encoding failed or made no progress");
         }
     }
 }
@@ -132,7 +132,7 @@ namespace {
     auto* const state_resource = http_pmr_resource_or_default(resource);
     zlib_deflate_stream deflater(state_resource, format);
     if (!deflater.initialized()) {
-        throw http_content_encode_error("zlib encoder initialization failed");
+        throw http_content_codec_error("zlib encoder initialization failed");
     }
     return encode_zlib_content(deflater, input, max_encoded_bytes, state_resource);
 }

@@ -1,5 +1,6 @@
 #include "ruvia/http/http_request.h"
 
+#include "ruvia/http/cookies.h"
 #include "ruvia/http/detail/field/header_token_utils.h"
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
@@ -47,22 +48,32 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
     if (!detail::request_has_known_header(*this, detail::request_header_kind::cookie)) {
         return std::nullopt;
     }
+    // The last matching pair within one field line wins.
+    const auto find_in = [name](std::string_view field_value) noexcept {
+        std::optional<std::string_view> result;
+        http_visit_cookie_pairs(field_value, [name, &result](std::string_view key, std::string_view value) noexcept {
+            if (key == name) {
+                result = value;
+            }
+            return true;
+        });
+        return result;
+    };
     const auto last_cookie =
         detail::request_known_header(*this, detail::request_header_kind::cookie);
     const auto last_cookie_index =
         cached_headers_[detail::request_header_kind_known_slot(detail::request_header_kind::cookie)];
-    if (auto value = detail::http_find_semicolon_parameter(last_cookie, name)) {
+    if (auto value = find_in(last_cookie)) {
         return value;
     }
     // The one-based cache points to the last Cookie field; only earlier fields can contribute.
     for (std::size_t i = last_cookie_index - 1; i > 0; --i) {
         const auto index = i - 1;
-        const auto header_value = headers_[index];
         if (headers_.kind_at(index) !=
             static_cast<std::uint8_t>(detail::request_header_kind::cookie)) {
             continue;
         }
-        if (auto value = detail::http_find_semicolon_parameter(header_value.value(), name)) {
+        if (auto value = find_in(headers_[index].value())) {
             return value;
         }
     }

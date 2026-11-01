@@ -44,7 +44,7 @@ RUVIA_TEST(response_public_write_plan_distinguishes_head_from_bodyless_status) {
 
     const auto head_plan = ruvia::plan_buffered_http_response_write(
         ruvia::http_known_method::head, response);
-    RUVIA_CHECK(head_plan.body_suppressed());
+    RUVIA_CHECK(head_plan.body_plan().body_suppressed());
     RUVIA_CHECK_EQ(head_plan.content_length(), std::uint64_t{19});
     RUVIA_CHECK(!head_plan.send_body());
     RUVIA_CHECK(head_plan.matches_response(response));
@@ -67,7 +67,7 @@ RUVIA_TEST(response_public_server_plans_preserve_head_representation_length) {
 
     const auto write_plan = ruvia::plan_buffered_http_response_write(
         ruvia::http_known_method::head, response);
-    RUVIA_CHECK(write_plan.body_suppressed());
+    RUVIA_CHECK(write_plan.body_plan().body_suppressed());
     RUVIA_CHECK_EQ(write_plan.content_length(), std::uint64_t{9});
     RUVIA_CHECK(!write_plan.send_body());
     RUVIA_CHECK(write_plan.matches_response(response));

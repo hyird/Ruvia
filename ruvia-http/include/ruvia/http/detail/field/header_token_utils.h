@@ -69,27 +69,6 @@ inline void http_visit_comma_separated_quoted(std::string_view value, visitor_ty
         value, [&visitor](std::string_view item) { return item.empty() || visitor(item); });
 }
 
-// Iterate the `key=value` parameters of a `;`-delimited list (cookie pairs,
-// Content-Type / Content-Disposition parameters). Each key and value is trimmed
-// of OWS; segments without '=' are skipped. The visitor returns false to stop
-// (e.g. once it has found the parameter it wants). Quote-stripping and key
-// matching are left to the caller, which differs per RFC.
-template <typename visitor_type>
-inline void http_visit_semicolon_parameters(std::string_view value, visitor_type&& visitor) {
-    while (!value.empty()) {
-        const auto semicolon = value.find(';');
-        const auto part =
-            http_trim_ows(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
-        if (!http_emit_field_parameter(part, visitor)) {
-            return;
-        }
-        if (semicolon == std::string_view::npos) {
-            return;
-        }
-        value.remove_prefix(semicolon + 1);
-    }
-}
-
 // True when `predicate` accepts every ';'-separated parameter that follows a
 // field value's leading token — the media type, coding or extension name, which
 // carries no '=' and is never a parameter itself. The scan is quote-aware, so a
@@ -119,22 +98,6 @@ template <typename predicate_type>
     }
     return true;
 }
-
-[[nodiscard]] inline std::optional<std::string_view> http_find_semicolon_parameter(
-    std::string_view value, std::string_view name) {
-    std::optional<std::string_view> result;
-    http_visit_semicolon_parameters(
-        value, [name, &result](std::string_view key, std::string_view parameter_value) {
-            if (key == name) {
-                result = parameter_value;
-            }
-            return true;
-        });
-    return result;
-}
-
-template <http_temporary_owning_char_string value_type>
-std::optional<std::string_view> http_find_semicolon_parameter(value_type&&, std::string_view) = delete;
 
 [[nodiscard]] inline bool http_has_token(std::string_view value, std::string_view expected) noexcept {
     if (expected.empty()) {

@@ -51,7 +51,7 @@ private:
 // fields on insertion; these checks keep the commit self-contained.
 [[nodiscard]] inline http1_final_response_control http1_final_response_control_plan(const http_response& response) {
     const auto status_code = response.status();
-    if (!http_final_status_code_valid(status_code)) {
+    if (!status_code.is_final()) {
         throw http1_response_head_error("invalid final HTTP response status");
     }
 
@@ -90,7 +90,7 @@ private:
 [[nodiscard]] inline std::optional<http2_final_response_control_plan_error>
 http2_final_response_control_plan(const http_response& response) noexcept {
     const auto status_code = response.status();
-    if (!http_final_status_code_valid(status_code)) {
+    if (!status_code.is_final()) {
         return http2_final_response_control_plan_error::invalid_status;
     }
     if (status_code == http_status::upgrade_required) {

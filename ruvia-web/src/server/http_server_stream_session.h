@@ -636,7 +636,7 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
             if (write_start.held_) {
                 // Logged once the write that carries its head commits it.
                 tail.defer_access(options_.access_log_, work_set.deferred_access_, write_start.head_bytes_,
-                    response_plan.response_status());
+                    response_plan.body_plan().response_status());
                 scanner_entry.set_phase(connection_scanner::phase::idle);
             } else {
                 std::optional<http1_buffered_response_write_result> write_result;

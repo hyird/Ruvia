@@ -197,7 +197,7 @@ void http_response::status(http_status_code status_code) {
     if (status_code == http_status::switching_protocols) {
         throw std::invalid_argument("Switching Protocols requires a dedicated protocol driver");
     }
-    if (!detail::http_final_status_code_valid(status_code)) {
+    if (!status_code.is_final()) {
         throw std::invalid_argument("invalid final HTTP status code");
     }
     status_code_ = status_code;

@@ -515,8 +515,8 @@ void validate_indexed_file_for_bodyless_response(
     if (const auto* range = plan.partial()) {
         http_response response(context_value.arena());
         add_file_headers(response, source_value, validators, partial_file_header_set(plan));
-        response.content_range(range->offset(), range->length(), source_value.size_);
-        set_file_body(context_value, source_value, response, range->offset(), range->length());
+        response.content_range(range->offset_, range->length_, source_value.size_);
+        set_file_body(context_value, source_value, response, range->offset_, range->length_);
         apply_file_response_state(context_value, source_value, response, plan.status());
         return response;
     }

@@ -330,36 +330,27 @@ RUVIA_TEST(cookie_writer_leaves_lifetime_caps_to_user_agents) {
 }
 
 RUVIA_TEST(cookie_request_pair_keeps_equals_for_empty_names) {
-    std::string header;
-    ruvia::append_cookie_request_pair(header, "sid", "abc");
-    RUVIA_CHECK_EQ(header, std::string("sid=abc"));
-    ruvia::append_cookie_request_pair(header, "", "session=forged");
+    const auto pair = [&](std::string_view name, std::string_view value) {
+        std::string wire(ruvia::cookie_request_pair_size(name, value), '\0');
+        const auto* const end = ruvia::write_cookie_request_pair(wire.data(), name, value);
+        RUVIA_CHECK(end == wire.data() + wire.size());
+        return wire;
+    };
+    RUVIA_CHECK_EQ(pair("sid", "abc"), std::string("sid=abc"));
     // A nameless value that looks like a cookie-pair must stay behind '='.
-    RUVIA_CHECK_EQ(header, std::string("sid=abc; =session=forged"));
-    std::string nameless;
-    ruvia::append_cookie_request_pair(nameless, "", "sid");
-    RUVIA_CHECK_EQ(nameless, std::string("=sid"));
+    RUVIA_CHECK_EQ(pair("", "session=forged"), std::string("=session=forged"));
+    RUVIA_CHECK_EQ(pair("", "sid"), std::string("=sid"));
+    RUVIA_CHECK_EQ(pair("sid", ""), std::string("sid="));
+    RUVIA_CHECK_EQ(pair(std::string_view("\0", 1), std::string_view("\0", 1)), std::string("\0=\0", 3));
 }
 
-RUVIA_TEST(cookie_request_pair_preserves_aliased_inputs_and_terminators) {
-    std::string header = "a";
-    header.reserve(16);
-    const std::string_view terminator(header.data() + header.size(), 1);
-    ruvia::append_cookie_request_pair(header, "b", terminator);
-    RUVIA_CHECK_EQ(header, std::string("a; b=\0", 6));
-
-    std::pmr::string empty;
-    const std::string_view empty_terminator(empty.data(), 1);
-    ruvia::append_cookie_request_pair(empty, empty_terminator, empty_terminator);
-    RUVIA_CHECK_EQ(std::string_view(empty), std::string_view("\0=\0", 3));
-
-    std::string growing = "sid=abc";
-    growing.resize(growing.capacity(), 'x');
-    const auto original = growing;
-    const std::string_view name(growing.data(), 3);
-    const std::string_view value(growing.data() + 4, growing.size() - 3);
-    ruvia::append_cookie_request_pair(growing, name, value);
-    auto expected = original + "; sid=" + original.substr(4);
-    expected.push_back('\0');
-    RUVIA_CHECK_EQ(growing, expected);
+RUVIA_TEST(cookie_request_pair_accepts_inputs_inside_the_written_bytes) {
+    // Each input is consumed before an output byte overwrites it.
+    std::string buffer("valuename");
+    buffer.resize(16, '#');
+    const std::string_view value(buffer.data(), 5);
+    const std::string_view name(buffer.data() + 5, 4);
+    const auto* const end = ruvia::write_cookie_request_pair(buffer.data(), name, value);
+    RUVIA_CHECK(end == buffer.data() + 10);
+    RUVIA_CHECK_EQ(std::string_view(buffer.data(), 10), std::string_view("name=value"));
 }

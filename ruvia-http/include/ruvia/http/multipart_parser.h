@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -22,6 +21,10 @@ namespace detail {
 struct multipart_part_access;
 struct multipart_stream_part_access;
 }  // namespace detail
+
+class http_byte_range_set;
+class http_multipart_byte_range_plan;
+class multipart_boundary_parse_result;
 
 // Buffered multipart parsing borrows unmodified Content-Disposition names,
 // filenames, Content-Type values, and part bodies from the caller-owned
@@ -83,20 +86,23 @@ private:
 
 // RFC 2046 multipart boundary value. The validated bytes are stored inline so
 // every buffered/streaming parser consumes the same allocation-free value and
-// cannot observe a dangling Content-Type substring.
+// cannot observe a dangling Content-Type substring. The only way to obtain one
+// is parse_multipart_boundary().
 class multipart_boundary final {
 public:
-    explicit multipart_boundary(std::string_view value) {
-        if (!valid(value)) {
-            throw std::invalid_argument("invalid multipart boundary");
-        }
-        assign(value);
+    [[nodiscard]] constexpr std::string_view value() const& noexcept {
+        return std::string_view(bytes_.data(), size_);
     }
+    [[nodiscard]] std::string_view value() const&& = delete;
 
-    // Validation-only entry for parsing paths that must report failure as a
-    // value rather than drive control flow through the throwing constructor.
-    [[nodiscard]] static std::optional<multipart_boundary> try_create(
-        std::string_view value) noexcept {
+private:
+    friend multipart_boundary_parse_result parse_multipart_boundary(std::string_view);
+    friend http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
+        const http_byte_range_set&, std::uint64_t, std::string_view, std::string_view, std::pmr::memory_resource*);
+
+    constexpr multipart_boundary() noexcept = default;
+
+    [[nodiscard]] static std::optional<multipart_boundary> try_create(std::string_view value) noexcept {
         if (!valid(value)) {
             return std::nullopt;
         }
@@ -104,14 +110,6 @@ public:
         boundary.assign(value);
         return boundary;
     }
-
-    [[nodiscard]] constexpr std::string_view value() const& noexcept {
-        return std::string_view(bytes_.data(), size_);
-    }
-    [[nodiscard]] std::string_view value() const&& = delete;
-
-private:
-    constexpr multipart_boundary() noexcept = default;
 
     static constexpr std::size_t max_size = 70;
 

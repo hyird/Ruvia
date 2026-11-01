@@ -13,6 +13,7 @@
 #include "ruvia/web/detail/json/json_escape.h"
 #include "ruvia/web/detail/model/model_binary.h"
 #include "ruvia/web/detail/model/model_schema.h"
+#include "ruvia/web/detail/util/finite_double.h"
 #include "ruvia/web/model.h"
 
 namespace ruvia::detail {
@@ -86,7 +87,7 @@ void append_json_value(std::pmr::string& output, const value_type& value) {
     } else if constexpr (std::is_unsigned_v<t_type>) {
         http_append_unsigned(output, value);
     } else if constexpr (std::is_integral_v<t_type>) {
-        http_append_formatted_number(output, value, "JSON integer formatting failed");
+        http_append_signed(output, value);
     } else if constexpr (std::is_floating_point_v<t_type>) {
         // JSON (RFC 8259) has no representation for infinity or NaN, and
         // std::to_chars would emit the bare tokens "inf"/"nan" — invalid JSON.
@@ -95,11 +96,7 @@ void append_json_value(std::pmr::string& output, const value_type& value) {
             output.append("null");
             return;
         }
-        char buffer[64];
-        const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), value);
-        if (ec == std::errc{}) {
-            output.append(buffer, static_cast<std::size_t>(ptr - buffer));
-        }
+        append_finite_double(output, value, "JSON number must be finite");
     } else if constexpr (is_ruvia_bytes<t_type>) {
         append_model_binary(output, value);
     } else if constexpr (is_ruvia_string<t_type>) {

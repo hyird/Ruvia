@@ -7,16 +7,12 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
-#include "ruvia/http/detail/response/http_response_header_bits.h"
-#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
 
 #include "coding/http_content_codec.h"
 #include "request/http_request_access.h"
-#include "response/http_response_header_access.h"
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token
 // each coding is spelled with, the list-grammar accumulator across field lines,
@@ -155,31 +151,9 @@ bool is_valid_http_content_encoding_field_value(std::string_view value, http_fie
 
 namespace ruvia {
 
-http_content_coding_field_result parse_http_content_coding(
-    std::string_view value) noexcept {
-    detail::http_content_coding_field_parser parser;
-    parser.update(value);
-    return parser.finish();
-}
-
 http_content_coding_field_result parse_http_content_coding_headers(
     std::span<const http_header> headers) noexcept {
     return detail::http_content_coding_from_headers(headers);
-}
-
-http_content_coding_field_result parse_http_content_coding_headers(
-    const http_response_headers& headers) noexcept {
-    detail::http_content_coding_field_parser parser;
-    if (!detail::response_has_known_header(headers, detail::response_header_content_encoding)) {
-        return parser.finish();
-    }
-    for (const auto& header : headers) {
-        if (detail::http_response_header_access::known_bit(header) ==
-            detail::response_header_content_encoding) {
-            parser.update(header.value());
-        }
-    }
-    return parser.finish();
 }
 
 http_content_coding_field_result request_content_coding(const http_request& request) noexcept {
@@ -200,7 +174,9 @@ http_content_coding_field_result request_content_coding(const http_request& requ
     return parser.finish();
 }
 
-std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
+namespace {
+
+[[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_content_stage(
     http_content_coding coding, std::string_view input, http_content_decode_options options) {
     if (input.empty() && !http_content_coding_token(coding).empty()) {
         // A zero-length coded representation carries no content: user agents
@@ -217,14 +193,13 @@ std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
         case http_content_coding::zstd:
             return detail::decode_zstd_content(input, options.max_decoded_bytes_, options.resource_);
         case http_content_coding::identity:
-            if (input.size() > options.max_decoded_bytes_) {
-                return http_content_decode_error::decoded_size_exceeded;
-            }
-            return std::pmr::string(
-                input, detail::http_pmr_resource_or_default(options.resource_));
+            // Identity stages are skipped by decode_http_content.
+            break;
     }
     return http_content_decode_error::unsupported_coding;
 }
+
+}  // namespace
 
 std::optional<std::pmr::string> encode_http_content(
     http_content_coding coding, std::string_view input, http_content_encode_options options) {
@@ -244,65 +219,34 @@ std::optional<std::pmr::string> encode_http_content(
             return std::pmr::string(
                 input, detail::http_pmr_resource_or_default(options.resource_));
     }
-    throw http_content_encode_error("unsupported content coding");
-}
-
-std::optional<std::pmr::string> encode_http_content(
-    std::span<const http_content_coding> codings, std::string_view input,
-    http_content_encode_options options) {
-    auto* const resource = detail::http_pmr_resource_or_default(options.resource_);
-    std::pmr::string current("", resource);
-    std::string_view source_value = input;
-    bool encoded = false;
-    for (const auto coding : codings) {
-        // identity transforms nothing; only the size limit below applies to it.
-        if (coding == http_content_coding::identity) {
-            continue;
-        }
-        auto stage = encode_http_content(coding, source_value, options);
-        if (!stage.has_value()) {
-            return std::nullopt;
-        }
-        current = std::move(*stage);
-        source_value = current;
-        encoded = true;
-    }
-    if (!encoded) {
-        if (input.size() > options.max_encoded_bytes_) {
-            return std::nullopt;
-        }
-        current.assign(input);
-    }
-    return current;
+    throw http_content_codec_error("unsupported content coding");
 }
 
 std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_decode_options options) {
-    auto* const resource = detail::http_pmr_resource_or_default(options.resource_);
-    std::pmr::string current("", resource);
-    std::string_view source_value = input;
-    bool decoded = false;
+    // Nothing is allocated until a stage produces content, so an oversized
+    // identity body is rejected before any allocation.
+    std::optional<std::pmr::string> current;
     for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
         // identity transforms nothing; only the size limit below applies to it.
         if (*coding == http_content_coding::identity) {
             continue;
         }
-        auto stage = decode_http_content(*coding, source_value, options);
+        const std::string_view source_value = current.has_value() ? std::string_view(*current) : input;
+        auto stage = decode_content_stage(*coding, source_value, options);
         auto* content = std::get_if<std::pmr::string>(&stage);
         if (content == nullptr) {
             return std::get<http_content_decode_error>(stage);
         }
         current = std::move(*content);
-        source_value = current;
-        decoded = true;
     }
-    if (!decoded) {
-        if (input.size() > options.max_decoded_bytes_) {
-            return http_content_decode_error::decoded_size_exceeded;
-        }
-        current.assign(input);
+    if (current.has_value()) {
+        return std::move(*current);
     }
-    return current;
+    if (input.size() > options.max_decoded_bytes_) {
+        return http_content_decode_error::decoded_size_exceeded;
+    }
+    return std::pmr::string(input, detail::http_pmr_resource_or_default(options.resource_));
 }
 }  // namespace ruvia

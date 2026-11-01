@@ -68,11 +68,6 @@ private:
 
 [[nodiscard]] std::optional<http_authority_view> parse_http_authority(borrowed_text value) noexcept;
 
-// Parses a Host-field authority without userinfo and borrows its host text.
-// The host retains brackets around an IP literal. An invalid authority has no
-// value; a syntactically valid empty host remains an engaged empty view.
-[[nodiscard]] std::optional<std::string_view> parse_http_authority_host(borrowed_text value) noexcept;
-
 // Compares HTTP authorities using case-insensitive host syntax and the supplied
 // scheme default port. Invalid authorities never compare equal.
 [[nodiscard]] bool http_authorities_equal(borrowed_text left, borrowed_text right, std::uint16_t default_port) noexcept;

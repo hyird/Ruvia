@@ -2,15 +2,12 @@
 
 #include <array>
 #include <charconv>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
-#include <system_error>
 
 namespace ruvia {
 
@@ -41,27 +38,11 @@ inline void http_append_unsigned(std::pmr::string& output, std::uint64_t value) 
     output.append(http_format_unsigned(digits, value));
 }
 
-// Append the shortest decimal form of an arithmetic value; `error_message` is
-// thrown as std::logic_error if formatting fails.
-template <typename number_type>
-void http_append_formatted_number(std::pmr::string& output, number_type value, const char* error_message) {
-    std::array<char, 64> buffer;
-    const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if (ec != std::errc{}) {
-        throw std::logic_error(error_message);
-    }
-    output.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
-}
-
-// Floating-point variant that rejects NaN and infinities with
-// std::invalid_argument before touching `output`.
-template <typename number_type>
-void http_append_formatted_finite_number(std::pmr::string& output, number_type value,
-    const char* finite_error_message, const char* format_error_message) {
-    if (!std::isfinite(value)) {
-        throw std::invalid_argument(finite_error_message);
-    }
-    http_append_formatted_number(output, value, format_error_message);
+inline void http_append_signed(std::pmr::string& output, std::int64_t value) {
+    // Sign plus the 19 digits of the most negative std::int64_t.
+    std::array<char, 20> digits;
+    const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), value).ptr;
+    output.append(digits.data(), static_cast<std::size_t>(end - digits.data()));
 }
 
 }  // namespace ruvia

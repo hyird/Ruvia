@@ -16,36 +16,34 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
 
     const auto get_plan =
         ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
-    RUVIA_CHECK(get_plan.request_method() == ruvia::http_known_method::get);
     RUVIA_CHECK(get_plan.body_plan().request_method() == ruvia::http_known_method::get);
     RUVIA_CHECK(get_plan.matches_response(response));
-    RUVIA_CHECK_EQ(get_plan.response_status(), ruvia::http_status::ok);
     RUVIA_CHECK_EQ(get_plan.body_plan().response_status(), ruvia::http_status::ok);
-    RUVIA_CHECK(get_plan.status_allows_body());
+    RUVIA_CHECK(get_plan.body_plan().status_allows_body());
     RUVIA_CHECK(get_plan.body_plan().content_semantics() ==
                 ruvia::http_response_content_semantics::with_content);
-    RUVIA_CHECK(!get_plan.body_suppressed());
+    RUVIA_CHECK(!get_plan.body_plan().body_suppressed());
     RUVIA_CHECK(get_plan.send_body());
     RUVIA_CHECK_EQ(get_plan.content_length(), static_cast<std::uint64_t>(5));
 
     const auto head_plan =
         ruvia::plan_buffered_http_response_write(ruvia::http_known_method::head, response);
-    RUVIA_CHECK_EQ(head_plan.response_status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(head_plan.body_plan().response_status(), ruvia::http_status::ok);
     RUVIA_CHECK(head_plan.body_plan().status_allows_body());
     RUVIA_CHECK(head_plan.body_plan().content_semantics() ==
                 ruvia::http_response_content_semantics::without_content);
-    RUVIA_CHECK(head_plan.body_suppressed());
+    RUVIA_CHECK(head_plan.body_plan().body_suppressed());
     RUVIA_CHECK(!head_plan.send_body());
     RUVIA_CHECK_EQ(head_plan.content_length(), static_cast<std::uint64_t>(5));
 
     response.status(ruvia::http_status::no_content);
     const auto no_content_plan =
         ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response);
-    RUVIA_CHECK_EQ(no_content_plan.response_status(), ruvia::http_status::no_content);
+    RUVIA_CHECK_EQ(no_content_plan.body_plan().response_status(), ruvia::http_status::no_content);
     RUVIA_CHECK(!no_content_plan.body_plan().status_allows_body());
     RUVIA_CHECK(no_content_plan.body_plan().content_semantics() ==
                 ruvia::http_response_content_semantics::without_content);
-    RUVIA_CHECK(no_content_plan.body_suppressed());
+    RUVIA_CHECK(no_content_plan.body_plan().body_suppressed());
     RUVIA_CHECK(!no_content_plan.send_body());
     RUVIA_CHECK_EQ(no_content_plan.content_length(), static_cast<std::uint64_t>(0));
 
@@ -55,17 +53,17 @@ RUVIA_TEST(response_write_plan_unifies_method_status_and_body_size) {
     RUVIA_CHECK(!reset_content_plan.body_plan().status_allows_body());
     RUVIA_CHECK(reset_content_plan.body_plan().content_semantics() ==
                 ruvia::http_response_content_semantics::with_content);
-    RUVIA_CHECK(reset_content_plan.body_suppressed());
+    RUVIA_CHECK(reset_content_plan.body_plan().body_suppressed());
     RUVIA_CHECK(!reset_content_plan.send_body());
     RUVIA_CHECK_EQ(reset_content_plan.content_length(), static_cast<std::uint64_t>(0));
 
     response.status(ruvia::http_status::ok);
     const auto connect_plan =
         ruvia::plan_buffered_http_response_write(ruvia::http_known_method::connect, response);
-    RUVIA_CHECK(connect_plan.status_allows_body());
+    RUVIA_CHECK(connect_plan.body_plan().status_allows_body());
     RUVIA_CHECK(connect_plan.body_plan().content_semantics() ==
                 ruvia::http_response_content_semantics::connect_tunnel);
-    RUVIA_CHECK(connect_plan.body_suppressed());
+    RUVIA_CHECK(connect_plan.body_plan().body_suppressed());
     RUVIA_CHECK(!connect_plan.send_body());
     RUVIA_CHECK_EQ(connect_plan.content_length(), static_cast<std::uint64_t>(0));
 }
@@ -159,7 +157,7 @@ RUVIA_TEST(http1_response_head_framing_is_an_exclusive_plan) {
                 ruvia::http_response_content_semantics::with_content);
     RUVIA_CHECK_EQ(buffered.buffered()->content_length(), std::uint64_t{5});
     RUVIA_CHECK_EQ(combined.content_length(), std::uint64_t{5});
-    RUVIA_CHECK_EQ(combined.response_status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(combined.body_plan().response_status(), ruvia::http_status::ok);
     RUVIA_CHECK(combined.send_body());
     RUVIA_CHECK(combined.body_plan().request_method() == ruvia::http_known_method::get);
     RUVIA_CHECK(buffered.protocol_version() == ruvia::http_protocol_version::http11);

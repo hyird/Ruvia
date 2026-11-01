@@ -1,6 +1,7 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/http/http_status.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 
@@ -18,12 +19,6 @@ namespace {
         }
     }
     return false;
-}
-
-[[nodiscard]] bool is_redirect_status(http_status_code status_code) noexcept {
-    return status_code == http_status::moved_permanently || status_code == http_status::found ||
-           status_code == http_status::see_other || status_code == http_status::temporary_redirect ||
-           status_code == http_status::permanent_redirect;
 }
 
 // RFC 3986 section 3.2 authority of an absolute or network-path reference:
@@ -56,7 +51,7 @@ namespace {
 http_response context::redirect(redirect_response_options options) const {
     const auto location = options.location_.view();
     const auto status_code = options.status_;
-    if (!is_redirect_status(status_code)) {
+    if (!is_http_redirect_status(status_code)) {
         throw std::invalid_argument("redirect status must be 301, 302, 303, 307, or 308");
     }
     if (redirect_location_contains_line_break(location)) {

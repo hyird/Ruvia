@@ -19,7 +19,7 @@ std::variant<std::pmr::string, http_content_decode_error> decode_zstd_content(
     std::pmr::string output("", http_pmr_resource_or_default(resource));
     zstd_decoder_stream decoder(output.get_allocator().resource());
     if (!decoder.initialized()) {
-        return http_content_decode_error::decoder_failure;
+        throw http_content_codec_error("zstd decoder initialization failed");
     }
     auto* stream = decoder.native();
 
@@ -31,9 +31,10 @@ std::variant<std::pmr::string, http_content_decode_error> decode_zstd_content(
         const auto result_value = ZSTD_decompressStream(stream, &out, &in);
         if (ZSTD_isError(result_value) != 0) {
             decoder.rethrow_allocation_failure();
-            return ZSTD_getErrorCode(result_value) == ZSTD_error_memory_allocation
-                       ? http_content_decode_error::decoder_failure
-                       : http_content_decode_error::invalid_content;
+            if (ZSTD_getErrorCode(result_value) == ZSTD_error_memory_allocation) {
+                throw http_content_codec_error(ZSTD_getErrorName(result_value));
+            }
+            return http_content_decode_error::invalid_content;
         }
         if (!append_decoded_bytes(output, buffer, out.pos, max_decoded_bytes)) {
             return http_content_decode_error::decoded_size_exceeded;
@@ -65,7 +66,7 @@ std::optional<std::pmr::string> encode_zstd_content(
             const auto result_value = ZSTD_compressStream2(context_value, &out, &in, ZSTD_e_end);
             if (ZSTD_isError(result_value) != 0) {
                 encoder.rethrow_allocation_failure();
-                throw http_content_encode_error(ZSTD_getErrorName(result_value));
+                throw http_content_codec_error(ZSTD_getErrorName(result_value));
             }
             if (result_value == 0 && out.pos == 0 && in.pos == in.size) {
                 return output;
@@ -81,13 +82,13 @@ std::optional<std::pmr::string> encode_zstd_content(
         output.append(buffer, out.pos);
         if (ZSTD_isError(result_value) != 0) {
             encoder.rethrow_allocation_failure();
-            throw http_content_encode_error(ZSTD_getErrorName(result_value));
+            throw http_content_codec_error(ZSTD_getErrorName(result_value));
         }
         if (result_value == 0 && in.pos == in.size) {
             return output;
         }
         if (output.size() == offset && in.pos == before_input) {
-            throw http_content_encode_error("zstd encoder made no progress");
+            throw http_content_codec_error("zstd encoder made no progress");
         }
     }
 }
@@ -97,7 +98,7 @@ std::optional<std::pmr::string> encode_zstd_content(
     auto* const state_resource = http_pmr_resource_or_default(resource);
     zstd_encoder_stream encoder(state_resource);
     if (!encoder.initialized()) {
-        throw http_content_encode_error("zstd encoder initialization failed");
+        throw http_content_codec_error("zstd encoder initialization failed");
     }
     return encode_zstd_content(encoder, input, max_encoded_bytes, state_resource);
 }

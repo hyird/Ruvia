@@ -22,14 +22,6 @@ public:
         return http_status_code(value, validated_tag_type{});
     }
 
-    [[nodiscard]] static constexpr std::optional<http_status_code> try_from_value(
-        std::uint16_t value) noexcept {
-        if (!is_valid_value(value)) {
-            return std::nullopt;
-        }
-        return http_status_code(value, validated_tag_type{});
-    }
-
     [[nodiscard]] static constexpr bool is_valid_value(std::uint16_t value) noexcept {
         return value >= 100 && value <= 599;
     }
@@ -48,10 +40,6 @@ public:
 
     [[nodiscard]] constexpr bool is_redirection() const noexcept {
         return value_ >= 300 && value_ < 400;
-    }
-
-    [[nodiscard]] constexpr bool is_client_error() const noexcept {
-        return value_ >= 400 && value_ < 500;
     }
 
     [[nodiscard]] constexpr bool is_server_error() const noexcept {
@@ -102,8 +90,8 @@ using http_status_code_token_type = std::array<char, http_status_code_token_size
 }  // namespace detail
 
 // Stable RFC-assigned names are defined once here. Unknown extension codes and
-// temporary draft registrations remain available through from_value() and
-// try_from_value() without turning an unstable name into framework API.
+// temporary draft registrations remain available through from_value() without
+// turning an unstable name into framework API.
 namespace http_status {
 
 inline constexpr auto continue_value = http_status_code::from_value(100);
@@ -184,8 +172,8 @@ public:
     // Accepts every three-digit code 000..999; anything else is malformed.
     [[nodiscard]] static constexpr std::optional<http_received_status> try_from_value(
         std::uint16_t value) noexcept {
-        if (const auto status = http_status_code::try_from_value(value)) {
-            return http_received_status(*status, value);
+        if (http_status_code::is_valid_value(value)) {
+            return http_received_status(http_status_code::from_value(value), value);
         }
         if (value <= 999) {
             return http_received_status(http_status::internal_server_error, value);
@@ -369,11 +357,15 @@ static_assert(std::is_trivially_copyable_v<http_received_status>);
     }
 }
 
-namespace detail {
-
-[[nodiscard]] inline constexpr bool http_final_status_code_valid(http_status_code status) noexcept {
-    return status.is_final();
+// The redirect status codes whose Location a client may follow
+// (RFC 9110 sections 15.4.2-15.4.4, 15.4.8, 15.4.9).
+[[nodiscard]] inline constexpr bool is_http_redirect_status(http_status_code status) noexcept {
+    return status == http_status::moved_permanently || status == http_status::found ||
+           status == http_status::see_other || status == http_status::temporary_redirect ||
+           status == http_status::permanent_redirect;
 }
+
+namespace detail {
 
 // 101 is a protocol transition rather than an interim progress head. It is
 // intentionally owned by a dedicated Upgrade driver instead of either generic

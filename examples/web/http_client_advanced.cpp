@@ -35,7 +35,7 @@ ruvia::task<void> follow_redirect(ruvia::http_client& client, const ruvia::http_
     const auto requests = client.handle();
     for (unsigned hop = 0; hop != 4; ++hop) {
         auto response = co_await requests.send({.target_ = target});
-        if (!ruvia::is_http_client_redirect_status(response.status())) {
+        if (!ruvia::is_http_redirect_status(response.status())) {
             auto bytes_value = co_await response.body().read_all();
             std::cout << "redirected bytes=" << bytes_value.bytes().size() << '\n';
             co_return;

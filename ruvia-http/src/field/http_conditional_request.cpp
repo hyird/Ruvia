@@ -1,17 +1,17 @@
-#include "ruvia/http/http_conditional_request.h"
+#include "field/http_conditional_request.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <utility>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http_date.h"
 #include "ruvia/http/http_field_syntax.h"
 
-#include "field/http_date.h"
 #include "field/http_entity_tag.h"
 #include "request/http_request_access.h"
 
-namespace ruvia {
+namespace ruvia::detail {
 
 http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept {
     http_conditional_headers result{
@@ -109,12 +109,12 @@ http_etag_preconditions get_http_etag_preconditions(
 }
 
 bool http_date_not_modified(std::string_view header_value, std::time_t modified_seconds) noexcept {
-    const auto date = detail::http_parse_http_date(http_trim_ows(header_value));
+    const auto date = parse_http_date(header_value);
     return date.has_value() && modified_seconds <= *date;
 }
 
 bool http_date_unmodified(std::string_view header_value, std::time_t modified_seconds) noexcept {
-    const auto date = detail::http_parse_http_date(http_trim_ows(header_value));
+    const auto date = parse_http_date(header_value);
     return !date.has_value() || modified_seconds <= *date;
 }
 
@@ -130,8 +130,8 @@ bool http_if_range_allows(std::string_view header_value, std::string_view etag,
     if (!date_validator_strong || !modified_seconds) {
         return false;
     }
-    const auto date = detail::http_parse_http_date(value);
+    const auto date = parse_http_date(value);
     return date.has_value() && *modified_seconds == *date;
 }
 
-}  // namespace ruvia
+}  // namespace ruvia::detail

@@ -123,7 +123,7 @@ http2_connection::submit_response_head(
         stream->local_send().head_pending() == nullptr) {
         return http2_response_head_submit_error::invalid_state;
     }
-    if (write_plan.request_method() != stream->request_known_method() ||
+    if (write_plan.body_plan().request_method() != stream->request_known_method() ||
         !write_plan.matches_response(response)) {
         return http2_response_head_submit_error::response_plan_mismatch;
     }

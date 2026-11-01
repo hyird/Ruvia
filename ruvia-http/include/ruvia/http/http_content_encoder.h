@@ -16,7 +16,7 @@ namespace ruvia {
 // The PMR resource must outlive the stable-address encoder. Output can be cleared
 // between calls and remains valid after encoder destruction.
 // Empty input is valid, including repeated flushes; it does not end the stream.
-// Codec failures throw http_content_encode_error; allocation exceptions retain
+// Codec failures throw http_content_codec_error; allocation exceptions retain
 // their original type when the codec returns through its C API. Brotli builds
 // that exit on internal OOM cannot be recovered by this boundary.
 // Either failure is terminal because input/output may have
@@ -24,7 +24,7 @@ namespace ruvia {
 // writing after successful finish throws std::logic_error without changing output.
 // reset() returns an encoder in any phase to a fresh active stream, reusing the
 // codec's working memory; a codec that cannot be reset throws
-// http_content_encode_error and the encoder stays failed.
+// http_content_codec_error and the encoder stays failed.
 class http_content_encoder final {
 public:
     http_content_encoder(http_content_coding coding, std::pmr::memory_resource* resource);

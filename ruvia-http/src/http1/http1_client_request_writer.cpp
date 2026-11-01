@@ -487,9 +487,8 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
     http1_client_request_prepare_error>
-http1_client_request_writer::prepare_connect(
-    const http_origin_view& tunnel_origin, std::span<const http_header_view> headers,
-    std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
+http1_client_request_writer::prepare_connect(borrowed_text authority,
+    std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     if (!is_valid_http1_close_policy(policy.close_policy_)) {
         return detail::http1_client_request_prepare_result_access::failure(
             http1_client_request_prepare_error::invalid_close_policy);
@@ -498,23 +497,14 @@ http1_client_request_writer::prepare_connect(
         return detail::http1_client_request_prepare_result_access::failure(
             http1_client_request_prepare_error::invalid_expectation);
     }
-    if (tunnel_origin.port() == 0) {
+    if (!is_valid_http_connect_authority(authority.view())) {
         return detail::http1_client_request_prepare_result_access::failure(
             http1_client_request_prepare_error::invalid_connect_origin);
     }
-    return prepare_request(tunnel_origin, "CONNECT", http_known_method::connect, {}, headers,
-        http_client_request_content_view::none(), head_buffer, policy, resource_);
-}
-
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
-    http1_client_request_prepare_error>
-http1_client_request_writer::prepare_connect(borrowed_text authority,
-    std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
     const auto parsed_value = parse_http_authority(authority.view());
-    if (!parsed_value || !parsed_value->port() || *parsed_value->port() == 0) {
-        return detail::http1_client_request_prepare_result_access::failure(http1_client_request_prepare_error::invalid_connect_origin);
-    }
-    return prepare_connect(http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()}), headers, head_buffer, policy);
+    return prepare_request(http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()}),
+        "CONNECT", http_known_method::connect, {}, headers, http_client_request_content_view::none(), head_buffer,
+        policy, resource_);
 }
 
 }  // namespace ruvia

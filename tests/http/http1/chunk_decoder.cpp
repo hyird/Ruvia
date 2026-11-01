@@ -56,15 +56,12 @@ private:
 
 RUVIA_TEST(protocol_byte_limit_has_no_numeric_sentinel) {
     const auto unlimited = protocol_byte_limit::unlimited();
-    RUVIA_CHECK(!unlimited.is_limited());
-    RUVIA_CHECK(!unlimited.maximum().has_value());
+    RUVIA_CHECK_EQ(unlimited.read_ceiling(), (std::numeric_limits<std::size_t>::max)());
     RUVIA_CHECK(!unlimited.exceeds((std::numeric_limits<std::size_t>::max)()));
     RUVIA_CHECK(unlimited.addition_exceeds((std::numeric_limits<std::size_t>::max)(), 1));
 
     const auto limited = protocol_byte_limit::limited(8);
-    RUVIA_CHECK(limited.is_limited());
-    RUVIA_CHECK(limited.maximum().has_value());
-    RUVIA_CHECK_EQ(limited.maximum().value(), std::size_t{8});
+    RUVIA_CHECK_EQ(limited.read_ceiling(), std::size_t{8});
     RUVIA_CHECK(!limited.exceeds(8));
     RUVIA_CHECK(limited.exceeds(9));
     RUVIA_CHECK(!limited.addition_exceeds(3, 5));

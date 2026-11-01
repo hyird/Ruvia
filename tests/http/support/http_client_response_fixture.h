@@ -73,7 +73,7 @@ inline http1_client_response_parse_result parse_wire(std::string_view method, st
     if (method == "CONNECT") {
         std::array<char, 2048> request_head;
         return exchange_parser(ruvia::http1_client_request_writer().prepare_connect(
-                                   origin, request_headers, request_head, policy),
+                                   "example.test:443", request_headers, request_head, policy),
             resource)
             .parse(wire);
     }

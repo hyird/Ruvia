@@ -10,6 +10,7 @@
 #include "ruvia/http/multipart_parser.h"
 
 #include "failing_memory_resource.h"
+#include "multipart_boundary_fixture.h"
 #include "test_harness.h"
 
 RUVIA_TEST(multipart_parser_retries_owned_metadata_without_consuming_limits) {
@@ -28,7 +29,7 @@ RUVIA_TEST(multipart_parser_retries_owned_metadata_without_consuming_limits) {
             failing_memory_resource resource;
             bool allocation_failed = false;
             {
-                ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc"),
+                ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("abc"),
                     .resource_ = &resource,
                     .max_parts_ = limit_parts ? 1U : 2U,
                     .max_metadata_bytes_ = limit_parts ? headers.size() * 2 : headers.size()});
@@ -95,13 +96,13 @@ RUVIA_TEST(multipart_parser_handles_deterministic_arbitrary_bytes) {
         std::pmr::monotonic_buffer_resource resource;
         try {
             const auto complete_value = ruvia::parse_multipart_body(input,
-                {.boundary_ = ruvia::multipart_boundary("FUZZ"), .resource_ = &resource});
+                {.boundary_ = ruvia::testing::make_multipart_boundary("FUZZ"), .resource_ = &resource});
             static_cast<void>(complete_value);
         } catch (const ruvia::http_protocol_error&) {
         }
 
         ruvia::multipart_parser parser(
-            {.boundary_ = ruvia::multipart_boundary("FUZZ"), .resource_ = &resource});
+            {.boundary_ = ruvia::testing::make_multipart_boundary("FUZZ"), .resource_ = &resource});
         parser.feed(input);
         parser.finish_input();
 
@@ -131,7 +132,7 @@ RUVIA_TEST(multipart_parser_feed_preserves_borrowed_body_before_input_compaction
             }
             failing_memory_resource resource;
             {
-                ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc"), .resource_ = &resource});
+                ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("abc"), .resource_ = &resource});
                 std::string payload(128 * 1024, 'a');
                 for (std::size_t index = 0; index < payload.size(); ++index) {
                     payload[index] = static_cast<char>('a' + (index * 29 + index / 17) % 26);
@@ -185,24 +186,20 @@ RUVIA_TEST(multipart_parser_feed_preserves_borrowed_body_before_input_compaction
 }
 
 RUVIA_TEST(multipart_boundary_value_enforces_rfc2046_grammar) {
-    const auto throws_on = [](std::string_view value) {
-        try {
-            (void)ruvia::multipart_boundary(value);
-            return false;
-        } catch (const std::invalid_argument&) {
-            return true;
-        }
+    const auto rejected = [](std::string_view value) {
+        const auto parsed = ruvia::parse_multipart_boundary(ruvia::testing::multipart_boundary_content_type(value));
+        return parsed.failure() != nullptr;
     };
 
-    const auto spaced = ruvia::multipart_boundary("a b");
+    const auto spaced = ruvia::testing::make_multipart_boundary("a b");
     RUVIA_CHECK_EQ(spaced.value(), std::string_view("a b"));
-    const auto maximum = ruvia::multipart_boundary(std::string(70, 'x'));
+    const auto maximum = ruvia::testing::make_multipart_boundary(std::string(70, 'x'));
     RUVIA_CHECK_EQ(maximum.value().size(), std::size_t{70});
-    RUVIA_CHECK(throws_on(""));
-    RUVIA_CHECK(throws_on(std::string(71, 'x')));
-    RUVIA_CHECK(throws_on("trailing "));
-    RUVIA_CHECK(throws_on("semi;colon"));
-    RUVIA_CHECK(throws_on("bad\r\nvalue"));
+    RUVIA_CHECK(rejected(""));
+    RUVIA_CHECK(rejected(std::string(71, 'x')));
+    RUVIA_CHECK(rejected("trailing "));
+    RUVIA_CHECK(rejected("semi;colon"));
+    RUVIA_CHECK(rejected("bad\r\nvalue"));
 }
 
 // Boundary extraction owns MIME parameter quoting and returns the same typed
@@ -293,7 +290,7 @@ RUVIA_TEST(multipart_boundary_allows_empty_http_parameter_slots_without_relaxing
 }
 
 RUVIA_TEST(multipart_parser_commits_an_eof_close_only_after_finish_input) {
-    ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+    ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"),
         .resource_ = std::pmr::get_default_resource()});
     parser.feed(
         "--BOUNDARY\r\n"
@@ -338,7 +335,7 @@ RUVIA_TEST(multipart_parser_commits_an_eof_close_only_after_finish_input) {
 }
 
 RUVIA_TEST(multipart_parser_reports_typed_incomplete_body) {
-    ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+    ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"),
         .resource_ = std::pmr::get_default_resource()});
     parser.feed(
         "--BOUNDARY\r\n"
@@ -368,7 +365,7 @@ RUVIA_TEST(multipart_part_preserves_empty_filename_parameter_presence) {
         "data\r\n"
         "--BOUNDARY--\r\n";
     const auto parts =
-        ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+        ruvia::parse_multipart_body(body, {.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"),
                                               .resource_ = std::pmr::get_default_resource()});
     RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
     if (!parts.empty()) {
@@ -376,7 +373,7 @@ RUVIA_TEST(multipart_part_preserves_empty_filename_parameter_presence) {
         RUVIA_CHECK_EQ(parts[0].filename(), std::string_view());
     }
 
-    ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+    ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"),
         .resource_ = std::pmr::get_default_resource()});
     parser.feed(body);
     parser.finish_input();
@@ -405,7 +402,7 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_disposition_parameters) {
         body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
         bool rejected = false;
         try {
-            (void)ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+            (void)ruvia::parse_multipart_body(body, {.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"),
                                                         .resource_ = std::pmr::get_default_resource()});
         } catch (const ruvia::http_protocol_error& error) {
             rejected = true;
@@ -430,7 +427,7 @@ RUVIA_TEST(multipart_part_header_rejects_ambiguous_header_blocks) {
         body.append("\r\n\r\nvalue\r\n--BOUNDARY--\r\n");
         bool rejected = false;
         try {
-            (void)ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+            (void)ruvia::parse_multipart_body(body, {.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"),
                                                         .resource_ = std::pmr::get_default_resource()});
         } catch (const ruvia::http_protocol_error& error) {
             rejected = true;
@@ -454,7 +451,7 @@ RUVIA_TEST(multipart_complete_body_parser_returns_borrowed_part_bodies) {
         "file-data\r\n"
         "--BOUNDARY--\r\n";
     const auto parts =
-        ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+        ruvia::parse_multipart_body(body, {.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"),
                                               .resource_ = std::pmr::get_default_resource()});
     RUVIA_CHECK_EQ(parts.size(), std::size_t{2});
     RUVIA_CHECK_EQ(parts[0].name(), std::string_view("field"));
@@ -478,7 +475,7 @@ RUVIA_TEST(multipart_complete_body_parser_rejects_malformed_body) {
     try {
         (void)ruvia::parse_multipart_body(
             "--BOUNDARY\r\nContent-Disposition: form-data; name=\"x\"\r\n\r\nmissing close",
-            {.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+            {.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"),
                 .resource_ = std::pmr::get_default_resource()});
     } catch (const ruvia::http_protocol_error& error) {
         rejected = true;
@@ -495,7 +492,7 @@ RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
     bool rejected = false;
     try {
         (void)ruvia::parse_multipart_body(
-            oversized_preamble, {.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+            oversized_preamble, {.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"),
                                     .resource_ = std::pmr::get_default_resource()});
     } catch (const ruvia::http_protocol_error& error) {
         rejected = true;
@@ -506,7 +503,7 @@ RUVIA_TEST(multipart_complete_body_parser_shares_incremental_limits) {
     }
     RUVIA_CHECK(rejected);
 
-    ruvia::multipart_parser incremental({.boundary_ = ruvia::multipart_boundary("BOUNDARY"),
+    ruvia::multipart_parser incremental({.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"),
         .resource_ = std::pmr::get_default_resource()});
     incremental.feed(oversized_preamble);
     const auto streamed = incremental.poll();
@@ -532,7 +529,7 @@ RUVIA_TEST(multipart_complete_limits_cannot_be_bypassed_by_terminators) {
     auto* const resource = std::pmr::get_default_resource();
     const auto parse = [resource](std::string_view body) {
         return ruvia::parse_multipart_body(
-            body, {.boundary_ = ruvia::multipart_boundary("BOUNDARY"), .resource_ = resource});
+            body, {.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"), .resource_ = resource});
     };
     const auto check_failure = [&ruvia_ctx, &parse, resource](
                                    const std::string& body, std::string_view message) {
@@ -547,7 +544,7 @@ RUVIA_TEST(multipart_complete_limits_cannot_be_bypassed_by_terminators) {
         RUVIA_CHECK(rejected);
 
         ruvia::multipart_parser incremental(
-            {.boundary_ = ruvia::multipart_boundary("BOUNDARY"), .resource_ = resource});
+            {.boundary_ = ruvia::testing::make_multipart_boundary("BOUNDARY"), .resource_ = resource});
         incremental.feed(body);
         incremental.finish_input();
         const auto streamed = incremental.poll();
@@ -607,13 +604,13 @@ RUVIA_TEST(multipart_part_and_metadata_limits_are_cumulative) {
     }
     body += "--abc--\r\n";
 
-    const auto accepted = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("abc"),
+    const auto accepted = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::testing::make_multipart_boundary("abc"),
                                                                 .max_parts_ = 3,
                                                                 .max_metadata_bytes_ = 3 * header_value.size()});
     RUVIA_CHECK_EQ(accepted.size(), std::size_t{3});
     bool too_many_rejected = false;
     try {
-        (void)ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("abc"), .max_parts_ = 2});
+        (void)ruvia::parse_multipart_body(body, {.boundary_ = ruvia::testing::make_multipart_boundary("abc"), .max_parts_ = 2});
     } catch (const ruvia::http_protocol_error& error) {
         too_many_rejected = true;
         RUVIA_CHECK_EQ(error.status(), ruvia::http_status::content_too_large);
@@ -621,14 +618,14 @@ RUVIA_TEST(multipart_part_and_metadata_limits_are_cumulative) {
     RUVIA_CHECK(too_many_rejected);
     bool too_large_rejected = false;
     try {
-        (void)ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("abc"), .max_metadata_bytes_ = 3 * header_value.size() - 1});
+        (void)ruvia::parse_multipart_body(body, {.boundary_ = ruvia::testing::make_multipart_boundary("abc"), .max_metadata_bytes_ = 3 * header_value.size() - 1});
     } catch (const ruvia::http_protocol_error& error) {
         too_large_rejected = true;
         RUVIA_CHECK_EQ(error.status(), ruvia::http_status::content_too_large);
     }
     RUVIA_CHECK(too_large_rejected);
 
-    ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc"), .max_parts_ = 2});
+    ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("abc"), .max_parts_ = 2});
     parser.feed(body);
     for (std::size_t index = 0; index < 4; ++index) {
         const auto result_value = parser.poll();
@@ -652,9 +649,9 @@ RUVIA_TEST(multipart_streaming_handles_bytewise_long_syntax_and_false_delimiters
     body.append(16 * 1024, '\t');
     body += "\r\n";
 
-    const auto expected = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("abc")});
+    const auto expected = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::testing::make_multipart_boundary("abc")});
     RUVIA_CHECK(!expected.empty());
-    ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc")});
+    ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("abc")});
     std::string received;
     std::size_t ended = 0;
     bool done = false;
@@ -693,7 +690,7 @@ RUVIA_TEST(multipart_part_may_end_at_its_header_block) {
         "--b\r\nContent-Disposition: form-data; name=\"d\"\r\n\r\n--ax\r\n"
         "--b\r\nContent-Disposition: form-data; name=\"e\"\r\n\r\n--b--";
 
-    const auto parts = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::multipart_boundary("b")});
+    const auto parts = ruvia::parse_multipart_body(body, {.boundary_ = ruvia::testing::make_multipart_boundary("b")});
     RUVIA_CHECK_EQ(parts.size(), std::size_t{4});
     if (parts.size() == 4) {
         RUVIA_CHECK_EQ(parts[0].name(), std::string_view("a"));
@@ -707,7 +704,7 @@ RUVIA_TEST(multipart_part_may_end_at_its_header_block) {
     }
 
     for (const std::size_t step : {std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{7}}) {
-        ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("b")});
+        ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("b")});
         std::string received;
         std::size_t ended = 0;
         bool done = false;
@@ -763,7 +760,7 @@ RUVIA_TEST(multipart_preamble_limit_is_independent_of_input_chunking) {
             const bool accepted = preamble_bytes <= preamble_limit;
             bool buffered_accepted = false;
             try {
-                const auto parts = ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::multipart_boundary("abc")});
+                const auto parts = ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::testing::make_multipart_boundary("abc")});
                 buffered_accepted = true;
                 RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
                 if (!parts.empty()) {
@@ -779,7 +776,7 @@ RUVIA_TEST(multipart_preamble_limit_is_independent_of_input_chunking) {
             for (const auto chunk_bytes : {std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{7}, wire.size()}) {
                 failing_memory_resource resource;
                 {
-                    ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc"), .resource_ = &resource});
+                    ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("abc"), .resource_ = &resource});
                     std::string received;
                     std::size_t ended = 0;
                     bool done = false;
@@ -837,14 +834,14 @@ RUVIA_TEST(multipart_preamble_limit_counts_misleading_and_incomplete_marker_byte
         }
         bool buffered_rejected = false;
         try {
-            (void)ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::multipart_boundary("abc")});
+            (void)ruvia::parse_multipart_body(wire, {.boundary_ = ruvia::testing::make_multipart_boundary("abc")});
         } catch (const ruvia::http_protocol_error& error) {
             buffered_rejected = true;
             RUVIA_CHECK_EQ(error.status(), ruvia::http_status::content_too_large);
         }
         RUVIA_CHECK(buffered_rejected);
 
-        ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc")});
+        ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("abc")});
         bool failed = false;
         for (std::size_t offset = 0; offset < wire.size() && !failed; ++offset) {
             parser.feed(std::string_view(wire).substr(offset, 1));
@@ -871,7 +868,7 @@ RUVIA_TEST(multipart_preamble_limit_counts_misleading_and_incomplete_marker_byte
 RUVIA_TEST(multipart_truncated_body_at_eof_fails_without_emitting_partial_part) {
     const std::string truncated =
         "--abc\r\nContent-Disposition: form-data; name=\"field\"\r\n\r\n" + std::string(64, 'x');
-    ruvia::multipart_parser parser({.boundary_ = ruvia::multipart_boundary("abc")});
+    ruvia::multipart_parser parser({.boundary_ = ruvia::testing::make_multipart_boundary("abc")});
     parser.feed(truncated);
     parser.finish_input();
     const auto polled = parser.poll();
@@ -887,7 +884,7 @@ RUVIA_TEST(multipart_part_ignores_filename_star_parameter) {
         "data\r\n"
         "--b--\r\n";
     const auto parts = ruvia::parse_multipart_body(
-        body, {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = std::pmr::get_default_resource()});
+        body, {.boundary_ = ruvia::testing::make_multipart_boundary("b"), .resource_ = std::pmr::get_default_resource()});
     RUVIA_CHECK_EQ(parts.size(), std::size_t{1});
     if (!parts.empty()) {
         RUVIA_CHECK_EQ(parts[0].filename(), std::string_view("a.txt"));
@@ -905,14 +902,14 @@ RUVIA_TEST(multipart_rejects_boundary_line_that_is_not_a_delimiter) {
         bool rejected = false;
         try {
             static_cast<void>(ruvia::parse_multipart_body(
-                body, {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = std::pmr::get_default_resource()}));
+                body, {.boundary_ = ruvia::testing::make_multipart_boundary("b"), .resource_ = std::pmr::get_default_resource()}));
         } catch (const ruvia::http_protocol_error& error) {
             rejected = std::string_view(error.code()) == "multipart_invalid_delimiter";
         }
         RUVIA_CHECK(rejected);
 
         ruvia::multipart_parser parser(
-            {.boundary_ = ruvia::multipart_boundary("b"), .resource_ = std::pmr::get_default_resource()});
+            {.boundary_ = ruvia::testing::make_multipart_boundary("b"), .resource_ = std::pmr::get_default_resource()});
         parser.feed(body);
         parser.finish_input();
         bool failed = false;

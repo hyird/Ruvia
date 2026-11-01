@@ -60,8 +60,7 @@ namespace {
     out.append("{\"type\":\"about:blank\",\"title\":");
     detail::append_json_string(out, title);
     out.append(",\"status\":");
-    http_append_formatted_number(out, static_cast<std::int32_t>(error.status().value()),
-        "failed to format HTTP error status");
+    http_append_unsigned(out, error.status().value());
     out.append(",\"detail\":");
     detail::append_json_string(out, error.message());
     out.append(",\"code\":");

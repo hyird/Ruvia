@@ -47,7 +47,6 @@ using ruvia::http_transfer_coding_decoder_failure;
 using ruvia::http_transfer_coding_stack_decoder;
 using ruvia::http_transfer_codings;
 using ruvia::http_unsupported_expectation_policy;
-using ruvia::parse_http_content_coding;
 using ruvia::protocol_byte_limit;
 
 inline constexpr std::size_t decoded_body_limit = 16 * 1024 * 1024;
@@ -170,9 +169,15 @@ inline std::string zstd_compress_with_window(std::string_view data, int window_l
     return output;
 }
 
+// One Content-Encoding field line through the recipient parser.
+inline ruvia::http_content_coding_field_result content_coding_field(std::string_view value) {
+    const ruvia::http_header header("Content-Encoding", value);
+    return ruvia::parse_http_content_coding_headers(std::span<const ruvia::http_header>(&header, 1));
+}
+
 inline std::string decoded(http_content_coding coding, std::string_view input, std::size_t max_bytes) {
-    auto result_value = decode_http_content(
-        coding, input, {.max_decoded_bytes_ = max_bytes, .resource_ = std::pmr::get_default_resource()});
+    auto result_value = decode_http_content(std::array{coding}, input,
+        {.max_decoded_bytes_ = max_bytes, .resource_ = std::pmr::get_default_resource()});
     const auto* content = std::get_if<std::pmr::string>(&result_value);
     if (content == nullptr) {
         throw std::runtime_error("test content decode failed");
@@ -182,8 +187,8 @@ inline std::string decoded(http_content_coding coding, std::string_view input, s
 
 inline http_content_decode_error decode_error(
     http_content_coding coding, std::string_view input, std::size_t max_bytes = decoded_body_limit) {
-    const auto result_value = decode_http_content(
-        coding, input, {.max_decoded_bytes_ = max_bytes, .resource_ = std::pmr::get_default_resource()});
+    const auto result_value = decode_http_content(std::array{coding}, input,
+        {.max_decoded_bytes_ = max_bytes, .resource_ = std::pmr::get_default_resource()});
     const auto* failure = std::get_if<http_content_decode_error>(&result_value);
     if (failure == nullptr) {
         throw std::runtime_error("test content decode unexpectedly succeeded");
@@ -214,7 +219,7 @@ inline std::optional<std::string> zstd_round_trip(std::string_view plain, std::s
     }
     compressed.resize(written - truncate_by);
 
-    const auto result_value = ruvia::decode_http_content(http_content_coding::zstd, compressed,
+    const auto result_value = ruvia::decode_http_content(std::array{http_content_coding::zstd}, compressed,
         {.max_decoded_bytes_ = ruvia::default_max_buffered_body_bytes,
             .resource_ = std::pmr::get_default_resource()});
     const auto* decoded = std::get_if<std::pmr::string>(&result_value);
