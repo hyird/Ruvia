@@ -7,8 +7,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/operation_timeout.h"
-#include "ruvia/core/scoped_operation.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/redis/redis_types.h"
 
@@ -20,6 +19,7 @@ class redis_write_result;
 namespace ruvia::detail {
 
 class redis_pool;
+struct request_io_metrics;
 
 using redis_orm_arguments_type = std::pmr::vector<std::pmr::string>;
 
@@ -39,9 +39,10 @@ struct redis_orm_script final {
 [[nodiscard]] redis_orm_arguments_type redis_orm_delete_arguments(
     std::string_view prefix, std::string_view id, std::pmr::memory_resource* resource);
 // Runs an EVALSHA argument list for `script`; a NOSCRIPT reply loads the body
-// through EVAL once within the same operation.
+// through EVAL once within the same operation. `io_metrics` is the request's
+// counter block, or null outside a request.
 [[nodiscard]] task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script,
-    redis_orm_arguments_type args, operation_scope& scope, operation_options options,
+    redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options,
     std::pmr::memory_resource* resource);
 [[nodiscard]] redis_write_result redis_orm_exec_result(redis_value&& reply, std::pmr::memory_resource* resource);
 [[nodiscard]] redis_write_result redis_orm_delete_result(redis_value&& reply, std::pmr::memory_resource* resource);

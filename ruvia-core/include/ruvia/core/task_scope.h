@@ -4,11 +4,9 @@
 #include <cstddef>
 #include <exception>
 #include <memory_resource>
-#include <optional>
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 
@@ -39,18 +37,9 @@ public:
     // Every operation is bound to this scope's stable address: child
     // completion nodes point back to it, and lazy join tasks borrow it.
     // Reject temporary scopes before either lifetime can be
-    // created and keep even state/token access on the same explicit owner.
+    // created and keep even state access on the same explicit owner.
     void spawn(task<void> task) &;
     void spawn(task<void>) && = delete;
-    // Stop control is worker-affine like the rest of the scope. The stop state
-    // is created by the first token request, so a scope whose token is never
-    // observed allocates none; get_stop_token() may throw std::bad_alloc.
-    void request_stop() & noexcept;
-    void request_stop() && = delete;
-    [[nodiscard]] stop_token get_stop_token() const&;
-    stop_token get_stop_token() const&& = delete;
-    [[nodiscard]] bool stop_requested() const& noexcept;
-    bool stop_requested() const&& = delete;
     // Includes a spawn currently acquiring its child node.
     [[nodiscard]] std::size_t size() const& noexcept;
     std::size_t size() const&& = delete;
@@ -112,8 +101,6 @@ private:
 
     const worker_handle& worker_;
     std::pmr::memory_resource* resource_;
-    mutable std::optional<stop_source> stop_source_;
-    bool stop_requested_{false};
     std::size_t active_{0};
     retiring_guard* retiring_{nullptr};
     lifecycle_type lifecycle_;

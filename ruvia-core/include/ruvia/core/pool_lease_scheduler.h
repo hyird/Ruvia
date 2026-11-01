@@ -46,9 +46,8 @@ public:
     // worker's timer queue stops (pending or new acquires alike) no timer
     // fires: the acquire completes only through release(), close() (closed),
     // or its stop token (cancelled). It never throws for that.
-    [[nodiscard]] pool_lease_acquire acquire(const std::optional<std::chrono::milliseconds>& timeout);
-    [[nodiscard]] pool_lease_acquire acquire(const std::optional<std::chrono::milliseconds>& timeout,
-        stop_token stop_token);
+    [[nodiscard]] pool_lease_acquire acquire(
+        const std::optional<std::chrono::milliseconds>& timeout, stop_token stop = {});
 
     void release(std::size_t slot) noexcept;
     [[nodiscard]] bool close() noexcept;

@@ -6,9 +6,9 @@
 
 #include <asio/io_context.hpp>
 
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/core/worker_runtime_context.h"
 
 #include "test_harness.h"
 #include "worker_task_fixture.h"
@@ -64,11 +64,12 @@ RUVIA_TEST(worker_handle_defers_resumption_to_its_worker) {
     using worker_resume_test::before;
     for (const int hint : {ASIO_CONCURRENCY_HINT_DEFAULT, ASIO_CONCURRENCY_HINT_UNSAFE_IO}) {
         asio::io_context context(hint);
-        ruvia::worker_runtime_context runtime(context, 1);
-        const auto worker_value = runtime.handle();
+        auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 1});
+        const auto worker_value = attachment.loop().handle();
         std::vector<int> order;
         bool on_worker = true;
-        ruvia::test::run_worker_tasks(runtime, worker_resume_test::resume_twice(worker_value, order, 10, on_worker),
+        ruvia::test::run_worker_tasks(attachment,
+            worker_resume_test::resume_twice(worker_value, order, 10, on_worker),
             worker_resume_test::resume_twice(worker_value, order, 20, on_worker));
         RUVIA_CHECK(on_worker);
         RUVIA_CHECK_EQ(order.size(), std::size_t{10});

@@ -57,8 +57,8 @@ public:
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
 
+#include "integration/operation_timeout.h"
 #include "integration/slot_pool.h"
 #include "redis/redis_connection.h"
 
@@ -95,10 +95,11 @@ public:
     void close_now() noexcept;
     // `reply_timeout` starts when the command is written, so a server-side
     // block window is not consumed by slot acquisition or a lazy connect.
+    // `io_metrics` is the request's counter block, or null outside a request.
     task<redis_value> execute_owned(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource, operation_options options = {},
         std::optional<std::chrono::milliseconds> reply_timeout = std::nullopt,
-        operation_scope* scope = nullptr, std::optional<operation_timeout> deadline = std::nullopt);
+        request_io_metrics* io_metrics = nullptr, std::optional<operation_timeout> deadline = std::nullopt);
     // The caller keeps `args` alive until the operation completes. `deadline`
     // is copied, so repeated commands share the operation's absolute bound.
     task<redis_value> execute_borrowed(redis_command_args_view args, std::pmr::memory_resource* resource,
@@ -125,7 +126,7 @@ private:
     template <typename result_type, typename command_source_type>
     task<result_type> execute_commands(command_source_type source, operation_options options,
         std::optional<std::chrono::milliseconds> reply_timeout, std::pmr::memory_resource* resource,
-        std::optional<operation_timeout> deadline, operation_scope* scope = nullptr,
+        std::optional<operation_timeout> deadline, request_io_metrics* io_metrics = nullptr,
         bool wrap_transaction = false);
 
     const redis_config_storage& config_;
@@ -139,7 +140,7 @@ private:
 
 struct redis_command_executor final {
     redis_pool* pool_{nullptr};
-    operation_scope* scope_{nullptr};
+    request_io_metrics* io_metrics_{nullptr};
     operation_options options_;
 
     [[nodiscard]] task<redis_value> execute(std::pmr::vector<std::pmr::string> args,
@@ -166,8 +167,10 @@ public:
     void close_now() noexcept;
 
     [[nodiscard]] bool empty() const noexcept;
-    [[nodiscard]] redis_handle get(::ruvia::operation_scope& operation_scope) const;
-    [[nodiscard]] redis_handle get(std::string_view alias, ::ruvia::operation_scope& operation_scope) const;
+    // `io_metrics` is the request's counter block, or null outside a request.
+    [[nodiscard]] redis_handle get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] redis_handle get(
+        std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
 
 private:
     using entry_type = std::unique_ptr<redis_client_runtime, pmr_object_deleter<redis_client_runtime>>;

@@ -1108,16 +1108,16 @@ task<db_exec_result> mariadb_driver::execute(pool_type& pool, std::size_t index,
 }
 
 task<db_rows> mariadb_driver::query_pipelined(pool_type& pool, std::pmr::string sql, std::pmr::vector<db_value> params,
-    std::pmr::memory_resource* resource, operation_options options, operation_scope* scope) {
+    std::pmr::memory_resource* resource, operation_options options, request_io_metrics* io_metrics) {
     return run_pipelined<mariadb_pipeline_io, db_rows>(
-        pool, std::move(sql), std::move(params), resource, std::move(options), scope);
+        pool, std::move(sql), std::move(params), resource, std::move(options), io_metrics);
 }
 
 task<db_exec_result> mariadb_driver::execute_pipelined(pool_type& pool, std::pmr::string sql,
     std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
-    operation_scope* scope) {
+    request_io_metrics* io_metrics) {
     return run_pipelined<mariadb_pipeline_io, db_exec_result>(
-        pool, std::move(sql), std::move(params), resource, std::move(options), scope);
+        pool, std::move(sql), std::move(params), resource, std::move(options), io_metrics);
 }
 
 task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql,

@@ -15,6 +15,7 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 
 #include "server/connection_drain.h"

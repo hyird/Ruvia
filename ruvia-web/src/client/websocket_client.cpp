@@ -195,10 +195,10 @@ void websocket_client_handle::expire_capability(void* target) noexcept {
 }
 
 websocket_client_handle websocket_client_handle::with_options(operation_options options) const {
-    validate_operation_options(options);
+    detail::validate_operation_options(options);
     registration_.require_active();
     return websocket_client_handle(
-        *state_, registration_.scope(), merge_operation_options(options_, std::move(options)));
+        *state_, registration_.scope(), detail::merge_operation_options(options_, std::move(options)));
 }
 
 task<std::optional<websocket_message>> websocket_client_handle::read() const {

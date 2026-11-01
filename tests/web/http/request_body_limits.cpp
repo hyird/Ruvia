@@ -17,7 +17,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
@@ -182,7 +181,7 @@ void exercise_lazy_body_reads(ruvia::testing::test_context& ruvia_ctx,
         asio::steady_timer watchdog(io, std::chrono::seconds(5));
         watchdog.async_wait([&](std::error_code error) {
             if (!error) {
-                ruvia::close_socket(client);
+                ruvia::test::close_socket(client);
             }
         });
         try {
@@ -231,7 +230,7 @@ void exercise_lazy_body_reads(ruvia::testing::test_context& ruvia_ctx,
             failure = std::current_exception();
         }
         static_cast<void>(watchdog.cancel());
-        ruvia::close_socket(client);
+        ruvia::test::close_socket(client);
         attachment.stop();
     };
     auto done = attachment.loop().start(run());
@@ -259,7 +258,7 @@ std::string exchange_raw_request(
         asio::steady_timer watchdog(io, std::chrono::seconds(5));
         watchdog.async_wait([&](std::error_code error) {
             if (!error) {
-                ruvia::close_socket(client);
+                ruvia::test::close_socket(client);
             }
         });
         try {
@@ -309,7 +308,7 @@ std::string exchange_raw_request(
             failure = std::current_exception();
         }
         static_cast<void>(watchdog.cancel());
-        ruvia::close_socket(client);
+        ruvia::test::close_socket(client);
         attachment.stop();
     };
     auto done = attachment.loop().start(run());

@@ -220,7 +220,7 @@ public:
         detail::db_registry registry(io_context, worker_value, resolved, databases);
         co_await registry.connect();
         ::ruvia::operation_scope operation_scope;
-        auto handle = registry.get(operation_scope);
+        auto handle = registry.get(operation_scope, nullptr);
 
         co_await acquire_lock(handle, driver, lock_name, options.lock_timeout_, resolved);
 

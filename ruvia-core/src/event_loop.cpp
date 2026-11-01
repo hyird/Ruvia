@@ -9,6 +9,7 @@
 #include <utility>
 #include <variant>
 
+#include <asio/bind_executor.hpp>
 #include <asio/execution_context.hpp>
 
 #include "ruvia/core/failure_report.h"
@@ -417,22 +418,6 @@ void event_loop_stop_registration::reset() noexcept {
 event_loop::event_loop(std::shared_ptr<detail::event_loop_state> state_value) noexcept
     : state_(std::move(state_value)) {}
 
-bool event_loop::valid() const noexcept {
-    return state_ && state_->runtime_.handle().valid();
-}
-
-bool event_loop::accepting() const noexcept {
-    return state_ && state_->runtime_.handle().accepting();
-}
-
-bool event_loop::is_current() const noexcept {
-    return state_ && state_->runtime_.handle().is_current();
-}
-
-worker_id_type event_loop::id() const noexcept {
-    return state_ ? state_->runtime_.handle().id() : 0;
-}
-
 asio::io_context& event_loop::io_context() const& {
     if (!state_ || !state_->runtime_.handle().valid()) {
         if (state_) {
@@ -448,7 +433,7 @@ asio::io_context::executor_type event_loop::executor() const {
     return state_->executor_;
 }
 
-const worker_handle& event_loop::dispatch_handle() const noexcept {
+const worker_handle& event_loop::handle() const& noexcept {
     if (state_) {
         return state_->runtime_.handle();
     }
@@ -456,8 +441,8 @@ const worker_handle& event_loop::dispatch_handle() const noexcept {
     return empty_handle;
 }
 
-worker_handle event_loop::handle() const noexcept {
-    return dispatch_handle();
+worker_handle event_loop::handle() const&& noexcept {
+    return handle();
 }
 
 void event_loop::report_failure(std::exception_ptr failure) const noexcept {

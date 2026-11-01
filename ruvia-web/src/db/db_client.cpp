@@ -31,7 +31,7 @@ void db_client_state::throw_not_ready() {
 
 db_handle db_client_state::handle(operation_options options) {
     lifecycle_.require_ready();
-    return databases_.get(lifecycle_.operation_scope()).with_options(lifecycle_.options(std::move(options)));
+    return databases_.get(lifecycle_.operation_scope(), nullptr).with_options(lifecycle_.options(std::move(options)));
 }
 
 }  // namespace ruvia::detail

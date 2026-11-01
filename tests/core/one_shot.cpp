@@ -14,8 +14,8 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_runtime_context.h"
 
 #include "worker_task_fixture.h"
 
@@ -138,16 +138,16 @@ task<void> exercise_payload_retirement(worker_handle worker, bool& success) {
 
 bool test_completion_move_can_close_receiver(bool stop_worker) {
     asio::io_context io;
-    worker_runtime_context runtime(io, 8);
+    auto attachment = attach_event_loop(io, {.queue_capacity_ = 8});
     payload_state state;
-    auto [completion, receiver] = make_one_shot<payload>(runtime.handle());
+    auto [completion, receiver] = make_one_shot<payload>(attachment.loop().handle());
     std::binary_semaphore requested{0};
     std::binary_semaphore closed{0};
     bool observe = true;
     bool closed_during_move = false;
     const auto close = [&] {
         if (stop_worker) {
-            runtime.close();
+            attachment.stop();
         } else {
             receiver.close();
         }
@@ -177,7 +177,6 @@ bool test_completion_move_can_close_receiver(bool stop_worker) {
                    *result.rejected()->value_ == 42;
     }
     receiver.close();
-    runtime.detach();
     return rejected && closed_during_move && state.destroyed_ == 1;
 }
 
@@ -188,10 +187,10 @@ task<void> verify_payload_value(one_shot_receiver<payload>& receiver, bool& succ
 
 bool test_concurrent_completion_reservation(bool throw_first) {
     asio::io_context io;
-    worker_runtime_context runtime(io, 8);
+    auto attachment = attach_event_loop(io, {.queue_capacity_ = 8});
     payload_state first_state;
     payload_state retry_state;
-    auto [completion, receiver] = make_one_shot<payload>(runtime.handle());
+    auto [completion, receiver] = make_one_shot<payload>(attachment.loop().handle());
     std::binary_semaphore entered{0};
     std::binary_semaphore proceed{0};
     std::binary_semaphore second_finished{0};
@@ -229,8 +228,7 @@ bool test_concurrent_completion_reservation(bool throw_first) {
         receiver.close();
     }
     bool received = false;
-    ruvia::test::run_worker_tasks(runtime, verify_payload_value(receiver, received));
-    runtime.detach();
+    ruvia::test::run_worker_tasks(attachment, verify_payload_value(receiver, received));
     return concurrent && second_status == one_shot_complete_status::in_progress &&
            first_completed == !throw_first && first_failed == throw_first && retried && received;
 }
@@ -314,21 +312,21 @@ ruvia::task<void> wait_for_value(ruvia::one_shot_receiver<int>& receiver, int ex
               result_value.value() == expected;
 }
 
-ruvia::task<void> wait_for_worker_stopping(ruvia::worker_runtime_context& runtime,
+ruvia::task<void> wait_for_worker_stopping(ruvia::event_loop_attachment& attachment,
     ruvia::one_shot_receiver<int>& receiver, bool& success) {
-    asio::post(runtime.io_context(), [&runtime] { runtime.close(); });
+    asio::post(attachment.loop().executor(), [&attachment] { attachment.stop(); });
     const auto result_value = co_await receiver.wait();
     success = result_value.status() == ruvia::worker_wait_status::worker_stopping && !result_value.has_value();
 }
 
-ruvia::task<void> settled_outcomes_survive_worker_stopping(ruvia::worker_runtime_context& runtime,
+ruvia::task<void> settled_outcomes_survive_worker_stopping(ruvia::event_loop_attachment& attachment,
     ruvia::one_shot_completion<int> delivered_completion, ruvia::one_shot_receiver<int>& delivered_receiver,
     ruvia::one_shot_completion<int> closed_completion, ruvia::one_shot_receiver<int>& closed_receiver,
     bool& success) {
     const bool completed = delivered_completion.complete(1).accepted();
     const auto delivered = co_await delivered_receiver.wait();
     closed_receiver.close();
-    runtime.close();
+    attachment.stop();
     const auto duplicate = delivered_completion.complete(2);
     const auto after_consumed = co_await delivered_receiver.wait();
     const auto after_close = closed_completion.complete(3);
@@ -528,7 +526,6 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     if (!completed) {
         active_receiver.close();
     }
-    scope.request_stop();
     co_await scope.join();
     success = success && completed;
 }
@@ -542,50 +539,47 @@ int main() {
     bool cancellation_during_completion = false;
     {
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
-        const auto worker_value = runtime.handle();
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+        const auto worker_value = attachment.loop().handle();
         auto cold_wait = make_cold_wait_after_receiver_close(worker_value, false);
         auto timed_cold_wait = make_cold_wait_after_receiver_close(worker_value, true);
         auto completed_cold_wait = make_cold_wait_after_receiver_close(worker_value, false, true);
         auto completed_timed_cold_wait = make_cold_wait_after_receiver_close(worker_value, true, true);
-        ruvia::test::run_worker_tasks(runtime, exercise(worker_value, success),
+        ruvia::test::run_worker_tasks(attachment, exercise(worker_value, success),
             verify_cold_wait_operations(std::move(cold_wait), std::move(timed_cold_wait),
                 std::move(completed_cold_wait), std::move(completed_timed_cold_wait),
                 cold_wait_operations_safe),
             ruvia::test::one_shot_tests::exercise_payload_retirement(worker_value, payload_retirement_safe),
             ruvia::test::one_shot_tests::exercise_cancellation_during_completion(worker_value, cancellation_during_completion));
-        runtime.detach();
     }
 
     bool worker_stopping = false;
     {
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
-        const auto worker_value = runtime.handle();
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+        const auto worker_value = attachment.loop().handle();
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
-        ruvia::test::run_worker_tasks(runtime, wait_for_worker_stopping(runtime, receiver, worker_stopping));
-        runtime.detach();
+        ruvia::test::run_worker_tasks(attachment, wait_for_worker_stopping(attachment, receiver, worker_stopping));
     }
 
     bool settled_outcomes_kept = false;
     {
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
-        const auto worker_value = runtime.handle();
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+        const auto worker_value = attachment.loop().handle();
         auto [delivered_completion, delivered_receiver] = ruvia::make_one_shot<int>(worker_value);
         auto [closed_completion, closed_receiver] = ruvia::make_one_shot<int>(worker_value);
-        ruvia::test::run_worker_tasks(runtime,
-            settled_outcomes_survive_worker_stopping(runtime, std::move(delivered_completion), delivered_receiver,
+        ruvia::test::run_worker_tasks(attachment,
+            settled_outcomes_survive_worker_stopping(attachment, std::move(delivered_completion), delivered_receiver,
                 std::move(closed_completion), closed_receiver, settled_outcomes_kept));
-        runtime.detach();
     }
 
     bool cross_thread_value = false;
     bool cross_thread_completed = false;
     {
         asio::io_context io_context;
-        ruvia::worker_runtime_context runtime(io_context, 8);
-        const auto worker_value = runtime.handle();
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+        const auto worker_value = attachment.loop().handle();
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         std::binary_semaphore receiver_scheduled{0};
         asio::post(io_context, [&receiver_scheduled] { receiver_scheduled.release(); });
@@ -593,9 +587,8 @@ int main() {
             receiver_scheduled.acquire();
             cross_thread_completed = completion.complete(77).accepted();
         });
-        ruvia::test::run_worker_tasks(runtime, wait_for_value(receiver, 77, cross_thread_value));
+        ruvia::test::run_worker_tasks(attachment, wait_for_value(receiver, 77, cross_thread_value));
         completer.join();
-        runtime.detach();
     }
     const bool all_passed = success && cold_wait_operations_safe && payload_retirement_safe && worker_stopping && settled_outcomes_kept && cross_thread_value &&
                             cross_thread_completed && cancellation_during_completion &&

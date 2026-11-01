@@ -467,14 +467,16 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
 
 template <typename driver_type>
 task<db_rows> db_pool<driver_type>::query(std::pmr::string sql, std::pmr::vector<db_value> params,
-    std::pmr::memory_resource* resource, operation_options options, operation_scope* scope) {
-    return driver_type::query_pipelined(*this, std::move(sql), std::move(params), resource, std::move(options), scope);
+    std::pmr::memory_resource* resource, operation_options options, request_io_metrics* io_metrics) {
+    return driver_type::query_pipelined(
+        *this, std::move(sql), std::move(params), resource, std::move(options), io_metrics);
 }
 
 template <typename driver_type>
 task<db_exec_result> db_pool<driver_type>::execute(std::pmr::string sql, std::pmr::vector<db_value> params,
-    std::pmr::memory_resource* resource, operation_options options, operation_scope* scope) {
-    return driver_type::execute_pipelined(*this, std::move(sql), std::move(params), resource, std::move(options), scope);
+    std::pmr::memory_resource* resource, operation_options options, request_io_metrics* io_metrics) {
+    return driver_type::execute_pipelined(
+        *this, std::move(sql), std::move(params), resource, std::move(options), io_metrics);
 }
 
 template <typename driver_type>

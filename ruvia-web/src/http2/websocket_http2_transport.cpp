@@ -7,10 +7,10 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/http/http_pmr_string.h"
 
 #include "client/websocket_client_state.h"
+#include "integration/operation_timeout.h"
 
 namespace ruvia::detail {
 

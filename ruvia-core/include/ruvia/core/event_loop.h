@@ -10,7 +10,6 @@
 #include <type_traits>
 #include <utility>
 
-#include <asio/bind_executor.hpp>
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/detail/io/asio_await.h"
@@ -54,29 +53,20 @@ class event_loop final {
 public:
     event_loop() noexcept = default;
 
-    [[nodiscard]] bool valid() const noexcept;
-    [[nodiscard]] bool accepting() const noexcept;
-    [[nodiscard]] bool is_current() const noexcept;
-    [[nodiscard]] worker_id_type id() const noexcept;
-
     // A retired pool loop or attachment is invalid; accessing its context or
     // obtaining a fresh executor then throws std::logic_error. Previously
     // obtained executors must not outlive the loop's physical context storage.
     [[nodiscard]] asio::io_context& io_context() const&;
     asio::io_context& io_context() const&& = delete;
     [[nodiscard]] asio::io_context::executor_type executor() const;
-    [[nodiscard]] worker_handle handle() const noexcept;
+    // Rvalue loops return a copy: the handle must not outlive its loop owner.
+    [[nodiscard]] const worker_handle& handle() const& noexcept;
+    [[nodiscard]] worker_handle handle() const&& noexcept;
 
     // Reports a terminal runtime failure without throwing on the caller's
     // thread. Pool owners retain the first failure for join(); attachments
     // route it to the existing unhandled-failure diagnostic.
     void report_failure(std::exception_ptr failure) const noexcept;
-
-    template <typename fn_type>
-        requires detail::move_only_function_target<void, fn_type>
-    [[nodiscard]] post_result_type post(fn_type&& fn) const {
-        return dispatch_handle().post(std::forward<fn_type>(fn));
-    }
 
     // Cold-path cleanup for an already owned resource, not new business work.
     // Bypasses bounded admission but acquires retirement protection; returns
@@ -182,9 +172,9 @@ public:
                 delivered_ = true;
             }
         };
-        auto posted = post([completion, bound_executor,
-                               retirement_lease = std::move(retirement_lease),
-                               launch = launch_guard(std::move(task_value), completion)]() mutable {
+        auto posted = handle().post([completion, bound_executor,
+                                        retirement_lease = std::move(retirement_lease),
+                                        launch = launch_guard(std::move(task_value), completion)]() mutable {
             try {
                 detail::async_start_task(std::move(*launch.task_),
                     root_completion(bound_executor, completion, retirement_lease));
@@ -220,7 +210,6 @@ public:
 
 private:
     explicit event_loop(std::shared_ptr<detail::event_loop_state> state_value) noexcept;
-    [[nodiscard]] const worker_handle& dispatch_handle() const noexcept;
     [[nodiscard]] event_loop_stop_registration register_stop_callback(
         move_only_function<task<void>()> callback) const;
     [[nodiscard]] std::shared_ptr<void> acquire_root_lease() const;

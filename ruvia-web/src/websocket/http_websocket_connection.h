@@ -15,7 +15,6 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_signal.h"
@@ -28,6 +27,7 @@
 
 #include "server/connection_scanner.h"
 #include "tls/tls_stream_end.h"
+#include "util/socket.h"
 #include "websocket/http_websocket_liveness.h"
 
 namespace ruvia::detail {

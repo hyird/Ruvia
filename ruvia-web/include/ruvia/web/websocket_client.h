@@ -16,7 +16,7 @@
 #include <utility>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"

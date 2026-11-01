@@ -4,9 +4,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/operation_timeout.h"
-
 #include "client/websocket_client_state.h"
+#include "integration/operation_timeout.h"
 #include "util/pmr_owned_storage.h"
 
 namespace ruvia::detail {

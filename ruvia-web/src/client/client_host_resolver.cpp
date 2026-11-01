@@ -14,6 +14,8 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_number_format.h"
 
+#include "util/socket.h"
+
 namespace ruvia::detail {
 struct client_host_resolver::query final {
     std::pmr::string host_;
@@ -29,9 +31,7 @@ struct client_host_resolver::query final {
 };
 
 bool client_host_needs_lookup(std::string_view host) {
-    std::error_code error;
-    (void)asio::ip::make_address(host, error);
-    return static_cast<bool>(error);
+    return !parse_ip_address(host).has_value();
 }
 
 void require_client_host_lookup(std::string_view host, const worker_handle& worker) {
@@ -57,10 +57,8 @@ client_host_resolver& client_host_resolver::operator=(client_host_resolver&& oth
 
 client_resolve_operation client_host_resolver::resolve(std::string_view host, std::uint16_t port,
     const operation_timeout& timeout) {
-    std::error_code error;
-    const auto address = asio::ip::make_address(host, error);
-    if (!error) {
-        return client_resolve_result{.literal_ = asio::ip::tcp::endpoint(address, port)};
+    if (const auto address = parse_ip_address(host)) {
+        return client_resolve_result{.literal_ = asio::ip::tcp::endpoint(*address, port)};
     }
     std::array<char, http_max_unsigned_decimal_size> digits;
     const auto service = http_format_unsigned(digits, port);

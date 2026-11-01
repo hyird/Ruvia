@@ -17,7 +17,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/socket.h"
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/context.h"
@@ -190,7 +189,7 @@ void check_file_end(ruvia::testing::test_context& ruvia_ctx, bool exhaust_connec
         watchdog.async_wait([&](std::error_code error) {
             if (!error) {
                 expired = true;
-                ruvia::close_socket(socket);
+                ruvia::test::close_socket(socket);
             }
         });
         try {
@@ -256,7 +255,7 @@ void check_file_end(ruvia::testing::test_context& ruvia_ctx, bool exhaust_connec
         } catch (...) {
             failure = std::current_exception();
         }
-        ruvia::close_socket(socket);
+        ruvia::test::close_socket(socket);
         (void)watchdog.cancel();
         server.finish();
         attachment.stop();
@@ -300,7 +299,7 @@ RUVIA_TEST(http2_failed_file_writes_release_output_budget_slots) {
         watchdog.async_wait([&](std::error_code error) {
             if (!error) {
                 expired = true;
-                ruvia::close_socket(socket);
+                ruvia::test::close_socket(socket);
             }
         });
         try {
@@ -395,7 +394,7 @@ RUVIA_TEST(http2_failed_file_writes_release_output_budget_slots) {
         } catch (...) {
             failure = std::current_exception();
         }
-        ruvia::close_socket(socket);
+        ruvia::test::close_socket(socket);
         (void)watchdog.cancel();
         server.finish();
         attachment.stop();

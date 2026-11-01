@@ -5,17 +5,14 @@
 #include <stdexcept>
 #include <utility>
 
-#include <asio/co_spawn.hpp>
-
-#include "ruvia/core/async.h"
+#include "ruvia/core/event_loop.h"
+#include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_runtime_context.h"
 
 namespace ruvia::test {
 
-// Start roots on their handle's owner, drain every root, then close the owner.
-// The roots use their own stop sources when exercising cancellation; the
-// enclosing scope's stop request marks structured shutdown, not test input.
+// Start roots on their handle's owner and drain every root. The roots use
+// their own stop sources when exercising cancellation.
 template <std::size_t Count>
 task<void> join_worker_tasks(const worker_handle& worker,
     std::array<task<void>, Count> tasks) {
@@ -28,33 +25,43 @@ task<void> join_worker_tasks(const worker_handle& worker,
     } catch (...) {
         failure = std::current_exception();
     }
-    scope.request_stop();
     co_await scope.join();
     if (failure) {
         std::rethrow_exception(failure);
     }
 }
 
-template <typename... Tasks>
-void run_worker_tasks(worker_runtime_context& runtime, Tasks&&... tasks) {
+// The root task holds the loop's retirement open, so a test may stop the
+// attachment while its roots still run; the loop retires once they joined.
+template <std::size_t Count>
+task<void> join_worker_tasks_then_stop(event_loop_attachment& attachment, const worker_handle& worker,
+    std::array<task<void>, Count> tasks, bool& joined) {
     std::exception_ptr failure;
-    bool joined = false;
-    asio::co_spawn(runtime.io_context(),
-        as_awaitable(join_worker_tasks(runtime.handle(),
-            std::array<task<void>, sizeof...(Tasks)>{std::forward<Tasks>(tasks)...})),
-        [&](std::exception_ptr error) {
-            failure = std::move(error);
-            joined = true;
-            runtime.close();
-            runtime.stop_timers();
-        });
-    runtime.run();
-    if (!joined) {
-        throw std::logic_error("worker owner stopped before root tasks joined");
+    try {
+        co_await join_worker_tasks(worker, std::move(tasks));
+    } catch (...) {
+        failure = std::current_exception();
     }
+    joined = true;
+    attachment.stop();
     if (failure) {
         std::rethrow_exception(failure);
     }
+}
+
+// Runs the roots on the attached loop, stops the attachment once they have
+// joined, and drives the context until the loop retires.
+template <typename... Tasks>
+void run_worker_tasks(event_loop_attachment& attachment, Tasks&&... tasks) {
+    bool joined = false;
+    const auto loop = attachment.loop();
+    auto root = loop.start(join_worker_tasks_then_stop(attachment, loop.handle(),
+        std::array<task<void>, sizeof...(Tasks)>{std::forward<Tasks>(tasks)...}, joined));
+    attachment.run();
+    if (!joined) {
+        throw std::logic_error("worker owner stopped before root tasks joined");
+    }
+    root.get();
 }
 
 }  // namespace ruvia::test

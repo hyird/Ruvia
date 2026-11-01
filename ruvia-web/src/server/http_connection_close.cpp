@@ -10,8 +10,9 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/socket.h"
 #include "ruvia/core/worker_timer.h"
+
+#include "util/socket.h"
 
 namespace ruvia::detail {
 namespace {

@@ -37,12 +37,12 @@ blocking_pool* detail::worker_handle_access::blocking_pool(const worker_handle& 
     return worker.dispatcher_ ? worker.dispatcher_->blocking_pool() : nullptr;
 }
 
-post_result_type worker_handle::post_task(move_only_function<void()> task_value) const {
+post_outcome<> worker_handle::post_task(move_only_function<void()> task_value) const {
     if (!task_value) {
         throw std::invalid_argument("worker post requires a callable task");
     }
     return dispatcher_ ? dispatcher_->post(std::move(task_value))
-                       : post_result_type::reject(post_status::worker_stopping, std::move(task_value));
+                       : post_outcome<>::reject(post_status::worker_stopping, std::move(task_value));
 }
 
 void worker_handle::defer_resume(std::coroutine_handle<> continuation) const noexcept {

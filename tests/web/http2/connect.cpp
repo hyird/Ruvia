@@ -19,7 +19,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/socket.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
@@ -221,7 +220,7 @@ RUVIA_TEST(http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_requ
         asio::ip::tcp::socket socket(io);
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
         bool expired = false;
-        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::close_socket(socket); } });
+        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::test::close_socket(socket); } });
         ruvia::worker_memory memory(allocations);
         try {
             const auto connected = co_await ruvia::async_asio([&](auto handler) { socket.async_connect(server.endpoint(), std::move(handler)); });
@@ -357,7 +356,7 @@ RUVIA_TEST(http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_requ
         } catch (...) {
             failure = std::current_exception();
         }
-        ruvia::close_socket(socket);
+        ruvia::test::close_socket(socket);
         (void)watchdog_value.cancel();
         server.finish();
         RUVIA_CHECK(!expired);
@@ -385,7 +384,7 @@ RUVIA_TEST(http2_connect_route_receives_data_sent_before_the_response) {
         asio::ip::tcp::socket socket(io);
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
         bool expired = false;
-        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::close_socket(socket); } });
+        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::test::close_socket(socket); } });
         ruvia::worker_memory memory(allocations);
         try {
             const auto connected = co_await ruvia::async_asio([&](auto handler) { socket.async_connect(server.endpoint(), std::move(handler)); });
@@ -473,7 +472,7 @@ RUVIA_TEST(http2_connect_route_receives_data_sent_before_the_response) {
         } catch (...) {
             failure = std::current_exception();
         }
-        ruvia::close_socket(socket);
+        ruvia::test::close_socket(socket);
         (void)watchdog_value.cancel();
         server.finish();
         RUVIA_CHECK(!expired);
@@ -497,7 +496,7 @@ RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_pe
         asio::ip::tcp::socket socket(io);
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
         bool expired = false;
-        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::close_socket(socket); } });
+        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::test::close_socket(socket); } });
         ruvia::worker_memory memory(allocations);
         try {
             const auto connected = co_await ruvia::async_asio([&](auto handler) { socket.async_connect(server.endpoint(), std::move(handler)); });
@@ -607,7 +606,7 @@ RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_pe
         } catch (...) {
             failure = std::current_exception();
         }
-        ruvia::close_socket(socket);
+        ruvia::test::close_socket(socket);
         (void)watchdog_value.cancel();
         server.finish();
         RUVIA_CHECK(!expired);
@@ -631,7 +630,7 @@ RUVIA_TEST(http2_websocket_request_half_closed_before_handshake_receives_error_r
         asio::ip::tcp::socket socket(io);
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
         bool expired = false;
-        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::close_socket(socket); } });
+        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::test::close_socket(socket); } });
         ruvia::worker_memory memory(allocations);
         try {
             const auto connected = co_await ruvia::async_asio([&](auto handler) { socket.async_connect(server.endpoint(), std::move(handler)); });
@@ -693,7 +692,7 @@ RUVIA_TEST(http2_websocket_request_half_closed_before_handshake_receives_error_r
         } catch (...) {
             failure = std::current_exception();
         }
-        ruvia::close_socket(socket);
+        ruvia::test::close_socket(socket);
         (void)watchdog_value.cancel();
         server.finish();
         RUVIA_CHECK(!expired);
@@ -720,7 +719,7 @@ RUVIA_TEST(http2_rejected_expectation_discards_request_content_received_during_e
         asio::ip::tcp::socket socket(io);
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
         bool expired = false;
-        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::close_socket(socket); } });
+        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::test::close_socket(socket); } });
         try {
             const auto connected = co_await ruvia::async_asio([&](auto handler) { socket.async_connect(server.endpoint(), std::move(handler)); });
             if (connected.error_code()) {
@@ -797,7 +796,7 @@ RUVIA_TEST(http2_rejected_expectation_discards_request_content_received_during_e
         } catch (...) {
             failure = std::current_exception();
         }
-        ruvia::close_socket(socket);
+        ruvia::test::close_socket(socket);
         (void)watchdog_value.cancel();
         server.finish();
         RUVIA_CHECK(!expired);
@@ -824,7 +823,7 @@ RUVIA_TEST(http2_capsule_route_resets_truncated_capsule_with_protocol_error) {
         asio::ip::tcp::socket socket(io);
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
         bool expired = false;
-        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::close_socket(socket); } });
+        watchdog_value.async_wait([&](std::error_code error) { if (!error) { expired = true; ruvia::test::close_socket(socket); } });
         ruvia::worker_memory memory(allocations);
         try {
             const auto connected = co_await ruvia::async_asio([&](auto handler) { socket.async_connect(server.endpoint(), std::move(handler)); });
@@ -885,7 +884,7 @@ RUVIA_TEST(http2_capsule_route_resets_truncated_capsule_with_protocol_error) {
         } catch (...) {
             failure = std::current_exception();
         }
-        ruvia::close_socket(socket);
+        ruvia::test::close_socket(socket);
         (void)watchdog_value.cancel();
         server.finish();
         RUVIA_CHECK(!expired);
@@ -963,7 +962,7 @@ RUVIA_TEST(http2_capsule_route_half_closed_resets_truncated_capsule_on_end_strea
             asio::async_write(socket, asio::buffer(ping_frame), std::move(h));
         });
         co_await pump();
-        ruvia::close_socket(socket);
+        ruvia::test::close_socket(socket);
         server.finish();
         attachment.stop();
     };

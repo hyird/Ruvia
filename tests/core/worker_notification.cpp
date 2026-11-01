@@ -20,7 +20,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/worker_runtime.h"
-#include "ruvia/core/worker_runtime_context.h"
 
 #include "test_harness.h"
 
@@ -68,10 +67,10 @@ ruvia::task<void> close_notification(ruvia::worker_notification& notification) {
 }
 
 ruvia::task<void> close_and_stop_runtime(ruvia::worker_notification& notification,
-    ruvia::worker_runtime_context& runtime, asio::steady_timer& watchdog_value) {
+    ruvia::worker_runtime& runtime, asio::steady_timer& watchdog_value) {
     watchdog_value.cancel();
     notification.close();
-    runtime.close();
+    runtime.request_stop();
     co_return;
 }
 
@@ -313,10 +312,9 @@ RUVIA_TEST(worker_notification_early_latch_cold_wait_and_repeated_reuse) {
     RUVIA_CHECK(stop(worker));
 }
 
-RUVIA_TEST(worker_notification_borrows_worker_runtime_context) {
+RUVIA_TEST(worker_notification_round_trips_on_worker_runtime) {
     constexpr std::size_t round_count = 4;
-    asio::io_context io_context(ASIO_CONCURRENCY_HINT_UNSAFE_IO);
-    ruvia::worker_runtime_context runtime(io_context, 64);
+    ruvia::worker_runtime runtime;
     ruvia::worker_notification notification(runtime);
 
     bool close_rejected_off_worker = false;
@@ -338,26 +336,15 @@ RUVIA_TEST(worker_notification_borrows_worker_runtime_context) {
     bool rounds_succeeded = false;
     auto rounds_task = spawn(runtime, wait_runtime_rounds(notification, rounds, round_count, rounds_succeeded));
 
-    asio::steady_timer watchdog(io_context);
+    asio::steady_timer watchdog(runtime.io_context());
     watchdog.expires_after(20s);
     watchdog.async_wait([&](const asio::error_code& error) {
         if (!error) {
             notification.close();
-            runtime.close();
+            runtime.request_stop();
         }
     });
-
-    std::promise<std::exception_ptr> runtime_exit_promise;
-    auto runtime_exit = runtime_exit_promise.get_future();
-    std::thread worker_value([&] {
-        std::exception_ptr failure;
-        try {
-            runtime.run();
-        } catch (...) {
-            failure = std::current_exception();
-        }
-        runtime_exit_promise.set_value(std::move(failure));
-    });
+    RUVIA_CHECK(runtime.start());
 
     bool rounds_advanced = true;
     for (std::size_t next_value = 1; next_value < round_count; ++next_value) {
@@ -389,18 +376,7 @@ RUVIA_TEST(worker_notification_borrows_worker_runtime_context) {
     RUVIA_CHECK(wait_completed);
     RUVIA_CHECK_EQ(wait_result.load(std::memory_order_acquire), 2);
 
-    bool runtime_exited = runtime_exit.wait_for(wait_timeout) == std::future_status::ready;
-    if (!runtime_exited) {
-        runtime.close();
-    }
-    RUVIA_CHECK(runtime_exited);
-    if (runtime_exited) {
-        const auto failure = runtime_exit.get();
-        RUVIA_CHECK(failure == nullptr);
-    } else {
-        std::terminate();
-    }
-    worker_value.join();
+    RUVIA_CHECK(stop(runtime));
     RUVIA_CHECK(!runtime.handle().accepting());
 }
 

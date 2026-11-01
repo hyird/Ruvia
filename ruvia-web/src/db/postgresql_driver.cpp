@@ -707,16 +707,16 @@ task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t ind
 
 task<db_rows> postgresql_driver::query_pipelined(pool_type& pool, std::pmr::string sql,
     std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
-    operation_scope* scope) {
+    request_io_metrics* io_metrics) {
     return run_pipelined<postgresql_pipeline_io, db_rows>(
-        pool, std::move(sql), std::move(params), resource, std::move(options), scope);
+        pool, std::move(sql), std::move(params), resource, std::move(options), io_metrics);
 }
 
 task<db_exec_result> postgresql_driver::execute_pipelined(pool_type& pool, std::pmr::string sql,
     std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
-    operation_scope* scope) {
+    request_io_metrics* io_metrics) {
     return run_pipelined<postgresql_pipeline_io, db_exec_result>(
-        pool, std::move(sql), std::move(params), resource, std::move(options), scope);
+        pool, std::move(sql), std::move(params), resource, std::move(options), io_metrics);
 }
 
 // Single-row mode reports whether the statement produced rows only with its

@@ -114,17 +114,17 @@ post_status worker_dispatcher::reserve(std::size_t& index) noexcept {
 // may reenter this worker (post, close, detach). Admission and publication are
 // therefore two critical sections with the move between them, never under the
 // mutex; the reserved node counts against capacity throughout.
-post_result_type worker_dispatcher::post(move_only_function<void()> task_value) {
+post_outcome<> worker_dispatcher::post(move_only_function<void()> task_value) {
     if (!task_value) {
         throw std::invalid_argument("worker post requires a callable task");
     }
     std::size_t index = no_node;
     if (const auto status = reserve(index); status != post_status::accepted) {
-        return post_result_type::reject(status, std::move(task_value));
+        return post_outcome<>::reject(status, std::move(task_value));
     }
     nodes_[index].task_ = std::move(task_value);
     publish(index);
-    return post_result_type::accept();
+    return post_outcome<>::accept();
 }
 
 post_status worker_dispatcher::post_factory(move_only_function<move_only_function<void()>()> factory) {

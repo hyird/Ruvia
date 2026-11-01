@@ -9,11 +9,12 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
 #include "ruvia/web/detail/db/db_backend.h"
+
+#include "integration/operation_timeout.h"
 
 // Execution of compiled db_query statements: one deadline and one chain for a
 // query, or a query and its count, run directly or through the result cache.
@@ -23,6 +24,8 @@ class db_query;
 }
 
 namespace ruvia::detail {
+
+struct request_io_metrics;
 
 #ifdef RUVIA_ENABLE_REDIS
 class db_query_cache_state;
@@ -34,7 +37,8 @@ struct db_query_backend final {
     db_pool_ref_type pool_;
     std::optional<std::size_t> slot_;
     std::pmr::memory_resource* resource_;
-    operation_scope* scope_{nullptr};
+    // The request's counter block for pooled statements; null otherwise.
+    request_io_metrics* io_metrics_{nullptr};
     // Set when the database statement itself failed: a transaction statement
     // failure has already retired the transaction's lease.
     bool* backend_failed_{nullptr};

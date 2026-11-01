@@ -33,11 +33,11 @@ std::pmr::memory_resource* web_worker_context::pool() const noexcept {
 
 #ifdef RUVIA_ENABLE_DATABASE
 db_handle web_worker_context::db() const {
-    return client_registries_.db(operation_scope_, capabilities_.stop_token());
+    return client_registries_.db(operation_scope_, nullptr, capabilities_.stop_token());
 }
 
 db_handle web_worker_context::db(std::string_view alias) const {
-    return client_registries_.db(alias, operation_scope_, capabilities_.stop_token());
+    return client_registries_.db(alias, operation_scope_, nullptr, capabilities_.stop_token());
 }
 #endif
 
@@ -51,11 +51,11 @@ http_client_handle web_worker_context::http_client(std::string_view alias) const
 
 #ifdef RUVIA_ENABLE_REDIS
 redis_handle web_worker_context::redis() const {
-    return client_registries_.redis(operation_scope_, capabilities_.stop_token());
+    return client_registries_.redis(operation_scope_, nullptr, capabilities_.stop_token());
 }
 
 redis_handle web_worker_context::redis(std::string_view alias) const {
-    return client_registries_.redis(alias, operation_scope_, capabilities_.stop_token());
+    return client_registries_.redis(alias, operation_scope_, nullptr, capabilities_.stop_token());
 }
 #endif
 

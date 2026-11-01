@@ -126,7 +126,6 @@ void http_client_pool::close_now() noexcept {
     }
     // slots_.close() retires queued waiters and connection shutdown aborts
     // every connect and exchange; a transferred slot fails at admission.
-    background_tasks_.request_stop();
     for (auto& connection_value : connections_) {
         connection_value->shutdown();
     }

@@ -18,9 +18,7 @@ namespace ruvia {
 
 context::context(
     request_memory& memory, const http_request& request, const detail::context_services& services)
-    : context(memory, request, {}, nullptr, nullptr, 0, 0, services) {
-    operation_scope_.bind_context(services.io_metrics());
-}
+    : context(memory, request, {}, nullptr, nullptr, 0, 0, services) {}
 
 context::context(request_memory& memory, const http_request& request,
     std::string_view route_path, const std::string_view* param_names,
@@ -36,9 +34,7 @@ context::context(request_memory& memory, const http_request& request,
       param_count_(param_count < detail::max_route_params ? param_count : detail::max_route_params),
       route_rate_limit_scope_(route_rate_limit_scope),
       request_storage_(make_pmr_object<detail::context_request_storage>(memory.resource(),
-          services, memory.resource())) {
-    operation_scope_.bind_context(services.io_metrics());
-}
+          services, memory.resource())) {}
 
 context::~context() = default;
 
@@ -126,21 +122,29 @@ void context::respond(http_response&& response) {
 
 #ifdef RUVIA_ENABLE_DATABASE
 db_handle context::db() const {
-    return services().client_registries().db(operation_scope_, capabilities_.stop_token());
+    const auto& services_value = services();
+    return services_value.client_registries().db(
+        operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 
 db_handle context::db(std::string_view alias) const {
-    return services().client_registries().db(alias, operation_scope_, capabilities_.stop_token());
+    const auto& services_value = services();
+    return services_value.client_registries().db(
+        alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
 redis_handle context::redis() const {
-    return services().client_registries().redis(operation_scope_, capabilities_.stop_token());
+    const auto& services_value = services();
+    return services_value.client_registries().redis(
+        operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 
 redis_handle context::redis(std::string_view alias) const {
-    return services().client_registries().redis(alias, operation_scope_, capabilities_.stop_token());
+    const auto& services_value = services();
+    return services_value.client_registries().redis(
+        alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 #endif
 

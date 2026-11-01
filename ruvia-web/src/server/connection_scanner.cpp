@@ -6,8 +6,8 @@
 #include <utility>
 
 #include "ruvia/core/memory/memory_pool.h"
-#include "ruvia/core/socket.h"
 
+#include "util/socket.h"
 #include "util/steady_clock.h"
 
 namespace ruvia::detail {

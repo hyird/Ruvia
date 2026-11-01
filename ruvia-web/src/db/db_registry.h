@@ -59,6 +59,7 @@ public:
 namespace ruvia::detail {
 
 class redis_registry;
+struct request_io_metrics;
 #ifdef RUVIA_ENABLE_REDIS
 class db_query_cache_state;
 #endif
@@ -82,8 +83,10 @@ public:
     task<void> connect();
     void close_now() noexcept;
     [[nodiscard]] bool empty() const noexcept;
-    [[nodiscard]] db_handle get(::ruvia::operation_scope& operation_scope) const;
-    [[nodiscard]] db_handle get(std::string_view alias, ::ruvia::operation_scope& operation_scope) const;
+    // `io_metrics` is the request's counter block, or null outside a request.
+    [[nodiscard]] db_handle get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] db_handle get(
+        std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
 
     template <typename driver_type>
     using pool_owner_ptr_type = std::unique_ptr<db_pool<driver_type>, pmr_object_deleter<db_pool<driver_type>>>;
@@ -113,7 +116,8 @@ private:
         const db_cache_config_storage& policy, const db_config_storage& config, std::string_view alias);
     ::ruvia::operation_scope cache_scope_;
 #endif
-    [[nodiscard]] db_handle handle(const entry_type& entry, ::ruvia::operation_scope& operation_scope) const;
+    [[nodiscard]] db_handle handle(
+        const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
     std::pmr::vector<entry_type> entries_;
     named_capability_index alias_index_;
 };

@@ -9,12 +9,12 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "db/db_query_execution.h"
+#include "integration/operation_timeout.h"
 
 // Query-result cache encoding and keys (Redis builds only). The cache store
 // itself and its failure policy live in db_query_result_cache.cpp.

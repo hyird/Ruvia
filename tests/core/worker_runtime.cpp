@@ -865,7 +865,7 @@ RUVIA_TEST(event_loop_cleanup_drains_owned_inputs_after_business_admission_close
     retirement_started.get_future().get();
     bool ran{};
     bool inputs_destroyed_on_owner{};
-    RUVIA_CHECK(!loop.accepting());
+    RUVIA_CHECK(!loop.handle().accepting());
     RUVIA_CHECK(loop.defer_cleanup([payload = std::make_unique<cleanup_payload>(worker_value, inputs_destroyed_on_owner), &gate, &ran, &worker_value] {
         ran = worker_value.is_current();
         gate.notify();
@@ -884,7 +884,7 @@ RUVIA_TEST(event_loop_cleanup_can_be_drained_without_starting_business_workers) 
     RUVIA_CHECK(loop.defer_cleanup([&] { ran = worker_value.is_current(); }));
     pool.join();
     RUVIA_CHECK(ran);
-    RUVIA_CHECK(!loop.valid());
+    RUVIA_CHECK(!loop.handle().valid());
 }
 
 RUVIA_TEST(event_loop_draining_post_can_schedule_defer_cleanup_after_stop) {
@@ -894,7 +894,7 @@ RUVIA_TEST(event_loop_draining_post_can_schedule_defer_cleanup_after_stop) {
     bool post_ran = false;
     bool cleanup_scheduled = false;
     bool cleanup_ran = false;
-    RUVIA_CHECK_EQ(loop.post([loop, worker_value, &post_ran, &cleanup_scheduled, &cleanup_ran] {
+    RUVIA_CHECK_EQ(loop.handle().post([loop, worker_value, &post_ran, &cleanup_scheduled, &cleanup_ran] {
         post_ran = worker_value.is_current();
         cleanup_scheduled = loop.defer_cleanup([worker_value, &cleanup_ran] {
             cleanup_ran = worker_value.is_current();

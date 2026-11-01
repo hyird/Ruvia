@@ -11,8 +11,9 @@
 #include <asio/ip/address_v4.hpp>
 #include <asio/ip/address_v6.hpp>
 
-#include "ruvia/core/socket.h"
 #include "ruvia/http/http_hex.h"
+
+#include "util/socket.h"
 
 namespace ruvia::detail {
 
@@ -37,7 +38,7 @@ inline constexpr std::size_t rate_limit_key_buffer_bytes = 19;
     if (!(remote_address.find(':') != std::string_view::npos)) {
         return remote_address;  // no ':' -> IPv4 or empty; already a per-host key
     }
-    const auto parsed_value = ruvia::parse_ip_address(remote_address);
+    const auto parsed_value = parse_ip_address(remote_address);
     if (!parsed_value || !parsed_value->is_v6()) {
         return remote_address;
     }

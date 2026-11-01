@@ -384,16 +384,16 @@ void http_client_handle::expire_capability(void* target) noexcept {
 }
 
 http_client_handle http_client_handle::with_options(operation_options options) const {
-    validate_operation_options(options);
+    detail::validate_operation_options(options);
     registration_.require_active();
     http_client_handle copy(*this);
-    copy.options_ = merge_operation_options(options_, std::move(options));
+    copy.options_ = detail::merge_operation_options(options_, std::move(options));
     return copy;
 }
 
 task<http_client_response> http_client_handle::send(
     const http_client_request_view& view) const {
-    validate_operation_options(options_);
+    detail::validate_operation_options(options_);
     detail::http_client_request_storage request(view.method_.view(), view.target_.view(), view.headers_, resource_);
     if (const auto* bytes = view.content_.borrowed_bytes()) {
         request.set_body(bytes->value());

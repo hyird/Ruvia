@@ -400,6 +400,44 @@ RUVIA_TEST(app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
     app.trusted_proxies(nullptr);
 }
 
+// A CIDR without '/' is exactly one IP literal, so trusted proxy configuration
+// exposes the strict literal parser: complete IPv4/IPv6 text only, no ports,
+// brackets, padding, partial IPv4 or invalid IPv6 zones.
+RUVIA_TEST(app_trusted_proxy_config_accepts_only_strict_ip_literals) {
+    auto& app = ruvia::app();
+    for (const std::string_view literal : {"192.0.2.1", "0.0.0.0", "255.255.255.255",
+             "2001:0db8:1234:5678:90ab:cdef:1234:5678", "fe80::1%12", "::ffff:192.0.2.1"}) {
+        bool accepted = true;
+        try {
+            app.trusted_proxies({.cidrs_ = {std::string(literal)}});
+        } catch (const std::invalid_argument&) {
+            accepted = false;
+        }
+        RUVIA_CHECK(accepted);
+    }
+    for (const std::string_view literal : {std::string_view{}, std::string_view("not an address"),
+             std::string_view("192.0.2.1\0suffix", 16), std::string_view("192.0.2.1suffix"),
+             std::string_view("192.0.2.1:80"), std::string_view("[::1]:80"), std::string_view("[::1]"),
+             std::string_view("192.0.2"), std::string_view("01.2.3.4"), std::string_view("192.0.2.256"),
+             std::string_view("192.0.2.1."), std::string_view(".192.0.2.1"), std::string_view("192.0.2.1%1"),
+             std::string_view("fe80::1%"), std::string_view("fe80::1%1%2"), std::string_view("::1 "),
+             std::string_view("1"), std::string_view("::ffff:01.2.3.4"), std::string_view("::ffff:192.0.2"),
+             std::string_view("fe80::1%12:80"), std::string_view("fe80::1%12 "), std::string_view("fe80::1%1]:80"),
+             std::string_view("fe80::1%0"), std::string_view("fe80::1%01"), std::string_view("fe80::1%-1"),
+             std::string_view("fe80::1%+1"), std::string_view("fe80::1%12abc"), std::string_view("fe80::1%4294967296"),
+             std::string_view("fe80::1%99999999999999999999"),
+             std::string_view("fe80::1%nonexistent_ruvia_zone_id")}) {
+        bool rejected = false;
+        try {
+            app.trusted_proxies({.cidrs_ = {std::string(literal)}});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+    app.trusted_proxies(nullptr);
+}
+
 // application is a process singleton with sealed controller registration. This functional
 // test runs in its own executable and exercises retries against the same config.
 RUVIA_TEST(app_startup_barrier_orders_hooks_and_rolls_back) {

@@ -13,10 +13,11 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_signal.h"
+
+#include "integration/operation_timeout.h"
 
 namespace ruvia::detail {
 
@@ -54,7 +55,7 @@ public:
     client_lifecycle& operator=(const client_lifecycle&) = delete;
 
     [[nodiscard]] static event_loop require_loop(event_loop loop) {
-        if (!loop.valid()) {
+        if (!loop.handle().valid()) {
             throw std::invalid_argument(message(" requires a valid event loop"));
         }
         return loop;
@@ -199,7 +200,7 @@ private:
     [[nodiscard]] static task<void> shutdown_owned(std::shared_ptr<owner_type> state_value,
         shutdown_mode mode) {
         auto& lifecycle = state_value->lifecycle_;
-        if (!lifecycle.loop_.is_current()) {
+        if (!lifecycle.loop_.handle().is_current()) {
             throw std::logic_error("client shutdown must run on its bound event loop");
         }
         // The coroutine frame retains the client until its cleanup completes.

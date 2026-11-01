@@ -14,7 +14,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -90,7 +89,7 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::test::close_socket(client); } });
         try {
             const auto send = [&](std::string_view bytes_value) -> ruvia::task<void> {
                 const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(bytes_value), std::move(handler)); });
@@ -135,7 +134,7 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
             }
         } catch (...) {
             failure = std::current_exception();
-            ruvia::close_socket(client);
+            ruvia::test::close_socket(client);
         }
         (void)watchdog_value.cancel();
         attachment.stop();
@@ -144,7 +143,7 @@ void exercise_connect(ruvia::testing::test_context& ruvia_ctx, bool finish_first
     io.run();
     root.get();
     server.finish();
-    ruvia::close_socket(client);
+    ruvia::test::close_socket(client);
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -217,7 +216,7 @@ std::string exchange_closing_request(std::string_view request) {
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::test::close_socket(client); } });
         try {
             const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(request), std::move(handler)); });
             if (written.error_code()) {
@@ -243,7 +242,7 @@ std::string exchange_closing_request(std::string_view request) {
     auto root = attachment.loop().start(run());
     io.run();
     root.get();
-    ruvia::close_socket(client);
+    ruvia::test::close_socket(client);
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);

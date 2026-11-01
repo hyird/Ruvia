@@ -87,7 +87,7 @@ public:
     worker_dispatcher(const worker_dispatcher&) = delete;
     worker_dispatcher& operator=(const worker_dispatcher&) = delete;
 
-    [[nodiscard]] post_result_type post(move_only_function<void()> task);
+    [[nodiscard]] post_outcome<> post(move_only_function<void()> task);
     [[nodiscard]] post_status post_factory(move_only_function<move_only_function<void()>()> factory);
     void defer(move_only_function<void()> task);
     [[nodiscard]] bool defer_if_attached(move_only_function<void()> task);

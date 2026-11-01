@@ -10,7 +10,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/socket.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 
@@ -46,7 +45,7 @@ RUVIA_TEST(server_answers_an_uncommittable_route_response_with_a_closing_error) 
         asio::steady_timer watchdog(io, std::chrono::seconds(5));
         watchdog.async_wait([&](std::error_code error) {
             if (!error) {
-                ruvia::close_socket(client);
+                ruvia::test::close_socket(client);
             }
         });
         try {
@@ -76,7 +75,7 @@ RUVIA_TEST(server_answers_an_uncommittable_route_response_with_a_closing_error) 
             failure = std::current_exception();
         }
         static_cast<void>(watchdog.cancel());
-        ruvia::close_socket(client);
+        ruvia::test::close_socket(client);
         attachment.stop();
     };
     auto done = attachment.loop().start(run());

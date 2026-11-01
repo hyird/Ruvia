@@ -116,8 +116,10 @@ public:
                 throw inbound_transport_error(
                     std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
             }
-            co_await http2_sans_io_sleep_awaiter(write_signal_.worker(), stream_signal_.termination(),
-                std::chrono::steady_clock::duration(1));
+            // Connection termination stops the tick and fails the write.
+            (void)co_await sleep_for(write_signal_.worker(), std::chrono::steady_clock::duration(1),
+                stream_signal_.termination().token());
+            throw_if_terminated_during_sleep();
             co_return;
         }
         throw_if_terminated();
@@ -190,8 +192,11 @@ public:
         if (state_.body_suppressed_complete()) {
             co_return timer_sleep_result::stop_requested;
         }
-        const auto result = co_await http2_sans_io_sleep_awaiter(
-            write_signal_.worker(), stream_signal_.termination(), duration, stop_token_value);
+        // Connection termination wakes the sleep through the combined token and
+        // then fails it; the caller's own stop still reports stop_requested.
+        const auto result = co_await sleep_for(write_signal_.worker(), duration,
+            combine_stop_tokens(stop_token_value, stream_signal_.termination().token()));
+        throw_if_terminated_during_sleep();
         if (connection_.stream_aborted(stream_id_)) {
             throw inbound_transport_error(
                 std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset during sleep");
@@ -331,6 +336,12 @@ private:
     void throw_if_terminated() const {
         if (stream_signal_.terminated()) {
             throw inbound_transport_error(stream_signal_.terminal_error(), "HTTP/2 connection ended during response stream");
+        }
+    }
+
+    void throw_if_terminated_during_sleep() const {
+        if (stream_signal_.terminated()) {
+            throw inbound_transport_error(stream_signal_.terminal_error(), "HTTP/2 connection ended during sleep");
         }
     }
 

@@ -832,10 +832,10 @@ private:
 template <typename io_type, typename result_type>
 task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& pool, std::pmr::string sql,
     std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
-    operation_scope* scope) {
+    request_io_metrics* io_metrics) {
     using member_type = db_pipeline_member<io_type>;
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
-    scoped_request_io_timer timer(scope, request_io_kind::db);
+    scoped_request_io_timer timer(io_metrics, request_io_kind::db);
     auto statement = io_type::prepare(pool, sql, std::span<const db_value>(params));
     const operation_timeout timeout(options.timeout_);
     auto& pipeline = pool.state();

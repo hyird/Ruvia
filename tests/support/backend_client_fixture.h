@@ -1374,7 +1374,7 @@ inline void drive_backend_task(event_loop_attachment& attachment, task<void> ope
 
 inline void retire_backend_attachment(event_loop_attachment& attachment) {
     auto loop = attachment.loop();
-    if (!loop.valid()) {
+    if (!loop.handle().valid()) {
         return;
     }
     auto& io = loop.io_context();

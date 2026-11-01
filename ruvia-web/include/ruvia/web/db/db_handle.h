@@ -44,6 +44,7 @@ class db_client_state;
 class db_query_cache_state;
 struct db_query_backend;
 struct db_query_plan;
+struct request_io_metrics;
 }  // namespace detail
 
 // Statement and completion operations are lazy. Inputs are owned before the
@@ -215,25 +216,27 @@ private:
 
     db_transaction(detail::db_pool_ref_type client, std::size_t slot, std::pmr::memory_resource* resource,
         operation_options options);
-    static task<db_rows> query_prepared(
-        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
-    static task<db_exec_result> execute_prepared(
-        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
-    static task<void> commit_task(operation_scope& scope, operation_guard_type operation);
-    static task<void> rollback_task(operation_scope& scope, operation_guard_type operation);
+    // `io_metrics` is the request's counter block, or null outside a request.
+    static task<db_rows> query_prepared(std::pmr::string sql, std::pmr::vector<db_value> params,
+        detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    static task<db_exec_result> execute_prepared(std::pmr::string sql, std::pmr::vector<db_value> params,
+        detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    static task<void> commit_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    static task<void> rollback_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
     task<void> run_savepoint_command(std::string_view prefix, std::string_view name);
-    static task<void> savepoint_task(std::pmr::string sql, operation_scope& scope, operation_guard_type operation);
+    static task<void> savepoint_task(
+        std::pmr::string sql, detail::request_io_metrics* io_metrics, operation_guard_type operation);
     void require_postgresql_transaction(std::string_view feature) const;
     task<void> query_void_prepared(std::string_view sql, std::span<const db_value> params);
     task<bool> query_bool_prepared(std::string_view sql, std::span<const db_value> params);
-    static task<void> query_void_task(
-        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
-    static task<void> execute_void_task(
-        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
-    static task<bool> query_bool_task(
-        std::pmr::string sql, std::pmr::vector<db_value> params, operation_scope& scope, operation_guard_type operation);
+    static task<void> query_void_task(std::pmr::string sql, std::pmr::vector<db_value> params,
+        detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    static task<void> execute_void_task(std::pmr::string sql, std::pmr::vector<db_value> params,
+        detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    static task<bool> query_bool_task(std::pmr::string sql, std::pmr::vector<db_value> params,
+        detail::request_io_metrics* io_metrics, operation_guard_type operation);
     void reset() noexcept;
-    void bind_operation_scope(operation_scope& scope) noexcept;
+    void bind_operation_scope(operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     static void expire_capability(void* target) noexcept;
 
     [[nodiscard]] detail::db_query_backend query_backend(const lease_type& lease) const;
@@ -241,6 +244,7 @@ private:
     static task<std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>> query_plan_prepared(
         detail::db_query_plan plan, detail::db_query_backend backend, operation_guard_type operation);
     state_owner_type state_;
+    detail::request_io_metrics* io_metrics_{nullptr};
     scoped_capability_registration registration_;
 };
 
@@ -262,10 +266,11 @@ public:
 
 private:
     friend class db_handle;
-    db_query_result_cache(
-        detail::db_query_cache_state& state_value, ::ruvia::operation_scope& scope, operation_options options) noexcept;
+    db_query_result_cache(detail::db_query_cache_state& state_value, ::ruvia::operation_scope& scope,
+        detail::request_io_metrics* io_metrics, operation_options options) noexcept;
     static void expire_capability(void* target) noexcept;
     detail::db_query_cache_state* state_;
+    detail::request_io_metrics* io_metrics_;
     operation_options options_;
     scoped_capability_registration registration_;
 };
@@ -386,13 +391,15 @@ private:
     }
 
     // cache is nullptr when the alias has no query cache; without Redis
-    // support it is always nullptr.
+    // support it is always nullptr. `io_metrics` is the request's counter
+    // block, or null outside a request.
     db_handle(detail::db_pool_ref_type client, std::pmr::memory_resource* resource,
-        operation_scope& operation_scope, detail::db_query_cache_state* cache) noexcept;
+        operation_scope& operation_scope, detail::request_io_metrics* io_metrics,
+        detail::db_query_cache_state* cache) noexcept;
     [[nodiscard]] detail::db_query_backend query_backend() const;
     static task<db_stream_result> query_stream_prepared(detail::db_pool_ref_type client, std::pmr::string sql,
         std::pmr::vector<db_value> params, std::pmr::memory_resource* resource,
-        operation_scope& operation_scope, operation_options options);
+        operation_scope& operation_scope, detail::request_io_metrics* io_metrics, operation_options options);
     static task<db_transaction> begin_transaction_prepared(detail::db_query_backend backend,
         operation_scope& operation_scope, operation_options operation_options,
         db_transaction_options transaction_options);
@@ -400,6 +407,7 @@ private:
     detail::db_query_cache_state* cache_{nullptr};
     detail::db_pool_ref_type client_;
     std::pmr::memory_resource* resource_;
+    detail::request_io_metrics* io_metrics_{nullptr};
     operation_options options_;
     static void expire_capability(void* target) noexcept;
     scoped_capability_registration registration_;

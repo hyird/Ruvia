@@ -7,7 +7,7 @@
 #include <asio/ip/address.hpp>
 #include <asio/ip/address_v6.hpp>
 
-#include "ruvia/core/socket.h"
+#include "util/socket.h"
 
 namespace ruvia::detail {
 
@@ -22,7 +22,7 @@ struct mapped_address final {
 // equivalent so one masked compare serves both families and a deployment that
 // writes 10.0.0.0/8 still matches a peer that arrives as ::ffff:10.1.2.3.
 [[nodiscard]] std::optional<mapped_address> to_mapped_bytes(std::string_view text) noexcept {
-    const auto parsed_value = ruvia::parse_ip_address(text);
+    const auto parsed_value = parse_ip_address(text);
     if (!parsed_value) {
         return std::nullopt;
     }

@@ -77,7 +77,7 @@ detail::db_registry::db_registry(asio::io_context& io_context, const worker_hand
             if (redis == nullptr) {
                 throw std::invalid_argument("database query cache requires an existing Redis registry");
             }
-            const auto store_value = redis->get(definition.query_cache_->redis_alias_, cache_scope_);
+            const auto store_value = redis->get(definition.query_cache_->redis_alias_, cache_scope_, nullptr);
             attach_cache(entries_.size() - 1, worker_value, store_value, definition.query_cache_->policy_,
                 definition.config_, definition.alias_);
         }
@@ -157,33 +157,34 @@ void detail::db_registry::close_now() noexcept {
     }
 }
 
-db_handle detail::db_registry::handle(const entry_type& entry, ::ruvia::operation_scope& operation_scope) const {
+db_handle detail::db_registry::handle(
+    const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
 #ifdef RUVIA_ENABLE_REDIS
     detail::db_query_cache_state* const cache = entry.cache_.get();
 #else
     detail::db_query_cache_state* const cache = nullptr;
 #endif
-    return db_handle(pool_ref(entry.pool_), resource_, operation_scope, cache);
+    return db_handle(pool_ref(entry.pool_), resource_, operation_scope, io_metrics, cache);
 }
 
 bool detail::db_registry::empty() const noexcept {
     return entries_.empty();
 }
 
-db_handle detail::db_registry::get(::ruvia::operation_scope& operation_scope) const {
+db_handle detail::db_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto default_pool_index = alias_index_.default_index();
     if (!default_pool_index.has_value()) {
         throw db_error(
             db_error::code_type::not_configured, std::nullopt, "default database is not configured");
     }
-    return handle(entries_[*default_pool_index], operation_scope);
+    return handle(entries_[*default_pool_index], operation_scope, io_metrics);
 }
 
 db_handle detail::db_registry::get(
-    std::string_view alias, ::ruvia::operation_scope& operation_scope) const {
+    std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto match = alias_index_.find(alias);
     if (match.has_value()) {
-        return handle(entries_[*match], operation_scope);
+        return handle(entries_[*match], operation_scope, io_metrics);
     }
     throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
 }

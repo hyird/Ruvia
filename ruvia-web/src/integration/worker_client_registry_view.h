@@ -20,6 +20,7 @@ class redis_handle;
 namespace detail {
 
 class db_registry;
+struct request_io_metrics;
 class http_client_registry;
 class redis_registry;
 
@@ -44,18 +45,19 @@ public:
         return http_clients_ != nullptr;
     }
 
+    // `io_metrics` is the request's counter block, or null outside a request.
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_handle db(
-        ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
-    [[nodiscard]] db_handle db(std::string_view alias, ::ruvia::operation_scope& operation_scope,
+    [[nodiscard]] db_handle db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics,
         const stop_token& stop_token) const;
+    [[nodiscard]] db_handle db(std::string_view alias, ::ruvia::operation_scope& operation_scope,
+        request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_handle redis(
-        ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
-    [[nodiscard]] redis_handle redis(std::string_view alias, ::ruvia::operation_scope& operation_scope,
+    [[nodiscard]] redis_handle redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics,
         const stop_token& stop_token) const;
+    [[nodiscard]] redis_handle redis(std::string_view alias, ::ruvia::operation_scope& operation_scope,
+        request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
     [[nodiscard]] http_client_handle http_client(

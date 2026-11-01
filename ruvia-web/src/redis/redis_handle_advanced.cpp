@@ -202,12 +202,12 @@ task<std::optional<redis_x_read_group_result>> redis_handle::xread_group(
 
 redis_pipeline redis_handle::pipeline() const {
     registration_.require_active();
-    return redis_pipeline(pool(), operation_options_, resource_, registration_.scope());
+    return redis_pipeline(pool(), operation_options_, resource_, registration_.scope(), io_metrics_);
 }
 
 redis_transaction redis_handle::transaction() const {
     registration_.require_active();
-    return redis_transaction(pool(), operation_options_, resource_, registration_.scope());
+    return redis_transaction(pool(), operation_options_, resource_, registration_.scope(), io_metrics_);
 }
 
 task<std::int64_t> redis_handle::publish(std::string_view channel, std::string_view payload) const {

@@ -52,9 +52,10 @@ task<redis_ttl> redis_ttl_command(detail::redis_command_executor executor,
 }  // namespace
 
 redis_handle::redis_handle(detail::redis_client_runtime& runtime, std::pmr::memory_resource* resource,
-    ::ruvia::operation_scope& operation_scope) noexcept
+    ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept
     : runtime_(&runtime),
       resource_(pmr_resource_or_default(resource)),
+      io_metrics_(io_metrics),
       registration_(operation_scope, this, &redis_handle::expire_capability) {}
 
 redis_handle::redis_handle(detail::redis_client_runtime& runtime, std::pmr::memory_resource* resource,
@@ -67,15 +68,16 @@ redis_handle::redis_handle(detail::redis_client_runtime& runtime, std::pmr::memo
 redis_handle::redis_handle(const redis_handle& other) noexcept
     : runtime_(other.runtime_),
       resource_(other.resource_),
+      io_metrics_(other.io_metrics_),
       operation_options_(other.operation_options_),
       registration_(other.registration_, this) {}
 
 redis_handle redis_handle::with_options(operation_options options) const {
     registration_.require_active();
-    validate_operation_options(options);
+    detail::validate_operation_options(options);
     redis_handle configured(*this);
     configured.operation_options_ =
-        merge_operation_options(operation_options_, std::move(options));
+        detail::merge_operation_options(operation_options_, std::move(options));
     return configured;
 }
 
@@ -97,13 +99,14 @@ detail::redis_command_executor redis_handle::executor() const {
 }
 
 detail::redis_command_executor redis_handle::executor(detail::redis_pool& pool_value) const {
-    return detail::redis_command_executor{&pool_value, &registration_.scope(), operation_options_};
+    return detail::redis_command_executor{&pool_value, io_metrics_, operation_options_};
 }
 
 void redis_handle::expire_capability(void* target) noexcept {
     auto& handle = *static_cast<redis_handle*>(target);
     handle.runtime_ = nullptr;
     handle.resource_ = nullptr;
+    handle.io_metrics_ = nullptr;
     handle.operation_options_ = {};
 }
 
@@ -133,7 +136,7 @@ task<redis_value> redis_handle::script_owned(
     const detail::redis_orm_script& script, std::pmr::vector<std::pmr::string>&& args) const {
     registration_.require_active();
     return detail::execute_redis_orm_script(
-        pool(), script, std::move(args), registration_.scope(), operation_options_, resource_);
+        pool(), script, std::move(args), io_metrics_, operation_options_, resource_);
 }
 
 task<void> redis_handle::ping() const {

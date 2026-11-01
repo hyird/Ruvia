@@ -12,7 +12,6 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_handle.h"
@@ -22,6 +21,7 @@
 #include "ruvia/http/http_pmr_string.h"
 
 #include "client/client_tcp_transport.h"
+#include "integration/operation_timeout.h"
 
 namespace ruvia::detail {
 

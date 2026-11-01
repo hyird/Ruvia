@@ -19,6 +19,10 @@
 
 namespace ruvia {
 
+namespace detail {
+struct request_io_metrics;
+}
+
 // Result of a statement whose contract is side effects rather than a row set.
 // PostgreSQL does not expose a portable connection-level insert id, so that
 // value is present only when the selected backend supplied one.
@@ -132,12 +136,14 @@ private:
         std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
         operation_options options);
     void reset() noexcept;
-    void bind_operation_scope(::ruvia::operation_scope& scope) noexcept;
+    // `io_metrics` is the request's counter block, or null outside a request.
+    void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     static void expire_capability(void* target) noexcept;
-    static task<std::optional<db_row>> read_task(operation_scope& scope, operation_guard_type operation);
-    static task<void> close_task(operation_scope& scope, operation_guard_type operation);
+    static task<std::optional<db_row>> read_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
+    static task<void> close_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
 
     state_owner_type state_;
+    detail::request_io_metrics* io_metrics_{nullptr};
     scoped_capability_registration registration_;
 };
 

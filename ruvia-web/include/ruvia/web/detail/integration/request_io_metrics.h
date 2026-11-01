@@ -3,8 +3,6 @@
 #include <chrono>
 #include <cstdint>
 
-#include "ruvia/core/scoped_operation.h"
-
 namespace ruvia::detail {
 
 struct request_io_metrics final {
@@ -21,10 +19,10 @@ enum class request_io_kind : std::uint8_t {
 
 class scoped_request_io_timer final {
 public:
-    scoped_request_io_timer(operation_scope& scope, request_io_kind kind) noexcept
-        : scoped_request_io_timer(&scope, kind) {}
-    scoped_request_io_timer(operation_scope* scope, request_io_kind kind) noexcept
-        : metrics_(scope != nullptr ? static_cast<request_io_metrics*>(scope->context()) : nullptr),
+    // `metrics` is the request's counter block, or null outside a request
+    // (worker callbacks, standalone clients); null disables timing.
+    scoped_request_io_timer(request_io_metrics* metrics, request_io_kind kind) noexcept
+        : metrics_(metrics),
           kind_(kind),
           started_at_(metrics_ != nullptr ? std::chrono::steady_clock::now()
                                           : std::chrono::steady_clock::time_point{}) {}

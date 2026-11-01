@@ -12,7 +12,6 @@
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
 
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
@@ -21,6 +20,7 @@
 #include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
 #include "client/client_tls_socket.h"
+#include "integration/operation_timeout.h"
 #include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {

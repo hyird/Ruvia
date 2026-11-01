@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_connect_udp.h"

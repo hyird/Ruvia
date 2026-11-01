@@ -88,10 +88,6 @@ public:
         friend class worker_signal;
     };
 
-private:
-    using awaiter_type = wait_operation;
-
-public:
     explicit worker_signal(const worker_handle& worker_value)
         : worker_(require_worker(worker_value)) {}
     worker_signal(worker_handle&&) = delete;
@@ -132,12 +128,12 @@ private:
         }
     }
 
-    void resume_scheduled(awaiter_type* waiter, std::coroutine_handle<> continuation) noexcept;
+    void resume_scheduled(wait_operation* waiter, std::coroutine_handle<> continuation) noexcept;
 
     // The owning session/connection keeps its stable worker handle alive until
     // every signal waiter and scheduled resumption has joined.
     const worker_handle& worker_;
-    awaiter_type* waiters_{nullptr};
+    wait_operation* waiters_{nullptr};
     std::size_t scheduled_waiters_{0};
     std::size_t reserved_waits_{0};
     bool pending_{false};
@@ -170,7 +166,7 @@ inline void worker_signal::notify() noexcept {
 }
 
 inline void worker_signal::resume_scheduled(
-    awaiter_type* waiter, std::coroutine_handle<> continuation) noexcept {
+    wait_operation* waiter, std::coroutine_handle<> continuation) noexcept {
     if (!worker_.is_current() || waiter->state_ != await_state_type::scheduled ||
         waiter->continuation_ != continuation || scheduled_waiters_ == 0) {
         std::terminate();

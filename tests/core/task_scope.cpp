@@ -15,8 +15,9 @@
 
 #include <asio/io_context.hpp>
 
+#include "ruvia/core/event_loop.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/timer.h"
-#include "ruvia/core/worker_runtime_context.h"
 
 #include "failing_memory_resource.h"
 #include "worker_task_fixture.h"
@@ -74,6 +75,12 @@ ruvia::task<void> increment(ruvia::worker_handle worker_value, int& value) {
 }
 
 ruvia::task<void> fail() {
+    throw std::runtime_error("child failed");
+    co_return;
+}
+
+ruvia::task<void> stop_then_fail(ruvia::stop_source& source) {
+    source.request_stop();
     throw std::runtime_error("child failed");
     co_return;
 }
@@ -200,14 +207,15 @@ ruvia::task<void> verify_stop_callback_reentrant_join_waits_for_finish(
     ruvia::task_scope observer(worker_value);
     bool active_during_stop_callback = false;
     bool completed_after_node_release = false;
+    ruvia::stop_source source;
     ruvia::stop_registration registration;
-    primary->get_stop_token().register_callback(registration, [&] {
+    source.token().register_callback(registration, [&] {
         active_during_stop_callback =
             primary.has_value() && primary->size() == 1 && resource.live_allocations() != 0;
         observer.spawn(join_and_destroy_on_failure(
             primary, resource, completed_after_node_release));
     });
-    primary->spawn(fail());
+    primary->spawn(stop_then_fail(source));
     while (primary.has_value()) {
         static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
     }
@@ -335,12 +343,13 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
             auto discarded_join = cancelled_scope.join();
             static_cast<void>(discarded_join);
         }
+        ruvia::stop_source source;
         bool stopped = false;
-        cancelled_scope.spawn(wait_for_stop(worker_value, cancelled_scope.get_stop_token(), stopped));
+        cancelled_scope.spawn(wait_for_stop(worker_value, source.token(), stopped));
         auto join = cancelled_scope.join();
-        cancelled_scope.request_stop();
+        source.request_stop();
         co_await std::move(join);
-        if (!stopped || !cancelled_scope.stop_requested() || cancelled_scope.size() != 0 || resource.live_allocations() != 0) {
+        if (!stopped || cancelled_scope.size() != 0 || resource.live_allocations() != 0) {
             co_return;
         }
     }
@@ -357,9 +366,6 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
             // child, so wait until every child has been retired.
             while (unjoined_scope.size() != 0) {
                 static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
-            }
-            if (!unjoined_scope.stop_requested()) {
-                co_return;
             }
         }
         if (completed != 1) {
@@ -408,7 +414,7 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     try {
         co_await scope.join();
     } catch (const std::runtime_error& error) {
-        success = calls == 1 && scope.size() == 0 && scope.stop_requested() && resource.live_allocations() == 0 &&
+        success = calls == 1 && scope.size() == 0 && resource.live_allocations() == 0 &&
                   std::string_view(error.what()) == "child failed";
     }
 }
@@ -427,21 +433,20 @@ int main() {
     }
 
     asio::io_context io_context;
-    ruvia::worker_runtime_context runtime(io_context, 8);
-    const auto worker_value = runtime.handle();
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+    const auto worker_value = attachment.loop().handle();
     bool success = false;
     bool reentrant_spawn_safe = false;
     bool reentrant_stop_join_safe = false;
     bool reentrant_failed_spawn_safe = false;
     bool reentrant_deallocation_safe = false;
-    ruvia::test::run_worker_tasks(runtime,
+    ruvia::test::run_worker_tasks(attachment,
         ruvia::test::task_scope_tests::exercise(worker_value, success),
         ruvia::test::task_scope_tests::verify_spawn_rechecks_join_after_allocation(worker_value, reentrant_spawn_safe),
         ruvia::test::task_scope_tests::verify_stop_callback_reentrant_join_waits_for_finish(
             worker_value, reentrant_stop_join_safe),
         ruvia::test::task_scope_tests::verify_reentrant_join_on_failed_allocation(worker_value, reentrant_failed_spawn_safe),
         ruvia::test::task_scope_tests::verify_join_waits_for_node_deallocation(worker_value, reentrant_deallocation_safe));
-    runtime.detach();
     return success && reentrant_spawn_safe && reentrant_stop_join_safe &&
                    reentrant_failed_spawn_safe && reentrant_deallocation_safe
                ? 0

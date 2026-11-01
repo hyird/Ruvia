@@ -50,8 +50,8 @@ void redis_client_runtime::close_now() noexcept {
     subscriptions_.close_now();
 }
 
-redis_handle redis_client_runtime::handle(::ruvia::operation_scope& scope) {
-    return redis_handle(*this, resource_, scope);
+redis_handle redis_client_runtime::handle(::ruvia::operation_scope& scope, request_io_metrics* io_metrics) {
+    return redis_handle(*this, resource_, scope, io_metrics);
 }
 
 redis_handle redis_client_runtime::handle(::ruvia::operation_scope& scope, operation_options options) {

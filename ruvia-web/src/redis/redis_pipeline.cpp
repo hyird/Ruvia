@@ -12,11 +12,12 @@
 namespace ruvia::detail {
 
 template <redis_batch_mode mode>
-redis_batch<mode>::redis_batch(redis_pool& pool, operation_options options,
-    std::pmr::memory_resource* resource, operation_scope& scope) noexcept
+redis_batch<mode>::redis_batch(redis_pool& pool, operation_options options, std::pmr::memory_resource* resource,
+    operation_scope& scope, request_io_metrics* io_metrics) noexcept
     : pool_(&pool),
       options_(std::move(options)),
       commands_(pmr_resource_or_default(resource)),
+      io_metrics_(io_metrics),
       registration_(scope, this, &redis_batch::expire_capability) {}
 
 template <redis_batch_mode mode>
@@ -24,6 +25,7 @@ redis_batch<mode>::redis_batch(redis_batch&& other) noexcept
     : pool_(std::exchange(other.pool_, nullptr)),
       options_(std::move(other.options_)),
       commands_(std::move(other.commands_)),
+      io_metrics_(other.io_metrics_),
       registration_(std::move(other.registration_), this) {}
 
 template <redis_batch_mode mode>
@@ -50,6 +52,7 @@ template <redis_batch_mode mode>
 void redis_batch<mode>::expire() noexcept {
     pool_ = nullptr;
     options_ = {};
+    io_metrics_ = nullptr;
     std::pmr::vector<redis_owned_command> empty(resource());
     commands_.swap(empty);
 }
@@ -74,8 +77,8 @@ redis_batch<mode>& redis_batch<mode>::append_owned(redis_owned_command command) 
 
 template <redis_batch_mode mode>
 task<std::pmr::vector<redis_value>> redis_batch<mode>::execute_owned(
-    operation_scope& scope, redis_command_payload payload_value) {
-    scoped_request_io_timer timer(scope, request_io_kind::redis);
+    request_io_metrics* io_metrics, redis_command_payload payload_value) {
+    scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     auto* resource = payload_value.commands_.get_allocator().resource();
     if constexpr (mode == redis_batch_mode::pipeline) {
         co_return co_await payload_value.pool_.get().execute_pipeline(
@@ -103,7 +106,7 @@ template <redis_batch_mode mode>
 task<std::pmr::vector<redis_value>> redis_batch<mode>::exec() && {
     auto& scope = registration_.scope();
     auto payload_value = consume();
-    return make_scoped_operation(scope, execute_owned(scope, std::move(payload_value)));
+    return make_scoped_operation(scope, execute_owned(io_metrics_, std::move(payload_value)));
 }
 
 template class redis_batch<redis_batch_mode::pipeline>;

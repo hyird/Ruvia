@@ -18,7 +18,6 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -33,6 +32,7 @@
 #include "db/db_slot_socket.h"
 #include "db/mariadb_pipeline.h"
 #include "db/postgresql_pipeline.h"
+#include "integration/operation_timeout.h"
 #include "integration/slot_pool.h"
 
 struct st_mysql;
@@ -96,10 +96,10 @@ struct mariadb_driver final {
     static constexpr std::string_view name{"MariaDB"};
 
     static task<db_rows> query_pipelined(pool_type& pool, std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options, operation_scope* scope);
+        std::pmr::memory_resource* resource, operation_options options, request_io_metrics* io_metrics);
     static task<db_exec_result> execute_pipelined(pool_type& pool, std::pmr::string sql,
         std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
-        operation_scope* scope);
+        request_io_metrics* io_metrics);
     static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
     static void close_connection(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
@@ -125,10 +125,10 @@ struct postgresql_driver final {
     static constexpr std::string_view name{"PostgreSQL"};
 
     static task<db_rows> query_pipelined(pool_type& pool, std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options, operation_scope* scope);
+        std::pmr::memory_resource* resource, operation_options options, request_io_metrics* io_metrics);
     static task<db_exec_result> execute_pipelined(pool_type& pool, std::pmr::string sql,
         std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
-        operation_scope* scope);
+        request_io_metrics* io_metrics);
     static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
     static void close_connection(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
@@ -228,13 +228,14 @@ public:
 
     // The only execution path for raw SQL, compiled queries and transactions.
     // Outside a transaction, a driver that pipelines statements shares
-    // connections between query() and execute() callers.
+    // connections between query() and execute() callers. `io_metrics` is the
+    // request's counter block, or null outside a request.
     task<db_rows> query(std::pmr::string sql, std::pmr::vector<db_value> params,
         std::pmr::memory_resource* resource, operation_options options,
-        operation_scope* scope = nullptr);
+        request_io_metrics* io_metrics = nullptr);
     task<db_exec_result> execute(std::pmr::string sql, std::pmr::vector<db_value> params,
         std::pmr::memory_resource* resource, operation_options options,
-        operation_scope* scope = nullptr);
+        request_io_metrics* io_metrics = nullptr);
     task<db_stream_result> stream(std::pmr::string sql, std::pmr::vector<db_value> params,
         std::pmr::memory_resource* resource, operation_options options);
     task<std::optional<db_row>> read_stream_row(std::size_t slot, void* result,

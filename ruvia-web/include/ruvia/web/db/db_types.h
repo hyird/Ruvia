@@ -17,7 +17,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/integer.h"
 #include "ruvia/web/model.h"

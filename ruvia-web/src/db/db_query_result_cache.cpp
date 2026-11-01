@@ -77,9 +77,9 @@ task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr:
     }
 }
 
-task<void> remove_keys(
-    redis_handle redis, std::pmr::vector<std::pmr::string> keys, operation_scope& scope, operation_options options) {
-    scoped_request_io_timer timer(scope, request_io_kind::redis);
+task<void> remove_keys(redis_handle redis, std::pmr::vector<std::pmr::string> keys, request_io_metrics* io_metrics,
+    operation_options options) {
+    scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_timeout deadline_value(options.timeout_);
     auto deletion = delete_key_batch(redis, keys, keys.get_allocator().resource(), options, deadline_value);
     // The command owns the keys; release their source before network IO.
@@ -88,8 +88,8 @@ task<void> remove_keys(
 }
 
 task<void> clear_keys(
-    redis_handle redis, std::pmr::string pattern, operation_scope& scope, operation_options options) {
-    scoped_request_io_timer timer(scope, request_io_kind::redis);
+    redis_handle redis, std::pmr::string pattern, request_io_metrics* io_metrics, operation_options options) {
+    scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_timeout deadline_value(options.timeout_);
     auto* const resource = pattern.get_allocator().resource();
     std::optional<redis_scan_cursor> cursor;
@@ -216,7 +216,7 @@ task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::mil
 
 // A cache id names every result shape a repository builder derived from it.
 task<void> db_query_cache_state::remove(
-    std::span<const std::string_view> ids, operation_scope& scope, operation_options options) {
+    std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options) {
     require_open();
     for (const auto id : ids) {
         if (id.empty()) {
@@ -228,44 +228,46 @@ task<void> db_query_cache_state::remove(
     for (const auto id : ids) {
         append_db_cache_id_keys(keys, prefix_, id);
     }
-    return remove_keys(redis_, std::move(keys), scope, std::move(options));
+    return remove_keys(redis_, std::move(keys), io_metrics, std::move(options));
 }
 
-task<void> db_query_cache_state::clear(operation_scope& scope, operation_options options) {
+task<void> db_query_cache_state::clear(request_io_metrics* io_metrics, operation_options options) {
     require_open();
     std::pmr::string pattern(resource_);
     pattern.reserve(prefix_.size() + 1);
     pattern.append(prefix_);
     pattern.push_back('*');
-    return clear_keys(redis_, std::move(pattern), scope, std::move(options));
+    return clear_keys(redis_, std::move(pattern), io_metrics, std::move(options));
 }
 
 }  // namespace ruvia::detail
 
 namespace ruvia {
-db_query_result_cache::db_query_result_cache(detail::db_query_cache_state& state_value, operation_scope& scope, operation_options options) noexcept
+db_query_result_cache::db_query_result_cache(detail::db_query_cache_state& state_value, operation_scope& scope,
+    detail::request_io_metrics* io_metrics, operation_options options) noexcept
     : state_(&state_value),
+      io_metrics_(io_metrics),
       options_(std::move(options)),
       registration_(scope, this, &db_query_result_cache::expire_capability) {}
 
 db_query_result_cache::db_query_result_cache(const db_query_result_cache& other) noexcept
     : state_(other.state_),
+      io_metrics_(other.io_metrics_),
       options_(other.options_),
       registration_(other.registration_, this) {}
 
 void db_query_result_cache::expire_capability(void* target) noexcept {
     auto& cache = *static_cast<db_query_result_cache*>(target);
     cache.state_ = nullptr;
+    cache.io_metrics_ = nullptr;
     cache.options_ = {};
 }
 task<void> db_query_result_cache::remove(std::span<const std::string_view> ids) const {
     registration_.require_active();
-    auto& scope = registration_.scope();
-    return make_scoped_operation(scope, state_->remove(ids, scope, options_));
+    return make_scoped_operation(registration_.scope(), state_->remove(ids, io_metrics_, options_));
 }
 task<void> db_query_result_cache::clear() const {
     registration_.require_active();
-    auto& scope = registration_.scope();
-    return make_scoped_operation(scope, state_->clear(scope, options_));
+    return make_scoped_operation(registration_.scope(), state_->clear(io_metrics_, options_));
 }
 }  // namespace ruvia

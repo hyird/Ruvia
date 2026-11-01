@@ -70,7 +70,7 @@ int main() {
     auto failure = loop.start(ruvia::test::asio_task_tests::fail());
     std::promise<bool> same_loop_get_rejected;
     auto same_loop_get_result = same_loop_get_rejected.get_future();
-    const auto probe_posted = loop.post([&] {
+    const auto probe_posted = loop.handle().post([&] {
         try {
             static_cast<void>(value.get());
             same_loop_get_rejected.set_value(false);

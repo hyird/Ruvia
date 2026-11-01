@@ -122,7 +122,7 @@ RUVIA_TEST(db_client_cold_connect_can_be_discarded_before_pool_start) {
         (void)cold;
     }
     pool.join();
-    RUVIA_CHECK(!pool.loop(0).accepting());
+    RUVIA_CHECK(!pool.loop(0).handle().accepting());
 }
 
 RUVIA_TEST(db_client_event_loop_stop_awaits_retirement_of_pending_authentication) {

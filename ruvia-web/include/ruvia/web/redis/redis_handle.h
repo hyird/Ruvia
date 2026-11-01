@@ -17,7 +17,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -35,6 +35,7 @@ class redis_client_runtime;
 class redis_client_state;
 struct redis_command_executor;
 class redis_pool;
+struct request_io_metrics;
 struct redis_orm_script;
 class redis_subscription_connection;
 class redis_subscription_set;
@@ -234,8 +235,9 @@ public:
 private:
     friend class ::ruvia::redis_handle;
 
-    redis_batch(redis_pool& pool, operation_options options,
-        std::pmr::memory_resource* resource, operation_scope& scope) noexcept;
+    // `io_metrics` is the request's counter block, or null outside a request.
+    redis_batch(redis_pool& pool, operation_options options, std::pmr::memory_resource* resource,
+        operation_scope& scope, request_io_metrics* io_metrics) noexcept;
     void require_ready() const;
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
     [[nodiscard]] redis_command_payload consume();
@@ -250,12 +252,13 @@ private:
     }
 
     [[nodiscard]] static task<std::pmr::vector<redis_value>> execute_owned(
-        operation_scope& scope, redis_command_payload payload);
+        request_io_metrics* io_metrics, redis_command_payload payload);
     static void expire_capability(void* target) noexcept;
 
     redis_pool* pool_;
     operation_options options_;
     std::pmr::vector<redis_owned_command> commands_;
+    request_io_metrics* io_metrics_;
     scoped_capability_registration registration_;
 };
 
@@ -709,8 +712,10 @@ private:
             script_owned(script, std::move(args)), resource_, std::move(mapper)));
     }
 
+    // `io_metrics` is the request's counter block, or null outside a request.
     redis_handle(detail::redis_client_runtime& runtime, std::pmr::memory_resource* resource,
-        operation_scope& operation_scope) noexcept;
+        operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept;
+    // A standalone client handle: no request, so no request I/O metrics.
     redis_handle(detail::redis_client_runtime& runtime, std::pmr::memory_resource* resource,
         operation_scope& operation_scope, operation_options options) noexcept;
 
@@ -726,6 +731,7 @@ private:
     [[nodiscard]] detail::redis_pool& blocking_pool() const noexcept;
     detail::redis_client_runtime* runtime_;
     std::pmr::memory_resource* resource_;
+    detail::request_io_metrics* io_metrics_{nullptr};
     operation_options operation_options_;
     scoped_capability_registration registration_;
 };

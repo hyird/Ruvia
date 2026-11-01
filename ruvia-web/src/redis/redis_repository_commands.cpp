@@ -132,9 +132,9 @@ redis_orm_arguments_type redis_orm_delete_arguments(
 }
 
 task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script,
-    redis_orm_arguments_type args, operation_scope& scope, operation_options options,
+    redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options,
     std::pmr::memory_resource* resource) {
-    scoped_request_io_timer timer(scope, request_io_kind::redis);
+    scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_timeout deadline(options.timeout_);
     {
         auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, resource, options, deadline);

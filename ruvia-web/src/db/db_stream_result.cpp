@@ -69,6 +69,7 @@ db_stream_result::db_stream_result(detail::db_pool_ref_type client, std::size_t 
 
 db_stream_result::db_stream_result(db_stream_result&& other) noexcept
     : state_(std::move(other.state_)),
+      io_metrics_(other.io_metrics_),
       registration_(std::move(other.registration_), this) {}
 
 db_stream_result::~db_stream_result() = default;
@@ -77,7 +78,9 @@ bool db_stream_result::active() const noexcept {
     return state_ != nullptr && state_->operation_.active();
 }
 
-void db_stream_result::bind_operation_scope(::ruvia::operation_scope& scope) noexcept {
+void db_stream_result::bind_operation_scope(
+    ::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept {
+    io_metrics_ = io_metrics;
     registration_.bind(scope, this, &db_stream_result::expire_capability);
 }
 
@@ -88,13 +91,13 @@ void db_stream_result::expire_capability(void* target) noexcept {
 
 task<std::optional<db_row>> db_stream_result::read() & {
     registration_.require_active();
-    auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
-        scope, read_task(scope, operation_guard_type(state_->operation_)));
+        registration_.scope(), read_task(io_metrics_, operation_guard_type(state_->operation_)));
 }
 
-task<std::optional<db_row>> db_stream_result::read_task(operation_scope& scope, operation_guard_type pending) {
-    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
+task<std::optional<db_row>> db_stream_result::read_task(
+    detail::request_io_metrics* io_metrics, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto& lease_value = operation.lease();
@@ -110,13 +113,12 @@ task<std::optional<db_row>> db_stream_result::read_task(operation_scope& scope, 
 
 task<void> db_stream_result::close() & {
     registration_.require_active();
-    auto& scope = registration_.scope();
     return ::ruvia::make_scoped_operation(
-        scope, close_task(scope, operation_guard_type(state_->operation_)));
+        registration_.scope(), close_task(io_metrics_, operation_guard_type(state_->operation_)));
 }
 
-task<void> db_stream_result::close_task(operation_scope& scope, operation_guard_type pending) {
-    detail::scoped_request_io_timer timer(scope, detail::request_io_kind::db);
+task<void> db_stream_result::close_task(detail::request_io_metrics* io_metrics, operation_guard_type pending) {
+    detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     if (operation.finished()) {
         co_return;

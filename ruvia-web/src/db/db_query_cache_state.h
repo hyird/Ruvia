@@ -7,7 +7,6 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_rows.h"
@@ -15,6 +14,7 @@
 
 #include "db/db_config_storage.h"
 #include "db/db_query_cache.h"
+#include "integration/operation_timeout.h"
 
 namespace ruvia::detail {
 
@@ -30,9 +30,10 @@ public:
     // Serves the step from the cache, or runs `database` and stores its rows.
     [[nodiscard]] task<db_rows> wrap(std::optional<std::chrono::milliseconds> duration, std::pmr::string key,
         db_cache_query database, operation_options options, operation_timeout deadline);
+    // `io_metrics` is the request's counter block, or null outside a request.
     [[nodiscard]] task<void> remove(
-        std::span<const std::string_view> ids, operation_scope& scope, operation_options options);
-    [[nodiscard]] task<void> clear(operation_scope& scope, operation_options options);
+        std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options);
+    [[nodiscard]] task<void> clear(request_io_metrics* io_metrics, operation_options options);
 
 private:
     void require_open() const;

@@ -132,10 +132,6 @@ pool_lease_scheduler::pool_lease_scheduler(std::size_t pool_size, const worker_h
 
 pool_lease_scheduler::~pool_lease_scheduler() = default;
 
-pool_lease_acquire pool_lease_scheduler::acquire(const std::optional<std::chrono::milliseconds>& timeout) {
-    return pool_lease_acquire(*impl_, timeout, {});
-}
-
 pool_lease_acquire pool_lease_scheduler::acquire(
     const std::optional<std::chrono::milliseconds>& timeout, stop_token stop_token_value) {
     return pool_lease_acquire(*impl_, timeout, std::move(stop_token_value));

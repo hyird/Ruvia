@@ -7,13 +7,13 @@
 
 #include <asio/buffer.hpp>
 
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_io_buffer.h"
 
 #include "client/client_tcp_transport.h"
+#include "integration/operation_timeout.h"
 
 namespace ruvia {
 class http1_request_content_writer;

@@ -56,19 +56,19 @@ bool redis_registry::empty() const noexcept {
     return pools_.empty();
 }
 
-redis_handle redis_registry::get(::ruvia::operation_scope& operation_scope) const {
+redis_handle redis_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto default_pool_index = alias_index_.default_index();
     if (!default_pool_index.has_value()) {
         throw redis_error(redis_error::code_type::not_configured, "default redis is not configured");
     }
-    return pools_[*default_pool_index]->handle(operation_scope);
+    return pools_[*default_pool_index]->handle(operation_scope, io_metrics);
 }
 
 redis_handle redis_registry::get(
-    std::string_view alias, ::ruvia::operation_scope& operation_scope) const {
+    std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto match = alias_index_.find(alias);
     if (match.has_value()) {
-        return pools_[*match]->handle(operation_scope);
+        return pools_[*match]->handle(operation_scope, io_metrics);
     }
     throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
 }

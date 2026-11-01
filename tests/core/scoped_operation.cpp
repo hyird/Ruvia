@@ -397,7 +397,7 @@ RUVIA_TEST(scoped_operation_close_and_join_releases_frame_before_expiring_capabi
     started.get();
 
     auto join_root = loop.start(join_and_observe_bytes(scope, parameter_resource));
-    const auto notified = loop.post([&] { signal.notify(); });
+    const auto notified = loop.handle().post([&] { signal.notify(); });
     const auto bytes_at_join = join_root.get();
     operation_root.get();
 
@@ -432,7 +432,7 @@ RUVIA_TEST(scoped_operation_exception_releases_frame_before_expiring_capabilitie
     started.get();
 
     auto join_root = loop.start(join_and_observe_bytes(scope, resource));
-    const auto notified = loop.post([&] { signal.notify(); });
+    const auto notified = loop.handle().post([&] { signal.notify(); });
     RUVIA_CHECK_EQ(join_root.get(), 0U);
     RUVIA_CHECK(ruvia::testing::throws_on([&] { operation_root.get(); }));
     RUVIA_CHECK(notified == ruvia::post_status::accepted);
@@ -465,7 +465,7 @@ RUVIA_TEST(scoped_operation_cooperative_cancellation_releases_frame_before_expir
 
     auto join_root = loop.start(join_and_observe_bytes(scope, resource));
     stop_requested.store(true);
-    const auto notified = loop.post([&] { signal.notify(); });
+    const auto notified = loop.handle().post([&] { signal.notify(); });
     RUVIA_CHECK_EQ(join_root.get(), 0U);
     RUVIA_CHECK(operation_root.get());
     RUVIA_CHECK(notified == ruvia::post_status::accepted);
@@ -501,7 +501,7 @@ RUVIA_TEST(scoped_operation_result_survives_join_after_frame_release) {
     started.get();
 
     auto join_root = loop.start(join_and_observe_bytes(scope, parameter_resource));
-    const auto notified = loop.post([&] { signal.notify(); });
+    const auto notified = loop.handle().post([&] { signal.notify(); });
     RUVIA_CHECK_EQ(join_root.get(), 0U);
     {
         owned_result result_value = operation_root.get();
@@ -554,7 +554,7 @@ RUVIA_TEST(root_rejected_launch_retires_cold_input_before_publishing_failure) {
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
     std::atomic_uint borrows{0};
-    RUVIA_CHECK(loop.post([] { throw std::runtime_error("stop launch queue"); }) == ruvia::post_status::accepted);
+    RUVIA_CHECK(loop.handle().post([] { throw std::runtime_error("stop launch queue"); }) == ruvia::post_status::accepted);
     auto root = loop.start(return_cold_delivery_borrow(delivery_borrow(borrows)));
     RUVIA_CHECK_EQ(borrows.load(), 1U);
     loops.start();
@@ -585,7 +585,7 @@ RUVIA_TEST(scoped_operation_result_move_failure_releases_frame_before_join) {
     started.get();
 
     auto join_root = loop.start(join_and_observe_bytes(scope, parameter_resource));
-    const auto notified = loop.post([&] { signal.notify(); });
+    const auto notified = loop.handle().post([&] { signal.notify(); });
     RUVIA_CHECK_EQ(join_root.get(), 0U);
     bool failed_at_extraction = false;
     try {
@@ -907,10 +907,6 @@ RUVIA_TEST(scoped_capability_cleanup_can_destroy_its_owner_and_a_sibling) {
 
 RUVIA_TEST(scoped_capability_cleanup_can_reenter_scope_close) {
     ruvia::operation_scope scope;
-    int context_marker = 42;
-    RUVIA_CHECK(scope.context() == nullptr);
-    scope.bind_context(&context_marker);
-    RUVIA_CHECK(scope.context() == &context_marker);
     int expired = 0;
     struct reentrant_closer final {
         ruvia::operation_scope* scope_;

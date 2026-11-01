@@ -29,7 +29,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/socket.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/http/http_ascii.h"
@@ -45,6 +44,7 @@
 #include "server/windows_accept_domain.h"
 #include "tls/tls_protocol_policy.h"
 #include "tls/tls_served_certificate.h"
+#include "util/socket.h"
 #include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
@@ -518,7 +518,7 @@ task<void> worker_connections::run_session(
         if (close_mode == http_connection_close::linger && !stop_token_.stop_requested()) {
             co_await linger_http_connection(socket, scanner_, worker_);
         }
-        ruvia::close_socket(socket);
+        close_socket(socket);
     } catch (...) {
         report_session_failure(socket, remote_address, std::current_exception());
     }
@@ -552,7 +552,7 @@ task<void> worker_connections::run_tls_session(
             const auto handshake_completion =
                 co_await ruvia::async_asio(tls_server_handshake_initiator{&tls_stream});
             if (handshake_completion.error_code()) {
-                ruvia::close_socket(socket);
+                close_socket(socket);
                 co_return;
             }
         }
@@ -571,7 +571,7 @@ task<void> worker_connections::run_tls_session(
         if (close_mode != http_connection_close::abort && !stop_token_.stop_requested()) {
             co_await close_http_connection_gracefully(tls_stream, close_mode, scanner_, worker_);
         }
-        ruvia::close_socket(socket);
+        close_socket(socket);
     } catch (...) {
         report_session_failure(socket, remote_address, std::current_exception());
     }
@@ -597,7 +597,7 @@ void worker_connections::report_session_failure(
     // Dropping the connection must not also drop the reason: this is the
     // only place that reason exists, so it goes to the connection-failure
     // sink before the frame unwinds.
-    ruvia::close_socket(socket);
+    close_socket(socket);
     options_.connection_failure_.invoke(remote_address, std::move(failure));
 }
 
