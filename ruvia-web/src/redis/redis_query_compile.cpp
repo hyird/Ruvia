@@ -121,44 +121,43 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
     }
 }
 
-// The text writes store for the same value, so a predicate matches stored data.
-[[nodiscard]] std::string_view format_canonical_numeric(std::array<char, 64>& buffer,
+// Bound text is the write encoding (encode_redis_number) of the value in the
+// column's type, so it parses to exactly the double RediSearch indexed for
+// that stored value: a float32 0.1 is written and bounded as "0.100000001".
+// The optional exclusive marker '(' precedes the number in the same buffer.
+using redis_numeric_bound_buffer = std::array<char, redis_scalar_scratch_size + 1>;
+
+[[nodiscard]] std::string_view format_canonical_numeric(redis_numeric_bound_buffer& buffer,
     const redis_literal& value, redis_column_kind column_kind, bool exclusive = false) {
-    char* const start = buffer.data() + (exclusive ? 1 : 0);
-    char* const limit = buffer.data() + buffer.size();
-    if (exclusive) {
-        buffer[0] = '(';
-    }
-    std::to_chars_result result{};
+    const std::span<char, redis_scalar_scratch_size> scratch(buffer.data() + 1, redis_scalar_scratch_size);
+    std::string_view number;
     switch (value.kind()) {
         case redis_literal_kind::signed_integer:
             require_redis_exact_number(static_cast<double>(value.signed_value()));
-            result = std::to_chars(start, limit, value.signed_value());
+            number = encode_redis_number(value.signed_value(), scratch);
             break;
         case redis_literal_kind::unsigned_integer:
             require_redis_exact_number(static_cast<double>(value.unsigned_value()));
-            result = std::to_chars(start, limit, value.unsigned_value());
+            number = encode_redis_number(value.unsigned_value(), scratch);
             break;
         case redis_literal_kind::real: {
-            const double number = value.real_value();
-            require_redis_exact_number(number);
-            if (column_kind == redis_column_kind::float32) {
-                const float float_val = static_cast<float>(number);
-                result = std::to_chars(start, limit, float_val == 0.0F ? 0.0F : float_val,
-                    std::chars_format::general);
-            } else {
-                result = std::to_chars(start, limit, number == 0.0 ? 0.0 : number,
-                    std::chars_format::general);
-            }
+            const double real = value.real_value();
+            require_redis_exact_number(real);
+            number = column_kind == redis_column_kind::float32
+                         ? encode_redis_number(static_cast<float>(real), scratch)
+                         : encode_redis_number(real, scratch);
             break;
         }
         default:
             throw std::invalid_argument("Redis numeric predicate requires a numeric value");
     }
-    if (result.ec != std::errc{}) {
-        throw std::runtime_error("failed to format redis number");
+    if (!exclusive) {
+        return number;
     }
-    return std::string_view(buffer.data(), static_cast<std::size_t>(result.ptr - buffer.data()));
+    // The number lies inside scratch, which starts one byte into the buffer.
+    const auto offset = static_cast<std::size_t>(number.data() - buffer.data());
+    buffer[offset - 1] = '(';
+    return std::string_view(buffer.data() + offset - 1, number.size() + 1);
 }
 
 // TAG indexes only cover text and boolean columns.
@@ -320,7 +319,7 @@ void append_numeric_comparison(std::pmr::string& output, std::string_view field,
         append_null_comparison(output, field, operation, "unsupported NULL NUMERIC comparison");
         return;
     }
-    std::array<char, 64> number_buffer;
+    redis_numeric_bound_buffer number_buffer;
     switch (operation) {
         case redis_binary_operator::equal: {
             const auto number = format_canonical_numeric(number_buffer, value, column_kind);
@@ -486,7 +485,7 @@ private:
                 append_encoded_tag_term(
                     output, field, raw_tag_value(value, comparison.column_.kind_));
             } else {
-                std::array<char, 64> number_buffer;
+                redis_numeric_bound_buffer number_buffer;
                 const auto number =
                     format_canonical_numeric(number_buffer, value, comparison.column_.kind_);
                 append_numeric_range(output, field, number, number);
@@ -507,8 +506,8 @@ private:
             lower.kind() == redis_literal_kind::null || upper.kind() == redis_literal_kind::null) {
             throw std::invalid_argument("Redis BETWEEN requires a NUMERIC indexed column");
         }
-        std::array<char, 64> low_buffer;
-        std::array<char, 64> high_buffer;
+        redis_numeric_bound_buffer low_buffer;
+        redis_numeric_bound_buffer high_buffer;
         const auto low = format_canonical_numeric(low_buffer, lower, comparison.column_.kind_);
         const auto high = format_canonical_numeric(high_buffer, upper, comparison.column_.kind_);
         append_numeric_range(output, field, low, high);
