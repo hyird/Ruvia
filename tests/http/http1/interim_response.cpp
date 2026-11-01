@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_limits.h"
@@ -17,7 +18,7 @@ namespace {
 
 using ruvia::http1_interim_connection_disposition;
 using ruvia::http1_interim_response_buffer_too_small;
-using ruvia::http1_interim_response_prepare_error;
+using ruvia::http1_response_head_error;
 using ruvia::http_header_view;
 using ruvia::http_interim_response_head;
 using ruvia::prepare_http1_interim_response_head;
@@ -25,6 +26,19 @@ using ruvia::prepared_http1_interim_response;
 
 [[nodiscard]] bool unchanged(const std::array<char, 64>& buffer, char sentinel) {
     return std::ranges::all_of(buffer, [sentinel](char value) { return value == sentinel; });
+}
+
+// Rejection throws before the head buffer is touched.
+[[nodiscard]] bool rejects_without_writing(std::span<const http_header_view> fields_value, char sentinel) {
+    std::array<char, 64> buffer;
+    buffer.fill(sentinel);
+    try {
+        (void)prepare_http1_interim_response_head(
+            http_interim_response_head(ruvia::http_status::early_hints, fields_value), buffer);
+    } catch (const http1_response_head_error&) {
+        return unchanged(buffer, sentinel);
+    }
+    return false;
 }
 
 }  // namespace
@@ -130,16 +144,6 @@ RUVIA_TEST(http1_interim_response_writer_preserves_fields_borrowed_from_output) 
 }
 
 RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally) {
-    const auto rejects = [&](std::span<const http_header_view> fields_value,
-                             http1_interim_response_prepare_error expected) {
-        std::array<char, 64> buffer;
-        buffer.fill('@');
-        const auto result_value = prepare_http1_interim_response_head(
-            http_interim_response_head(ruvia::http_status::early_hints, fields_value), buffer);
-        const auto* const failure = std::get_if<http1_interim_response_prepare_error>(&result_value);
-        return failure != nullptr && *failure == expected && unchanged(buffer, '@');
-    };
-
     const http_header_view malformed_name[] = {{"Bad Name", "value"}};
     const http_header_view malformed_value[] = {{"X-Test", "a\r\nb"}};
     const http_header_view malformed_content_encoding[] = {{"Content-Encoding", "gzip;level=9"}};
@@ -164,24 +168,19 @@ RUVIA_TEST(http1_interim_response_writer_rejects_invalid_fields_transactionally)
     };
     const http_header_view unlisted_upgrade[] = {{"Upgrade", "example/1"}};
 
-    RUVIA_CHECK(rejects(malformed_name, http1_interim_response_prepare_error::invalid_header));
-    RUVIA_CHECK(rejects(malformed_value, http1_interim_response_prepare_error::invalid_header));
-    RUVIA_CHECK(
-        rejects(malformed_content_encoding, http1_interim_response_prepare_error::invalid_header));
-    RUVIA_CHECK(rejects(empty_content_encoding, http1_interim_response_prepare_error::invalid_header));
-    RUVIA_CHECK(rejects(malformed_content_type, http1_interim_response_prepare_error::invalid_header));
-    RUVIA_CHECK(rejects(empty_content_type, http1_interim_response_prepare_error::invalid_header));
-    RUVIA_CHECK(rejects(content_length, http1_interim_response_prepare_error::content_length_forbidden));
-    RUVIA_CHECK(
-        rejects(transfer_encoding, http1_interim_response_prepare_error::transfer_encoding_forbidden));
-    RUVIA_CHECK(rejects(trailer, http1_interim_response_prepare_error::trailer_forbidden));
-    RUVIA_CHECK(rejects(te, http1_interim_response_prepare_error::te_field_forbidden));
-    RUVIA_CHECK(rejects(duplicate_server, http1_interim_response_prepare_error::repeated_singleton));
-    RUVIA_CHECK(rejects(invalid_connection, http1_interim_response_prepare_error::invalid_connection));
-    RUVIA_CHECK(rejects(managed_connection, http1_interim_response_prepare_error::invalid_connection));
-    RUVIA_CHECK(rejects(invalid_upgrade, http1_interim_response_prepare_error::invalid_upgrade));
-    RUVIA_CHECK(rejects(
-        unlisted_upgrade, http1_interim_response_prepare_error::upgrade_connection_option_required));
+    for (const std::span<const http_header_view> fields_value :
+        {std::span<const http_header_view>(malformed_name), std::span<const http_header_view>(malformed_value),
+            std::span<const http_header_view>(malformed_content_encoding),
+            std::span<const http_header_view>(empty_content_encoding),
+            std::span<const http_header_view>(malformed_content_type),
+            std::span<const http_header_view>(empty_content_type), std::span<const http_header_view>(content_length),
+            std::span<const http_header_view>(transfer_encoding), std::span<const http_header_view>(trailer),
+            std::span<const http_header_view>(te), std::span<const http_header_view>(duplicate_server),
+            std::span<const http_header_view>(invalid_connection),
+            std::span<const http_header_view>(managed_connection),
+            std::span<const http_header_view>(invalid_upgrade), std::span<const http_header_view>(unlisted_upgrade)}) {
+        RUVIA_CHECK(rejects_without_writing(fields_value, '@'));
+    }
 }
 
 RUVIA_TEST(http1_interim_response_writer_enforces_size_limit) {
@@ -193,17 +192,7 @@ RUVIA_TEST(http1_interim_response_writer_enforces_size_limit) {
         many_buffer);
     RUVIA_CHECK(std::holds_alternative<prepared_http1_interim_response>(many_result));
 
-    std::array<char, 64> buffer;
-    buffer.fill('!');
     const std::string oversized_value(ruvia::max_http_header_bytes, 'x');
     const http_header_view oversized[] = {{"X-Hint", oversized_value}};
-    const auto oversized_result = prepare_http1_interim_response_head(
-        http_interim_response_head(ruvia::http_status::early_hints, oversized), buffer);
-    const auto* const oversized_failure = std::get_if<http1_interim_response_prepare_error>(&oversized_result);
-    RUVIA_CHECK(oversized_failure != nullptr);
-    if (oversized_failure != nullptr) {
-        RUVIA_CHECK_EQ(
-            *oversized_failure, http1_interim_response_prepare_error::header_too_large);
-    }
-    RUVIA_CHECK(unchanged(buffer, '!'));
+    RUVIA_CHECK(rejects_without_writing(oversized, '!'));
 }

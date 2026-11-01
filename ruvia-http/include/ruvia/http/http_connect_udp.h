@@ -8,6 +8,7 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_version.h"
@@ -75,5 +76,7 @@ struct http_connect_udp_request_view final {
 // Capsule-Protocol and version-specific status/Upgrade fields. HTTP/1 status 101
 // can only be produced by this dedicated driver boundary.
 [[nodiscard]] std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response response, http_protocol_version version);
-[[nodiscard]] std::variant<http1_response_head_plan, http_connect_udp_error> prepare_http1_connect_udp_response_head(const http_response& response) noexcept;
+// The HTTP/1 head plan of a response prepare_http_connect_udp_response()
+// produced; throws http1_response_head_error for any other response.
+[[nodiscard]] http1_response_head_plan prepare_http1_connect_udp_response_head(const http_response& response);
 }  // namespace ruvia

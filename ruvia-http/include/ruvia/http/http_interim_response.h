@@ -9,6 +9,7 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 
@@ -68,19 +69,6 @@ private:
     std::span<const http_header_view> headers_;
 };
 
-enum class http1_interim_response_prepare_error : std::uint8_t {
-    invalid_header,
-    content_length_forbidden,
-    transfer_encoding_forbidden,
-    trailer_forbidden,
-    te_field_forbidden,
-    repeated_singleton,
-    invalid_connection,
-    invalid_upgrade,
-    upgrade_connection_option_required,
-    header_too_large,
-};
-
 // Connection lifecycle after the encoded interim response. RFC 9112 requires
 // a sender of Connection: close to begin closing after the response containing
 // that option, even though doing so leaves the request without a final response.
@@ -89,9 +77,6 @@ enum class http1_interim_connection_disposition : std::uint8_t {
     close_after_interim_response,
 };
 
-[[nodiscard]] std::string_view http1_interim_response_prepare_error_message(
-    http1_interim_response_prepare_error error) noexcept;
-
 class http1_interim_response_buffer_too_small final {
 public:
     [[nodiscard]] constexpr std::size_t required_head_bytes() const noexcept {
@@ -99,9 +84,8 @@ public:
     }
 
 private:
-    friend std::variant<class prepared_http1_interim_response, http1_interim_response_buffer_too_small,
-        http1_interim_response_prepare_error>
-    prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>) noexcept;
+    friend std::variant<class prepared_http1_interim_response, http1_interim_response_buffer_too_small>
+    prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>);
 
     explicit constexpr http1_interim_response_buffer_too_small(std::size_t required_head_bytes) noexcept
         : required_head_bytes_(required_head_bytes) {}
@@ -124,9 +108,8 @@ public:
     }
 
 private:
-    friend std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small,
-        http1_interim_response_prepare_error>
-    prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>) noexcept;
+    friend std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small>
+    prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>);
 
     constexpr prepared_http1_interim_response(
         std::string_view head, http1_interim_connection_disposition connection_disposition) noexcept
@@ -139,11 +122,10 @@ private:
 
 // Allocation-free HTTP/1.1 interim-head writer. It validates the complete
 // borrowed field set and exact 64-field/64-KiB bounds before touching the
-// output buffer. No Server or Date field is injected: the encoded fields are
-// exactly those represented by http_interim_response_head.
-[[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small,
-    http1_interim_response_prepare_error>
-prepare_http1_interim_response_head(
-    const http_interim_response_head& response, std::span<char> head_buffer) noexcept;
+// output buffer, throwing http1_response_head_error for a head it cannot send.
+// No Server or Date field is injected: the encoded fields are exactly those
+// represented by http_interim_response_head.
+[[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small>
+prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer);
 
 }  // namespace ruvia

@@ -2,10 +2,25 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_response_server.h"
 
 #include "test_harness.h"
+
+namespace {
+
+template <typename fn_type>
+[[nodiscard]] bool throws_head_error(fn_type&& fn) {
+    try {
+        fn();
+    } catch (const ruvia::http1_response_head_error&) {
+        return true;
+    }
+    return false;
+}
+
+}  // namespace
 
 RUVIA_TEST(http1_connect_head_transfers_to_tunnel_without_message_framing_for_every_successful_status) {
     std::pmr::unsynchronized_pool_resource resource;
@@ -31,18 +46,18 @@ RUVIA_TEST(http1_connect_head_rejects_failed_status_payload_and_framing_fields_b
     for (const auto name : {"Content-Length", "Transfer-Encoding"}) {
         ruvia::http_response response(&resource);
         response.header(name, name == std::string_view("Content-Length") ? "0" : "chunked");
-        RUVIA_CHECK(ruvia::testing::throws_on([&] {
+        RUVIA_CHECK(throws_head_error([&] {
             (void)ruvia::prepare_http1_connect_response_head(response, ruvia::http_protocol_version::http11);
         }));
     }
     ruvia::http_response response(&resource);
     response.status(ruvia::http_status::forbidden);
-    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+    RUVIA_CHECK(throws_head_error([&] {
         (void)ruvia::prepare_http1_connect_response_head(response, ruvia::http_protocol_version::http11);
     }));
     response.status(ruvia::http_status::ok);
     response.body("HTTP payload");
-    RUVIA_CHECK(ruvia::testing::throws_on([&] {
+    RUVIA_CHECK(throws_head_error([&] {
         (void)ruvia::prepare_http1_connect_response_head(response, ruvia::http_protocol_version::http11);
     }));
 }

@@ -33,7 +33,7 @@ template <typename make_completion_type>
     http1_request_connection_plan connection_plan, make_completion_type make_completion) {
     try {
         return make_completion(http1_commit_final_response(response, connection_plan));
-    } catch (const http1_final_response_commit_error& error) {
+    } catch (const http1_response_head_error& error) {
         return http1_session_request_completion::make_rejected_final_response(connection_plan, error);
     }
 }

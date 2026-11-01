@@ -3,6 +3,7 @@
 #include <variant>
 
 #include "ruvia/http/http1_client_request_writer.h"
+#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_datagram.h"
@@ -96,16 +97,13 @@ RUVIA_TEST(http_connect_udp_response_preparation_owns_required_fields_and_http1_
         RUVIA_CHECK(std::get<0>(prepared).header("capsule-protocol") == "?1");
         RUVIA_CHECK(std::get<0>(prepared).header("x-proxy") == "test");
         RUVIA_CHECK(std::get<0>(prepared).status() == ruvia::http_status::switching_protocols);
-        auto plan = ruvia::prepare_http1_connect_udp_response_head(std::get<0>(prepared));
-        RUVIA_CHECK((plan.index() == 0));
-        if ((plan.index() == 0)) {
-            ruvia::http_response_head_buffer head{std::pmr::polymorphic_allocator<char>{}};
-            ruvia::append_http1_response_head(std::get<0>(prepared), head, std::get<0>(plan));
-            RUVIA_CHECK(head.view().starts_with("HTTP/1.1 101 "));
-            RUVIA_CHECK(head.view().find("Connection: Upgrade\r\n") != std::string_view::npos);
-            RUVIA_CHECK(head.view().find("Content-Length:") == std::string_view::npos);
-            RUVIA_CHECK(head.view().find("Transfer-Encoding:") == std::string_view::npos);
-        }
+        const auto plan = ruvia::prepare_http1_connect_udp_response_head(std::get<0>(prepared));
+        ruvia::http_response_head_buffer head{std::pmr::polymorphic_allocator<char>{}};
+        ruvia::append_http1_response_head(std::get<0>(prepared), head, plan);
+        RUVIA_CHECK(head.view().starts_with("HTTP/1.1 101 "));
+        RUVIA_CHECK(head.view().find("Connection: Upgrade\r\n") != std::string_view::npos);
+        RUVIA_CHECK(head.view().find("Content-Length:") == std::string_view::npos);
+        RUVIA_CHECK(head.view().find("Transfer-Encoding:") == std::string_view::npos);
     }
     ruvia::http_response parameterized;
     parameterized.status(ruvia::http_status::ok);
@@ -128,6 +126,16 @@ RUVIA_TEST(http_connect_udp_response_preparation_owns_required_fields_and_http1_
     ruvia::http_response content;
     content.body("forbidden");
     RUVIA_CHECK((ruvia::prepare_http_connect_udp_response(std::move(content), ruvia::http_protocol_version::http11).index() != 0));
+    // Only the 101 head prepare_http_connect_udp_response() produces has an HTTP/1 plan.
+    ruvia::http_response unprepared;
+    unprepared.status(ruvia::http_status::ok);
+    bool rejected = false;
+    try {
+        (void)ruvia::prepare_http1_connect_udp_response_head(unprepared);
+    } catch (const ruvia::http1_response_head_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
 }
 
 RUVIA_TEST(http_connect_udp_http1_request_writer_generates_upgrade_without_message_content) {

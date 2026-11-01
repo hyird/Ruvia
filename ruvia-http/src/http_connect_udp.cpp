@@ -334,13 +334,11 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
     }
     return response;
 }
-std::variant<http1_response_head_plan, http_connect_udp_error> prepare_http1_connect_udp_response_head(const http_response& response) noexcept {
-    if (response.status() != http_status::switching_protocols || response.file_body() || !response.body_bytes().empty()) {
-        return http_connect_udp_error::invalid_response;
-    }
-    if (const auto error = validate_connect_udp_response(http_protocol_version::http11, response.status().value(),
+http1_response_head_plan prepare_http1_connect_udp_response_head(const http_response& response) {
+    if (response.status() != http_status::switching_protocols || response.file_body() || !response.body_bytes().empty() ||
+        validate_connect_udp_response(http_protocol_version::http11, response.status().value(),
             std::span(response.headers().begin(), response.headers().size()))) {
-        return *error;
+        throw http1_response_head_error("invalid HTTP/1 CONNECT-UDP response head");
     }
     return http1_close_delimited_response_stream_head_plan(plan_http_response_body(http_known_method::get, response.status()), http1_request_connection_plan::http11_close());
 }

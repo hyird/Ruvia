@@ -12,6 +12,7 @@
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
+#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response.h"
@@ -92,11 +93,11 @@ bool throws_invalid(fn_type&& fn) {
 }
 
 template <typename fn_type>
-bool throws_length(fn_type&& fn) {
+bool throws_head_error(fn_type&& fn) {
     try {
         fn();
         return false;
-    } catch (const std::length_error&) {
+    } catch (const ruvia::http1_response_head_error&) {
         return true;
     }
 }
@@ -648,7 +649,7 @@ RUVIA_TEST(response_head_heap_spill_preserves_full_output) {
 RUVIA_TEST(response_head_rejects_oversized_field_section) {
     http_response oversized(std::pmr::new_delete_resource());
     oversized.header("X-Oversized", std::string(ruvia::max_http_header_bytes, 'v'));
-    RUVIA_CHECK(throws_length([&] { (void)emit_buffered_head(oversized); }));
+    RUVIA_CHECK(throws_head_error([&] { (void)emit_buffered_head(oversized); }));
 
     http_response many(std::pmr::new_delete_resource());
     for (std::size_t i = 0; i < 80; ++i) {

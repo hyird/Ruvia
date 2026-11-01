@@ -1,12 +1,12 @@
 #pragma once
 
 #include <cstdint>
-#include <exception>
 #include <optional>
 #include <utility>
 #include <variant>
 
 #include "ruvia/http/http1_request_connection_plan.h"
+#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_known_method.h"
@@ -118,31 +118,14 @@ inline void http1_mark_connection_close(http_response& response,
     }
 }
 
-namespace detail {
-enum class http1_final_response_control_plan_error : std::uint8_t;
-}  // namespace detail
-
 class prepared_http1_response_stream;
-
-class http1_final_response_commit_error final : public std::exception {
-public:
-    [[nodiscard]] const char* what() const noexcept override;
-
-private:
-    friend http1_request_connection_plan http1_commit_final_response(
-        http_response&, http1_request_connection_plan);
-
-    explicit http1_final_response_commit_error(detail::http1_final_response_control_plan_error error) noexcept
-        : error_(error) {}
-
-    detail::http1_final_response_control_plan_error error_;
-};
 
 // Commit response-side HTTP/1 persistence after the runtime has folded in
 // request-body completion and server policy. This is the sole protocol mutation:
 // it honors an application-provided Connection: close and emits the version-
 // appropriate Connection field. Success retains the exact request version for
-// head serialization; wire-message failures remain typed.
+// head serialization; a head this endpoint cannot send (for example a 426
+// without an Upgrade protocol) throws http1_response_head_error.
 [[nodiscard]] http1_request_connection_plan http1_commit_final_response(
     http_response& response, http1_request_connection_plan plan);
 
@@ -196,6 +179,7 @@ private:
 
 // The successful head ends HTTP framing and transfers the connection to a
 // duplex byte stream. Payload belongs to that stream, not to an HTTP response.
+// A 2xx head with content or framing fields throws http1_response_head_error.
 [[nodiscard]] http1_response_head_plan prepare_http1_connect_response_head(
     const http_response& response, http_protocol_version version);
 

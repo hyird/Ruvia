@@ -8,6 +8,7 @@
 #include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/server/http_final_response_control_plan.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
+#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
@@ -43,7 +44,7 @@ inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-E
             continue;
         }
         if (state.parse_field(header.value()) != http_content_length_parse_status::ok) {
-            throw std::invalid_argument("invalid explicit HTTP response Content-Length");
+            throw http1_response_head_error("invalid explicit HTTP response Content-Length");
         }
     }
     return state.value();
@@ -146,7 +147,7 @@ void append_http1_response_head(
     const bool chunked_payload_plan = plan.chunked_stream() != nullptr &&
                                       body_plan.transfer_encoding_allowed() && !body_plan.body_suppressed();
     if (chunked_payload_plan && plan.protocol_version() == http_protocol_version::http10) {
-        throw std::invalid_argument("HTTP/1.0 response cannot use chunked Transfer-Encoding");
+        throw http1_response_head_error("HTTP/1.0 response cannot use chunked Transfer-Encoding");
     }
     const bool emit_chunked_transfer_encoding = chunked_payload_plan;
     // A HEAD handler may describe the GET representation without producing it.
@@ -199,7 +200,7 @@ void append_http1_response_head(
     http_field_section_budget head_budget;
     const auto charge = [](bool fits) {
         if (!fits) {
-            throw std::length_error("HTTP response head is too large");
+            throw http1_response_head_error("HTTP response head is too large");
         }
     };
     charge(head_budget.add(detail::http1_status_line_size(reason_phrase)));
@@ -213,12 +214,12 @@ void append_http1_response_head(
         }
         if (!detail::is_valid_http1_emitted_response_header(header.name(), header.value(), known_bit,
                 emit_chunked_transfer_encoding, connection_options, upgrade_protocols)) {
-            throw std::invalid_argument("invalid HTTP response header");
+            throw http1_response_head_error("invalid HTTP response header");
         }
         charge(head_budget.add_field(header.name(), header.value()));
     }
     if (upgrade_protocols.has_field() && !connection_options.upgrade()) {
-        throw std::invalid_argument("HTTP Upgrade response requires Connection: Upgrade");
+        throw http1_response_head_error("HTTP Upgrade response requires Connection: Upgrade");
     }
     if ((known_bits & detail::response_header_date) == 0 && !date_header.empty()) {
         charge(head_budget.add(date_header.size()));
@@ -276,22 +277,6 @@ http_response_trailer_section validate_http_response_trailers(
     return http_response_trailer_section(trailers);
 }
 
-const char* http1_final_response_commit_error::what() const noexcept {
-    switch (error_) {
-        case detail::http1_final_response_control_plan_error::invalid_status:
-            return "invalid final HTTP response status";
-        case detail::http1_final_response_control_plan_error::invalid_connection_field:
-            return "invalid HTTP Connection header";
-        case detail::http1_final_response_control_plan_error::invalid_upgrade_field:
-            return "invalid HTTP Upgrade header";
-        case detail::http1_final_response_control_plan_error::upgrade_required:
-            return "Upgrade Required response requires an Upgrade protocol";
-        case detail::http1_final_response_control_plan_error::te_field_forbidden:
-            return "TE is not a response field";
-    }
-    return "unknown HTTP final response commit failure";
-}
-
 namespace {
 
 // Lists one generated option; an application Connection line is extended
@@ -309,11 +294,7 @@ void add_http1_connection_option(http_response& response, std::string_view optio
 
 http1_request_connection_plan http1_commit_final_response(
     http_response& response, http1_request_connection_plan plan) {
-    const auto control_result = detail::http1_final_response_control_plan(response);
-    if (const auto* error = std::get_if<detail::http1_final_response_control_plan_error>(&control_result)) {
-        throw http1_final_response_commit_error(*error);
-    }
-    const auto& http1_control = std::get<detail::http1_final_response_control>(control_result);
+    const auto http1_control = detail::http1_final_response_control_plan(response);
     const auto response_options = http1_control.connection_options();
     const auto upgrade_protocols = http1_control.upgrade_protocols();
     const bool preserve_upgrade = upgrade_protocols.has_field();

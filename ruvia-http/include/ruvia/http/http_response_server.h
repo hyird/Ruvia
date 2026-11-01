@@ -11,6 +11,7 @@
 #include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/server/http_response_trailers.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
@@ -47,7 +48,9 @@ private:
 // The plan must describe the same response representation.
 // Canonical Content-Length is measured and emitted from the same decimal token.
 // An explicit Date is preserved without consulting the clock; otherwise a
-// cached current Date is generated when a usable clock is available.
+// cached current Date is generated when a usable clock is available. A head
+// that breaks a message rule or the head size bound throws
+// http1_response_head_error.
 void append_http1_response_head(
     const http_response& response, http_response_head_buffer& head,
     const http1_response_head_plan& plan);

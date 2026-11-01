@@ -49,10 +49,9 @@ private:
                 encoded = prepare_http1_interim_response_head(response, std::span<char>(out, head_bytes));
             });
         }
-        const auto* prepared = std::get_if<prepared_http1_interim_response>(&encoded);
-        if (prepared == nullptr) {
-            throw std::invalid_argument("invalid or oversized interim response head");
-        }
+        // Validation threw http1_response_head_error before any buffer was
+        // touched; an exactly sized buffer always holds the prepared head.
+        const auto* prepared = &std::get<prepared_http1_interim_response>(encoded);
         if (prepared->connection_disposition() != http1_interim_connection_disposition::unchanged) {
             throw std::invalid_argument("application interim response cannot close the exchange");
         }

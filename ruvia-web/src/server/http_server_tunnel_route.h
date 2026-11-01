@@ -36,12 +36,7 @@ namespace ruvia::detail {
     if (!udp) {
         return prepare_http1_connect_response_head(head_response, version);
     }
-    const auto upgrade = prepare_http1_connect_udp_response_head(head_response);
-    if (upgrade.index() != 0) {
-        throw http_protocol_error(http_status::internal_server_error,
-            "invalid_connect_udp_response_head", "invalid CONNECT-UDP response head");
-    }
-    return std::get<0>(upgrade);
+    return prepare_http1_connect_udp_response_head(head_response);
 }
 
 template <typename stream_type>
