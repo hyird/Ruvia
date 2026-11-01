@@ -1,6 +1,7 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <stdexcept>
 #include <string_view>
 #include <vector>
@@ -139,7 +140,7 @@ RUVIA_TEST(db_pool_transaction_retirement_checks_server_state_before_reuse) {
     using peer_type = test::backend_startup_peer;
     // Successful control commands may chain a new transaction or leave
     // autocommit disabled. Failed statements also retire via ROLLBACK.
-    for (const unsigned short status : {2, 3, 0}) {
+    for (const auto status : {std::uint16_t{2}, std::uint16_t{3}, std::uint16_t{0}}) {
         for (int ending = 0; ending < 3; ++ending) {
             std::vector<peer_type::maria_reply> replies{{.column_ = "", .status_ = 3}};
             if (ending == 2) {
