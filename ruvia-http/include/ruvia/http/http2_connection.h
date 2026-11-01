@@ -42,14 +42,12 @@ struct http2_connection_options final {
     // Enable only for an authenticated h2 connection to an origin server.
     // RFC 8336 forbids using ORIGIN over h2c or through an explicit proxy.
     bool receive_origin_advertisements_{false};
-    // 在完整帧提交后按线上顺序同步观察；分片和异常重试不重复已提交通知。
-    // SETTINGS 仅通知非 ACK；WINDOW_UPDATE 仅通知实际接受的更新；
-    // PRIORITY 表示帧元数据，request_head 则必须通过完整请求校验。
-    // 同一 HEADERS 帧的 priority 先于 request_head；CONTINUATION 仅在请求完成时通知。
-    // 回调不得重入同一连接、抛异常或保留借用视图。context 必须活到连接销毁。
-    // 未设置时不新增元数据缓冲、队列或动态分配。
-    http2_receive_observer_type receive_observer_{nullptr};
-    void* receive_observer_context_{nullptr};
+    // Deliver the peer's frame metadata as received_settings,
+    // received_window_update and received_priority events, interleaved with
+    // the other events in wire order (see http2_event). Off, none is produced
+    // and no metadata work is done. Request pseudo-header order is always in
+    // the request-head event's request_view().
+    bool receive_frame_metadata_{false};
 };
 
 struct http2_regular_request_head_view final {
@@ -275,8 +273,7 @@ private:
     friend websocket_handshake_validation_result validate_http2_websocket_handshake(
         http2_connection&, std::uint32_t, const http_request&,
         websocket_handshake_validation_options) noexcept;
-    explicit http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push, bool receive_origin_advertisements,
-        http2_receive_observer_type receive_observer, void* receive_observer_context);
+    http2_connection(http2_role role, const http2_connection_options& options);
     struct impl_deleter_type final {
         void operator()(detail::http2_connection_owner_endpoint* value) const noexcept;
     };

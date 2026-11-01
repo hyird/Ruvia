@@ -409,6 +409,30 @@ public:
     }
     const http_priority_update* priority_update() const&& = delete;
 
+    // Peer frame metadata, produced only with
+    // http2_connection_options::receive_frame_metadata_. Each committed frame
+    // yields at most one such event, queued in wire order with the others; a
+    // frame rejected with a connection error yields none, and a retried feed()
+    // never repeats one.
+    // - received_settings: each applied non-ACK SETTINGS (an ACK yields none).
+    // - received_window_update: each applied WINDOW_UPDATE; a zero or
+    //   overflowing increment, or one on a closed or unknown stream, yields none.
+    // - received_priority: each PRIORITY frame with a valid payload, and the
+    //   priority fields of an accepted HEADERS frame, ahead of every event that
+    //   frame produces (such as its request head).
+    [[nodiscard]] const http2_received_settings* received_settings() const& noexcept {
+        return std::get_if<http2_received_settings>(&value_);
+    }
+    const http2_received_settings* received_settings() const&& = delete;
+    [[nodiscard]] const http2_received_window_update* received_window_update() const& noexcept {
+        return std::get_if<http2_received_window_update>(&value_);
+    }
+    const http2_received_window_update* received_window_update() const&& = delete;
+    [[nodiscard]] const http2_received_priority* received_priority() const& noexcept {
+        return std::get_if<http2_received_priority>(&value_);
+    }
+    const http2_received_priority* received_priority() const&& = delete;
+
     [[nodiscard]] const http2_push_promise_event* push_promise() const& noexcept {
         return std::get_if<http2_push_promise_event>(&value_);
     }
@@ -420,7 +444,9 @@ private:
     using value_type = std::variant<http2_informational_head_event, http2_request_head_event,
         http2_response_head_event, http2_message_body_chunk_event, http2_message_end_event,
         http2_tunnel_data_event, http2_tunnel_end_event, http2_stream_closed_event,
-        http2_request_unprocessed_event, http2_goaway_event, http2_push_promise_event, http_priority_update, http_origin_advertisement, http_alternative_service_advertisement>;
+        http2_request_unprocessed_event, http2_goaway_event, http2_push_promise_event, http_priority_update,
+        http_origin_advertisement, http_alternative_service_advertisement, http2_received_settings,
+        http2_received_window_update, http2_received_priority>;
     template <typename event_type>
     explicit http2_event(event_type event) noexcept
         : value_(std::move(event)) {}

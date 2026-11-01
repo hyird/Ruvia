@@ -143,6 +143,10 @@ bool http2_connection::process_window_update(
         return false;
     }
     const auto increment = http2_window_update_increment(payload_value);
+    if (receive_frame_metadata_) {
+        // Before any window changes; send-window draining queues no events.
+        reserve_event_slots(1);
+    }
     if (header_value.stream_id_ == 0) {
         switch (http2_apply_window_update(connection_send_window_, increment)) {
             case http2_window_update_result::ok:
@@ -152,9 +156,9 @@ bool http2_connection::process_window_update(
                     connection_send_window_ -= static_cast<std::int32_t>(increment);
                     throw;
                 }
-                if (receive_observer_ != nullptr) {
-                    pending_receive_notifications_.metadata_ = http2_received_window_update{
-                        .stream_id_ = header_value.stream_id_, .increment_ = increment};
+                if (receive_frame_metadata_) {
+                    events_.push_back(http2_event(http2_received_window_update{
+                        .stream_id_ = header_value.stream_id_, .increment_ = increment}));
                 }
                 return true;
             case http2_window_update_result::zero_increment:
@@ -204,9 +208,9 @@ bool http2_connection::process_window_update(
                 (void)stream->add_send_window(-static_cast<std::int64_t>(increment));
                 throw;
             }
-            if (receive_observer_ != nullptr) {
-                pending_receive_notifications_.metadata_ = http2_received_window_update{
-                    .stream_id_ = header_value.stream_id_, .increment_ = increment};
+            if (receive_frame_metadata_) {
+                events_.push_back(http2_event(http2_received_window_update{
+                    .stream_id_ = header_value.stream_id_, .increment_ = increment}));
             }
             return true;
         case http2_window_update_result::zero_increment:

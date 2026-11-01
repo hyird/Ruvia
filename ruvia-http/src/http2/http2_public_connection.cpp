@@ -70,12 +70,11 @@ namespace detail {
 
 class http2_connection_owner_endpoint final {
 public:
-    http2_connection_owner_endpoint(std::pmr::memory_resource* resource, http2_role role,
-        bool enable_push, bool receive_origin_advertisements,
-        http2_receive_observer_type receive_observer, void* receive_observer_context)
+    http2_connection_owner_endpoint(
+        std::pmr::memory_resource* resource, http2_role role, const http2_connection_options& options)
         : resource_(resource),
-          connection_(resource, role, enable_push, receive_origin_advertisements,
-              receive_observer, receive_observer_context) {}
+          connection_(resource, role, options.enable_push_, options.receive_origin_advertisements_,
+              options.receive_frame_metadata_) {}
     http2_connection_owner_endpoint(const http2_connection_owner_endpoint&) = delete;
     http2_connection_owner_endpoint& operator=(const http2_connection_owner_endpoint&) = delete;
 
@@ -264,12 +263,10 @@ void http2_connection::impl_deleter_type::operator()(detail::http2_connection_ow
     }
 }
 
-http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push, bool receive_origin_advertisements,
-    http2_receive_observer_type receive_observer, void* receive_observer_context) {
-    auto* resolved = detail::http_pmr_resource_or_default(resource);
+http2_connection::http2_connection(http2_role role, const http2_connection_options& options) {
+    auto* resolved = detail::http_pmr_resource_or_default(options.resource_);
     impl_.reset(detail::construct_http_pmr_object<detail::http2_connection_owner_endpoint>(
-        resolved, resolved, role, enable_push, receive_origin_advertisements,
-        receive_observer, receive_observer_context));
+        resolved, resolved, role, options));
     impl_->connection_.begin_connection();
 }
 http2_connection http2_connection::server(http2_connection_options options) {
@@ -278,12 +275,10 @@ http2_connection http2_connection::server(http2_connection_options options) {
     if (options.enable_push_ || options.receive_origin_advertisements_) {
         throw std::invalid_argument("HTTP/2 server connection does not accept client-only options");
     }
-    return http2_connection(options.resource_, http2_role::server, false, false,
-        options.receive_observer_, options.receive_observer_context_);
+    return http2_connection(http2_role::server, options);
 }
 http2_connection http2_connection::client(http2_connection_options options) {
-    return http2_connection(options.resource_, http2_role::client, options.enable_push_, options.receive_origin_advertisements_,
-        options.receive_observer_, options.receive_observer_context_);
+    return http2_connection(http2_role::client, options);
 }
 http2_connection::~http2_connection() = default;
 http2_connection::http2_connection(http2_connection&&) noexcept = default;

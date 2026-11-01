@@ -91,9 +91,8 @@ class http2_connection final {
     };
 
 public:
-    explicit http2_connection(
-        std::pmr::memory_resource* resource, http2_role role = http2_role::server, bool enable_push = false, bool receive_origin_advertisements = false,
-        http2_receive_observer_type receive_observer = nullptr, void* receive_observer_context = nullptr);
+    explicit http2_connection(std::pmr::memory_resource* resource, http2_role role = http2_role::server,
+        bool enable_push = false, bool receive_origin_advertisements = false, bool receive_frame_metadata = false);
 
     [[nodiscard]] http2_role role() const noexcept {
         return role_;
@@ -450,7 +449,6 @@ private:
     // a fatal protocol error (GOAWAY queued). Shared by feed()'s fast (parse over the
     // caller's bytes) and slow (parse the buffered input_) paths.
     [[nodiscard]] bool consume_frames(std::string_view buffer, std::size_t& offset);
-    void commit_receive_notifications() noexcept;
     // Synchronous per-frame dispatch (ported 1:1 from process_frame/*; returns false
     // on a fatal protocol error, having appended GOAWAY and transitioned the
     // local connection state to fatal failure).
@@ -467,8 +465,10 @@ private:
     [[nodiscard]] bool process_priority_update(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_priority(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_goaway(const http2_frame_header& header, std::string_view payload);
-    [[nodiscard]] bool process_headers(const http2_frame_header& header, std::string_view payload,
-        http2_received_priority* received_priority);
+    // Decodes the HEADERS framing and, with receive_frame_metadata_, queues the
+    // frame's priority fields ahead of every event the frame produces.
+    [[nodiscard]] bool process_headers(const http2_frame_header& header, std::string_view payload);
+    [[nodiscard]] bool process_headers_fragment(const http2_frame_header& header, std::string_view fragment);
     [[nodiscard]] bool process_trailer_headers(
         http2_stream_state& stream, const http2_frame_header& header, std::string_view fragment);
     [[nodiscard]] bool process_continuation(
@@ -587,14 +587,6 @@ private:
     std::pmr::string input_;
     std::size_t input_offset_{0};
     bool retry_input_{false};
-    http2_receive_observer_type receive_observer_{nullptr};
-    void* receive_observer_context_{nullptr};
-    // 单帧事务的提交标记，不保留历史；消费游标前移后才同步观察。
-    struct frame_receive_notifications final {
-        std::optional<std::variant<http2_received_settings, http2_received_window_update, http2_received_priority>> metadata_;
-        std::optional<std::uint32_t> request_stream_;
-    };
-    frame_receive_notifications pending_receive_notifications_;
 
     // Outbound serialization and consumed-prefix ownership are isolated from
     // connection state transitions.
@@ -622,6 +614,8 @@ private:
     bool push_reject_connected_tunnel_{false};
     bool enable_push_{false};
     bool receive_origin_advertisements_{false};
+    // Queue received_settings / received_window_update / received_priority events.
+    bool receive_frame_metadata_{false};
     std::uint32_t last_peer_push_stream_id_{0};
     std::uint32_t next_push_stream_id_{2};
     std::optional<http2_stream_state> discarded_header_stream_;

@@ -6,7 +6,6 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/websocket_protocol.h"
@@ -43,8 +42,8 @@ enum class http2_request_pseudo_header : std::uint8_t {
     protocol,
 };
 
-// 对端请求的借用视图；通过 request-head event 取得时，存储由该 lease 保持。
-// 接收观察回调中的视图仅在回调期间有效。连接移动不使已有 lease 的视图失效。
+// 对端请求的借用视图；通过 request-head event 取得，存储由该 lease 保持。
+// 连接移动不使已有 lease 的视图失效。
 struct http2_server_request_view final {
     std::string_view method_{};
     std::string_view scheme_{};
@@ -61,8 +60,9 @@ struct http2_setting_entry final {
     std::uint32_t value_{0};
 };
 
-// 已提交的非 ACK SETTINGS 的借用视图，保留未知项、重复项和线上顺序。
-// 只在接收观察回调期间有效，不保存连接历史，也不分配条目数组。
+// received_settings 事件：已应用的非 ACK SETTINGS 的借用视图，保留未知项、
+// 重复项和线上顺序。借用已接受的 feed() 输入，与其他事件派生的字节视图一样，
+// 在下一次 feed() 前有效；不保存连接历史，也不分配条目数组。
 class http2_received_settings final {
 public:
     http2_received_settings() = default;
@@ -79,27 +79,20 @@ private:
     std::string_view payload_{};
 };
 
+// received_window_update 事件：连接实际应用的 WINDOW_UPDATE（stream 0 或存活流）。
 struct http2_received_window_update final {
     std::uint32_t stream_id_{0};
     std::uint32_t increment_{0};
 };
 
-// RFC 9113 §6.2/§6.3 的原始 dependency/weight 元数据，不代表调度策略。
+// received_priority 事件：RFC 9113 §6.2/§6.3 的原始 dependency/weight 元数据，
+// 来自 PRIORITY 帧或带 PRIORITY 标志的 HEADERS 帧，不代表调度策略。
 struct http2_received_priority final {
     std::uint32_t stream_id_{0};
     std::uint32_t stream_dependency_{0};
     std::uint16_t weight_{0};
     bool exclusive_{false};
 };
-
-struct http2_received_request_head final {
-    std::uint32_t stream_id_{0};
-    http2_server_request_view request_{};
-};
-
-using http2_receive_metadata = std::variant<http2_received_settings,
-    http2_received_window_update, http2_received_priority, http2_received_request_head>;
-using http2_receive_observer_type = void (*)(void*, const http2_receive_metadata&) noexcept;
 
 // Read-only send-flow-control observation for a live stream. The available
 // amount is the minimum of the connection and stream windows, clamped at zero.

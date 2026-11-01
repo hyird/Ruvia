@@ -53,7 +53,8 @@ public:
     using value_type = std::variant<http2_informational_head_event, http2_message_head_record,
         http2_message_data_record, http2_message_end_record, http2_tunnel_data_record, http2_tunnel_end_event,
         http2_stream_closed_event, http2_request_unprocessed_event, http2_goaway_event, http2_push_promise_event,
-        http_priority_update, http_origin_advertisement, http_alternative_service_advertisement>;
+        http_priority_update, http_origin_advertisement, http_alternative_service_advertisement,
+        http2_received_settings, http2_received_window_update, http2_received_priority>;
 
     template <typename event_type>
         requires(!std::is_same_v<event_type, http2_event>)

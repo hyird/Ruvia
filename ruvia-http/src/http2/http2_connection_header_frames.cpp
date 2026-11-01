@@ -41,8 +41,7 @@ bool http2_connection::complete_decoded_header_block(http2_stream_state& stream,
     return true;
 }
 
-bool http2_connection::process_headers(const http2_frame_header& header_value, std::string_view payload_value,
-    http2_received_priority* received_priority) {
+bool http2_connection::process_headers(const http2_frame_header& header_value, std::string_view payload_value) {
     if (header_value.stream_id_ == 0) {
         append_goaway(http2_error_code::protocol_error, "HEADERS stream id must be nonzero");
         return false;
@@ -54,7 +53,9 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
     }
 
     std::string_view fragment;
-    switch (http2_decode_headers_payload(header_value, payload_value, fragment, received_priority)) {
+    const bool report_priority = receive_frame_metadata_ && (header_value.flags_ & http2_flag_priority) != 0;
+    http2_received_priority priority;
+    switch (http2_decode_headers_payload(header_value, payload_value, fragment, report_priority ? &priority : nullptr)) {
         case http2_frame_payload_status::decoded:
             break;
         case http2_frame_payload_status::invalid_padding:
@@ -67,7 +68,32 @@ bool http2_connection::process_headers(const http2_frame_header& header_value, s
             append_goaway(http2_error_code::frame_size_error, "HEADERS priority fields are incomplete");
             return false;
     }
+    if (!report_priority) {
+        return process_headers_fragment(header_value, fragment);
+    }
+    // RFC 9113 §6.2 priority fields are advisory metadata. Queue them ahead of
+    // every event this frame produces. A throwing frame stays retryable, and a
+    // frame rejected with a connection error before it queued anything else
+    // reports nothing.
+    reserve_event_slots(1);
+    const auto priority_event = events_.size();
+    events_.push_back(http2_event(priority));
+    bool accepted = false;
+    try {
+        accepted = process_headers_fragment(header_value, fragment);
+    } catch (...) {
+        if (events_.size() == priority_event + 1) {
+            events_.pop_back();
+        }
+        throw;
+    }
+    if (!accepted && events_.size() == priority_event + 1) {
+        events_.pop_back();
+    }
+    return accepted;
+}
 
+bool http2_connection::process_headers_fragment(const http2_frame_header& header_value, std::string_view fragment) {
     http2_stream_state* stream = nullptr;
     bool new_peer_stream = false;
     bool created_peer_stream = false;

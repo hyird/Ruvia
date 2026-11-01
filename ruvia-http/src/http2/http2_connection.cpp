@@ -46,12 +46,10 @@ static_assert(http2_drain_ping_payload.size() == 8);
 }
 }  // namespace
 
-http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push, bool receive_origin_advertisements,
-    http2_receive_observer_type receive_observer, void* receive_observer_context)
+http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push,
+    bool receive_origin_advertisements, bool receive_frame_metadata)
     : resource_(resource),
       input_(std::string_view{}, resource),
-      receive_observer_(receive_observer),
-      receive_observer_context_(receive_observer_context),
       output_(resource),
       streams_(resource),
       priorities_(resource),
@@ -68,6 +66,7 @@ http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_ro
       connection_receive_window_(static_cast<std::int32_t>(http2_local_settings::initial_window_size)) {
     enable_push_ = role == http2_role::client && enable_push;
     receive_origin_advertisements_ = role == http2_role::client && receive_origin_advertisements;
+    receive_frame_metadata_ = receive_frame_metadata;
     decoder_.set_max_dynamic_table_size(http2_local_settings::header_table_size);
 }
 
@@ -315,6 +314,10 @@ bool http2_connection::process_settings(const http2_frame_header& header_value, 
     bool settings_applied = false;
     try {
         output_.reserve_additional(http2_frame_header_bytes);
+        if (receive_frame_metadata_) {
+            // Nothing below queues another event before this frame's own.
+            reserve_event_slots(1);
+        }
         if (!apply_settings_payload(payload_value)) {
             return false;
         }
@@ -329,8 +332,9 @@ bool http2_connection::process_settings(const http2_frame_header& header_value, 
         // SETTINGS_INITIAL_WINDOW_SIZE may have opened send windows: drain deferred DATA
         // and report streams whose core-owned remainder completed.
         mark_send_window_opened();
-        if (receive_observer_ != nullptr) {
-            pending_receive_notifications_.metadata_ = http2_received_settings(payload_value);
+        if (receive_frame_metadata_) {
+            // Last, after every throwing step: the view borrows the accepted input.
+            events_.push_back(http2_event(http2_received_settings(payload_value)));
         }
         return true;
     } catch (...) {
@@ -384,10 +388,11 @@ bool http2_connection::process_priority(const http2_frame_header& header_value, 
         }
         return true;
     }
-    // RFC 9113 §6.3：已废弃的优先级树不参与协议状态或调度，观察也不新增校验。
-    if (receive_observer_ != nullptr) {
-        pending_receive_notifications_.metadata_ = http2_decode_priority_fields(header_value.stream_id_,
-            reinterpret_cast<const unsigned char*>(payload_value.data()));
+    // RFC 9113 §6.3：已废弃的优先级树不参与协议状态或调度，元数据事件也不新增校验。
+    if (receive_frame_metadata_) {
+        reserve_event_slots(1);
+        events_.push_back(http2_event(http2_decode_priority_fields(
+            header_value.stream_id_, reinterpret_cast<const unsigned char*>(payload_value.data()))));
     }
     return true;
 }
@@ -639,17 +644,8 @@ bool http2_connection::process_frame(const http2_frame_header& header_value, std
             return process_priority_update(header_value, payload_value);
         case http2_frame_type::priority:
             return process_priority(header_value, payload_value);
-        case http2_frame_type::headers: {
-            if (receive_observer_ == nullptr || (header_value.flags_ & http2_flag_priority) == 0) {
-                return process_headers(header_value, payload_value, nullptr);
-            }
-            http2_received_priority priority;
-            const bool accepted = process_headers(header_value, payload_value, &priority);
-            if (accepted) {
-                pending_receive_notifications_.metadata_ = priority;
-            }
-            return accepted;
-        }
+        case http2_frame_type::headers:
+            return process_headers(header_value, payload_value);
         case http2_frame_type::continuation:
             return process_continuation(header_value, payload_value);
         case http2_frame_type::data:
@@ -661,28 +657,6 @@ bool http2_connection::process_frame(const http2_frame_header& header_value, std
         default:
             return true;
     }
-}
-
-void http2_connection::commit_receive_notifications() noexcept {
-    if (receive_observer_ == nullptr) {
-        return;
-    }
-    if (pending_receive_notifications_.metadata_) {
-        std::visit([this](const auto& metadata) noexcept {
-            receive_observer_(receive_observer_context_, http2_receive_metadata{metadata});
-        },
-            *pending_receive_notifications_.metadata_);
-    }
-    if (pending_receive_notifications_.request_stream_) {
-        const auto stream_id = *pending_receive_notifications_.request_stream_;
-        const auto request = server_request_view(stream_id);
-        if (!request) {
-            std::terminate();
-        }
-        receive_observer_(receive_observer_context_,
-            http2_received_request_head{.stream_id_ = stream_id, .request_ = *request});
-    }
-    pending_receive_notifications_ = {};
 }
 
 bool http2_connection::consume_frames(std::string_view buffer, std::size_t& offset) {
@@ -700,12 +674,10 @@ bool http2_connection::consume_frames(std::string_view buffer, std::size_t& offs
             break;  // partial frame; wait for the next feed
         }
         const auto payload_value = buffer.substr(offset + http2_frame_header_bytes, header_value.length_);
-        pending_receive_notifications_ = {};
         if (!process_frame(header_value, payload_value)) {
             return false;
         }
         offset += http2_frame_header_bytes + header_value.length_;
-        commit_receive_notifications();
         if (local_connection_state_.fatal_failure() != nullptr) {
             break;
         }
