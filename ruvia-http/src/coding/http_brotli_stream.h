@@ -3,7 +3,10 @@
 #include <brotli/decode.h>
 #include <brotli/encode.h>
 
+#include <cstddef>
 #include <memory_resource>
+#include <string>
+#include <string_view>
 
 #include "coding/pmr_codec_allocation.h"
 
@@ -50,12 +53,11 @@ public:
     [[nodiscard]] bool initialized() const noexcept {
         return state_ != nullptr;
     }
-    [[nodiscard]] BrotliEncoderState* native() const noexcept {
-        return state_;
-    }
-    void rethrow_allocation_failure() const {
-        allocation_.rethrow_allocation_failure();
-    }
+    // Consumes the input and drains the requested operation into output. False
+    // means the total output budget was exceeded before appending a block.
+    // After false or an exception, the owner must discard/rebuild this stream.
+    [[nodiscard]] bool encode(std::string_view input, std::pmr::string& output,
+        BrotliEncoderOperation operation, std::size_t max_encoded_bytes);
 
 private:
     pmr_codec_allocation_context allocation_;

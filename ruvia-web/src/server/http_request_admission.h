@@ -191,7 +191,6 @@ private:
 enum class http_request_endpoint : std::uint8_t {
     // Rejections: answer rejection() through respond_http_request_rejection.
     rejection,
-    not_acceptable,
     // Admitted endpoints (resolved() is non-null for all but buffered).
     websocket,
     tunnel,

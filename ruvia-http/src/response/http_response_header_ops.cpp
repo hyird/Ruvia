@@ -35,31 +35,20 @@ namespace {
     }
     const auto known_bit = detail::classify_response_header_name(key);
     const auto kind = detail::classify_response_field(key, known_bit);
-    switch (kind) {
-        case detail::request_header_kind::connection: {
-            detail::http_connection_options options;
-            if (options.parse_field(value, detail::http_connection_field_role::sender) !=
-                detail::http_field_list_parse_status::ok) {
-                throw std::invalid_argument("invalid HTTP Connection header");
-            }
-            break;
-        }
-        case detail::request_header_kind::upgrade: {
-            detail::http_upgrade_protocols protocols;
-            if (protocols.parse_field(value, detail::http_field_list_role::sender) !=
-                detail::http_field_list_parse_status::ok) {
-                throw std::invalid_argument("invalid HTTP Upgrade header");
-            }
-            break;
-        }
-        case detail::request_header_kind::te:
+    detail::http_connection_options connection_options;
+    detail::http_upgrade_protocols upgrade_protocols;
+    switch (detail::parse_http_response_control_field(kind, value, connection_options, upgrade_protocols)) {
+        case detail::http_response_control_field_status::invalid_connection:
+            throw std::invalid_argument("invalid HTTP Connection header");
+        case detail::http_response_control_field_status::invalid_upgrade:
+            throw std::invalid_argument("invalid HTTP Upgrade header");
+        case detail::http_response_control_field_status::te_forbidden:
             throw std::invalid_argument("TE is not a response field");
-        default:
+        case detail::http_response_control_field_status::ok:
             break;
     }
     detail::response_field_state fields;
-    if (detail::validate_response_field(kind, value,
-            detail::http_field_list_role::sender, fields) != detail::response_field_status::ok) {
+    if (detail::validate_response_field(kind, value, fields) != detail::response_field_status::ok) {
         throw std::invalid_argument("invalid HTTP response field value");
     }
     return known_bit;

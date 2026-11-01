@@ -20,7 +20,8 @@ class worker_memory;
 
 namespace ruvia::detail {
 
-// Worker-owned HTTP/1 connection activity tracking options.
+// Worker-owned connection activity tracking options, copied from the server
+// configuration after validate_server_limits has checked every duration.
 struct connection_scanner_options final {
     std::chrono::milliseconds scan_interval_{std::chrono::seconds(1)};
     // Inactivity timeouts measured from the connection's last successful I/O.

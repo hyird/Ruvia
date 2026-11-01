@@ -177,6 +177,7 @@ private:
     [[nodiscard]] bool running_on_worker() const noexcept {
         return current_worker_dispatcher() == this && attached();
     }
+    [[nodiscard]] bool post_continuation(move_only_function<void()>& task);
     [[nodiscard]] idle_callbacks_type take_idle_callbacks_locked();
     static void notify_idle(idle_callbacks_type callbacks) noexcept;
     // Returns whether this call opened the (single) stopping batch.

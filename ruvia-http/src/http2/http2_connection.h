@@ -460,7 +460,6 @@ private:
     [[nodiscard]] bool process_rst_stream(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_push_promise(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool finish_push_promise(std::string_view block);
-    [[nodiscard]] bool process_push_continuation(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_advertisement(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_priority_update(const http2_frame_header& header, std::string_view payload);
     [[nodiscard]] bool process_priority(const http2_frame_header& header, std::string_view payload);
@@ -570,6 +569,8 @@ private:
         http2_error_code error, close_notification_type notification);
     bool close_stream(std::uint32_t stream_id, http2_stream_close_source source, http2_error_code error);
     bool close_stream_by_owner(std::uint32_t stream_id);
+    bool reset_stream(std::uint32_t stream_id, http2_error_code error,
+        close_notification_type notification = close_notification_type::emit_event);
     [[nodiscard]] bool was_closed_by_peer_reset(
         std::uint32_t stream_id, const http2_stream_state* retained_stream) const noexcept;
     void discard_deferred_stream_state(std::uint32_t stream_id);

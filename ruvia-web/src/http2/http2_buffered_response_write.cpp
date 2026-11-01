@@ -1,7 +1,5 @@
 #include "http2/http2_buffered_response_write.h"
 
-#include <algorithm>
-#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -51,7 +49,7 @@ task<http2_buffered_response_writer::data_write_result_type> http2_buffered_resp
     if (signal != nullptr && signal->terminated()) {
         co_return data_write_result_type::failed;
     }
-    const auto status = co_await write_http2_stream_data_chunk(
+    const auto status = co_await write_http2_stream_data(
         connection_, stream_id, signal, write_signal_, output_budget_, chunk, end_stream);
     switch (status) {
         case http2_stream_data_write_status::completed:
@@ -113,8 +111,6 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
         co_return committed_status;
     }
 
-    // Bound the core-owned window-blocked remainder to one frame-sized slice.
-    constexpr std::size_t slice_bytes = http2_data_output_credit_bytes;
     if (response.file_body() || response.has_multipart_file_body()) {
         response_file_source source(response, file_io_);
         for (;;) {
@@ -131,37 +127,30 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
                 co_return fail_after_commit();
             }
             const auto bytes = chunk.bytes();
-            for (std::size_t offset = 0; offset < bytes.size();) {
+            if (!bytes.empty()) {
                 if (connection_.stream_aborted(stream_id)) {
                     co_return committed_status;
                 }
-                const auto size = std::min<std::size_t>(slice_bytes, bytes.size() - offset);
-                const auto result_value = co_await write_data(stream_id, bytes.substr(offset, size),
-                    http2_end_stream::keep_open);
+                const auto result_value = co_await write_data(stream_id, bytes, http2_end_stream::keep_open);
                 if (result_value == data_write_result_type::peer_aborted) {
                     co_return committed_status;
                 }
                 if (result_value == data_write_result_type::failed) {
                     co_return fail_after_commit();
                 }
-                offset += size;
             }
         }
     }
 
     const auto body = response.body_bytes();
-    std::size_t offset = 0;
-    while (offset < body.size()) {
-        const auto size = std::min<std::size_t>(slice_bytes, body.size() - offset);
-        const auto result_value = co_await write_data(stream_id, body.substr(offset, size),
-            offset + size == body.size() ? http2_end_stream::end_stream : http2_end_stream::keep_open);
+    if (!body.empty()) {
+        const auto result_value = co_await write_data(stream_id, body, http2_end_stream::end_stream);
         if (result_value == data_write_result_type::peer_aborted) {
             co_return committed_status;
         }
         if (result_value == data_write_result_type::failed) {
             co_return fail_after_commit();
         }
-        offset += size;
     }
 
     // An empty write plan committed END_STREAM with the response head above.

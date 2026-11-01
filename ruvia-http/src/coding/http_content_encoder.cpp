@@ -1,12 +1,11 @@
 #include "ruvia/http/http_content_encoder.h"
 
-#include <brotli/encode.h>
 #include <zlib.h>
 #include <zstd.h>
 
 #include <array>
 #include <cstddef>
-#include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <utility>
 #include <variant>
@@ -100,35 +99,7 @@ void encode_stream(detail::brotli_encoder_stream& encoder, std::string_view inpu
     bool flush, bool finish_value) {
     const auto operation = finish_value ? BROTLI_OPERATION_FINISH : flush ? BROTLI_OPERATION_FLUSH
                                                                           : BROTLI_OPERATION_PROCESS;
-    auto* state_value = encoder.native();
-    std::size_t available_input = input.size();
-    const auto* next_input = reinterpret_cast<const std::uint8_t*>(input.data());
-    for (;;) {
-        std::size_t available_output = 0;
-        const auto before_input = available_input;
-        if (BrotliEncoderCompressStream(state_value, operation, &available_input, &next_input,
-                &available_output, nullptr, nullptr) != BROTLI_TRUE) {
-            fail_encoding(encoder, "Brotli content encoding failed");
-        }
-        std::size_t produced = 0;
-        const auto* bytes_value = BrotliEncoderTakeOutput(state_value, &produced);
-        // Consume the borrowed block before the next encoder call.
-        if (produced != 0) {
-            output.append(reinterpret_cast<const char*>(bytes_value), produced);
-        }
-        if (operation == BROTLI_OPERATION_FINISH && BrotliEncoderIsFinished(state_value) == BROTLI_TRUE) {
-            return;
-        }
-        if (available_input == 0 && BrotliEncoderHasMoreOutput(state_value) != BROTLI_TRUE) {
-            if (operation == BROTLI_OPERATION_FINISH) {
-                fail_encoding(encoder, "Brotli content encoder did not finish");
-            }
-            return;
-        }
-        if (produced == 0 && available_input == before_input) {
-            fail_encoding(encoder, "Brotli content encoder made no progress");
-        }
-    }
+    static_cast<void>(encoder.encode(input, output, operation, std::numeric_limits<std::size_t>::max()));
 }
 
 void encode_stream(detail::zstd_encoder_stream& encoder, std::string_view input, std::pmr::string& output,

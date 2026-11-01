@@ -360,11 +360,15 @@ bool http2_connection::process_continuation(
         return false;
     }
     const auto kind = header_continuation_.kind();
-    if (kind == http2_header_block_kind::push_promise) {
-        return process_push_continuation(header_value, payload_value);
-    }
     http2_stream_state* stream = nullptr;
-    if (kind == http2_header_block_kind::discarded) {
+    if (kind == http2_header_block_kind::push_promise) {
+        if (!push_header_stream_) {
+            append_goaway(http2_error_code::protocol_error, "missing push continuation state");
+            push_reject_connected_tunnel_ = false;
+            return false;
+        }
+        stream = &*push_header_stream_;
+    } else if (kind == http2_header_block_kind::discarded) {
         if (!discarded_header_stream_ || discarded_header_stream_->id() != header_value.stream_id_) {
             append_goaway(http2_error_code::protocol_error, "missing discarded CONTINUATION state");
             return false;
@@ -387,11 +391,24 @@ bool http2_connection::process_continuation(
             // The accumulated HEADERS+CONTINUATION block overflowed the buffer cap; the
             // partial block cannot be decoded, so skipping it would desync HPACK for the
             // whole connection -- COMPRESSION_ERROR (RFC 9113 §4.3), not a stream reset.
-            append_goaway(http2_error_code::compression_error, "field block not decompressed");
+            append_goaway(http2_error_code::compression_error,
+                kind == http2_header_block_kind::push_promise
+                    ? "push field block exceeds limit"
+                    : "field block not decompressed");
+            if (kind == http2_header_block_kind::push_promise) {
+                push_reject_connected_tunnel_ = false;
+            }
             return false;
         }
         (void)header_continuation_.record_continuation_frame();
         if ((header_value.flags_ & http2_flag_end_headers) != 0) {
+            if (kind == http2_header_block_kind::push_promise) {
+                const auto result = finish_push_promise(stream->remote_header_block());
+                push_header_stream_.reset();
+                push_reject_connected_tunnel_ = false;
+                header_continuation_.reset();
+                return result;
+            }
             const auto completed_kind = header_continuation_.finish_kind();
             if (completed_kind == http2_header_block_kind::discarded) {
                 return finish_discarded_header_block(stream->remote_header_block());

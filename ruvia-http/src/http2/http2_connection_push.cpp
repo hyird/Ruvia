@@ -66,6 +66,7 @@ bool http2_connection::process_push_promise(const http2_frame_header& header_val
             // compressed storage. Published promise metadata owns its decoded bytes.
             const auto result_value = finish_push_promise(block);
             push_header_stream_.reset();
+            push_reject_connected_tunnel_ = false;
             return result_value;
         }
         header_continuation_.start(header_value.stream_id_, http2_header_block_kind::push_promise);
@@ -77,41 +78,8 @@ bool http2_connection::process_push_promise(const http2_frame_header& header_val
     }
 }
 
-bool http2_connection::process_push_continuation(const http2_frame_header& header_value, std::string_view payload_value) {
-    if (!push_header_stream_) {
-        push_reject_connected_tunnel_ = false;
-        append_goaway(http2_error_code::protocol_error, "missing push continuation state");
-        return false;
-    }
-    const auto checkpoint = header_continuation_.checkpoint();
-    const auto bytes_value = push_header_stream_->remote_header_block().size();
-    try {
-        if (!http2_append_header_block(*push_header_stream_, payload_value)) {
-            push_reject_connected_tunnel_ = false;
-            append_goaway(http2_error_code::compression_error, "push field block exceeds limit");
-            return false;
-        }
-        (void)header_continuation_.record_continuation_frame();
-        if ((header_value.flags_ & http2_flag_end_headers) != 0) {
-            const auto result_value = finish_push_promise(push_header_stream_->remote_header_block());
-            push_header_stream_.reset();
-            header_continuation_.reset();
-            return result_value;
-        }
-        return true;
-    } catch (...) {
-        if (push_header_stream_) {
-            push_header_stream_->remote_header_block().resize(bytes_value);
-        }
-        header_continuation_.restore(checkpoint);
-        throw;
-    }
-}
-
 bool http2_connection::finish_push_promise(std::string_view block) {
     auto& scratch = *push_header_stream_;
-    const bool reject_connected_tunnel = push_reject_connected_tunnel_;
-    push_reject_connected_tunnel_ = false;
     // PUSH_PROMISE represents a complete request without a request body.
     (void)scratch.record_remote_head_end_stream();
     http2_stream_header_decode_transaction stream_transaction{scratch, true};
@@ -121,7 +89,7 @@ bool http2_connection::finish_push_promise(std::string_view block) {
         append_goaway(http2_error_code::compression_error, "push field block decompression failed");
         return false;
     }
-    if (reject_connected_tunnel) {
+    if (push_reject_connected_tunnel_) {
         // RFC 9113 section 8.5: on a connected stream only DATA, RST_STREAM,
         // WINDOW_UPDATE and PRIORITY are allowed; any other frame is a stream
         // error. The block still had to be decoded so HPACK stays synchronized,

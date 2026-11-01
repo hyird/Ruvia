@@ -624,10 +624,7 @@ template <typename driver_type>
 task<std::optional<db_row>> db_pool<driver_type>::read_stream_row(std::size_t slot, void* result,
     std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_options& options) {
-    if (slot >= slots_.size()) {
-        co_return std::nullopt;
-    }
-    co_return co_await driver_type::read_stream_row(*this, slot, result, fields, column_names, resource, options);
+    return driver_type::read_stream_row(*this, slot, result, fields, column_names, resource, options);
 }
 
 template <typename driver_type>

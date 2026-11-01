@@ -1,5 +1,4 @@
 #include <brotli/decode.h>
-#include <brotli/encode.h>
 
 #include <cstddef>
 #include <utility>
@@ -86,36 +85,10 @@ std::optional<std::pmr::string> encode_brotli_content(
     brotli_encoder_stream& encoder, std::string_view input,
     std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
     std::pmr::string output("", http_pmr_resource_or_default(output_resource));
-    auto* state_value = encoder.native();
-
-    std::size_t available_input = input.size();
-    const auto* next_input = reinterpret_cast<const std::uint8_t*>(input.data());
-    for (;;) {
-        const auto before_input = available_input;
-        std::size_t available_output = 0;
-        const auto compressed = BrotliEncoderCompressStream(state_value, BROTLI_OPERATION_FINISH,
-            &available_input, &next_input, &available_output, nullptr, nullptr);
-        encoder.rethrow_allocation_failure();
-        if (compressed != BROTLI_TRUE) {
-            throw http_content_codec_error("brotli encoding failed");
-        }
-        std::size_t produced = 0;
-        const auto* bytes_value = BrotliEncoderTakeOutput(state_value, &produced);
-        if (output.size() > max_encoded_bytes || produced > max_encoded_bytes - output.size()) {
-            return std::nullopt;
-        }
-        // The borrowed block expires on the next encoder call. Copy it directly
-        // into the result before checking or advancing the encoder state.
-        if (produced != 0) {
-            output.append(reinterpret_cast<const char*>(bytes_value), produced);
-        }
-        if (BrotliEncoderIsFinished(state_value) == BROTLI_TRUE) {
-            return output;
-        }
-        if (produced == 0 && available_input == before_input) {
-            throw http_content_codec_error("brotli encoder made no progress");
-        }
+    if (!encoder.encode(input, output, BROTLI_OPERATION_FINISH, max_encoded_bytes)) {
+        return std::nullopt;
     }
+    return output;
 }
 
 std::optional<std::pmr::string> encode_brotli_content(

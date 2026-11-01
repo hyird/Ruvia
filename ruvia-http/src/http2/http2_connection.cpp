@@ -375,17 +375,7 @@ bool http2_connection::process_priority(const http2_frame_header& header_value, 
         // RFC 9113 section 6.3 makes malformed PRIORITY length a stream error,
         // unlike most fixed-size connection-control frames. Do not terminate
         // unrelated multiplexed streams for one bad advisory frame.
-        const auto output_checkpoint = output_.checkpoint();
-        try {
-            output_.append_rst_stream(header_value.stream_id_, http2_error_code::frame_size_error);
-            if (stream != nullptr) {
-                close_stream(header_value.stream_id_, http2_stream_close_source::local,
-                    http2_error_code::frame_size_error);
-            }
-        } catch (...) {
-            output_.rollback_to(output_checkpoint);
-            throw;
-        }
+        reset_stream(header_value.stream_id_, http2_error_code::frame_size_error);
         return true;
     }
     // RFC 9113 §6.3：已废弃的优先级树不参与协议状态或调度，元数据事件也不新增校验。

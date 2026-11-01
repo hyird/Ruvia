@@ -52,7 +52,8 @@ using http1_client_response_head_parse_result_type =
 using http1_client_response_planning_result_type =
     std::variant<http1_client_response_plan, http1_client_response_parse_error>;
 
-// Parse the status line and header fields of one complete head section.
+// Parse one complete head section, retaining each line's CRLF but excluding
+// the final empty line. Response obs-fold has already been unfolded.
 [[nodiscard]] http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
     std::string_view head_section, const http1_client_exchange_state& exchange_state,
     std::pmr::memory_resource* resource);

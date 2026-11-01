@@ -8,7 +8,6 @@
 
 #include "client/http_client_access.h"
 #include "coding/http_content_length.h"
-#include "field/response_field_validation.h"
 #include "http2/http2_connection.h"
 #include "http2/http2_header_block.h"
 #include "http2/http2_header_rules.h"
@@ -30,7 +29,6 @@ struct http2_response_decode_context final {
           informational_fields_(resource) {}
 
     http2_header_decode_context base_;
-    response_field_state fields_;
     std::pmr::vector<http_header> informational_fields_;
     std::optional<http_received_status> status_;
     http_response_content_semantics content_semantics_{http_response_content_semantics::with_content};
@@ -76,10 +74,6 @@ bool http2_on_decoded_response_header(void* target, std::string_view name, std::
     const auto kind = classify_request_header(name);
     const bool successful_connect =
         context_value->content_semantics_ == http_response_content_semantics::connect_tunnel;
-    if (validate_response_field(kind, value, http_field_list_role::recipient, context_value->fields_) !=
-        response_field_status::ok) {
-        return false;
-    }
     // RFC 9110 9.3.6: successful CONNECT ignores Content-Length semantics,
     // including invalid or unrepresentable numerals. Retain the generic-byte-valid
     // field so extension validators (RFC 9297 section 3.2) can still inspect it.

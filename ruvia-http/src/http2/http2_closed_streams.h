@@ -72,20 +72,6 @@ public:
         return false;
     }
 
-    [[nodiscard]] bool claim_late_local_reset(std::uint32_t stream_id) noexcept {
-        for (std::size_t i = 0; i < size_; ++i) {
-            auto& record = records_[i];
-            if (record.id_ == stream_id) {
-                if (record.source_ != http2_stream_close_source::local || record.reset_sent_) {
-                    return false;
-                }
-                record.reset_sent_ = true;
-                return true;
-            }
-        }
-        return false;
-    }
-
 private:
     static constexpr std::size_t record_limit =
         static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 16;

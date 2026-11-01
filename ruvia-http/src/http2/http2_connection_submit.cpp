@@ -577,15 +577,12 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
         if (error == http2_error_code::protocol_error &&
             close_source == http2_stream_close_source::local &&
             local_connection_state_.fatal_failure() == nullptr &&
-            closed_streams_.claim_late_local_reset(stream_id)) {
-            const auto output_checkpoint = output_.checkpoint();
-            try {
-                output_.append_rst_stream(stream_id, error);
-                return http2_submit_status::accepted;
-            } catch (...) {
-                output_.rollback_to(output_checkpoint);
-                throw;
-            }
+            !closed_streams_.local_reset_sent(stream_id)) {
+            // append_rst_stream publishes one complete frame or leaves output
+            // unchanged. Consume the one-shot late reset only after it succeeds.
+            output_.append_rst_stream(stream_id, error);
+            closed_streams_.remember(stream_id, http2_stream_close_source::local, true);
+            return http2_submit_status::accepted;
         }
         return http2_submit_status::closed;
     }
@@ -607,11 +604,18 @@ http2_submit_status http2_connection::submit_reset(std::uint32_t stream_id, http
         (http2_stream_is_closed(*stream) && error != http2_error_code::protocol_error)) {
         return http2_submit_status::invalid_state;
     }
+    return reset_stream(stream_id, error, close_notification_type::owner_already_knows)
+               ? http2_submit_status::accepted
+               : http2_submit_status::closed;
+}
+
+bool http2_connection::reset_stream(std::uint32_t stream_id, http2_error_code error,
+    close_notification_type notification) {
     const auto output_checkpoint = output_.checkpoint();
     try {
         output_.append_rst_stream(stream_id, error);
-        return close_stream_by_owner(stream_id) ? http2_submit_status::accepted
-                                                : http2_submit_status::closed;
+        // A reset returns no send credit, so it cannot unblock other streams.
+        return close_stream_impl(stream_id, http2_stream_close_source::local, error, notification);
     } catch (...) {
         output_.rollback_to(output_checkpoint);
         throw;

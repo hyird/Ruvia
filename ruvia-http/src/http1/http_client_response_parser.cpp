@@ -118,9 +118,9 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
         return fail(http1_client_response_parse_error::header_too_large);
     }
 
-    // Remove the terminal CRLF CRLF. The last field line then has the same
-    // shape as every preceding line except that it has no trailing delimiter.
-    auto head_section = buffer.substr(0, header_bytes - 4);
+    // Exclude only the final empty line: every field keeps its CRLF, matching
+    // the request scanner even when the head contains no fields.
+    auto head_section = buffer.substr(0, header_bytes - 2);
     std::optional<std::pmr::string> unfolded_head;
     const auto status_line_end = head_section.find("\r\n");
     if (status_line_end != std::string_view::npos) {

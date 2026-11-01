@@ -241,7 +241,7 @@ void http_response::apply_encoded_representation(
     content_encoding = http_trim_ows(content_encoding);
     detail::response_field_state fields;
     if (detail::validate_response_field(detail::request_header_kind::content_encoding, content_encoding,
-            detail::http_field_list_role::sender, fields) != detail::response_field_status::ok) {
+            fields) != detail::response_field_status::ok) {
         throw std::invalid_argument("invalid HTTP Content-Encoding header");
     }
     const auto current_etag = headers_.known_header_value(detail::response_header_etag);

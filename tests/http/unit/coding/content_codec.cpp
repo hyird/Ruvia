@@ -775,6 +775,37 @@ RUVIA_TEST(http_content_encoder_failure_is_terminal) {
     RUVIA_CHECK(ruvia::testing::throws_on([&] { encoder.finish(output); }));
     RUVIA_CHECK(ruvia::testing::throws_on([&] { encoder.write("retry", output); }));
 }
+
+RUVIA_TEST(http_content_encoder_brotli_reset_recovers_after_output_allocation_failure) {
+    const std::string input(4096, 'b');
+    for (const bool fail_on_finish : {false, true}) {
+        http_content_encoder encoder(http_content_coding::brotli, std::pmr::get_default_resource());
+        std::pmr::string output(std::pmr::null_memory_resource());
+        // Fill inline storage so even a one-byte final block must allocate.
+        output.resize(output.capacity(), 'p');
+        bool allocation_failed = false;
+        try {
+            if (fail_on_finish) {
+                std::pmr::string pending;
+                encoder.write(input, pending);
+                encoder.finish(output);
+            } else {
+                encoder.write(input, output, true);
+            }
+        } catch (const std::bad_alloc&) {
+            allocation_failed = true;
+        }
+        RUVIA_CHECK(allocation_failed);
+        std::pmr::string recovered;
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { encoder.write("retry", recovered); }));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { encoder.finish(recovered); }));
+        RUVIA_CHECK(recovered.empty());
+        encoder.reset();
+        encoder.write(input, recovered, true);
+        encoder.finish(recovered);
+        RUVIA_CHECK_EQ(decoded(http_content_coding::brotli, recovered, input.size()), input);
+    }
+}
 #endif  // !_MSC_VER
 
 RUVIA_TEST(http_content_encoder_flushes_each_incremental_chunk) {

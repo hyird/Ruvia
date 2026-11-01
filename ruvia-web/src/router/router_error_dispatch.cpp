@@ -140,11 +140,11 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
     }
 
     auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
-    auto terminal = [this, error, error_handler](context& terminal_context) -> task<http_response> {
+    auto terminal = [error, error_handler](context& terminal_context) -> task<http_response> {
         if (error_handler == nullptr) {
             co_return make_default_error_response(terminal_context.arena(), error);
         }
-        co_return co_await handle_error(terminal_context, error, error_handler);
+        co_return co_await invoke_error_handler(terminal_context, error, error_handler);
     };
     // Drivers call this to answer a rejection or a recovery outcome, so it must
     // always produce a response: a failure escaping the wrapping middleware
@@ -181,12 +181,6 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
 
     auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
     co_return co_await handle_exception(context_value, exception, error_handler);
-}
-
-task<http_response> detail::route_table::handle_error(
-    context& context_value, http_error_info error, http_error_handler_ref error_handler) const {
-    auto response = co_await invoke_error_handler(context_value, error, error_handler);
-    co_return response;
 }
 
 task<http_response> detail::route_table::handle_not_found(
@@ -234,7 +228,7 @@ task<http_response> detail::route_table::handle_exception(context& context_value
     const auto error_info = classify_exception(context_value.arena(), exception);
     report_unexpected_failure(error_info, exception, error_handler);
 
-    auto response = co_await handle_error(context_value, error_info.error_.info(), error_handler);
+    auto response = co_await invoke_error_handler(context_value, error_info.error_.info(), error_handler);
     apply_exception_response_metadata(response, exception);
     co_return response;
 }

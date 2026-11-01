@@ -197,6 +197,7 @@ while (conn.wants_write()) {
 - **服务端 `CONNECT` 乐观数据**：接受/拒绝前收到的 `DATA` 以 `tunnel_data()` 事件发布，其流控凭证由所有者持有到接受隧道后消费；`submit_connect_response_head()` 接受后再发布 `tunnel_end()`（若请求半边已结束）。非 2xx 拒绝后到达的 `DATA` 丢弃并归还流控额度。RFC 8441 `:protocol = websocket` 的提前 `DATA` 同样保留（RFC 6455 §4.1 的等待规则只约束客户端）。非 2xx 拒绝响应后服务端以 `RST_STREAM(NO_ERROR)` 结束流。已建立隧道上的未知扩展帧被丢弃（RFC 9113 §5.5），`ALTSVC`/`ORIGIN` 帧也被忽略（RFC 7838 §4、RFC 8336 §2.1）。
 - **客户端 `REFUSED_STREAM`**：客户端在收到任何响应头（含 `1xx` 临时响应与最终响应头）前收到 `RST_STREAM(REFUSED_STREAM)` 时发布 `request_unprocessed()` 而不是 `stream_closed()`（RFC 9113 §8.7：请求未被处理，可安全重试），连接保持可用；`http_client` 对无请求体的请求重试一次。
 - **Server Push 并发**：`submit_push_request()` 在已打开的服务端推送流（预留状态不计入，RFC 9113 §5.1.2）达到对端 `SETTINGS_MAX_CONCURRENT_STREAMS` 时返回 `http2_push_submit_error::stream_limit`，不发送 `PUSH_PROMISE`（RFC 9113 §8.4）。
+- **分配失败与重试**：`submit_reset()` 的本地 reset 标记只在完整 `RST_STREAM` 入队后提交；因分配失败抛出时，不消耗已关闭流上仍允许的一次 late reset，可在资源恢复后对同一流重试。未完成首部块的 `CONTINUATION` 处理若因分配失败回滚，保留此前的片段与拒绝判定；对同一片段重试不会把本应拒绝的隧道上 `PUSH_PROMISE` 发布为成功事件。这是本库的异常恢复契约，不表示任意 `feed()` 调用或已发布事件都具备整体回滚保证。
 - **`SETTINGS_ENABLE_CONNECT_PROTOCOL`**：服务端收到该参数不产生任何影响（RFC 8441 §3）；客户端仍校验服务端发送的取值与 1→0 回退。
 
 ---

@@ -2,6 +2,8 @@
 
 #include <cstdint>
 
+#include "ruvia/http/http_content_codec.h"
+
 namespace ruvia::detail {
 
 namespace {
@@ -39,6 +41,42 @@ brotli_encoder_stream::brotli_encoder_stream(std::pmr::memory_resource* resource
 brotli_encoder_stream::~brotli_encoder_stream() {
     if (state_ != nullptr) {
         BrotliEncoderDestroyInstance(state_);
+    }
+}
+
+bool brotli_encoder_stream::encode(std::string_view input, std::pmr::string& output,
+    BrotliEncoderOperation operation, std::size_t max_encoded_bytes) {
+    std::size_t available_input = input.size();
+    const auto* next_input = reinterpret_cast<const std::uint8_t*>(input.data());
+    for (;;) {
+        const auto before_input = available_input;
+        std::size_t available_output = 0;
+        const auto compressed = BrotliEncoderCompressStream(state_, operation,
+            &available_input, &next_input, &available_output, nullptr, nullptr);
+        allocation_.rethrow_allocation_failure();
+        if (compressed != BROTLI_TRUE) {
+            throw http_content_codec_error("brotli encoding failed");
+        }
+        std::size_t produced = 0;
+        const auto* bytes_value = BrotliEncoderTakeOutput(state_, &produced);
+        if (output.size() > max_encoded_bytes || produced > max_encoded_bytes - output.size()) {
+            return false;
+        }
+        // Consume the borrowed block directly into the caller's output before
+        // any subsequent encoder call can invalidate it.
+        if (produced != 0) {
+            output.append(reinterpret_cast<const char*>(bytes_value), produced);
+        }
+        if (operation == BROTLI_OPERATION_FINISH) {
+            if (BrotliEncoderIsFinished(state_) == BROTLI_TRUE) {
+                return true;
+            }
+        } else if (available_input == 0 && BrotliEncoderHasMoreOutput(state_) != BROTLI_TRUE) {
+            return true;
+        }
+        if (produced == 0 && available_input == before_input) {
+            throw http_content_codec_error("brotli encoder made no progress");
+        }
     }
 }
 

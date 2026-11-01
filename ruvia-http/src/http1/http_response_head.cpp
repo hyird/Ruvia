@@ -58,16 +58,12 @@ inline constexpr std::string_view content_length_name = "Content-Length";
 [[nodiscard]] bool is_valid_http1_emitted_response_header(std::string_view name, std::string_view value,
     std::uint32_t known_bit, bool trailer_header_allowed, http_connection_options& connection_options,
     http_upgrade_protocols& upgrade_protocols) noexcept {
-    switch (classify_response_field(name, known_bit)) {
-        case request_header_kind::connection:
-            return connection_options.parse_field(value, http_connection_field_role::sender) == http_field_list_parse_status::ok;
-        case request_header_kind::trailer:
-            return trailer_header_allowed || http_trim_ows(value).empty();
-        case request_header_kind::upgrade:
-            return upgrade_protocols.parse_field(value, http_field_list_role::sender) == http_field_list_parse_status::ok;
-        default:
-            return true;
+    const auto kind = classify_response_field(name, known_bit);
+    if (kind == request_header_kind::trailer) {
+        return trailer_header_allowed || http_trim_ows(value).empty();
     }
+    return parse_http_response_control_field(kind, value, connection_options, upgrade_protocols) ==
+           http_response_control_field_status::ok;
 }
 
 void emit_response_head(const http_response& response, http_raw_wire_sink& sink_value, http_status_code response_status,
@@ -218,7 +214,7 @@ void append_http1_response_head(
         }
         charge(head_budget.add_field(header.name(), header.value()));
     }
-    if (upgrade_protocols.has_field() && !connection_options.upgrade()) {
+    if (!detail::http_response_upgrade_pair_valid(connection_options, upgrade_protocols)) {
         throw http1_response_head_error("HTTP Upgrade response requires Connection: Upgrade");
     }
     if ((known_bits & detail::response_header_date) == 0 && !date_header.empty()) {

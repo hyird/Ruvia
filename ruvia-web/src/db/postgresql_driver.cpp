@@ -733,6 +733,9 @@ task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size
 task<std::optional<db_row>> postgresql_driver::read_stream_row(pool_type& pool, std::size_t index, void*,
     std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_options& options) {
+    if (index >= pool.config().pool_size_per_worker_) {
+        co_return std::nullopt;
+    }
     auto* connection = pool.slot(index).connection_;
     auto cancellation = pool.cancel_on_stop(index, options.stop_token_);
     bool slot_released = false;

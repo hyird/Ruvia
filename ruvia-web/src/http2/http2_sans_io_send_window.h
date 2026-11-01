@@ -35,12 +35,9 @@ enum class http2_stream_data_write_status : std::uint8_t {
     content_length_incomplete,
 };
 
-[[nodiscard]] task<http2_stream_data_write_status> write_http2_stream_data_chunk(
-    ruvia::http2_connection& connection, std::uint32_t stream_id,
-    http2_sans_io_stream_signal* signal, worker_signal& write_signal,
-    http2_data_output_budget& output_budget, std::string_view chunk,
-    http2_end_stream end_stream, const bool* aborted = nullptr);
-
+// Splits caller-owned bytes into credit-sized submissions. Empty input still
+// submits one DATA frame; only the last slice receives the requested ending.
+// The caller keeps the bytes alive until the task completes.
 [[nodiscard]] task<http2_stream_data_write_status> write_http2_stream_data(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
     http2_sans_io_stream_signal* signal, worker_signal& write_signal,

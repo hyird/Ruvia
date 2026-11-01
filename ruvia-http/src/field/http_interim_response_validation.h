@@ -48,7 +48,7 @@ public:
             default:
                 break;
         }
-        switch (validate_response_field(kind, value, http_field_list_role::sender, fields_)) {
+        switch (validate_response_field(kind, value, fields_)) {
             case response_field_status::ok:
                 break;
             case response_field_status::invalid:

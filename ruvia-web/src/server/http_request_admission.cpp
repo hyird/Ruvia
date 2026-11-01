@@ -138,8 +138,8 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     admission.body_limit_ = http_request_body_limit(input.resolution_,
         endpoint != nullptr ? endpoint->request_body_mode() : request_body_mode::buffered, policy);
 
-    const auto reject = [&](http_request_endpoint kind, http_request_rejection rejection) {
-        admission.endpoint_ = kind;
+    const auto reject = [&](http_request_rejection rejection) {
+        admission.endpoint_ = http_request_endpoint::rejection;
         admission.rejection_ = rejection;
         return std::move(admission);
     };
@@ -147,9 +147,8 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // Before any expectation, limit or endpoint decision: a request this
     // connection cannot carry is not this server's to evaluate.
     if (policy.verify_target_origin_ && !connection_carries_target(request, services)) {
-        return reject(http_request_endpoint::rejection,
-            http_request_rejection::error(http_error_info(
-                {.status_ = http_status::misdirected_request, .message_ = "misdirected request"})));
+        return reject(http_request_rejection::error(http_error_info(
+            {.status_ = http_status::misdirected_request, .message_ = "misdirected request"})));
     }
 
     // Expect extensions are valid HTTP syntax. The protocol reports the
@@ -157,21 +156,19 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // RFC 9110-permitted 417 before reading request content.
     if (input.expectation_ != nullptr &&
         *input.expectation_ == http_server_expectation_plan::reject_unsupported) {
-        return reject(http_request_endpoint::rejection,
-            http_request_rejection::error(
-                copy_http_protocol_error_info(input.resource_, http_unsupported_expectation_error())));
+        return reject(http_request_rejection::error(
+            copy_http_protocol_error_info(input.resource_, http_unsupported_expectation_error())));
     }
     if (policy.apply_rate_limit_) {
         if (const auto rejection = decide_request_rate_limit(admission.services_.rate_limiter(), client_address)) {
-            return reject(http_request_endpoint::rejection, http_request_rejection::rate_limited(*rejection));
+            return reject(http_request_rejection::rate_limited(*rejection));
         }
     }
     // Content already in hand (buffered bodies and subrequests) is held
     // to the same ceiling a streaming protocol enforces while reading.
     if (admission.body_limit_.exceeds(request.body_bytes().size())) {
-        return reject(http_request_endpoint::rejection,
-            http_request_rejection::error(
-                copy_http_protocol_error_info(input.resource_, http_request_body_protocol_error(http_request_body_failure::too_large))));
+        return reject(http_request_rejection::error(
+            copy_http_protocol_error_info(input.resource_, http_request_body_protocol_error(http_request_body_failure::too_large))));
     }
     if (endpoint == nullptr) {
         admission.endpoint_ = http_request_endpoint::buffered;
@@ -180,9 +177,8 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     if (const auto* tunnel = endpoint->tunnel()) {
         admission.udp_tunnel_ = tunnel->protocol() == "connect-udp";
         if (admission.udp_tunnel_ && validate_http_connect_udp_request(request).has_value()) {
-            return reject(http_request_endpoint::rejection,
-                http_request_rejection::error(http_error_info(
-                    {.status_ = http_status::bad_request, .message_ = "invalid CONNECT-UDP request head"})));
+            return reject(http_request_rejection::error(http_error_info(
+                {.status_ = http_status::bad_request, .message_ = "invalid CONNECT-UDP request head"})));
         }
         admission.endpoint_ = http_request_endpoint::tunnel;
         return admission;

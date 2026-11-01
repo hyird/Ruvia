@@ -185,6 +185,16 @@ void worker_dispatcher::release_abandoned_node(std::size_t index) noexcept {
 }
 
 void worker_dispatcher::defer(move_only_function<void()> task_value) {
+    if (!post_continuation(task_value)) {
+        throw std::runtime_error("worker execution context is detached");
+    }
+}
+
+bool worker_dispatcher::defer_if_attached(move_only_function<void()> task_value) {
+    return post_continuation(task_value);
+}
+
+bool worker_dispatcher::post_continuation(move_only_function<void()>& task_value) {
     if (!task_value) {
         throw std::invalid_argument("worker defer requires a callable task");
     }
@@ -192,25 +202,10 @@ void worker_dispatcher::defer(move_only_function<void()> task_value) {
     // only runs the task, and the io_context it is queued on outlives it.
     if (running_on_worker()) {
         asio::post(io_context_, std::move(task_value));
-        return;
+        return true;
     }
     // Off the worker, the mutex orders this post before detach_context(),
     // after which the context may be destroyed.
-    std::lock_guard lock(mutex_);
-    if (!context_attached_) {
-        throw std::runtime_error("worker execution context is detached");
-    }
-    asio::post(io_context_, std::move(task_value));
-}
-
-bool worker_dispatcher::defer_if_attached(move_only_function<void()> task_value) {
-    if (!task_value) {
-        throw std::invalid_argument("worker defer requires a callable task");
-    }
-    if (running_on_worker()) {
-        asio::post(io_context_, std::move(task_value));
-        return true;
-    }
     std::lock_guard lock(mutex_);
     if (!context_attached_) {
         return false;

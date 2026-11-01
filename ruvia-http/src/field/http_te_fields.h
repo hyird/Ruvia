@@ -8,7 +8,6 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_coding.h"
 
-#include "coding/http_transfer_encoding.h"
 #include "field/http_quality_value.h"
 
 namespace ruvia::detail {
@@ -20,71 +19,49 @@ enum class http_te_field_validation_mode : std::uint8_t { recipient,
     return http_is_gzip_coding_token(coding) || http_ascii_equals_ignore_case(coding, "deflate");
 }
 
-// The weight of a t-coding (RFC 9110 section 10.1.4) is validated in both
-// modes. A recipient accepts any other syntactically valid transfer-parameter:
-// it never applies a TE-listed coding, so parameter semantics are irrelevant.
-// A client advertises only the codings it can decode, without parameters.
-[[nodiscard]] inline bool http_te_parameters_are_valid(
-    std::string_view item, http_te_field_validation_mode mode) noexcept {
-    auto start = http_find_unquoted_delimiter(item, 0, ';');
-    if (start >= item.size()) {
-        return true;
-    }
-
-    bool quality_seen = false;
-    ++start;
-    while (start <= item.size()) {
-        const auto end = start + http_find_unquoted_delimiter(item.substr(start), 0, ';');
-        const auto parameter = http_trim_ows(item.substr(start, end - start));
-        const auto equals = parameter.find('=');
-        if (equals == std::string_view::npos) {
-            return false;
-        }
-
-        const auto raw_name = parameter.substr(0, equals);
-        const auto raw_value = parameter.substr(equals + 1);
-        const auto name = http_trim_ows(raw_name);
-        const auto value = http_trim_ows(raw_value);
-        if (http_ascii_equals_ignore_case(name, "q")) {
-            if (quality_seen || raw_name != name || raw_value != value ||
-                http_parse_quality_value(value) < 0) {
-                return false;
-            }
-            quality_seen = true;
-        } else if (mode == http_te_field_validation_mode::client_capability) {
-            return false;
-        }
-
-        if (end >= item.size()) {
-            return true;
-        }
-        start = end + 1;
-    }
-
-    return true;
-}
-
 [[nodiscard]] inline bool is_valid_http_te_field_item(
     std::string_view item, http_te_field_validation_mode mode) noexcept {
-    std::string_view coding;
-    bool has_parameters = false;
-    if (!http_parse_transfer_coding_syntax(item, coding, has_parameters)) {
+    const auto first_semicolon = http_find_unquoted_delimiter(item, 0, ';');
+    const auto coding = http_trim_ows(item.substr(0, first_semicolon));
+    if (!is_valid_http_header_name(coding)) {
         return false;
     }
     if (http_ascii_equals_ignore_case(coding, "trailers")) {
-        return !has_parameters;
+        return first_semicolon == item.size();
     }
     // RFC 9112 section 7.4: a client MUST NOT list chunked in TE. That binds
-    // the sender; a recipient treats the member as the always-acceptable
-    // chunked coding and does not reject the request.
-    if (http_ascii_equals_ignore_case(coding, "chunked")) {
-        return mode == http_te_field_validation_mode::recipient && http_te_parameters_are_valid(item, mode);
-    }
+    // the sender; a recipient treats it as an always-acceptable coding.
     if (mode == http_te_field_validation_mode::client_capability &&
         !http_is_client_supported_te_transfer_coding(coding)) {
         return false;
     }
-    return http_te_parameters_are_valid(item, mode);
+
+    // Validate transfer-parameter syntax and TE's weight in the same walk.
+    // Unlike other parameters, q permits neither BWS around '=' nor a quoted
+    // value. Recipients accept extension parameters; clients advertise only
+    // the codings they can decode, with an optional weight.
+    bool quality_seen = false;
+    return http_all_parameters(item.substr(first_semicolon),
+        [&quality_seen, mode](std::string_view parameter) noexcept {
+            const auto equals = parameter.find('=');
+            if (equals == std::string_view::npos) {
+                return false;
+            }
+            const auto raw_name = parameter.substr(0, equals);
+            const auto raw_value = parameter.substr(equals + 1);
+            const auto name = http_trim_ows(raw_name);
+            const auto value = http_trim_ows(raw_value);
+            if (http_ascii_equals_ignore_case(name, "q")) {
+                if (quality_seen || raw_name != name || raw_value != value ||
+                    http_parse_quality_value(value) < 0) {
+                    return false;
+                }
+                quality_seen = true;
+                return true;
+            }
+            return mode == http_te_field_validation_mode::recipient &&
+                   is_valid_http_header_name(name) && is_http_token_or_quoted_string(value);
+        });
 }
 
 [[nodiscard]] inline bool is_valid_http_te_field_value(

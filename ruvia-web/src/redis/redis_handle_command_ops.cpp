@@ -9,8 +9,8 @@ namespace ruvia::detail {
 
 task<void> execute_redis_ping(redis_command_executor executor, std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource) {
-    auto reply = co_await redis_status_command(std::move(executor), std::move(args), resource);
-    if (!http_ascii_equals_ignore_case(reply, "PONG")) {
+    auto reply = co_await execute_owned_redis_command(std::move(executor), std::move(args), resource);
+    if (!http_ascii_equals_ignore_case(redis_value_string(reply), "PONG")) {
         throw redis_error(redis_error::code_type::command_error, "unexpected redis ping reply");
     }
 }
@@ -61,11 +61,12 @@ task<std::pmr::vector<redis_scored_value>> execute_redis_scored_array(redis_comm
 task<std::optional<double>> execute_redis_optional_double(redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::string_view context_value,
     std::pmr::memory_resource* resource) {
-    auto reply = co_await redis_string_command(std::move(executor), std::move(args), resource);
-    if (!reply) {
+    auto reply = co_await execute_owned_redis_command(std::move(executor), std::move(args), resource);
+    throw_if_redis_error(reply);
+    if (reply.null()) {
         co_return std::nullopt;
     }
-    co_return parse_redis_double(*reply, context_value);
+    co_return parse_redis_double(redis_value_string(reply), context_value);
 }
 
 }  // namespace ruvia::detail

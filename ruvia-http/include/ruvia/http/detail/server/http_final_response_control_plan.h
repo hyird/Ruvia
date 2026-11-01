@@ -58,22 +58,15 @@ private:
     http_connection_options connection_options;
     http_upgrade_protocols upgrade_protocols;
     for (const auto& header : response.headers()) {
-        switch (classify_request_header(header.name())) {
-            case request_header_kind::connection:
-                if (connection_options.parse_field(header.value(), http_connection_field_role::sender) !=
-                    http_field_list_parse_status::ok) {
-                    throw http1_response_head_error("invalid HTTP Connection header");
-                }
-                break;
-            case request_header_kind::upgrade:
-                if (upgrade_protocols.parse_field(header.value(), http_field_list_role::sender) !=
-                    http_field_list_parse_status::ok) {
-                    throw http1_response_head_error("invalid HTTP Upgrade header");
-                }
-                break;
-            case request_header_kind::te:
+        switch (parse_http_response_control_field(
+            classify_request_header(header.name()), header.value(), connection_options, upgrade_protocols)) {
+            case http_response_control_field_status::invalid_connection:
+                throw http1_response_head_error("invalid HTTP Connection header");
+            case http_response_control_field_status::invalid_upgrade:
+                throw http1_response_head_error("invalid HTTP Upgrade header");
+            case http_response_control_field_status::te_forbidden:
                 throw http1_response_head_error("TE is not a response field");
-            default:
+            case http_response_control_field_status::ok:
                 break;
         }
     }

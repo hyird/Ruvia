@@ -37,6 +37,8 @@ task<http2_send_window_wait_status> await_http2_send_window(
     }
 }
 
+namespace {
+
 task<http2_stream_data_write_status> write_http2_stream_data_chunk(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
     http2_sans_io_stream_signal* signal, worker_signal& write_signal,
@@ -133,16 +135,18 @@ task<http2_stream_data_write_status> write_http2_stream_data_chunk(
     }
 }
 
+}  // namespace
+
 task<http2_stream_data_write_status> write_http2_stream_data(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
     http2_sans_io_stream_signal* signal, worker_signal& write_signal,
     http2_data_output_budget& output_budget, std::string_view bytes,
     http2_end_stream end_stream, const bool* aborted) {
+    // Bound the core-owned window-blocked remainder to one credit-sized slice.
     constexpr std::size_t submit_chunk_bytes = http2_data_output_credit_bytes;
     std::size_t offset = 0;
-    bool submitted_empty_terminal = false;
     do {
-        const auto count = bytes.empty() ? 0 : std::min(submit_chunk_bytes, bytes.size() - offset);
+        const auto count = std::min(submit_chunk_bytes, bytes.size() - offset);
         const auto chunk = bytes.substr(offset, count);
         const bool last = offset + count == bytes.size();
         const auto status = co_await write_http2_stream_data_chunk(connection, stream_id, signal,
@@ -151,8 +155,7 @@ task<http2_stream_data_write_status> write_http2_stream_data(
             co_return status;
         }
         offset += count;
-        submitted_empty_terminal = bytes.empty();
-    } while (offset < bytes.size() || (!submitted_empty_terminal && bytes.empty()));
+    } while (offset < bytes.size());
     co_return http2_stream_data_write_status::completed;
 }
 }  // namespace ruvia::detail

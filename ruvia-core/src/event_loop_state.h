@@ -76,10 +76,7 @@ public:
                 std::terminate();
             }
             --pending_;
-            if (sealed_ && pending_ == 0 && !finalized_) {
-                finalized_ = true;
-                finalize = std::move(finalize_);
-            }
+            take_finalize_locked(finalize);
         }
         if (finalize) {
             finalize();
@@ -107,10 +104,7 @@ public:
         {
             const std::lock_guard lock(mutex_);
             sealed_ = true;
-            if (pending_ == 0 && !finalized_) {
-                finalized_ = true;
-                finalize = std::move(finalize_);
-            }
+            take_finalize_locked(finalize);
         }
         if (finalize) {
             finalize();
@@ -118,6 +112,15 @@ public:
     }
 
 private:
+    // Both drain and seal claim finalization under the gate mutex; the caller
+    // invokes the claimed callback only after releasing that mutex.
+    void take_finalize_locked(move_only_function<void()>& finalize) noexcept {
+        if (sealed_ && pending_ == 0 && !finalized_) {
+            finalized_ = true;
+            finalize = std::move(finalize_);
+        }
+    }
+
     struct lease_token_type final {
         explicit lease_token_type(std::shared_ptr<event_loop_state> owner_value) noexcept
             : owner_(std::move(owner_value)) {}

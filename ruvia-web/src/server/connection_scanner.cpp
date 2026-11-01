@@ -20,13 +20,6 @@ namespace {
     return worker_value;
 }
 
-void validate_scanner_timeout(const std::optional<std::chrono::milliseconds>& timeout) {
-    if (timeout.has_value() && timeout->count() <= 0) {
-        throw std::invalid_argument(
-            "configured connection scanner timeouts must be greater than zero");
-    }
-}
-
 [[nodiscard]] bool timeout_expired(
     const std::optional<std::chrono::milliseconds>& timeout, std::int64_t inactive_ms) noexcept {
     return timeout.has_value() && inactive_ms >= timeout->count();
@@ -186,15 +179,6 @@ connection_scanner::impl_type::impl_type(
       timer_state_(std::make_shared<timer_state_type>(this)),
       options_(std::move(options)),
       cached_now_ms_(steady_now_ms()) {
-    if (options_.scan_interval_.count() <= 0) {
-        throw std::invalid_argument("connection scanner interval must be greater than zero");
-    }
-    validate_scanner_timeout(options_.idle_timeout_);
-    validate_scanner_timeout(options_.initial_read_timeout_);
-    validate_scanner_timeout(options_.payload_read_timeout_);
-    validate_scanner_timeout(options_.write_timeout_);
-    validate_scanner_timeout(options_.initial_read_completion_timeout_);
-    validate_scanner_timeout(options_.payload_read_completion_timeout_);
     sentinel_.prev_ = sentinel_.next_ = &sentinel_;
 }
 bool connection_scanner::impl_type::retire() noexcept {

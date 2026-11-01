@@ -1148,7 +1148,7 @@ task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t 
 task<std::optional<db_row>> mariadb_driver::read_stream_row(pool_type& pool, std::size_t index, void* result_value,
     std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_options& options) {
-    if (result_value == nullptr) {
+    if (index >= pool.config().pool_size_per_worker_ || result_value == nullptr) {
         co_return std::nullopt;
     }
 

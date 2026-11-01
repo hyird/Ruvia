@@ -6,8 +6,7 @@
 #include "ruvia/http/http_field_syntax.h"
 
 #include "client/http_client_response_head.h"
-#include "field/field_value_scan.h"
-#include "field/response_field_validation.h"
+#include "parser/http_header_block_parser.h"
 #include "response/http_response_content_semantics.h"
 
 namespace ruvia::detail {
@@ -86,8 +85,7 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     std::string_view head_section, const http1_client_exchange_state& exchange_state,
     std::pmr::memory_resource* resource) {
     const auto first_line_end = head_section.find("\r\n");
-    const auto first_line =
-        first_line_end == std::string_view::npos ? head_section : head_section.substr(0, first_line_end);
+    const auto first_line = head_section.substr(0, first_line_end);
     const auto status_line = parse_status_line(first_line);
     if ((status_line.index() != 0)) {
         return std::get<1>(status_line);
@@ -96,7 +94,6 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
 
     const auto content_semantics = classify_http_response_content_semantics(
         http1_client_exchange_state_access::method(exchange_state), output.status_code_);
-    response_field_state response_fields;
     // RFC 9112 section 6.3 rule 1 ends 1xx, 204, 304 and HEAD responses at the
     // header section whatever framing fields they carry, and rule 1 precedes
     // the rule 5 Content-Length check. A recipient therefore ignores their
@@ -105,38 +102,16 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     // field describing the selected representation.
     const bool framing_fields_apply = content_semantics == http_response_content_semantics::with_content;
 
-    auto remaining = first_line_end == std::string_view::npos ? std::string_view{}
-                                                              : head_section.substr(first_line_end + 2);
+    const auto remaining = head_section.substr(first_line_end + 2);
     std::size_t cursor_value = 0;
     while (cursor_value < remaining.size()) {
-        const auto name_start = cursor_value;
-        cursor_value += http_token_prefix_size(
-            {remaining.data() + cursor_value, remaining.size() - cursor_value});
-        if (cursor_value == name_start || cursor_value >= remaining.size() ||
-            remaining[cursor_value] != ':') {
+        const auto field = scan_http1_field_line(remaining, cursor_value);
+        if (!field) {
             return http1_client_response_parse_error::invalid_header;
         }
-        const auto name = remaining.substr(name_start, cursor_value - name_start);
-        ++cursor_value;
-
-        while (cursor_value < remaining.size() && is_http_ows_char(remaining[cursor_value])) {
-            ++cursor_value;
-        }
-        const auto value_start = cursor_value;
-        cursor_value += http_field_value_prefix_size(
-            {remaining.data() + cursor_value, remaining.size() - cursor_value});
-        if (cursor_value < remaining.size() &&
-            (cursor_value + 1 >= remaining.size() || remaining[cursor_value] != '\r' ||
-                remaining[cursor_value + 1] != '\n')) {
-            return http1_client_response_parse_error::invalid_header;
-        }
-        // Leading OWS is already consumed, so trimming only drops trailing OWS.
-        const auto value = http_trim_ows(remaining.substr(value_start, cursor_value - value_start));
+        const auto name = field->name();
+        const auto value = field->value();
         const auto kind = classify_request_header(name);
-        if (validate_response_field(kind, value, http_field_list_role::recipient,
-                response_fields) != response_field_status::ok) {
-            return http1_client_response_parse_error::invalid_header;
-        }
         output.headers_.append(http_header_view{name, value});
 
         switch (kind) {
@@ -194,11 +169,6 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
             default:
                 break;
         }
-
-        if (cursor_value == remaining.size()) {
-            break;
-        }
-        cursor_value += 2;
     }
 
     if (output.transfer_encoding_.unsupported()) {

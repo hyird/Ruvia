@@ -376,4 +376,40 @@ private:
 static_assert(std::is_trivially_copyable_v<http_upgrade_protocols>);
 static_assert(sizeof(http_upgrade_protocols) == 1);
 
+enum class http_response_control_field_status : std::uint8_t {
+    ok,
+    invalid_connection,
+    invalid_upgrade,
+    te_forbidden,
+};
+
+// Sender control-field grammar shared by insertion and final head analysis.
+// Keep the parsed state across repeated lines, but do not check the Upgrade
+// association until construction of all Connection fields has finished.
+[[nodiscard]] inline http_response_control_field_status parse_http_response_control_field(
+    request_header_kind kind, std::string_view value,
+    http_connection_options& connection_options, http_upgrade_protocols& upgrade_protocols) noexcept {
+    switch (kind) {
+        case request_header_kind::connection:
+            return connection_options.parse_field(value, http_connection_field_role::sender) ==
+                           http_field_list_parse_status::ok
+                       ? http_response_control_field_status::ok
+                       : http_response_control_field_status::invalid_connection;
+        case request_header_kind::upgrade:
+            return upgrade_protocols.parse_field(value, http_field_list_role::sender) ==
+                           http_field_list_parse_status::ok
+                       ? http_response_control_field_status::ok
+                       : http_response_control_field_status::invalid_upgrade;
+        case request_header_kind::te:
+            return http_response_control_field_status::te_forbidden;
+        default:
+            return http_response_control_field_status::ok;
+    }
+}
+
+[[nodiscard]] inline bool http_response_upgrade_pair_valid(
+    const http_connection_options& connection_options, const http_upgrade_protocols& upgrade_protocols) noexcept {
+    return !upgrade_protocols.has_field() || connection_options.upgrade();
+}
+
 }  // namespace ruvia::detail

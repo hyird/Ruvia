@@ -16,10 +16,40 @@
 
 #include "coding/http_content_length.h"
 #include "coding/http_transfer_encoding.h"
+#include "field/field_value_scan.h"
 #include "field/http_request_field_validation.h"
 #include "parser/http_header_descriptor_storage.h"
 
 namespace ruvia::detail {
+
+// Scan one complete RFC 9112 section 5 field line, including its CRLF.
+// The caller excludes the final empty line and unfolds response obs-fold first.
+// Views borrow buffer; only a successful scan advances cursor_value.
+[[nodiscard]] inline std::optional<http_header_view> scan_http1_field_line(
+    std::string_view buffer, std::size_t& cursor_value) noexcept {
+    const auto name_start = cursor_value;
+    auto position = cursor_value + http_token_prefix_size(buffer.substr(cursor_value));
+    if (position == name_start || position >= buffer.size() || buffer[position] != ':') {
+        return std::nullopt;
+    }
+    const auto name = buffer.substr(name_start, position - name_start);
+    ++position;
+    while (position < buffer.size() && is_http_ows_char(buffer[position])) {
+        ++position;
+    }
+    const auto value_start = position;
+    position += http_field_value_prefix_size(buffer.substr(position));
+    if (position + 1 >= buffer.size() || buffer[position] != '\r' || buffer[position + 1] != '\n') {
+        return std::nullopt;
+    }
+    // Leading OWS has already been skipped; trim only the trailing OWS.
+    auto value_end = position;
+    while (value_end > value_start && is_http_ows_char(buffer[value_end - 1])) {
+        --value_end;
+    }
+    cursor_value = position + 2;
+    return http_header_view{name, buffer.substr(value_start, value_end - value_start)};
+}
 
 // Request slots are assigned only when appended; unused inline slots need no
 // per-request zeroing. Offsets keep their borrowed bytes independent of moves.

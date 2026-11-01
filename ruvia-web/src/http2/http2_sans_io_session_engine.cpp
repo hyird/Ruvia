@@ -552,8 +552,7 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
     bool body_failure_handled = false;
     if (const auto& body_failure = stream_runtime->body_failure();
         body_failure.has_value() &&
-        admission.endpoint() != http_request_endpoint::rejection &&
-        admission.endpoint() != http_request_endpoint::not_acceptable) {
+        admission.endpoint() != http_request_endpoint::rejection) {
         body_failure_handled = true;
         admission.tail().disable_response_coding();
         response = co_await respond_http_request_rejection(routes_, request, request_memory_value,
@@ -563,7 +562,6 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
     } else {
         switch (admission.endpoint()) {
             case http_request_endpoint::rejection:
-            case http_request_endpoint::not_acceptable:
                 admission.tail().disable_response_coding();
                 response = co_await respond_http_request_rejection(
                     routes_, request, request_memory_value, *admission.rejection(), request_services);

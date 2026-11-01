@@ -106,11 +106,12 @@ void http2_connection::mark_send_window_opened() {
 
     // Drain core-owned DATA remainders now that a window may have opened. Completion
     // reports that the owner may submit the stream's next source chunk.
-    for (std::size_t i = 0; i < pending_sends_.size();) {
+    const auto first_drained = drained_data_streams_.size();
+    std::size_t retained = 0;
+    for (std::size_t i = 0; i < pending_sends_.size(); ++i) {
         auto& pending = pending_sends_[i];
         auto* stream = find_stream(pending.stream_id_);
         if (stream == nullptr || stream->is_aborted()) {
-            pending_sends_.erase(pending_sends_.begin() + static_cast<std::ptrdiff_t>(i));
             continue;
         }
         pending.offset_ = send_data_up_to_window(
@@ -126,13 +127,22 @@ void http2_connection::mark_send_window_opened() {
                 (void)stream->commit_local_end_stream();
                 release_local_request_stream_if_closed(*stream);
             }
-            const auto stream_id = pending.stream_id_;
-            drained_data_streams_.push_back(stream_id);
-            pending_sends_.erase(pending_sends_.begin() + static_cast<std::ptrdiff_t>(i));
-            retire_completed_local_push(stream_id);
+            drained_data_streams_.push_back(pending.stream_id_);
         } else {
-            ++i;  // still window-blocked; keep the remainder for the next opening
+            if (retained != i) {
+                // All queued strings use resource_; moving a survivor cannot
+                // allocate after the output/window transaction has committed.
+                pending_sends_[retained] = std::move(pending);
+            }
+            ++retained;
         }
+    }
+    pending_sends_.erase(pending_sends_.begin() + static_cast<std::ptrdiff_t>(retained),
+        pending_sends_.end());
+    // Retirement can discard a stream's deferred state. Run it only after the
+    // stable compaction, never while a queue entry is borrowed by the drain.
+    for (auto i = first_drained; i < drained_data_streams_.size(); ++i) {
+        retire_completed_local_push(drained_data_streams_[i]);
     }
 }
 
@@ -189,17 +199,6 @@ bool http2_connection::process_window_update(
         // A skipped/released identifier is closed, not idle: ignored as above.
         return true;
     }
-    const auto reset_stream_for_window_update_error = [&](http2_error_code error) {
-        const auto output_checkpoint = output_.checkpoint();
-        try {
-            output_.append_rst_stream(header_value.stream_id_, error);
-            // A reset returns no send credit, so it cannot unblock other streams.
-            close_stream(header_value.stream_id_, http2_stream_close_source::local, error);
-        } catch (...) {
-            output_.rollback_to(output_checkpoint);
-            throw;
-        }
-    };
     switch (http2_apply_stream_window_update(*stream, increment)) {
         case http2_window_update_result::ok:
             try {
@@ -214,10 +213,10 @@ bool http2_connection::process_window_update(
             }
             return true;
         case http2_window_update_result::zero_increment:
-            reset_stream_for_window_update_error(http2_error_code::protocol_error);
+            reset_stream(header_value.stream_id_, http2_error_code::protocol_error);
             return true;
         case http2_window_update_result::overflow:
-            reset_stream_for_window_update_error(http2_error_code::flow_control_error);
+            reset_stream(header_value.stream_id_, http2_error_code::flow_control_error);
             return true;
     }
     return true;

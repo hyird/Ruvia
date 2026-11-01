@@ -1050,6 +1050,88 @@ RUVIA_TEST(http2_push_promise_on_connected_tunnel_is_a_stream_error) {
     (void)server.release(std::move(*connect_head));
 }
 
+RUVIA_TEST(http2_push_tunnel_continuation_allocation_failure_preserves_rejection) {
+    ruvia::testing::output_relay relay;
+    bool completed = false;
+    bool saw_allocation_failure = false;
+    for (std::size_t failure_index = 0; failure_index < 64 && !completed; ++failure_index) {
+        failing_memory_resource resource;
+        {
+            auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
+            auto server = ruvia::http2_connection::server();
+            relay.transfer(client, server);
+            relay.transfer(server, client);
+            relay.transfer(client, server);
+            RUVIA_CHECK(std::holds_alternative<std::uint32_t>(client.submit_request_head(
+                ruvia::http2_connect_request_head_view{.authority_ = "example.test:443"})));
+            relay.transfer(client, server);
+            auto request = server.next_event();
+            RUVIA_CHECK(request && request->request_head());
+            RUVIA_CHECK(server.submit_connect_response_head(1, ruvia::http_response{}) ==
+                        ruvia::http2_submit_status::accepted);
+            relay.transfer(server, client);
+            while (client.next_event()) {
+            }
+            std::pmr::string block;
+            ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+            ruvia::hpack_encoder::encode_header(block, ":scheme", "https");
+            ruvia::hpack_encoder::encode_header(block, ":authority", "example.test");
+            ruvia::hpack_encoder::encode_header(block, ":path", "/pushed");
+            ruvia::hpack_encoder::encode_header(block, "x-long", std::string(8192, 'x'));
+            std::string promise(ruvia::http2_frame_header_bytes + 4, '\0');
+            RUVIA_CHECK(ruvia::encode_http2_frame_header(std::span(promise).first(9),
+                4, ruvia::http2_frame_type::push_promise, 0, 1));
+            promise[12] = 2;
+            RUVIA_CHECK(client.feed(promise) == ruvia::http2_feed_result::accepted);
+            std::string continuation(ruvia::http2_frame_header_bytes, '\0');
+            RUVIA_CHECK(ruvia::encode_http2_frame_header(std::span(continuation),
+                static_cast<std::uint32_t>(block.size()), ruvia::http2_frame_type::continuation, 4, 1));
+            continuation.append(block);
+            if (ruvia::test::should_inject_stl_allocation_failure(failure_index)) {
+                resource.fail_after(failure_index);
+            }
+            bool failed = false;
+            try {
+                RUVIA_CHECK(client.feed(continuation) == ruvia::http2_feed_result::accepted);
+            } catch (const std::bad_alloc&) {
+                failed = true;
+            }
+            resource.allow_allocations();
+            if (failed) {
+                saw_allocation_failure = true;
+                RUVIA_CHECK(!client.wants_write());
+                RUVIA_CHECK(!client.next_event());
+                RUVIA_CHECK(client.feed(continuation) == ruvia::http2_feed_result::accepted);
+            } else {
+                completed = true;
+            }
+            RUVIA_CHECK(!client.connection_error());
+            auto closed = client.next_event();
+            RUVIA_CHECK(closed && closed->stream_closed() && closed->stream_closed()->stream_id() == 1);
+            RUVIA_CHECK(!client.next_event());
+            const auto output = ruvia::testing::drain_output(client);
+            RUVIA_CHECK_EQ(output.size(), 2 * (ruvia::http2_frame_header_bytes + 4));
+            if (output.size() == 2 * (ruvia::http2_frame_header_bytes + 4)) {
+                const auto associated = ruvia::parse_http2_frame_header(std::span(output).first(9));
+                const auto promised = ruvia::parse_http2_frame_header(std::span(output).subspan(13).first(9));
+                RUVIA_CHECK(associated && associated->stream_id_ == 1 &&
+                            associated->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));
+                RUVIA_CHECK(promised && promised->stream_id_ == 2 &&
+                            promised->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));
+                RUVIA_CHECK_EQ(static_cast<unsigned char>(output[12]),
+                    static_cast<unsigned char>(ruvia::http2_error_code::protocol_error));
+                RUVIA_CHECK_EQ(static_cast<unsigned char>(output[25]),
+                    static_cast<unsigned char>(ruvia::http2_error_code::cancel));
+            }
+            RUVIA_CHECK(server.release(std::move(*request->request_head())) ==
+                        ruvia::http2_server_request_release_status::released);
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
+    RUVIA_CHECK(completed);
+    RUVIA_CHECK(saw_allocation_failure);
+}
+
 // A5H2-01: Releasing >128 push stream leases while GOAWAY stream_closed events
 // are still queued in events_ defers up to http2_stream_table::max_streams
 // releases without calling std::terminate().

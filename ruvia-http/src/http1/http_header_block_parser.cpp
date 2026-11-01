@@ -4,7 +4,6 @@
 
 #include "ruvia/http/http_limits.h"
 
-#include "field/field_value_scan.h"
 #include "field/http_request_field_validation.h"
 
 namespace ruvia::detail {
@@ -137,27 +136,14 @@ namespace {
 [[nodiscard]] std::optional<http_parse_error> parse_header_fields(std::string_view buffer,
     std::size_t headers_end, std::size_t cursor_value, bool ignore_upgrade,
     parsed_request_header_block& block) {
+    buffer = buffer.substr(0, headers_end);
     while (cursor_value < headers_end) {
-        const auto name_start = cursor_value;
-        cursor_value += http_token_prefix_size({buffer.data() + cursor_value, headers_end - cursor_value});
-        if (cursor_value == name_start || cursor_value >= headers_end || buffer[cursor_value] != ':') {
+        const auto field = scan_http1_field_line(buffer, cursor_value);
+        if (!field) {
             return http_parse_error::invalid_header;
         }
-        const auto name_end = cursor_value;
-        ++cursor_value;
-
-        while (cursor_value < headers_end && is_http_ows_char(buffer[cursor_value])) {
-            ++cursor_value;
-        }
-        const auto value_start = cursor_value;
-        cursor_value += http_field_value_prefix_size({buffer.data() + cursor_value, headers_end - cursor_value});
-        if (cursor_value + 1 >= headers_end || buffer[cursor_value] != '\r' || buffer[cursor_value + 1] != '\n') {
-            return http_parse_error::invalid_header;
-        }
-        // Leading OWS is already consumed, so trimming only drops trailing OWS.
-        const auto value = http_trim_ows(buffer.substr(value_start, cursor_value - value_start));
-
-        const auto name = buffer.substr(name_start, name_end - name_start);
+        const auto name = field->name();
+        const auto value = field->value();
 
         const auto kind = classify_request_header(name);
         if (const auto error = apply_request_header(kind, value, ignore_upgrade, block)) {
@@ -165,13 +151,12 @@ namespace {
         }
 
         block.headers_.append(
-            parsed_request_header_slot{.name_ = make_slice(name_start, name_end - name_start),
-                .value_ = make_slice(value_start, value.size()),
+            parsed_request_header_slot{.name_ = make_slice(static_cast<std::size_t>(name.data() - buffer.data()), name.size()),
+                .value_ = make_slice(static_cast<std::size_t>(value.data() - buffer.data()), value.size()),
                 .kind_ = kind});
         if (kind == request_header_kind::host) {
             block.host_header_index_ = static_cast<known_request_header_index_type>(block.headers_.size() - 1);
         }
-        cursor_value += 2;
     }
 
     return std::nullopt;

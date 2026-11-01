@@ -49,22 +49,15 @@ void analyze_http1_fields(const http_interim_response_head& response, http1_inte
         if (status != detail::http_interim_response_header_validation_status::ok) {
             throw http1_response_head_error(common_validation_message(status));
         }
-        switch (kind) {
-            case detail::request_header_kind::connection:
-                if (facts.connection_options_.parse_field(value, detail::http_connection_field_role::sender) !=
-                    detail::http_field_list_parse_status::ok) {
-                    throw http1_response_head_error("invalid HTTP/1 interim response Connection field");
-                }
-                break;
-            case detail::request_header_kind::upgrade:
-                if (facts.upgrade_protocols_.parse_field(value, detail::http_field_list_role::sender) !=
-                    detail::http_field_list_parse_status::ok) {
-                    throw http1_response_head_error("invalid HTTP/1 interim response Upgrade field");
-                }
-                break;
-            case detail::request_header_kind::te:
+        switch (detail::parse_http_response_control_field(
+            kind, value, facts.connection_options_, facts.upgrade_protocols_)) {
+            case detail::http_response_control_field_status::invalid_connection:
+                throw http1_response_head_error("invalid HTTP/1 interim response Connection field");
+            case detail::http_response_control_field_status::invalid_upgrade:
+                throw http1_response_head_error("invalid HTTP/1 interim response Upgrade field");
+            case detail::http_response_control_field_status::te_forbidden:
                 throw http1_response_head_error("TE is not a response field");
-            default:
+            case detail::http_response_control_field_status::ok:
                 break;
         }
 
@@ -72,7 +65,7 @@ void analyze_http1_fields(const http_interim_response_head& response, http1_inte
             throw http1_response_head_error("HTTP/1 interim response head is too large");
         }
     }
-    if (facts.upgrade_protocols_.has_field() && !facts.connection_options_.upgrade()) {
+    if (!detail::http_response_upgrade_pair_valid(facts.connection_options_, facts.upgrade_protocols_)) {
         throw http1_response_head_error("HTTP/1 interim Upgrade requires Connection: Upgrade");
     }
 }
