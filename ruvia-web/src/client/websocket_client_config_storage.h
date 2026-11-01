@@ -12,12 +12,15 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/websocket_client_negotiation.h"
 #include "ruvia/web/websocket_client.h"
 
 #include "client/client_tls.h"
+#include "client/client_user_agent.h"
 #include "client/websocket_client_config_validation.h"
+#include "websocket/websocket_lifecycle_validation.h"
 
 namespace ruvia::detail {
 
@@ -42,19 +45,17 @@ struct websocket_client_config_storage final {
     http_origin_view origin_;
     std::pmr::string authority_;
     std::pmr::string target_;
+    // The application fields plus the default User-Agent when they carry none.
     std::pmr::vector<http_header> headers_;
     websocket_client_deflate_offer deflate_{};
-    int compression_level_{6};
     std::size_t max_message_bytes_;
     std::chrono::milliseconds connect_timeout_;
     std::optional<std::chrono::milliseconds> read_timeout_;
     std::optional<std::chrono::milliseconds> write_timeout_;
-    std::optional<std::chrono::milliseconds> close_handshake_timeout_;
-    websocket_heartbeat_config heartbeat_;
+    websocket_lifecycle_options lifecycle_;
     client_tls_config_storage tls_;
-    std::pmr::string user_agent_;
-    // Extended CONNECT (HTTP/2) request fields and response
-    // validation, built once from the headers, user agent and offers above.
+    // Sec-WebSocket-* request fields and response validation, built once from
+    // the subprotocols and the deflate offer.
     websocket_client_negotiation negotiation_;
 
 private:
@@ -74,12 +75,20 @@ private:
 
     [[nodiscard]] static std::pmr::vector<http_header> copy_headers(
         const websocket_client_config& source_value, std::pmr::memory_resource* resource) {
+        const bool http2 = source_value.protocol_ == websocket_client_protocol::http2;
+        const auto copy = [http2, resource](std::string_view name, std::string_view value) {
+            return http2 ? http_header::copy_with_lowercase_name(name, value, resource)
+                         : http_header(name, value, resource);
+        };
         std::pmr::vector<http_header> result_value(resource);
-        result_value.reserve(source_value.headers_.size());
+        result_value.reserve(source_value.headers_.size() + 1);
+        bool has_user_agent = false;
         for (const auto& header : source_value.headers_) {
-            result_value.push_back(source_value.protocol_ == websocket_client_protocol::http2
-                                       ? http_header::copy_with_lowercase_name(header.name(), header.value(), resource)
-                                       : http_header(header.name(), header.value(), resource));
+            has_user_agent = has_user_agent || http_ascii_equals_ignore_case(header.name(), "user-agent");
+            result_value.push_back(copy(header.name(), header.value()));
+        }
+        if (!has_user_agent) {
+            result_value.push_back(copy("User-Agent", default_client_user_agent));
         }
         return result_value;
     }
@@ -103,8 +112,7 @@ private:
             }
             subprotocols = heap_subprotocols;
         }
-        validate_websocket_client_protocols_and_headers(
-            source_value.headers_, subprotocols, source_value.user_agent_.view(), source_value.deflate_);
+        validate_websocket_client_protocols_and_headers(source_value.headers_, subprotocols, source_value.deflate_);
         return websocket_client_negotiation(
             {.subprotocols_ = subprotocols, .deflate_ = source_value.deflate_}, resource);
     }
@@ -123,17 +131,14 @@ private:
           target_(source_value.target_.view(), resource),
           headers_(copy_headers(source_value, resource)),
           deflate_(source_value.deflate_),
-          compression_level_(source_value.compression_level_),
           max_message_bytes_(source_value.max_message_bytes_),
           connect_timeout_(source_value.connect_timeout_),
           read_timeout_(source_value.read_timeout_),
           write_timeout_(source_value.write_timeout_),
-          close_handshake_timeout_(source_value.close_handshake_timeout_),
-          heartbeat_(normalize_websocket_heartbeat_config(source_value.heartbeat_)),
+          lifecycle_(normalize_websocket_lifecycle_options(source_value.lifecycle_)),
           tls_(source_value.tls_,
               source_value.scheme_ == websocket_scheme::wss ? client_tls_files::parse : client_tls_files::keep_paths,
               resource),
-          user_agent_(source_value.user_agent_.view(), resource),
           negotiation_(make_negotiation(source_value, resource)) {}
 };
 

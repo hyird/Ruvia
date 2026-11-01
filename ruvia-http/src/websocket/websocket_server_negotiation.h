@@ -8,19 +8,12 @@
 #include <vector>
 
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/websocket_handshake.h"
 
 #include "websocket/http_websocket_handshake_fields.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 
 namespace ruvia::detail {
-
-struct websocket_server_negotiation_options final {
-    // Server preference order. Every entry must be a nonempty, unique HTTP token.
-    std::span<const std::string_view> supported_subprotocols_{};
-    std::span<const http_header_view> response_headers_{};
-    std::pmr::memory_resource* resource_{nullptr};
-    websocket_deflate_config deflate_{};
-};
 
 // HTTP-version-independent result of one server-side websocket negotiation. HTTP/1
 // and RFC 8441 consume this same immutable value for their response head, and the
@@ -64,7 +57,7 @@ public:
 
 private:
     friend websocket_server_negotiation make_websocket_server_negotiation(
-        const http_request&, websocket_server_negotiation_options);
+        const http_request&, const websocket_server_handshake_options&, std::pmr::memory_resource*);
 
     websocket_server_negotiation(std::string_view subprotocol, websocket_compression compression,
         std::span<const http_header_view> response_headers_value, std::pmr::memory_resource* resource);
@@ -75,7 +68,9 @@ private:
     std::pmr::vector<http_header> response_headers_;
 };
 
+// Copies the selected subprotocol and response fields into `resource` (nullptr
+// selects the default resource).
 [[nodiscard]] websocket_server_negotiation make_websocket_server_negotiation(
-    const http_request& request, websocket_server_negotiation_options options = {});
+    const http_request& request, const websocket_server_handshake_options& options, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia::detail

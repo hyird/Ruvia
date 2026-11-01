@@ -64,7 +64,7 @@ class http1_websocket_routes final {
     const auto required_subprotocol =
         ruvia::websocket_route_config{.subprotocols_ = {"chat.v1"}, .require_subprotocol_ = true};
     const auto takeover_deflate =
-        ruvia::websocket_route_config{.deflate_ = {.context_takeover_ = true, .mem_level_ = 4}};
+        ruvia::websocket_route_config{.deflate_ = {.context_takeover_ = true, .deflater_ = {.mem_level_ = 4}}};
     // Short enough for a Ping and a lapsed Pong window inside the handler's
     // idle start, long enough that a tick write delayed by a busy CI host is
     // not mistaken for a stalled peer (that budget is interval + timeout).
@@ -556,8 +556,9 @@ RUVIA_TEST(http1_websocket_heartbeat_does_not_abort_an_unread_responsive_peer) {
         head.push_back(byte);
     }
     RUVIA_CHECK(head.starts_with("HTTP/1.1 101 "));
-    ruvia::websocket_connection peer({.role_ = ruvia::websocket_connection_role::client,
-        .mask_key_generator_ = &http1_websocket_test::zero_mask});
+    ruvia::http_io_buffer peer_input;
+    ruvia::websocket_connection peer(peer_input, {.role_ = ruvia::websocket_connection_role::client,
+                                                     .mask_key_generator_ = &http1_websocket_test::zero_mask});
     const auto flush = [&] {
         const std::string bytes_value(peer.output_plan().bytes());
         if (!bytes_value.empty()) {
@@ -588,7 +589,7 @@ RUVIA_TEST(http1_websocket_heartbeat_does_not_abort_an_unread_responsive_peer) {
         }
         const auto read = client.read_some(asio::buffer(input), end);
         if (!end) {
-            RUVIA_CHECK(peer.feed(std::string_view(input.data(), read)) == ruvia::websocket_feed_status::accepted);
+            peer_input.append(std::string_view(input.data(), read));
         }
     }
     // A Ping went out during the 300 ms idle start and was answered, and
@@ -795,12 +796,13 @@ RUVIA_TEST(http1_websocket_deflate_echoes_with_shared_and_takeover_codecs) {
         RUVIA_CHECK(head.starts_with("HTTP/1.1 101 "));
         RUVIA_CHECK(head.find("permessage-deflate") != std::string::npos);
         RUVIA_CHECK((head.find("server_no_context_takeover") == std::string::npos) == takeover);
-        ruvia::websocket_connection peer({.message_limit_ = ruvia::protocol_byte_limit::unlimited(),
-            .compression_ = {.enabled_ = true,
-                .server_no_context_takeover_ = !takeover,
-                .client_no_context_takeover_ = !takeover},
-            .role_ = ruvia::websocket_connection_role::client,
-            .mask_key_generator_ = &http1_websocket_test::zero_mask});
+        ruvia::http_io_buffer peer_input;
+        ruvia::websocket_connection peer(peer_input, {.message_limit_ = ruvia::protocol_byte_limit::unlimited(),
+                                                         .compression_ = {.enabled_ = true,
+                                                             .server_no_context_takeover_ = !takeover,
+                                                             .client_no_context_takeover_ = !takeover},
+                                                         .role_ = ruvia::websocket_connection_role::client,
+                                                         .mask_key_generator_ = &http1_websocket_test::zero_mask});
         const auto flush = [&] {
             const std::string bytes_value(peer.output_plan().bytes());
             asio::write(client, asio::buffer(bytes_value));
@@ -824,7 +826,7 @@ RUVIA_TEST(http1_websocket_deflate_echoes_with_shared_and_takeover_codecs) {
                 }
                 const auto read = client.read_some(asio::buffer(input));
                 wire_bytes += read;
-                RUVIA_CHECK(peer.feed(std::string_view(input.data(), read)) == ruvia::websocket_feed_status::accepted);
+                peer_input.append(std::string_view(input.data(), read));
             }
         };
         // Small, mid-size, past 64 KiB, incompressible, then small again.

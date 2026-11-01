@@ -72,6 +72,7 @@ struct http_client_result_budget_config final {
 // Configuration for one http_client bound to one event_loop. application registration
 // creates one such client per Web worker, so these limits remain per client
 // without exposing the application deployment model in the standalone API.
+// A request without a User-Agent field sends "User-Agent: Ruvia".
 struct http_client_config final {
     http_scheme scheme_{http_scheme::https};
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
@@ -102,7 +103,6 @@ struct http_client_config final {
     // Used for https; client_tls_mode::disabled is rejected (select http instead).
     client_tls_config tls_{};
     http_client_received_cookie_policy received_cookies_{http_client_received_cookie_policy::ignore};
-    borrowed_text user_agent_{"Ruvia"};
     // Client-stored like retained cookies: never sent with TRACE (RFC 9110 §9.3.8).
     // Explicit caller Cookie fields are combined independently of the stored jar.
     std::vector<http_header_view> cookies_{};

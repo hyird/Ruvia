@@ -86,14 +86,16 @@ private:
     std::size_t size_{0};
 };
 
+// Server handshake policy shared by HTTP/1.1 Upgrade and RFC 8441 Extended
+// CONNECT.
 struct websocket_server_handshake_options final {
     // Server preference order. Every entry must be a nonempty, unique HTTP token.
     std::span<const std::string_view> supported_subprotocols_{};
-    // Additional response fields, copied before construction returns. Framing,
-    // connection, and Sec-websocket fields belong to the handshake itself.
-    // Names/values must be valid fields; values cannot start or end with SP/HTAB.
+    // Additional response fields, copied before the response plan is returned.
+    // Framing, connection, and Sec-websocket fields belong to the handshake
+    // itself. Names/values must be valid fields; values cannot start or end
+    // with SP/HTAB.
     std::span<const http_header_view> response_headers_{};
-    std::pmr::memory_resource* resource_{nullptr};
     websocket_deflate_config deflate_{};
 };
 
@@ -297,7 +299,7 @@ public:
 
 private:
     friend websocket_server_handshake make_websocket_server_handshake(
-        const http_request&, websocket_server_handshake_options);
+        const http_request&, websocket_server_handshake_options, std::pmr::memory_resource*);
 
     inline static constexpr std::string_view subprotocol_header_prefix = "Sec-WebSocket-Protocol: ";
     inline static constexpr std::string_view extensions_header_prefix = "Sec-WebSocket-Extensions: ";
@@ -319,9 +321,10 @@ private:
 };
 
 // Call after validate_websocket_handshake() succeeds. The selected subprotocol
-// is copied into the requested resource; the response plan borrows no request
-// or server-preference storage.
-[[nodiscard]] websocket_server_handshake make_websocket_server_handshake(
-    const http_request& request, websocket_server_handshake_options options = {});
+// and response fields are copied into `resource`; the response plan borrows no
+// request or server-preference storage.
+[[nodiscard]] websocket_server_handshake make_websocket_server_handshake(const http_request& request,
+    websocket_server_handshake_options options = {},
+    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
 
 }  // namespace ruvia

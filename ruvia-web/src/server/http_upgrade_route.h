@@ -45,8 +45,7 @@ namespace ruvia::detail {
     // outlive every connection, so they allocate no codec state here.
     return websocket_connection_options{
         .compression_ = negotiated,
-        .compression_level_ = deflate.compression_level_,
-        .mem_level_ = deflate.mem_level_,
+        .deflater_ = deflate.deflater_,
         .shared_deflate_ = &options.codecs_->websocket_deflate(),
     };
 }

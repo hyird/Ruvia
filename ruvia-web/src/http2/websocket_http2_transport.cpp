@@ -46,36 +46,9 @@ task<void> websocket_http2_transport::connect() {
                 websocket_client_error::code_type::protocol_error, "invalid HTTP/2 connection input");
     }
     const auto& config = owner_.config_;
-    const auto submitted = [&]() {
-        static constexpr std::size_t inline_header_capacity = 16;
-        const std::size_t total_headers =
-            config.headers_.size() + (config.user_agent_.empty() ? 0U : 1U);
-        std::array<http_header_view, inline_header_capacity> inline_headers{};
-        std::pmr::vector<http_header_view> heap_headers(received_.get_allocator().resource());
-        std::span<const http_header_view> extended_headers{};
-        if (total_headers <= inline_headers.size()) {
-            std::size_t index = 0;
-            for (const auto& header : config.headers_) {
-                inline_headers[index++] = http_header_view{header.name(), header.value()};
-            }
-            if (!config.user_agent_.empty()) {
-                inline_headers[index++] = http_header_view{"user-agent", config.user_agent_};
-            }
-            extended_headers = std::span<const http_header_view>(inline_headers.data(), total_headers);
-        } else {
-            heap_headers.reserve(total_headers);
-            for (const auto& header : config.headers_) {
-                heap_headers.emplace_back(header.name(), header.value());
-            }
-            if (!config.user_agent_.empty()) {
-                heap_headers.emplace_back("user-agent", config.user_agent_);
-            }
-            extended_headers = heap_headers;
-        }
-        return config.negotiation_.submit_http2_request(session_.connection(),
-            config.scheme_ == websocket_scheme::wss ? "https" : "http", config.authority_,
-            config.target_, extended_headers);
-    }();
+    const auto submitted = submit_http2_websocket_client_request(session_.connection(), config.negotiation_,
+        config.scheme_ == websocket_scheme::wss ? "https" : "http", config.authority_, config.target_,
+        config.headers_);
     if (submitted.index() != 0) {
         throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
             "could not open HTTP/2 WebSocket Extended CONNECT");
@@ -94,7 +67,8 @@ task<void> websocket_http2_transport::connect() {
     // RFC 8441 section 5: END_STREAM after the 2xx is the server's orderly
     // close of the tunnel (possibly with its Close frame in the same read);
     // only END_STREAM on the response HEADERS leaves no WebSocket stream.
-    const auto negotiated = config.negotiation_.validate_response(*response_, !response_stream_ended_);
+    const auto negotiated =
+        validate_http2_websocket_client_response(config.negotiation_, *response_, !response_stream_ended_);
     if ((negotiated.index() != 0)) {
         throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
             "invalid HTTP/2 WebSocket handshake response");

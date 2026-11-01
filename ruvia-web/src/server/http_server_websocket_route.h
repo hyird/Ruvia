@@ -38,11 +38,11 @@ struct http1_websocket_upgrade_commit final {
 
     [[nodiscard]] task<std::optional<websocket_upgrade_commit<stream_type>>> operator()(
         context& context_value, std::span<const http_header_view> response_headers_value) const {
-        const auto handshake = make_websocket_server_handshake(
-            dispatch_.parsed_.request_, {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
-                                            .response_headers_ = response_headers_value,
-                                            .resource_ = dispatch_.memory_.resource(),
-                                            .deflate_ = websocket_endpoint_.deflate()});
+        const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request_,
+            {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
+                .response_headers_ = response_headers_value,
+                .deflate_ = websocket_endpoint_.deflate()},
+            dispatch_.memory_.resource());
         context_access::commit_upgrade(context_value);
         if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake,
                 dispatch_.parsed_.body_plan_.expectations(), dispatch_.memory_.resource());

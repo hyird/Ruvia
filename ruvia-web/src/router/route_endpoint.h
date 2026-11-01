@@ -19,7 +19,7 @@
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
-#include "websocket/websocket_heartbeat_config_validation.h"
+#include "websocket/websocket_lifecycle_validation.h"
 
 // What a registered route runs, as one closed set of alternatives. Each
 // alternative carries the handler's invoke thunk together with the route
@@ -183,19 +183,8 @@ public:
 
     [[nodiscard]] static route_endpoint websocket(std::pmr::memory_resource* resource,
         route_stream_handler::invoke_type invoke, websocket_route_config options) {
-        if (options.lifecycle_.close_handshake_timeout_.has_value() &&
-            options.lifecycle_.close_handshake_timeout_->count() <= 0) {
-            throw std::invalid_argument(
-                "websocket close-handshake timeout must be greater than zero");
-        }
-        if (options.deflate_.compression_level_ < 0 || options.deflate_.compression_level_ > 9) {
-            throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
-        }
-        if (options.deflate_.mem_level_ < 1 || options.deflate_.mem_level_ > 9) {
-            throw std::invalid_argument("WebSocket deflate memory level must be between 1 and 9");
-        }
-        options.lifecycle_.heartbeat_ =
-            normalize_websocket_heartbeat_config(options.lifecycle_.heartbeat_);
+        options.lifecycle_ = normalize_websocket_lifecycle_options(options.lifecycle_);
+        validate_websocket_deflater_config(options.deflate_.deflater_);
         ruvia::websocket_subprotocol_set subprotocols;
         for (const auto& subprotocol : options.subprotocols_) {
             if (!subprotocols.append(subprotocol)) {

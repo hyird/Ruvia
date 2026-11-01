@@ -19,6 +19,7 @@
 #include "ruvia/http/http_set_cookie.h"
 
 #include "client/client_host.h"
+#include "client/client_user_agent.h"
 #include "client/http_client_config_storage.h"
 #include "client/http_client_request_storage.h"
 
@@ -224,7 +225,7 @@ http_client_request_view client_request_policy::prepare_request(
     const http_client_request_storage& request, client_prepared_request_scratch& scratch) {
     const auto& input_headers = request.headers();
     auto field_count = input_headers.size();
-    bool add_user_agent = !config_.user_agent_.empty();
+    bool add_user_agent = true;
     scratch.overflow_cookie_header_.clear();
     std::size_t cookie_header_bytes = 0;
     // Request storage preserves caller field-name spelling.
@@ -356,7 +357,7 @@ http_client_request_view client_request_policy::prepare_request(
             }
         }
         if (add_user_agent) {
-            scratch.inline_headers_[index++] = http_header_view{"user-agent", config_.user_agent_};
+            scratch.inline_headers_[index++] = http_header_view{"user-agent", default_client_user_agent};
         }
         if (add_cookie) {
             scratch.inline_headers_[index++] = http_header_view{"cookie", cookie_header_view};
@@ -372,7 +373,7 @@ http_client_request_view client_request_policy::prepare_request(
             }
         }
         if (add_user_agent) {
-            headers.emplace_back("user-agent", config_.user_agent_);
+            headers.emplace_back("user-agent", default_client_user_agent);
         }
         if (add_cookie) {
             headers.emplace_back("cookie", cookie_header_view);

@@ -58,6 +58,7 @@ void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer, b
     const auto serve_stream = [&](auto& socket) -> asio::awaitable<void> {
         std::pmr::unsynchronized_pool_resource resource;
         auto connection = ruvia::http2_connection::server({.resource_ = &resource});
+        ruvia::http_io_buffer websocket_input(&resource);
         std::optional<ruvia::websocket_connection> websocket;
         std::optional<ruvia::http2_request_head_event> request_lease;
         std::string outbound;
@@ -108,14 +109,13 @@ void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer, b
                         if (negotiated == nullptr) {
                             throw std::runtime_error("HTTP/2 WebSocket handshake failed");
                         }
-                        websocket.emplace(ruvia::websocket_connection_options{.resource_ = &resource,
-                            .compression_ = negotiated->compression()});
+                        websocket.emplace(websocket_input, ruvia::websocket_connection_options{.compression_ = negotiated->compression()});
                         if (reset_peer) {
                             RUVIA_CHECK(connection.submit_reset(1, ruvia::http2_error_code::cancel) == ruvia::http2_submit_status::accepted);
                         }
                         request_lease.emplace(std::move(*request));
                     } else if (auto* data = event->tunnel_data()) {
-                        (void)websocket->feed(data->bytes());
+                        websocket_input.append(data->bytes());
                         (void)connection.acknowledge(data->take_credit());
                         while (auto ws_event = websocket->next_event()) {
                             if (auto* message = ws_event->message()) {
@@ -168,7 +168,7 @@ void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer, b
             .host_ = "127.0.0.1",
             .port_ = peer.local_endpoint().port(),
             .headers_ = headers,
-            .deflate_ = {.enabled_ = true},
+            .deflate_ = {.compression_ = {.enabled_ = true}},
             .read_timeout_ = std::chrono::milliseconds(2000),
             .write_timeout_ = std::chrono::milliseconds(2000)};
         if (identity) {
@@ -243,6 +243,7 @@ void exercise_closing_peer(ruvia::testing::test_context& ruvia_ctx, closing_peer
         auto socket = co_await peer.async_accept(asio::use_awaitable);
         auto connection = ruvia::http2_connection::server();
         std::optional<ruvia::http2_request_head_event> request;
+        ruvia::http_io_buffer websocket_input;
         std::optional<ruvia::websocket_connection> websocket;
         std::array<char, 16384> input{};
         std::pmr::string output;
@@ -263,9 +264,9 @@ void exercise_closing_peer(ruvia::testing::test_context& ruvia_ctx, closing_peer
                         const auto submitted = connection.submit_websocket_handshake(head->stream_id(), built_request, validation);
                         RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(submitted));
                         request.emplace(std::move(*head));
-                        websocket.emplace();
+                        websocket.emplace(websocket_input);
                     } else if (auto* data = event->tunnel_data()) {
-                        (void)websocket->feed(data->bytes());
+                        websocket_input.append(data->bytes());
                         (void)connection.acknowledge(data->take_credit());
                         while (auto frame = websocket->next_event()) {
                             if (const auto* close = frame->close()) {
@@ -452,7 +453,8 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
                         const auto validation = ruvia::validate_http2_websocket_handshake(connection, head->stream_id(), built_request);
                         const auto submitted = connection.submit_websocket_handshake(head->stream_id(), built_request, validation);
                         RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(submitted));
-                        ruvia::websocket_connection websocket;
+                        ruvia::http_io_buffer websocket_input;
+                        ruvia::websocket_connection websocket(websocket_input);
                         RUVIA_CHECK(websocket.submit_close(1000, "bye") == ruvia::websocket_close_submit_status::accepted);
                         const auto close = websocket.output_plan();
                         const auto end_flag = mode == handshake_end::close_without_end_stream
@@ -479,7 +481,7 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
                                                               .protocol_ = ruvia::websocket_client_protocol::http2,
                                                               .host_ = "127.0.0.1",
                                                               .port_ = peer.local_endpoint().port(),
-                                                              .close_handshake_timeout_ = std::chrono::milliseconds(50),
+                                                              .lifecycle_ = {.close_handshake_timeout_ = std::chrono::milliseconds(50)},
                                                           });
         std::exception_ptr failure;
         try {

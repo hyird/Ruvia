@@ -107,7 +107,7 @@ task<void> websocket_client_state::run_close(websocket_close_options options, st
     // The close-handshake limit starts after the local Close frame is committed.
     // Keep it on its own timer so peer traffic and control-frame responses cannot
     // restart the deadline for the next transport read.
-    arm(close_handshake_timer_, config_.close_handshake_timeout_, client_abort_reason::timeout);
+    arm(close_handshake_timer_, config_.lifecycle_.close_handshake_timeout_, client_abort_reason::timeout);
     for (;;) {
         const auto event = co_await poll_protocol_event(
             std::nullopt, "WebSocket peer violated the protocol during close handshake");

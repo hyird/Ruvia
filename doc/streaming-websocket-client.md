@@ -179,7 +179,7 @@ inline const ruvia::websocket_route_config chat_ws_options{
     },
     .deflate_ = {
         .enabled_ = true,
-        .compression_level_ = 6,
+        .deflater_ = {.compression_level_ = 6},
     },
 };
 
@@ -311,6 +311,8 @@ Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.htm
 | `received_cookies_` | `http_client_received_cookie_policy`（默认 `ignore`） | 设为 `retain_and_send` 时启用客户端 Cookie Jar 自动管理 `Set-Cookie` |
 | `push_` / `advertisements_` | `http_client_push_config` / `http_client_advertisement_config` | 控制是否接收 HTTP/2 Server Push 与 `ORIGIN` / `ALTSVC` 通告 |
 
+未携带 `User-Agent` 字段的 HTTP 请求与 WebSocket 握手（HTTP/1.1 Upgrade 与 HTTP/2 Extended CONNECT）统一发送 `User-Agent: Ruvia`；调用方在请求首部或 `websocket_client_config::headers_` 中提供的 `User-Agent` 字段替换该默认值。
+
 TLS 连接关闭时（响应要求关闭、`shutdown()` 退役空闲连接或 HTTP/2 会话、WebSocket 与 Redis 客户端关闭），客户端先以一次非阻塞写发送 `close_notify`（[RFC 9112 §9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.8)），不等待对端告警；关闭始终立即完成，挂起的读取不阻止告警，由关闭取消。告警只追加在已完整写出的 TLS 记录之后：仍有记录写入等待 socket 或只写出部分记录（来自写入，或来自读取对握手后消息的应答，例如 TLS 1.2 `HelloRequest` 引发的 `no_renegotiation` 告警）、记录写入失败或被取消，以及发生 TLS 错误后的关闭不发送告警，`CONNECT` 隧道由隧道自身负责 TLS 关闭。
 
 系统 DNS 查询在客户端事件循环借用的有界阻塞池上执行：注册到 `application` 的客户端使用应用阻塞池，独立客户端使用创建其 `event_loop` 时通过 `event_loop_pool_options::blocking_pool_` 或 `attach_event_loop(io, {.blocking_pool_ = &pool})` 交给事件循环的池。事件循环没有池时，`host_` 不是 IP 字面量的 HTTP、WebSocket、Redis 和数据库客户端在构造时抛出 `std::invalid_argument`；注册客户端因此使 `run()` 启动失败并回滚。查询参数在异步入口返回前完成拥有化。底层 `getaddrinfo` 已开始后不能抢占，但超时、取消、客户端关闭和 Worker 停机都会立即释放当前等待者，不等待系统调用返回；迟到结果被丢弃。数字地址在同步阶段生成端点，不查询、不需要池，也不创建解析协程帧。
@@ -409,6 +411,6 @@ co_await client.shutdown();
 | `void close() noexcept` / `void abort() noexcept` | 客户端 `client.close()`（或句柄 `peer.abort()`）请求立即中止连接 |
 | `task<void> shutdown() &` | 关闭并等待底层全部挂起 I/O 安全退役 |
 
-关闭握手完成后，客户端按 [RFC 6455 §7.1.1](https://www.rfc-editor.org/rfc/rfc6455.html#section-7.1.1) 由服务端先关闭底层 TCP 连接（HTTP/2 下为服务端先发送 `END_STREAM`）：客户端继续读取并丢弃 Close 之后的字节，直到对端 EOF，再结束自己的传输。等待时长受 `close_handshake_timeout_` 约束（`nullopt` 表示不设上限）；超时或期间传输出错时客户端自行关闭连接，由于关闭握手已经完成，`read()` / `close()` 仍正常返回，不抛错。等待对端 Close 与等待传输结束各自受该时限约束，因此 `close()` 最长约为 `close_handshake_timeout_` 的两倍。
+关闭握手完成后，客户端按 [RFC 6455 §7.1.1](https://www.rfc-editor.org/rfc/rfc6455.html#section-7.1.1) 由服务端先关闭底层 TCP 连接（HTTP/2 下为服务端先发送 `END_STREAM`）：客户端继续读取并丢弃 Close 之后的字节，直到对端 EOF，再结束自己的传输。等待时长受 `lifecycle_.close_handshake_timeout_` 约束（`nullopt` 表示不设上限）；超时或期间传输出错时客户端自行关闭连接，由于关闭握手已经完成，`read()` / `close()` 仍正常返回，不抛错。等待对端 Close 与等待传输结束各自受该时限约束，因此 `close()` 最长约为 `lifecycle_.close_handshake_timeout_` 的两倍。
 
 HTTP/2 下，只有响应 `HEADERS` 自身携带 `END_STREAM` 的 2xx 才视为握手失败（没有可用的 WebSocket 流）；2xx 之后在 `DATA` 上到达的 `END_STREAM`（即使与服务端 Close 帧在同一次读取中到达）是服务端对隧道的有序关闭（[RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5)），握手成功，`read()` 随后报告该 Close。客户端退役 HTTP/2 连接时（关闭握手完成、超时、取消、`close()` / `abort()` 或握手失败），若会话仍在运行，先发送 `GOAWAY(NO_ERROR)` 并等待其写出后再关闭传输（[RFC 9113 §6.8](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.8)）；该等待最长 1 秒（产品限制），对端不读取或 `write_timeout_` 为 `nullopt` 时到时直接关闭。

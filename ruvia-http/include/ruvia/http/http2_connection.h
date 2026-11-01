@@ -25,6 +25,7 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/websocket_client_negotiation.h"
 #include "ruvia/http/websocket_handshake.h"
 
 namespace ruvia {
@@ -47,12 +48,6 @@ struct http2_connection_options final {
     // 未设置时不新增元数据缓冲、队列或动态分配。
     http2_receive_observer_type receive_observer_{nullptr};
     void* receive_observer_context_{nullptr};
-};
-
-struct http2_websocket_server_handshake_options final {
-    std::span<const std::string_view> supported_subprotocols_{};
-    std::span<const http_header_view> response_headers_{};
-    websocket_deflate_config deflate_{};
 };
 
 struct http2_regular_request_head_view final {
@@ -197,7 +192,7 @@ public:
     [[nodiscard]] std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_error>
     submit_websocket_handshake(std::uint32_t stream_id, const http_request& request,
         const websocket_handshake_validation_result& validation,
-        http2_websocket_server_handshake_options options = {});
+        websocket_server_handshake_options options = {});
     // Submit only the final buffered-response head. The committed plan tells the
     // caller whether/how much representation remains for DATA or file output.
     [[nodiscard]] std::variant<http_buffered_response_write_plan, http2_response_head_submit_error>
@@ -292,5 +287,17 @@ private:
     http2_connection& connection, std::uint32_t stream_id,
     const http_request& request,
     websocket_handshake_validation_options options = {}) noexcept;
+
+// RFC 8441 Extended CONNECT with :protocol websocket: the negotiation's
+// Sec-WebSocket-* request fields followed by the application headers.
+[[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
+    http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
+    std::string_view authority, std::string_view target, std::span<const http_header> headers = {});
+
+// Validates the server's 2xx response on a still-open stream, then its
+// selection against the negotiation. The result view borrows the response head.
+[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
+validate_http2_websocket_client_response(
+    const websocket_client_negotiation& negotiation, const http_client_response_head& head, bool stream_open);
 
 }  // namespace ruvia

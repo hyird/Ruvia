@@ -57,7 +57,7 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                 }
 
                 if (const auto* message = event->message()) {
-                    co_return websocket_message::borrow(message->opcode(), message->payload());
+                    co_return *message;
                 }
                 if (event->ping() != nullptr) {
                     co_await flush_protocol_output_exclusive();

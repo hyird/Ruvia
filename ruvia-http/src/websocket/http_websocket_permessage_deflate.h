@@ -32,15 +32,15 @@ namespace ruvia::detail {
 // codec memory. Every other direction owns a private zlib stream from the
 // connection's resource, created on its first compressed message and kept,
 // with its dictionary, until the connection ends. The owner validates the
-// level (0-9), memLevel (1-9) and windows (8-15).
+// deflater (validate_websocket_deflater_config) and windows (8-15).
 class websocket_deflate final {
 public:
-    websocket_deflate(std::pmr::memory_resource* resource, websocket_deflate_codecs* shared, int compression_level,
-        int mem_level, bool send_takeover, bool receive_takeover, int send_window, int receive_window) noexcept
+    websocket_deflate(std::pmr::memory_resource* resource, websocket_deflate_codecs* shared,
+        websocket_deflater_config deflater, bool send_takeover, bool receive_takeover, int send_window,
+        int receive_window) noexcept
         : resource_(resource),
           shared_(shared),
-          compression_level_(compression_level),
-          mem_level_(mem_level),
+          deflater_config_(deflater),
           send_window_(send_window),
           receive_window_(receive_window),
           send_takeover_(send_takeover),
@@ -54,12 +54,12 @@ public:
     bool compress(std::string_view input, std::pmr::string& out) {
         if (!send_takeover_ && shared_ != nullptr) {
             // Reset after every call, including failures and exceptions.
-            return shared_->deflate_message(input, out, compression_level_, send_window_);
+            return shared_->deflate_message(input, out, deflater_config_.compression_level_, send_window_);
         }
         if (deflater_ == nullptr) {
-            deflater_ = make_http_pmr_object<zlib_deflate_stream>(resource_, resource_, compression_level_,
-                websocket_deflate_zlib_window_bits(send_window_), mem_level_,
-                websocket_deflate_zlib_strategy(send_window_));
+            deflater_ = make_http_pmr_object<zlib_deflate_stream>(resource_, resource_,
+                deflater_config_.compression_level_, websocket_deflate_zlib_window_bits(send_window_),
+                deflater_config_.mem_level_, websocket_deflate_zlib_strategy(send_window_));
             if (!deflater_->initialized()) {
                 deflater_.reset();
                 return false;
@@ -110,8 +110,7 @@ private:
     websocket_deflate_codecs* shared_;
     private_stream_type<zlib_deflate_stream> deflater_;
     private_stream_type<zlib_inflate_stream> inflater_;
-    int compression_level_;
-    int mem_level_;
+    websocket_deflater_config deflater_config_;
     int send_window_;
     int receive_window_;
     bool send_takeover_;
@@ -285,12 +284,7 @@ struct permessage_deflate_params final {
 
 [[nodiscard]] inline websocket_compression websocket_negotiate_permessage_deflate(
     const http_request& request, websocket_deflate_config config) {
-    if (config.compression_level_ < 0 || config.compression_level_ > 9) {
-        throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
-    }
-    if (config.mem_level_ < 1 || config.mem_level_ > 9) {
-        throw std::invalid_argument("WebSocket deflate memory level must be between 1 and 9");
-    }
+    validate_websocket_deflater_config(config.deflater_);
     if (!config.enabled_ ||
         !request_has_known_header(request, request_header_kind::sec_websocket_extensions)) {
         return (websocket_compression{});

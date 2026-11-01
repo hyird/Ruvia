@@ -299,17 +299,11 @@ std::variant<http2_websocket_negotiation, http2_websocket_handshake_submit_error
 http2_connection::submit_websocket_handshake(
     std::uint32_t stream_id, const http_request& request,
     const websocket_handshake_validation_result& validation,
-    http2_websocket_server_handshake_options options) {
+    websocket_server_handshake_options options) {
     if (impl_->connection_.find_outbound_stream(stream_id) == nullptr) {
         return http2_websocket_handshake_submit_error::closed;
     }
-    auto negotiation = detail::make_websocket_server_negotiation(request,
-        {
-            .supported_subprotocols_ = options.supported_subprotocols_,
-            .response_headers_ = options.response_headers_,
-            .resource_ = impl_->resource_,
-            .deflate_ = options.deflate_,
-        });
+    auto negotiation = detail::make_websocket_server_negotiation(request, options, impl_->resource_);
     return impl_->connection_.submit_websocket_handshake(
         stream_id, validation, std::move(negotiation));
 }

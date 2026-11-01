@@ -11,7 +11,7 @@
 
 #include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
-#include "websocket/websocket_heartbeat_config_validation.h"
+#include "websocket/websocket_lifecycle_validation.h"
 
 namespace ruvia::detail {
 
@@ -36,29 +36,23 @@ inline void validate_websocket_client_config(const websocket_client_config& conf
     if (config.connect_timeout_.count() <= 0) {
         throw std::invalid_argument("WebSocket client connect timeout must be greater than zero");
     }
-    for (const std::optional<std::chrono::milliseconds> timeout :
-        {config.read_timeout_, config.write_timeout_, config.close_handshake_timeout_}) {
+    for (const std::optional<std::chrono::milliseconds> timeout : {config.read_timeout_, config.write_timeout_}) {
         if (timeout.has_value() && timeout->count() <= 0) {
             throw std::invalid_argument("WebSocket client timeout must be greater than zero");
         }
     }
-    validate_websocket_heartbeat_config(config.heartbeat_);
+    validate_websocket_lifecycle_options(config.lifecycle_);
     validate_client_tls_config(config.tls_);
     if (config.scheme_ == websocket_scheme::wss && config.tls_.mode_ == client_tls_mode::disabled) {
         throw std::invalid_argument("wss WebSocket client requires TLS; use the ws scheme for plaintext");
-    }
-
-    if (config.compression_level_ < 0 || config.compression_level_ > 9) {
-        throw std::invalid_argument("WebSocket client compression level must be between 0 and 9");
     }
 }
 
 // The handshake owns application-header policy; the negotiation owns the
 // subprotocol list and the deflate offer.
-inline void validate_websocket_client_protocols_and_headers(
-    std::span<const http_header_view> headers, std::span<const std::string_view> subprotocols,
-    std::string_view user_agent, const websocket_client_deflate_offer& deflate) {
-    validate_http1_websocket_client_handshake_configuration(headers, user_agent);
+inline void validate_websocket_client_protocols_and_headers(std::span<const http_header_view> headers,
+    std::span<const std::string_view> subprotocols, const websocket_client_deflate_offer& deflate) {
+    validate_http1_websocket_client_handshake_configuration(headers);
     websocket_client_negotiation::validate_configuration({.subprotocols_ = subprotocols, .deflate_ = deflate});
 }
 

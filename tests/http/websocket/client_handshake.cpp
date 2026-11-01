@@ -27,10 +27,9 @@ constexpr std::string_view accept = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=";
 class client_handshake final {
 public:
     explicit client_handshake(std::span<const ruvia::http_header_view> headers = {},
-        std::span<const std::string_view> protocols = {}, std::string_view user_agent = {})
-        : negotiation_({.subprotocols_ = protocols}),
-          user_agent_(user_agent) {
-        ruvia::validate_http1_websocket_client_handshake_configuration(headers, user_agent);
+        std::span<const std::string_view> protocols = {})
+        : negotiation_({.subprotocols_ = protocols}) {
+        ruvia::validate_http1_websocket_client_handshake_configuration(headers);
         ruvia::http_base64_encode(key_.data(), nonce);
         for (const auto header : headers) {
             headers_.emplace_back(header.name(), header.value(), std::pmr::get_default_resource());
@@ -40,8 +39,8 @@ public:
     [[nodiscard]] std::variant<ruvia::prepared_http1_client_request,
         ruvia::http1_client_request_buffer_too_small, ruvia::http1_client_request_prepare_error>
     prepare(const ruvia::http_origin_view& origin, std::string_view target, std::span<char> buffer) const {
-        return ruvia::prepare_http1_websocket_client_request(origin, target, key_, negotiation_, headers_,
-            user_agent_, buffer, std::pmr::get_default_resource());
+        return ruvia::prepare_http1_websocket_client_request(origin, target, key_, negotiation_, headers_, buffer,
+            std::pmr::get_default_resource());
     }
 
     // The response parser takes a freshly prepared request's exchange state.
@@ -64,7 +63,7 @@ public:
     }
 
     [[nodiscard]] std::variant<ruvia::websocket_client_negotiation_result_view,
-        ruvia::http1_websocket_client_handshake_error>
+        ruvia::websocket_client_handshake_error>
     validate(const ruvia::http1_parsed_client_response_head& response) const {
         return ruvia::validate_http1_websocket_client_response(key_, negotiation_, response);
     }
@@ -73,7 +72,6 @@ private:
     std::array<char, 24> key_{};
     ruvia::websocket_client_negotiation negotiation_;
     std::vector<ruvia::http_header> headers_;
-    std::string user_agent_;
 };
 
 std::string valid_response(std::string_view extra = {}) {
@@ -89,9 +87,9 @@ std::string valid_response(std::string_view extra = {}) {
 }
 
 bool rejects_configuration(std::span<const ruvia::http_header_view> headers = {},
-    std::span<const std::string_view> protocols = {}, std::string_view user_agent = {}) {
+    std::span<const std::string_view> protocols = {}) {
     try {
-        const client_handshake handshake(headers, protocols, user_agent);
+        const client_handshake handshake(headers, protocols);
         (void)handshake;
         return false;
     } catch (const std::invalid_argument&) {
@@ -103,8 +101,9 @@ bool rejects_configuration(std::span<const ruvia::http_header_view> headers = {}
 
 RUVIA_TEST(websocket_client_handshake_prepares_rfc_request) {
     const std::array protocols{std::string_view{"chat"}};
-    const std::array headers{ruvia::http_header_view{"X-Trace", "one"}};
-    const client_handshake handshake(headers, protocols, "RuviaTest/1");
+    const std::array headers{
+        ruvia::http_header_view{"X-Trace", "one"}, ruvia::http_header_view{"User-Agent", "RuviaTest/1"}};
+    const client_handshake handshake(headers, protocols);
     std::array<char, 2048> buffer{};
     const auto prepared = handshake.prepare(
         ruvia::http_origin_view::https({.host_ = "example.com"}), "/chat", buffer);
@@ -143,8 +142,7 @@ RUVIA_TEST(websocket_client_handshake_rejects_unoffered_or_duplicate_protocol) {
         const auto result_value = handshake.validate(response);
         RUVIA_CHECK(!(result_value.index() == 0));
         if (!(result_value.index() == 0)) {
-            RUVIA_CHECK(std::get<1>(result_value) ==
-                        ruvia::http1_websocket_client_handshake_error::subprotocol);
+            RUVIA_CHECK(std::get<1>(result_value) == ruvia::websocket_client_handshake_error::subprotocol);
         }
     }
 }
@@ -158,7 +156,7 @@ RUVIA_TEST(websocket_client_handshake_rejects_bad_accept_and_extensions) {
     const auto bad_result = handshake.validate(bad);
     RUVIA_CHECK(!(bad_result.index() == 0));
     if (!(bad_result.index() == 0)) {
-        RUVIA_CHECK(std::get<1>(bad_result) == ruvia::http1_websocket_client_handshake_error::accept);
+        RUVIA_CHECK(std::get<1>(bad_result) == ruvia::websocket_client_handshake_error::accept);
     }
 
     const auto duplicate =
@@ -166,8 +164,7 @@ RUVIA_TEST(websocket_client_handshake_rejects_bad_accept_and_extensions) {
     const auto duplicate_result = handshake.validate(duplicate);
     RUVIA_CHECK(!(duplicate_result.index() == 0));
     if (!(duplicate_result.index() == 0)) {
-        RUVIA_CHECK(std::get<1>(duplicate_result) ==
-                    ruvia::http1_websocket_client_handshake_error::accept);
+        RUVIA_CHECK(std::get<1>(duplicate_result) == ruvia::websocket_client_handshake_error::accept);
     }
 
     const auto response =
@@ -175,8 +172,7 @@ RUVIA_TEST(websocket_client_handshake_rejects_bad_accept_and_extensions) {
     const auto extension_result = handshake.validate(response);
     RUVIA_CHECK(!(extension_result.index() == 0));
     if (!(extension_result.index() == 0)) {
-        RUVIA_CHECK(std::get<1>(extension_result) ==
-                    ruvia::http1_websocket_client_handshake_error::extensions);
+        RUVIA_CHECK(std::get<1>(extension_result) == ruvia::websocket_client_handshake_error::extensions);
     }
 }
 
@@ -202,7 +198,7 @@ RUVIA_TEST(websocket_client_handshake_rejects_invalid_configuration_and_reserved
     const std::array reserved{ruvia::http_header_view{"Host", "evil.example"}};
     const std::array transfer_encoding{
         ruvia::http_header_view{"Transfer-Encoding", "chunked"}};
-    const std::array user_agent_header{ruvia::http_header_view{"User-Agent", "custom-agent"}};
+    const std::array bad_user_agent{ruvia::http_header_view{"User-Agent", "bad\r\nagent"}};
     const std::array trailer{ruvia::http_header_view{"Trailer", "X-End"}};
     const std::array expect{ruvia::http_header_view{"Expect", "100-continue"}};
     const std::array pseudo{ruvia::http_header_view{":authority", "evil.example"}};
@@ -215,7 +211,6 @@ RUVIA_TEST(websocket_client_handshake_rejects_invalid_configuration_and_reserved
     RUVIA_CHECK(rejects_configuration(bad_comma));
     RUVIA_CHECK(rejects_configuration(reserved));
     RUVIA_CHECK(rejects_configuration(transfer_encoding));
-    RUVIA_CHECK(rejects_configuration(user_agent_header, {}, "another-agent"));
     RUVIA_CHECK(rejects_configuration(trailer));
     RUVIA_CHECK(rejects_configuration(expect));
     RUVIA_CHECK(rejects_configuration(pseudo));
@@ -224,7 +219,7 @@ RUVIA_TEST(websocket_client_handshake_rejects_invalid_configuration_and_reserved
     RUVIA_CHECK(rejects_configuration({}, empty));
     RUVIA_CHECK(rejects_configuration({}, bad_token));
     RUVIA_CHECK(rejects_configuration({}, comma_token));
-    RUVIA_CHECK(rejects_configuration({}, {}, "bad\r\nagent"));
+    RUVIA_CHECK(rejects_configuration(bad_user_agent));
 }
 
 RUVIA_TEST(websocket_client_handshake_prepares_ipv6_host) {

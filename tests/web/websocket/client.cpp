@@ -91,7 +91,7 @@ namespace {
     std::pmr::monotonic_buffer_resource resource;
     const auto parsed_request =
         ruvia::make_parsed_http_request("GET", "/", headers, {}, &resource);
-    auto handshake = ruvia::make_websocket_server_handshake(parsed_request, {.resource_ = &resource});
+    auto handshake = ruvia::make_websocket_server_handshake(parsed_request, {}, &resource);
     std::string response;
     handshake.for_each_response_part([&response](std::string_view part) {
         response.append(part);
@@ -255,8 +255,8 @@ void check_server_closes_first(ruvia::testing::test_context& ruvia_ctx, bool cli
             {.scheme_ = ruvia::websocket_scheme::ws,
                 .host_ = "127.0.0.1",
                 .port_ = peer.local_endpoint().port(),
-                .close_handshake_timeout_ = server_closes ? std::chrono::milliseconds(10000)
-                                                          : std::chrono::milliseconds(100)});
+                .lifecycle_ = {.close_handshake_timeout_ = server_closes ? std::chrono::milliseconds(10000)
+                                                                         : std::chrono::milliseconds(100)}});
         std::exception_ptr failure;
         try {
             co_await client.connect();
@@ -312,7 +312,8 @@ RUVIA_TEST(websocket_client_negotiates_deflate_and_can_skip_individual_messages)
         auto response = make_server_handshake_response(request);
         response.insert(response.size() - 2, "Sec-WebSocket-Extensions: permessage-deflate; server_no_context_takeover; client_no_context_takeover\r\n");
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
-        ruvia::websocket_connection protocol({.compression_ = {.enabled_ = true}});
+        ruvia::http_io_buffer protocol_input;
+        ruvia::websocket_connection protocol(protocol_input, {.compression_ = {.enabled_ = true}});
         std::array<char, 8192> bytes_value{};
         unsigned messages = 0;
         while (messages != 4) {
@@ -323,7 +324,7 @@ RUVIA_TEST(websocket_client_negotiates_deflate_and_can_skip_individual_messages)
             if (messages == 1) {
                 uncompressed = (static_cast<unsigned char>(bytes_value[0]) & 0x40) == 0;
             }
-            (void)protocol.feed(std::string_view(bytes_value.data(), count));
+            protocol_input.append(std::string_view(bytes_value.data(), count));
             while (auto event = protocol.next_event()) {
                 if (const auto* message = event->message()) {
                     RUVIA_CHECK_EQ(message->payload(), payload_value);
@@ -342,7 +343,7 @@ RUVIA_TEST(websocket_client_negotiates_deflate_and_can_skip_individual_messages)
         ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
                                                               .host_ = "127.0.0.1",
                                                               .port_ = peer.local_endpoint().port(),
-                                                              .deflate_ = {.enabled_ = true}});
+                                                              .deflate_ = {.compression_ = {.enabled_ = true}}});
         {
             auto cold = client.connect();
         }
@@ -530,6 +531,60 @@ RUVIA_TEST(websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
     RUVIA_CHECK(connected);
 }
 
+// One User-Agent rule for every client: the default "Ruvia" unless the
+// application headers carry their own field, which replaces it.
+RUVIA_TEST(websocket_client_handshake_sends_the_default_user_agent_unless_headers_supply_one) {
+    const ruvia::http_header_view custom[]{{"User-Agent", "custom/1"}};
+    for (const auto headers : {std::span<const ruvia::http_header_view>{}, std::span<const ruvia::http_header_view>(custom)}) {
+        auto& io = ruvia::test::new_test_io_context();
+        auto attachment = ruvia::attach_event_loop(io);
+        asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+        std::exception_ptr peer_failure;
+        std::string request;
+        const auto serve = [&]() -> asio::awaitable<void> {
+            auto socket = co_await peer.async_accept(asio::use_awaitable);
+            co_await asio::async_read_until(socket, asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
+            const auto response = make_server_handshake_response(request);
+            co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+            std::array<char, 1024> input{};
+            std::error_code error;
+            while (co_await socket.async_read_some(asio::buffer(input), asio::redirect_error(asio::use_awaitable, error))) {
+            }
+        };
+        asio::co_spawn(io, serve(), [&peer_failure](std::exception_ptr failure) { peer_failure = failure; });
+
+        const auto run_client = [&]() -> ruvia::task<void> {
+            ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
+                                                                  .host_ = "127.0.0.1",
+                                                                  .port_ = peer.local_endpoint().port(),
+                                                                  .headers_ = headers});
+            std::exception_ptr failure;
+            try {
+                co_await client.connect();
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            co_await client.shutdown();
+            peer.close();
+            attachment.stop();
+            if (failure) {
+                std::rethrow_exception(failure);
+            }
+        };
+        auto root = attachment.loop().start(run_client());
+        attachment.run();
+        root.get();
+        if (peer_failure) {
+            std::rethrow_exception(peer_failure);
+        }
+        const std::string_view expected = headers.empty() ? "User-Agent: Ruvia\r\n" : "User-Agent: custom/1\r\n";
+        const auto first = request.find("User-Agent:");
+        RUVIA_CHECK(first != std::string::npos);
+        RUVIA_CHECK(request.find("User-Agent:", first + 1) == std::string::npos);
+        RUVIA_CHECK(request.find(expected) == first);
+    }
+}
+
 RUVIA_TEST(websocket_client_event_loop_stop_joins_connected_heartbeat_and_pending_read) {
     asio::io_context io;
     auto attachment = ruvia::attach_event_loop(io);
@@ -576,10 +631,10 @@ RUVIA_TEST(websocket_client_event_loop_stop_joins_connected_heartbeat_and_pendin
         ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
                                                               .host_ = "127.0.0.1",
                                                               .port_ = peer.local_endpoint().port(),
-                                                              .heartbeat_ = {
-                                                                  .ping_interval_ = std::chrono::milliseconds(20),
-                                                                  .pong_timeout_ = std::chrono::seconds(5),
-                                                              }});
+                                                              .lifecycle_ = {.heartbeat_ = {
+                                                                                 .ping_interval_ = std::chrono::milliseconds(20),
+                                                                                 .pong_timeout_ = std::chrono::seconds(5),
+                                                                             }}});
         co_await client.connect();
         connected = client.connected();
         try {
@@ -689,10 +744,10 @@ RUVIA_TEST(websocket_client_heartbeat_pings_after_a_blocked_message_write) {
                                                               .host_ = "127.0.0.1",
                                                               .port_ = peer.local_endpoint().port(),
                                                               .max_message_bytes_ = payload_size,
-                                                              .heartbeat_ = {
-                                                                  .ping_interval_ = std::chrono::milliseconds(20),
-                                                                  .pong_timeout_ = std::chrono::seconds(5),
-                                                              }});
+                                                              .lifecycle_ = {.heartbeat_ = {
+                                                                                 .ping_interval_ = std::chrono::milliseconds(20),
+                                                                                 .pong_timeout_ = std::chrono::seconds(5),
+                                                                             }}});
         co_await client.connect();
         const std::string payload(payload_size, 'x');
         co_await client.handle().binary(payload);
@@ -759,10 +814,10 @@ RUVIA_TEST(websocket_client_heartbeat_aborts_a_write_stalled_by_a_non_reading_pe
                                                               .port_ = peer.local_endpoint().port(),
                                                               .max_message_bytes_ = payload_size,
                                                               .write_timeout_ = std::nullopt,
-                                                              .heartbeat_ = {
-                                                                  .ping_interval_ = std::chrono::milliseconds(50),
-                                                                  .pong_timeout_ = std::chrono::milliseconds(100),
-                                                              }});
+                                                              .lifecycle_ = {.heartbeat_ = {
+                                                                                 .ping_interval_ = std::chrono::milliseconds(50),
+                                                                                 .pong_timeout_ = std::chrono::milliseconds(100),
+                                                                             }}});
         co_await client.connect();
         const std::string payload(payload_size, 'x');
         try {
@@ -1028,10 +1083,10 @@ RUVIA_TEST(websocket_client_keeps_a_peer_whose_pong_waits_for_the_next_read) {
         ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
                                                               .host_ = "127.0.0.1",
                                                               .port_ = peer.local_endpoint().port(),
-                                                              .heartbeat_ = {
-                                                                  .ping_interval_ = std::chrono::milliseconds(20),
-                                                                  .pong_timeout_ = std::chrono::milliseconds(50),
-                                                              }});
+                                                              .lifecycle_ = {.heartbeat_ = {
+                                                                                 .ping_interval_ = std::chrono::milliseconds(20),
+                                                                                 .pong_timeout_ = std::chrono::milliseconds(50),
+                                                                             }}});
         std::exception_ptr failure;
         try {
             co_await client.connect();

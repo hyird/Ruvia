@@ -14,12 +14,6 @@
 
 namespace ruvia::detail {
 
-inline void validate_http_client_user_agent(std::string_view user_agent) {
-    if (!user_agent.empty() && !is_valid_http_header_value(user_agent)) {
-        throw std::invalid_argument("http client user agent is invalid");
-    }
-}
-
 inline void validate_http_client_config(const http_client_config& config) {
     if (config.push_.max_queued_pushes_ == 0 || config.push_.max_concurrent_pushes_ == 0 ||
         (config.push_.timeout_ && config.push_.timeout_->count() <= 0)) {
@@ -74,7 +68,6 @@ inline void validate_http_client_config(const http_client_config& config) {
     detail::ensure_positive_optional_durations("configured http client timeouts must be greater than zero",
         std::optional{config.connect_timeout_}, config.write_timeout_, config.request_timeout_,
         config.acquire_timeout_);
-    validate_http_client_user_agent(config.user_agent_.view());
     std::size_t unique_cookies = 0;
     std::size_t cookie_bytes = 0;
     for (std::size_t i = 0; i < config.cookies_.size(); ++i) {

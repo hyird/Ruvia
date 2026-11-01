@@ -5,6 +5,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_deflate_codecs.h"
@@ -78,12 +79,14 @@ RUVIA_TEST(websocket_deflate_codecs_match_per_connection_no_context_takeover_byt
     for (int window = 8; window <= 15; ++window) {
         for (int level = 1; level <= 9; ++level) {
             websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
-            websocket_connection connection({
-                .compression_ = (websocket_compression{.enabled_ = true,
-                    .server_max_window_bits_ = window,
-                    .client_max_window_bits_ = window}),
-                .compression_level_ = level,
-            });
+            http_io_buffer input;
+            websocket_connection connection(input,
+                {
+                    .compression_ = (websocket_compression{.enabled_ = true,
+                        .server_max_window_bits_ = window,
+                        .client_max_window_bits_ = window}),
+                    .deflater_ = {.compression_level_ = level},
+                });
             for (unsigned message = 0; message < 3; ++message) {
                 const auto payload = sample_message(message == 1 ? 70'000 : 600, message + 1);
                 RUVIA_CHECK(connection.submit_frame(websocket_opcode::binary, payload) ==

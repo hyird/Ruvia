@@ -34,8 +34,7 @@ bool is_reserved_handshake_header(std::string_view name, detail::request_header_
 }
 }  // namespace
 
-void validate_http1_websocket_client_handshake_configuration(
-    std::span<const http_header_view> headers, std::string_view user_agent) {
+void validate_http1_websocket_client_handshake_configuration(std::span<const http_header_view> headers) {
     request_header_facts facts;
     http1_client_request_prepare_error error{};
     for (const auto& header : headers) {
@@ -50,24 +49,16 @@ void validate_http1_websocket_client_handshake_configuration(
     if (!finalize_headers(facts, error)) {
         throw std::invalid_argument(http1_client_request_prepare_error_message(error).data());
     }
-    if (!user_agent.empty()) {
-        if (!analyze_header(
-                http_header_view{"User-Agent", user_agent}, detail::request_header_kind::user_agent, facts, error)) {
-            throw std::invalid_argument(http1_client_request_prepare_error_message(error).data());
-        }
-    }
 }
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
     http1_client_request_prepare_error>
 prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target,
     std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation,
-    std::span<const http_header> headers, std::string_view user_agent, std::span<char> head_buffer,
-    std::pmr::memory_resource* resource) {
+    std::span<const http_header> headers, std::span<char> head_buffer, std::pmr::memory_resource* resource) {
     static constexpr std::size_t inline_header_capacity = 16;
     const auto negotiation_fields = negotiation.request_fields();
-    const std::size_t total_headers =
-        headers.size() + 3U + negotiation_fields.size() + (user_agent.empty() ? 0U : 1U);
+    const std::size_t total_headers = headers.size() + 3U + negotiation_fields.size();
     std::array<http_header_view, inline_header_capacity> inline_headers{};
     std::pmr::vector<http_header_view> heap_headers(resource);
     std::span<const http_header_view> active_headers{};
@@ -84,9 +75,6 @@ prepare_http1_websocket_client_request(const http_origin_view& origin, std::stri
         for (const auto& field : negotiation_fields) {
             inline_headers[index++] = http_header_view{field.name(), field.value()};
         }
-        if (!user_agent.empty()) {
-            inline_headers[index++] = http_header_view{"User-Agent", user_agent};
-        }
         active_headers = std::span<const http_header_view>(inline_headers.data(), total_headers);
     } else {
         heap_headers.reserve(total_headers);
@@ -101,21 +89,18 @@ prepare_http1_websocket_client_request(const http_origin_view& origin, std::stri
         for (const auto& field : negotiation_fields) {
             heap_headers.emplace_back(field.name(), field.value());
         }
-        if (!user_agent.empty()) {
-            heap_headers.emplace_back("User-Agent", user_agent);
-        }
         active_headers = heap_headers;
     }
     return http1_client_request_writer(resource)
         .prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = active_headers}, head_buffer);
 }
 
-std::variant<websocket_client_negotiation_result_view, http1_websocket_client_handshake_error>
+std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
 validate_http1_websocket_client_response(std::span<const char, 24> encoded_key,
     const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response) {
     if (response.plan().protocol_upgrade() == nullptr ||
         response.head().status() != http_status::switching_protocols) {
-        return http1_websocket_client_handshake_error::response_status;
+        return websocket_client_handshake_error::response_status;
     }
     detail::websocket_accept_key_type expected{};
     detail::encode_websocket_accept(
@@ -143,21 +128,15 @@ validate_http1_websocket_client_response(std::span<const char, 24> encoded_key,
         }
     }
     if (accepts != 1 || !accept_matches) {
-        return http1_websocket_client_handshake_error::accept;
+        return websocket_client_handshake_error::accept;
     }
     if (!has_upgrade) {
-        return http1_websocket_client_handshake_error::upgrade;
+        return websocket_client_handshake_error::upgrade;
     }
     if (!has_connection) {
-        return http1_websocket_client_handshake_error::connection;
+        return websocket_client_handshake_error::connection;
     }
 
-    const auto negotiated = negotiation.validate_fields(response.head().headers());
-    if ((negotiated.index() != 0)) {
-        return std::get<1>(negotiated) == websocket_client_negotiation_error::subprotocol
-                   ? http1_websocket_client_handshake_error::subprotocol
-                   : http1_websocket_client_handshake_error::extensions;
-    }
-    return std::get<0>(negotiated);
+    return detail::validate_websocket_client_selection(negotiation, response.head().headers(), false);
 }
 }  // namespace ruvia

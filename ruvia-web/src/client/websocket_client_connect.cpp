@@ -64,16 +64,15 @@ task<void> websocket_client_state::establish() {
         co_await perform_handshake();
     }
     protocol_.emplace(input_, websocket_connection_options{
-                                  .resource_ = memory_.resource(),
                                   .message_limit_ = protocol_byte_limit::limited(config_.max_message_bytes_),
                                   .compression_ = negotiated_compression_,
                                   .role_ = websocket_connection_role::client,
                                   .mask_key_generator_ = &websocket_client_state::generate_mask,
-                                  .compression_level_ = config_.compression_level_});
+                                  .deflater_ = config_.deflate_.deflater_});
     last_active_ms_ = steady_now_ms();
     liveness_state_ = websocket_liveness_idle{};
-    if (config_.heartbeat_.ping_interval_.has_value()) {
-        arm_heartbeat_timer(*config_.heartbeat_.ping_interval_);
+    if (config_.lifecycle_.heartbeat_.ping_interval_.has_value()) {
+        arm_heartbeat_timer(*config_.lifecycle_.heartbeat_.ping_interval_);
     }
 }
 
@@ -94,9 +93,8 @@ task<void> websocket_client_state::perform_handshake() {
     http_io_buffer request_buffer(memory_.resource());
     auto prepared_result = prepare_http1_request_head(
         request_buffer, max_request_head_bytes, [&](std::span<char> buffer) {
-            return prepare_http1_websocket_client_request(config_.origin_, config_.target_,
-                encoded_key, config_.negotiation_, config_.headers_, config_.user_agent_, buffer,
-                memory_.resource());
+            return prepare_http1_websocket_client_request(config_.origin_, config_.target_, encoded_key,
+                config_.negotiation_, config_.headers_, buffer, memory_.resource());
         });
     auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
     if (prepared == nullptr) {

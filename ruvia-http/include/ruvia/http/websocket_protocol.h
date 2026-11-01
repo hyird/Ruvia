@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -39,20 +40,49 @@ struct websocket_compression final {
     bool operator==(const websocket_compression&) const = default;
 };
 
+// zlib parameters of an endpoint's permessage-deflate deflater, which RFC 7692
+// leaves to the sender: compression level (0-9) and memLevel (1-9). Only a
+// direction negotiated with context takeover keeps a private deflater, created
+// on its first compressed message: directions without takeover (the default)
+// share the worker's codecs, which use zlib's default memLevel, and allocate no
+// codec state per connection. memLevel sizes the hash heads plus pending
+// buffer at 2^(memLevel + 9) bytes on top of the 128 KiB window and history of
+// a 15-bit window: 128 KiB at 8, 8 KiB at 4, so 4 saves 120 KiB per takeover
+// connection at a lower ratio.
+struct websocket_deflater_config final {
+    int compression_level_{6};
+    int mem_level_{8};
+};
+
+// The one range check of websocket_deflater_config; throws
+// std::invalid_argument outside zlib's ranges.
+inline void validate_websocket_deflater_config(websocket_deflater_config config) {
+    if (config.compression_level_ < 0 || config.compression_level_ > 9) {
+        throw std::invalid_argument("WebSocket compression level must be between 0 and 9");
+    }
+    if (config.mem_level_ < 1 || config.mem_level_ > 9) {
+        throw std::invalid_argument("WebSocket deflate memory level must be between 1 and 9");
+    }
+}
+
+// Server permessage-deflate policy.
 struct websocket_deflate_config final {
     bool enabled_{true};
-    int compression_level_{6};
     // Opt-in: never mix secrets and attacker-controlled content in one dictionary.
     // A peer requesting no-context-takeover still receives independent messages.
     bool context_takeover_{false};
-    // zlib memLevel (1-9) of a connection's private deflater. Only a direction
-    // negotiated with context takeover keeps one, created on its first
-    // compressed message: directions without takeover (the default) share the
-    // worker's codecs and allocate no codec state per connection. memLevel
-    // sizes the hash heads plus pending buffer at 2^(memLevel + 9) bytes on
-    // top of the 128 KiB window and history of a 15-bit window: 128 KiB at 8,
-    // 8 KiB at 4, so 4 saves 120 KiB per takeover connection at a lower ratio.
-    int mem_level_{8};
+    websocket_deflater_config deflater_{};
+};
+
+// Client permessage-deflate offer. compression_ holds the offered extension
+// parameters (RFC 7692 section 7.1); offer_client_max_window_bits_ adds the
+// valueless client_max_window_bits that lets the server pick the client window
+// (section 7.1.2.2) and is required when compression_.client_max_window_bits_
+// is set.
+struct websocket_client_deflate_offer final {
+    websocket_compression compression_{};
+    bool offer_client_max_window_bits_{true};
+    websocket_deflater_config deflater_{};
 };
 
 namespace detail {
@@ -212,31 +242,6 @@ private:
     websocket_transport_disposition disposition_;
 };
 
-enum class websocket_event_kind : std::uint8_t { message,
-    ping,
-    pong,
-    close,
-    protocol_error,
-    transport_end };
-
-class websocket_message_event final {
-public:
-    [[nodiscard]] constexpr websocket_opcode opcode() const noexcept {
-        return opcode_;
-    }
-    [[nodiscard]] constexpr std::string_view payload() const noexcept {
-        return payload_;
-    }
-
-private:
-    friend class websocket_event;
-    constexpr websocket_message_event(websocket_opcode opcode, std::string_view payload_value) noexcept
-        : opcode_(opcode),
-          payload_(payload_value) {}
-    websocket_opcode opcode_;
-    std::string_view payload_;
-};
-
 class websocket_ping_event final {
 public:
     [[nodiscard]] constexpr std::string_view payload() const noexcept {
@@ -304,16 +309,14 @@ private:
 
 // One protocol value shared by both public drivers and the sans-I/O core.
 // Payload/reason views borrow the driver's input or message assembly storage;
-// the driver's next poll()/next_event() or feed() may invalidate those views.
+// the next next_event() or an append to the driver's input buffer may
+// invalidate those views.
 class websocket_event final {
 public:
-    [[nodiscard]] websocket_event_kind kind() const noexcept {
-        return static_cast<websocket_event_kind>(value_.index());
+    [[nodiscard]] const websocket_message* message() const& noexcept {
+        return std::get_if<websocket_message>(&value_);
     }
-    [[nodiscard]] const websocket_message_event* message() const& noexcept {
-        return std::get_if<websocket_message_event>(&value_);
-    }
-    const websocket_message_event* message() const&& = delete;
+    const websocket_message* message() const&& = delete;
     [[nodiscard]] const websocket_ping_event* ping() const& noexcept {
         return std::get_if<websocket_ping_event>(&value_);
     }
@@ -337,14 +340,13 @@ public:
 
 private:
     friend class websocket_connection;
-    using value_type = std::variant<websocket_message_event, websocket_ping_event, websocket_pong_event,
+    using value_type = std::variant<websocket_message, websocket_ping_event, websocket_pong_event,
         websocket_close_event, websocket_protocol_error_event, websocket_transport_end_event>;
-    static_assert(static_cast<std::uint8_t>(websocket_event_kind::transport_end) + 1 == std::variant_size_v<value_type>);
     template <typename event_type>
     explicit websocket_event(event_type event) noexcept
         : value_(std::move(event)) {}
     [[nodiscard]] static websocket_event message(websocket_opcode opcode, std::string_view payload_value) noexcept {
-        return websocket_event(websocket_message_event(opcode, payload_value));
+        return websocket_event(websocket_message::borrow(opcode, payload_value));
     }
     [[nodiscard]] static websocket_event ping(std::string_view payload_value) noexcept {
         return websocket_event(websocket_ping_event(payload_value));

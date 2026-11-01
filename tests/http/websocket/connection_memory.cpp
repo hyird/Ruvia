@@ -73,12 +73,16 @@ bool zero_mask(void*, websocket_mask_key_type& key) noexcept {
     return message;
 }
 
-[[nodiscard]] websocket_connection client(websocket_compression compression) {
-    return websocket_connection({.message_limit_ = protocol_byte_limit::unlimited(),
-        .compression_ = compression,
-        .role_ = websocket_connection_role::client,
-        .mask_key_generator_ = &zero_mask});
-}
+struct client_endpoint final {
+    explicit client_endpoint(websocket_compression compression)
+        : protocol_(input_, {.message_limit_ = protocol_byte_limit::unlimited(),
+                                .compression_ = compression,
+                                .role_ = websocket_connection_role::client,
+                                .mask_key_generator_ = &zero_mask}) {}
+
+    http_io_buffer input_;
+    websocket_connection protocol_;
+};
 
 // Takes every pending output byte of a sender.
 template <typename sender_type>
@@ -132,21 +136,22 @@ RUVIA_TEST(ws_shared_deflate_matches_private_no_context_takeover_bytes) {
             const websocket_compression compression{.enabled_ = true, .server_max_window_bits_ = window};
             counting_resource codec_memory;
             websocket_deflate_codecs codecs(&codec_memory);
-            server_endpoint shared({.compression_ = compression, .compression_level_ = level, .shared_deflate_ = &codecs});
-            server_endpoint owned({.compression_ = compression, .compression_level_ = level});
-            auto peer = client(compression);
+            server_endpoint shared(
+                {.compression_ = compression, .deflater_ = {.compression_level_ = level}, .shared_deflate_ = &codecs});
+            server_endpoint owned({.compression_ = compression, .deflater_ = {.compression_level_ = level}});
+            client_endpoint peer(compression);
             for (const auto& message : messages) {
                 RUVIA_CHECK(shared.protocol_.submit_frame(websocket_opcode::text, message) == websocket_frame_submit_status::accepted);
                 RUVIA_CHECK(owned.protocol_.submit_frame(websocket_opcode::text, message) == websocket_frame_submit_status::accepted);
                 const auto shared_wire = drain(ruvia_ctx, shared.protocol_);
                 RUVIA_CHECK_EQ(shared_wire, drain(ruvia_ctx, owned.protocol_));
                 RUVIA_CHECK(compressed(shared_wire));
-                RUVIA_CHECK(peer.feed(shared_wire) == websocket_feed_status::accepted);
-                const auto event = peer.next_event();
+                peer.input_.append(shared_wire);
+                const auto event = peer.protocol_.next_event();
                 RUVIA_CHECK(event && event->message() && event->message()->payload() == message);
 
-                RUVIA_CHECK(peer.submit_frame(websocket_opcode::text, message) == websocket_frame_submit_status::accepted);
-                const auto wire = drain(ruvia_ctx, peer);
+                RUVIA_CHECK(peer.protocol_.submit_frame(websocket_opcode::text, message) == websocket_frame_submit_status::accepted);
+                const auto wire = drain(ruvia_ctx, peer.protocol_);
                 RUVIA_CHECK(receive(ruvia_ctx, shared.input_, shared.protocol_, wire) == message);
                 RUVIA_CHECK(receive(ruvia_ctx, owned.input_, owned.protocol_, wire) == message);
             }
@@ -191,9 +196,9 @@ RUVIA_TEST(ws_shared_deflate_resets_after_a_failed_connection_message) {
     failing.input_.append(garbage);
     const auto failure = failing.protocol_.next_event();
     RUVIA_CHECK(failure && failure->protocol_error() && failure->protocol_error()->close_code() == 1002);
-    auto peer = client(compression);
-    RUVIA_CHECK(peer.submit_frame(websocket_opcode::binary, message) == websocket_frame_submit_status::accepted);
-    RUVIA_CHECK(receive(ruvia_ctx, other.input_, other.protocol_, drain(ruvia_ctx, peer)) == message);
+    client_endpoint peer(compression);
+    RUVIA_CHECK(peer.protocol_.submit_frame(websocket_opcode::binary, message) == websocket_frame_submit_status::accepted);
+    RUVIA_CHECK(receive(ruvia_ctx, other.input_, other.protocol_, drain(ruvia_ctx, peer.protocol_)) == message);
 }
 
 // After one large message in each direction, every connection buffer goes
@@ -202,14 +207,14 @@ RUVIA_TEST(ws_connection_buffers_keep_bounded_storage_after_a_large_message) {
     const websocket_compression compression{.enabled_ = true};
     websocket_deflate_codecs codecs(std::pmr::new_delete_resource());
     server_endpoint server({.compression_ = compression, .shared_deflate_ = &codecs});
-    auto peer = client(compression);
+    client_endpoint peer(compression);
     const auto exchange = [&](const std::string& inbound, bool compress_inbound, const std::string& outbound) {
-        RUVIA_CHECK(peer.submit_frame(websocket_opcode::binary, inbound, compress_inbound) == websocket_frame_submit_status::accepted);
-        RUVIA_CHECK(receive(ruvia_ctx, server.input_, server.protocol_, drain(ruvia_ctx, peer)) == inbound);
+        RUVIA_CHECK(peer.protocol_.submit_frame(websocket_opcode::binary, inbound, compress_inbound) == websocket_frame_submit_status::accepted);
+        RUVIA_CHECK(receive(ruvia_ctx, server.input_, server.protocol_, drain(ruvia_ctx, peer.protocol_)) == inbound);
         RUVIA_CHECK(server.protocol_.submit_frame(websocket_opcode::binary, outbound) == websocket_frame_submit_status::accepted);
         const auto wire = drain(ruvia_ctx, server.protocol_);
-        RUVIA_CHECK(peer.feed(wire) == websocket_feed_status::accepted);
-        const auto event = peer.next_event();
+        peer.input_.append(wire);
+        const auto event = peer.protocol_.next_event();
         RUVIA_CHECK(event && event->message() && event->message()->payload() == outbound);
         // Releases the delivered message and its input.
         RUVIA_CHECK(!server.protocol_.next_event().has_value());
@@ -249,7 +254,7 @@ RUVIA_TEST(ws_takeover_directions_keep_private_codecs_beside_shared_ones) {
         counting_resource codec_memory;
         websocket_deflate_codecs codecs(&codec_memory);
         server_endpoint server({.compression_ = compression, .shared_deflate_ = &codecs});
-        auto peer = client(compression);
+        client_endpoint peer(compression);
         const auto idle_bytes = server.memory_.live_bytes_;
 
         std::size_t first_size = 0;
@@ -263,12 +268,12 @@ RUVIA_TEST(ws_takeover_directions_keep_private_codecs_beside_shared_ones) {
                 // Only a kept dictionary shrinks a repeated message.
                 RUVIA_CHECK(server_takeover ? wire.size() < first_size : wire.size() == first_size);
             }
-            RUVIA_CHECK(peer.feed(wire) == websocket_feed_status::accepted);
-            const auto event = peer.next_event();
+            peer.input_.append(wire);
+            const auto event = peer.protocol_.next_event();
             RUVIA_CHECK(event && event->message() && event->message()->payload() == message);
 
-            RUVIA_CHECK(peer.submit_frame(websocket_opcode::text, message) == websocket_frame_submit_status::accepted);
-            RUVIA_CHECK(receive(ruvia_ctx, server.input_, server.protocol_, drain(ruvia_ctx, peer)) == message);
+            RUVIA_CHECK(peer.protocol_.submit_frame(websocket_opcode::text, message) == websocket_frame_submit_status::accepted);
+            RUVIA_CHECK(receive(ruvia_ctx, server.input_, server.protocol_, drain(ruvia_ctx, peer.protocol_)) == message);
         }
         // The private inflater (and deflater with server takeover) came from
         // the connection; the shared codecs serve only a no-takeover sender.
@@ -286,14 +291,14 @@ RUVIA_TEST(ws_takeover_deflater_uses_the_configured_mem_level) {
     const auto message = sample_message(5000, 10);
     std::size_t codec_bytes[2]{};
     for (const int mem_level : {8, 4}) {
-        server_endpoint server({.compression_ = compression, .mem_level_ = mem_level});
+        server_endpoint server({.compression_ = compression, .deflater_ = {.mem_level_ = mem_level}});
         const auto idle_bytes = server.memory_.live_bytes_;
-        auto peer = client(compression);
+        client_endpoint peer(compression);
         for (int round = 0; round < 2; ++round) {
             RUVIA_CHECK(server.protocol_.submit_frame(websocket_opcode::text, message) == websocket_frame_submit_status::accepted);
             const auto wire = drain(ruvia_ctx, server.protocol_);
-            RUVIA_CHECK(peer.feed(wire) == websocket_feed_status::accepted);
-            const auto event = peer.next_event();
+            peer.input_.append(wire);
+            const auto event = peer.protocol_.next_event();
             RUVIA_CHECK(event && event->message() && event->message()->payload() == message);
         }
         codec_bytes[mem_level == 8 ? 0 : 1] = server.memory_.live_bytes_ - idle_bytes;
@@ -303,25 +308,23 @@ RUVIA_TEST(ws_takeover_deflater_uses_the_configured_mem_level) {
 
 RUVIA_TEST(ws_deflate_mem_level_is_validated) {
     for (const int mem_level : {0, 10}) {
-        RUVIA_CHECK(ruvia::testing::throws_on([&] {
-            websocket_connection invalid({.mem_level_ = mem_level});
-        }));
         http_io_buffer input;
         RUVIA_CHECK(ruvia::testing::throws_on([&] {
-            websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(), .mem_level_ = mem_level});
+            websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(), .deflater_ = {.mem_level_ = mem_level}});
         }));
     }
     for (const int mem_level : {1, 9}) {
-        websocket_connection valid({.compression_ = {.enabled_ = true}, .mem_level_ = mem_level});
+        http_io_buffer input;
+        websocket_connection valid(input, {.compression_ = {.enabled_ = true}, .deflater_ = {.mem_level_ = mem_level}});
         RUVIA_CHECK(valid.submit_frame(websocket_opcode::text, std::string(1000, 'v')) == websocket_frame_submit_status::accepted);
     }
 }
 
 RUVIA_TEST(ws_server_protocol_reports_bytes_missing_from_a_partial_frame) {
-    auto peer = client({});
+    client_endpoint peer(websocket_compression{});
     const auto message = sample_message(70'000, 11);
-    RUVIA_CHECK(peer.submit_frame(websocket_opcode::binary, message) == websocket_frame_submit_status::accepted);
-    const auto wire = drain(ruvia_ctx, peer);
+    RUVIA_CHECK(peer.protocol_.submit_frame(websocket_opcode::binary, message) == websocket_frame_submit_status::accepted);
+    const auto wire = drain(ruvia_ctx, peer.protocol_);
     http_io_buffer input;
     websocket_connection protocol(input, {.message_limit_ = protocol_byte_limit::unlimited()});
     RUVIA_CHECK_EQ(protocol.needed_input_bytes(), std::size_t{0});

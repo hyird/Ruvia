@@ -287,10 +287,9 @@ websocket_server_negotiation::websocket_server_negotiation(std::string_view subp
 }
 
 websocket_server_negotiation make_websocket_server_negotiation(
-    const http_request& request, websocket_server_negotiation_options options) {
-    return websocket_server_negotiation(
-        choose_websocket_subprotocol(request, options.supported_subprotocols_),
-        websocket_negotiate_permessage_deflate(request, options.deflate_), options.response_headers_, options.resource_);
+    const http_request& request, const websocket_server_handshake_options& options, std::pmr::memory_resource* resource) {
+    return websocket_server_negotiation(choose_websocket_subprotocol(request, options.supported_subprotocols_),
+        websocket_negotiate_permessage_deflate(request, options.deflate_), options.response_headers_, resource);
 }
 
 }  // namespace ruvia::detail
@@ -298,17 +297,11 @@ websocket_server_negotiation make_websocket_server_negotiation(
 namespace ruvia {
 
 websocket_server_handshake make_websocket_server_handshake(
-    const http_request& request, websocket_server_handshake_options options) {
+    const http_request& request, websocket_server_handshake_options options, std::pmr::memory_resource* resource) {
     detail::websocket_accept_key_type accept;
     detail::encode_websocket_accept(
         accept, detail::request_known_header(request, detail::request_header_kind::sec_websocket_key));
-    auto negotiation = detail::make_websocket_server_negotiation(request,
-        {
-            .supported_subprotocols_ = options.supported_subprotocols_,
-            .response_headers_ = options.response_headers_,
-            .resource_ = options.resource_,
-            .deflate_ = options.deflate_,
-        });
+    auto negotiation = detail::make_websocket_server_negotiation(request, options, resource);
     return websocket_server_handshake(accept, std::move(negotiation).take_subprotocol(),
         negotiation.compression(), std::move(negotiation).take_response_headers());
 }

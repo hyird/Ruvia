@@ -26,7 +26,7 @@ task<std::optional<websocket_message>> websocket_client_state::run_read(operatio
         const auto event =
             co_await poll_protocol_event(config_.read_timeout_, "WebSocket peer violated the protocol");
         if (const auto* message = event.message()) {
-            co_return websocket_message::borrow(message->opcode(), message->payload());
+            co_return *message;
         }
         if (const auto* pong = event.pong()) {
             if (websocket_heartbeat_pong_matches(liveness_state_, pong->payload())) {
@@ -93,9 +93,9 @@ task<void> websocket_client_state::await_peer_transport_end() {
     // within a reasonable time. Either way the close handshake has completed,
     // so neither that timeout nor a failing transport fails the operation.
     disarm(close_handshake_timer_);
-    if (config_.close_handshake_timeout_.has_value()) {
+    if (config_.lifecycle_.close_handshake_timeout_.has_value()) {
         (void)worker_.schedule_timer(close_handshake_timer_,
-            worker_timer_deadline_after(*config_.close_handshake_timeout_),
+            worker_timer_deadline_after(*config_.lifecycle_.close_handshake_timeout_),
             [this](worker_timer_outcome outcome) noexcept {
                 if (outcome != worker_timer_outcome::expired) {
                     return;
@@ -127,7 +127,7 @@ task<void> websocket_client_state::await_peer_transport_end() {
         co_return;
     }
     require_protocol().notify_transport_eof();
-    arm(close_handshake_timer_, config_.close_handshake_timeout_, client_abort_reason::closing);
+    arm(close_handshake_timer_, config_.lifecycle_.close_handshake_timeout_, client_abort_reason::closing);
     try {
         co_await wait_for_write_idle(write_wait_type::reader);
         write_guard_type write_guard(*this, write_phase_type::application);

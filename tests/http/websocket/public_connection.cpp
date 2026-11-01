@@ -57,8 +57,8 @@ private:
     }
 };
 
-websocket_connection client(mask_source& source_value, protocol_byte_limit limit = protocol_byte_limit::unlimited()) {
-    return websocket_connection({.message_limit_ = limit, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &source_value});
+websocket_connection client(http_io_buffer& input, mask_source& source_value, protocol_byte_limit limit = protocol_byte_limit::unlimited()) {
+    return websocket_connection(input, {.message_limit_ = limit, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &source_value});
 }
 
 std::string drain(websocket_connection& connection) {
@@ -74,8 +74,10 @@ RUVIA_TEST(ws_public_context_takeover_mixed_messages_and_connection_lifetime) {
     counting_resource memory;
     {
         mask_source mask;
-        websocket_connection sender({.resource_ = &memory, .message_limit_ = protocol_byte_limit::limited(16384), .compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask, .compression_level_ = 9});
-        websocket_connection receiver({.resource_ = &memory, .message_limit_ = protocol_byte_limit::limited(16384), .compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false}), .compression_level_ = 9});
+        http_io_buffer sender_input(&memory);
+        http_io_buffer receiver_input(&memory);
+        websocket_connection sender(sender_input, {.message_limit_ = protocol_byte_limit::limited(16384), .compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask, .deflater_ = {.compression_level_ = 9}});
+        websocket_connection receiver(receiver_input, {.message_limit_ = protocol_byte_limit::limited(16384), .compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false}), .deflater_ = {.compression_level_ = 9}});
         std::string noise(1024, '\0');
         std::uint32_t state_value = 1234567;
         for (auto& byte : noise) {
@@ -93,7 +95,7 @@ RUVIA_TEST(ws_public_context_takeover_mixed_messages_and_connection_lifetime) {
             if (!compress || round % 4 == 0) {
                 RUVIA_CHECK((static_cast<unsigned char>(wire[0]) & 0x40U) == 0);
             }
-            RUVIA_CHECK(receiver.feed(wire) == websocket_feed_status::accepted);
+            receiver_input.append(wire);
             const auto event = receiver.next_event();
             RUVIA_CHECK(event && event->message());
             if (!event || !event->message()) {
@@ -125,12 +127,14 @@ RUVIA_TEST(ws_public_compression_recovers_after_unsent_message_failure) {
             const websocket_compression compression{.enabled_ = true,
                 .server_no_context_takeover_ = false,
                 .client_no_context_takeover_ = false};
-            websocket_connection sender({.resource_ = &memory,
-                .compression_ = compression,
-                .role_ = websocket_connection_role::client,
-                .mask_key_generator_ = &mask_source::generate,
-                .mask_key_context_ = &mask});
-            websocket_connection receiver({.compression_ = compression});
+            http_io_buffer sender_input(&memory);
+            websocket_connection sender(sender_input,
+                {.compression_ = compression,
+                    .role_ = websocket_connection_role::client,
+                    .mask_key_generator_ = &mask_source::generate,
+                    .mask_key_context_ = &mask});
+            http_io_buffer receiver_input;
+            websocket_connection receiver(receiver_input, {.compression_ = compression});
             const std::string payload(4096, 'x');
             const std::string prefix_payload(1024, 'p');
             if (failure == failure_kind::mask_with_pending_message) {
@@ -150,7 +154,7 @@ RUVIA_TEST(ws_public_compression_recovers_after_unsent_message_failure) {
 
             RUVIA_CHECK(sender.submit_frame(websocket_opcode::binary, payload) == websocket_frame_submit_status::accepted);
             const auto wire = drain(sender);
-            RUVIA_CHECK(receiver.feed(wire) == websocket_feed_status::accepted);
+            receiver_input.append(wire);
             if (failure == failure_kind::mask_with_pending_message) {
                 const auto prefix_event = receiver.next_event();
                 RUVIA_CHECK(prefix_event && prefix_event->message());
@@ -172,21 +176,22 @@ RUVIA_TEST(ws_public_compression_recovers_after_unsent_message_failure) {
 RUVIA_TEST(ws_public_compression_accepts_final_blocks_and_preserves_required_history) {
     for (const bool no_takeover : {false, true}) {
         mask_source mask;
-        websocket_connection receiver({.compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = no_takeover}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
+        http_io_buffer input;
+        websocket_connection receiver(input, {.compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = no_takeover}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
         // RFC 7692 section 7.2.3.4: BFINAL=1, padding, then an empty block.
-        RUVIA_CHECK(receiver.feed(std::string_view("\xc1\x08\xf3\x48\xcd\xc9\xc9\x07\x00\x00", 10)) == websocket_feed_status::accepted);
+        input.append(std::string_view("\xc1\x08\xf3\x48\xcd\xc9\xc9\x07\x00\x00", 10));
         auto event = receiver.next_event();
         RUVIA_CHECK(event && event->message() && event->message()->payload() == "Hello");
         // Two terminated streams within one message share their LZ77 history
         // even when context takeover between messages is disabled.
-        RUVIA_CHECK(receiver.feed(std::string_view("\xc1\x0c\xf3\x48\xcd\xc9\xc9\x07\x00\xf3\x00\x11\x00\x00", 14)) == websocket_feed_status::accepted);
+        input.append(std::string_view("\xc1\x0c\xf3\x48\xcd\xc9\xc9\x07\x00\xf3\x00\x11\x00\x00", 14));
         event = receiver.next_event();
         RUVIA_CHECK(event && event->message() && event->message()->payload() == "HelloHello");
-        RUVIA_CHECK(receiver.feed(std::string_view("\xc1\x01\x00", 3)) == websocket_feed_status::accepted);
+        input.append(std::string_view("\xc1\x01\x00", 3));
         event = receiver.next_event();
         RUVIA_CHECK(event && event->message() && event->message()->payload().empty());
         // This message refers back to the preceding message's dictionary.
-        RUVIA_CHECK(receiver.feed(std::string_view("\xc1\x05\xf2\x00\x11\x00\x00", 7)) == websocket_feed_status::accepted);
+        input.append(std::string_view("\xc1\x05\xf2\x00\x11\x00\x00", 7));
         event = receiver.next_event();
         if (no_takeover) {
             RUVIA_CHECK(event && event->protocol_error() && event->protocol_error()->close_code() == 1002);
@@ -199,8 +204,9 @@ RUVIA_TEST(ws_public_compression_accepts_final_blocks_and_preserves_required_his
 RUVIA_TEST(ws_public_compression_rejects_incomplete_empty_block_headers) {
     for (const auto wire : {std::string_view("\xc1\x00", 2), std::string_view("\xc1\x02\x03\x00", 4)}) {
         mask_source mask;
-        websocket_connection receiver({.compression_ = (websocket_compression{.enabled_ = true}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
-        RUVIA_CHECK(receiver.feed(wire) == websocket_feed_status::accepted);
+        http_io_buffer input;
+        websocket_connection receiver(input, {.compression_ = (websocket_compression{.enabled_ = true}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
+        input.append(wire);
         const auto event = receiver.next_event();
         RUVIA_CHECK(event && event->protocol_error() && event->protocol_error()->close_code() == 1002);
         RUVIA_CHECK(receiver.submit_frame(websocket_opcode::text, "after-error") == websocket_frame_submit_status::not_open);
@@ -212,9 +218,9 @@ RUVIA_TEST(ws_public_decompression_preserves_resource_failure_and_retires_connec
     for (const bool reject_window : {false, true}) {
         counting_resource memory;
         {
-            websocket_connection connection({.resource_ = &memory,
-                .compression_ = websocket_compression{.enabled_ = true}});
-            RUVIA_CHECK(connection.feed(wire) == websocket_feed_status::accepted);
+            http_io_buffer input(&memory);
+            websocket_connection connection(input, {.compression_ = websocket_compression{.enabled_ = true}});
+            input.append(wire);
             // zlib defers its raw-inflate window until the first message.
             // Small protocol buffers remain available, so a queued Close cannot
             // hide a window-allocation failure behind another allocation.
@@ -239,10 +245,9 @@ RUVIA_TEST(ws_public_decompression_preserves_resource_failure_and_retires_connec
                 // still direct the driver to end it, exactly as after EOF.
                 RUVIA_CHECK(connection.output_plan().bytes().empty());
                 RUVIA_CHECK(connection.output_plan().disposition() == websocket_transport_disposition::end_transport);
-                RUVIA_CHECK(connection.feed(wire) == websocket_feed_status::inactive);
                 RUVIA_CHECK(connection.submit_frame(websocket_opcode::text, "after-failure") == websocket_frame_submit_status::not_open);
                 const auto terminal = connection.next_event();
-                RUVIA_CHECK(terminal && terminal->kind() == websocket_event_kind::transport_end);
+                RUVIA_CHECK(terminal && terminal->transport_end() != nullptr);
                 RUVIA_CHECK(connection.abort() == websocket_abort_disposition::abort_transport);
                 RUVIA_CHECK(connection.abort() == websocket_abort_disposition::no_transport_action);
             }
@@ -254,7 +259,8 @@ RUVIA_TEST(ws_public_decompression_preserves_resource_failure_and_retires_connec
 
 RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
     mask_source mask;
-    auto sender = client(mask);
+    http_io_buffer sender_input;
+    auto sender = client(sender_input, mask);
     http_io_buffer input;
     websocket_connection protocol(input);
 
@@ -264,7 +270,6 @@ RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
     RUVIA_CHECK(sender.consume_output(message_wire.size()) == websocket_output_consume_status::drained);
     input.append(message_wire);
     auto message = protocol.next_event();
-    RUVIA_CHECK(message && message->kind() == websocket_event_kind::message);
     RUVIA_CHECK(message && message->message());
     if (message && message->message()) {
         RUVIA_CHECK(message->message()->opcode() == websocket_opcode::text);
@@ -277,7 +282,6 @@ RUVIA_TEST(ws_public_server_events_use_public_payload_types) {
     RUVIA_CHECK(sender.consume_output(ping_wire.size()) == websocket_output_consume_status::drained);
     input.append(ping_wire);
     auto ping = protocol.next_event();
-    RUVIA_CHECK(ping && ping->kind() == websocket_event_kind::ping);
     RUVIA_CHECK(ping && ping->ping());
     if (ping && ping->ping()) {
         RUVIA_CHECK_EQ(ping->ping()->payload(), "p");
@@ -292,7 +296,8 @@ RUVIA_TEST(ws_public_protocol_reuses_borrowed_input_and_releases_memory) {
     {
         websocket_connection protocol(input);
         mask_source mask;
-        auto sender = client(mask);
+        http_io_buffer sender_input;
+        auto sender = client(sender_input, mask);
         for (int i = 0; i < 32; ++i) {
             RUVIA_CHECK(sender.submit_frame(websocket_opcode::text, "payload") ==
                         websocket_frame_submit_status::accepted);
@@ -335,7 +340,7 @@ RUVIA_TEST(ws_public_protocol_reuses_borrowed_input_and_releases_memory) {
         RUVIA_CHECK_EQ(memory.live_bytes_, live_before_submit);
         protocol.notify_transport_eof();
         auto end = protocol.next_event();
-        RUVIA_CHECK(end && end->kind() == websocket_event_kind::transport_end);
+        RUVIA_CHECK(end && end->transport_end() != nullptr);
         protocol.commit_transport_end();
         RUVIA_CHECK(protocol.abort() == websocket_abort_disposition::no_transport_action);
     }
@@ -348,7 +353,6 @@ RUVIA_TEST(ws_public_server_protocol_reports_protocol_error_as_public_value) {
     // A server-side connection must reject an unmasked client frame.
     input.append(std::string_view("\x81\x01x", 3));
     auto error = protocol.next_event();
-    RUVIA_CHECK(error && error->kind() == websocket_event_kind::protocol_error);
     RUVIA_CHECK(error && error->protocol_error() && error->protocol_error()->close_code() == 1002);
 }
 
@@ -356,7 +360,7 @@ RUVIA_TEST(ws_public_server_protocol_controls_permessage_deflate_per_frame) {
     http_io_buffer input;
     websocket_connection protocol(input, {.message_limit_ = protocol_byte_limit::unlimited(),
                                              .compression_ = websocket_compression{.enabled_ = true},
-                                             .compression_level_ = 6});
+                                             .deflater_ = {.compression_level_ = 6}});
     const std::string payload_value(200, 'x');
 
     RUVIA_CHECK(protocol.submit_frame(websocket_opcode::text, payload_value, false) ==
@@ -433,10 +437,9 @@ RUVIA_TEST(ws_public_server_keeps_pending_pong_before_peer_close) {
         "\x88\x80\x05\x06\x07\x08",
         13));
     const auto ping = protocol.next_event();
-    RUVIA_CHECK(ping && ping->kind() == websocket_event_kind::ping);
     RUVIA_CHECK(ping && ping->ping() && ping->ping()->payload() == "p");
     const auto close = protocol.next_event();
-    RUVIA_CHECK(close && close->kind() == websocket_event_kind::close);
+    RUVIA_CHECK(close && close->close());
 
     const auto plan = protocol.output_plan();
     RUVIA_CHECK_EQ(plan.bytes(), std::string_view("\x8a\x01p", 3));
@@ -450,8 +453,10 @@ RUVIA_TEST(ws_public_server_keeps_pending_pong_before_peer_close) {
 
 RUVIA_TEST(ws_public_client_server_exchange_and_partial_output) {
     mask_source source;
-    auto sender = client(source);
-    websocket_connection receiver;
+    http_io_buffer sender_input;
+    auto sender = client(sender_input, source);
+    http_io_buffer receiver_input;
+    websocket_connection receiver(receiver_input);
     const std::string payload_value(65536, '\xff');
     for (unsigned round = 0; round < 3; ++round) {
         RUVIA_CHECK(sender.submit_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
@@ -461,9 +466,9 @@ RUVIA_TEST(ws_public_client_server_exchange_and_partial_output) {
         RUVIA_CHECK(sender.consume_output(1) == websocket_output_consume_status::pending);
         RUVIA_CHECK_EQ(sender.output_plan().bytes(), std::string_view(wire).substr(1));
         RUVIA_CHECK(sender.consume_output(wire.size() - 1) == websocket_output_consume_status::drained);
-        RUVIA_CHECK(receiver.feed(std::string_view(wire).substr(0, 5)) == websocket_feed_status::accepted);
+        receiver_input.append(std::string_view(wire).substr(0, 5));
         RUVIA_CHECK(!receiver.next_event());
-        RUVIA_CHECK(receiver.feed(std::string_view(wire).substr(5)) == websocket_feed_status::accepted);
+        receiver_input.append(std::string_view(wire).substr(5));
         const auto event = receiver.next_event();
         RUVIA_CHECK(event && event->message());
         if (!event || !event->message()) {
@@ -473,7 +478,7 @@ RUVIA_TEST(ws_public_client_server_exchange_and_partial_output) {
         RUVIA_CHECK(receiver.submit_frame(websocket_opcode::binary, event->message()->payload()) == websocket_frame_submit_status::accepted);
         const auto reply = drain(receiver);
         RUVIA_CHECK((static_cast<unsigned char>(reply[1]) & 0x80U) == 0);
-        RUVIA_CHECK(sender.feed(reply) == websocket_feed_status::accepted);
+        sender_input.append(reply);
         const auto echo = sender.next_event();
         RUVIA_CHECK(echo && echo->message());
         if (!echo || !echo->message()) {
@@ -486,8 +491,10 @@ RUVIA_TEST(ws_public_client_server_exchange_and_partial_output) {
 
 RUVIA_TEST(ws_public_client_fragmented_message_with_ping_and_close) {
     mask_source source;
-    auto connection = client(source);
-    websocket_connection server;
+    http_io_buffer input;
+    auto connection = client(input, source);
+    http_io_buffer server_input;
+    websocket_connection server(server_input);
     // A fragmented binary message with a control frame between fragments.
     const std::string wire(
         "\x02\x02"
@@ -497,18 +504,18 @@ RUVIA_TEST(ws_public_client_fragmented_message_with_ping_and_close) {
         "\x80\x02"
         "cd",
         11);
-    RUVIA_CHECK(connection.feed(wire) == websocket_feed_status::accepted);
+    input.append(wire);
     const auto ping = connection.next_event();
     RUVIA_CHECK(ping && ping->ping());
     const auto pong = drain(connection);
-    RUVIA_CHECK(server.feed(pong) == websocket_feed_status::accepted);
+    server_input.append(pong);
     const auto pong_event = server.next_event();
     RUVIA_CHECK(pong_event && pong_event->pong() && pong_event->pong()->payload() == "p");
     const auto message = connection.next_event();
     RUVIA_CHECK(message && message->message() && message->message()->payload() == "abcd");
     RUVIA_CHECK(server.submit_close(1000, "done") == websocket_close_submit_status::accepted);
     const auto close = drain(server);
-    RUVIA_CHECK(connection.feed(close) == websocket_feed_status::accepted);
+    input.append(close);
     const auto closed = connection.next_event();
     RUVIA_CHECK(closed && closed->close() && closed->close()->close_code() == 1000);
     // RFC 6455 section 7.1.1: the server closes the transport first, so the
@@ -517,11 +524,11 @@ RUVIA_TEST(ws_public_client_fragmented_message_with_ping_and_close) {
     const auto response = drain(connection);
     RUVIA_CHECK(connection.output_plan().disposition() == websocket_transport_disposition::keep_open);
     RUVIA_CHECK(connection.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof);
-    RUVIA_CHECK(server.feed(response) == websocket_feed_status::accepted);
+    server_input.append(response);
     const auto acknowledged = server.next_event();
     RUVIA_CHECK(acknowledged && acknowledged->close());
     // Bytes after the close handshake are discarded while waiting.
-    RUVIA_CHECK(connection.feed("x") == websocket_feed_status::accepted);
+    input.append("x");
     RUVIA_CHECK(!connection.next_event());
     RUVIA_CHECK(connection.submit_frame(websocket_opcode::text, "late") == websocket_frame_submit_status::not_open);
     connection.notify_transport_eof();
@@ -529,7 +536,6 @@ RUVIA_TEST(ws_public_client_fragmented_message_with_ping_and_close) {
     RUVIA_CHECK(end && end->transport_end());
     RUVIA_CHECK(connection.output_plan().disposition() == websocket_transport_disposition::end_transport);
     connection.commit_transport_end();
-    RUVIA_CHECK(connection.feed("x") == websocket_feed_status::inactive);
     RUVIA_CHECK_EQ(source.calls_, 2U);
     RUVIA_CHECK(pong.substr(2, 4) != response.substr(2, 4));
 }
@@ -540,10 +546,11 @@ RUVIA_TEST(ws_public_client_waits_for_server_eof_after_initiating_close) {
     websocket_connection connection(input, {.role_ = websocket_connection_role::client,
                                                .mask_key_generator_ = &mask_source::generate,
                                                .mask_key_context_ = &source});
-    websocket_connection server;
+    http_io_buffer server_input;
+    websocket_connection server(server_input);
     RUVIA_CHECK(connection.submit_close(1000, "done") == websocket_close_submit_status::accepted);
     const auto request_bytes = drain(connection);
-    RUVIA_CHECK(server.feed(request_bytes) == websocket_feed_status::accepted);
+    server_input.append(request_bytes);
     const auto request = server.next_event();
     RUVIA_CHECK(request && request->close());
     const auto reply = drain(server);
@@ -572,7 +579,8 @@ RUVIA_TEST(ws_public_fragmented_messages_reuse_reassembly_scratch) {
     counting_resource memory;
     {
         mask_source mask;
-        websocket_connection receiver({.resource_ = &memory, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
+        http_io_buffer input(&memory);
+        websocket_connection receiver(input, {.role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
         const std::string wire(
             "\x01\x02"
             "ab"
@@ -580,7 +588,7 @@ RUVIA_TEST(ws_public_fragmented_messages_reuse_reassembly_scratch) {
             "cd",
             8);
         const auto deliver = [&] {
-            RUVIA_CHECK(receiver.feed(wire) == websocket_feed_status::accepted);
+            input.append(wire);
             const auto event = receiver.next_event();
             RUVIA_CHECK(event && event->message() && event->message()->payload() == "abcd");
         };
@@ -598,7 +606,7 @@ RUVIA_TEST(ws_public_fragmented_messages_reuse_reassembly_scratch) {
         large.append(payload, 0, 32 * 1024);
         large.append("\x80\x7e\x80\x00", 4);
         large.append(payload, 0, 32 * 1024);
-        RUVIA_CHECK(receiver.feed(large) == websocket_feed_status::accepted);
+        input.append(large);
         const auto event = receiver.next_event();
         RUVIA_CHECK(event && event->message() && event->message()->payload().size() == payload.size());
         const auto pinned = memory.live_bytes_;
@@ -610,17 +618,21 @@ RUVIA_TEST(ws_public_fragmented_messages_reuse_reassembly_scratch) {
 
 RUVIA_TEST(ws_public_client_rejects_masked_server_and_oversized_message) {
     mask_source source;
-    auto invalid_server = client(source);
+    http_io_buffer invalid_server_input;
+    auto invalid_server = client(invalid_server_input, source);
     RUVIA_CHECK(invalid_server.submit_frame(websocket_opcode::text, "bad") == websocket_frame_submit_status::accepted);
     const auto masked = drain(invalid_server);
-    auto receiver = client(source);
-    RUVIA_CHECK(receiver.feed(masked) == websocket_feed_status::accepted);
+    http_io_buffer receiver_input;
+    auto receiver = client(receiver_input, source);
+    receiver_input.append(masked);
     const auto error = receiver.next_event();
     RUVIA_CHECK(error && error->protocol_error() && error->protocol_error()->close_code() == 1002);
-    auto limited = client(source, protocol_byte_limit::limited(2));
-    RUVIA_CHECK(limited.feed(std::string_view("\x82\x03"
-                                              "abc",
-                    5)) == websocket_feed_status::accepted);
+    http_io_buffer limited_input;
+    auto limited = client(limited_input, source, protocol_byte_limit::limited(2));
+    limited_input.append(std::string_view(
+        "\x82\x03"
+        "abc",
+        5));
     const auto large = limited.next_event();
     RUVIA_CHECK(large && large->protocol_error() && large->protocol_error()->close_code() == 1009);
     RUVIA_CHECK(limited.submit_frame(websocket_opcode::binary, "x") == websocket_frame_submit_status::not_open);
@@ -628,13 +640,16 @@ RUVIA_TEST(ws_public_client_rejects_masked_server_and_oversized_message) {
 
 RUVIA_TEST(ws_public_client_requires_entropy_and_handles_transport_end) {
     RUVIA_CHECK(ruvia::testing::throws_on([] {
-        websocket_connection connection({.role_ = websocket_connection_role::client});
+        http_io_buffer input;
+        websocket_connection connection(input, {.role_ = websocket_connection_role::client});
     }));
     RUVIA_CHECK(ruvia::testing::throws_on([] {
-        websocket_connection connection({.role_ = static_cast<websocket_connection_role>(255)});
+        http_io_buffer input;
+        websocket_connection connection(input, {.role_ = static_cast<websocket_connection_role>(255)});
     }));
     mask_source source;
-    auto connection = client(source);
+    http_io_buffer input;
+    auto connection = client(input, source);
     source.fail_ = true;
     RUVIA_CHECK(ruvia::testing::throws_on([&] {
         (void)connection.submit_frame(websocket_opcode::binary, "x");
@@ -642,7 +657,8 @@ RUVIA_TEST(ws_public_client_requires_entropy_and_handles_transport_end) {
     RUVIA_CHECK(connection.output_plan().bytes().empty());
     RUVIA_CHECK(connection.abort() == websocket_abort_disposition::abort_transport);
     RUVIA_CHECK(connection.abort() == websocket_abort_disposition::no_transport_action);
-    auto eof = client(source);
+    http_io_buffer eof_input;
+    auto eof = client(eof_input, source);
     eof.notify_transport_eof();
     const auto event = eof.next_event();
     RUVIA_CHECK(event && event->transport_end());
@@ -654,17 +670,19 @@ RUVIA_TEST(ws_public_connection_reuses_buffers_and_releases_owned_memory) {
     counting_resource resource;
     mask_source source;
     {
-        websocket_connection connection({.resource_ = &resource,
-            .role_ = websocket_connection_role::client,
-            .mask_key_generator_ = &mask_source::generate,
-            .mask_key_context_ = &source});
-        websocket_connection server;
+        http_io_buffer input(&resource);
+        websocket_connection connection(input,
+            {.role_ = websocket_connection_role::client,
+                .mask_key_generator_ = &mask_source::generate,
+                .mask_key_context_ = &source});
+        http_io_buffer server_input;
+        websocket_connection server(server_input);
         const std::string payload_value(8192, 'x');
         RUVIA_CHECK(server.submit_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
         const auto wire = drain(server);
         std::size_t warmed_bytes = 0;
         for (unsigned i = 0; i < 100; ++i) {
-            RUVIA_CHECK(connection.feed(wire) == websocket_feed_status::accepted);
+            input.append(wire);
             const auto event = connection.next_event();
             RUVIA_CHECK(event && event->message());
             if (!event || !event->message()) {
@@ -692,14 +710,16 @@ RUVIA_TEST(ws_public_connection_moves_keep_event_and_output_storage_stable) {
     mask_source mask;
     const std::string payload_value(1024, 'x');
     {
-        websocket_connection source_value({.resource_ = &source_memory,
-            .role_ = websocket_connection_role::client,
-            .mask_key_generator_ = &mask_source::generate,
-            .mask_key_context_ = &mask});
-        websocket_connection server;
+        http_io_buffer source_input(&source_memory);
+        websocket_connection source_value(source_input,
+            {.role_ = websocket_connection_role::client,
+                .mask_key_generator_ = &mask_source::generate,
+                .mask_key_context_ = &mask});
+        http_io_buffer server_input;
+        websocket_connection server(server_input);
         RUVIA_CHECK(server.submit_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
         const auto wire = drain(server);
-        RUVIA_CHECK(source_value.feed(wire) == websocket_feed_status::accepted);
+        source_input.append(wire);
         const auto event = source_value.next_event();
         RUVIA_CHECK(event && event->message());
         if (!event || !event->message()) {
@@ -711,7 +731,11 @@ RUVIA_TEST(ws_public_connection_moves_keep_event_and_output_storage_stable) {
         const auto live_before_move = source_memory.live_bytes_;
         const auto allocations_before_move = source_memory.allocations_;
         websocket_connection moved(std::move(source_value));
-        websocket_connection replacement({.resource_ = &replaced_memory});
+        // The replaced connection reads its own buffer; move assignment
+        // releases its implementation, and the result keeps reading the
+        // moved connection's buffer.
+        http_io_buffer replaced_input(&replaced_memory);
+        websocket_connection replacement(replaced_input);
         RUVIA_CHECK(replaced_memory.live_bytes_ > 0);
         replacement = std::move(moved);
         RUVIA_CHECK_EQ(replaced_memory.live_bytes_, std::size_t{0});
@@ -720,7 +744,7 @@ RUVIA_TEST(ws_public_connection_moves_keep_event_and_output_storage_stable) {
         RUVIA_CHECK_EQ(retained_payload, payload_value);
         RUVIA_CHECK(replacement.output_plan().bytes().data() == retained_output.data());
         RUVIA_CHECK_EQ(replacement.output_plan().bytes(), retained_output);
-        RUVIA_CHECK(server.feed(retained_output) == websocket_feed_status::accepted);
+        server_input.append(retained_output);
         const auto echoed = server.next_event();
         RUVIA_CHECK(echoed && echoed->message() && echoed->message()->payload() == payload_value);
         // EOF/abort discard logical output without invalidating a transport's
@@ -739,19 +763,6 @@ RUVIA_TEST(ws_public_connection_moves_keep_event_and_output_storage_stable) {
 RUVIA_TEST(ws_public_driver_releases_owned_memory_after_construction_failures) {
     counting_resource memory;
     {
-        websocket_connection unused({.resource_ = &memory});
-        RUVIA_CHECK(memory.live_bytes_ > 0);
-    }
-    RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
-    RUVIA_CHECK(ruvia::testing::throws_on([&] {
-        websocket_connection invalid({.resource_ = &memory, .role_ = websocket_connection_role::client});
-    }));
-    RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
-    RUVIA_CHECK(ruvia::testing::throws_on([&] {
-        websocket_connection invalid({.resource_ = &memory, .compression_ = websocket_compression{.enabled_ = true, .server_max_window_bits_ = 7}});
-    }));
-    RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
-    {
         http_io_buffer input(&memory);
         const auto input_bytes = memory.live_bytes_;
         {
@@ -760,19 +771,25 @@ RUVIA_TEST(ws_public_driver_releases_owned_memory_after_construction_failures) {
         }
         RUVIA_CHECK_EQ(memory.live_bytes_, input_bytes);
         RUVIA_CHECK(ruvia::testing::throws_on([&] {
+            websocket_connection invalid(input, {.role_ = websocket_connection_role::client});
+        }));
+        RUVIA_CHECK_EQ(memory.live_bytes_, input_bytes);
+        RUVIA_CHECK(ruvia::testing::throws_on([&] {
             websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(),
                                                     .compression_ = websocket_compression{.enabled_ = true, .server_max_window_bits_ = 7}});
         }));
         RUVIA_CHECK_EQ(memory.live_bytes_, input_bytes);
         RUVIA_CHECK(ruvia::testing::throws_on([&] {
             websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(),
-                                                    .compression_level_ = 10});
+                                                    .deflater_ = {.compression_level_ = 10}});
         }));
         RUVIA_CHECK_EQ(memory.live_bytes_, input_bytes);
     }
+    RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
     memory.reject_ = true;
     RUVIA_CHECK(ruvia::testing::throws_on([&] {
-        websocket_connection rejected({.resource_ = &memory});
+        http_io_buffer input(&memory);
+        websocket_connection rejected(input);
     }));
     RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
     RUVIA_CHECK_EQ(memory.allocations_, memory.deallocations_);
@@ -781,7 +798,8 @@ RUVIA_TEST(ws_public_driver_releases_owned_memory_after_construction_failures) {
 RUVIA_TEST(ws_server_protocol_reuses_drained_input_for_repeated_large_messages) {
     counting_resource memory;
     mask_source mask;
-    auto sender = client(mask);
+    http_io_buffer sender_input;
+    auto sender = client(sender_input, mask);
     http_io_buffer input(&memory);
     websocket_connection protocol(input);
     const auto deliver = [&](std::size_t payload_bytes) {
@@ -813,11 +831,6 @@ RUVIA_TEST(ws_default_message_limit_rejects_oversized_declared_frame_before_payl
     // A masked binary frame declaring 16 MiB + 1 bytes requires no payload to
     // establish that it cannot fit the finite default message policy.
     const std::string header_value("\x82\xff\x00\x00\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00", 14);
-    websocket_connection connection;
-    RUVIA_CHECK(connection.feed(header_value) == websocket_feed_status::accepted);
-    const auto event = connection.next_event();
-    RUVIA_CHECK(event && event->protocol_error());
-    RUVIA_CHECK_EQ(event->protocol_error()->close_code(), std::uint16_t{1009});
     http_io_buffer input;
     input.append(header_value);
     websocket_connection protocol(input);
@@ -826,46 +839,7 @@ RUVIA_TEST(ws_default_message_limit_rejects_oversized_declared_frame_before_payl
     RUVIA_CHECK_EQ(borrowed_event->protocol_error()->close_code(), std::uint16_t{1009});
 }
 
-RUVIA_TEST(ws_owned_input_backpressure_does_not_copy_rejected_bytes) {
-    counting_resource resource;
-    websocket_connection connection({.resource_ = &resource, .max_buffered_input_bytes_ = 16});
-    const auto baseline = resource.live_bytes_;
-    const std::string oversized(17, 'x');
-    RUVIA_CHECK(connection.feed(oversized) == websocket_feed_status::backpressured);
-    RUVIA_CHECK_EQ(resource.live_bytes_, baseline);
-    const std::string ping("\x89\x81\x00\x00\x00\x00p", 7);
-    RUVIA_CHECK(connection.feed(ping) == websocket_feed_status::accepted);
-    const auto event = connection.next_event();
-    RUVIA_CHECK(event && event->ping());
-    RUVIA_CHECK_EQ(event->ping()->payload(), "p");
-    (void)connection.consume_output(connection.output_plan().bytes().size());
-    RUVIA_CHECK(!connection.next_event());
-    RUVIA_CHECK(connection.feed(ping) == websocket_feed_status::accepted);
-    RUVIA_CHECK(connection.next_event()->ping() != nullptr);
-}
-
-RUVIA_TEST(ws_owned_input_bound_excludes_parsed_prefix) {
-    websocket_connection connection({.max_buffered_input_bytes_ = 32});
-    const std::string ping("\x89\x81\x00\x00\x00\x00p", 7);
-    std::string binary("\x82\x94\x00\x00\x00\x00", 6);
-    binary.append(20, 'b');
-    const auto first_chunk = ping + binary.substr(0, 10);
-    RUVIA_CHECK(connection.feed(first_chunk) == websocket_feed_status::accepted);
-    const auto ping_event = connection.next_event();
-    RUVIA_CHECK(ping_event && ping_event->ping());
-    (void)connection.consume_output(connection.output_plan().bytes().size());
-    RUVIA_CHECK(!connection.next_event());
-    // 16 pending + 10 buffered frame bytes fit the 32-byte bound once the
-    // already-delivered Ping no longer occupies the buffer.
-    RUVIA_CHECK(connection.feed(std::string_view(binary).substr(10)) == websocket_feed_status::accepted);
-    const auto message_event = connection.next_event();
-    RUVIA_CHECK(message_event && message_event->message());
-    if (message_event && message_event->message()) {
-        RUVIA_CHECK_EQ(message_event->message()->payload(), std::string(20, 'b'));
-    }
-}
-
-RUVIA_TEST(ws_owned_input_accepts_message_payload_during_compaction) {
+RUVIA_TEST(ws_input_accepts_borrowed_message_payload_during_compaction) {
     for (const bool following_frame : {false, true}) {
         const std::string nested_frame("\x82\x01x", 3);
         std::string wire("\x82\x03", 2);
@@ -877,11 +851,12 @@ RUVIA_TEST(ws_owned_input_accepts_message_payload_during_compaction) {
                 10);
         }
         mask_source mask;
-        websocket_connection connection({.role_ = websocket_connection_role::client,
-            .mask_key_generator_ = &mask_source::generate,
-            .mask_key_context_ = &mask,
-            .max_buffered_input_bytes_ = wire.size()});
-        RUVIA_CHECK(connection.feed(wire) == websocket_feed_status::accepted);
+        http_io_buffer input;
+        websocket_connection connection(input,
+            {.role_ = websocket_connection_role::client,
+                .mask_key_generator_ = &mask_source::generate,
+                .mask_key_context_ = &mask});
+        input.append(wire);
         const auto wrapper = connection.next_event();
         RUVIA_CHECK(wrapper && wrapper->message());
         if (!wrapper || !wrapper->message()) {
@@ -889,10 +864,10 @@ RUVIA_TEST(ws_owned_input_accepts_message_payload_during_compaction) {
         }
         RUVIA_CHECK_EQ(wrapper->message()->payload(), nested_frame);
 
-        // Feed bytes borrowed from the completed message while any following
-        // frame is still buffered. The input bound requires reclaiming the
-        // consumed wrapper before accepting the nested frame.
-        RUVIA_CHECK(connection.feed(wrapper->message()->payload()) == websocket_feed_status::accepted);
+        // Append bytes borrowed from the completed message while any following
+        // frame is still buffered. Making room must copy them before the
+        // consumed wrapper is reclaimed.
+        input.append(wrapper->message()->payload());
         if (following_frame) {
             const auto following = connection.next_event();
             RUVIA_CHECK(following && following->message());
@@ -911,7 +886,7 @@ RUVIA_TEST(ws_owned_input_accepts_message_payload_during_compaction) {
     }
 }
 
-RUVIA_TEST(ws_owned_input_accepts_message_payload_when_storage_grows) {
+RUVIA_TEST(ws_input_accepts_borrowed_message_payload_when_storage_grows) {
     ruvia::testing::poisoned_retirement_resource resource;
     {
         const std::string payload(8000, 'x');
@@ -920,12 +895,12 @@ RUVIA_TEST(ws_owned_input_accepts_message_payload_when_storage_grows) {
         std::string wire("\x82\x7e\x1f\x44", 4);
         wire += nested_frame;
         mask_source mask;
-        websocket_connection connection({.resource_ = &resource,
-            .role_ = websocket_connection_role::client,
-            .mask_key_generator_ = &mask_source::generate,
-            .mask_key_context_ = &mask,
-            .max_buffered_input_bytes_ = wire.size() * 2});
-        RUVIA_CHECK(connection.feed(wire) == websocket_feed_status::accepted);
+        http_io_buffer input(&resource);
+        websocket_connection connection(input,
+            {.role_ = websocket_connection_role::client,
+                .mask_key_generator_ = &mask_source::generate,
+                .mask_key_context_ = &mask});
+        input.append(wire);
         const auto wrapper = connection.next_event();
         RUVIA_CHECK(wrapper && wrapper->message());
         if (!wrapper || !wrapper->message()) {
@@ -937,7 +912,7 @@ RUVIA_TEST(ws_owned_input_accepts_message_payload_when_storage_grows) {
 
         // Appending the nested frame exceeds the first allocation. Poisoning
         // retired storage exposes a copy made after its source was invalidated.
-        RUVIA_CHECK(connection.feed(borrowed) == websocket_feed_status::accepted);
+        input.append(borrowed);
         RUVIA_CHECK(resource.retired(original_storage));
         const auto nested = connection.next_event();
         RUVIA_CHECK(nested && nested->message());
@@ -950,7 +925,7 @@ RUVIA_TEST(ws_owned_input_accepts_message_payload_when_storage_grows) {
     RUVIA_CHECK_EQ(resource.live_bytes(), std::size_t{0});
 }
 
-RUVIA_TEST(ws_owned_input_retries_after_borrowed_payload_copy_failure) {
+RUVIA_TEST(ws_input_retries_after_borrowed_payload_copy_failure) {
     counting_resource resource;
     {
         const std::string payload(40, 'x');
@@ -961,12 +936,12 @@ RUVIA_TEST(ws_owned_input_retries_after_borrowed_payload_copy_failure) {
                                      "abcdefgh",
                                      10);
         mask_source mask;
-        websocket_connection connection({.resource_ = &resource,
-            .role_ = websocket_connection_role::client,
-            .mask_key_generator_ = &mask_source::generate,
-            .mask_key_context_ = &mask,
-            .max_buffered_input_bytes_ = wire.size()});
-        RUVIA_CHECK(connection.feed(wire) == websocket_feed_status::accepted);
+        http_io_buffer input(&resource);
+        websocket_connection connection(input,
+            {.role_ = websocket_connection_role::client,
+                .mask_key_generator_ = &mask_source::generate,
+                .mask_key_context_ = &mask});
+        input.append(wire);
         const auto wrapper = connection.next_event();
         RUVIA_CHECK(wrapper && wrapper->message());
         if (!wrapper || !wrapper->message()) {
@@ -976,14 +951,14 @@ RUVIA_TEST(ws_owned_input_retries_after_borrowed_payload_copy_failure) {
         resource.reject_ = true;
         bool threw = false;
         try {
-            (void)connection.feed(borrowed);
+            input.append(borrowed);
         } catch (const std::bad_alloc&) {
             threw = true;
         }
         RUVIA_CHECK(threw);
         RUVIA_CHECK_EQ(borrowed, nested_frame);
         resource.reject_ = false;
-        RUVIA_CHECK(connection.feed(borrowed) == websocket_feed_status::accepted);
+        input.append(borrowed);
         const auto following = connection.next_event();
         RUVIA_CHECK(following && following->message());
         if (following && following->message()) {
@@ -1001,8 +976,10 @@ RUVIA_TEST(ws_owned_input_retries_after_borrowed_payload_copy_failure) {
 
 RUVIA_TEST(ws_public_masking_round_trips_over_odd_lengths_and_offsets) {
     mask_source mask;
-    auto sender = client(mask, protocol_byte_limit::unlimited());
-    websocket_connection receiver({.message_limit_ = protocol_byte_limit::unlimited(), .max_buffered_input_bytes_ = 1U << 20U});
+    http_io_buffer sender_input;
+    auto sender = client(sender_input, mask, protocol_byte_limit::unlimited());
+    http_io_buffer receiver_input;
+    websocket_connection receiver(receiver_input, {.message_limit_ = protocol_byte_limit::unlimited()});
     for (const std::size_t length : {std::size_t{0}, std::size_t{1}, std::size_t{2}, std::size_t{3}, std::size_t{4},
              std::size_t{5}, std::size_t{7}, std::size_t{8}, std::size_t{9}, std::size_t{15}, std::size_t{16},
              std::size_t{17}, std::size_t{31}, std::size_t{33}, std::size_t{125}, std::size_t{126},
@@ -1035,7 +1012,7 @@ RUVIA_TEST(ws_public_masking_round_trips_over_odd_lengths_and_offsets) {
             RUVIA_CHECK(masked_on_wire);
 
             const auto frames = leading_wire + wire;
-            RUVIA_CHECK(receiver.feed(frames) == websocket_feed_status::accepted);
+            receiver_input.append(frames);
             const auto leading_event = receiver.next_event();
             RUVIA_CHECK(leading_event && leading_event->message());
             if (leading_event && leading_event->message()) {
@@ -1075,7 +1052,8 @@ RUVIA_TEST(ws_server_borrowed_frame_follows_pending_output_until_drained) {
     std::string message_value("hello");
     RUVIA_CHECK(protocol.submit_borrowed_frame(websocket_opcode::text, message_value) == websocket_frame_submit_status::accepted);
     mask_source mask;
-    auto peer = client(mask);
+    http_io_buffer peer_input;
+    auto peer = client(peer_input, mask);
     RUVIA_CHECK(peer.submit_frame(websocket_opcode::ping, "p") == websocket_frame_submit_status::accepted);
     input.append(drain(peer));
     const auto ping = protocol.next_event();
@@ -1085,7 +1063,7 @@ RUVIA_TEST(ws_server_borrowed_frame_follows_pending_output_until_drained) {
     RUVIA_CHECK(plan.borrowed_bytes().empty());
     const std::string wire(plan.bytes());
     RUVIA_CHECK(protocol.consume_output(wire.size()) == websocket_output_consume_status::drained);
-    RUVIA_CHECK(peer.feed(wire) == websocket_feed_status::accepted);
+    peer_input.append(wire);
     const auto message = peer.next_event();
     RUVIA_CHECK(message && message->message());
     if (message && message->message()) {
@@ -1142,12 +1120,13 @@ RUVIA_TEST(ws_public_eight_bit_receive_window_accepts_zlib_nine_bit_deflater_str
 
     for (const bool no_takeover : {false, true}) {
         mask_source mask;
-        websocket_connection receiver({.compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = no_takeover, .server_max_window_bits_ = 8}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
+        http_io_buffer input;
+        websocket_connection receiver(input, {.compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = no_takeover, .server_max_window_bits_ = 8}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
         std::string wire("\xc2\x7e", 2);
         wire.push_back(static_cast<char>(compressed.size() >> 8));
         wire.push_back(static_cast<char>(compressed.size() & 0xff));
         wire += compressed;
-        RUVIA_CHECK(receiver.feed(wire) == websocket_feed_status::accepted);
+        input.append(wire);
         const auto event = receiver.next_event();
         RUVIA_CHECK(event && event->message() && event->message()->payload() == message);
     }
@@ -1161,21 +1140,15 @@ RUVIA_TEST(ws_public_receiver_accepts_non_minimal_payload_length_forms) {
     const std::string sixty_four_bit("\x81\xff\x00\x00\x00\x00\x00\x00\x00\x05\x00\x00\x00\x00hello", 19);
     const std::string control_sixteen_bit("\x89\xfe\x00\x02\x00\x00\x00\x00hi", 10);
     for (const auto& wire : {sixteen_bit, sixty_four_bit}) {
-        websocket_connection server;
-        RUVIA_CHECK(server.feed(wire) == websocket_feed_status::accepted);
+        http_io_buffer input;
+        websocket_connection server(input);
+        input.append(wire);
         const auto event = server.next_event();
         RUVIA_CHECK(event && event->message() && event->message()->payload() == "hello");
     }
-    websocket_connection server;
-    RUVIA_CHECK(server.feed(control_sixteen_bit) == websocket_feed_status::accepted);
+    http_io_buffer input;
+    websocket_connection server(input);
+    input.append(control_sixteen_bit);
     const auto event = server.next_event();
     RUVIA_CHECK(event && event->ping() && event->ping()->payload() == "hi");
-}
-
-RUVIA_TEST(ws_public_feed_reports_backpressure_when_initial_buffer_exceeds_limit) {
-    http_io_buffer input;
-    input.append("123456789");
-    websocket_connection connection(input, {.max_buffered_input_bytes_ = 8});
-    RUVIA_CHECK(connection.feed("x") == websocket_feed_status::backpressured);
-    RUVIA_CHECK_EQ(input.size(), std::size_t{9});
 }

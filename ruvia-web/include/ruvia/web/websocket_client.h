@@ -21,7 +21,6 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/websocket_client_negotiation.h"
 #include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/tls_config.h"
 #include "ruvia/web/websocket.h"
@@ -45,30 +44,29 @@ struct websocket_client_config final {
     borrowed_text host_{};
     std::optional<std::uint16_t> port_{};
     borrowed_text target_{"/"};
+    // Application request fields. Without a User-Agent field the handshake
+    // sends "User-Agent: Ruvia".
     std::span<const http_header_view> headers_{};
     std::span<const borrowed_text> subprotocols_{};
     websocket_client_deflate_offer deflate_{};
-    int compression_level_{6};
     std::size_t max_message_bytes_{default_max_websocket_message_bytes};
     std::chrono::milliseconds connect_timeout_{5000};
     std::optional<std::chrono::milliseconds> read_timeout_{};
     std::optional<std::chrono::milliseconds> write_timeout_{30000};
-    // After a local Close is sent, the maximum time to wait for the peer Close.
-    // After the close handshake completes, the maximum time to wait for the
-    // server to close the transport first (RFC 6455 section 7.1.1); the client
-    // then closes it itself without failing read() or close(). Each wait has
-    // its own bound, so close() can take up to twice this value. nullopt
+    // close_handshake_timeout_ bounds two waits, so close() can take up to
+    // twice its value: after a local Close is sent, the wait for the peer
+    // Close; after the close handshake completes, the wait for the server to
+    // close the transport first (RFC 6455 section 7.1.1), after which the
+    // client closes it itself without failing read() or close(). nullopt
     // disables both guards.
-    std::optional<std::chrono::milliseconds> close_handshake_timeout_{5000};
-    // Pongs are matched by read(); a pong timeout retires the client only while
-    // a read is active, and an expired window restarts when the next read begins.
-    // A write (application message or Ping) that has not completed within
-    // ping_interval + pong_timeout since the last activity retires the client
-    // with `timeout`, independently of write_timeout_.
-    websocket_heartbeat_config heartbeat_{};
+    // Heartbeat pongs are matched by read(); a pong timeout retires the client
+    // only while a read is active, and an expired window restarts when the
+    // next read begins. A write (application message or Ping) that has not
+    // completed within ping_interval + pong_timeout since the last activity
+    // retires the client with `timeout`, independently of write_timeout_.
+    websocket_lifecycle_options lifecycle_{};
     // Used for wss; client_tls_mode::disabled is rejected (select ws instead).
     client_tls_config tls_{};
-    borrowed_text user_agent_{"Ruvia"};
 };
 
 class websocket_client_error final : public std::runtime_error {

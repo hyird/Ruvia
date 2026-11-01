@@ -23,14 +23,14 @@ std::chrono::milliseconds websocket_client_state::heartbeat_delay(std::int64_t n
     std::int64_t delay_value = 1;
     const auto* pong = std::get_if<websocket_awaiting_pong>(&liveness_state_);
     if (pong != nullptr && write_phase_ == write_phase_type::idle) {
-        delay_value = remaining(pong->sent_at_ms(), config_.heartbeat_.pong_timeout_->count());
+        delay_value = remaining(pong->sent_at_ms(), config_.lifecycle_.heartbeat_.pong_timeout_->count());
     } else if (!std::holds_alternative<websocket_awaiting_peer_close>(liveness_state_)) {
-        delay_value = remaining(last_active_ms_, config_.heartbeat_.ping_interval_->count());
+        delay_value = remaining(last_active_ms_, config_.lifecycle_.heartbeat_.ping_interval_->count());
         if (write_phase_ != write_phase_type::idle) {
             // The write holding the lane (an application message or the Ping
             // itself) has the Pong timeout on top of the Ping interval before
             // it counts as stalled.
-            const auto pong_timeout = config_.heartbeat_.pong_timeout_->count();
+            const auto pong_timeout = config_.lifecycle_.heartbeat_.pong_timeout_->count();
             delay_value = pong_timeout > std::numeric_limits<std::int64_t>::max() - delay_value
                               ? std::numeric_limits<std::int64_t>::max()
                               : delay_value + pong_timeout;
@@ -51,12 +51,12 @@ void websocket_client_state::arm_heartbeat_timer(std::chrono::milliseconds delay
 
 void websocket_client_state::touch_activity() noexcept {
     last_active_ms_ = steady_now_ms();
-    if (!protocol_open() || !config_.heartbeat_.ping_interval_.has_value() ||
+    if (!protocol_open() || !config_.lifecycle_.heartbeat_.ping_interval_.has_value() ||
         !std::holds_alternative<websocket_liveness_idle>(liveness_state_)) {
         return;
     }
     try {
-        arm_heartbeat_timer(*config_.heartbeat_.ping_interval_);
+        arm_heartbeat_timer(*config_.lifecycle_.heartbeat_.ping_interval_);
     } catch (...) {
         fail_transport();
     }
@@ -71,7 +71,7 @@ void websocket_client_state::resume_pong_deadline() noexcept {
         return;
     }
     const auto now = steady_now_ms();
-    if (now - pong->sent_at_ms() >= config_.heartbeat_.pong_timeout_->count()) {
+    if (now - pong->sent_at_ms() >= config_.lifecycle_.heartbeat_.pong_timeout_->count()) {
         liveness_state_ = websocket_awaiting_pong(now, pong->challenge());
     }
     try {
@@ -83,8 +83,7 @@ void websocket_client_state::resume_pong_deadline() noexcept {
 
 bool websocket_client_state::heartbeat_ping_due() noexcept {
     const auto now = steady_now_ms();
-    const websocket_lifecycle_options options{
-        .heartbeat_ = config_.heartbeat_, .close_handshake_timeout_ = config_.close_handshake_timeout_};
+    const auto& options = config_.lifecycle_;
     // A write holding the lane defers the Ping; a stalled write is aborted
     // once it exceeds the Ping interval plus the Pong timeout. Only a reader
     // that can poll (one is running and no write holds the lane) observes a
@@ -152,7 +151,7 @@ task<void> websocket_client_state::heartbeat() {
             const auto ping_sent_at_ms = steady_now_ms();
             if (protocol_open() && std::holds_alternative<websocket_sending_ping>(liveness_state_)) {
                 liveness_state_ = websocket_awaiting_pong(ping_sent_at_ms, challenge);
-                arm_heartbeat_timer(*config_.heartbeat_.pong_timeout_);
+                arm_heartbeat_timer(*config_.lifecycle_.heartbeat_.pong_timeout_);
             }
         }
     } catch (...) {
