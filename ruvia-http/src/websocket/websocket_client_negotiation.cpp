@@ -244,6 +244,10 @@ websocket_client_negotiation::websocket_client_negotiation(
             }
         });
 }
+std::variant<websocket_client_negotiation_result_view, error_type>
+websocket_client_negotiation::validate_fields(std::span<const http_header> fields_value) const {
+    return detail::validate_websocket_client_selection(*this, fields_value, false);
+}
 
 namespace detail {
 std::variant<websocket_client_negotiation_result_view, error_type> validate_websocket_client_selection(

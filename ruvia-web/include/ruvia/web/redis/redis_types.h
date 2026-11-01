@@ -15,6 +15,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/tls_config.h"
 
 namespace ruvia {
@@ -59,6 +60,7 @@ struct redis_config {
     std::optional<std::size_t> max_reply_bytes_{64 * 1024 * 1024};
     // Must be greater than zero.
     std::size_t max_array_depth_{64};
+    client_tcp_config tcp_{.keep_alive_ = tcp_keep_alive_policy::system_default};
 };
 
 class redis_block_wait final {

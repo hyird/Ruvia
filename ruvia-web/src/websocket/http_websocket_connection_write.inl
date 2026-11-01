@@ -11,13 +11,13 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/websocket.h"
 
 #include "server/connection_scanner.h"
 #include "server/inbound_transport_error.h"
-#include "util/socket.h"
 #include "util/steady_clock.h"
 #include "websocket/http_websocket_connection.h"
 #include "websocket/http_websocket_liveness.h"
@@ -260,9 +260,9 @@ void server_websocket_connection<stream_type>::close_stream() noexcept {
     if constexpr (!native_stream) {
         stream_.abort();
     } else if constexpr (requires(stream_type& value) { value.next_layer(); }) {
-        close_socket(stream_.lowest_layer());
+        ruvia::close_socket(stream_.lowest_layer());
     } else {
-        close_socket(stream_);
+        ruvia::close_socket(stream_);
     }
 }
 

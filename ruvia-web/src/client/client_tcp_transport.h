@@ -12,6 +12,7 @@
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
@@ -20,7 +21,6 @@
 #include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
 #include "client/client_tls_socket.h"
-#include "integration/operation_timeout.h"
 #include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
@@ -77,7 +77,7 @@ struct client_tcp_endpoint final {
     std::uint16_t port_;
     // nullptr selects plaintext TCP.
     const client_tls_config_storage* tls_;
-    tcp_keep_alive keep_alive_;
+    client_tcp_config tcp_;
     // ALPN offered in the TLS handshake; ignored for plaintext TCP.
     client_alpn alpn_;
 };

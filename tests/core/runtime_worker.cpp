@@ -32,6 +32,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_cancellation.h"
+#include "ruvia/core/worker_runtime_context.h"
 #include "ruvia/core/worker_signal.h"
 
 namespace {
@@ -780,6 +781,25 @@ bool test_cancellation_after_endpoint_detach_does_not_touch_retired_owner() {
     source.request_stop();
     context.restart();
     return observed.owner_destroyed_ && observed.calls_ == 0 && context.run() == 0;
+}
+
+bool test_worker_runtime_context_owns_stable_detached_endpoint() {
+    asio::io_context context;
+    std::optional<ruvia::worker_handle> escaped_handle;
+    {
+        ruvia::worker_runtime_context runtime(context, 8);
+        if (&runtime.io_context() != &context || !runtime.handle().valid()) {
+            return false;
+        }
+        escaped_handle.emplace(runtime.handle());
+        runtime.detach();
+        if (runtime.handle().valid() || escaped_handle->valid()) {
+            return false;
+        }
+    }
+    asio::post(context, [] {});
+    context.run();
+    return escaped_handle && !escaped_handle->valid();
 }
 
 bool test_queue_callable_destruction_can_inspect_worker() {
@@ -2360,6 +2380,8 @@ int main() {
                        test_post_factory_close_drains_admitted_callback) &&
                    run("post_outcome_invariants_and_empty_callbacks",
                        test_post_outcome_invariants_and_empty_callbacks) &&
+                   run("worker_runtime_context_owns_stable_detached_endpoint",
+                       test_worker_runtime_context_owns_stable_detached_endpoint) &&
                    run("queue_callable_destruction_can_inspect_worker",
                        test_queue_callable_destruction_can_inspect_worker) &&
                    run("worker_signal_is_worker_affine", test_worker_signal_is_worker_affine) &&

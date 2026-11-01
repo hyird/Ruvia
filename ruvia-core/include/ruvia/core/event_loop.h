@@ -53,6 +53,11 @@ class event_loop final {
 public:
     event_loop() noexcept = default;
 
+    [[nodiscard]] bool valid() const noexcept;
+    [[nodiscard]] bool accepting() const noexcept;
+    [[nodiscard]] bool is_current() const noexcept;
+    [[nodiscard]] worker_id_type id() const noexcept;
+
     // A retired pool loop or attachment is invalid; accessing its context or
     // obtaining a fresh executor then throws std::logic_error. Previously
     // obtained executors must not outlive the loop's physical context storage.
@@ -67,6 +72,12 @@ public:
     // thread. Pool owners retain the first failure for join(); attachments
     // route it to the existing unhandled-failure diagnostic.
     void report_failure(std::exception_ptr failure) const noexcept;
+
+    template <typename fn_type>
+        requires detail::move_only_function_target<void, fn_type>
+    [[nodiscard]] post_result_type post(fn_type&& fn) const {
+        return handle().post(std::forward<fn_type>(fn));
+    }
 
     // Cold-path cleanup for an already owned resource, not new business work.
     // Bypasses bounded admission but acquires retirement protection; returns

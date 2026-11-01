@@ -102,7 +102,7 @@ ruvia_link_controllers(my_service user_controllers)
 - **单 Worker 独占连接生命周期**：生产应用 `ruvia::app()` 按 `server_config::worker_count_` 启动业务 worker 线程。每个 worker 独占一个 standalone Asio `io_context`、自己的监听器、控制器实例、中间件实例、PMR 内存池以及绑定的 `db_client` / `redis_client` / `http_client` 连接池。
 - **无跨线程连接交接**：待接受的 socket 从发起 accept 的 origin worker 创建起，其后的 TCP/TLS I/O、HTTP/1 或 HTTP/2 解析、路由执行、协议定时器和关闭排空全程留在该 worker 线程，无需加锁访问 worker 局部状态（`c.worker_state<T>()`）。
 - **跨线程调度与卸载**：
-  - 跨 worker 通信通过 `web_worker_handle::post`、`event_loop::handle().post` 或有界通道 `make_channel` / `make_one_shot` 进行。
+  - 跨 worker 通信通过 `web_worker_handle::post`、`event_loop::post` 或有界通道 `make_channel` / `make_one_shot` 进行。
   - 阻塞或 CPU 密集型计算必须通过 `c.run_blocking(...)` 或 `ruvia::run_blocking(...)` 显式卸载到 worker 事件循环借用的 `blocking_pool`；独立事件循环须在创建时通过 `blocking_pool_` 选项交给它一个比它存活更久的池，否则返回 `blocking_status::unavailable`，主机不是 IP 字面量的客户端也无法构造。**卸载闭包必须按值/移动持有自有数据，严禁在阻塞池线程中访问 `ruvia::context`、请求 Arena 或任何 worker 局部状态**。
 
 ### 3.2 协程与作用域操作契约

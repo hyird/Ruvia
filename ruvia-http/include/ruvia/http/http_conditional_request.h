@@ -6,8 +6,7 @@
 
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request.h"
-
-namespace ruvia::detail {
+namespace ruvia {
 
 struct http_conditional_method_plan final {
     bool evaluates_preconditions_;
@@ -89,4 +88,4 @@ struct http_etag_preconditions final {
 [[nodiscard]] bool http_if_range_allows(std::string_view header_value, std::string_view etag,
     std::optional<std::time_t> modified_seconds, bool date_validator_strong) noexcept;
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

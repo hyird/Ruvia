@@ -269,6 +269,10 @@ private:
 
     using source_tokens = std::array<detail::stop_state_ref, max_stop_token_sources>;
 
+    stop_registration(const source_tokens& tokens, move_only_function<void()> callback_value) {
+        register_callbacks(tokens, std::move(callback_value));
+    }
+
     // `tokens` holds its entries with a stop state as a prefix; an entry whose
     // source died without a stop request stays in place but never fires.
     void register_callbacks(const source_tokens& tokens, move_only_function<void()> callback_value) {
@@ -377,15 +381,22 @@ public:
         return false;
     }
 
-    // Registers `callback_value` in caller-owned registration storage, replacing
-    // any earlier registration. The registration embeds one intrusive node per
-    // observed source, so registering performs no allocation, and awaiters can
-    // form their callback after an operation has published its id/generation in
-    // await_suspend. Registration may race with request_stop(). If stop was
-    // already requested, the callback runs synchronously before registration
-    // returns. request_stop() may invoke the callback on the requesting thread;
-    // callbacks that affect worker-owned state must post only an id/generation
-    // to that worker and let the owner validate it there.
+    // The registration embeds one intrusive node per observed source, so
+    // registering a cancellation callback performs no allocation.
+    // Registration may race with request_stop(). If stop was already requested,
+    // the callback runs synchronously before registration returns.
+    // request_stop() may invoke the callback on the requesting thread; callbacks
+    // that affect worker-owned state must post only an id/generation to that
+    // worker and let the owner validate it there.
+    [[nodiscard]] stop_registration register_callback(move_only_function<void()> callback_value) const {
+        return stop_registration(tokens_, std::move(callback_value));
+    }
+
+    // Reuses caller-owned registration storage, replacing any earlier
+    // registration. This is for awaiters that can only form their cancellation
+    // callback after an operation has published its id/generation in
+    // await_suspend; it preserves the embedded, zero-allocation node
+    // representation.
     void register_callback(stop_registration& registration, move_only_function<void()> callback_value) const {
         registration.reset();
         registration.register_callbacks(tokens_, std::move(callback_value));

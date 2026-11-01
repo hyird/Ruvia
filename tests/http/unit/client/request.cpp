@@ -102,6 +102,8 @@ auto prepare_field_request(unsigned entry, std::span<const ruvia::http_header_vi
             return writer.prepare_streaming(origin,
                 ruvia::http1_client_request_head_view{.method_ = "POST", .headers_ = fields, .content_length_ = 0},
                 output, policy);
+        case 2:
+            return writer.prepare_connect(origin, fields, output, policy);
         default:
             return writer.prepare_connect("example.test:443", fields, output, policy);
     }
@@ -216,7 +218,8 @@ RUVIA_TEST(http1_client_request_writer_owns_request_target_forms_and_host) {
 
 RUVIA_TEST(http1_client_connect_entry_generates_authority_form_atomically) {
     std::array<char, 512> buffer;
-    const auto result_value = http1_client_request_writer().prepare_connect("example.test:443", {}, buffer);
+    const auto result_value = http1_client_request_writer().prepare_connect(
+        http_origin_view::https({.host_ = "example.test"}), {}, buffer);
     const auto* prepared = std::get_if<prepared_http1_client_request>(&result_value);
     RUVIA_CHECK(prepared != nullptr);
     if (prepared != nullptr) {
@@ -227,7 +230,8 @@ RUVIA_TEST(http1_client_connect_entry_generates_authority_form_atomically) {
     }
 
     std::array<char, 512> ipv6_buffer;
-    const auto ipv6 = http1_client_request_writer().prepare_connect("[::1]:443", {}, ipv6_buffer);
+    const auto ipv6 = http1_client_request_writer().prepare_connect(
+        http_origin_view::https({.host_ = "[::1]"}), {}, ipv6_buffer);
     const auto* ipv6_prepared = std::get_if<prepared_http1_client_request>(&ipv6);
     RUVIA_CHECK(ipv6_prepared != nullptr);
     if (ipv6_prepared != nullptr) {
@@ -236,11 +240,17 @@ RUVIA_TEST(http1_client_connect_entry_generates_authority_form_atomically) {
     }
 
     std::array<char, 128> invalid_buffer;
-    const auto invalid = http1_client_request_writer().prepare_connect("example.test:0", {}, invalid_buffer);
+    const auto invalid = http1_client_request_writer().prepare_connect(
+        http_origin_view::https({.host_ = "example.test", .port_ = 0}), {}, invalid_buffer);
     const auto* invalid_failure = std::get_if<http1_client_request_prepare_error>(&invalid);
     RUVIA_CHECK(invalid_failure != nullptr);
     RUVIA_CHECK(
         *invalid_failure == http1_client_request_prepare_error::invalid_connect_origin);
+
+    const auto invalid_authority = http1_client_request_writer().prepare_connect("example.test:0", {}, invalid_buffer);
+    const auto* invalid_authority_failure = std::get_if<http1_client_request_prepare_error>(&invalid_authority);
+    RUVIA_CHECK(invalid_authority_failure != nullptr &&
+                *invalid_authority_failure == http1_client_request_prepare_error::invalid_connect_origin);
 }
 
 RUVIA_TEST(http1_client_request_writer_is_the_only_host_and_framing_owner) {
@@ -474,7 +484,7 @@ RUVIA_TEST(http1_client_request_writer_rejects_invalid_wire_policy) {
 
     std::array<char, 512> buffer{};
     const auto connect =
-        http1_client_request_writer().prepare_connect("example.test:443",
+        http1_client_request_writer().prepare_connect(http_origin_view::https({.host_ = "example.test"}),
             std::span<const ruvia::http_header_view>{}, buffer, invalid_without_expectation);
     const auto* connect_failure = std::get_if<http1_client_request_prepare_error>(&connect);
     RUVIA_CHECK(connect_failure != nullptr);
@@ -484,7 +494,7 @@ RUVIA_TEST(http1_client_request_writer_rejects_invalid_wire_policy) {
     }
 
     const auto invalid_connect_expectation =
-        http1_client_request_writer().prepare_connect("example.test:443",
+        http1_client_request_writer().prepare_connect(http_origin_view::https({.host_ = "example.test"}),
             std::span<const ruvia::http_header_view>{}, buffer, invalid_expectation);
     const auto* invalid_connect_expectation_failure =
         std::get_if<http1_client_request_prepare_error>(&invalid_connect_expectation);
@@ -1026,7 +1036,7 @@ RUVIA_TEST(http1_client_forwards_received_application_fields_without_regeneratin
             continue;
         }
         const std::array fields{ruvia::http_header_view{field.name(), *received}};
-        for (unsigned entry = 0; entry != 3; ++entry) {
+        for (unsigned entry = 0; entry != 4; ++entry) {
             std::array<char, 1024> output;
             output.fill('z');
             const auto generated = prepare_field_request(entry, fields, output, ruvia::http_request_field_source::generated);
@@ -1061,7 +1071,7 @@ RUVIA_TEST(http1_client_forwarding_retains_security_ownership_and_singleton_rule
         ruvia::http_header_view{"Connection", "Content-Type"},
         ruvia::http_header_view{"Upgrade", ",websocket,"},
         ruvia::http_header_view{"TE", ",trailers,"}};
-    for (unsigned entry = 0; entry != 3; ++entry) {
+    for (unsigned entry = 0; entry != 4; ++entry) {
         std::array<char, 1024> output;
         for (const auto& field : invalid) {
             output.fill('z');

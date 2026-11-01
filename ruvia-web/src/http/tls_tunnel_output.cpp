@@ -10,8 +10,7 @@
 #include <openssl/err.h>
 
 #include "ruvia/core/async.h"
-
-#include "util/socket.h"
+#include "ruvia/core/socket.h"
 
 namespace ruvia::detail {
 

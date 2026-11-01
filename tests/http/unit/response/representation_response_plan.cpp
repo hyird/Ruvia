@@ -39,6 +39,16 @@ constexpr ruvia::http_selected_representation_metadata representation{
     .strong_date_validator_ = true,
 };
 
+constexpr std::string_view representation_date = "Sun, 06 Nov 1994 08:49:37 GMT";
+
+ruvia::http_status_code planned_status(std::string_view method, std::string_view name, std::string_view value,
+    const ruvia::http_selected_representation_metadata& metadata = representation,
+    ruvia::http_representation_response_options options = {}) {
+    auto req = request(method);
+    add(req, name, value);
+    return ruvia::plan_http_representation_response(req, metadata, options).status();
+}
+
 }  // namespace
 
 RUVIA_TEST(representation_response_plan_only_evaluates_conditions_for_eligible_responses) {
@@ -373,6 +383,61 @@ RUVIA_TEST(representation_response_plan_respects_date_failures_and_strong_versus
     add(weak, "If-None-Match", R"(W/"v1")");
     const auto weak_plan = ruvia::plan_http_representation_response(weak, representation);
     RUVIA_CHECK(weak_plan.not_modified() != nullptr);
+}
+
+RUVIA_TEST(representation_response_plan_applies_each_condition_by_method_role) {
+    const ruvia::http_representation_response_options honor_ranges{
+        .range_policy_ = ruvia::http_range_request_policy::honor_byte_ranges};
+    for (const auto method : {"GET", "HEAD"}) {
+        RUVIA_CHECK_EQ(planned_status(method, "If-None-Match", R"("v1")"), ruvia::http_status::not_modified);
+        RUVIA_CHECK_EQ(
+            planned_status(method, "If-Modified-Since", representation_date), ruvia::http_status::not_modified);
+    }
+
+    // State-changing and extension methods evaluate preconditions, but answer a
+    // matched If-None-Match with 412 and ignore If-Modified-Since and Range.
+    for (const auto method : {"POST", "PUT", "DELETE", "PATCH", "PROPFIND"}) {
+        RUVIA_CHECK_EQ(planned_status(method, "If-Match", R"("stale")"), ruvia::http_status::precondition_failed);
+        RUVIA_CHECK_EQ(planned_status(method, "If-None-Match", R"("v1")"), ruvia::http_status::precondition_failed);
+        RUVIA_CHECK_EQ(planned_status(method, "If-Modified-Since", representation_date), ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(
+            planned_status(method, "Range", "bytes=2-4", representation, honor_ranges), ruvia::http_status::ok);
+    }
+
+    for (const auto method : {"OPTIONS", "CONNECT", "TRACE"}) {
+        RUVIA_CHECK_EQ(planned_status(method, "If-Match", R"("stale")"), ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(planned_status(method, "If-None-Match", R"("v1")"), ruvia::http_status::ok);
+        RUVIA_CHECK_EQ(planned_status(method, "If-Modified-Since", representation_date), ruvia::http_status::ok);
+    }
+}
+
+RUVIA_TEST(representation_response_plan_compares_condition_dates_with_last_modified) {
+    auto earlier = representation;
+    earlier.last_modified_ = *representation.last_modified_ - 1;
+    auto later = representation;
+    later.last_modified_ = *representation.last_modified_ + 1;
+
+    // If-Modified-Since: 304 when the representation was modified at or before the date.
+    RUVIA_CHECK_EQ(planned_status("GET", "If-Modified-Since", representation_date, earlier),
+        ruvia::http_status::not_modified);
+    RUVIA_CHECK_EQ(planned_status("GET", "If-Modified-Since", representation_date, later), ruvia::http_status::ok);
+
+    // If-Unmodified-Since: 412 only when the representation is newer.
+    RUVIA_CHECK_EQ(planned_status("GET", "If-Unmodified-Since", representation_date), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(planned_status("GET", "If-Unmodified-Since", representation_date, earlier), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(planned_status("GET", "If-Unmodified-Since", representation_date, later),
+        ruvia::http_status::precondition_failed);
+}
+
+RUVIA_TEST(representation_response_plan_folds_repeated_entity_tag_lines) {
+    auto req = request("GET");
+    add(req, "If-None-Match", R"("v1")");
+    add(req, "If-None-Match", R"("stale")");
+    RUVIA_CHECK_EQ(ruvia::plan_http_representation_response(req, representation).status(),
+        ruvia::http_status::not_modified);
+
+    // A wildcard If-Match matches any current representation.
+    RUVIA_CHECK_EQ(planned_status("GET", "If-Match", "*", {.length_ = 10}), ruvia::http_status::ok);
 }
 
 RUVIA_TEST(representation_response_plan_keeps_resolved_values_after_input_lifetimes_end) {

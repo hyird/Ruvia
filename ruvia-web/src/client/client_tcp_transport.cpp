@@ -247,7 +247,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
         }
         stream_.next_layer().replace_socket(std::move(*connected.socket_));
     }
-    auto mode_error = apply_tcp_socket_policies(stream_.next_layer().socket(), endpoint_.keep_alive_);
+    auto mode_error = apply_tcp_socket_policies(stream_.next_layer().socket(), endpoint_.tcp_);
     // Every socket operation is asynchronous or a bounded probe, and the TLS
     // socket layer writes records directly.
     if (!mode_error) {

@@ -26,7 +26,7 @@ namespace {
     return {.host_ = config.host_,
         .port_ = config.port_,
         .tls_ = config.tls_.mode_ == client_tls_mode::disabled ? nullptr : &config.tls_,
-        .keep_alive_ = tcp_keep_alive::system_default,
+        .tcp_ = config.tcp_,
         .alpn_ = client_alpn::none};
 }
 

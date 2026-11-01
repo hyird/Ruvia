@@ -418,6 +418,22 @@ void event_loop_stop_registration::reset() noexcept {
 event_loop::event_loop(std::shared_ptr<detail::event_loop_state> state_value) noexcept
     : state_(std::move(state_value)) {}
 
+bool event_loop::valid() const noexcept {
+    return handle().valid();
+}
+
+bool event_loop::accepting() const noexcept {
+    return handle().accepting();
+}
+
+bool event_loop::is_current() const noexcept {
+    return handle().is_current();
+}
+
+worker_id_type event_loop::id() const noexcept {
+    return handle().id();
+}
+
 asio::io_context& event_loop::io_context() const& {
     if (!state_ || !state_->runtime_.handle().valid()) {
         if (state_) {

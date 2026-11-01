@@ -36,6 +36,12 @@ struct http_content_encode_options final {
 [[nodiscard]] std::optional<std::pmr::string> encode_http_content(
     http_content_coding coding, std::string_view input, http_content_encode_options options);
 
+// Applies the listed codings in order. Each intermediate representation is
+// bounded by max_encoded_bytes and released before the next stage completes.
+[[nodiscard]] std::optional<std::pmr::string> encode_http_content(
+    std::span<const http_content_coding> codings, std::string_view input,
+    http_content_encode_options options);
+
 // Reusable whole-buffer encoder for one coding, for an owner that encodes many
 // representations on one thread. The first encode() creates the codec state
 // from `state_resource`; gzip, deflate and zstd keep it and reset it after
@@ -78,6 +84,14 @@ struct http_content_decode_options final {
     std::size_t max_decoded_bytes_{};
     std::pmr::memory_resource* resource_{nullptr};
 };
+
+// gzip members and zstd frames are consumed through the end of input; Brotli
+// trailing bytes are rejected. The exact decoded-size cap applies across the
+// complete representation, and an identity representation over the cap is
+// rejected before allocating. An empty representation decodes to empty content
+// for every coding. Codec failures throw http_content_codec_error.
+[[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
+    http_content_coding coding, std::string_view input, http_content_decode_options options);
 
 // Decodes the listed codings in reverse order. gzip members and zstd frames are
 // consumed through the end of their input; Brotli trailing bytes are rejected.

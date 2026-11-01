@@ -61,6 +61,12 @@ constexpr char* http_encode_lower_hex(char* output, std::span<const unsigned cha
     return output + 2 * bytes.size();
 }
 
+// Text is encoded byte by byte, like its unsigned char representation.
+inline char* http_encode_lower_hex(char* output, std::string_view bytes) noexcept {
+    return http_encode_lower_hex(
+        output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
+}
+
 // `bytes` may alias `output`, up to and including its terminating NUL at
 // output.data()[output.size()]; an aliased input is rebased by offset after
 // the resize, which may reallocate. Throws std::length_error when the result

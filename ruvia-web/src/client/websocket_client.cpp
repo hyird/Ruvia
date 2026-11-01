@@ -31,7 +31,7 @@ websocket_client_state::websocket_client_state(event_loop loop, const websocket_
           client_tcp_endpoint{.host_ = config_.host_,
               .port_ = config_.port_,
               .tls_ = config_.scheme_ == websocket_scheme::wss ? &config_.tls_ : nullptr,
-              .keep_alive_ = tcp_keep_alive::enable,
+              .tcp_ = config_.tcp_,
               .alpn_ = config.protocol_ == websocket_client_protocol::http2 ? client_alpn::http2 : client_alpn::http11},
           wire_counters_),
       write_signal_(worker_),
@@ -195,10 +195,10 @@ void websocket_client_handle::expire_capability(void* target) noexcept {
 }
 
 websocket_client_handle websocket_client_handle::with_options(operation_options options) const {
-    detail::validate_operation_options(options);
+    validate_operation_options(options);
     registration_.require_active();
     return websocket_client_handle(
-        *state_, registration_.scope(), detail::merge_operation_options(options_, std::move(options)));
+        *state_, registration_.scope(), merge_operation_options(options_, std::move(options)));
 }
 
 task<std::optional<websocket_message>> websocket_client_handle::read() const {

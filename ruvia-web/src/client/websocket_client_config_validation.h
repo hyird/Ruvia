@@ -11,6 +11,8 @@
 
 #include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
+#include "client/client_user_agent.h"
+#include "util/tcp_socket_policies.h"
 #include "websocket/websocket_lifecycle_validation.h"
 
 namespace ruvia::detail {
@@ -46,6 +48,8 @@ inline void validate_websocket_client_config(const websocket_client_config& conf
     if (config.scheme_ == websocket_scheme::wss && config.tls_.mode_ == client_tls_mode::disabled) {
         throw std::invalid_argument("wss WebSocket client requires TLS; use the ws scheme for plaintext");
     }
+    validate_client_tcp_config(config.tcp_);
+    validate_client_user_agent(config.user_agent_.view());
 }
 
 // The handshake owns application-header policy; the negotiation owns the

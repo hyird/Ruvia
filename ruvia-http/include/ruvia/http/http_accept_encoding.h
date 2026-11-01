@@ -32,10 +32,17 @@ struct http_accepted_encoding_quality {
         return wildcard_quality_ > 0 ? wildcard_quality_ : 0;
     }
 
+    [[nodiscard]] bool accepts() const noexcept {
+        return accepts(false);
+    }
+
     [[nodiscard]] bool accepts(bool is_identity) const noexcept {
         return quality(is_identity) > 0;
     }
 };
+
+[[nodiscard]] bool http_accepts_encoding(
+    std::string_view accept_encoding, std::string_view coding) noexcept;
 
 struct http_response_coding_qualities final {
     // A missing field and an explicitly empty field have different RFC 9110
@@ -50,6 +57,10 @@ struct http_response_coding_qualities final {
     http_accepted_encoding_quality identity_;
 
     void update(std::string_view accept_encoding) noexcept;
+
+    [[nodiscard]] bool accepts(http_content_coding coding) const noexcept {
+        return score(coding) >= 0;
+    }
 
 private:
     friend class http_response_coding_selection;
@@ -148,6 +159,9 @@ class http_response_coding_selection final {
 public:
     [[nodiscard]] static http_response_coding_selection select(
         const http_response_coding_qualities& qualities) noexcept;
+    [[nodiscard]] static http_response_coding_selection select(
+        const http_response_coding_qualities& qualities,
+        http_response_coding_candidates candidates) noexcept;
 
     // Ranks the same Accept-Encoding snapshot over the codings one
     // representation store actually holds (for example indexed precompressed
@@ -198,17 +212,24 @@ private:
     bool acceptable_;
 };
 
-// Picks the best response coding among every coding the server can produce.
-// The highest client q-value wins; ties resolve by server preference br > zstd
-// > gzip > deflate > identity. A coding with q=0 or one the client never
-// accepts is excluded.
+// Picks the best response coding from the supplied representation candidates
+// (every coding the server can produce for the one-argument form). The highest
+// client q-value wins; ties resolve by server preference br > zstd > gzip >
+// deflate > identity. A coding with q=0 or one the client never accepts is
+// excluded.
 inline http_response_coding_selection http_response_coding_selection::select(
     const http_response_coding_qualities& qualities) noexcept {
+    return select(qualities, http_response_coding_candidates::all());
+}
+
+inline http_response_coding_selection http_response_coding_selection::select(
+    const http_response_coding_qualities& qualities,
+    http_response_coding_candidates candidates) noexcept {
     scores_type scores{};
     for (std::size_t index = 0; index < scores.size(); ++index) {
         scores[index] = static_cast<std::int16_t>(qualities.score(static_cast<http_content_coding>(index)));
     }
-    return rank(scores, http_response_coding_candidates::all());
+    return rank(scores, candidates);
 }
 
 constexpr http_response_coding_selection http_response_coding_selection::rank(

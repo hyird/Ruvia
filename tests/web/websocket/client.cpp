@@ -531,11 +531,24 @@ RUVIA_TEST(websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
     RUVIA_CHECK(connected);
 }
 
-// One User-Agent rule for every client: the default "Ruvia" unless the
-// application headers carry their own field, which replaces it.
+// One User-Agent rule for every client: the configured agent (default "Ruvia")
+// unless the application headers carry their own field, which replaces it; an
+// empty agent sends none.
 RUVIA_TEST(websocket_client_handshake_sends_the_default_user_agent_unless_headers_supply_one) {
+    struct case_type final {
+        std::span<const ruvia::http_header_view> headers_;
+        std::optional<std::string_view> user_agent_;
+        std::string_view expected_;
+    };
     const ruvia::http_header_view custom[]{{"User-Agent", "custom/1"}};
-    for (const auto headers : {std::span<const ruvia::http_header_view>{}, std::span<const ruvia::http_header_view>(custom)}) {
+    const case_type cases[]{
+        {.expected_ = "User-Agent: Ruvia\r\n"},
+        {.headers_ = custom, .expected_ = "User-Agent: custom/1\r\n"},
+        {.user_agent_ = "configured/2", .expected_ = "User-Agent: configured/2\r\n"},
+        {.headers_ = custom, .user_agent_ = "configured/2", .expected_ = "User-Agent: custom/1\r\n"},
+        {.user_agent_ = "", .expected_ = {}},
+    };
+    for (const auto& test_case : cases) {
         auto& io = ruvia::test::new_test_io_context();
         auto attachment = ruvia::attach_event_loop(io);
         asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
@@ -554,10 +567,14 @@ RUVIA_TEST(websocket_client_handshake_sends_the_default_user_agent_unless_header
         asio::co_spawn(io, serve(), [&peer_failure](std::exception_ptr failure) { peer_failure = failure; });
 
         const auto run_client = [&]() -> ruvia::task<void> {
-            ruvia::websocket_client client(attachment.loop(), {.scheme_ = ruvia::websocket_scheme::ws,
-                                                                  .host_ = "127.0.0.1",
-                                                                  .port_ = peer.local_endpoint().port(),
-                                                                  .headers_ = headers});
+            ruvia::websocket_client_config config{.scheme_ = ruvia::websocket_scheme::ws,
+                .host_ = "127.0.0.1",
+                .port_ = peer.local_endpoint().port(),
+                .headers_ = test_case.headers_};
+            if (test_case.user_agent_) {
+                config.user_agent_ = *test_case.user_agent_;
+            }
+            ruvia::websocket_client client(attachment.loop(), config);
             std::exception_ptr failure;
             try {
                 co_await client.connect();
@@ -577,11 +594,14 @@ RUVIA_TEST(websocket_client_handshake_sends_the_default_user_agent_unless_header
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
-        const std::string_view expected = headers.empty() ? "User-Agent: Ruvia\r\n" : "User-Agent: custom/1\r\n";
         const auto first = request.find("User-Agent:");
+        if (test_case.expected_.empty()) {
+            RUVIA_CHECK(first == std::string::npos);
+            continue;
+        }
         RUVIA_CHECK(first != std::string::npos);
         RUVIA_CHECK(request.find("User-Agent:", first + 1) == std::string::npos);
-        RUVIA_CHECK(request.find(expected) == first);
+        RUVIA_CHECK(request.find(test_case.expected_) == first);
     }
 }
 

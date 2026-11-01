@@ -13,11 +13,10 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_signal.h"
-
-#include "integration/operation_timeout.h"
 
 namespace ruvia::detail {
 

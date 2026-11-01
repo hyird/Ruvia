@@ -9,6 +9,7 @@
 #include <string_view>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http1_client_request_writer.h"
@@ -22,6 +23,10 @@
 #include "test_harness.h"
 
 namespace {
+void add(std::vector<ruvia::http_header>& head, std::string_view name, std::string_view value) {
+    head.emplace_back(name, value, std::pmr::get_default_resource());
+}
+
 // A 2xx response head carrying `fields` (CRLF-terminated lines), as an RFC 8441
 // server accepts the WebSocket with.
 ruvia::http_client_response_head accepted_head(std::string_view fields) {
@@ -48,10 +53,11 @@ std::variant<ruvia::websocket_client_negotiation_result_view, ruvia::websocket_c
 RUVIA_TEST(websocket_client_negotiation_accepts_asymmetric_context_and_window_parameters) {
     const std::array protocols{std::string_view("chat")};
     ruvia::websocket_client_negotiation client({.subprotocols_ = protocols, .deflate_ = {.compression_ = {.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false, .server_max_window_bits_ = 10, .client_max_window_bits_ = 12}}});
-    const auto head = accepted_head(
-        "sec-websocket-protocol: chat\r\n"
-        "sec-websocket-extensions: permessage-deflate; client_no_context_takeover; server_max_window_bits=10; client_max_window_bits=12\r\n");
-    auto accepted = open_stream_selection(client, head);
+    std::vector<ruvia::http_header> head;
+
+    add(head, "sec-websocket-protocol", "chat");
+    add(head, "sec-websocket-extensions", "permessage-deflate; client_no_context_takeover; server_max_window_bits=10; client_max_window_bits=12");
+    auto accepted = client.validate_fields(head);
     RUVIA_CHECK((accepted.index() == 0));
     RUVIA_CHECK_EQ(std::get<0>(accepted).selected_subprotocol_, std::string_view("chat"));
     RUVIA_CHECK(!std::get<0>(accepted).compression_.server_no_context_takeover_);
@@ -62,29 +68,37 @@ RUVIA_TEST(websocket_client_negotiation_accepts_asymmetric_context_and_window_pa
 RUVIA_TEST(websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_selection) {
     ruvia::websocket_client_negotiation client({.deflate_ = {.compression_ = {.enabled_ = true, .server_max_window_bits_ = 10}, .offer_client_max_window_bits_ = false}});
     for (auto extension : std::array{"permessage-deflate", "permessage-deflate; server_no_context_takeover; server_max_window_bits=11", "permessage-deflate; server_no_context_takeover; server_max_window_bits=10; client_max_window_bits=9", "permessage-deflate; server_no_context_takeover; server_max_window_bits=10; unknown", "permessage-deflate; server_no_context_takeover; server_max_window_bits=10; server_max_window_bits=10"}) {
-        const auto head = accepted_head("sec-websocket-extensions: " + std::string(extension) + "\r\n");
-        RUVIA_CHECK(!(open_stream_selection(client, head).index() == 0));
+        std::vector<ruvia::http_header> head;
+
+        add(head, "sec-websocket-extensions", extension);
+        RUVIA_CHECK(!(client.validate_fields(head).index() == 0));
     }
     // A server may add its own window bound without an offer.
     ruvia::websocket_client_negotiation no_server_window_client({.deflate_ = {.compression_ = {.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false}}});
     {
-        const auto head = accepted_head("sec-websocket-extensions: permessage-deflate; server_max_window_bits=10\r\n");
-        RUVIA_CHECK((open_stream_selection(no_server_window_client, head).index() == 0));
+        std::vector<ruvia::http_header> head;
+
+        add(head, "sec-websocket-extensions", "permessage-deflate; server_max_window_bits=10");
+        RUVIA_CHECK((no_server_window_client.validate_fields(head).index() == 0));
     }
     // The server may select a larger client window than the offered hint, or
     // none, but the client still never compresses with more than it offered.
     ruvia::websocket_client_negotiation limited_client_window({.deflate_ = {.compression_ = {.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false, .client_max_window_bits_ = 9}}});
     for (auto extension : std::array{"permessage-deflate; client_max_window_bits=10", "permessage-deflate"}) {
-        const auto head = accepted_head("sec-websocket-extensions: " + std::string(extension) + "\r\n");
-        auto accepted = open_stream_selection(limited_client_window, head);
+        std::vector<ruvia::http_header> head;
+
+        add(head, "sec-websocket-extensions", extension);
+        auto accepted = limited_client_window.validate_fields(head);
         RUVIA_CHECK((accepted.index() == 0));
         if (accepted.index() == 0) {
             RUVIA_CHECK_EQ(std::get<0>(accepted).compression_.client_max_window_bits_.value_or(15), 9);
         }
     }
     {
-        const auto head = accepted_head("sec-websocket-extensions: permessage-deflate; client_max_window_bits=8\r\n");
-        auto accepted = open_stream_selection(limited_client_window, head);
+        std::vector<ruvia::http_header> head;
+
+        add(head, "sec-websocket-extensions", "permessage-deflate; client_max_window_bits=8");
+        auto accepted = limited_client_window.validate_fields(head);
         RUVIA_CHECK((accepted.index() == 0));
         if (accepted.index() == 0) {
             RUVIA_CHECK_EQ(std::get<0>(accepted).compression_.client_max_window_bits_.value_or(15), 8);
@@ -93,13 +107,17 @@ RUVIA_TEST(websocket_client_negotiation_rejects_duplicate_unknown_or_unoffered_s
     // A client takeover preference in an offer is a hint.
     ruvia::websocket_client_negotiation require_client_no_takeover({.deflate_ = {.compression_ = {.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = true}}});
     {
-        const auto head = accepted_head("sec-websocket-extensions: permessage-deflate\r\n");
-        auto accepted = open_stream_selection(require_client_no_takeover, head);
+        std::vector<ruvia::http_header> head;
+
+        add(head, "sec-websocket-extensions", "permessage-deflate");
+        auto accepted = require_client_no_takeover.validate_fields(head);
         RUVIA_CHECK((accepted.index() == 0));
         RUVIA_CHECK(std::get<0>(accepted).compression_.client_no_context_takeover_);
     }
-    const auto head = accepted_head("sec-websocket-protocol: unoffered\r\n");
-    RUVIA_CHECK(!(open_stream_selection(client, head).index() == 0));
+    std::vector<ruvia::http_header> head;
+
+    add(head, "sec-websocket-protocol", "unoffered");
+    RUVIA_CHECK(!(client.validate_fields(head).index() == 0));
 }
 RUVIA_TEST(websocket_h1_client_handshake_negotiates_deflate) {
     constexpr std::array<std::uint8_t, 16> nonce{'t', 'h', 'e', ' ', 's', 'a', 'm', 'p', 'l', 'e', ' ', 'n', 'o', 'n', 'c', 'e'};

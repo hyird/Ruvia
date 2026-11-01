@@ -19,7 +19,7 @@ RUVIA_TEST(response_coding_sets_and_selection_snapshots_distinguish_every_suppor
         const std::string field = std::string(ruvia::http_content_coding_token(coding)) +
                                   ";q=1,*;q=0" + (coding == ruvia::http_content_coding::identity ? "" : ",identity;q=0");
         qualities.update(field);
-        const auto selected = ruvia::http_response_coding_selection::select(qualities).select(candidates);
+        const auto selected = ruvia::http_response_coding_selection::select(qualities, candidates);
         RUVIA_CHECK(selected.acceptable());
         RUVIA_CHECK(selected.coding() == coding);
         for (const auto other : codings) {
@@ -58,14 +58,6 @@ reference_qualities reference_three_pass(std::string_view header_value) {
 
 bool same_quality(const http_accepted_encoding_quality& a, const http_accepted_encoding_quality& b) {
     return a.explicit_quality_ == b.explicit_quality_ && a.wildcard_quality_ == b.wildcard_quality_;
-}
-
-// Whether one Accept-Encoding field value accepts `coding`, by the weight rules
-// a response with an application-chosen coding is checked against.
-bool accepts_coding(std::string_view field, std::string_view coding) {
-    http_accepted_encoding_quality quality;
-    quality.update(field, coding);
-    return quality.accepts(coding == "identity");
 }
 
 http_response_coding_selection select_field(std::string_view header_value) {
@@ -174,23 +166,27 @@ RUVIA_TEST(response_coding_selection_end_to_end) {
 
     auto gzip_only = http_response_coding_candidates::empty();
     gzip_only.include(http_content_coding::gzip);
-    const auto absent_header_gzip = no_header.select(gzip_only);
+    const auto absent_header_gzip =
+        http_response_coding_selection::select(http_response_coding_qualities{}, gzip_only);
     RUVIA_CHECK(absent_header_gzip.acceptable());
     RUVIA_CHECK(absent_header_gzip.coding() == http_content_coding::gzip);
     RUVIA_CHECK(absent_header_gzip.accepts(http_content_coding::gzip));
 
+    http_response_coding_qualities empty_header;
+    empty_header.update("");
     // An explicitly empty Accept-Encoding allows only an uncoded representation,
     // so a response policy with only gzip has no acceptable candidate.
-    RUVIA_CHECK(!explicit_empty.select(gzip_only).acceptable());
+    const auto explicit_empty_gzip = http_response_coding_selection::select(empty_header, gzip_only);
+    RUVIA_CHECK(!explicit_empty_gzip.acceptable());
 }
 
 RUVIA_TEST(accepted_encoding_quality_treats_gzip_aliases_as_the_same_coding) {
     for (const auto coding : {std::string_view{"gzip"}, std::string_view{"x-gzip"}, std::string_view{"X-GZIP"}}) {
-        RUVIA_CHECK(accepts_coding("x-gzip", coding));
-        RUVIA_CHECK(accepts_coding("GZIP", coding));
-        RUVIA_CHECK(!accepts_coding("x-gzip;q=0, *;q=1", coding));
-        RUVIA_CHECK(!accepts_coding("gzip;q=0, *;q=1", coding));
-        RUVIA_CHECK(accepts_coding("x-gzip;q=0.8, *;q=0", coding));
+        RUVIA_CHECK(ruvia::http_accepts_encoding("x-gzip", coding));
+        RUVIA_CHECK(ruvia::http_accepts_encoding("GZIP", coding));
+        RUVIA_CHECK(!ruvia::http_accepts_encoding("x-gzip;q=0, *;q=1", coding));
+        RUVIA_CHECK(!ruvia::http_accepts_encoding("gzip;q=0, *;q=1", coding));
+        RUVIA_CHECK(ruvia::http_accepts_encoding("x-gzip;q=0.8, *;q=0", coding));
     }
 }
 
@@ -236,15 +232,17 @@ RUVIA_TEST(response_coding_selection_retains_client_preference_until_representat
 }
 
 RUVIA_TEST(response_coding_selection_uses_only_available_representations) {
-    const auto qualities = select_field("br, gzip, identity;q=0");
+    http_response_coding_qualities qualities;
+    qualities.update("br, gzip, identity;q=0");
 
     auto gzip_only = http_response_coding_candidates::identity_only();
     gzip_only.include(http_content_coding::gzip);
-    const auto gzip_selection = qualities.select(gzip_only);
+    const auto gzip_selection = http_response_coding_selection::select(qualities, gzip_only);
     RUVIA_CHECK(gzip_selection.acceptable());
     RUVIA_CHECK(gzip_selection.coding() == http_content_coding::gzip);
 
-    const auto identity_selection = qualities.select(http_response_coding_candidates::identity_only());
+    auto identity_only = http_response_coding_candidates::identity_only();
+    const auto identity_selection = http_response_coding_selection::select(qualities, identity_only);
     RUVIA_CHECK(!identity_selection.acceptable());
 
     // A failed ranking keeps the client's snapshot: the same selection still
@@ -257,32 +255,33 @@ RUVIA_TEST(response_coding_selection_uses_only_available_representations) {
     RUVIA_CHECK(brotli_selection.coding() == http_content_coding::brotli);
 }
 
-RUVIA_TEST(accepted_encoding_quality_rfc9110_identity_rules) {
+RUVIA_TEST(http_accepts_encoding_rfc9110_identity_rules) {
+    using ruvia::http_accepts_encoding;
+
     // RFC 9110 §12.5.3: Empty field-value accepts only identity.
-    RUVIA_CHECK(accepts_coding("", "identity"));
-    RUVIA_CHECK(!accepts_coding("", "gzip"));
+    RUVIA_CHECK(http_accepts_encoding("", "identity"));
+    RUVIA_CHECK(!http_accepts_encoding("", "gzip"));
 
     // RFC 9110 §12.5.3: "identity" is always acceptable unless specifically refused.
-    RUVIA_CHECK(accepts_coding("gzip", "identity"));
-    RUVIA_CHECK(accepts_coding("gzip, br", "identity"));
-    RUVIA_CHECK(accepts_coding("*;q=0.5", "identity"));
+    RUVIA_CHECK(http_accepts_encoding("gzip", "identity"));
+    RUVIA_CHECK(http_accepts_encoding("gzip, br", "identity"));
+    RUVIA_CHECK(http_accepts_encoding("*;q=0.5", "identity"));
 
     // Explicitly refused with identity;q=0.
-    RUVIA_CHECK(!accepts_coding("identity;q=0", "identity"));
-    RUVIA_CHECK(!accepts_coding("gzip, identity;q=0", "identity"));
+    RUVIA_CHECK(!http_accepts_encoding("identity;q=0", "identity"));
+    RUVIA_CHECK(!http_accepts_encoding("gzip, identity;q=0", "identity"));
 
     // Refused by wildcard *;q=0 when identity is not specifically included.
-    RUVIA_CHECK(!accepts_coding("*;q=0", "identity"));
-    RUVIA_CHECK(!accepts_coding("gzip, *;q=0", "identity"));
+    RUVIA_CHECK(!http_accepts_encoding("*;q=0", "identity"));
+    RUVIA_CHECK(!http_accepts_encoding("gzip, *;q=0", "identity"));
 
     // Explicit identity;q>0 overrides *;q=0.
-    RUVIA_CHECK(accepts_coding("gzip, *;q=0, identity;q=0.5", "identity"));
+    RUVIA_CHECK(http_accepts_encoding("gzip, *;q=0, identity;q=0.5", "identity"));
 
     // Explicit identity;q>0.
-    RUVIA_CHECK(accepts_coding("identity;q=0.1", "identity"));
+    RUVIA_CHECK(http_accepts_encoding("identity;q=0.1", "identity"));
 
-    // The weight of an unlisted coding: identity defaults to acceptable, any
-    // other coding does not.
+    // http_accepted_encoding_quality accepts(bool) overload check.
     http_accepted_encoding_quality quality;
     quality.update("gzip", "identity");
     RUVIA_CHECK(quality.accepts(true));
@@ -291,7 +290,7 @@ RUVIA_TEST(accepted_encoding_quality_rfc9110_identity_rules) {
 
 RUVIA_TEST(accepted_encoding_weights_do_not_allow_media_parameter_slots) {
     for (const std::string_view item : {"gzip;", "gzip;;q=1", "gzip;q=1;", "gzip; ;q=1;"}) {
-        RUVIA_CHECK(!accepts_coding(item, "gzip"));
+        RUVIA_CHECK(!ruvia::http_accepts_encoding(item, "gzip"));
         http_response_coding_qualities qualities;
         qualities.update("identity;q=0.5");
         qualities.update(item);
@@ -300,7 +299,7 @@ RUVIA_TEST(accepted_encoding_weights_do_not_allow_media_parameter_slots) {
         RUVIA_CHECK(selected.coding() == http_content_coding::identity);
         RUVIA_CHECK(!selected.accepts(http_content_coding::gzip));
     }
-    RUVIA_CHECK(!accepts_coding("*;;q=1", "extension"));
-    RUVIA_CHECK(!accepts_coding("extension;q=0.8;", "extension"));
-    RUVIA_CHECK(accepts_coding("extension;q=0.8", "extension"));
+    RUVIA_CHECK(!ruvia::http_accepts_encoding("*;;q=1", "extension"));
+    RUVIA_CHECK(!ruvia::http_accepts_encoding("extension;q=0.8;", "extension"));
+    RUVIA_CHECK(ruvia::http_accepts_encoding("extension;q=0.8", "extension"));
 }

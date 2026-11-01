@@ -22,7 +22,7 @@ namespace ruvia::testing {
     return content_type;
 }
 
-// Builds a boundary through parse_multipart_boundary, the only public route.
+// Builds a boundary through parse_multipart_boundary, the Content-Type route.
 [[nodiscard]] inline ruvia::multipart_boundary make_multipart_boundary(std::string_view value) {
     const auto parsed = ruvia::parse_multipart_boundary(multipart_boundary_content_type(value));
     if (const auto* boundary = parsed.boundary()) {

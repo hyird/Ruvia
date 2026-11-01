@@ -354,3 +354,26 @@ RUVIA_TEST(cookie_request_pair_accepts_inputs_inside_the_written_bytes) {
     RUVIA_CHECK(end == buffer.data() + 10);
     RUVIA_CHECK_EQ(std::string_view(buffer.data(), 10), std::string_view("name=value"));
 }
+
+RUVIA_TEST(cookie_request_pair_preserves_aliased_inputs_and_terminators) {
+    std::string header = "a";
+    header.reserve(16);
+    const std::string_view terminator(header.data() + header.size(), 1);
+    ruvia::append_cookie_request_pair(header, "b", terminator);
+    RUVIA_CHECK_EQ(header, std::string("a; b=\0", 6));
+
+    std::pmr::string empty;
+    const std::string_view empty_terminator(empty.data(), 1);
+    ruvia::append_cookie_request_pair(empty, empty_terminator, empty_terminator);
+    RUVIA_CHECK_EQ(std::string_view(empty), std::string_view("\0=\0", 3));
+
+    std::string growing = "sid=abc";
+    growing.resize(growing.capacity(), 'x');
+    const auto original = growing;
+    const std::string_view name(growing.data(), 3);
+    const std::string_view value(growing.data() + 4, growing.size() - 3);
+    ruvia::append_cookie_request_pair(growing, name, value);
+    auto expected = original + "; sid=" + original.substr(4);
+    expected.push_back('\0');
+    RUVIA_CHECK_EQ(growing, expected);
+}

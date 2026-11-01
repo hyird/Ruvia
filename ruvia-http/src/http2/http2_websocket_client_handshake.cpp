@@ -13,9 +13,15 @@
 
 namespace ruvia {
 
-std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
+namespace {
+
+// The one RFC 8441 request builder behind both the free function (owning
+// application headers) and websocket_client_negotiation::submit_http2_request()
+// (borrowed application headers).
+template <class header_type>
+std::variant<std::uint32_t, http2_request_head_submit_error> submit_websocket_extended_connect(
     http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const http_header> headers) {
+    std::string_view authority, std::string_view target, std::span<const header_type> headers) {
     static constexpr std::size_t inline_header_capacity = 16;
     const auto negotiation_fields = negotiation.request_fields();
     const std::size_t total_headers = negotiation_fields.size() + headers.size();
@@ -27,10 +33,11 @@ std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websoc
         fields = heap_headers.data();
     }
     std::size_t index = 0;
-    for (const auto group : {negotiation_fields, headers}) {
-        for (const auto& field : group) {
-            fields[index++] = http_header_view{field.name(), field.value()};
-        }
+    for (const auto& field : negotiation_fields) {
+        fields[index++] = http_header_view{field.name(), field.value()};
+    }
+    for (const auto& field : headers) {
+        fields[index++] = http_header_view{field.name(), field.value()};
     }
     return connection.submit_request_head(http2_extended_connect_request_head_view{
         .protocol_ = "websocket",
@@ -39,6 +46,20 @@ std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websoc
         .target_ = target,
         .headers_ = std::span<const http_header_view>(fields, total_headers),
     });
+}
+
+}  // namespace
+
+std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
+    http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
+    std::string_view authority, std::string_view target, std::span<const http_header> headers) {
+    return submit_websocket_extended_connect(connection, negotiation, scheme, authority, target, headers);
+}
+
+std::variant<std::uint32_t, http2_request_head_submit_error> websocket_client_negotiation::submit_http2_request(
+    http2_connection& connection, std::string_view scheme, std::string_view authority, std::string_view target,
+    std::span<const http_header_view> headers) const {
+    return submit_websocket_extended_connect(connection, *this, scheme, authority, target, headers);
 }
 
 std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
@@ -51,6 +72,11 @@ validate_http2_websocket_client_response(
         return websocket_client_handshake_error::stream_closed;
     }
     return detail::validate_websocket_client_selection(negotiation, head.headers(), true);
+}
+
+std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
+websocket_client_negotiation::validate_response(const http_client_response_head& head, bool stream_open) const {
+    return validate_http2_websocket_client_response(*this, head, stream_open);
 }
 
 }  // namespace ruvia

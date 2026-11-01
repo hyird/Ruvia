@@ -6,7 +6,6 @@
 #include <memory>
 #include <mutex>
 #include <stdexcept>
-#include <system_error>
 #include <thread>
 
 #include <asio/io_context.hpp>
@@ -16,14 +15,6 @@
 #include "ruvia/web/server_config.h"
 
 namespace ruvia::test {
-
-// Close a test client socket and cancel any outstanding I/O.
-inline void close_socket(asio::ip::tcp::socket& socket) noexcept {
-    std::error_code ignored;
-    socket.cancel(ignored);
-    socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
-    socket.close(ignored);
-}
 
 class http_server_fixture final {
 public:

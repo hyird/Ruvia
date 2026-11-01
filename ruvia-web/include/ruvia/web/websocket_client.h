@@ -22,6 +22,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/websocket_protocol.h"
+#include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/tls_config.h"
 #include "ruvia/web/websocket.h"
 
@@ -44,8 +45,7 @@ struct websocket_client_config final {
     borrowed_text host_{};
     std::optional<std::uint16_t> port_{};
     borrowed_text target_{"/"};
-    // Application request fields. Without a User-Agent field the handshake
-    // sends "User-Agent: Ruvia".
+    // Application request fields. A User-Agent field replaces user_agent_.
     std::span<const http_header_view> headers_{};
     std::span<const borrowed_text> subprotocols_{};
     websocket_client_deflate_offer deflate_{};
@@ -67,6 +67,11 @@ struct websocket_client_config final {
     websocket_lifecycle_options lifecycle_{};
     // Used for wss; client_tls_mode::disabled is rejected (select ws instead).
     client_tls_config tls_{};
+    client_tcp_config tcp_{};
+    // Sent as the User-Agent of a request or handshake that carries no
+    // User-Agent field; a caller field replaces it and an empty value sends
+    // none. Must be a valid header field value.
+    borrowed_text user_agent_{"Ruvia"};
 };
 
 class websocket_client_error final : public std::runtime_error {

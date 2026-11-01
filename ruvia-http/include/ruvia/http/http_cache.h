@@ -92,4 +92,7 @@ private:
     bool stale_if_error_seen_{false};
 };
 
+// Parse a Cache-Control field value (a single line, or several joined by commas).
+[[nodiscard]] cache_control parse_cache_control(std::string_view value) noexcept;
+
 }  // namespace ruvia

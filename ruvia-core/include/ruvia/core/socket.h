@@ -7,7 +7,7 @@
 #include <asio/ip/address.hpp>
 #include <asio/ip/tcp.hpp>
 
-namespace ruvia::detail {
+namespace ruvia {
 
 // Parse a complete textual IP address, rejecting embedded NUL bytes.
 [[nodiscard]] std::optional<asio::ip::address> parse_ip_address(std::string_view text);
@@ -19,4 +19,4 @@ inline void close_socket(asio::ip::tcp::socket& socket) noexcept {
     socket.close(ignored);
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

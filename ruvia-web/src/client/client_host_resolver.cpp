@@ -12,9 +12,8 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/socket.h"
 #include "ruvia/http/http_number_format.h"
-
-#include "util/socket.h"
 
 namespace ruvia::detail {
 struct client_host_resolver::query final {

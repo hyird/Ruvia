@@ -7,12 +7,16 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/header_token_utils.h"
+#include "ruvia/http/detail/response/http_response_header_bits.h"
+#include "ruvia/http/detail/response/http_response_header_state.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_response.h"
 
 #include "coding/http_content_codec.h"
 #include "request/http_request_access.h"
+#include "response/http_response_header_access.h"
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token
 // each coding is spelled with, the list-grammar accumulator across field lines,
@@ -151,9 +155,31 @@ bool is_valid_http_content_encoding_field_value(std::string_view value, http_fie
 
 namespace ruvia {
 
+http_content_coding_field_result parse_http_content_coding(
+    std::string_view value) noexcept {
+    detail::http_content_coding_field_parser parser;
+    parser.update(value);
+    return parser.finish();
+}
+
 http_content_coding_field_result parse_http_content_coding_headers(
     std::span<const http_header> headers) noexcept {
     return detail::http_content_coding_from_headers(headers);
+}
+
+http_content_coding_field_result parse_http_content_coding_headers(
+    const http_response_headers& headers) noexcept {
+    detail::http_content_coding_field_parser parser;
+    if (!detail::response_has_known_header(headers, detail::response_header_content_encoding)) {
+        return parser.finish();
+    }
+    for (const auto& header : headers) {
+        if (detail::http_response_header_access::known_bit(header) ==
+            detail::response_header_content_encoding) {
+            parser.update(header.value());
+        }
+    }
+    return parser.finish();
 }
 
 http_content_coding_field_result request_content_coding(const http_request& request) noexcept {
@@ -220,6 +246,34 @@ std::optional<std::pmr::string> encode_http_content(
                 input, detail::http_pmr_resource_or_default(options.resource_));
     }
     throw http_content_codec_error("unsupported content coding");
+}
+
+std::optional<std::pmr::string> encode_http_content(
+    std::span<const http_content_coding> codings, std::string_view input,
+    http_content_encode_options options) {
+    // Nothing is allocated until a stage produces content.
+    std::optional<std::pmr::string> current;
+    for (const auto coding : codings) {
+        // identity transforms nothing; only the size limit below applies to it.
+        if (coding == http_content_coding::identity) {
+            continue;
+        }
+        const std::string_view source_value = current.has_value() ? std::string_view(*current) : input;
+        auto stage = encode_http_content(coding, source_value, options);
+        if (!stage.has_value()) {
+            return std::nullopt;
+        }
+        current = std::move(stage);
+    }
+    if (current.has_value()) {
+        return current;
+    }
+    return encode_http_content(http_content_coding::identity, input, options);
+}
+
+std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
+    http_content_coding coding, std::string_view input, http_content_decode_options options) {
+    return decode_http_content(std::span<const http_content_coding>(&coding, 1), input, options);
 }
 
 std::variant<std::pmr::string, http_content_decode_error> decode_http_content(

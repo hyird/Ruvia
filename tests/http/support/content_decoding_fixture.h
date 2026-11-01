@@ -47,6 +47,7 @@ using ruvia::http_transfer_coding_decoder_failure;
 using ruvia::http_transfer_coding_stack_decoder;
 using ruvia::http_transfer_codings;
 using ruvia::http_unsupported_expectation_policy;
+using ruvia::parse_http_content_coding;
 using ruvia::protocol_byte_limit;
 
 inline constexpr std::size_t decoded_body_limit = 16 * 1024 * 1024;
@@ -167,12 +168,6 @@ inline std::string zstd_compress_with_window(std::string_view data, int window_l
     }
     output.resize(size);
     return output;
-}
-
-// One Content-Encoding field line through the recipient parser.
-inline ruvia::http_content_coding_field_result content_coding_field(std::string_view value) {
-    const ruvia::http_header header("Content-Encoding", value);
-    return ruvia::parse_http_content_coding_headers(std::span<const ruvia::http_header>(&header, 1));
 }
 
 inline std::string decoded(http_content_coding coding, std::string_view input, std::size_t max_bytes) {

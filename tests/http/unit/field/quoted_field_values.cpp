@@ -73,20 +73,15 @@ RUVIA_TEST(public_unquoted_delimiter_preserves_quote_state_before_start) {
 }
 
 RUVIA_TEST(accept_encoding_quality_unquoted_unchanged) {
-    const auto accepts = [](std::string_view field, std::string_view coding) {
-        ruvia::http_accepted_encoding_quality quality;
-        quality.update(field, coding);
-        return quality.accepts(coding == "identity");
-    };
-    RUVIA_CHECK(accepts("", "identity"));
-    RUVIA_CHECK(!accepts("", "gzip"));
-    RUVIA_CHECK(accepts("gzip;q=0.5, br", "br"));
-    RUVIA_CHECK(accepts("gzip;q=0.5, br", "gzip"));
-    RUVIA_CHECK(!accepts("gzip;q=0", "gzip"));
+    using ruvia::http_accepts_encoding;
+    RUVIA_CHECK(http_accepts_encoding("", "identity"));
+    RUVIA_CHECK(!http_accepts_encoding("", "gzip"));
+    RUVIA_CHECK(http_accepts_encoding("gzip;q=0.5, br", "br"));
+    RUVIA_CHECK(http_accepts_encoding("gzip;q=0.5, br", "gzip"));
+    RUVIA_CHECK(!http_accepts_encoding("gzip;q=0", "gzip"));
 }
 
 RUVIA_TEST(accept_quality_quoted_comma_does_not_split_item) {
-    ruvia::http_accepted_encoding_quality quality;
-    quality.update(R"(gzip;note="a,b";q=0)", "gzip");
-    RUVIA_CHECK(!quality.accepts(false));
+    using ruvia::http_accepts_encoding;
+    RUVIA_CHECK(!http_accepts_encoding(R"(gzip;note="a,b";q=0)", "gzip"));
 }

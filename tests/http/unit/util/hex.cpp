@@ -8,14 +8,6 @@
 
 #include "test_harness.h"
 
-namespace {
-
-std::span<const unsigned char> text_bytes(std::string_view text) noexcept {
-    return {reinterpret_cast<const unsigned char*>(text.data()), text.size()};
-}
-
-}  // namespace
-
 RUVIA_TEST(hex_nibbles_decode_and_encode_ascii_digits) {
     RUVIA_CHECK_EQ(ruvia::http_decode_hex_nibble('0'), 0);
     RUVIA_CHECK_EQ(ruvia::http_decode_hex_nibble('a'), 10);
@@ -33,14 +25,14 @@ RUVIA_TEST(hex_encode_accepts_output_overlapping_input) {
     for (std::size_t size = 0; size <= text.size(); ++size) {
         const auto input = text.substr(0, size);
         std::string expected(2 * size, '\0');
-        ruvia::http_encode_lower_hex(expected.data(), text_bytes(input));
+        ruvia::http_encode_lower_hex(expected.data(), input);
         // Every output start from wholly before to wholly after the input,
         // including in place and starts inside it.
         for (auto output_start = input_start - expected.size(); output_start <= input_start + size; ++output_start) {
             std::array<char, 48> buffer{};
             input.copy(buffer.data() + input_start, size);
-            const auto* const end = ruvia::http_encode_lower_hex(
-                buffer.data() + output_start, text_bytes(std::string_view(buffer.data() + input_start, size)));
+            const auto* const end =
+                ruvia::http_encode_lower_hex(buffer.data() + output_start, std::string_view(buffer.data() + input_start, size));
             RUVIA_CHECK_EQ(end, buffer.data() + output_start + expected.size());
             RUVIA_CHECK_EQ(std::string(buffer.data() + output_start, expected.size()), expected);
         }

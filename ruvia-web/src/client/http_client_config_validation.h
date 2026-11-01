@@ -10,7 +10,9 @@
 
 #include "client/client_tls.h"
 #include "client/client_tls_config_storage.h"
+#include "client/client_user_agent.h"
 #include "util/config_validation.h"
+#include "util/tcp_socket_policies.h"
 
 namespace ruvia::detail {
 
@@ -68,6 +70,8 @@ inline void validate_http_client_config(const http_client_config& config) {
     detail::ensure_positive_optional_durations("configured http client timeouts must be greater than zero",
         std::optional{config.connect_timeout_}, config.write_timeout_, config.request_timeout_,
         config.acquire_timeout_);
+    validate_client_user_agent(config.user_agent_.view());
+    validate_client_tcp_config(config.tcp_);
     std::size_t unique_cookies = 0;
     std::size_t cookie_bytes = 0;
     for (std::size_t i = 0; i < config.cookies_.size(); ++i) {

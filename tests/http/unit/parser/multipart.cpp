@@ -186,15 +186,27 @@ RUVIA_TEST(multipart_parser_feed_preserves_borrowed_body_before_input_compaction
 }
 
 RUVIA_TEST(multipart_boundary_value_enforces_rfc2046_grammar) {
-    const auto rejected = [](std::string_view value) {
-        const auto parsed = ruvia::parse_multipart_boundary(ruvia::testing::multipart_boundary_content_type(value));
-        return parsed.failure() != nullptr;
+    const auto throws_on = [](std::string_view value) {
+        try {
+            (void)ruvia::multipart_boundary(value);
+            return false;
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+    };
+    const auto rejected = [&throws_on](std::string_view value) {
+        return throws_on(value) && !ruvia::multipart_boundary::try_create(value).has_value();
     };
 
-    const auto spaced = ruvia::testing::make_multipart_boundary("a b");
+    const auto spaced = ruvia::multipart_boundary("a b");
     RUVIA_CHECK_EQ(spaced.value(), std::string_view("a b"));
-    const auto maximum = ruvia::testing::make_multipart_boundary(std::string(70, 'x'));
+    const auto maximum = ruvia::multipart_boundary(std::string(70, 'x'));
     RUVIA_CHECK_EQ(maximum.value().size(), std::size_t{70});
+    const auto created = ruvia::multipart_boundary::try_create("a b");
+    RUVIA_CHECK(created.has_value());
+    if (created) {
+        RUVIA_CHECK_EQ(created->value(), std::string_view("a b"));
+    }
     RUVIA_CHECK(rejected(""));
     RUVIA_CHECK(rejected(std::string(71, 'x')));
     RUVIA_CHECK(rejected("trailing "));

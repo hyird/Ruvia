@@ -356,6 +356,28 @@ struct request_head_write_plan final {
         head, content_bytes->value(), std::move(exchange_state));
 }
 
+// The one CONNECT rule set behind both prepare_connect() entries: wire-policy
+// checks first, then the tunnel target (null when the caller's authority is
+// invalid; port 0 is never a tunnel target), emitted in authority-form.
+[[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_connect_request(
+    const http_origin_view* tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer,
+    http1_client_request_wire_policy policy, std::pmr::memory_resource* resource) {
+    if (!is_valid_http1_close_policy(policy.close_policy_)) {
+        return detail::http1_client_request_prepare_result_access::failure(
+            http1_client_request_prepare_error::invalid_close_policy);
+    }
+    if (!is_valid_http_client_request_expectation(policy.expectation_)) {
+        return detail::http1_client_request_prepare_result_access::failure(
+            http1_client_request_prepare_error::invalid_expectation);
+    }
+    if (tunnel_origin == nullptr || tunnel_origin->port() == 0) {
+        return detail::http1_client_request_prepare_result_access::failure(
+            http1_client_request_prepare_error::invalid_connect_origin);
+    }
+    return prepare_request(*tunnel_origin, "CONNECT", http_known_method::connect, {}, headers,
+        http_client_request_content_view::none(), head_buffer, policy, resource);
+}
+
 }  // namespace
 
 std::string_view http1_client_request_prepare_error_message(
@@ -487,24 +509,23 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
     http1_client_request_prepare_error>
+http1_client_request_writer::prepare_connect(
+    const http_origin_view& tunnel_origin, std::span<const http_header_view> headers,
+    std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
+    return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy, resource_);
+}
+
+std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+    http1_client_request_prepare_error>
 http1_client_request_writer::prepare_connect(borrowed_text authority,
     std::span<const http_header_view> headers, std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
-    if (!is_valid_http1_close_policy(policy.close_policy_)) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_close_policy);
-    }
-    if (!is_valid_http_client_request_expectation(policy.expectation_)) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_expectation);
-    }
     if (!is_valid_http_connect_authority(authority.view())) {
-        return detail::http1_client_request_prepare_result_access::failure(
-            http1_client_request_prepare_error::invalid_connect_origin);
+        return prepare_connect_request(nullptr, headers, head_buffer, policy, resource_);
     }
     const auto parsed_value = parse_http_authority(authority.view());
-    return prepare_request(http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()}),
-        "CONNECT", http_known_method::connect, {}, headers, http_client_request_content_view::none(), head_buffer,
-        policy, resource_);
+    const auto tunnel_origin =
+        http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()});
+    return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy, resource_);
 }
 
 }  // namespace ruvia

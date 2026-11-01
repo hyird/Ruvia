@@ -9,12 +9,12 @@
 #include <span>
 #include <string_view>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "db/db_pipeline.h"
 #include "db/db_postgresql.h"
 #include "db/db_slot_socket.h"
-#include "integration/operation_timeout.h"
 
 // PostgreSQL's part of statement pipelining (db_pipeline.h): a group's
 // connection runs in libpq pipeline mode, and each statement sends its own

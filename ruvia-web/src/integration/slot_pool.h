@@ -11,14 +11,13 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait_result.h"
-
-#include "integration/operation_timeout.h"
 
 // The connection-slot bookkeeping every pooled client shares: lease scheduling,
 // stop-token cancellation addressed by operation id, and one deadline timer per

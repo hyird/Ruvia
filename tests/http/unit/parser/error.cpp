@@ -17,12 +17,10 @@ using ruvia::http_reason_phrase;
 }  // namespace
 
 RUVIA_TEST(http_status_code_validates_the_wire_value_boundary) {
-    RUVIA_CHECK(ruvia::http_status_code::from_value(100) == ruvia::http_status::continue_value);
-    RUVIA_CHECK_EQ(ruvia::http_status_code::from_value(599).value(), std::uint16_t{599});
-    RUVIA_CHECK(ruvia::http_status_code::is_valid_value(100));
-    RUVIA_CHECK(ruvia::http_status_code::is_valid_value(599));
-    RUVIA_CHECK(!ruvia::http_status_code::is_valid_value(99));
-    RUVIA_CHECK(!ruvia::http_status_code::is_valid_value(600));
+    RUVIA_CHECK(ruvia::http_status_code::try_from_value(100) == ruvia::http_status::continue_value);
+    RUVIA_CHECK(ruvia::http_status_code::try_from_value(599) == ruvia::http_status_code::from_value(599));
+    RUVIA_CHECK(!ruvia::http_status_code::try_from_value(99).has_value());
+    RUVIA_CHECK(!ruvia::http_status_code::try_from_value(600).has_value());
 
     bool threw = false;
     try {

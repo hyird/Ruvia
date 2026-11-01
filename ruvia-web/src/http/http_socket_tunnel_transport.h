@@ -10,12 +10,12 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
 
 #include "http/tls_tunnel_output.h"
 #include "server/inbound_transport_error.h"
 #include "tls/tls_stream_end.h"
-#include "util/socket.h"
 
 namespace ruvia::detail {
 

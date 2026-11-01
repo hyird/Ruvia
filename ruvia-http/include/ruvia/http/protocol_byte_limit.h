@@ -7,12 +7,14 @@
 
 namespace ruvia {
 
-// A protocol byte ceiling with no numeric sentinel: built only through
-// unlimited() or limited(n), and a configured limit is always strictly positive.
+// A protocol byte ceiling with no numeric sentinel: the default is unlimited,
+// while a configured limit is always strictly positive.
 class protocol_byte_limit final {
 public:
+    protocol_byte_limit() noexcept = default;
+
     [[nodiscard]] static protocol_byte_limit unlimited() noexcept {
-        return protocol_byte_limit(std::nullopt);
+        return protocol_byte_limit();
     }
 
     [[nodiscard]] static protocol_byte_limit limited(std::size_t bytes_value) {
@@ -20,6 +22,14 @@ public:
             throw std::invalid_argument("protocol byte limit must be greater than zero");
         }
         return protocol_byte_limit(bytes_value);
+    }
+
+    [[nodiscard]] bool is_limited() const noexcept {
+        return maximum_.has_value();
+    }
+
+    [[nodiscard]] std::optional<std::size_t> maximum() const noexcept {
+        return maximum_;
     }
 
     [[nodiscard]] bool exceeds(std::size_t bytes_value) const noexcept {
@@ -38,8 +48,8 @@ public:
     }
 
 private:
-    explicit protocol_byte_limit(std::optional<std::size_t> maximum) noexcept
-        : maximum_(maximum) {}
+    explicit protocol_byte_limit(std::size_t bytes_value) noexcept
+        : maximum_(bytes_value) {}
 
     std::optional<std::size_t> maximum_;
 };

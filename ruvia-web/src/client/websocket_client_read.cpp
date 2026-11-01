@@ -5,8 +5,9 @@
 #include <span>
 #include <string_view>
 
+#include "ruvia/core/operation_timeout.h"
+
 #include "client/websocket_client_state.h"
-#include "integration/operation_timeout.h"
 #include "websocket/http_websocket_liveness.h"
 namespace ruvia::detail {
 

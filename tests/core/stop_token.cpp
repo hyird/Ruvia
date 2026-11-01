@@ -256,6 +256,20 @@ RUVIA_TEST(combined_stop_token_observes_either_source) {
     RUVIA_CHECK(combined.stop_requested());
 }
 
+RUVIA_TEST(combined_stop_registration_outlives_temporary_token) {
+    ruvia::stop_source first;
+    ruvia::stop_source second;
+    int calls = 0;
+    auto registration =
+        ruvia::combine_stop_tokens(first.token(), second.token()).register_callback([&calls] {
+            ++calls;
+        });
+    RUVIA_CHECK(registration.registered());
+    second.request_stop();
+    first.request_stop();
+    RUVIA_CHECK_EQ(calls, 1);
+}
+
 RUVIA_TEST(combined_stop_registration_reuses_storage_after_token_dies) {
     ruvia::stop_source first;
     ruvia::stop_source second;

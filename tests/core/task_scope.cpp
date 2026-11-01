@@ -79,12 +79,6 @@ ruvia::task<void> fail() {
     co_return;
 }
 
-ruvia::task<void> stop_then_fail(ruvia::stop_source& source) {
-    source.request_stop();
-    throw std::runtime_error("child failed");
-    co_return;
-}
-
 ruvia::task<void> no_op() {
     co_return;
 }
@@ -207,15 +201,14 @@ ruvia::task<void> verify_stop_callback_reentrant_join_waits_for_finish(
     ruvia::task_scope observer(worker_value);
     bool active_during_stop_callback = false;
     bool completed_after_node_release = false;
-    ruvia::stop_source source;
     ruvia::stop_registration registration;
-    source.token().register_callback(registration, [&] {
+    primary->get_stop_token().register_callback(registration, [&] {
         active_during_stop_callback =
             primary.has_value() && primary->size() == 1 && resource.live_allocations() != 0;
         observer.spawn(join_and_destroy_on_failure(
             primary, resource, completed_after_node_release));
     });
-    primary->spawn(stop_then_fail(source));
+    primary->spawn(fail());
     while (primary.has_value()) {
         static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
     }
@@ -343,13 +336,12 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
             auto discarded_join = cancelled_scope.join();
             static_cast<void>(discarded_join);
         }
-        ruvia::stop_source source;
         bool stopped = false;
-        cancelled_scope.spawn(wait_for_stop(worker_value, source.token(), stopped));
+        cancelled_scope.spawn(wait_for_stop(worker_value, cancelled_scope.get_stop_token(), stopped));
         auto join = cancelled_scope.join();
-        source.request_stop();
+        cancelled_scope.request_stop();
         co_await std::move(join);
-        if (!stopped || cancelled_scope.size() != 0 || resource.live_allocations() != 0) {
+        if (!stopped || !cancelled_scope.stop_requested() || cancelled_scope.size() != 0 || resource.live_allocations() != 0) {
             co_return;
         }
     }
@@ -366,6 +358,9 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
             // child, so wait until every child has been retired.
             while (unjoined_scope.size() != 0) {
                 static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)));
+            }
+            if (!unjoined_scope.stop_requested()) {
+                co_return;
             }
         }
         if (completed != 1) {
@@ -414,7 +409,7 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     try {
         co_await scope.join();
     } catch (const std::runtime_error& error) {
-        success = calls == 1 && scope.size() == 0 && resource.live_allocations() == 0 &&
+        success = calls == 1 && scope.size() == 0 && scope.stop_requested() && resource.live_allocations() == 0 &&
                   std::string_view(error.what()) == "child failed";
     }
 }

@@ -51,14 +51,18 @@ public:
         closed,
     };
 
-    impl_type(std::pmr::memory_resource* memory, http_io_buffer& input, websocket_connection_options options)
+    // A null `input` gives the connection an input buffer of its own, allocated
+    // from `memory`. Protocol buffers share the input buffer's resource; only
+    // the implementation itself always lives in `memory`.
+    impl_type(std::pmr::memory_resource* memory, http_io_buffer* input, websocket_connection_options options)
         : resource_(memory),
-          input_(&input),
+          input_(input != nullptr ? input : &owned_input_.emplace(http_io_buffer::allocator_type(memory))),
+          max_buffered_input_bytes_(options.max_buffered_input_bytes_),
           message_limit_(options.message_limit_),
-          out_buffer_(memory),
-          assembler_(memory),
-          inbound_inflated_(memory),
-          outbound_deflated_(memory),
+          out_buffer_(input_->get_allocator().resource()),
+          assembler_(input_->get_allocator().resource()),
+          inbound_inflated_(input_->get_allocator().resource()),
+          outbound_deflated_(input_->get_allocator().resource()),
           role_(options.role_),
           mask_key_generator_(options.mask_key_generator_),
           mask_key_context_(options.mask_key_context_) {
@@ -67,6 +71,9 @@ public:
 
     void initialize_codecs(const websocket_connection_options& options) {
         const auto& compression = options.compression_;
+        if (max_buffered_input_bytes_ == 0) {
+            throw std::invalid_argument("WebSocket input buffer limit must be greater than zero");
+        }
         if (role_ != websocket_connection_role::server && role_ != websocket_connection_role::client) {
             throw std::invalid_argument("invalid WebSocket connection role");
         }
@@ -90,9 +97,18 @@ public:
                 (server ? compression.server_max_window_bits_ : compression.client_max_window_bits_).value_or(15);
             const int receive_window =
                 (server ? compression.client_max_window_bits_ : compression.server_max_window_bits_).value_or(15);
-            deflate_.emplace(resource_, options.shared_deflate_, options.deflater_, send_takeover, receive_takeover,
-                send_window, receive_window);
+            deflate_.emplace(input_->get_allocator().resource(), options.shared_deflate_, options.deflater_,
+                send_takeover, receive_takeover, send_window, receive_window);
         }
+    }
+
+    [[nodiscard]] std::size_t pending_input_bytes() const noexcept {
+        return input_->size() - pending_consume_;
+    }
+
+    void release_consumed_input() noexcept {
+        // Keep the storage: the caller may append bytes that alias the released frame.
+        input_->consume(std::exchange(pending_consume_, 0));
     }
 
     [[nodiscard]] websocket_liveness_mode liveness_mode() const noexcept {
@@ -261,7 +277,9 @@ public:
     }
 
     std::pmr::memory_resource* resource_;
+    std::optional<http_io_buffer> owned_input_;
     http_io_buffer* input_;
+    const std::size_t max_buffered_input_bytes_;
     protocol_byte_limit message_limit_;
     // Bytes of the last returned frame, consumed by the next next_event().
     std::size_t pending_consume_{0};
@@ -294,14 +312,46 @@ void websocket_connection::impl_deleter_type::operator()(impl_type* value) const
     }
 }
 
+websocket_connection::websocket_connection(websocket_connection_options options) {
+    auto* resource = detail::http_pmr_resource_or_default(options.resource_);
+    impl_.reset(detail::construct_http_pmr_object<impl_type>(resource, resource, nullptr, options));
+}
+
 websocket_connection::websocket_connection(http_io_buffer& input, websocket_connection_options options) {
-    auto* resource = detail::http_pmr_resource_or_default(input.get_allocator().resource());
-    impl_.reset(detail::construct_http_pmr_object<impl_type>(resource, resource, input, options));
+    auto* resource = options.resource_ != nullptr
+                         ? options.resource_
+                         : detail::http_pmr_resource_or_default(input.get_allocator().resource());
+    impl_.reset(detail::construct_http_pmr_object<impl_type>(resource, resource, &input, options));
 }
 
 websocket_connection::~websocket_connection() = default;
 websocket_connection::websocket_connection(websocket_connection&&) noexcept = default;
 websocket_connection& websocket_connection::operator=(websocket_connection&&) noexcept = default;
+
+websocket_feed_status websocket_connection::feed(std::string_view input) {
+    const auto liveness = impl_->liveness_mode();
+    if (liveness == websocket_liveness_mode::inactive) {
+        return websocket_feed_status::inactive;
+    }
+    if (liveness == websocket_liveness_mode::awaiting_peer_eof) {
+        // Bytes after the close handshake carry nothing; the client keeps
+        // reading only to observe the server's EOF.
+        return websocket_feed_status::accepted;
+    }
+    if (impl_->input_->size() > impl_->max_buffered_input_bytes_ ||
+        input.size() > impl_->max_buffered_input_bytes_ - impl_->input_->size()) {
+        if (impl_->pending_input_bytes() > impl_->max_buffered_input_bytes_ ||
+            input.size() > impl_->max_buffered_input_bytes_ - impl_->pending_input_bytes()) {
+            return websocket_feed_status::backpressured;
+        }
+        // The bound covers bytes awaiting next_event(), not the frame already
+        // returned; otherwise a frame that fits could never arrive. append()
+        // copies an `input` aliasing the buffer before it moves any byte.
+        impl_->release_consumed_input();
+    }
+    impl_->input_->append(input);
+    return websocket_feed_status::accepted;
+}
 
 std::optional<websocket_event> websocket_connection::next_event() & {
     using close_phase_type = impl_type::close_phase_type;

@@ -13,7 +13,6 @@
 #include "ruvia/web/detail/json/json_escape.h"
 #include "ruvia/web/detail/model/model_binary.h"
 #include "ruvia/web/detail/model/model_schema.h"
-#include "ruvia/web/detail/util/finite_double.h"
 #include "ruvia/web/model.h"
 
 namespace ruvia::detail {
@@ -96,7 +95,7 @@ void append_json_value(std::pmr::string& output, const value_type& value) {
             output.append("null");
             return;
         }
-        append_finite_double(output, value, "JSON number must be finite");
+        http_append_formatted_number(output, value, "JSON number cannot be formatted");
     } else if constexpr (is_ruvia_bytes<t_type>) {
         append_model_binary(output, value);
     } else if constexpr (is_ruvia_string<t_type>) {

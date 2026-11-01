@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -21,7 +22,6 @@
 
 #include "client/client_tcp_transport.h"
 #include "http2/http2_client_session.h"
-#include "integration/operation_timeout.h"
 
 namespace ruvia::detail {
 

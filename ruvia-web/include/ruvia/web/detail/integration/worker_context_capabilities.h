@@ -52,12 +52,15 @@ public:
         return ruvia::run_blocking(worker_, {.stop_token_ = stop_token_}, std::move(callable));
     }
 
-    // The deadline saturates at the steady-clock range; a non-positive one
-    // rejects without submitting the callable.
+    // The deadline rounds up to whole milliseconds; a non-positive one rejects
+    // without submitting the callable.
     template <typename rep_type, typename period_type, typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
         std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
-        return run_blocking_until(worker_, worker_timer_saturating_duration_cast(timeout), stop_token_, std::move(callable));
+        return ruvia::run_blocking(worker_,
+            {.timeout_ = worker_timer_ceil_milliseconds(worker_timer_saturating_duration_cast(timeout)),
+                .stop_token_ = stop_token_},
+            std::move(callable));
     }
 
 private:

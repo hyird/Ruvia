@@ -1,4 +1,4 @@
-#include "field/http_conditional_request.h"
+#include "ruvia/http/http_conditional_request.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -11,7 +11,7 @@
 #include "field/http_entity_tag.h"
 #include "request/http_request_access.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept {
     http_conditional_headers result{
@@ -134,4 +134,4 @@ bool http_if_range_allows(std::string_view header_value, std::string_view etag,
     return date.has_value() && *modified_seconds == *date;
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

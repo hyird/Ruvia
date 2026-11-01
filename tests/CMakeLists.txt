@@ -78,6 +78,7 @@ if(RUVIA_BUILD_CORE)
         core/bytes.cpp
         core/error_text.cpp
         core/failure_report.cpp
+        core/ip_address.cpp
         core/local_ring_queue.cpp
         core/memory_pool.cpp
         core/scoped_operation.cpp
@@ -92,6 +93,7 @@ if(RUVIA_BUILD_CORE)
         "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fno-elide-constructors>")
     ruvia_add_test(ruvia_asio_task ruvia::core SOURCES core/asio_task.cpp)
     ruvia_add_test(ruvia_event_loop_pool ruvia::core SOURCES core/runtime_worker.cpp)
+    ruvia_add_test(ruvia_operation_deadline ruvia::core SOURCES core/operation_deadline.cpp)
     ruvia_add_test(ruvia_pool_lease_scheduler ruvia::core TIMEOUT 10 SOURCES
         core/pool_lease_scheduler.cpp)
     ruvia_add_test(ruvia_task_scope ruvia::core SOURCES core/task_scope.cpp)

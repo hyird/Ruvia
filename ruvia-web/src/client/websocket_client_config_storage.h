@@ -18,7 +18,6 @@
 #include "ruvia/web/websocket_client.h"
 
 #include "client/client_tls.h"
-#include "client/client_user_agent.h"
 #include "client/websocket_client_config_validation.h"
 #include "websocket/websocket_lifecycle_validation.h"
 
@@ -45,7 +44,8 @@ struct websocket_client_config_storage final {
     http_origin_view origin_;
     std::pmr::string authority_;
     std::pmr::string target_;
-    // The application fields plus the default User-Agent when they carry none.
+    // The application fields plus the configured User-Agent when they carry
+    // none and it is not empty.
     std::pmr::vector<http_header> headers_;
     websocket_client_deflate_offer deflate_{};
     std::size_t max_message_bytes_;
@@ -54,6 +54,7 @@ struct websocket_client_config_storage final {
     std::optional<std::chrono::milliseconds> write_timeout_;
     websocket_lifecycle_options lifecycle_;
     client_tls_config_storage tls_;
+    client_tcp_config tcp_;
     // Sec-WebSocket-* request fields and response validation, built once from
     // the subprotocols and the deflate offer.
     websocket_client_negotiation negotiation_;
@@ -82,13 +83,15 @@ private:
         };
         std::pmr::vector<http_header> result_value(resource);
         result_value.reserve(source_value.headers_.size() + 1);
-        bool has_user_agent = false;
+        const std::string_view user_agent = source_value.user_agent_.view();
+        // An empty agent sends none; a caller field replaces it.
+        bool omit_user_agent = user_agent.empty();
         for (const auto& header : source_value.headers_) {
-            has_user_agent = has_user_agent || http_ascii_equals_ignore_case(header.name(), "user-agent");
+            omit_user_agent = omit_user_agent || http_ascii_equals_ignore_case(header.name(), "user-agent");
             result_value.push_back(copy(header.name(), header.value()));
         }
-        if (!has_user_agent) {
-            result_value.push_back(copy("User-Agent", default_client_user_agent));
+        if (!omit_user_agent) {
+            result_value.push_back(copy("User-Agent", user_agent));
         }
         return result_value;
     }
@@ -139,6 +142,7 @@ private:
           tls_(source_value.tls_,
               source_value.scheme_ == websocket_scheme::wss ? client_tls_files::parse : client_tls_files::keep_paths,
               resource),
+          tcp_(source_value.tcp_),
           negotiation_(make_negotiation(source_value, resource)) {}
 };
 

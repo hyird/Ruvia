@@ -113,6 +113,47 @@ template <typename rep_type, typename period_type>
     return now + delay;
 }
 
+[[nodiscard]] inline std::chrono::steady_clock::time_point worker_timer_deadline_after(
+    std::chrono::steady_clock::duration delay) noexcept {
+    return worker_timer_saturating_deadline(std::chrono::steady_clock::now(), delay);
+}
+
+// Non-positive delays map to zero; positive delays round up to whole
+// milliseconds and saturate at the representable maximum.
+[[nodiscard]] inline std::chrono::milliseconds worker_timer_ceil_milliseconds(
+    std::chrono::steady_clock::duration value) noexcept {
+    using milliseconds_type = std::chrono::milliseconds;
+    if (value <= std::chrono::steady_clock::duration::zero()) {
+        return milliseconds_type::zero();
+    }
+
+    using factor = std::ratio_divide<std::chrono::steady_clock::duration::period, milliseconds_type::period>;
+    if constexpr (factor::num == 1) {
+        const auto count = value.count() / factor::den;
+        if (std::cmp_greater_equal(count, milliseconds_type::max().count())) {
+            return milliseconds_type::max();
+        }
+        return milliseconds_type(static_cast<milliseconds_type::rep>(count) + (value.count() % factor::den != 0));
+    } else if constexpr (factor::den == 1) {
+        if (std::cmp_greater(value.count(), milliseconds_type::max().count() / factor::num)) {
+            return milliseconds_type::max();
+        }
+        return milliseconds_type(static_cast<milliseconds_type::rep>(value.count()) * factor::num);
+    } else {
+        using millisecond_float_type = std::chrono::duration<long double, milliseconds_type::period>;
+        const auto count = std::chrono::duration_cast<millisecond_float_type>(value).count();
+        if (std::isnan(count)) {
+            return milliseconds_type::zero();
+        }
+        const auto maximum = static_cast<long double>(milliseconds_type::max().count());
+        const auto rounded = std::ceil(count);
+        if (rounded >= maximum) {
+            return milliseconds_type::max();
+        }
+        return milliseconds_type(static_cast<milliseconds_type::rep>(rounded));
+    }
+}
+
 template <typename rep_type, typename period_type>
 [[nodiscard]] inline std::chrono::steady_clock::time_point worker_timer_deadline_after(
     std::chrono::duration<rep_type, period_type> delay) noexcept {

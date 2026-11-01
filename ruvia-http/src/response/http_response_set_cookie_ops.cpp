@@ -46,7 +46,7 @@ namespace {
 
 void http_response_headers::set_cookie(const set_cookie_plan& plan) {
     auto* retained = find_set_cookie_header(
-        plan.prefix_text_, plan.name_, !plan.path_.empty(), plan.path_, plan.domain_, plan.partitioned_);
+        plan.wire_prefix(), plan.name(), !plan.path().empty(), plan.path(), plan.domain(), plan.partitioned_);
     if (retained == nullptr) {
         auto& header_value = append_header_uninitialized_value(
             "Set-Cookie", plan.size(), detail::response_header_set_cookie);

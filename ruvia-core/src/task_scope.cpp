@@ -98,6 +98,27 @@ void task_scope::spawn(task<void> task_value) & {
     node_value->task_.start();
 }
 
+void task_scope::request_stop() & noexcept {
+    stop_requested_ = true;
+    if (stop_source_) {
+        stop_source_->request_stop();
+    }
+}
+
+stop_token task_scope::get_stop_token() const& {
+    if (!stop_source_) {
+        stop_source_.emplace();
+        if (stop_requested_) {
+            stop_source_->request_stop();
+        }
+    }
+    return stop_source_->token();
+}
+
+bool task_scope::stop_requested() const& noexcept {
+    return stop_requested_;
+}
+
 std::size_t task_scope::size() const& noexcept {
     return active_;
 }
@@ -173,13 +194,19 @@ void task_scope::child_complete(void* raw) noexcept {
 }
 
 void task_scope::finish(node_type* node_value) noexcept {
+    bool notify_stop = false;
     node_value->task_.prepare_direct_completion();
     try {
         node_value->task_.handle_.promise().result();
     } catch (...) {
         if (failure_ == nullptr) {
             failure_ = std::current_exception();
+            stop_requested_ = true;
+            notify_stop = true;
         }
+    }
+    if (notify_stop) {
+        request_stop();
     }
 
     --active_;

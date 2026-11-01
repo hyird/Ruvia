@@ -2,9 +2,8 @@
 
 #include <stdexcept>
 
+#include "ruvia/http/http_conditional_request.h"
 #include "ruvia/http/http_request.h"
-
-#include "field/http_conditional_request.h"
 
 namespace ruvia {
 
@@ -66,7 +65,7 @@ http_representation_response_plan plan_http_representation_response(
     const auto make_full = [&]() noexcept {
         return http_representation_response_plan(http_representation_response_plan::full_type{options.normal_status_});
     };
-    auto method = detail::get_http_conditional_method_plan(request.known_method());
+    auto method = get_http_conditional_method_plan(request.known_method());
     if (request.known_method() == http_known_method::unknown &&
         !request.method().empty() && request.method() != "TRACE") {
         method.evaluates_preconditions_ = true;
@@ -76,15 +75,15 @@ http_representation_response_plan plan_http_representation_response(
         return make_full();
     }
 
-    const auto headers = detail::get_http_conditional_headers(request);
-    const auto etags = detail::get_http_etag_preconditions(request, representation.etag_);
+    const auto headers = get_http_conditional_headers(request);
+    const auto etags = get_http_etag_preconditions(request, representation.etag_);
     if (etags.if_match_.present_) {
         if (!etags.if_match_.matches()) {
             return http_representation_response_plan(
                 http_representation_response_plan::precondition_failed_type{});
         }
     } else if (representation.last_modified_ && !headers.if_unmodified_since_.empty() &&
-               !detail::http_date_unmodified(headers.if_unmodified_since_, *representation.last_modified_)) {
+               !http_date_unmodified(headers.if_unmodified_since_, *representation.last_modified_)) {
         return http_representation_response_plan(http_representation_response_plan::precondition_failed_type{});
     }
 
@@ -97,7 +96,7 @@ http_representation_response_plan plan_http_representation_response(
         }
     } else if (method.evaluates_if_modified_since_ && representation.last_modified_ &&
                !headers.if_modified_since_.empty() &&
-               detail::http_date_not_modified(headers.if_modified_since_, *representation.last_modified_)) {
+               http_date_not_modified(headers.if_modified_since_, *representation.last_modified_)) {
         return http_representation_response_plan(http_representation_response_plan::not_modified_type{});
     }
 
@@ -107,7 +106,7 @@ http_representation_response_plan plan_http_representation_response(
         return make_full();
     }
 
-    if (headers.has_if_range_ && !detail::http_if_range_allows(headers.if_range_, representation.etag_,
+    if (headers.has_if_range_ && !http_if_range_allows(headers.if_range_, representation.etag_,
                                      representation.last_modified_, representation.strong_date_validator_)) {
         return make_full();
     }

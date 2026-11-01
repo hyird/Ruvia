@@ -44,11 +44,17 @@ bool timer_duration_conversions_preserve_integer_ticks_and_saturate() {
     const milliseconds coarse(9'000'000'000'001LL);
     using picoseconds_type = duration<std::int64_t, std::pico>;
     const picoseconds_type fine(9'223'000'000'000'001'000LL);
-    return ruvia::worker_timer_saturating_duration_cast(coarse) == duration_cast<steady_clock::duration>(coarse) &&
-           ruvia::worker_timer_saturating_duration_cast(fine) == duration_cast<steady_clock::duration>(fine) &&
-           ruvia::worker_timer_saturating_duration_cast(seconds::max()) == steady_clock::duration::max() &&
-           ruvia::worker_timer_saturating_duration_cast(seconds::min()) == steady_clock::duration::min() &&
-           ruvia::worker_timer_saturating_duration_cast(duration<std::uint64_t, std::nano>((std::numeric_limits<std::uint64_t>::max)())) == steady_clock::duration::max();
+    if (ruvia::worker_timer_saturating_duration_cast(coarse) != duration_cast<steady_clock::duration>(coarse) ||
+        ruvia::worker_timer_saturating_duration_cast(fine) != duration_cast<steady_clock::duration>(fine) ||
+        ruvia::worker_timer_saturating_duration_cast(seconds::max()) != steady_clock::duration::max() ||
+        ruvia::worker_timer_saturating_duration_cast(seconds::min()) != steady_clock::duration::min() ||
+        ruvia::worker_timer_saturating_duration_cast(duration<std::uint64_t, std::nano>((std::numeric_limits<std::uint64_t>::max)())) != steady_clock::duration::max()) {
+        return false;
+    }
+    return ruvia::worker_timer_ceil_milliseconds(duration_cast<steady_clock::duration>(nanoseconds(9'000'000'000'000'000'001LL))) == milliseconds(9'000'000'000'001LL) &&
+           ruvia::worker_timer_ceil_milliseconds(duration_cast<steady_clock::duration>(milliseconds(1))) == milliseconds(1) &&
+           ruvia::worker_timer_ceil_milliseconds(duration_cast<steady_clock::duration>(nanoseconds(1))) == milliseconds(1) &&
+           ruvia::worker_timer_ceil_milliseconds(steady_clock::duration::min()) == milliseconds::zero();
 }
 
 bool timer_immediate_shutdown_works() {

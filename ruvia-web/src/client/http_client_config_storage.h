@@ -46,7 +46,9 @@ struct http_client_config_storage final {
     http_client_advertisement_config advertisements_;
     http_client_push_config push_;
     client_tls_config_storage tls_;
+    client_tcp_config tcp_;
     http_client_received_cookie_policy received_cookies_;
+    std::pmr::string user_agent_;
     // Configured name/value cookie pairs, one allocation per pair.
     std::pmr::vector<http_header> cookies_;
 
@@ -70,6 +72,12 @@ private:
     }
     [[nodiscard]] static std::string_view host_view(const http_client_config_storage& source_value) noexcept {
         return source_value.host_;
+    }
+    [[nodiscard]] static std::string_view user_agent_view(const http_client_config& source_value) noexcept {
+        return source_value.user_agent_.view();
+    }
+    [[nodiscard]] static std::string_view user_agent_view(const http_client_config_storage& source_value) noexcept {
+        return source_value.user_agent_;
     }
 
     template <typename source_type>
@@ -121,7 +129,9 @@ private:
           advertisements_(source_value.advertisements_),
           push_(source_value.push_),
           tls_(tls_storage(source_value, resource)),
+          tcp_(source_value.tcp_),
           received_cookies_(source_value.received_cookies_),
+          user_agent_(user_agent_view(source_value), resource),
           cookies_(resource) {
         std::size_t unique_cookies = 0;
         for (std::size_t i = 0; i < source_value.cookies_.size(); ++i) {

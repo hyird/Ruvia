@@ -8,7 +8,8 @@
 #include <utility>
 #include <vector>
 
-#include "integration/operation_timeout.h"
+#include "ruvia/core/operation_timeout.h"
+
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_protocol.h"
 #include "redis/redis_types_access.h"

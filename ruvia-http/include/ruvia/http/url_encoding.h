@@ -165,6 +165,39 @@ template <typename visitor_type>
     return std::string_view(storage);
 }
 
+// Compare two percent-encoded components by their decoded bytes without
+// allocating, so differently escaped spellings of one value compare equal.
+// Percent mode treats '+' literally; form mode converts it to a space.
+// Malformed percent escapes never compare equal.
+[[nodiscard]] inline bool url_components_equivalent(
+    std::string_view left, std::string_view right, url_decode_mode mode) noexcept {
+    const auto next_byte = [mode](std::string_view input, std::size_t& i) noexcept -> int {
+        const char c = input[i];
+        if (mode == url_decode_mode::form && c == '+') {
+            return ' ';
+        }
+        if (c == '%') {
+            const auto byte = http_try_decode_percent_byte(input, i);
+            if (!byte) {
+                return -1;
+            }
+            i += 2;
+            return *byte;
+        }
+        return static_cast<unsigned char>(c);
+    };
+    std::size_t left_index = 0;
+    std::size_t right_index = 0;
+    for (; left_index < left.size() && right_index < right.size(); ++left_index, ++right_index) {
+        const auto left_byte = next_byte(left, left_index);
+        const auto right_byte = next_byte(right, right_index);
+        if (left_byte < 0 || right_byte < 0 || left_byte != right_byte) {
+            return false;
+        }
+    }
+    return left_index == left.size() && right_index == right.size();
+}
+
 // Origin-form path identity, the one canonical form shared by route matching,
 // path-scoped middleware and fallbacks, and decoded route parameters. A path
 // splits into segments on literal '/' only, and each segment is its

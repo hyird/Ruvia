@@ -2,10 +2,10 @@
 
 #include <optional>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/web/http_client.h"
 
 #include "client/http_client_registry.h"
-#include "integration/operation_timeout.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_handle.h"

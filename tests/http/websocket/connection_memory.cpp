@@ -308,6 +308,9 @@ RUVIA_TEST(ws_takeover_deflater_uses_the_configured_mem_level) {
 
 RUVIA_TEST(ws_deflate_mem_level_is_validated) {
     for (const int mem_level : {0, 10}) {
+        RUVIA_CHECK(ruvia::testing::throws_on([&] {
+            websocket_connection invalid({.deflater_ = {.mem_level_ = mem_level}});
+        }));
         http_io_buffer input;
         RUVIA_CHECK(ruvia::testing::throws_on([&] {
             websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(), .deflater_ = {.mem_level_ = mem_level}});

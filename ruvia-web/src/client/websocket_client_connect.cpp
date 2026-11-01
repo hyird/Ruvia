@@ -6,6 +6,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http1_request_connection_plan.h"
@@ -16,7 +17,6 @@
 
 #include "client/http1_request_head.h"
 #include "client/websocket_client_state.h"
-#include "integration/operation_timeout.h"
 #include "tls/tls_random.h"
 
 namespace ruvia::detail {

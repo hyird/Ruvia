@@ -8,11 +8,10 @@
 
 #include <asio/ip/tcp.hpp>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
-
-#include "integration/operation_timeout.h"
 
 namespace ruvia::detail {
 

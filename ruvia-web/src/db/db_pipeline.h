@@ -11,14 +11,13 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
-
-#include "integration/operation_timeout.h"
 
 // Pipelining of buffered statements outside transactions, shared by the
 // drivers whose protocol lets one connection carry several statements at

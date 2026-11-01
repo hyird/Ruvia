@@ -18,6 +18,7 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -32,7 +33,6 @@
 #include "db/db_slot_socket.h"
 #include "db/mariadb_pipeline.h"
 #include "db/postgresql_pipeline.h"
-#include "integration/operation_timeout.h"
 #include "integration/slot_pool.h"
 
 struct st_mysql;

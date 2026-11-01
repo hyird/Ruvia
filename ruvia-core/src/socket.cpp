@@ -1,4 +1,4 @@
-#include "util/socket.h"
+#include "ruvia/core/socket.h"
 
 #include <array>
 #include <cstdint>
@@ -10,7 +10,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 namespace {
 
@@ -144,4 +144,4 @@ std::optional<asio::ip::address> parse_ip_address(std::string_view text) {
     return asio::ip::address(address);
 }
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

@@ -1,9 +1,7 @@
 #pragma once
 
 #include <chrono>
-#include <cmath>
 #include <optional>
-#include <ratio>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -13,7 +11,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_timer.h"
 
-namespace ruvia::detail {
+namespace ruvia {
 
 inline void validate_operation_options(const operation_options& options) {
     if (options.timeout_.has_value() && options.timeout_->count() <= 0) {
@@ -32,42 +30,6 @@ inline void validate_operation_options(const operation_options& options) {
     }
     merged.stop_token_ = combine_stop_tokens(base.stop_token_, std::move(overrides.stop_token_));
     return merged;
-}
-
-// Non-positive delays map to zero; positive delays round up to whole
-// milliseconds and saturate at the representable maximum.
-[[nodiscard]] inline std::chrono::milliseconds worker_timer_ceil_milliseconds(
-    std::chrono::steady_clock::duration value) noexcept {
-    using milliseconds_type = std::chrono::milliseconds;
-    if (value <= std::chrono::steady_clock::duration::zero()) {
-        return milliseconds_type::zero();
-    }
-
-    using factor = std::ratio_divide<std::chrono::steady_clock::duration::period, milliseconds_type::period>;
-    if constexpr (factor::num == 1) {
-        const auto count = value.count() / factor::den;
-        if (std::cmp_greater_equal(count, milliseconds_type::max().count())) {
-            return milliseconds_type::max();
-        }
-        return milliseconds_type(static_cast<milliseconds_type::rep>(count) + (value.count() % factor::den != 0));
-    } else if constexpr (factor::den == 1) {
-        if (std::cmp_greater(value.count(), milliseconds_type::max().count() / factor::num)) {
-            return milliseconds_type::max();
-        }
-        return milliseconds_type(static_cast<milliseconds_type::rep>(value.count()) * factor::num);
-    } else {
-        using millisecond_float_type = std::chrono::duration<long double, milliseconds_type::period>;
-        const auto count = std::chrono::duration_cast<millisecond_float_type>(value).count();
-        if (std::isnan(count)) {
-            return milliseconds_type::zero();
-        }
-        const auto maximum = static_cast<long double>(milliseconds_type::max().count());
-        const auto rounded = std::ceil(count);
-        if (rounded >= maximum) {
-            return milliseconds_type::max();
-        }
-        return milliseconds_type(static_cast<milliseconds_type::rep>(rounded));
-    }
 }
 
 // Absolute timeout shared across the asynchronous phases of one operation.
@@ -135,6 +97,15 @@ public:
         arm(deadline_value, std::monostate{});
     }
 
+    void arm(std::optional<std::chrono::milliseconds> timeout) noexcept
+        requires std::is_same_v<kind_type, std::monostate>
+    {
+        if (timeout.has_value()) {
+            arm(worker_timer_deadline_after(*timeout), std::monostate{});
+        } else {
+            reset();
+        }
+    }
     void reset() noexcept {
         state_.template emplace<inactive>();
     }
@@ -194,4 +165,4 @@ private:
     state_type state_;
 };
 
-}  // namespace ruvia::detail
+}  // namespace ruvia

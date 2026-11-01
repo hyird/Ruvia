@@ -45,6 +45,12 @@ public:
     [[nodiscard]] bool has_pending_operations() const noexcept {
         return head_ != nullptr;
     }
+    void bind_context(void* context) noexcept {
+        context_ = context;
+    }
+    [[nodiscard]] void* context() const noexcept {
+        return context_;
+    }
     // Borrows the worker handle, which must outlive this scope (the same rule
     // as task_scope). Bind once, before any operation is registered.
     void bind_worker(const worker_handle& worker) noexcept {
@@ -66,6 +72,7 @@ private:
 
     detail::scoped_operation_registration* head_{nullptr};
     scoped_capability_registration* capability_head_{nullptr};
+    void* context_{nullptr};
     const worker_handle* worker_{nullptr};
     std::coroutine_handle<> join_continuation_{};
     bool active_{true};

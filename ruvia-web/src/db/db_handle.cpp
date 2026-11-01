@@ -73,10 +73,10 @@ db_query_result_cache db_handle::query_result_cache() const {
 #endif
 
 db_handle db_handle::with_options(operation_options options) const {
-    detail::validate_operation_options(options);
+    validate_operation_options(options);
     registration_.require_active();
     db_handle copy(*this);
-    copy.options_ = detail::merge_operation_options(options_, std::move(options));
+    copy.options_ = merge_operation_options(options_, std::move(options));
     return copy;
 }
 

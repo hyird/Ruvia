@@ -7,6 +7,7 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_rows.h"
@@ -14,7 +15,6 @@
 
 #include "db/db_config_storage.h"
 #include "db/db_query_cache.h"
-#include "integration/operation_timeout.h"
 
 namespace ruvia::detail {
 

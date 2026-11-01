@@ -272,6 +272,12 @@ public:
     // unless close_after_response makes the request emit Connection: close.
     [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
         http1_client_request_prepare_error>
+    prepare_connect(const http_origin_view& tunnel_origin,
+        std::span<const http_header_view> headers, std::span<char> head_buffer,
+        http1_client_request_wire_policy policy = {}) const;
+
+    [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
+        http1_client_request_prepare_error>
     prepare_connect(borrowed_text authority,
         std::span<const http_header_view> headers, std::span<char> head_buffer,
         http1_client_request_wire_policy policy = {}) const;

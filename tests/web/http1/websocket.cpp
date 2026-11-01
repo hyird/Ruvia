@@ -18,6 +18,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_interim_response.h"
@@ -293,7 +294,7 @@ RUVIA_TEST(http1_websocket_read_reports_orderly_peer_eof_as_end) {
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::test::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
         try {
             const auto send = [&](std::string_view bytes_value) -> ruvia::task<void> {
                 const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(bytes_value), std::move(handler)); });
@@ -339,7 +340,7 @@ RUVIA_TEST(http1_websocket_read_reports_orderly_peer_eof_as_end) {
             }
         } catch (...) {
             failure = std::current_exception();
-            ruvia::test::close_socket(client);
+            ruvia::close_socket(client);
         }
         (void)watchdog_value.cancel();
         attachment.stop();
@@ -347,7 +348,7 @@ RUVIA_TEST(http1_websocket_read_reports_orderly_peer_eof_as_end) {
     auto root = attachment.loop().start(run());
     io.run();
     root.get();
-    ruvia::test::close_socket(client);
+    ruvia::close_socket(client);
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);
@@ -377,7 +378,7 @@ RUVIA_TEST(http1_websocket_send_echoes_borrowed_message_while_holding_read_lane)
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::test::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
         try {
             const auto send = [&](std::string_view bytes_value) -> ruvia::task<void> {
                 const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(bytes_value), std::move(handler)); });
@@ -430,7 +431,7 @@ RUVIA_TEST(http1_websocket_send_echoes_borrowed_message_while_holding_read_lane)
             }
         } catch (...) {
             failure = std::current_exception();
-            ruvia::test::close_socket(client);
+            ruvia::close_socket(client);
         }
         (void)watchdog_value.cancel();
         attachment.stop();
@@ -438,7 +439,7 @@ RUVIA_TEST(http1_websocket_send_echoes_borrowed_message_while_holding_read_lane)
     auto root = attachment.loop().start(run());
     io.run();
     root.get();
-    ruvia::test::close_socket(client);
+    ruvia::close_socket(client);
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);
@@ -464,7 +465,7 @@ RUVIA_TEST(http1_websocket_longest_heartbeat_never_aborts_a_slow_write) {
     bool payload_intact = true;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(10));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::test::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
         try {
             constexpr std::string_view upgrade =
                 "GET /http1-websocket-longest-heartbeat HTTP/1.1\r\n"
@@ -516,7 +517,7 @@ RUVIA_TEST(http1_websocket_longest_heartbeat_never_aborts_a_slow_write) {
         } catch (...) {
             failure = std::current_exception();
         }
-        ruvia::test::close_socket(client);
+        ruvia::close_socket(client);
         (void)watchdog_value.cancel();
         attachment.stop();
     };
@@ -618,7 +619,7 @@ RUVIA_TEST(http1_websocket_required_subprotocol_refuses_offers_without_one) {
         for (std::size_t index = 0; index != offers.size(); ++index) {
             asio::ip::tcp::socket client(io);
             asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-            watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::test::close_socket(client); } });
+            watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
             try {
                 client.connect(server.endpoint());
                 const std::string upgrade = std::string(
@@ -644,7 +645,7 @@ RUVIA_TEST(http1_websocket_required_subprotocol_refuses_offers_without_one) {
             } catch (...) {
                 failure = std::current_exception();
             }
-            ruvia::test::close_socket(client);
+            ruvia::close_socket(client);
             (void)watchdog_value.cancel();
             if (failure) {
                 break;
@@ -677,7 +678,7 @@ RUVIA_TEST(http1_websocket_upgrade_with_continue_expectation_sends_100_before_10
     auto run = [&]() -> ruvia::task<void> {
         asio::ip::tcp::socket client(io);
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
-        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::test::close_socket(client); } });
+        watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
         try {
             client.connect(server.endpoint());
             constexpr std::string_view upgrade =
@@ -706,7 +707,7 @@ RUVIA_TEST(http1_websocket_upgrade_with_continue_expectation_sends_100_before_10
         } catch (...) {
             failure = std::current_exception();
         }
-        ruvia::test::close_socket(client);
+        ruvia::close_socket(client);
         (void)watchdog_value.cancel();
         attachment.stop();
     };

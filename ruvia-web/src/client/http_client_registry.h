@@ -9,6 +9,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/web/http_client.h"
@@ -17,7 +18,6 @@
 #include "client/http_client_response_memory.h"
 #include "client/http_client_result_budget.h"
 #include "integration/named_capability.h"
-#include "integration/operation_timeout.h"
 
 namespace ruvia::detail {
 

@@ -11,7 +11,6 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/detail/util/finite_double.h"
 
 namespace ruvia::detail {
 
@@ -44,7 +43,8 @@ inline void append_redis_number(std::pmr::string& output, std::int64_t value) {
         output.append(value > 0 ? "+inf" : "-inf");
         return output;
     }
-    append_finite_double(output, value, "redis sorted set score must not be NaN");
+    http_append_formatted_finite_number(output, value, "redis sorted set score must not be NaN",
+        "redis sorted set score is invalid");
     return output;
 }
 

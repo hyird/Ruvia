@@ -9,10 +9,14 @@
 #include <variant>
 
 #include "ruvia/http/http1_client_request_writer.h"
+#include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/websocket_protocol.h"
 
 namespace ruvia {
+class http2_connection;
+class http_client_response_head;
+
 struct websocket_client_negotiation_config_view final {
     std::span<const std::string_view> subprotocols_{};
     websocket_client_deflate_offer deflate_{};
@@ -53,10 +57,11 @@ validate_websocket_client_selection(
 
 // HTTP-version-independent RFC 6455/7692 client negotiation owner. Configuration
 // is copied into resource once. It supplies request fields to HTTP/1 Upgrade or
-// RFC 8441 Extended CONNECT; the version-specific response validators check
-// the server's exact selection against it.
+// RFC 8441 Extended CONNECT, and validates the server's exact selection; the
+// version-specific response validators check the same selection after their
+// own status checks.
 // The resource must outlive this object.
-// All offer views expire with this owner.
+// All offer views expire with this owner; response views expire with the head.
 class websocket_client_negotiation final {
 public:
     // Validates the subprotocols and the deflate offer, including its deflater.
@@ -71,6 +76,18 @@ public:
         return std::span<const http_header>(fields_.data(), field_count_);
     }
     std::span<const http_header> request_fields() const&& = delete;
+    // The server's Sec-WebSocket-Protocol and Sec-WebSocket-Extensions selection
+    // in `fields` alone, without status or connection-specific field checks.
+    [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
+    validate_fields(std::span<const http_header> fields) const;
+    // submit_http2_websocket_client_request() with this negotiation.
+    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>
+    submit_http2_request(http2_connection& connection,
+        std::string_view scheme, std::string_view authority, std::string_view target,
+        std::span<const http_header_view> headers = {}) const;
+    // validate_http2_websocket_client_response() with this negotiation.
+    [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
+    validate_response(const http_client_response_head& head, bool stream_open) const;
     // The resource the configuration was copied into.
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;

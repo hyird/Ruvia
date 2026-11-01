@@ -134,6 +134,10 @@ public:
         return head_plan_.body_plan();
     }
 
+    [[nodiscard]] http_status_code response_status() const noexcept {
+        return body_plan().response_status();
+    }
+
     [[nodiscard]] constexpr std::uint64_t content_length() const noexcept {
         return head_plan_.buffered()->content_length();
     }

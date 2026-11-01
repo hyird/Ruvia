@@ -16,6 +16,7 @@
 
 namespace ruvia {
 
+class http_response_headers;
 class http_request;
 
 namespace detail {
@@ -125,10 +126,17 @@ private:
         value_;
 };
 
+// Parses one logical Content-Encoding field value using recipient list rules.
+// Empty list members are ignored; an empty value therefore means identity.
+[[nodiscard]] http_content_coding_field_result parse_http_content_coding(
+    std::string_view value) noexcept;
+
 // Folds every Content-Encoding header line into one recipient-side decision.
 // Empty list members are ignored; no field or only empty members means identity.
 [[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(
     std::span<const http_header> headers) noexcept;
+[[nodiscard]] http_content_coding_field_result parse_http_content_coding_headers(
+    const http_response_headers& headers) noexcept;
 
 // Uses the parser's classified header descriptors without rescanning wire names.
 // Admission keeps Content-Encoding opaque. Inspect invalid()/unsupported()

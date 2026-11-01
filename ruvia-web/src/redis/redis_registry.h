@@ -57,8 +57,8 @@ public:
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_timeout.h"
 
-#include "integration/operation_timeout.h"
 #include "integration/slot_pool.h"
 #include "redis/redis_connection.h"
 

@@ -10,6 +10,7 @@
 #include "ruvia/http/http_content_encoder.h"
 
 #include "content_decoding_fixture.h"
+#include "stl_allocation_fixture.h"
 
 using ruvia::http_content_encoder;
 
@@ -153,7 +154,7 @@ RUVIA_TEST(http_content_decode_handles_deterministic_arbitrary_compressed_bytes)
 
 RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     const auto check_coding = [&](std::string_view value, http_content_coding expected) {
-        const auto parsed_value = content_coding_field(value);
+        const auto parsed_value = parse_http_content_coding(value);
         RUVIA_CHECK(parsed_value.invalid() == nullptr);
         RUVIA_CHECK(parsed_value.unsupported() == nullptr);
         RUVIA_CHECK_EQ(parsed_value.codings().size(), 1U);
@@ -170,7 +171,7 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     check_coding("deflate", http_content_coding::deflate);
     for (const std::string_view value : {std::string_view(""), std::string_view("identity"),
              std::string_view("IDENTITY, identity")}) {
-        const auto empty = content_coding_field(value);
+        const auto empty = parse_http_content_coding(value);
         RUVIA_CHECK(empty.invalid() == nullptr);
         RUVIA_CHECK(empty.unsupported() == nullptr);
         RUVIA_CHECK(empty.codings().empty());
@@ -185,7 +186,7 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     };
     for (const auto& [coding, token] : mappings) {
         RUVIA_CHECK_EQ(ruvia::http_content_coding_token(coding), token);
-        const auto parsed_value = content_coding_field(token);
+        const auto parsed_value = parse_http_content_coding(token);
         if (coding == http_content_coding::identity) {
             RUVIA_CHECK(parsed_value.codings().empty());
         } else {
@@ -199,8 +200,8 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     RUVIA_CHECK(!ruvia::http_content_coding_from_token("compress").has_value());
     RUVIA_CHECK(!ruvia::http_content_coding_from_token("").has_value());
 
-    const auto unsupported = content_coding_field("compress");
-    const auto stacked = content_coding_field("gzip, br");
+    const auto unsupported = parse_http_content_coding("compress");
+    const auto stacked = parse_http_content_coding("gzip, br");
     RUVIA_CHECK(unsupported.invalid() == nullptr);
     RUVIA_CHECK(unsupported.unsupported() != nullptr);
     RUVIA_CHECK(stacked.invalid() == nullptr);
@@ -210,7 +211,7 @@ RUVIA_TEST(http_content_coding_field_mapping_is_protocol_generic) {
     RUVIA_CHECK(stacked.codings()[1] == http_content_coding::brotli);
 
     for (const std::string_view value : {"gzip;level=9", "bad coding", "gzip/deflate"}) {
-        const auto invalid = content_coding_field(value);
+        const auto invalid = parse_http_content_coding(value);
         RUVIA_CHECK(invalid.unsupported() == nullptr);
         RUVIA_CHECK(invalid.invalid() != nullptr);
         if (invalid.invalid() != nullptr) {
@@ -224,17 +225,17 @@ RUVIA_TEST(http_content_coding_field_bounds_the_coding_stack) {
     for (std::size_t index = 0; index < ruvia::max_content_codings; ++index) {
         value += ", gzip, identity";
     }
-    const auto bounded = content_coding_field(value);
+    const auto bounded = parse_http_content_coding(value);
     RUVIA_CHECK(bounded.unsupported() == nullptr);
     RUVIA_CHECK_EQ(bounded.codings().size(), ruvia::max_content_codings);
 
     value += ", identity";
-    const auto still_bounded = content_coding_field(value);
+    const auto still_bounded = parse_http_content_coding(value);
     RUVIA_CHECK(still_bounded.unsupported() == nullptr);
     RUVIA_CHECK_EQ(still_bounded.codings().size(), ruvia::max_content_codings);
 
     value += ", gzip";
-    const auto oversized = content_coding_field(value);
+    const auto oversized = parse_http_content_coding(value);
     RUVIA_CHECK(oversized.invalid() == nullptr);
     RUVIA_CHECK(oversized.unsupported() != nullptr);
     if (oversized.unsupported() != nullptr) {
@@ -242,7 +243,7 @@ RUVIA_TEST(http_content_coding_field_bounds_the_coding_stack) {
     }
     RUVIA_CHECK(oversized.codings().empty());
 
-    const auto oversized_with_unknown = content_coding_field(
+    const auto oversized_with_unknown = parse_http_content_coding(
         "gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, x-custom");
     RUVIA_CHECK(oversized_with_unknown.invalid() == nullptr);
     RUVIA_CHECK(oversized_with_unknown.unsupported() != nullptr);
@@ -251,14 +252,14 @@ RUVIA_TEST(http_content_coding_field_bounds_the_coding_stack) {
     }
 
     const auto oversized_unknown_only =
-        content_coding_field("x1, x2, x3, x4, x5, x6, x7, x8, x9");
+        parse_http_content_coding("x1, x2, x3, x4, x5, x6, x7, x8, x9");
     RUVIA_CHECK(oversized_unknown_only.invalid() == nullptr);
     RUVIA_CHECK(oversized_unknown_only.unsupported() != nullptr);
     if (oversized_unknown_only.unsupported() != nullptr) {
         RUVIA_CHECK(oversized_unknown_only.unsupported()->depth_exceeded());
     }
 
-    const auto eight_known_plus_unknown = content_coding_field(
+    const auto eight_known_plus_unknown = parse_http_content_coding(
         "gzip, gzip, gzip, gzip, gzip, gzip, gzip, gzip, x-custom");
     RUVIA_CHECK(eight_known_plus_unknown.invalid() == nullptr);
     RUVIA_CHECK(eight_known_plus_unknown.unsupported() != nullptr);
@@ -266,7 +267,7 @@ RUVIA_TEST(http_content_coding_field_bounds_the_coding_stack) {
         RUVIA_CHECK(eight_known_plus_unknown.unsupported()->depth_exceeded());
     }
     value += ", bad coding";
-    const auto malformed = content_coding_field(value);
+    const auto malformed = parse_http_content_coding(value);
     RUVIA_CHECK(malformed.invalid() != nullptr);
 
     // identity stages transform nothing but still observe the decoded limit.
@@ -298,21 +299,14 @@ RUVIA_TEST(http_deflate_content_uses_the_rfc9110_zlib_wrapper) {
     }
 }
 
-RUVIA_TEST(http_content_decoding_stack_reverses_protocol_order) {
+RUVIA_TEST(http_content_encoding_stack_round_trips_in_protocol_order) {
     constexpr std::array codings{http_content_coding::gzip, http_content_coding::deflate,
         http_content_coding::brotli};
     const std::string input(8192, 's');
     counting_memory_resource resource;
     {
-        // Content-Encoding lists codings in the order they were applied.
-        std::optional<std::pmr::string> encoded(std::in_place, input, &resource);
-        for (const auto coding : codings) {
-            if (!encoded.has_value()) {
-                break;
-            }
-            encoded = encode_http_content(coding, *encoded,
-                {.max_encoded_bytes_ = input.size(), .resource_ = &resource});
-        }
+        auto encoded = encode_http_content(codings, input,
+            {.max_encoded_bytes_ = input.size(), .resource_ = &resource});
         RUVIA_CHECK(encoded.has_value());
         if (encoded.has_value()) {
             auto decoded = decode_http_content(codings, *encoded,
@@ -338,8 +332,36 @@ RUVIA_TEST(http_content_decoding_stack_reverses_protocol_order) {
                             http_content_decode_error::invalid_content);
             }
         }
+        auto capped = encode_http_content(codings, input,
+            {.max_encoded_bytes_ = 8, .resource_ = &resource});
+        RUVIA_CHECK(!capped.has_value());
     }
     RUVIA_CHECK_EQ(resource.live_bytes(), 0U);
+}
+
+RUVIA_TEST(http_content_encoding_stack_skips_identity_stages_without_copying) {
+    const std::string input(8192, 'i');
+    constexpr std::array stacked{http_content_coding::gzip, http_content_coding::identity};
+    counting_memory_resource single_resource;
+    counting_memory_resource stacked_resource;
+    auto single = encode_http_content(http_content_coding::gzip, input,
+        {.max_encoded_bytes_ = input.size(), .resource_ = &single_resource});
+    auto encoded = encode_http_content(stacked, input,
+        {.max_encoded_bytes_ = input.size(), .resource_ = &stacked_resource});
+    RUVIA_CHECK(single.has_value());
+    RUVIA_CHECK(encoded.has_value());
+    if (single.has_value() && encoded.has_value()) {
+        RUVIA_CHECK_EQ(*encoded, *single);
+    }
+    if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+        RUVIA_CHECK_EQ(stacked_resource.allocations(), single_resource.allocations());
+    }
+
+    constexpr std::array identity_only{http_content_coding::identity, http_content_coding::identity};
+    auto copied = encode_http_content(identity_only, input, {.max_encoded_bytes_ = input.size()});
+    RUVIA_CHECK(copied.has_value() && std::string_view(*copied) == input);
+    auto capped = encode_http_content(identity_only, input, {.max_encoded_bytes_ = input.size() - 1});
+    RUVIA_CHECK(!capped.has_value());
 }
 
 RUVIA_TEST(http_content_encoder_reset_starts_an_equivalent_fresh_stream) {
@@ -434,6 +456,34 @@ RUVIA_TEST(http_content_encode_enforces_exact_cap_without_partial_output) {
     RUVIA_CHECK(!identity_too_large.has_value());
     const auto empty_identity = encode_http_content(http_content_coding::identity, {}, {.max_encoded_bytes_ = 0});
     RUVIA_CHECK(empty_identity.has_value() && empty_identity->empty());
+}
+
+RUVIA_TEST(http_content_encoding_stack_caps_each_stage_and_throws_for_unknown_coding) {
+    const std::string input(2048, 's');
+    constexpr std::array codings{http_content_coding::gzip, http_content_coding::gzip};
+    const auto first = encode_http_content(codings.front(), input, {.max_encoded_bytes_ = input.size()});
+    const auto full = encode_http_content(codings, input, {.max_encoded_bytes_ = input.size()});
+    RUVIA_CHECK(first.has_value());
+    RUVIA_CHECK(full.has_value());
+    if (first.has_value() && full.has_value()) {
+        RUVIA_CHECK(full->size() > first->size());
+        const auto exact = encode_http_content(codings, input, {.max_encoded_bytes_ = full->size()});
+        RUVIA_CHECK(exact.has_value() && *exact == *full);
+        RUVIA_CHECK(!encode_http_content(codings, input, {.max_encoded_bytes_ = first->size()}).has_value());
+        RUVIA_CHECK(!encode_http_content(codings, input, {.max_encoded_bytes_ = first->size() - 1}).has_value());
+    }
+
+    counting_memory_resource resource;
+    constexpr std::array invalid_stack{http_content_coding::gzip, static_cast<http_content_coding>(255)};
+    bool stack_threw = false;
+    try {
+        static_cast<void>(encode_http_content(invalid_stack, input,
+            {.max_encoded_bytes_ = input.size(), .resource_ = &resource}));
+    } catch (const ruvia::http_content_codec_error&) {
+        stack_threw = true;
+    }
+    RUVIA_CHECK(stack_threw);
+    RUVIA_CHECK_EQ(resource.live_bytes(), 0U);
 }
 
 RUVIA_TEST(http_content_codec_error_is_thrown_only_when_a_codec_cannot_run) {
