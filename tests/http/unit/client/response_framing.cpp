@@ -1,14 +1,71 @@
+#include <cstddef>
 #include <memory_resource>
+#include <new>
 #include <string>
 #include <utility>
 
 #include "ruvia/http/http1_client_response_body_decoder.h"
+#include "ruvia/http/http_header.h"
 
 #include "failing_memory_resource.h"
 #include "http_client_response_fixture.h"
 #include "stl_allocation_fixture.h"
 
 // HTTP/1 client responses: what the head says about the body.
+
+namespace {
+
+class interchangeable_header_resource final : public std::pmr::memory_resource {
+public:
+    std::size_t allocations_{};
+    std::size_t returns_{};
+    bool allocations_disabled_{};
+
+private:
+    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
+        if (allocations_disabled_) {
+            throw std::bad_alloc();
+        }
+        auto* block = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
+        ++allocations_;
+        return block;
+    }
+
+    void do_deallocate(void* block, std::size_t bytes_value, std::size_t alignment) override {
+        ++returns_;
+        std::pmr::new_delete_resource()->deallocate(block, bytes_value, alignment);
+    }
+
+    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
+        return dynamic_cast<const interchangeable_header_resource*>(&other) != nullptr;
+    }
+};
+
+}  // namespace
+
+RUVIA_TEST(http_owned_header_move_keeps_destination_resource_when_resources_compare_equal) {
+    interchangeable_header_resource destination_resource;
+    interchangeable_header_resource source_resource;
+    {
+        ruvia::http_header destination("X-Old", "old", &destination_resource);
+        ruvia::http_header source("X-New", "retained", &source_resource);
+        const auto* source_bytes = source.name().data();
+        destination_resource.allocations_disabled_ = true;
+        source_resource.allocations_disabled_ = true;
+        destination = std::move(source);
+        RUVIA_CHECK(destination.name().data() == source_bytes);
+        RUVIA_CHECK_EQ(destination.value(), "retained");
+
+        destination_resource.allocations_disabled_ = false;
+        const auto copy = destination;
+        RUVIA_CHECK_EQ(copy.name(), "X-New");
+        RUVIA_CHECK_EQ(copy.value(), "retained");
+        RUVIA_CHECK(copy.name().data() != destination.name().data());
+    }
+    RUVIA_CHECK_EQ(source_resource.returns_, std::size_t{0});
+    RUVIA_CHECK_EQ(destination_resource.returns_,
+        destination_resource.allocations_ + source_resource.allocations_);
+}
 
 RUVIA_TEST(http_owned_header_assignment_preserves_resources_and_allows_retry) {
     failing_memory_resource first_resource;

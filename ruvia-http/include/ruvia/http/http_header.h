@@ -61,6 +61,9 @@ public:
           name_size_(std::exchange(other.name_size_, 0)),
           value_size_(std::exchange(other.value_size_, 0)) {}
 
+    // Assignment between resource-bound fields retains the destination's resource
+    // object. Equal resources allow an allocation-free move, not propagation of
+    // the source resource's lifetime requirement.
     http_header& operator=(const http_header& other) {
         if (this != &other) {
             if (other.resource_ == nullptr) {
@@ -83,7 +86,9 @@ public:
             if (resource_ == nullptr || other.resource_ == nullptr ||
                 resource_->is_equal(*other.resource_)) {
                 release();
-                resource_ = other.resource_;
+                if (resource_ == nullptr || other.resource_ == nullptr) {
+                    resource_ = other.resource_;
+                }
                 bytes_ = std::exchange(other.bytes_, nullptr);
                 name_size_ = std::exchange(other.name_size_, 0);
                 value_size_ = std::exchange(other.value_size_, 0);

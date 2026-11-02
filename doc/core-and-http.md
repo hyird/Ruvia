@@ -127,6 +127,8 @@ pool.join();
 | `"ruvia/http/cookies.h"` / `"ruvia/http/http_set_cookie.h"` | `struct cookie_options`、`parse_set_cookie`、`class set_cookie_plan final` | Cookie 属性校验（含 `__Secure-` / `__Host-` 前缀规则）、`Set-Cookie` 解析与序列化计划 |
 | `"ruvia/http/http_priority.h"` | `struct http_priority`、`struct http_priority_fields`、`parse_http_priority`、`encode_http_priority` | RFC 9218 可扩展 HTTP 优先级首部与 HTTP/2 `PRIORITY_UPDATE` 帧编解码 |
 
+当两个 `http_header` 均绑定 PMR 时，赋值保留目标的资源对象。移动赋值在资源等价时直接转移存储、不分配；`is_equal()` 只允许互相回收存储，不表示两个资源对象具有相同寿命，因此不会改为借用源资源。拷贝和移动构造仍沿用源对象的资源。
+
 `is_valid_http_request_application_field(name, value)` 在应用配置或请求构造边界校验单个出站请求首部，返回 `bool`、`noexcept` 且不分配内存：检查字段名 token、规范化字段值（包括拒绝首尾 SP/HTAB 及非法控制字节），按大小写不敏感匹配拒绝 `Host`、`Content-Length`、`Transfer-Encoding`、`Trailer`、`Expect`、`Connection`、`Keep-Alive`、`Proxy-Connection`、`TE`、`Upgrade`，并复用请求 writer 的已知字段发送方语义校验（如 `Content-Type`、`Content-Encoding`、`Origin` 与 CORS 请求字段）。合法未知扩展和其空值仍允许；不引入应用配置政策。HTTP/1 与 HTTP/2 的 `TE` 差异已被托管字段边界排除，因此无版本参数。此接口不保留状态，字段间重复、完整消息约束仍由调用方及最终 writer 负责；不得用于响应首部或接收方校验，接收方仍按各协议入口的 recipient 规则处理。
 
 `is_valid_http_response_field(name, value)` 声明在 `http_field_syntax.h`，同样返回 `bool`、`noexcept` 且不分配内存；检查通用名称/规范化字段值语法并复用响应发送方的 `Content-Type`、`Content-Encoding`、`Trailer` 语义校验。它不应用请求专属的 `Origin`、CORS、`Expect` 规则或请求托管字段黑名单，不用于接收方校验，也不替代响应写出入口的版本相关连接/分帧检查（如 `Connection`、`Upgrade`、`TE`）、重复字段检查及完整消息约束。应用禁改首部政策由调用方单独保留；此谓词返回 `true` 不表示字段在任意响应上下文中都可以发送。
