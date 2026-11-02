@@ -16,7 +16,13 @@ template <typename result_type, typename fn_type, typename... args_type>
 concept move_only_function_target =
     (std::is_void_v<result_type> &&
         std::same_as<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>, void>) ||
-    (!std::is_void_v<result_type> && std::is_invocable_r_v<result_type, std::decay_t<fn_type>&, args_type...>);
+    (!std::is_void_v<result_type> &&
+        std::is_invocable_r_v<result_type, std::decay_t<fn_type>&, args_type...> &&
+        (!std::is_reference_v<result_type> ||
+            (std::is_reference_v<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>> &&
+                std::is_convertible_v<
+                    std::add_pointer_t<std::remove_reference_t<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>>>,
+                    std::add_pointer_t<std::remove_reference_t<result_type>>>)));
 
 }  // namespace detail
 
@@ -50,6 +56,9 @@ public:
     move_only_function() noexcept = default;
     move_only_function(std::nullptr_t) noexcept {}
 
+    // 引用签名只接受直接返回兼容引用的目标（允许 cv 与派生到基类转换），
+    // 不从返回值或转换临时量生成引用。自定义转换须由显式返回引用的 lambda
+    // 完成；目标负责被引用对象的寿命。值签名仍允许正常隐式结果转换。
     template <typename fn_type>
         requires(!std::same_as<std::remove_cvref_t<fn_type>, move_only_function>) &&
                 detail::move_only_function_target<result_type, fn_type, args_type...>
