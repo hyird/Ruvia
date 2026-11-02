@@ -5,6 +5,8 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/websocket_protocol.h"
+
 // Building the payload an endpoint sends in a Close frame: a validated status code
 // followed by an optional UTF-8 reason, capped at the 125-byte control-frame
 // limit. Encoding either yields the bytes or one typed reason it could not.
@@ -12,7 +14,6 @@
 namespace ruvia::detail {
 
 enum class websocket_close_payload_encode_error : std::uint8_t {
-    invalid_code,
     invalid_reason,
     reason_too_large,
 };
@@ -29,9 +30,9 @@ public:
 private:
     friend class websocket_close_payload_encode_result;
     friend websocket_close_payload_encode_result encode_websocket_close_payload(
-        std::uint16_t, std::string_view) noexcept;
+        websocket_close_code, std::string_view) noexcept;
 
-    websocket_encoded_close_payload(std::uint16_t code, std::string_view reason) noexcept;
+    websocket_encoded_close_payload(websocket_close_code code, std::string_view reason) noexcept;
 
     std::array<char, 125> bytes_;
     std::uint8_t size_{0};
@@ -46,7 +47,7 @@ public:
 private:
     friend class websocket_close_payload_encode_result;
     friend websocket_close_payload_encode_result encode_websocket_close_payload(
-        std::uint16_t, std::string_view) noexcept;
+        websocket_close_code, std::string_view) noexcept;
 
     explicit constexpr websocket_close_payload_encode_failure(
         websocket_close_payload_encode_error error) noexcept
@@ -69,7 +70,7 @@ public:
 
 private:
     friend websocket_close_payload_encode_result encode_websocket_close_payload(
-        std::uint16_t, std::string_view) noexcept;
+        websocket_close_code, std::string_view) noexcept;
 
     explicit websocket_close_payload_encode_result(websocket_encoded_close_payload encoded) noexcept
         : value_(encoded) {}
@@ -83,5 +84,5 @@ private:
 };
 
 [[nodiscard]] websocket_close_payload_encode_result encode_websocket_close_payload(
-    std::uint16_t code, std::string_view reason) noexcept;
+    websocket_close_code code, std::string_view reason) noexcept;
 }  // namespace ruvia::detail

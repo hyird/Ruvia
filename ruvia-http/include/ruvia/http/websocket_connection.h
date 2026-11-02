@@ -95,7 +95,7 @@ public:
     [[nodiscard]] websocket_frame_submit_status submit_borrowed_frame(
         websocket_opcode opcode, std::string_view payload, bool compress = true);
     [[nodiscard]] websocket_close_submit_status submit_close(
-        std::uint16_t code, std::string_view reason);
+        websocket_close_code code, std::string_view reason);
 
 private:
     class impl_type;

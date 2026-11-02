@@ -1,11 +1,14 @@
 #pragma once
 
 #include <array>
+#include <compare>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 
@@ -20,6 +23,60 @@ enum class websocket_liveness_mode : std::uint8_t { open,
     awaiting_peer_close,
     awaiting_peer_eof,
     inactive };
+
+// The supported Close status space from RFC 6455 section 7.4 and the IANA
+// WebSocket Close Code registry. Role-specific restrictions remain with the
+// connection. Local-only sentinel codes such as 1005/1006 are not wire values.
+class websocket_close_code final {
+public:
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr websocket_close_code from_value(integer_type value) {
+        if (!is_valid_value(value)) {
+            throw std::invalid_argument("invalid WebSocket Close status code");
+        }
+        return websocket_close_code(static_cast<std::uint16_t>(value), validated_tag_type{});
+    }
+
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr std::optional<websocket_close_code> try_from_value(
+        integer_type value) noexcept {
+        if (!is_valid_value(value)) {
+            return std::nullopt;
+        }
+        return websocket_close_code(static_cast<std::uint16_t>(value), validated_tag_type{});
+    }
+
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
+        const auto integer_value = +value;
+        return (integer_value >= 1000 && integer_value <= 1003) ||
+               (integer_value >= 1007 && integer_value <= 1014) ||
+               (integer_value >= 3000 && integer_value <= 4999);
+    }
+
+    [[nodiscard]] constexpr std::uint16_t value() const noexcept {
+        return value_;
+    }
+
+    friend constexpr auto operator<=>(websocket_close_code, websocket_close_code) = default;
+
+private:
+    struct validated_tag_type {};
+
+    constexpr websocket_close_code(std::uint16_t value, validated_tag_type) noexcept
+        : value_(value) {}
+
+    std::uint16_t value_;
+};
+
+static_assert(std::is_trivially_copyable_v<websocket_close_code>);
+static_assert(sizeof(websocket_close_code) == sizeof(std::uint16_t));
+
+namespace websocket_close_status {
+inline constexpr auto normal_closure = websocket_close_code::from_value(1000);
+inline constexpr auto going_away = websocket_close_code::from_value(1001);
+inline constexpr auto internal_error = websocket_close_code::from_value(1011);
+}  // namespace websocket_close_status
 
 enum class websocket_opcode : std::uint8_t {
     text = 0x1,

@@ -80,7 +80,7 @@ task<void> server_websocket_connection<stream_type>::write_going_away_close() {
     write_guard_type write_guard(*this, write_phase_type::going_away, write_claim_type::adopt);
     try {
         // The session may have closed or failed before this coroutine ran.
-        if (protocol_.submit_close(1001, {}) != websocket_close_submit_status::accepted) {
+        if (protocol_.submit_close(websocket_close_status::going_away, {}) != websocket_close_submit_status::accepted) {
             co_return;
         }
         // Same deadline as a locally initiated close(); it covers this write.

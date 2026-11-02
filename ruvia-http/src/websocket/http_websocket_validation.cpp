@@ -130,30 +130,19 @@ websocket_handshake_validation_result validate_websocket_handshake(const http_re
 
 namespace ruvia::detail {
 
-bool is_valid_websocket_close_code(std::uint16_t code) noexcept {
-    if (code == 1000 || code == 1001 || code == 1002 || code == 1003 ||
-        (code >= 1007 && code <= 1014)) {
-        return true;
-    }
-    return code >= 3000 && code <= 4999;
-}
-
 websocket_encoded_close_payload::websocket_encoded_close_payload(
-    std::uint16_t code, std::string_view reason) noexcept
+    websocket_close_code code, std::string_view reason) noexcept
     : size_(static_cast<std::uint8_t>(reason.size() + 2)) {
-    bytes_[0] = static_cast<char>((code >> 8) & 0xFF);
-    bytes_[1] = static_cast<char>(code & 0xFF);
+    const auto code_value = code.value();
+    bytes_[0] = static_cast<char>((code_value >> 8) & 0xFF);
+    bytes_[1] = static_cast<char>(code_value & 0xFF);
     if (!reason.empty()) {
         std::memcpy(bytes_.data() + 2, reason.data(), reason.size());
     }
 }
 
 websocket_close_payload_encode_result encode_websocket_close_payload(
-    std::uint16_t code, std::string_view reason) noexcept {
-    if (!is_valid_websocket_close_code(code)) {
-        return websocket_close_payload_encode_result(
-            websocket_close_payload_encode_failure(websocket_close_payload_encode_error::invalid_code));
-    }
+    websocket_close_code code, std::string_view reason) noexcept {
     if (reason.size() > 123) {
         return websocket_close_payload_encode_result(
             websocket_close_payload_encode_failure(websocket_close_payload_encode_error::reason_too_large));
@@ -178,7 +167,7 @@ std::optional<websocket_protocol_failure> websocket_close_payload_failure(
     }
     const auto code = static_cast<std::uint16_t>(
         (static_cast<unsigned char>(payload_value[0]) << 8) | static_cast<unsigned char>(payload_value[1]));
-    if (!is_valid_websocket_close_code(code)) {
+    if (!websocket_close_code::is_valid_value(code)) {
         return websocket_protocol_failure::protocol_error;
     }
     if (!is_valid_utf8(payload_value.substr(2))) {

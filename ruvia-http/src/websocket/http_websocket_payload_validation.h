@@ -12,8 +12,6 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] bool is_valid_websocket_close_code(std::uint16_t code) noexcept;
-
 // The protocol failure a Close payload commits, or nullopt when it is legal.
 [[nodiscard]] std::optional<websocket_protocol_failure> websocket_close_payload_failure(
     std::string_view payload_value) noexcept;

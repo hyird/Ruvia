@@ -53,7 +53,7 @@ private:
                 co_await ws.send(std::move(*message));
             }
         }
-        co_await ws.close({.code_ = 1000, .reason_ = "bye"});
+        co_await ws.close({.code_ = ruvia::websocket_close_status::normal_closure, .reason_ = "bye"});
     }
 };
 

@@ -45,7 +45,7 @@ ruvia::task<void> exchange(ruvia::event_loop loop, ruvia::websocket_client_confi
         // Control frames are handled by the client driver. Close must not
         // overlap a read; all data operations above have already completed.
         co_await peer.ping("alive");
-        co_await peer.close({.code_ = 1000, .reason_ = "example complete"});
+        co_await peer.close({.code_ = ruvia::websocket_close_status::normal_closure, .reason_ = "example complete"});
     } catch (...) {
         failure = std::current_exception();
     }

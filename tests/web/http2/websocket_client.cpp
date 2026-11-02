@@ -346,7 +346,7 @@ void exercise_closing_peer(ruvia::testing::test_context& ruvia_ctx, closing_peer
         try {
             co_await client.connect();
             const auto client_handle = client.handle();
-            co_await client_handle.close({.code_ = 1000, .reason_ = "complete"});
+            co_await client_handle.close({.code_ = ruvia::websocket_close_status::normal_closure, .reason_ = "complete"});
             close_completed = true;
         } catch (const ruvia::websocket_client_error& error) {
             protocol_error = error.code() == ruvia::websocket_client_error::code_type::protocol_error;
@@ -454,7 +454,7 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
                         RUVIA_CHECK(std::holds_alternative<ruvia::http2_websocket_negotiation>(submitted));
                         ruvia::http_io_buffer websocket_input;
                         ruvia::websocket_connection websocket(websocket_input);
-                        RUVIA_CHECK(websocket.submit_close(1000, "bye") == ruvia::websocket_close_submit_status::accepted);
+                        RUVIA_CHECK(websocket.submit_close(ruvia::websocket_close_status::normal_closure, "bye") == ruvia::websocket_close_submit_status::accepted);
                         const auto close = websocket.output_plan();
                         const auto end_flag = mode == handshake_end::close_without_end_stream
                                                   ? ruvia::http2_end_stream::keep_open

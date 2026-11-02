@@ -79,7 +79,7 @@ task<void> finish_websocket_session(server_websocket_connection<stream_type>& co
     connection_failure.invoke(remote_address, exception);
     try {
         if (exception != nullptr) {
-            co_await connection.close({.code_ = 1011, .reason_ = "internal server error"});
+            co_await connection.close({.code_ = websocket_close_status::internal_error, .reason_ = "internal server error"});
         } else {
             co_await connection.close();
         }

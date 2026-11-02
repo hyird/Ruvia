@@ -179,7 +179,7 @@ public:
     void fail(std::uint16_t code) {
         if (close_phase_ == close_phase_type::open) {
             // Every protocol failure code is a valid Close code, so encoding succeeds.
-            const auto payload_value = detail::encode_websocket_close_payload(code, {});
+            const auto payload_value = detail::encode_websocket_close_payload(websocket_close_code::from_value(code), {});
             append_frame(websocket_opcode::close, payload_value.encoded()->bytes());
             close_phase_ = close_phase_type::final_output_queued;
             return;
@@ -570,7 +570,7 @@ websocket_frame_submit_status websocket_connection::submit_borrowed_frame(
 }
 
 websocket_close_submit_status websocket_connection::submit_close(
-    std::uint16_t code, std::string_view reason) {
+    websocket_close_code code, std::string_view reason) {
     using close_phase_type = impl_type::close_phase_type;
     if (impl_->close_phase_ == close_phase_type::closed) {
         return websocket_close_submit_status::closed;
@@ -582,14 +582,12 @@ websocket_close_submit_status websocket_connection::submit_close(
     // were absent from the server handshake. This core emits server frames;
     // a server must reject that mismatch during the opening handshake rather
     // than initiate a Close frame with the client-only status code.
-    if (impl_->role_ == websocket_connection_role::server && code == 1010) {
+    if (impl_->role_ == websocket_connection_role::server && code.value() == 1010) {
         return websocket_close_submit_status::invalid_code;
     }
     const auto payload_value = detail::encode_websocket_close_payload(code, reason);
     if (const auto* failure = payload_value.failure()) {
         switch (failure->error()) {
-            case detail::websocket_close_payload_encode_error::invalid_code:
-                return websocket_close_submit_status::invalid_code;
             case detail::websocket_close_payload_encode_error::invalid_reason:
                 return websocket_close_submit_status::invalid_reason;
             case detail::websocket_close_payload_encode_error::reason_too_large:

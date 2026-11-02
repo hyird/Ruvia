@@ -58,7 +58,7 @@ struct websocket_send_options final {
 };
 
 struct websocket_close_options final {
-    std::uint16_t code_{1000};
+    websocket_close_code code_{websocket_close_status::normal_closure};
     ::ruvia::borrowed_text reason_{};
 };
 

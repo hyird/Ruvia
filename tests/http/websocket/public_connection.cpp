@@ -1,7 +1,9 @@
 #include <zlib.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <new>
 #include <stdexcept>
@@ -69,6 +71,62 @@ std::string drain(websocket_connection& connection) {
     return bytes_value;
 }
 }  // namespace
+
+RUVIA_TEST(ws_public_close_code_rejects_wide_and_reserved_values_before_narrowing) {
+    const auto rejects = [](auto input) {
+        try {
+            (void)websocket_close_code::from_value(input);
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    const std::array<std::int64_t, 14> invalid_values{
+        std::numeric_limits<std::int64_t>::min(), -64536, -1, 0, 999,
+        1004, 1005, 1006, 1015, 1016, 2999, 5000, 66536,
+        std::numeric_limits<std::int64_t>::max()};
+    for (const auto input : invalid_values) {
+        RUVIA_CHECK(!websocket_close_code::try_from_value(input).has_value());
+        RUVIA_CHECK(rejects(input));
+    }
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    RUVIA_CHECK(!websocket_close_code::try_from_value(maximum).has_value());
+    RUVIA_CHECK(rejects(maximum));
+}
+
+RUVIA_TEST(ws_public_checked_close_codes_preserve_wire_value_and_role_rules) {
+    for (const std::uint64_t input : {1000u, 1003u, 1007u, 1014u, 3000u, 3999u, 4000u, 4999u, 1010u}) {
+        mask_source source;
+        http_io_buffer client_input;
+        auto sender = client(client_input, source);
+        http_io_buffer server_input;
+        websocket_connection receiver(server_input);
+        const auto code = websocket_close_code::from_value(input);
+        RUVIA_CHECK(sender.submit_close(code, "checked") == websocket_close_submit_status::accepted);
+        server_input.append(drain(sender));
+        const auto event = receiver.next_event();
+        RUVIA_CHECK(event && event->close() && event->close()->close_code() == input);
+        RUVIA_CHECK(event && event->close() && event->close()->reason() == "checked");
+    }
+
+    http_io_buffer server_input;
+    websocket_connection sender(server_input);
+    RUVIA_CHECK(sender.submit_close(websocket_close_code::from_value(1010), {}) == websocket_close_submit_status::invalid_code);
+    RUVIA_CHECK(sender.submit_frame(websocket_opcode::text, "still-open") == websocket_frame_submit_status::accepted);
+    RUVIA_CHECK(sender.submit_close(websocket_close_status::normal_closure, std::string_view("\xff", 1)) == websocket_close_submit_status::invalid_reason);
+    RUVIA_CHECK(sender.submit_close(websocket_close_status::normal_closure, std::string(124, 'x')) == websocket_close_submit_status::reason_too_large);
+    const std::string reason(123, 'x');
+    RUVIA_CHECK(sender.submit_close(websocket_close_status::normal_closure, reason) == websocket_close_submit_status::accepted);
+    mask_source source;
+    http_io_buffer client_input;
+    auto receiver = client(client_input, source);
+    client_input.append(drain(sender));
+    const auto message = receiver.next_event();
+    RUVIA_CHECK(message && message->message() && message->message()->payload() == "still-open");
+    const auto closed = receiver.next_event();
+    RUVIA_CHECK(closed && closed->close() && closed->close()->close_code() == 1000);
+    RUVIA_CHECK(closed && closed->close() && closed->close()->reason() == reason);
+}
 
 RUVIA_TEST(ws_public_context_takeover_mixed_messages_and_connection_lifetime) {
     counting_resource memory;
@@ -389,7 +447,7 @@ RUVIA_TEST(ws_public_server_protocol_controls_permessage_deflate_per_frame) {
 RUVIA_TEST(ws_public_server_protocol_preserves_transport_end_semantics) {
     http_io_buffer input;
     websocket_connection protocol(input);
-    RUVIA_CHECK(protocol.submit_close(1000, "done") == websocket_close_submit_status::accepted);
+    RUVIA_CHECK(protocol.submit_close(websocket_close_status::normal_closure, "done") == websocket_close_submit_status::accepted);
     RUVIA_CHECK(protocol.output_plan().disposition() ==
                 websocket_transport_disposition::keep_open);
     const auto output = protocol.output_plan().bytes();
@@ -428,7 +486,7 @@ RUVIA_TEST(ws_public_server_eof_discards_pending_output_before_transport_end) {
 RUVIA_TEST(ws_public_server_keeps_pending_pong_before_peer_close) {
     http_io_buffer input;
     websocket_connection protocol(input);
-    RUVIA_CHECK(protocol.submit_close(1000, "done") ==
+    RUVIA_CHECK(protocol.submit_close(websocket_close_status::normal_closure, "done") ==
                 websocket_close_submit_status::accepted);
     auto output = protocol.output_plan().bytes();
     RUVIA_CHECK(!output.empty());
@@ -518,7 +576,7 @@ RUVIA_TEST(ws_public_client_fragmented_message_with_ping_and_close) {
     RUVIA_CHECK(pong_event && pong_event->pong() && pong_event->pong()->payload() == "p");
     const auto message = connection.next_event();
     RUVIA_CHECK(message && message->message() && message->message()->payload() == "abcd");
-    RUVIA_CHECK(server.submit_close(1000, "done") == websocket_close_submit_status::accepted);
+    RUVIA_CHECK(server.submit_close(websocket_close_status::normal_closure, "done") == websocket_close_submit_status::accepted);
     const auto close = drain(server);
     input.append(close);
     const auto closed = connection.next_event();
@@ -555,7 +613,7 @@ RUVIA_TEST(ws_public_client_waits_for_server_eof_after_initiating_close) {
                                                .mask_key_context_ = &source});
     http_io_buffer server_input;
     websocket_connection server(server_input);
-    RUVIA_CHECK(connection.submit_close(1000, "done") == websocket_close_submit_status::accepted);
+    RUVIA_CHECK(connection.submit_close(websocket_close_status::normal_closure, "done") == websocket_close_submit_status::accepted);
     const auto request_bytes = drain(connection);
     server_input.append(request_bytes);
     const auto request = server.next_event();
