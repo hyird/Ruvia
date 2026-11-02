@@ -7,6 +7,7 @@
 #include "ruvia/web/context.h"
 
 #include "context/context_session_state.h"
+#include "http/secure_token.h"
 
 namespace ruvia::detail {
 
@@ -44,7 +45,7 @@ inline constexpr std::string_view session_rotation_script =
     "redis.call('DEL', KEYS[1]) return 1";
 
 [[nodiscard]] inline bool is_valid_session_id(std::string_view id) noexcept {
-    if (id.empty() || id.size() > 128) {
+    if (id.size() != secure_token_size) {
         return false;
     }
     for (const char ch : id) {

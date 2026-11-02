@@ -345,10 +345,12 @@ public:
     db_value(t_type value)
         : storage_(make_integer_storage(value)) {}
 
+    // 有限输入超出 double 范围时在构造阶段抛出 std::out_of_range，
+    // 不先窄化成无穷大。普通精度舍入及显式非有限输入的后续校验保持不变。
     template <typename t_type>
         requires std::is_floating_point_v<std::remove_cvref_t<t_type>>
     db_value(t_type value)
-        : storage_(std::in_place_type<double>, static_cast<double>(value)) {}
+        : storage_(std::in_place_type<double>, detail::checked_model_float<double>(value)) {}
 
 private:
     friend struct detail::db_value_access;

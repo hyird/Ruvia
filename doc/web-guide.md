@@ -399,6 +399,10 @@ const auto& user = c.request_state<current_user>();
 | `ruvia::session_middleware` (`"ruvia/web/session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话 |
 | `ruvia::make_health_response` / `make_readiness_response` (`"ruvia/web/context.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`） |
 
+两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。
+
+会话仅接受固定 48 位小写十六进制 ID，其他长度或字符按不存在的会话处理，不读取或修改其拼接的 Redis key。已有合法 ID 与 `key_prefix_ + ID` 存储格式保持不变；旧的非标准 ID 不再被识别。固定长度防止不同前缀通过变长 ID 穿透命名空间；使用同一 Redis 数据库和相同前缀则共享会话命名空间，隔离责任由配置方承担。
+
 ---
 
 ## 5. 声明式模型 `RUVIA_MODEL`、序列化与参数校验

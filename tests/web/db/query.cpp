@@ -355,6 +355,32 @@ RUVIA_TEST(db_query_literal_doubles_keep_the_bound_double_type) {
         "(- -2e0)");
 }
 
+RUVIA_TEST(db_value_rejects_finite_floating_overflow_before_query_construction) {
+    if constexpr (std::numeric_limits<long double>::max_exponent > std::numeric_limits<double>::max_exponent) {
+        for (const auto input : {std::numeric_limits<long double>::max(), -std::numeric_limits<long double>::max()}) {
+            bool rejected = false;
+            try {
+                (void)db_value(input);
+            } catch (const std::out_of_range&) {
+                rejected = true;
+            }
+            RUVIA_CHECK(rejected);
+        }
+    }
+    const auto maximum = std::numeric_limits<double>::max();
+    db_query converted;
+    converted.select({converted.value(db_value(1.5L)),
+        converted.value(db_value(static_cast<long double>(maximum))),
+        converted.value(db_value(-static_cast<long double>(maximum)))});
+    db_query reference;
+    reference.select({reference.value(1.5), reference.value(maximum), reference.value(-maximum)});
+    for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+        const auto actual = converted.compile(driver, nullptr, db_parameter_mode::literal);
+        const auto expected = reference.compile(driver, nullptr, db_parameter_mode::literal);
+        RUVIA_CHECK_EQ(actual.sql(), expected.sql());
+    }
+}
+
 RUVIA_TEST(db_query_postgresql_bitwise_parameters_use_integer_overloads) {
     struct integer_case final {
         db_value value_;

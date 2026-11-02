@@ -123,6 +123,8 @@ if(RUVIA_BUILD_WEB)
     # Process-singleton application fixtures run in separate test executables.
     ruvia_add_web_standalone_test(ruvia_app_startup 30 web/app/startup.cpp)
     ruvia_add_web_standalone_test(ruvia_app_lifecycle 60 web/app/lifecycle.cpp)
+    # Owns a Redis-backed session application and an isolated stateful peer.
+    ruvia_add_web_standalone_test(ruvia_session_tests 30 web/http/session.cpp)
     ruvia_add_web_standalone_test(ruvia_app_accept_ownership 60 web/app/accept_ownership.cpp)
     ruvia_add_web_standalone_test(ruvia_app_http2_drain 30 web/app/http2_drain.cpp)
     ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/app/http2_request_limit.cpp)

@@ -23,6 +23,10 @@ enum class rate_limit_overflow_policy : std::uint8_t {
 
 // Per-worker, per-address fixed-window rule. Configuration remains a plain
 // value; each owner validates it once before publishing runtime state.
+// Both app-wide and route rules key on the resolved client address: unscoped
+// IPv6 shares a /64 budget, IPv4-mapped IPv6 shares its dotted IPv4 host budget,
+// and scoped IPv6 keys on its full address plus numeric scope. Equivalent
+// accepted IPv6 spellings do not create additional budgets.
 struct rate_limit_rule final {
     std::size_t max_requests_{0};
     std::chrono::milliseconds window_{0};

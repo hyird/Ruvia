@@ -55,16 +55,19 @@ private:
 
 namespace ruvia {
 
-// Server-side session backed by Redis (RUVIA_ENABLE_REDIS). Reads the `sid`
-// cookie and loads the blob at sess:<id> into the context. Before the response
-// head is sent, it persists changes with the configured TTL or deletes the
-// session. A new session mints a random id in an HttpOnly
-// cookie. The blob format is the application's; pair it with JSON if desired.
+// Server-side session backed by Redis (RUVIA_ENABLE_REDIS). Reads the configured
+// cookie only when its ID is exactly 48 lowercase hexadecimal characters, the
+// fixed length minted by this middleware; other IDs are treated as absent.
+// Loads the blob at key_prefix_ + id (by default sess:<id>) into the context.
+// Before the response head is sent, persists changes with the configured TTL
+// or deletes the session. A new session mints a random ID in an HttpOnly cookie.
+// The blob format is the application's; pair it with JSON if desired.
 struct session_config final {
     std::string redis_alias_{"default"};
     std::string cookie_name_{"sid"};
     std::string key_prefix_{"sess:"};
-    // Must be greater than zero and at most max_cookie_age_seconds; throws std::invalid_argument otherwise.
+    // Must be positive and representable in std::chrono::milliseconds;
+    // otherwise construction throws std::invalid_argument.
     std::chrono::seconds ttl_{std::chrono::hours(24)};
 };
 

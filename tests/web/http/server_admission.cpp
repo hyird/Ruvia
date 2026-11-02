@@ -60,6 +60,7 @@ ruvia::task<ruvia::http_response> counted_error(ruvia::context& c, ruvia::http_e
 [[maybe_unused]] const bool application_configured = [] {
     ruvia::app().rate_limit(ruvia::rate_limit_config{
         .rule_ = {.max_requests_ = admitted_requests, .window_ = std::chrono::minutes(10)}});
+    ruvia::app().trusted_proxies({.cidrs_ = {"127.0.0.1/32"}});
     ruvia::app().on_error(&counted_error);
     return true;
 }();
@@ -70,6 +71,7 @@ class admission_routes final {
     RUVIA_POST("/upload", upload);
     RUVIA_GET("/events", events);
     RUVIA_GET("/boom", boom);
+    RUVIA_GET("/limited", plain, ruvia::rate_limit<1, 600000>);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> plain(ruvia::context& context_value) {
@@ -237,6 +239,57 @@ RUVIA_TEST(http1_failed_handler_error_response_is_not_renegotiated_into_406) {
         RUVIA_CHECK(output.value_or("").starts_with("HTTP/1.1 500 "));
         RUVIA_CHECK(output.value_or("").find("rejected") != std::string::npos);
         RUVIA_CHECK_EQ(error_handler_calls.load(), 1);
+    }
+    server.finish();
+}
+
+RUVIA_TEST(http1_rate_limits_canonicalize_forwarded_client_addresses) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, admission_server_config());
+    const auto loopback = asio::ip::address_v4::loopback();
+    // Each pair has its own address budget. The second spelling must consume
+    // the first spelling's budget through both independently enforced rules.
+    const std::array<std::pair<std::string_view, std::string_view>, 6> equivalent{{
+        {"fe80::a%12", "fe80:0:0:0:0:0:0:a%12"},
+        {"fe80::b%12", "FE80::B%12"},
+        {"fe80::c%12", "FE80:0:0:0:0:0:0:C%12"},
+        {"2001:db8:10::1", "2001:db8:10::ffff"},
+        {"192.0.2.10", "::ffff:192.0.2.10"},
+        {"::ffff:192.0.2.11", "192.0.2.11"},
+    }};
+    auto send = [&](std::string_view target, std::string_view address) {
+        std::string request("GET ");
+        request.append(target);
+        request.append(" HTTP/1.1\r\nHost: a\r\nConnection: close\r\nX-Forwarded-For: ");
+        request.append(address);
+        request.append("\r\n\r\n");
+        const auto output = stalled_connection_output(server.endpoint(), loopback, request);
+        RUVIA_CHECK(output.has_value());
+        return output.value_or("");
+    };
+    for (const auto& [first, alternate] : equivalent) {
+        RUVIA_CHECK(send("/limited", first).starts_with("HTTP/1.1 200 "));
+        const auto route_rejection = send("/limited", alternate);
+        RUVIA_CHECK(route_rejection.starts_with("HTTP/1.1 429 "));
+        RUVIA_CHECK(route_rejection.find("X-RateLimit-Limit: 1\r\n") != std::string::npos);
+        // The two requests above also consumed two of the four app-wide
+        // admissions. Spend the rest without the route-specific middleware.
+        for (std::size_t i = 2; i < admitted_requests; ++i) {
+            RUVIA_CHECK(send("/plain", first).starts_with("HTTP/1.1 200 "));
+        }
+        const auto app_rejection = send("/plain", alternate);
+        RUVIA_CHECK(app_rejection.starts_with("HTTP/1.1 429 "));
+        RUVIA_CHECK(app_rejection.find("X-RateLimit-Limit: 4\r\n") != std::string::npos);
+    }
+    // Scoped identities preserve all 128 address bits and the numeric scope,
+    // and cannot collide with the separate unscoped /64 namespace.
+    for (const auto address : {"fe80::a%13", "fe80::d%12", "fe80::a", "2001:db8:11::1", "192.0.2.12"}) {
+        RUVIA_CHECK(send("/limited", address).starts_with("HTTP/1.1 200 "));
+        RUVIA_CHECK(send("/limited", address).starts_with("HTTP/1.1 429 "));
+        for (std::size_t i = 2; i < admitted_requests; ++i) {
+            RUVIA_CHECK(send("/plain", address).starts_with("HTTP/1.1 200 "));
+        }
+        RUVIA_CHECK(send("/plain", address).starts_with("HTTP/1.1 429 "));
     }
     server.finish();
 }
