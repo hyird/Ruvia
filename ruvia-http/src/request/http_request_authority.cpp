@@ -92,8 +92,8 @@ std::optional<std::string_view> parse_http_authority_host(borrowed_text value) n
     return authority->host();
 }
 
-bool http_authorities_equal(borrowed_text left, borrowed_text right, std::uint16_t default_port) noexcept {
-    return detail::authority_matches_host(left.view(), right.view(), default_port);
+bool http_authorities_equal(borrowed_text left, borrowed_text right, port_number default_port) noexcept {
+    return detail::authority_matches_host(left.view(), right.view(), default_port.value());
 }
 
 }  // namespace ruvia

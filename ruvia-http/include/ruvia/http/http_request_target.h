@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/port_number.h"
 
 namespace ruvia {
 
@@ -48,8 +49,10 @@ public:
                                                              : std::nullopt;
     }
 
-    [[nodiscard]] constexpr std::uint16_t effective_port(std::uint16_t default_port) const noexcept {
-        return port_kind_ == http_authority_port_kind::value ? port_ : default_port;
+    // Returns the explicit port or caller fallback. This numeric observation
+    // alone does not preserve the absent/empty versus explicit-zero distinction.
+    [[nodiscard]] constexpr std::uint16_t effective_port(port_number default_port) const noexcept {
+        return port_kind_ == http_authority_port_kind::value ? port_ : default_port.value();
     }
 
 private:
@@ -74,8 +77,11 @@ private:
 [[nodiscard]] std::optional<std::string_view> parse_http_authority_host(borrowed_text value) noexcept;
 
 // Compares HTTP authorities using case-insensitive host syntax and the supplied
-// scheme default port. Invalid authorities never compare equal.
-[[nodiscard]] bool http_authorities_equal(borrowed_text left, borrowed_text right, std::uint16_t default_port) noexcept;
+// scheme default port, checked before narrowing like other port inputs.
+// Zero means no known scheme default: absent/empty ports then compare equal
+// only to absent/empty ports, never to an explicitly supplied zero.
+// Invalid authorities never compare equal.
+[[nodiscard]] bool http_authorities_equal(borrowed_text left, borrowed_text right, port_number default_port) noexcept;
 
 // Validates a WHATWG serialized origin, not a general URI or origin list.
 [[nodiscard]] bool is_valid_http_serialized_origin(std::string_view value) noexcept;
