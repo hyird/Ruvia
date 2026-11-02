@@ -179,6 +179,87 @@ RUVIA_TEST(http1_response_head_append_accepts_overlapping_written_inline_ranges)
     }
 }
 
+RUVIA_TEST(http1_response_head_commit_checks_owner_and_accepts_inline_boundaries) {
+    ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
+    ruvia::http_response_head_buffer other(std::pmr::new_delete_resource());
+    buffer.append("prefix");
+    RUVIA_CHECK(throws_invalid([&] { buffer.commit_stack(nullptr); }));
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix"));
+    RUVIA_CHECK(throws_invalid([&] { buffer.commit_stack(other.stack_cursor(1)); }));
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix"));
+
+    const auto remaining = ruvia::response_head_stack_bytes - buffer.view().size();
+    auto* const cursor = buffer.stack_cursor(remaining);
+    RUVIA_CHECK(cursor != nullptr);
+    if (cursor == nullptr) {
+        return;
+    }
+    std::memset(cursor, 's', remaining);
+    buffer.commit_stack(cursor + remaining);
+    const std::string expected = "prefix" + std::string(remaining, 's');
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view(expected));
+    buffer.commit_stack(cursor);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix"));
+    buffer.commit_stack(cursor - 6);
+    RUVIA_CHECK(buffer.view().empty());
+    buffer.append("reused");
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("reused"));
+}
+
+RUVIA_TEST(http1_response_head_commit_after_spill_rejects_without_losing_content) {
+    ruvia::http_response_head_buffer buffer(std::pmr::new_delete_resource());
+    buffer.append("prefix");
+    auto* const cursor = buffer.stack_cursor(1);
+    RUVIA_CHECK(cursor != nullptr);
+    if (cursor == nullptr) {
+        return;
+    }
+    cursor[0] = 'x';
+    buffer.reserve_additional(ruvia::response_head_stack_bytes);
+    bool rejected = false;
+    try {
+        buffer.commit_stack(cursor + 1);
+    } catch (const std::logic_error&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix"));
+    buffer.append("-retained");
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefix-retained"));
+    buffer.reset();
+    auto* const fresh = buffer.stack_cursor(1);
+    RUVIA_CHECK(fresh != nullptr);
+    if (fresh == nullptr) {
+        return;
+    }
+    fresh[0] = 'y';
+    buffer.commit_stack(fresh + 1);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("y"));
+}
+
+RUVIA_TEST(http1_response_head_commit_survives_failed_spill) {
+    std::array<std::byte, 256> allocation_storage{};
+    std::pmr::monotonic_buffer_resource resource(
+        allocation_storage.data(), allocation_storage.size(), std::pmr::null_memory_resource());
+    ruvia::http_response_head_buffer buffer(&resource);
+    buffer.append("prefix");
+    auto* const cursor = buffer.stack_cursor(1);
+    RUVIA_CHECK(cursor != nullptr);
+    if (cursor == nullptr) {
+        return;
+    }
+    cursor[0] = 'x';
+    bool rejected = false;
+    try {
+        buffer.reserve_additional(ruvia::response_head_stack_bytes);
+    } catch (const std::bad_alloc&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    buffer.commit_stack(cursor + 1);
+    RUVIA_CHECK_EQ(buffer.view(), std::string_view("prefixx"));
+}
+
 RUVIA_TEST(http1_response_trailers_preserve_fields_borrowed_from_output) {
     for (const std::size_t size : {std::size_t{8}, std::size_t{32}, std::size_t{4096}}) {
         for (const bool reserve_first : {false, true}) {

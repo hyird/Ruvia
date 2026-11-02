@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -51,6 +52,9 @@ public:
         writer(heap_.data() + previous_size);
     }
 
+    // Returns uncommitted inline scratch at the current end if bound fits.
+    // This is a capacity check, not a reservation; the buffer must stay alive
+    // and unmoved, and intervening mutations may change the logical end.
     [[nodiscard]] char* stack_cursor(std::size_t bound) & noexcept {
         auto* const stack_state = std::get_if<stack_state_type>(&state_);
         if (stack_state == nullptr || bound > stack_.size() - stack_state->used_) {
@@ -60,8 +64,23 @@ public:
     }
     [[nodiscard]] char* stack_cursor(std::size_t) && = delete;
 
-    void commit_stack(const char* end) noexcept {
-        std::get<stack_state_type>(state_).used_ = static_cast<std::size_t>(end - stack_.data());
+    // Sets the inline length to end, including the array's one-past endpoint.
+    // This may shorten existing content. A spilled buffer throws logic_error;
+    // a null or foreign endpoint throws invalid_argument. Rejection preserves
+    // the committed content. No pointer subtraction is performed on a foreign
+    // array, even when an endpoint was taken from another live buffer.
+    void commit_stack(const char* end) {
+        auto* const stack_state = std::get_if<stack_state_type>(&state_);
+        if (stack_state == nullptr) {
+            throw std::logic_error("HTTP response head no longer uses inline storage");
+        }
+        const auto begin_address = reinterpret_cast<std::uintptr_t>(stack_.data());
+        const auto end_address = reinterpret_cast<std::uintptr_t>(end);
+        const auto offset = end_address - begin_address;
+        if (end == nullptr || end_address < begin_address || offset > stack_.size()) {
+            throw std::invalid_argument("HTTP response head endpoint is outside its inline storage");
+        }
+        stack_state->used_ = static_cast<std::size_t>(offset);
     }
 
 private:
