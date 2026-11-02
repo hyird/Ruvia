@@ -111,9 +111,13 @@ struct redis_types_access final {
         return redis_ttl(state_value, remaining);
     }
 
-    [[nodiscard]] static redis_pubsub_event pubsub_event(redis_pubsub_event_kind kind, std::string_view channel,
-        std::string_view pattern, std::string_view payload, std::int64_t subscription_count) noexcept {
-        return redis_pubsub_event(kind, channel, pattern, payload, subscription_count);
+    [[nodiscard]] static redis_pubsub_event pubsub_confirmation(redis_pubsub_confirmation_kind kind,
+        std::optional<std::string_view> name, std::int64_t subscription_count) noexcept {
+        return redis_pubsub_event(redis_pubsub_confirmation(kind, name, subscription_count));
+    }
+    [[nodiscard]] static redis_pubsub_event pubsub_message(std::string_view channel,
+        std::optional<std::string_view> pattern, std::string_view payload) noexcept {
+        return redis_pubsub_event(redis_pubsub_message(channel, pattern, payload));
     }
 
     [[nodiscard]] static redis_value null_value(std::pmr::memory_resource* resource) {

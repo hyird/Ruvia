@@ -269,62 +269,89 @@ private:
 using redis_pipeline = detail::redis_batch<detail::redis_batch_mode::pipeline>;
 using redis_transaction = detail::redis_batch<detail::redis_batch_mode::transaction>;
 
-enum class redis_pubsub_event_kind : std::uint8_t {
-    // A SUBSCRIBE or PSUBSCRIBE confirmation for one channel or pattern.
+enum class redis_pubsub_confirmation_kind : std::uint8_t {
     subscribed,
-    // An UNSUBSCRIBE or PUNSUBSCRIBE confirmation for one channel or pattern.
+    pattern_subscribed,
     unsubscribed,
-    // A published message. pattern() is set when a pattern subscription
-    // delivered it.
-    message,
+    pattern_unsubscribed,
 };
 
-// One Pub/Sub reply in wire order. Every view borrows the subscription's
-// current reply storage and is valid until the next read() starts or the
-// subscription is destroyed; copy what outlives that.
-class redis_pubsub_event final {
+class redis_pubsub_confirmation final {
 public:
-    [[nodiscard]] redis_pubsub_event_kind kind() const noexcept {
+    [[nodiscard]] redis_pubsub_confirmation_kind kind() const noexcept {
         return kind_;
     }
-
-    // The channel a message was published to, or the channel a confirmation
-    // names; empty for a pattern confirmation.
-    [[nodiscard]] std::string_view channel() const noexcept {
-        return channel_;
+    // Present empty names are legal. Absence is Redis's nil confirmation when
+    // an unsubscribe-all command has no matching subscriptions to remove.
+    [[nodiscard]] std::optional<std::string_view> name() const noexcept {
+        return name_;
     }
-
-    // The matched pattern of a pattern subscription; empty otherwise.
-    [[nodiscard]] std::string_view pattern() const noexcept {
-        return pattern_;
-    }
-
-    [[nodiscard]] std::string_view payload() const noexcept {
-        return payload_;
-    }
-
-    // Channels and patterns this connection is subscribed to after a
-    // confirmation; zero for a message.
     [[nodiscard]] std::int64_t subscription_count() const noexcept {
         return subscription_count_;
     }
 
 private:
     friend struct detail::redis_types_access;
-
-    redis_pubsub_event(redis_pubsub_event_kind kind, std::string_view channel, std::string_view pattern,
-        std::string_view payload, std::int64_t subscription_count) noexcept
+    redis_pubsub_confirmation(redis_pubsub_confirmation_kind kind,
+        std::optional<std::string_view> name, std::int64_t subscription_count) noexcept
         : kind_(kind),
-          channel_(channel),
-          pattern_(pattern),
-          payload_(payload),
+          name_(name),
           subscription_count_(subscription_count) {}
 
-    redis_pubsub_event_kind kind_;
-    std::string_view channel_;
-    std::string_view pattern_;
-    std::string_view payload_;
+    redis_pubsub_confirmation_kind kind_;
+    std::optional<std::string_view> name_;
     std::int64_t subscription_count_;
+};
+
+class redis_pubsub_message final {
+public:
+    [[nodiscard]] std::string_view channel() const noexcept {
+        return channel_;
+    }
+    // Absence means a direct message; a present empty pattern is still a
+    // pattern delivery. Neither channel nor payload has an absence sentinel.
+    [[nodiscard]] std::optional<std::string_view> pattern() const noexcept {
+        return pattern_;
+    }
+    [[nodiscard]] std::string_view payload() const noexcept {
+        return payload_;
+    }
+
+private:
+    friend struct detail::redis_types_access;
+    redis_pubsub_message(std::string_view channel, std::optional<std::string_view> pattern,
+        std::string_view payload) noexcept
+        : channel_(channel),
+          pattern_(pattern),
+          payload_(payload) {}
+
+    std::string_view channel_;
+    std::optional<std::string_view> pattern_;
+    std::string_view payload_;
+};
+
+// Exactly one confirmation or message, in wire order. Every text view borrows
+// the subscription's current reply until its next read() starts or destruction.
+// Copy text that must outlive that boundary.
+class redis_pubsub_event final {
+public:
+    [[nodiscard]] const redis_pubsub_confirmation* confirmation() const& noexcept {
+        return std::get_if<redis_pubsub_confirmation>(&value_);
+    }
+    const redis_pubsub_confirmation* confirmation() const&& = delete;
+    [[nodiscard]] const redis_pubsub_message* message() const& noexcept {
+        return std::get_if<redis_pubsub_message>(&value_);
+    }
+    const redis_pubsub_message* message() const&& = delete;
+
+private:
+    friend struct detail::redis_types_access;
+    explicit redis_pubsub_event(redis_pubsub_confirmation value) noexcept
+        : value_(value) {}
+    explicit redis_pubsub_event(redis_pubsub_message value) noexcept
+        : value_(value) {}
+
+    std::variant<redis_pubsub_confirmation, redis_pubsub_message> value_;
 };
 
 // One dedicated Pub/Sub connection, created by redis_handle::subscription().

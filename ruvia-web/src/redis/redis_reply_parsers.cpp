@@ -205,13 +205,13 @@ redis_pubsub_event parse_redis_pubsub_event(const redis_value& value) {
         throw redis_error(redis_error::code_type::protocol_error, malformed);
     }
     const auto kind = redis_value_string(items[0]);
-    const auto optional_name = [&](const redis_value& item) {
-        return item.null() ? std::string_view{} : redis_value_string(item);
+    const auto optional_name = [&](const redis_value& item) -> std::optional<std::string_view> {
+        return item.null() ? std::nullopt : std::optional(redis_value_string(item));
     };
     if (items.size() == 3) {
         if (kind == "message") {
-            return redis_types_access::pubsub_event(redis_pubsub_event_kind::message,
-                redis_value_string(items[1]), {}, redis_value_string(items[2]), 0);
+            return redis_types_access::pubsub_message(
+                redis_value_string(items[1]), std::nullopt, redis_value_string(items[2]));
         }
         const bool pattern = kind == "psubscribe" || kind == "punsubscribe";
         const bool subscribed = kind == "subscribe" || kind == "psubscribe";
@@ -219,16 +219,19 @@ redis_pubsub_event parse_redis_pubsub_event(const redis_value& value) {
             throw redis_error(redis_error::code_type::protocol_error, malformed);
         }
         const auto name = optional_name(items[1]);
-        return redis_types_access::pubsub_event(
-            subscribed ? redis_pubsub_event_kind::subscribed : redis_pubsub_event_kind::unsubscribed,
-            pattern ? std::string_view{} : name, pattern ? name : std::string_view{}, {},
-            redis_value_integer(items[2]));
+        const auto confirmation_kind = pattern
+                                           ? (subscribed ? redis_pubsub_confirmation_kind::pattern_subscribed
+                                                         : redis_pubsub_confirmation_kind::pattern_unsubscribed)
+                                           : (subscribed ? redis_pubsub_confirmation_kind::subscribed
+                                                         : redis_pubsub_confirmation_kind::unsubscribed);
+        return redis_types_access::pubsub_confirmation(
+            confirmation_kind, name, redis_value_integer(items[2]));
     }
     if (kind != "pmessage") {
         throw redis_error(redis_error::code_type::protocol_error, malformed);
     }
-    return redis_types_access::pubsub_event(redis_pubsub_event_kind::message, redis_value_string(items[2]),
-        redis_value_string(items[1]), redis_value_string(items[3]), 0);
+    return redis_types_access::pubsub_message(redis_value_string(items[2]),
+        redis_value_string(items[1]), redis_value_string(items[3]));
 }
 
 }  // namespace ruvia::detail

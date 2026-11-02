@@ -372,11 +372,15 @@ Pub/Sub 订阅不共享常规连接池：每次调用 `c.redis().subscription()`
 auto sub = c.redis().with_options({.stop_token_ = c.stop_token()}).subscription();
 co_await sub.subscribe("news");
 while (auto event = co_await sub.read()) {
-    if (event->kind() == ruvia::redis_pubsub_event_kind::message) {
-        // event->channel(), event->payload()
+    if (const auto* message = event->message()) {
+        // message->channel(), message->payload(), message->pattern()
     }
 }
 ```
+
+`read()` 的 `redis_pubsub_event` 恰好包含 `confirmation()` 或 `message()`，不再通过空字符串判断事件种类。确认的 `kind()` 使用 `redis_pubsub_confirmation_kind` 区分 `subscribed`、`pattern_subscribed`、`unsubscribed`、`pattern_unsubscribed`；`name()` 是 optional，值为空串表示合法空频道/模式，缺省表示无订阅可退订的 nil 确认。只有确认提供 `subscription_count()`。消息提供 `channel()`、`payload()` 与 optional `pattern()`；无值为直接投递，有值（包括空模式）为模式投递。名称与正文仍借用当前回复，须在下一次 `read()` 开始前消费或复制；原先按 `pattern().empty()` 分流的调用方改为检查 optional 是否有值。
+
+线上 `message` / `pmessage` 与四种确认字段的定义见 [Redis Pub/Sub 推送格式](https://redis.io/docs/latest/develop/pubsub/#format-of-pushed-messages)。
 
 ### 4.4 Redis HASH 实体与 RediSearch ORM（`RUVIA_REDIS_ENTITY`）
 

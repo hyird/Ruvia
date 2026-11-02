@@ -69,18 +69,17 @@ private:
             if (events_value.aborted()) {
                 co_return;
             }
-            switch (event->kind()) {
-                case ruvia::redis_pubsub_event_kind::subscribed:
-                case ruvia::redis_pubsub_event_kind::unsubscribed:
-                    co_await events_value.write({.data_ = event->pattern().empty() ? event->channel() : event->pattern(),
-                        .event_ = event->kind() == ruvia::redis_pubsub_event_kind::subscribed ? "subscribed" : "unsubscribed"});
-                    break;
-                case ruvia::redis_pubsub_event_kind::message:
-                    // The event borrows the subscription's reply storage only
-                    // until the next read(); the SSE write copies it first.
-                    co_await events_value.write({.data_ = event->payload(),
-                        .event_ = event->pattern().empty() ? "message" : "pmessage"});
-                    break;
+            if (const auto* confirmation = event->confirmation()) {
+                const auto kind = confirmation->kind();
+                const bool subscribed = kind == ruvia::redis_pubsub_confirmation_kind::subscribed ||
+                                        kind == ruvia::redis_pubsub_confirmation_kind::pattern_subscribed;
+                co_await events_value.write({.data_ = confirmation->name().value_or(""),
+                    .event_ = subscribed ? "subscribed" : "unsubscribed"});
+            } else if (const auto* message = event->message()) {
+                // The event borrows the subscription's reply storage only
+                // until the next read(); the SSE write copies it first.
+                co_await events_value.write({.data_ = message->payload(),
+                    .event_ = message->pattern() ? "pmessage" : "message"});
             }
         }
     }
