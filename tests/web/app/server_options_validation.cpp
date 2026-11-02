@@ -62,7 +62,46 @@ ruvia::tls_config tls_config(std::filesystem::path certificate_chain_file,
             }};
 }
 
+class querying_callback_target final {
+public:
+    explicit querying_callback_target(int& destroyed) noexcept
+        : destroyed_(&destroyed) {}
+
+    querying_callback_target(querying_callback_target&& other) noexcept
+        : destroyed_(std::exchange(other.destroyed_, nullptr)) {}
+
+    ~querying_callback_target() {
+        if (destroyed_ != nullptr) {
+            (void)ruvia::app().workers();
+            ++*destroyed_;
+        }
+    }
+
+    void operator()(const ruvia::access_log_record&) const noexcept {}
+    void operator()(const ruvia::connection_failure_record&) const noexcept {}
+
+private:
+    int* destroyed_;
+};
+
 }  // namespace
+
+RUVIA_TEST(application_callback_replacement_retires_targets_outside_configuration_lock) {
+    int access_destroyed = 0;
+    int failure_destroyed = 0;
+    auto& app = ruvia::app();
+    app.on_access(querying_callback_target(access_destroyed));
+    app.on_access(querying_callback_target(access_destroyed));
+    RUVIA_CHECK_EQ(access_destroyed, 1);
+    app.on_access(nullptr);
+    RUVIA_CHECK_EQ(access_destroyed, 2);
+
+    app.on_connection_failure(querying_callback_target(failure_destroyed));
+    app.on_connection_failure(querying_callback_target(failure_destroyed));
+    RUVIA_CHECK_EQ(failure_destroyed, 1);
+    app.on_connection_failure(nullptr);
+    RUVIA_CHECK_EQ(failure_destroyed, 2);
+}
 
 RUVIA_TEST(listener_config_rejects_invalid_listener_and_tls_states_at_construction) {
     RUVIA_CHECK(throws_invalid([] { ruvia::app().listen({}); }));

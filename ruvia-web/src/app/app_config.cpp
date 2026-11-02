@@ -120,7 +120,8 @@ application& application::on_access(access_log_callback callback_value) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register access-log hook while app is running",
         [callback_value = std::move(callback_value)](detail::app_state& state_value) mutable {
-            state_value.access_log_callback_ = std::move(callback_value);
+            // Captured old target retires with this lambda, after the app lock.
+            std::swap(state_value.access_log_callback_, callback_value);
             state_value.options_.access_log_.callback_ = detail::callback_access::ref(state_value.access_log_callback_);
         });
 }
@@ -129,7 +130,7 @@ application& application::on_connection_failure(connection_failure_callback call
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register connection-failure hook while app is running",
         [callback_value = std::move(callback_value)](detail::app_state& state_value) mutable {
-            state_value.connection_failure_callback_ = std::move(callback_value);
+            std::swap(state_value.connection_failure_callback_, callback_value);
             state_value.options_.connection_failure_.callback_ =
                 detail::callback_access::ref(state_value.connection_failure_callback_);
         });

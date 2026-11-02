@@ -166,6 +166,9 @@ public:
     // workers admits up to N times this rule. Size it accordingly.
     application& rate_limit(rate_limit_config config);
     application& rate_limit(std::nullptr_t);
+    // Replacement/clearing retires the old target after releasing the application
+    // configuration lock, so its destructor may call stop() or query app state.
+    // The same retirement rule applies to on_connection_failure().
     application& on_access(access_log_callback callback);
     // Observes connections lost to an exception that escaped their session --
     // the failures on_error cannot answer because the response is already
