@@ -228,13 +228,23 @@ private:
 }  // namespace detail
 
 // A blocking operation's value, exception, or rejection before execution.
+// The outcome category is fixed after construction. Moving a failed result
+// preserves its failure in the source as well; it must not become a successful
+// result without a value. Replace an owning optional by emplacing a new result.
 template <typename t_type>
 class blocking_result final {
 public:
     blocking_result(const blocking_result&) = delete;
     blocking_result& operator=(const blocking_result&) = delete;
-    blocking_result(blocking_result&&) = default;
-    blocking_result& operator=(blocking_result&&) = default;
+    blocking_result(blocking_result&& other) noexcept(
+        std::is_nothrow_move_constructible_v<detail::blocking_payload<t_type>>)
+        requires std::is_move_constructible_v<detail::blocking_payload<t_type>>
+        : payload_(std::move(other.payload_)) {
+        if (payload_.error_ != nullptr) {
+            other.payload_.error_ = payload_.error_;
+        }
+    }
+    blocking_result& operator=(blocking_result&&) = delete;
 
     [[nodiscard]] blocking_status status() const noexcept {
         return payload_.status_;

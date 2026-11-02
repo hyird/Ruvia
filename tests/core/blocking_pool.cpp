@@ -6,6 +6,7 @@
 #include <memory>
 #include <semaphore>
 #include <stdexcept>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -250,18 +251,23 @@ task<void> exercise_results(worker_handle worker_value, bool& success) {
     }
 
     auto thrown = co_await ruvia::run_blocking(
-        worker_value, {}, []() -> int { throw std::runtime_error("blocking work failed"); });
-    if (thrown.status() != blocking_status::completed || !thrown.failed()) {
-        co_return;
-    }
-    bool rethrown = false;
-    try {
-        static_cast<void>(std::move(thrown).value());
-    } catch (const std::runtime_error& error) {
-        rethrown = std::string_view(error.what()) == "blocking work failed";
-    }
-    if (!rethrown) {
-        co_return;
+        worker_value, {}, []() -> int { throw std::system_error(std::make_error_code(std::errc::permission_denied)); });
+    const auto failure = thrown.error();
+    auto relocated = std::move(thrown);
+    for (auto* outcome : {&thrown, &relocated}) {
+        if (outcome->status() != blocking_status::completed || !outcome->failed() ||
+            outcome->completed() || outcome->error() != failure) {
+            co_return;
+        }
+        bool rethrown = false;
+        try {
+            static_cast<void>(std::move(*outcome).value());
+        } catch (const std::system_error& error) {
+            rethrown = error.code() == std::errc::permission_denied;
+        }
+        if (!rethrown) {
+            co_return;
+        }
     }
 
     std::atomic_bool ran{false};

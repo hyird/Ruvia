@@ -63,6 +63,8 @@ pool.join();
 | `"ruvia/core/worker_group.h"` | `class worker_group final` | 协调多个 `worker_runtime` 同步完成两阶段启动屏障（`start()` / `serve()`）与停机回收（`request_stop()` / `join()`） |
 | `"ruvia/core/blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(worker_handle, operation_options, fn)` | 固定大小阻塞卸载线程池，由调用方拥有：通过 `event_loop_pool_options`、`attach_event_loop` 的选项或 `worker_runtime_options` 的 `blocking_pool_` 交给事件循环借用，须比事件循环存活更久；core 不持有隐式进程级池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至该 Worker 借用的池并在完成后回到原 Worker 恢复协程；Worker 没有池时返回 `blocking_status::unavailable`，不提交 `fn`（`worker_handle::has_blocking_pool()` 可预先查询）。`operation_options` 的 `timeout_` / `stop_token_` 只限定等待，非正超时或已停止的令牌同样不提交 `fn`。调用或交付值的异常保存在结果中并由 `value()` 重新抛出。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
 
+`blocking_result<T>` 是不可复制、不可重新赋值的完成快照，支持 payload 所允许的移动构造。保存位置需要替换时使用新局部变量或 `std::optional::emplace()`。移动失败结果后，源与目标仍保留相同异常；移动成功结果后，源 payload 遵循自身移动语义，状态分类不变。`completed()`、`failed()` 与 `value()` 不会因结果替换或错误信息被移走而出现“成功但无值”的状态；任务与结果传输仍允许抛异常，不要求 payload 的移动为 `noexcept`。
+
 ---
 
 ### 4. 跨线程通道、单次交付、信号与内存池
