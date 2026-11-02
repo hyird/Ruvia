@@ -107,7 +107,8 @@ struct uri_reference_layout final {
 }
 }  // namespace
 
-std::string_view percent_encode_uri_reference(std::string_view reference, std::pmr::string& storage) {
+std::string_view percent_encode_uri_reference(borrowed_text text, std::pmr::string& storage) {
+    const auto reference = text.view();
     const auto layout = find_uri_reference_layout(reference);
     bool fragment_seen = false;
     std::pmr::string aliased_output(storage.get_allocator());

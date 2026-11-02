@@ -11,6 +11,7 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_hex.h"
 
 namespace ruvia {
@@ -82,8 +83,10 @@ namespace detail {
 // the delimiting '@' remains (section 3.2.1), and only the first '#' starts the
 // fragment. Returns `reference` itself, without allocating, when it needs no
 // encoding; otherwise the encoded reference replaces `storage`'s contents and
-// the result views `storage`. `reference` may alias `storage`.
-[[nodiscard]] std::string_view percent_encode_uri_reference(std::string_view reference, std::pmr::string& storage);
+// the result views `storage`. `reference` may alias `storage`. Keep the input
+// owner alive until the result is consumed; owning-string temporaries are
+// rejected even when their particular contents would require transformation.
+[[nodiscard]] std::string_view percent_encode_uri_reference(borrowed_text reference, std::pmr::string& storage);
 
 namespace detail {
 template <typename visitor_type>
@@ -121,9 +124,11 @@ template <typename visitor_type>
 // leaving `storage` unchanged. Form mode converts '+' to a space and, like the
 // WHATWG percent-decode algorithm used by application/x-www-form-urlencoded,
 // keeps a '%' that does not start a valid escape as a literal byte. `input`
-// may alias `storage`.
+// may alias `storage`. Keep its owner alive until the result is consumed;
+// owning-string temporaries are rejected regardless of their contents.
 [[nodiscard]] inline std::optional<std::string_view> decode_url_component(
-    std::string_view input, std::pmr::string& storage, url_decode_mode mode = url_decode_mode::percent) {
+    borrowed_text text, std::pmr::string& storage, url_decode_mode mode = url_decode_mode::percent) {
+    const auto input = text.view();
     std::size_t decoded_size = 0;
     bool transformed = false;
     for (std::size_t i = 0; i < input.size(); ++i) {
