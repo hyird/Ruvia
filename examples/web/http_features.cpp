@@ -44,7 +44,7 @@ private:
         // An interim head is separate from the final response. The Web API
         // copies its input, but the operation must still finish in this request.
         co_await c.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, hints));
-        c.priority({.urgency_ = 2, .incremental_ = true});
+        c.draft().priority({.urgency_ = 2, .incremental_ = true});
         if (c.req().protocol_version() == ruvia::http_protocol_version::http2) {
             if (connection.tls()) {
                 // Advertisements never change the client's trusted origin.
@@ -59,13 +59,13 @@ private:
                 .authority_ = c.req().header("host").value_or(connection.tls() ? "localhost:8444" : "localhost:8093"),
                 .path_ = "/features/asset",
             });
-            c.header("X-Push-Accepted", pushed ? "yes" : "no");
+            c.draft().header("X-Push-Accepted", pushed ? "yes" : "no");
         }
         co_return c.text("interim responses, priorities, advertisements, and push\n");
     }
 
     ruvia::task<ruvia::http_response> asset(ruvia::context& c) {
-        c.header("content-type", "text/css");
+        c.draft().header("content-type", "text/css");
         co_return c.body(ruvia::static_text("body { color: #234; }\n"));
     }
 
@@ -79,7 +79,10 @@ private:
 
     ruvia::task<void> download(ruvia::context& c) {
         auto& output = c.stream_text();
-        c.header("Trailer", "X-Example-Complete");
+        c.draft().header("Trailer", "X-Example-Complete");
+        if (co_await output.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await output.write("first\n");
         // Await each write for bounded backpressure. No subsequent header or
         // cookie mutation is allowed once the first write publishes the head.

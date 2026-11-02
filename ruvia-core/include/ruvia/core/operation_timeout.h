@@ -19,16 +19,19 @@ inline void validate_operation_options(const operation_options& options) {
     }
 }
 
-// The merged stop token observes both inputs' sources; more than
-// max_stop_token_sources distinct sources throw std::length_error.
-[[nodiscard]] inline operation_options merge_operation_options(
+// Unspecified fields inherit. A supplied token replaces the user cancellation
+// state; callers needing accumulation own a stop_group until their work joins.
+// Timeout remains the tighter bound.
+[[nodiscard]] inline operation_options override_operation_options(
     const operation_options& base, operation_options overrides) {
     operation_options merged = base;
     if (overrides.timeout_.has_value() &&
         (!merged.timeout_.has_value() || *overrides.timeout_ < *merged.timeout_)) {
         merged.timeout_ = overrides.timeout_;
     }
-    merged.stop_token_ = combine_stop_tokens(base.stop_token_, std::move(overrides.stop_token_));
+    if (overrides.stop_token_.has_state()) {
+        merged.stop_token_ = std::move(overrides.stop_token_);
+    }
     return merged;
 }
 

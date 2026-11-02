@@ -437,6 +437,8 @@ public:
 
     // Returns a request-scoped view whose policy is applied to every typed
     // command and inherited by pipelines and transactions created from it.
+    // Empty tokens inherit; supplied states replace user cancellation. Timeout
+    // can only tighten. Accumulation requires a caller-owned stop_group.
     [[nodiscard]] redis_handle with_options(operation_options options) const;
 
     // Borrows the owning worker; an expired capability cannot expose it.

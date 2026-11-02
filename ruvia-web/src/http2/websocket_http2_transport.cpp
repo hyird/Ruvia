@@ -207,11 +207,6 @@ void websocket_http2_transport::on_http2_event(http2_event& event) {
     }
 }
 
-void websocket_http2_transport::on_http2_data_drained(std::uint32_t) noexcept {
-    // flush() re-checks the stream's DATA queue on the session state signal
-    // that every drain notifies.
-}
-
 void websocket_http2_transport::on_http2_failure(
     const client_transport_result& transport, std::exception_ptr failure) noexcept {
     if (stopped_) {
@@ -222,8 +217,7 @@ void websocket_http2_transport::on_http2_failure(
         // then read() reports the end of the WebSocket transport. Output that
         // was still pending or in flight can no longer reach the peer.
         eof_ = true;
-        output_lost_ = session_.writing() || session_.connection().wants_write() ||
-                       (stream_id_ != 0 && session_.connection().data_queue_state(stream_id_) == http2_data_queue_state::queued);
+        output_lost_ = session_.writing() || session_.connection().wants_write();
         return;
     }
     try {
@@ -257,8 +251,7 @@ task<void> websocket_http2_transport::flush() {
             co_return;
         }
         auto& connection = session_.connection();
-        if (!connection.wants_write() && !session_.writing() &&
-            connection.data_queue_state(stream_id_) != http2_data_queue_state::queued) {
+        if (!connection.wants_write() && !session_.writing()) {
             co_return;
         }
         co_await session_.state_signal().wait();
@@ -296,25 +289,35 @@ task<void> websocket_http2_transport::write(std::string_view bytes_value) {
             throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                 "HTTP/2 WebSocket stream is closed");
         }
-        const auto count = std::min(bytes_value.size(), websocket_http2_data_chunk_bytes);
-        http2_data_submit_status submitted{};
+        http2_data_submit_result submitted{};
         try {
-            submitted = connection.submit_data(stream_id_, bytes_value.substr(0, count), http2_end_stream::keep_open);
+            submitted = connection.submit_data(
+                stream_id_, bytes_value, http2_end_stream::keep_open, websocket_http2_data_chunk_bytes);
         } catch (...) {
             throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                 "could not submit HTTP/2 WebSocket DATA");
         }
-        if (submitted == http2_data_submit_status::backpressured) {
-            session_.wake_writer();
-            co_await session_.state_signal().wait();
-            continue;
-        }
-        if (submitted != http2_data_submit_status::accepted && submitted != http2_data_submit_status::queued) {
+        bytes_value.remove_prefix(submitted.consumed_bytes_);
+        if (submitted.status_ != http2_data_submit_status::complete &&
+            submitted.status_ != http2_data_submit_status::backpressured) {
             throw websocket_client_error(websocket_client_error::code_type::protocol_error,
                 "could not submit HTTP/2 WebSocket DATA");
         }
-        bytes_value.remove_prefix(count);
         co_await flush();
+        if (submitted.status_ == http2_data_submit_status::backpressured) {
+            for (;;) {
+                require_live();
+                const auto window = connection.send_window_state(stream_id_);
+                if (!window || connection.stream_aborted(stream_id_)) {
+                    throw websocket_client_error(websocket_client_error::code_type::protocol_error,
+                        "HTTP/2 WebSocket stream is closed");
+                }
+                if (window->available_ != 0) {
+                    break;
+                }
+                co_await session_.state_signal().wait();
+            }
+        }
     }
 }
 
@@ -326,14 +329,14 @@ task<void> websocket_http2_transport::finish() {
         // transport-end plan.
         co_return;
     }
-    http2_data_submit_status submitted{};
+    http2_data_submit_result submitted{};
     try {
-        submitted = session_.connection().submit_data(stream_id_, {}, http2_end_stream::end_stream);
+        submitted = session_.connection().submit_data(stream_id_, {}, http2_end_stream::end_stream, 0);
     } catch (...) {
         throw websocket_client_error(websocket_client_error::code_type::protocol_error,
             "could not conclude HTTP/2 WebSocket stream");
     }
-    if (submitted != http2_data_submit_status::accepted && submitted != http2_data_submit_status::queued) {
+    if (submitted.status_ != http2_data_submit_status::complete) {
         throw websocket_client_error(websocket_client_error::code_type::protocol_error,
             "could not conclude HTTP/2 WebSocket stream");
     }

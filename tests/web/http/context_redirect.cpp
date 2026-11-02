@@ -197,7 +197,7 @@ RUVIA_TEST(context_redirect_rejects_crlf_even_when_location_needs_encoding) {
 
 RUVIA_TEST(context_body_sets_body_and_status) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
-        context.status(ruvia::http_status::created);
+        context.draft().status(ruvia::http_status::created);
         const auto response = context.body("hello world");
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::created);
         RUVIA_CHECK_EQ(response.body_bytes(), std::string_view("hello world"));
@@ -266,7 +266,7 @@ RUVIA_TEST(context_rejects_informational_and_non_http_final_statuses) {
         (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
             bool threw = false;
             try {
-                context.status(ruvia::http_status::early_hints);
+                context.draft().status(ruvia::http_status::early_hints);
             } catch (const std::invalid_argument&) {
                 threw = true;
             }
@@ -287,12 +287,12 @@ RUVIA_TEST(context_rejects_informational_and_non_http_final_statuses) {
 
 RUVIA_TEST(context_error_normalizes_non_error_status_before_response_state) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
-        context.header("X-Trace", "1");
+        context.draft().header("X-Trace", "1");
 
         const auto ok = context.error(
             {.status_ = ruvia::http_status::ok, .code_ = "bad", .message_ = "not an error"});
         RUVIA_CHECK_EQ(ok.status(), ruvia::http_status::internal_server_error);
-        RUVIA_CHECK_EQ(ok.header("X-Trace"), std::string_view("1"));
+        RUVIA_CHECK(!ok.header("X-Trace").has_value());
 
         const auto redirect = context.error({.status_ = ruvia::http_status::temporary_redirect,
             .code_ = "bad",
@@ -306,7 +306,7 @@ RUVIA_TEST(context_response_metadata_uses_http_response_validation) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
         bool threw = false;
         try {
-            context.header("Connection", "close,");
+            context.draft().header("Connection", "close,");
         } catch (const std::invalid_argument&) {
             threw = true;
         }
@@ -319,9 +319,9 @@ RUVIA_TEST(context_response_metadata_uses_http_response_validation) {
 
 RUVIA_TEST(context_body_applies_context_headers) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
-        context.status(ruvia::http_status::ok);
-        context.header("Content-Type", "text/plain");
-        context.header("X-Custom", "v");
+        context.draft().status(ruvia::http_status::ok);
+        context.draft().header("Content-Type", "text/plain");
+        context.draft().header("X-Custom", "v");
         const auto response = context.body("data");
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
         RUVIA_CHECK_EQ(response.body_bytes(), std::string_view("data"));
@@ -338,7 +338,7 @@ RUVIA_TEST(context_text_responses_send_nosniff_unless_the_application_set_it) {
         RUVIA_CHECK_EQ(borrowed.header("X-Content-Type-Options"), std::string_view("nosniff"));
         const auto owned = context.text(std::pmr::string("plain", context.arena()));
         RUVIA_CHECK_EQ(owned.header("X-Content-Type-Options"), std::string_view("nosniff"));
-        context.header("X-Content-Type-Options", "application-value");
+        context.draft().header("X-Content-Type-Options", "application-value");
         const auto configured = context.text("plain");
         RUVIA_CHECK_EQ(configured.header("X-Content-Type-Options"), std::string_view("application-value"));
         co_return;
@@ -347,25 +347,25 @@ RUVIA_TEST(context_text_responses_send_nosniff_unless_the_application_set_it) {
 
 RUVIA_TEST(context_response_header_transactions_preserve_owned_body_storage) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
-        context.header("X-Added", "context");
-        context.header("X-Tag", "same", {.mode_ = ruvia::http_response_header_mode::append});
-        context.header("X-Tag", "same", {.mode_ = ruvia::http_response_header_mode::append});
+        context.draft().header("X-Added", "context");
+        context.draft().header("X-Tag", "same", {.mode_ = ruvia::http_response_header_mode::append});
+        context.draft().header("X-Tag", "same", {.mode_ = ruvia::http_response_header_mode::append});
         ruvia::http_response response;
         response.header("Content-Type", "application/octet-stream");
         response.header("X-Tag", "same", {.mode_ = ruvia::http_response_header_mode::append});
         response.body(std::string(4096, 'x'));
         context.respond(std::move(response));
         RUVIA_CHECK_EQ(context.response()->body_bytes().size(), std::size_t{4096});
-        RUVIA_CHECK_EQ(context.response()->header("X-Added"), std::string_view("context"));
-        RUVIA_CHECK_EQ(context.response()->headers().size(), std::size_t{4});
+        RUVIA_CHECK(!context.response()->header("X-Added").has_value());
+        RUVIA_CHECK_EQ(context.response()->headers().size(), std::size_t{2});
         co_return;
     });
 }
 
 RUVIA_TEST(context_response_header_transactions_preserve_cookie_policy_and_spilled_headers) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
-        context.header("Set-Cookie", "session=new; Path=/");
-        context.header("Cache-Control", "no-store");
+        context.draft().header("Set-Cookie", "session=new; Path=/");
+        context.draft().header("Cache-Control", "no-store");
         ruvia::http_response response;
         response.header("Set-Cookie", "session=old; Path=/");
         response.header("Set-Cookie", "other=kept; Path=/", {.mode_ = ruvia::http_response_header_mode::append});
@@ -378,15 +378,15 @@ RUVIA_TEST(context_response_header_transactions_preserve_cookie_policy_and_spill
         context.respond(std::move(response));
         const auto& result_value = *context.response();
         RUVIA_CHECK_EQ(result_value.header("Content-Type"), std::string_view("application/octet-stream"));
-        RUVIA_CHECK_EQ(result_value.header("Cache-Control"), std::string_view("no-store"));
-        RUVIA_CHECK_EQ(result_value.header("Set-Cookie"), std::string_view("session=new; Path=/"));
+        RUVIA_CHECK_EQ(result_value.header("Cache-Control"), std::string_view("private"));
+        RUVIA_CHECK_EQ(result_value.header("Set-Cookie"), std::string_view("session=old; Path=/"));
         std::size_t cookies = 0;
         for (const auto& header : result_value.headers()) {
             if (header.name() == "Set-Cookie") {
                 ++cookies;
             }
         }
-        RUVIA_CHECK_EQ(cookies, std::size_t{1});
+        RUVIA_CHECK_EQ(cookies, std::size_t{2});
         for (int i = 0; i < 12; ++i) {
             RUVIA_CHECK_EQ(result_value.header("X-Field-" + std::to_string(i)), std::string_view("value"));
         }
@@ -394,10 +394,69 @@ RUVIA_TEST(context_response_header_transactions_preserve_cookie_policy_and_spill
     });
 }
 
+RUVIA_TEST(context_draft_is_consumed_and_final_edits_do_not_cross_replacement) {
+    const auto delivered = context_request_test::with_context(ruvia::test_request::get("/"),
+        [&ruvia_ctx](ruvia::context& context) -> ruvia::task<void> {
+            bool missing_rejected = false;
+            try {
+                context.edit_response().header("X-Invalid", "value");
+            } catch (const std::logic_error&) {
+                missing_rejected = true;
+            }
+            RUVIA_CHECK(missing_rejected);
+            context.draft().status(ruvia::http_status::partial_content);
+            context.draft().header("Content-Range", "bytes 0-2/10");
+            context.draft().set_cookie({.name_ = "draft", .value_ = "first"});
+            context.respond(context.body("abc"));
+            context.edit_response().header("ETag", "\"first\"");
+            context.draft().header("X-Replacement", "fresh");
+            context.respond(context.text("second"));
+            RUVIA_CHECK(!context.response()->header("ETag").has_value());
+            RUVIA_CHECK(!context.response()->header("Content-Range").has_value());
+            co_return;
+        });
+    RUVIA_CHECK_EQ(delivered.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(delivered.body(), std::string_view("second"));
+    RUVIA_CHECK_EQ(delivered.header("X-Replacement"), std::string_view("fresh"));
+    RUVIA_CHECK(!delivered.header("Set-Cookie").has_value());
+}
+
+RUVIA_TEST(context_policy_is_explicit_and_independent_of_response_selection_time) {
+    for (const bool after : {false, true}) {
+        const auto delivered = context_request_test::with_context(ruvia::test_request::get("/"),
+            [after, &ruvia_ctx](ruvia::context& context) -> ruvia::task<void> {
+                if (!after) {
+                    context.policy().header("X-Policy", "retained");
+                    context.policy().set_cookie({.name_ = "session", .value_ = "policy"});
+                }
+                context.respond(context.text("first"));
+                if (after) {
+                    context.policy().header("X-Policy", "retained");
+                    context.policy().set_cookie({.name_ = "session", .value_ = "policy"});
+                }
+                context.edit_response().header("X-Discarded", "first-only");
+                context.respond(context.error({.status_ = ruvia::http_status::conflict}));
+                RUVIA_CHECK(!context.response()->header("X-Policy").has_value());
+                co_return;
+            });
+        RUVIA_CHECK_EQ(delivered.status(), ruvia::http_status::conflict);
+        RUVIA_CHECK_EQ(delivered.header("X-Policy"), std::string_view("retained"));
+        RUVIA_CHECK(!delivered.header("X-Discarded").has_value());
+        RUVIA_CHECK(delivered.header("Set-Cookie").value_or("").starts_with("session=policy"));
+        std::size_t cookies = 0;
+        for (const auto& header : delivered.headers()) {
+            if (header.name() == "Set-Cookie") {
+                ++cookies;
+            }
+        }
+        RUVIA_CHECK_EQ(cookies, std::size_t{1});
+    }
+}
+
 RUVIA_TEST(context_metadata_preserves_repeated_set_cookie_headers) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
-        context.header("Set-Cookie", "a=1", {.mode_ = ruvia::http_response_header_mode::append});
-        context.header("Set-Cookie", "b=2", {.mode_ = ruvia::http_response_header_mode::append});
+        context.draft().header("Set-Cookie", "a=1", {.mode_ = ruvia::http_response_header_mode::append});
+        context.draft().header("Set-Cookie", "b=2", {.mode_ = ruvia::http_response_header_mode::append});
         const auto response = context.body("data");
 
         std::size_t set_cookie_count = 0;
@@ -413,7 +472,7 @@ RUVIA_TEST(context_metadata_preserves_repeated_set_cookie_headers) {
 
 RUVIA_TEST(context_body_null_gives_empty_body_with_status) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context) -> ruvia::task<void> {
-        context.status(ruvia::http_status::no_content);
+        context.draft().status(ruvia::http_status::no_content);
         const auto response = context.body();
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::no_content);
         RUVIA_CHECK(response.body_bytes().empty());

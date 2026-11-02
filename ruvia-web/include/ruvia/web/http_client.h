@@ -153,9 +153,8 @@ public:
     task<http_client_response_bytes> read_all(
         std::size_t = default_max_buffered_body_bytes) && = delete;
 
-    // Copies this same stream into a controller response stream with natural
-    // backpressure. This is the common forwarding path for both small and
-    // long-lived upstream responses.
+    // 以自然背压转发当前上游正文；调用者必须先对 output 执行 commit()，
+    // 只有 body 结果才启动转发，completed 时不得消费/生产转发正文。
     [[nodiscard]] task<void> pipe_to(response_stream_writer& output) &;
     task<void> pipe_to(response_stream_writer&) && = delete;
 
@@ -452,6 +451,8 @@ public:
     http_client_handle(const http_client_handle& other);
     http_client_handle& operator=(const http_client_handle&) = delete;
 
+    // Inherits an empty token; a supplied state replaces user cancellation.
+    // Timeout can only tighten. Accumulation requires a caller-owned stop_group.
     [[nodiscard]] http_client_handle with_options(operation_options options) const;
     // On HTTP/1, send() may transparently replay an idempotent request once
     // when a reused connection fails with I/O before any final response head.

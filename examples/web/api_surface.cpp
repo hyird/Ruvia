@@ -64,8 +64,8 @@ RUVIA_MODEL(surface_json_response, RUVIA_OPTIONAL_FIELD(message, ruvia::string))
 }  // namespace
 
 ruvia::task<ruvia::http_response> surface_not_found(ruvia::context& c) {
-    c.status(ruvia::http_status::not_found);
-    c.header("X-Surface-Not-Found", "true");
+    c.draft().status(ruvia::http_status::not_found);
+    c.draft().header("X-Surface-Not-Found", "true");
     co_return c.text("surface not found\n");
 }
 
@@ -82,18 +82,17 @@ public:
             // The framework already mapped the failure to its status (400 for
             // malformed JSON, 415 for an unsupported content coding, a handler's
             // http_error); keep it. Without a mapped response it is a server fault.
-            // A replacement inherits nothing else from the downstream error
-            // response; it starts from the context metadata set from here on.
-            c.status(downstream_response != nullptr ? downstream_response->status()
-                                                    : ruvia::http_status::internal_server_error);
-            c.header("X-Surface-Error", "true");
-            c.header("X-Surface-Error-Response", had_downstream_error_response ? "true" : "false");
-            c.header("X-Surface-Error-Status", downstream_was_internal_error ? "internal-server-error" : "other");
+            // 替换从独立草稿构造；仅显式 policy 字段跨替换传播。
+            c.draft().status(downstream_response != nullptr ? downstream_response->status()
+                                                            : ruvia::http_status::internal_server_error);
+            c.draft().header("X-Surface-Error", "true");
+            c.draft().header("X-Surface-Error-Response", had_downstream_error_response ? "true" : "false");
+            c.draft().header("X-Surface-Error-Status", downstream_was_internal_error ? "internal-server-error" : "other");
             c.respond(c.text("caught by middleware\n"));
             co_return;
         }
-        c.header("X-Surface-Finalized", c.response() != nullptr ? "true" : "false");
-        c.header(
+        c.edit_response().header("X-Surface-Finalized", c.response() != nullptr ? "true" : "false");
+        c.edit_response().header(
             "X-Surface-Middleware", "after-next", {.mode_ = ruvia::http_response_header_mode::append});
     }
 };
@@ -101,7 +100,7 @@ public:
 class surface_return_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next&) {
-        c.status(ruvia::http_status::accepted);
+        c.draft().status(ruvia::http_status::accepted);
         c.respond(c.text("returned by middleware\n"));
         co_return;
     }
@@ -110,7 +109,7 @@ public:
 class surface_pre_direct_response_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
-        c.header("X-Surface-Pre-Direct", "true");
+        c.policy().header("X-Surface-Pre-Direct", "true");
         co_await next_value();
     }
 };
@@ -118,7 +117,7 @@ public:
 class surface_res_slot_only_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next&) {
-        c.header("X-Surface-Res-Slot-Only", "true");
+        c.draft().header("X-Surface-Res-Slot-Only", "true");
         c.respond(c.body());
         co_return;
     }
@@ -222,15 +221,15 @@ private:
     }
 
     ruvia::task<ruvia::http_response> raw_body(ruvia::context& c) {
-        c.status(ruvia::http_status::accepted);
-        c.header("X-Raw", "first");
-        c.header("X-Raw", "second", {.mode_ = ruvia::http_response_header_mode::append});
-        c.header("X-Raw-Init", "true");
+        c.draft().status(ruvia::http_status::accepted);
+        c.draft().header("X-Raw", "first");
+        c.draft().header("X-Raw", "second", {.mode_ = ruvia::http_response_header_mode::append});
+        c.draft().header("X-Raw-Init", "true");
         co_return c.body("raw body\n");
     }
 
     ruvia::task<ruvia::http_response> response_slot(ruvia::context& c) {
-        c.header("X-Response-Prepared", "true");
+        c.policy().header("X-Response-Prepared", "true");
         ruvia::http_response response(c.arena());
         response.status(ruvia::http_status::non_authoritative_information);
         response.header("X-Response-Remove", "drop");
@@ -242,7 +241,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> res_slot_only(ruvia::context& c) {
-        c.status(ruvia::http_status::internal_server_error);
+        c.draft().status(ruvia::http_status::internal_server_error);
         co_return c.text("handler should not run\n");
     }
 
@@ -257,24 +256,24 @@ private:
     }
 
     ruvia::task<ruvia::http_response> null_body(ruvia::context& c) {
-        c.status(ruvia::http_status::accepted);
-        c.header("X-Null-Body", "true");
+        c.draft().status(ruvia::http_status::accepted);
+        c.draft().header("X-Null-Body", "true");
         co_return c.body();
     }
 
     ruvia::task<ruvia::http_response> binary_body(ruvia::context& c) {
         static constexpr std::array<std::byte, 3> bytes_value{
             std::byte{0x00}, std::byte{0x41}, std::byte{0xff}};
-        c.header("X-Binary-Body", "true");
+        c.draft().header("X-Binary-Body", "true");
         co_return c.body(std::span<const std::byte>(bytes_value));
     }
 
     ruvia::task<ruvia::http_response> header_remove(ruvia::context& c) {
-        c.header("X-Remove-Me", "drop");
-        c.header("X-Remove-Too", "drop");
-        c.header("X-Keep-Me", "keep");
-        c.remove_header("X-Remove-Me");
-        c.remove_header("X-Remove-Too");
+        c.draft().header("X-Remove-Me", "drop");
+        c.draft().header("X-Remove-Too", "drop");
+        c.draft().header("X-Keep-Me", "keep");
+        c.draft().remove_header("X-Remove-Me");
+        c.draft().remove_header("X-Remove-Too");
         co_return c.text("header remove\n");
     }
 
@@ -283,12 +282,12 @@ private:
     }
 
     ruvia::task<ruvia::http_response> redirect_prepared_location(ruvia::context& c) {
-        c.header("Location", "/surface/wrong");
+        c.draft().header("Location", "/surface/wrong");
         co_return c.redirect({.location_ = "/surface/right"});
     }
 
     ruvia::task<ruvia::http_response> app_error(ruvia::context& c) {
-        c.header("X-Error-Prepared", "true");
+        c.policy().header("X-Error-Prepared", "true");
         co_return c.error({.status_ = ruvia::http_status::bad_request,
             .code_ = "example_error",
             .message_ = "the example request was rejected"});
@@ -303,12 +302,12 @@ private:
     }
 
     ruvia::task<ruvia::http_response> missing(ruvia::context& c) {
-        c.header("X-Not-Found-Prepared", "true");
+        c.policy().header("X-Not-Found-Prepared", "true");
         co_return co_await c.not_found();
     }
 
     ruvia::task<ruvia::http_response> middleware_return_handler(ruvia::context& c) {
-        c.status(ruvia::http_status::internal_server_error);
+        c.draft().status(ruvia::http_status::internal_server_error);
         co_return c.text("handler should not run\n");
     }
 
@@ -317,18 +316,18 @@ private:
     }
 
     ruvia::task<ruvia::http_response> direct_buffered_response(ruvia::context& c) {
-        c.header("X-Direct-Buffered", "true");
+        c.draft().header("X-Direct-Buffered", "true");
         co_return c.body("direct buffered response\n");
     }
 
     ruvia::task<ruvia::http_response> remove_buffered_response(ruvia::context& c) {
-        c.header("X-Remove-Buffered", "drop");
-        c.remove_header("X-Remove-Buffered");
+        c.draft().header("X-Remove-Buffered", "drop");
+        c.draft().remove_header("X-Remove-Buffered");
         co_return c.body("removed buffered response\n");
     }
 
     ruvia::task<ruvia::http_response> assigned_prepared_response(ruvia::context& c) {
-        c.header("X-Surface-Prepared-Assigned", "true");
+        c.policy().header("X-Surface-Prepared-Assigned", "true");
         ruvia::http_response response(c.arena());
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.body("assigned prepared response\n");
@@ -381,7 +380,7 @@ private:
 
     ruvia::task<ruvia::http_response> discard(ruvia::context& c) {
         co_await c.req().discard_body();
-        c.status(ruvia::http_status::no_content);
+        c.draft().status(ruvia::http_status::no_content);
         co_return c.text("");
     }
 
@@ -416,7 +415,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> cookies(ruvia::context& c) {
-        c.set_cookie({
+        c.draft().set_cookie({
             .name_ = "session",
             .value_ = "example",
             .attributes_ =
@@ -426,8 +425,8 @@ private:
                     .http_only_ = ruvia::cookie_attribute_policy::emit,
                 },
         });
-        c.set_cookie({.name_ = "theme", .value_ = "light"});
-        c.set_cookie({
+        c.draft().set_cookie({.name_ = "theme", .value_ = "light"});
+        c.draft().set_cookie({
             .name_ = "chip",
             .value_ = "value",
             .attributes_ =
@@ -442,7 +441,7 @@ private:
                 },
         });
         const auto deleted = c.req().cookie("legacy-session");
-        c.delete_cookie({.name_ = "legacy-session"});
+        c.draft().delete_cookie({.name_ = "legacy-session"});
         std::pmr::string body(c.allocator<char>());
         body.append("cookies set\nlegacy-session=");
         body.append(deleted.value_or(""));
@@ -470,7 +469,7 @@ private:
 
     ruvia::task<ruvia::http_response> signed_cookies(ruvia::context& c) {
         static constexpr std::string_view secret = "surface-signing-secret";
-        c.set_signed_cookie({.name_ = "signed-session", .value_ = "signed-value", .secret_ = secret});
+        c.draft().set_signed_cookie({.name_ = "signed-session", .value_ = "signed-value", .secret_ = secret});
         const auto verified = c.req().signed_cookie({.name_ = "signed-session", .secret_ = secret});
         const auto absent = c.req().signed_cookie({.name_ = "absent", .secret_ = secret});
         std::pmr::string body(c.allocator<char>());

@@ -21,7 +21,14 @@ void redis_client_state::throw_not_ready() {
 
 redis_handle redis_client_state::handle(operation_options options) {
     lifecycle_.require_ready();
-    return runtime_.handle(lifecycle_.operation_scope(), lifecycle_.options(std::move(options)));
+    // Unbounded blocking commands/subscriptions require an explicit lifetime.
+    // Use the client's lifetime as the default, not as an extra user source.
+    // A user override replaces it; runtime_.close_now() independently cancels
+    // all command pools and subscriptions during client shutdown.
+    if (!options.stop_token_.has_state()) {
+        options.stop_token_ = lifecycle_.token();
+    }
+    return runtime_.handle(lifecycle_.operation_scope(), std::move(options));
 }
 
 }  // namespace ruvia::detail

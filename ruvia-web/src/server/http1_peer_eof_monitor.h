@@ -33,33 +33,17 @@ namespace ruvia::detail {
            error == asio::error::shut_down || error == asio::ssl::error::stream_truncated;
 }
 
-// What a clean peer end of input (FIN, or a TLS stream end) means.
-enum class http1_peer_eof_meaning : std::uint8_t {
-    // Explicit cancel_on_peer_eof(): any end abandons the response.
-    abandons_response,
-    // Automatic once a body-suppressed head completed the response: with no
-    // further request bytes the connection has nothing left to carry, so the
-    // end closes it; behind pipelined request bytes it is a half-close (RFC
-    // 9112 9.6) whose requests are still answered, and only stops monitoring.
-    ends_idle_connection,
-};
-
-// Constructed on explicit opt-in, or once a body-suppressed head completed the
-// response, and only after the body reader is complete. The route owns
-// cancellation and join; this object never borrows a request context. Both it
-// and the transport remain alive until its sole child has joined.
+// 仅由 cancel_on_peer_eof() 显式启用，且要求请求体已完整消费。
+// 正常完成不创建监控、不触发取消；route 负责 cancel/join 后再释放 transport。
 template <typename stream_type>
 class http1_peer_eof_monitor final {
 public:
     http1_peer_eof_monitor(stream_type& stream, const worker_handle& worker,
-        std::pmr::memory_resource* resource, std::size_t existing_pipeline_bytes,
-        http1_peer_eof_meaning eof_meaning = http1_peer_eof_meaning::abandons_response)
+        std::pmr::memory_resource* resource, std::size_t existing_pipeline_bytes)
         : stream_(stream),
           tasks_(worker, {.resource_ = resource}),
           input_(std::pmr::polymorphic_allocator<char>(resource)),
-          allowance_(max_http_header_bytes - std::min(max_http_header_bytes, existing_pipeline_bytes)),
-          eof_meaning_(eof_meaning),
-          pipelined_(existing_pipeline_bytes != 0) {}
+          allowance_(max_http_header_bytes - std::min(max_http_header_bytes, existing_pipeline_bytes)) {}
 
     void start() {
         tasks_.spawn(read_peer());
@@ -83,14 +67,6 @@ public:
         return input_.view();
     }
 
-    [[nodiscard]] bool stopped() const noexcept {
-        return closing_;
-    }
-
-    void clear_pipeline() noexcept {
-        input_.clear();
-    }
-
     void ensure_writable() const {
         if (failure_ != nullptr) {
             std::rethrow_exception(failure_);
@@ -107,8 +83,7 @@ public:
         cancel();
     }
 
-    // The response ended without the peer (a body-suppressed head): trips the
-    // token so waits observing it end, without marking the peer aborted.
+    // 仅在真实对端终止、写入失败或监控异常时唤醒业务等待。
     void request_stop() noexcept {
         stop_requested_ = true;
         if (source_) {
@@ -173,11 +148,6 @@ private:
                     if (closing_ && error == asio::error::operation_aborted) {
                         co_return;
                     }
-                    if (eof_meaning_ == http1_peer_eof_meaning::ends_idle_connection &&
-                        (pipelined_ || !input_.empty()) &&
-                        (error == asio::error::eof || error == asio::ssl::error::stream_truncated)) {
-                        co_return;
-                    }
                     if (http1_peer_transport_ended(error)) {
                         peer_aborted_ = true;
                         request_stop();
@@ -198,8 +168,6 @@ private:
     http_io_buffer input_;
     asio::cancellation_signal cancellation_;
     std::size_t allowance_;
-    http1_peer_eof_meaning eof_meaning_;
-    bool pipelined_;
     std::exception_ptr failure_;
     bool closing_{};
     bool peer_aborted_{};

@@ -64,7 +64,7 @@ public:
         const auto token = ruvia::jwt_bearer_token(c.req().header("Authorization").value_or(""));
         if (!token) {
             // RFC 9110 15.5.2: a 401 names the scheme that would succeed.
-            c.header("WWW-Authenticate", "Bearer");
+            c.policy().header("WWW-Authenticate", "Bearer");
             c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
                 .code_ = "missing_token",
                 .message_ = "missing bearer token"}));
@@ -79,7 +79,7 @@ public:
             payload.emplace(ruvia::jwt_verify(verify_options(*token, c.arena())));
         } catch (const ruvia::jwt_error&) {
             // RFC 6750 3.1: a presented but unusable token is invalid_token.
-            c.header("WWW-Authenticate", R"(Bearer error="invalid_token")");
+            c.policy().header("WWW-Authenticate", R"(Bearer error="invalid_token")");
             c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
                 .code_ = "invalid_token",
                 .message_ = "invalid bearer token"}));

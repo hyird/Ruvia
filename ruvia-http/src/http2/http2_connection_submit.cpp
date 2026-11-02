@@ -276,11 +276,11 @@ http2_submit_status http2_connection::submit_interim_response_head(
     return http2_submit_status::accepted;
 }
 
-http2_data_submit_status http2_connection::submit_data(
-    std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream) {
+http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id,
+    std::string_view chunk, http2_end_stream end_stream, std::size_t max_payload_bytes) {
     auto* stream = find_outbound_stream(stream_id);
     if (stream == nullptr) {
-        return http2_data_submit_status::closed;
+        return {0, http2_data_submit_status::closed};
     }
     const auto& local_send = stream->local_send();
     if (local_send.request_content_open() == nullptr && local_send.response_content_open() == nullptr &&
@@ -289,35 +289,15 @@ http2_data_submit_status http2_connection::submit_data(
     }
     if (local_send.request_content_open() != nullptr) {
         if (stream->request_continue_pending()) {
-            return http2_data_submit_status::expectation_pending;
+            return {0, http2_data_submit_status::expectation_pending};
         }
         if (stream->request_content_canceled()) {
             throw std::logic_error("HTTP/2 request content was canceled");
         }
     }
-    prepared_data_submission prepared;
-    const auto status = prepare_data_submission(*stream, chunk, end_stream, stream->local_content(), prepared);
-    if (status != http2_data_submit_status::accepted) {
-        return status;
-    }
-    if (prepared.output_bytes_ != 0) {
-        output_.reserve_additional(prepared.output_bytes_);
-        output_.reserve_segments_additional(prepared.output_segments_);
-    }
-    return commit_data_submission(*stream, prepared);
-}
-
-http2_data_submit_status http2_connection::prepare_data_submission(http2_stream_state& stream,
-    std::string_view chunk, http2_end_stream end_stream, const http2_local_content_state& content,
-    prepared_data_submission& prepared) {
-    // One queued submission per stream is the hard backpressure boundary. The
-    // current input remains caller-owned and can be retried after the prior one drains.
-    for (const auto& pending : pending_sends_) {
-        if (pending.stream_id_ == stream.id()) {
-            return http2_data_submit_status::backpressured;
-        }
-    }
-    switch (content.check_accept(chunk.size(), http2_ends_stream(end_stream))) {
+    // Check the whole offered input before consuming a prefix. A terminal input
+    // that cannot satisfy Content-Length must never partially reach the wire.
+    switch (stream->local_content().check_accept(chunk.size(), http2_ends_stream(end_stream))) {
         case http2_local_content_check::accepted:
             break;
         case http2_local_content_check::not_started:
@@ -328,77 +308,32 @@ http2_data_submit_status http2_connection::prepare_data_submission(http2_stream_
         case http2_local_content_check::length_incomplete:
             throw std::invalid_argument("HTTP/2 DATA ended before declared Content-Length");
     }
-    prepared.input_ = chunk;
-    prepared.end_stream_ = end_stream;
-    // Prepare every allocation needed for a deferred suffix BEFORE accepting the
-    // input or consuming flow-control window. A recoverable allocation failure can
-    // therefore never leave a framed prefix without its core-owned remainder.
-    std::size_t immediate_bytes = 0;
-    if (!chunk.empty()) {
-        immediate_bytes =
-            std::min(chunk.size(), http2_available_send_window(connection_send_window_, stream));
-        if (immediate_bytes < chunk.size()) {
-            std::pmr::string remainder(resource_);
-            remainder.append(chunk.data() + immediate_bytes, chunk.size() - immediate_bytes);
-            if (pending_sends_.size() == pending_sends_.capacity()) {
-                const auto max_size = pending_sends_.max_size();
-                if (pending_sends_.size() == max_size) {
-                    throw std::length_error("HTTP/2 pending send queue size overflow");
-                }
-                const auto required = pending_sends_.size() + 1;
-                const auto doubled = pending_sends_.capacity() > max_size / 2
-                                         ? max_size
-                                         : pending_sends_.capacity() * 2;
-                pending_sends_.reserve(std::max(required, doubled));
-            }
-            prepared.deferred_.emplace(http2_pending_send{
-                stream.id(), std::move(remainder), 0, end_stream, std::pmr::string(resource_)});
-        }
-    }
-    if (immediate_bytes != 0 || (chunk.empty() && http2_ends_stream(end_stream))) {
-        prepared.output_bytes_ = immediate_bytes == 0 ? http2_frame_header_bytes
-                                                      : http2_data_frame_encoded_bytes(immediate_bytes,
-                                                            peer_settings_.max_frame_size());
-        prepared.output_segments_ = immediate_bytes == 0
-                                        ? 1
-                                        : http2_data_frame_count(immediate_bytes, peer_settings_.max_frame_size());
-    }
-    return http2_data_submit_status::accepted;
-}
-
-http2_data_submit_status http2_connection::commit_data_submission(
-    http2_stream_state& stream, prepared_data_submission& prepared) {
-    const auto stream_id = stream.id();
-    const auto chunk = prepared.input_;
-    const auto end_stream = prepared.end_stream_;
-    // Accepted means ownership of the WHOLE input, even when flow control below
-    // can only materialize a prefix and the prepared suffix becomes pending.
-    stream.accept_local_content(chunk.size());
-    if (chunk.empty()) {
-        if (http2_ends_stream(end_stream)) {
+    const auto consumed = std::min({chunk.size(), max_payload_bytes,
+        http2_available_send_window(connection_send_window_, *stream)});
+    const bool complete = consumed == chunk.size();
+    const auto terminal = complete ? end_stream : http2_end_stream::keep_open;
+    if (consumed != 0 || (chunk.empty() && http2_ends_stream(terminal))) {
+        const auto output_bytes = consumed == 0 ? http2_frame_header_bytes
+                                                : http2_data_frame_encoded_bytes(consumed, peer_settings_.max_frame_size());
+        const auto output_segments = consumed == 0 ? std::size_t{1}
+                                                   : http2_data_frame_count(consumed, peer_settings_.max_frame_size());
+        // Reserve all frame bytes and metadata before the first mutation. Frame
+        // appends below cannot allocate; no caller-owned suffix is copied or retained.
+        output_.reserve_additional(output_bytes);
+        output_.reserve_segments_additional(output_segments);
+        if (consumed == 0) {
             output_.append_frame(http2_frame_type::data, http2_flag_end_stream, stream_id, {});
-            (void)stream.commit_local_end_stream();
-            release_local_request_stream_if_closed(stream);
+        } else {
+            append_data_frames(*stream, chunk.substr(0, consumed), terminal);
+        }
+        if (http2_ends_stream(terminal)) {
+            (void)stream->commit_local_end_stream();
+            release_local_request_stream_if_closed(*stream);
         }
         retire_completed_local_push(stream_id);
-        return http2_data_submit_status::accepted;
     }
-    const auto consumed = send_data_up_to_window(stream, chunk, 0, end_stream);
-    if (consumed < chunk.size()) {
-        // Preparation used these same windows and reserved the exact suffix and
-        // queue slot, so committing ownership cannot allocate here.
-        pending_sends_.push_back(std::move(*prepared.deferred_));
-        if (http2_ends_stream(end_stream)) {
-            (void)stream.queue_local_end_stream();
-        }
-        return http2_data_submit_status::queued;
-    }
-    if (http2_ends_stream(end_stream)) {
-        (void)stream.commit_local_end_stream();
-        release_local_request_stream_if_closed(stream);
-    }
-    retire_completed_local_push(stream_id);
-    return http2_data_submit_status::accepted;
+    return {consumed, complete ? http2_data_submit_status::complete
+                               : http2_data_submit_status::backpressured};
 }
 
 http2_request_content_release_status http2_connection::release_request_content(
@@ -502,14 +437,6 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
             http2_lower_header_name(field.name(), lower_name_stack, lower_name_scratch),
             field.value());
     }
-    for (auto& pending : pending_sends_) {
-        if (pending.stream_id_ == stream_id) {
-            pending.end_stream_ = block.empty() ? http2_end_stream::end_stream : http2_end_stream::keep_open;
-            pending.trailer_block_.swap(block);
-            (void)stream->queue_local_end_stream();
-            return http2_finish_status::queued;
-        }
-    }
     if (block.empty()) {
         output_.append_frame(http2_frame_type::data, http2_flag_end_stream, stream_id, {});
     } else {
@@ -532,27 +459,10 @@ http2_finish_status http2_connection::finish_response(
     if (!stream->local_content().length_complete()) {
         throw std::invalid_argument("HTTP/2 response ended before declared Content-Length");
     }
-    // The entire semantic trailer section was validated before the initial head
-    // commit and is encoded in detached
-    // storage before output, pending DATA, or stream phase changes. It either joins
-    // the terminal transaction whole or leaves no per-stream staged side channel.
+    // Encode the complete semantic trailer section before output or phase changes.
+    // Body input must already be consumed; DATA and terminal HEADERS preserve order.
     std::pmr::string trailer_block(resource_);
     append_http2_response_trailers(trailer_block, trailers);
-    // If the body still has a window-blocked remainder, the trailer HEADERS must NOT
-    // jump ahead of that queued DATA. Stash it on the pending entry and move END_STREAM
-    // from the body to the trailer (mark_send_window_opened emits it once the body drains).
-    for (auto& pending : pending_sends_) {
-        if (pending.stream_id_ == stream_id) {
-            if (trailer_block.empty()) {
-                pending.end_stream_ = http2_end_stream::end_stream;
-            } else {
-                pending.end_stream_ = http2_end_stream::keep_open;
-                pending.trailer_block_.swap(trailer_block);
-            }
-            (void)stream->queue_local_end_stream();
-            return http2_finish_status::queued;
-        }
-    }
     if (trailer_block.empty()) {
         output_.append_frame(http2_frame_type::data, http2_flag_end_stream, stream_id, {});
     } else {

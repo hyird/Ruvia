@@ -73,7 +73,7 @@ private:
             .target_ = "/policies/label",
             .headers_ = headers,
         });
-        c.status(response.status());
+        c.draft().status(response.status());
         // dispatch_response owns pooled bytes; text() copies them into this
         // response before the child result is destroyed on the same worker.
         co_return c.text(response.body());

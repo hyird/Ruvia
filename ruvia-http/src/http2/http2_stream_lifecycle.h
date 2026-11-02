@@ -142,10 +142,6 @@ private:
         return local_send_.reject_connect();
     }
 
-    [[nodiscard]] bool queue_local_end_stream() noexcept {
-        return local_send_.queue_end_stream();
-    }
-
     [[nodiscard]] bool commit_local_end_stream() noexcept {
         return local_send_.commit_end_stream();
     }

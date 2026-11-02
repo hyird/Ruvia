@@ -157,29 +157,15 @@ task<void> session_middleware::commit(context& c) const {
 
     const auto connection = c.conn();
     const bool secure = connection.scheme() == http_scheme::https;
-    // Once a final response exists, the cookie must also enter its metadata
-    // overlay: an outer middleware's respond() or an error after next() builds
-    // its replacement from that overlay alone, and Redis has already changed.
-    // Both blocks are staged before Redis is touched; publication after
-    // successful storage is an allocation-free move of complete header state.
-    auto& response = detail::context_access::response_storage(c);
-    auto* const overlay = detail::context_access::final_response_metadata(c);
+    // Session Cookie 属于明确的跨替换响应策略，只在最终交付/流提交时应用。
+    // Redis 成功后通过无分配移动发布完整字段，既有 commit guard 保证只持久化一次。
+    auto& response = detail::context_access::response_policy(c);
     auto staged = response.headers().clone(1);
-    std::optional<http_response_headers> staged_overlay;
-    if (overlay != nullptr) {
-        staged_overlay.emplace(overlay->headers().clone(1));
-    }
     const auto publish = [&]() noexcept {
         response.commit_headers(std::move(staged));
-        if (overlay != nullptr) {
-            overlay->commit_headers(std::move(*staged_overlay));
-        }
     };
     if (const auto* cleared = state_value.cleared()) {
         detail::append_expired_session_cookie_header(staged, cookie_name_, secure);
-        if (staged_overlay) {
-            detail::append_expired_session_cookie_header(*staged_overlay, cookie_name_, secure);
-        }
         if (cleared->old_id_.has_value()) {
             auto del_task = [&] {
                 const session_key_buffer key(key_prefix_, *cleared->old_id_, c.pool());
@@ -203,9 +189,6 @@ task<void> session_middleware::commit(context& c) const {
     std::array<char, detail::secure_token_size> id_buffer;
     const auto new_id = detail::generate_secure_token(id_buffer);
     detail::append_session_cookie_header(staged, cookie_name_, new_id, secure);
-    if (staged_overlay) {
-        detail::append_session_cookie_header(*staged_overlay, cookie_name_, new_id, secure);
-    }
 
     const session_key_buffer key(key_prefix_, new_id, c.pool());
     bool applied = false;

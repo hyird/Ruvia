@@ -52,6 +52,9 @@ private:
 
     ruvia::task<void> events_value(ruvia::context& c) {
         auto events_value = c.stream_sse();
+        if (co_await events_value.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         // The subscription inherits the request stop token: when the SSE
         // client disconnects, the pending read() ends with std::nullopt.
         auto subscription = c.redis().subscription();

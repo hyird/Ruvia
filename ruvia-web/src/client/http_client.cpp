@@ -31,7 +31,7 @@ http_client_handle http_client_state::handle(operation_options options) {
     lifecycle_.require_ready();
     validate_operation_options(options);
     return http_client_handle(pool_, memory_.resource(), lifecycle_.operation_scope(),
-        lifecycle_.options(std::move(options)));
+        std::move(options));
 }
 
 }  // namespace ruvia::detail

@@ -41,6 +41,7 @@ private:
         operation_options options, operation_timeout deadline);
 
     bool closed_{false};
+    stop_source stop_;
     std::pmr::memory_resource* resource_;
     std::chrono::milliseconds duration_;
     bool always_enabled_;

@@ -59,6 +59,8 @@ public:
         const operation_timeout* timeout_{nullptr};
         std::string_view request_target_;
         bool complete_{false};
+        // Caller-owned buffered suffix or its socket output is still pending.
+        bool request_body_pending_{false};
         bool retryable_{false};
 
         [[nodiscard]] bool failed() const noexcept {
@@ -119,7 +121,6 @@ public:
 
     // http2_client_session handler.
     void on_http2_event(http2_event& event);
-    void on_http2_data_drained(std::uint32_t stream_id) noexcept;
     void on_http2_failure(const client_transport_result& transport, std::exception_ptr failure) noexcept;
 
     client_tcp_transport transport_;
@@ -152,6 +153,8 @@ private:
     void consume_http2_data(std::uint32_t stream_id, std::string_view bytes, http2_received_data_credit credit);
     void finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end);
     [[nodiscard]] task<void> wait_for_http2_output(
+        http2_stream& stream, const http_client_output_queue* upload = nullptr);
+    [[nodiscard]] task<void> wait_for_http2_send_window(
         http2_stream& stream, const http_client_output_queue* upload = nullptr);
     [[nodiscard]] task<bool> send_http2_output_chunk(
         http2_stream& stream, http_client_output_queue& upload);

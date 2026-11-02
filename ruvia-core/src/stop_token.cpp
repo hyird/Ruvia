@@ -102,4 +102,64 @@ void stop_state::unlink(stop_callback_node& node) noexcept {
 stop_source::stop_source()
     : state_(detail::stop_state::create()) {}
 
+namespace {
+
+[[nodiscard]] bool unique_parent(std::span<const stop_token> parents, std::size_t index) noexcept {
+    if (!parents[index].stoppable()) {
+        return false;
+    }
+    for (std::size_t previous = 0; previous != index; ++previous) {
+        if (parents[previous] == parents[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] std::size_t extra_parent_count(std::span<const stop_token> parents) noexcept {
+    std::size_t count = 0;
+    for (std::size_t index = 0; index != parents.size(); ++index) {
+        if (parents[index].stop_requested()) {
+            return 0;
+        }
+        count += unique_parent(parents, index);
+    }
+    return count > 2 ? count - 2 : 0;
+}
+
+}  // namespace
+
+stop_group::stop_group(std::span<const stop_token> parents)
+    : extra_parents_(extra_parent_count(parents), process_resource()) {
+    std::size_t count = 0;
+    for (std::size_t index = 0; index != parents.size(); ++index) {
+        if (parents[index].stop_requested()) {
+            output_ = parents[index];
+            return;
+        }
+        if (unique_parent(parents, index)) {
+            output_ = parents[index];
+            ++count;
+        }
+    }
+    if (count < 2) {
+        return;
+    }
+    source_.emplace();
+    output_ = source_->token();
+    std::size_t slot = 0;
+    for (std::size_t index = 0; index != parents.size(); ++index) {
+        if (!unique_parent(parents, index)) {
+            continue;
+        }
+        auto& registration = slot < parents_.size() ? parents_[slot] : extra_parents_[slot - parents_.size()];
+        // Capture the state, never this: downstream callbacks may destroy the
+        // group, including the parent registration currently invoking us.
+        parents[index].register_callback(registration, [state = output_.state_] {
+            state->request_stop();
+        });
+        ++slot;
+    }
+}
+
 }  // namespace ruvia

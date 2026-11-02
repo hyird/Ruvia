@@ -235,10 +235,9 @@ bool detail::route_table::is_routable_method(http_known_method method) noexcept 
 }
 
 bool detail::route_table::supports_head_fallback(const route_entry& route) noexcept {
-    // RFC 9110 9.3.2: HEAD is GET without content. A buffered or
-    // response-stream (including SSE) GET handler serves it unchanged: the
-    // response plan suppresses the body and the stream writer finishes the
-    // response at the handler's first body write. A websocket GET route is an
+    // RFC 9110 9.3.2: HEAD is GET without content. Buffered responses omit
+    // content; response-stream/SSE handlers observe completed at explicit
+    // commit and must not start producing a body. A websocket GET is an
     // upgrade, not a representation, so HEAD needs its own route there.
     const auto& endpoint = route.endpoint();
     return route.method() == http_known_method::get &&

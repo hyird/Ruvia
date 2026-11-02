@@ -72,36 +72,25 @@ private:
     ::ruvia::operation_scope operation_scope_;
 };
 
+// 提交成功后只有这两种正常结果：可生产正文，或整个响应已完成。
+enum class stream_commit_result { body,
+    completed };
+
 class response_stream_writer final {
 public:
     response_stream_writer(const response_stream_writer&) = delete;
     response_stream_writer& operator=(const response_stream_writer&) = delete;
 
-    /// Writes one body chunk. write(), writeln(), and end() share one linear output lane.
-    /// An operation occupies the lane when started; starting another before it completes
-    /// throws std::logic_error. Unstarted operations may coexist. The string_view overload
-    /// copies the chunk into owner-worker PMR storage before returning.
-    /// HTTP/1 retains framing bytes and the temporary write-deadline scope until
-    /// the complete transport write settles.
-    /// HTTP/2 may reuse normal DATA-frame transport storage between successful writes;
-    /// oversized write buffers are released after completion.
-    /// A body-suppressed response (HEAD on a GET stream route, 304) is complete
-    /// once its head is sent: the first non-empty write commits that head, and
-    /// it and every later write() / writeln() succeed without sending anything
-    /// while the connection that carried the response lives; each later write
-    /// suspends briefly instead of returning synchronously. Once that
-    /// connection ends (the peer closes or resets it, or the server closes it
-    /// on a timeout, drain or shutdown; on HTTP/2 also the stream is reset) the
-    /// next write fails exactly as a GET write fails after a peer abort, so a
-    /// loop that never checks aborted() ends no later than it would for GET.
-    /// On HTTP/1 the server watches the connection's read side from that head
-    /// on: a peer end with no further request bytes (or on a connection that
-    /// will close after the response) ends the connection, while one behind
-    /// pipelined requests on a reusable connection is a half-close whose
-    /// requests are still answered. end() succeeds and
-    /// discards trailers after validating them. From the head on aborted() is
-    /// true, sleep() returns stop_requested at once, and the
-    /// cancel_on_peer_eof() token is stopped.
+    /// 显式提交响应头（包含 session 持久化）；成功返回 body 才可生产正文。
+    /// HEAD、304 返回 completed，属于正常完成，不设置 aborted 或取消 token。
+    /// commit/write/writeln/end 共用线性输出通道，并发启动抛 logic_error。
+    /// 重复 commit 抛 logic_error；提交前失败仍可由框架替换为缓冲错误响应。
+    [[nodiscard]] task<stream_commit_result> commit() &;
+    task<stream_commit_result> commit() && = delete;
+
+    /// 只在 commit 返回 body 后写正文；提交前、完成后调用均抛 logic_error。
+    /// string_view 在调用返回前复制到 owner-worker PMR，临时正文可安全跨挂起。
+    /// 输出缓冲及写超时作用域保留至传输操作完成。
     task<void> write(std::span<const std::byte> chunk) &;
     task<void> write(std::span<const std::byte>) && = delete;
     task<void> write(std::string_view chunk) &;
@@ -121,11 +110,9 @@ public:
     task<void> writeln(std::string_view chunk) &;
     task<void> writeln(std::string_view) && = delete;
 
-    /// Suspends the stream producer. The result is elapsed for a normal
-    /// delay, or stop_requested when the owning worker is shutting down, the
-    /// request's stop token trips, or a body-suppressed head already ended the
-    /// response (returned at once). HTTP/2 peer termination is reported as its
-    /// transport error.
+    /// 仅在正文阶段挂起生产者；正常超时返回 elapsed，真实请求/worker
+    /// 取消返回 stop_requested。提交前或响应完成后调用抛 logic_error。
+    /// HTTP/2 对端终止仍作为传输错误报告。
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &;
     task<timer_sleep_result> sleep(std::chrono::milliseconds) && = delete;
 
@@ -133,7 +120,6 @@ public:
     /// 仅在请求体完整消费后可启用，否则抛出 std::logic_error；不主动读取或丢弃请求体。
     /// 返回与请求取消组合的 token，供订阅、数据库等异步等待使用；sleep() 也观察它。
     /// 不改变 context::stop_token() 或此前复制的 token。HTTP/2 只观察当前流终止。
-    /// 不带内容的响应头（HEAD、304）结束响应后，该 token 即处于停止状态（之后调用也返回已停止的 token）。
     /// HTTP/1 自动监控在首次获取 token 时才创建取消状态；创建可能分配并抛出异常。
     /// 检测由连接 owner 管理，响应结束前取消并等待其完成。后续请求字节完整保留；
     /// 读前探缓冲达到既有请求头上限时暂停检测，不为探测分配无界存储。
@@ -141,29 +127,25 @@ public:
     [[nodiscard]] stop_token cancel_on_peer_eof() &;
     stop_token cancel_on_peer_eof() && = delete;
 
-    /// Whether the response stream can no longer be delivered: a failure was
-    /// observed, or a body-suppressed head (HEAD, 304) already ended the
-    /// response. HTTP/2 also observes peer reset or connection termination,
-    /// including while sleeping.
-    /// HTTP/1 默认仅在写失败时观察断开；显式 cancel_on_peer_eof() 还观察读侧终止。
-    /// False means no failure has been observed, not that the peer is connected.
+    /// 仅报告已观察到的真实失败或取消；正常完成不等于 aborted。
+    /// HTTP/1 默认只观察写失败，cancel_on_peer_eof() 额外观察读侧终止。
+    /// false 不保证对端仍连接。
     [[nodiscard]] bool aborted() const noexcept {
         return aborted_(target_);
     }
 
-    /// Atomically terminates the stream with an optional trailer section.
-    /// Header views are copied into owner storage before this function returns.
-    /// Framing that cannot carry optional trailers (for example, HTTP/1.0)
-    /// omits them. A response status that forbids trailers rejects a non-empty
-    /// section before an uncommitted response head is emitted.
-    /// On HTTP/2, a committed head needs no further head-commit task, while
-    /// trailer constraints remain enforced.
+    /// 正常结束正文并可附 Trailer；未提交时可用于提交一个空响应。
+    /// Trailer 视图在调用返回前复制到 owner storage；HTTP/1.0 等无法承载的可选
+    /// Trailer 会被省略，禁止 Trailer 的状态在未发送头之前拒绝非空部分。
+    /// 已正常完成后空 end() 幂等，非空 Trailer 抛 logic_error；生产正文仍必须
+    /// 先显式 commit() 并检查结果，不能用 end() 隐藏无正文阶段。
     task<void> end(std::span<const http_header_view> trailers = {}) &;
     task<void> end(std::span<const http_header_view> = {}) && = delete;
 
 private:
     friend struct detail::streaming_access;
 
+    using commit_type = task<stream_commit_result> (*)(void*);
     using write_type = task<void> (*)(void*, std::string_view);
     using end_type = task<void> (*)(void*, std::span<const http_header_view>);
     using sleep_type = task<timer_sleep_result> (*)(void*, std::chrono::milliseconds, const stop_token&);
@@ -173,11 +155,12 @@ private:
     using aborted_type = bool (*)(void*) noexcept;
     using cancel_on_peer_eof_type = stop_token (*)(void*);
 
-    response_stream_writer(std::pmr::memory_resource& resource, void* target, write_type write, end_type end, sleep_type sleep, bind_context_type bind_context,
+    response_stream_writer(std::pmr::memory_resource& resource, void* target, commit_type commit, write_type write, end_type end, sleep_type sleep, bind_context_type bind_context,
         release_context_type release_context, committed_type committed, aborted_type aborted,
         cancel_on_peer_eof_type cancel_on_peer_eof) noexcept
         : resource_(&resource),
           target_(target),
+          commit_(commit),
           write_(write),
           end_(end),
           sleep_(sleep),
@@ -213,6 +196,7 @@ private:
 
     std::pmr::memory_resource* resource_;
     void* target_;
+    commit_type commit_;
     write_type write_;
     end_type end_;
     sleep_type sleep_;
@@ -222,6 +206,7 @@ private:
     aborted_type aborted_;
     cancel_on_peer_eof_type cancel_on_peer_eof_;
     stop_token stop_token_;
+    std::optional<stop_group> peer_stop_;
     bool output_active_{false};
     ::ruvia::operation_scope operation_scope_;
 
@@ -235,6 +220,8 @@ public:
     sse_writer(sse_writer&& other) noexcept;
     sse_writer& operator=(sse_writer&&) = delete;
 
+    /// 与 response_stream_writer 相同；completed 时停止事件生产，不伪造取消。
+    [[nodiscard]] task<stream_commit_result> commit();
     task<void> write(const sse_message& message);
 
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration);

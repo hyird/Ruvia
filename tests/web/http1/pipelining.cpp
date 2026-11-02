@@ -104,11 +104,17 @@ class pipelining_routes final {
     }
 
     ruvia::task<void> stream(ruvia::context& c) {
+        if (co_await c.stream().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await c.stream().write("streamed-chunk");
     }
 
     ruvia::task<void> stream_echo(ruvia::context& c) {
         const auto body = "stream-echo-" + std::string(co_await c.req().text());
+        if (co_await c.stream().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await c.stream().write(body);
     }
 };

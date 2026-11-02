@@ -103,13 +103,9 @@ const detail::request_bindings& context::request_bindings() const noexcept {
     return request_storage().request_bindings_;
 }
 
-http_response& context::response_storage() {
-    return response_state().materialize_provisional();
-}
-
 const http_response* context::response() const noexcept {
     const auto* final = response_state().final();
-    return final == nullptr ? nullptr : &final->response();
+    return final;
 }
 
 bool context::has_response() const noexcept {
@@ -117,7 +113,7 @@ bool context::has_response() const noexcept {
 }
 
 void context::respond(http_response&& response) {
-    store_assigned_response(std::move(response));
+    store_response(std::move(response));
 }
 
 #ifdef RUVIA_ENABLE_DATABASE

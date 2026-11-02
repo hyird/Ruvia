@@ -158,8 +158,19 @@ public:
         const http2_connect_request_head_view& request);
     [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_request_head(
         const http2_extended_connect_request_head_view& request);
-    [[nodiscard]] http2_data_submit_status submit_data(
-        std::uint32_t stream_id, std::string_view bytes, http2_end_stream end_stream);
+    // Serializes at most min(bytes.size(), max_payload_bytes, available send window).
+    // Only the returned consumed_bytes_ advance Content-Length; no input view or
+    // unconsumed suffix is retained. Retry the suffix after obtaining output credit
+    // and/or a WINDOW_UPDATE/SETTINGS change. complete means this input was consumed,
+    // not that its frames reached the socket. Frame headers are additional overhead.
+    // Validate the complete input's length/terminal intent before consuming anything.
+    // Allocation failure leaves output, windows and content accounting unchanged.
+    // END_STREAM is emitted only after consuming this entire input; an empty terminal
+    // input emits one DATA frame even with zero payload allowance or zero send window.
+    [[nodiscard]] http2_data_submit_result submit_data(std::uint32_t stream_id,
+        std::string_view bytes, http2_end_stream end_stream, std::size_t max_payload_bytes);
+    // Finish only after all source bytes were consumed. Trailer fields are encoded
+    // before returning and never wait in a deferred DATA queue.
     [[nodiscard]] http2_finish_status finish_request(std::uint32_t stream_id,
         std::span<const http_header_view> trailers = {});
     [[nodiscard]] http2_request_content_release_status release_request_content(
@@ -205,8 +216,8 @@ public:
     [[nodiscard]] std::variant<http_response_stream_commit_plan, http2_response_head_submit_error>
     submit_streaming_response_head(std::uint32_t stream_id, http_response response,
         http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
-    // Encodes trailers before returning accepted or queued; field storage may be
-    // released or changed even while the ending waits for DATA flow control.
+    // Call after all body bytes have been consumed. Encodes trailers before returning;
+    // field storage may then be released. Incomplete Content-Length is rejected.
     [[nodiscard]] http2_finish_status finish_response(
         std::uint32_t stream_id, const http_response_trailer_section& trailers);
     [[nodiscard]] http2_submit_status submit_origin_advertisement(std::span<const std::string_view> origins);
@@ -222,11 +233,6 @@ public:
     // both END_STREAM flags have closed the stream.
     [[nodiscard]] http2_submit_status submit_reset(std::uint32_t stream_id, http2_error_code error);
     [[nodiscard]] http2_received_data_acknowledge_status acknowledge(http2_received_data_credit&& credit);
-    [[nodiscard]] bool has_queued_data(std::uint32_t stream_id) const noexcept;
-    // Per-stream protocol ownership of submitted DATA: queued means the core still
-    // owns a flow-control-blocked suffix; drained means none remains; aborted means
-    // the stream reset/closed and queued DATA was discarded.
-    [[nodiscard]] http2_data_queue_state data_queue_state(std::uint32_t stream_id) const noexcept;
     // Payload bytes in serialized DATA frames still owned by the core output buffer.
     [[nodiscard]] std::size_t pending_data_output_bytes(std::uint32_t stream_id) const noexcept;
     // Read-only state used by a response writer to decide whether a send-window
@@ -238,12 +244,6 @@ public:
     // Reports the protocol receive state without exposing internal stream storage.
     [[nodiscard]] http2_stream_receive_status stream_receive_status(
         std::uint32_t stream_id) const noexcept;
-    // Reports each queued-send drain once, even if its final DATA closed the stream.
-    // Control frames with no queued DATA preserve any untaken drain notifications.
-    // A reset cancels untaken notifications. IDs borrow storage until the next
-    // take_drained_data_streams() call or connection destruction.
-    [[nodiscard]] std::span<const std::uint32_t> take_drained_data_streams() & noexcept;
-    std::span<const std::uint32_t> take_drained_data_streams() && = delete;
     // Consume the server request event only after every request-derived view has
     // expired. An event cannot be released through another connection.
     [[nodiscard]] http2_server_request_release_status release(http2_request_head_event&& request);

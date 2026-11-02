@@ -1,7 +1,4 @@
 #include <algorithm>
-#include <limits>
-#include <stdexcept>
-#include <utility>
 
 #include "http2/http2_connection.h"
 #include "http2/http2_flow_control.h"
@@ -9,32 +6,17 @@
 #include "http2/http2_remote_receive_semantics.h"
 #include "http2/http2_window_update.h"
 
-// Connection- and stream-level flow control: how much of a queued body may go out
-// under the current send window, what a WINDOW_UPDATE reopens, and the receive
-// credit an owner's consumption returns to the peer.
+// Connection- and stream-level flow control. WINDOW_UPDATE only restores send
+// credit; the owner retries its unconsumed DATA after observing the new windows.
 
 namespace ruvia::detail {
-namespace {
 
-[[nodiscard]] std::size_t checked_output_bytes_add(std::size_t current, std::size_t additional) {
-    if (additional > std::numeric_limits<std::size_t>::max() - current) {
-        throw std::length_error("HTTP/2 deferred output size overflow");
-    }
-    return current + additional;
-}
-
-}  // namespace
-
-std::size_t http2_connection::send_data_up_to_window(
-    http2_stream_state& stream, std::string_view data, std::size_t offset, http2_end_stream end_stream) {
+void http2_connection::append_data_frames(
+    http2_stream_state& stream, std::string_view data, http2_end_stream end_stream) {
     const auto total = data.size();
+    std::size_t offset = 0;
     while (offset < total) {
-        const auto available = http2_available_send_window(connection_send_window_, stream);
-        if (available == 0) {
-            break;  // window exhausted; caller buffers the remainder
-        }
-        const auto chunk =
-            std::min<std::size_t>({total - offset, available, peer_settings_.max_frame_size()});
+        const auto chunk = std::min<std::size_t>(total - offset, peer_settings_.max_frame_size());
         const bool last = offset + chunk == total;
         output_.append_frame(http2_frame_type::data,
             static_cast<std::uint8_t>(http2_ends_stream(end_stream) && last ? http2_flag_end_stream : 0),
@@ -42,107 +24,6 @@ std::size_t http2_connection::send_data_up_to_window(
         http2_consume_send_window(connection_send_window_, stream, chunk);
         stream.commit_local_content(chunk);
         offset += chunk;
-    }
-    return offset;
-}
-
-void http2_connection::mark_send_window_opened() {
-    if (pending_sends_.empty()) {
-        return;
-    }
-    // Drain is a wire/state transaction: a throwing PMR resource must not leave
-    // a queued body with a smaller window and no corresponding bytes. Simulate
-    // the complete drain first and reserve both outbound bytes and the
-    // completion notification vector before touching any stream state.
-    std::size_t required_output_bytes = 0;
-    std::size_t required_output_segments = 0;
-    std::size_t drained_count = 0;
-    auto simulated_connection_window = connection_send_window_;
-    bool simulated_table_update_pending = encoder_table_size_update_pending_;
-    const auto max_frame = peer_settings_.max_frame_size();
-    for (const auto& pending : pending_sends_) {
-        auto* stream = find_stream(pending.stream_id_);
-        if (stream == nullptr || stream->is_aborted()) {
-            continue;
-        }
-        if (pending.offset_ > pending.bytes_.size()) {
-            throw std::logic_error("HTTP/2 deferred DATA offset is invalid");
-        }
-        const auto remaining = pending.bytes_.size() - pending.offset_;
-        const auto available = http2_available_send_window(simulated_connection_window, *stream);
-        const auto immediate = std::min(remaining, available);
-        required_output_bytes = checked_output_bytes_add(
-            required_output_bytes, http2_data_frame_encoded_bytes(immediate, max_frame));
-        required_output_segments = checked_output_bytes_add(
-            required_output_segments, http2_data_frame_count(immediate, max_frame));
-        simulated_connection_window -= static_cast<std::int32_t>(immediate);
-        if (immediate != remaining) {
-            continue;
-        }
-
-        ++drained_count;
-        if (!pending.trailer_block_.empty()) {
-            const auto header_frame_bytes = http2_header_frame_encoded_bytes(pending.trailer_block_.size(),
-                max_frame, simulated_table_update_pending ? encoder_zero_table_size_update_.size() : 0);
-            required_output_bytes = checked_output_bytes_add(required_output_bytes, header_frame_bytes);
-            required_output_segments = checked_output_bytes_add(
-                required_output_segments, http2_header_frame_count(header_frame_bytes, max_frame));
-            simulated_table_update_pending = false;
-        }
-    }
-    output_.reserve_additional(required_output_bytes);
-    output_.reserve_segments_additional(required_output_segments);
-    const auto max_size = drained_data_streams_.max_size();
-    if (drained_count > max_size - drained_data_streams_.size()) {
-        throw std::length_error("HTTP/2 drained stream notification size overflow");
-    }
-    const auto required = drained_data_streams_.size() + drained_count;
-    if (required > drained_data_streams_.capacity()) {
-        const auto doubled = drained_data_streams_.capacity() > max_size / 2
-                                 ? max_size
-                                 : drained_data_streams_.capacity() * 2;
-        drained_data_streams_.reserve(std::max(required, doubled));
-    }
-
-    // Drain core-owned DATA remainders now that a window may have opened. Completion
-    // reports that the owner may submit the stream's next source chunk.
-    const auto first_drained = drained_data_streams_.size();
-    std::size_t retained = 0;
-    for (std::size_t i = 0; i < pending_sends_.size(); ++i) {
-        auto& pending = pending_sends_[i];
-        auto* stream = find_stream(pending.stream_id_);
-        if (stream == nullptr || stream->is_aborted()) {
-            continue;
-        }
-        pending.offset_ = send_data_up_to_window(
-            *stream, std::string_view(pending.bytes_), pending.offset_, pending.end_stream_);
-        if (pending.offset_ >= pending.bytes_.size()) {
-            // The body fully drained. If a trailer block was queued behind it, emit it
-            // now as the terminal HEADERS(END_STREAM) -- strictly AFTER all the DATA.
-            if (!pending.trailer_block_.empty() && !stream->is_aborted()) {
-                append_response_header_frames(
-                    *stream, std::string_view(pending.trailer_block_), http2_end_stream::end_stream);
-            }
-            if (http2_ends_stream(pending.end_stream_) || !pending.trailer_block_.empty()) {
-                (void)stream->commit_local_end_stream();
-                release_local_request_stream_if_closed(*stream);
-            }
-            drained_data_streams_.push_back(pending.stream_id_);
-        } else {
-            if (retained != i) {
-                // All queued strings use resource_; moving a survivor cannot
-                // allocate after the output/window transaction has committed.
-                pending_sends_[retained] = std::move(pending);
-            }
-            ++retained;
-        }
-    }
-    pending_sends_.erase(pending_sends_.begin() + static_cast<std::ptrdiff_t>(retained),
-        pending_sends_.end());
-    // Retirement can discard a stream's deferred state. Run it only after the
-    // stable compaction, never while a queue entry is borrowed by the drain.
-    for (auto i = first_drained; i < drained_data_streams_.size(); ++i) {
-        retire_completed_local_push(drained_data_streams_[i]);
     }
 }
 
@@ -154,18 +35,12 @@ bool http2_connection::process_window_update(
     }
     const auto increment = http2_window_update_increment(payload_value);
     if (receive_frame_metadata_) {
-        // Before any window changes; send-window draining queues no events.
+        // Reserve notification storage before changing either send window.
         reserve_event_slots(1);
     }
     if (header_value.stream_id_ == 0) {
         switch (http2_apply_window_update(connection_send_window_, increment)) {
             case http2_window_update_result::ok:
-                try {
-                    mark_send_window_opened();
-                } catch (...) {
-                    connection_send_window_ -= static_cast<std::int32_t>(increment);
-                    throw;
-                }
                 if (receive_frame_metadata_) {
                     events_.push_back(http2_event(http2_received_window_update{
                         .stream_id_ = header_value.stream_id_, .increment_ = increment}));
@@ -201,12 +76,6 @@ bool http2_connection::process_window_update(
     }
     switch (http2_apply_stream_window_update(*stream, increment)) {
         case http2_window_update_result::ok:
-            try {
-                mark_send_window_opened();
-            } catch (...) {
-                (void)stream->add_send_window(-static_cast<std::int64_t>(increment));
-                throw;
-            }
             if (receive_frame_metadata_) {
                 events_.push_back(http2_event(http2_received_window_update{
                     .stream_id_ = header_value.stream_id_, .increment_ = increment}));
@@ -260,18 +129,6 @@ bool http2_connection::release_received_data(std::uint32_t stream_id, std::uint3
     return true;
 }
 
-bool http2_connection::has_queued_data(std::uint32_t stream_id) const noexcept {
-    return std::ranges::find(pending_sends_, stream_id, &http2_pending_send::stream_id_) != pending_sends_.end();
-}
-
-http2_data_queue_state http2_connection::data_queue_state(std::uint32_t stream_id) const noexcept {
-    if (stream_aborted(stream_id)) {
-        return http2_data_queue_state::aborted;
-    }
-    return has_queued_data(stream_id) ? http2_data_queue_state::queued
-                                      : http2_data_queue_state::drained;
-}
-
 std::size_t http2_connection::pending_data_output_bytes(std::uint32_t stream_id) const noexcept {
     return output_.pending_data_bytes(stream_id);
 }
@@ -287,7 +144,6 @@ std::optional<http2_send_window_state> http2_connection::send_window_state(
         .connection_window_ = connection_send_window_,
         .stream_window_ = stream->send_window(),
         .available_ = static_cast<std::uint32_t>(available),
-        .queued_data_ = has_queued_data(stream_id),
     };
 }
 

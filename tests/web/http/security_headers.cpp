@@ -22,7 +22,7 @@ using ruvia::xss_protection_header_policy;
     const security_headers_config& options = {}, std::string_view existing_frame_options = {}) {
     auto callback = [&](ruvia::context& ctx) -> ruvia::task<void> {
         if (!existing_frame_options.empty()) {
-            ctx.header("X-Frame-Options", existing_frame_options);
+            ctx.draft().header("X-Frame-Options", existing_frame_options);
         }
         ctx.respond(ctx.text("ok"));
         co_return;

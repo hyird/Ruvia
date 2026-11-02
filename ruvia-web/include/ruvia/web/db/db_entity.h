@@ -299,10 +299,11 @@ using tuple_filter_t = typename tuple_filter<predicate_type, ts_type...>::type;
 
 }  // namespace detail
 
-// PostgreSQL array columns use std::pmr::vector of scalar or optional elements.
+// Columns and projections require db_mapped_value: all text is owned.
+// PostgreSQL arrays use std::pmr::vector of owning scalar or optional elements.
 // Decoding retains one-dimensional element order and discards the lower bound;
 // multidimensional arrays are rejected with db_conversion_error.
-template <fixed_string field_name, typename t_type, db_column_options options_type = db_column_options{}>
+template <fixed_string field_name, db_mapped_value t_type, db_column_options options_type = db_column_options{}>
 struct db_column final {
     static_assert(!detail::is_optional<t_type>::value, "use nullable column options and set_null for entity fields; optional is only for array elements");
     static constexpr auto name = field_name;
@@ -314,8 +315,6 @@ struct db_column final {
         return opts;
     }
     static constexpr auto options = normalize_options(options_type);
-    static_assert(!std::is_same_v<t_type, char> && !std::is_same_v<t_type, std::string_view>,
-        "database entity columns must own their values");
     static constexpr db_data_type data_type = options_type.data_type_ == db_data_type::inferred
                                                   ? detail::db_entity_type_traits<t_type>::data_type
                                                   : options_type.data_type_;

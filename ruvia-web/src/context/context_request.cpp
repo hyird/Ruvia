@@ -303,7 +303,7 @@ http_priority context_request::priority() const noexcept {
     return (parsed_value.index() == 0) ? std::get<0>(parsed_value).request_priority() : http_priority{};
 }
 
-void context::priority(http_priority_fields fields_value) {
+void context_response_editor::priority(http_priority_fields fields_value) {
     std::array<char, 12> value{};
     const auto encoded = encode_http_priority(value, fields_value);
     if ((encoded.index() != 0)) {

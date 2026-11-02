@@ -77,7 +77,7 @@ redis_handle redis_handle::with_options(operation_options options) const {
     validate_operation_options(options);
     redis_handle configured(*this);
     configured.operation_options_ =
-        merge_operation_options(operation_options_, std::move(options));
+        override_operation_options(operation_options_, std::move(options));
     return configured;
 }
 

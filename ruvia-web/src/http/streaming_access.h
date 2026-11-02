@@ -10,6 +10,7 @@ namespace ruvia::detail {
 
 struct streaming_access final {
     using body_read_type = body_reader::read_type::invoke_type;
+    using stream_commit_type = response_stream_writer::commit_type;
     using stream_write_type = response_stream_writer::write_type;
     using stream_end_type = response_stream_writer::end_type;
     using stream_sleep_type = response_stream_writer::sleep_type;
@@ -24,11 +25,11 @@ struct streaming_access final {
     }
 
     [[nodiscard]] static response_stream_writer make_response_stream_writer(std::pmr::memory_resource& resource, void* target,
-        stream_write_type write, stream_end_type end, stream_sleep_type sleep, stream_bind_context_type bind_context,
+        stream_commit_type commit, stream_write_type write, stream_end_type end, stream_sleep_type sleep, stream_bind_context_type bind_context,
         stream_release_context_type release_context, stream_committed_type committed,
         stream_aborted_type aborted, stream_cancel_on_peer_eof_type cancel_on_peer_eof) noexcept {
         return response_stream_writer(
-            resource, target, write, end, sleep, bind_context, release_context, committed, aborted, cancel_on_peer_eof);
+            resource, target, commit, write, end, sleep, bind_context, release_context, committed, aborted, cancel_on_peer_eof);
     }
 
     // The token is supplied by the caller rather than read from `context`:

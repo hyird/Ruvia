@@ -27,7 +27,7 @@ public:
 
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
-        c.header("X-Route-Scope", tag_);
+        c.edit_response().header("X-Route-Scope", tag_);
     }
 
 private:
@@ -38,7 +38,7 @@ class route_shapes_trace final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
-        c.header("X-Route-Trace", "on");
+        c.edit_response().header("X-Route-Trace", "on");
     }
 };
 
@@ -227,6 +227,9 @@ private:
     }
 
     ruvia::task<void> stream(ruvia::context& c) {
+        if (co_await c.stream().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await c.stream().write("chunk");
     }
 };
@@ -250,7 +253,7 @@ private:
 }
 
 ruvia::task<ruvia::http_response> route_shapes_api_miss(ruvia::context& c) {
-    c.status(ruvia::http_status::not_found);
+    c.draft().status(ruvia::http_status::not_found);
     co_return c.body("api-miss");
 }
 

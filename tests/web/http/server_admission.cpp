@@ -53,7 +53,7 @@ std::atomic<int> error_handler_calls{0};
 
 ruvia::task<ruvia::http_response> counted_error(ruvia::context& c, ruvia::http_error_info error) {
     ++error_handler_calls;
-    c.status(error.status());
+    c.draft().status(error.status());
     co_return c.text("rejected");
 }
 
@@ -87,6 +87,9 @@ class admission_routes final {
     }
 
     ruvia::task<void> events(ruvia::context& context_value) {
+        if (co_await context_value.stream().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await context_value.stream().write("event");
     }
 };

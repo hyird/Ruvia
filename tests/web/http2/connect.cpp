@@ -78,7 +78,7 @@ ruvia::task<ruvia::http_response> answer_rejected_expectation(
     ruvia::context& context_value, ruvia::http_error_info error) {
     co_await hold_off(context_value);
     const auto body = co_await context_value.req().text();
-    context_value.status(error.status());
+    context_value.draft().status(error.status());
     std::pmr::string text(context_value.arena());
     text.append("body=");
     text.append(std::to_string(body.size()));
@@ -303,8 +303,9 @@ RUVIA_TEST(http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_requ
                     RUVIA_CHECK(sent_fin);
                     continue;
                 }
-                const auto submitted = peer.submit_data(id, payload_value, ruvia::http2_end_stream::end_stream);
-                RUVIA_CHECK(submitted == ruvia::http2_data_submit_status::accepted || submitted == ruvia::http2_data_submit_status::queued);
+                const auto submitted = peer.submit_data(id, payload_value, ruvia::http2_end_stream::end_stream, payload_value.size());
+                RUVIA_CHECK(submitted.status_ == ruvia::http2_data_submit_status::complete || submitted.status_ == ruvia::http2_data_submit_status::backpressured);
+                auto consumed = submitted.consumed_bytes_;
                 co_await flush_peer(socket, peer, memory.resource());
                 std::string echoed;
                 bool ended = false;
@@ -324,8 +325,15 @@ RUVIA_TEST(http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_requ
                             throw std::runtime_error("CONNECT stream reset");
                         }
                     }
+                    if (consumed != payload_value.size()) {
+                        const auto suffix = std::string_view(payload_value).substr(consumed);
+                        const auto retried = peer.submit_data(id, suffix, ruvia::http2_end_stream::end_stream, suffix.size());
+                        RUVIA_CHECK(retried.status_ == ruvia::http2_data_submit_status::complete || retried.status_ == ruvia::http2_data_submit_status::backpressured);
+                        consumed += retried.consumed_bytes_;
+                    }
                     co_await flush_peer(socket, peer, memory.resource());
                 }
+                RUVIA_CHECK_EQ(consumed, payload_value.size());
                 RUVIA_CHECK(echoed == payload_value);
                 RUVIA_CHECK(observation_value.saw_eof_ && observation_value.stable_);
                 {
@@ -458,8 +466,9 @@ RUVIA_TEST(http2_connect_route_receives_data_sent_before_the_response) {
                 }
                 if (established && !finished && echoed.size() == early.size()) {
                     finished = true;
-                    const auto submitted = peer.submit_data(id, {}, ruvia::http2_end_stream::end_stream);
-                    RUVIA_CHECK(submitted == ruvia::http2_data_submit_status::accepted);
+                    const auto submitted = peer.submit_data(id, {}, ruvia::http2_end_stream::end_stream, 0);
+                    RUVIA_CHECK(submitted.status_ == ruvia::http2_data_submit_status::complete);
+                    RUVIA_CHECK_EQ(submitted.consumed_bytes_, std::size_t{0});
                 }
                 co_await flush_peer(socket, peer, memory.resource());
             }
@@ -551,8 +560,9 @@ RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_pe
                 }
                 co_await flush_peer(socket, peer, memory.resource());
             }
-            const auto tunnel_submitted = peer.submit_data(tunnel_id, payload_value, ruvia::http2_end_stream::end_stream);
-            RUVIA_CHECK(tunnel_submitted == ruvia::http2_data_submit_status::accepted || tunnel_submitted == ruvia::http2_data_submit_status::queued);
+            const auto tunnel_submitted = peer.submit_data(tunnel_id, payload_value, ruvia::http2_end_stream::end_stream, payload_value.size());
+            RUVIA_CHECK(tunnel_submitted.status_ == ruvia::http2_data_submit_status::complete || tunnel_submitted.status_ == ruvia::http2_data_submit_status::backpressured);
+            auto tunnel_consumed = tunnel_submitted.consumed_bytes_;
             co_await flush_peer(socket, peer, memory.resource());
             std::string tunnel_reply;
             bool tunnel_ended = false;
@@ -570,8 +580,15 @@ RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_pe
                         throw std::runtime_error("slow tunnel stream reset");
                     }
                 }
+                if (tunnel_consumed != payload_value.size()) {
+                    const auto suffix = std::string_view(payload_value).substr(tunnel_consumed);
+                    const auto retried = peer.submit_data(tunnel_id, suffix, ruvia::http2_end_stream::end_stream, suffix.size());
+                    RUVIA_CHECK(retried.status_ == ruvia::http2_data_submit_status::complete || retried.status_ == ruvia::http2_data_submit_status::backpressured);
+                    tunnel_consumed += retried.consumed_bytes_;
+                }
                 co_await flush_peer(socket, peer, memory.resource());
             }
+            RUVIA_CHECK_EQ(tunnel_consumed, payload_value.size());
             RUVIA_CHECK(tunnel_reply == expected);
 
             const auto upload = peer.submit_request_head(ruvia::http2_regular_request_head_view{.method_ = "POST", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/slow-upload", .content_ = ruvia::http2_request_content::streaming()});
@@ -580,8 +597,9 @@ RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_pe
                 throw std::runtime_error("slow upload request submission rejected");
             }
             const auto upload_id = *upload_id_ptr;
-            const auto upload_submitted = peer.submit_data(upload_id, payload_value, ruvia::http2_end_stream::end_stream);
-            RUVIA_CHECK(upload_submitted == ruvia::http2_data_submit_status::accepted || upload_submitted == ruvia::http2_data_submit_status::queued);
+            const auto upload_submitted = peer.submit_data(upload_id, payload_value, ruvia::http2_end_stream::end_stream, payload_value.size());
+            RUVIA_CHECK(upload_submitted.status_ == ruvia::http2_data_submit_status::complete || upload_submitted.status_ == ruvia::http2_data_submit_status::backpressured);
+            auto upload_consumed = upload_submitted.consumed_bytes_;
             co_await flush_peer(socket, peer, memory.resource());
             std::string upload_reply;
             bool upload_ended = false;
@@ -602,8 +620,15 @@ RUVIA_TEST(http2_slow_body_and_tunnel_consumers_return_receive_window_without_pe
                         throw std::runtime_error("slow upload stream reset");
                     }
                 }
+                if (upload_consumed != payload_value.size()) {
+                    const auto suffix = std::string_view(payload_value).substr(upload_consumed);
+                    const auto retried = peer.submit_data(upload_id, suffix, ruvia::http2_end_stream::end_stream, suffix.size());
+                    RUVIA_CHECK(retried.status_ == ruvia::http2_data_submit_status::complete || retried.status_ == ruvia::http2_data_submit_status::backpressured);
+                    upload_consumed += retried.consumed_bytes_;
+                }
                 co_await flush_peer(socket, peer, memory.resource());
             }
+            RUVIA_CHECK_EQ(upload_consumed, payload_value.size());
             RUVIA_CHECK(upload_reply == expected);
         } catch (...) {
             failure = std::current_exception();
@@ -870,8 +895,9 @@ RUVIA_TEST(http2_capsule_route_resets_truncated_capsule_with_protocol_error) {
                         const auto submitted = peer.submit_data(id, std::string_view("\x00\x0a"
                                                                                      "ab",
                                                                         4),
-                            ruvia::http2_end_stream::end_stream);
-                        RUVIA_CHECK(submitted == ruvia::http2_data_submit_status::accepted);
+                            ruvia::http2_end_stream::end_stream, 65535);
+                        RUVIA_CHECK(submitted.status_ == ruvia::http2_data_submit_status::complete);
+                        RUVIA_CHECK_EQ(submitted.consumed_bytes_, std::size_t{4});
                         sent = true;
                     }
                     if (const auto* closed = event->stream_closed()) {
@@ -952,7 +978,7 @@ RUVIA_TEST(http2_capsule_route_half_closed_resets_truncated_capsule_on_end_strea
         (void)peer.submit_data(id, std::string_view("\x00\x0a"
                                                     "ab",
                                        4),
-            ruvia::http2_end_stream::end_stream);
+            ruvia::http2_end_stream::end_stream, 65535);
         co_await flush_peer(socket, peer, &resource);
         const auto& worker_value = attachment.loop().handle();
         (void)co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(30));

@@ -1,9 +1,6 @@
 #include "http2/http2_sans_io_send_window.h"
 
-#include <algorithm>
-#include <cstddef>
-
-#include "http2/http2_sans_io_stream_runtime.h"
+#include <stdexcept>
 
 namespace ruvia::detail {
 namespace {
@@ -26,27 +23,28 @@ task<http2_send_window_wait_status> await_http2_send_window(
     http2_sans_io_stream_signal* signal, const bool* aborted) {
     for (;;) {
         if ((aborted != nullptr && *aborted) ||
-            connection.stream_receive_status(stream_id) == ruvia::http2_stream_receive_status::closed ||
+            connection.stream_aborted(stream_id) ||
             signal == nullptr || signal->terminated()) {
             co_return http2_send_window_wait_status::aborted;
         }
-        if (!connection.has_queued_data(stream_id)) {
+        const auto window = connection.send_window_state(stream_id);
+        if (!window) {
+            co_return http2_send_window_wait_status::aborted;
+        }
+        if (window->available_ != 0) {
             co_return http2_send_window_wait_status::ready;
         }
         co_await signal->wait();
     }
 }
 
-namespace {
-
-task<http2_stream_data_write_status> write_http2_stream_data_chunk(
+task<http2_stream_data_write_status> write_http2_stream_data(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
     http2_sans_io_stream_signal* signal, worker_signal& write_signal,
-    http2_data_output_budget& output_budget, std::string_view chunk,
+    http2_data_output_budget& output_budget, std::string_view bytes,
     http2_end_stream end_stream, const bool* aborted) {
-    // queued transfers the unsent suffix to the core; backpressured retains
-    // caller ownership and must retry this exact stable view after the older
-    // queued input drains.
+    // The caller owns the suffix until consumed. Each reservation covers only
+    // encoded payload and remains charged through socket write completion.
     for (;;) {
         if (aborted != nullptr && *aborted) {
             co_return http2_stream_data_write_status::local_aborted;
@@ -57,30 +55,12 @@ task<http2_stream_data_write_status> write_http2_stream_data_chunk(
         if (signal == nullptr) {
             co_return http2_stream_data_write_status::peer_closed;
         }
-        if (!chunk.empty()) {
-            for (;;) {
-                const auto window = connection.send_window_state(stream_id);
-                if (!window) {
-                    co_return http2_stream_data_write_status::peer_closed;
-                }
-                if (aborted != nullptr && *aborted) {
-                    co_return http2_stream_data_write_status::local_aborted;
-                }
-                if (signal->terminated()) {
-                    co_return http2_stream_data_write_status::session_terminated;
-                }
-                if (window->available_ != 0) {
-                    break;
-                }
-                co_await output_budget.wait_for_change();
-                if (aborted != nullptr && *aborted) {
-                    co_return http2_stream_data_write_status::local_aborted;
-                }
-                if (signal->terminated()) {
-                    co_return http2_stream_data_write_status::session_terminated;
-                }
+        if (!bytes.empty()) {
+            if (co_await await_http2_send_window(connection, stream_id, signal, aborted) ==
+                http2_send_window_wait_status::aborted) {
+                co_return classify_aborted_write(signal, aborted);
             }
-            if (!(co_await output_budget.acquire(stream_id, *signal))) {
+            if (!(co_await output_budget.acquire(stream_id, *signal, connection, aborted))) {
                 co_return classify_aborted_write(signal, aborted);
             }
             if ((aborted != nullptr && *aborted) || signal->terminated()) {
@@ -88,74 +68,44 @@ task<http2_stream_data_write_status> write_http2_stream_data_chunk(
                 co_return classify_aborted_write(signal, aborted);
             }
         }
-        http2_data_submit_status result_value{};
+        http2_data_submit_result result_value{};
         try {
-            result_value = connection.submit_data(stream_id, chunk, end_stream);
+            result_value = connection.submit_data(stream_id, bytes, end_stream, http2_data_output_credit_bytes);
         } catch (const std::invalid_argument&) {
             write_signal.notify();
-            if (!chunk.empty()) {
+            if (!bytes.empty()) {
                 output_budget.release(stream_id);
             }
             co_return http2_stream_data_write_status::content_length_exceeded;
         } catch (const std::logic_error&) {
             write_signal.notify();
-            if (!chunk.empty()) {
+            if (!bytes.empty()) {
                 output_budget.release(stream_id);
             }
             co_return http2_stream_data_write_status::invalid_state;
         } catch (...) {
             write_signal.notify();
-            if (!chunk.empty()) {
+            if (!bytes.empty()) {
                 output_budget.release(stream_id);
             }
             throw;
         }
-        if (result_value == http2_data_submit_status::accepted ||
-            result_value == http2_data_submit_status::queued) {
-            output_budget.note_data_submitted(stream_id, chunk.size());
-        }
+        output_budget.note_data_submitted(stream_id, result_value.consumed_bytes_);
         write_signal.notify();
-        if (!chunk.empty() && result_value != http2_data_submit_status::accepted &&
-            result_value != http2_data_submit_status::queued) {
+        if (!bytes.empty() && result_value.consumed_bytes_ == 0) {
             output_budget.release(stream_id);
         }
-        if (result_value == http2_data_submit_status::accepted) {
+        bytes.remove_prefix(result_value.consumed_bytes_);
+        if (result_value.status_ == http2_data_submit_status::complete) {
             co_return http2_stream_data_write_status::completed;
         }
-        if (result_value == http2_data_submit_status::closed) {
+        if (result_value.status_ == http2_data_submit_status::closed) {
             co_return http2_stream_data_write_status::peer_closed;
         }
-        if (co_await await_http2_send_window(connection, stream_id, signal, aborted) ==
-            http2_send_window_wait_status::aborted) {
-            co_return classify_aborted_write(signal, aborted);
-        }
-        if (result_value == http2_data_submit_status::queued) {
-            co_return http2_stream_data_write_status::completed;
+        if (result_value.status_ == http2_data_submit_status::expectation_pending) {
+            co_await signal->wait();
         }
     }
 }
 
-}  // namespace
-
-task<http2_stream_data_write_status> write_http2_stream_data(
-    ruvia::http2_connection& connection, std::uint32_t stream_id,
-    http2_sans_io_stream_signal* signal, worker_signal& write_signal,
-    http2_data_output_budget& output_budget, std::string_view bytes,
-    http2_end_stream end_stream, const bool* aborted) {
-    // Bound the core-owned window-blocked remainder to one credit-sized slice.
-    constexpr std::size_t submit_chunk_bytes = http2_data_output_credit_bytes;
-    std::size_t offset = 0;
-    do {
-        const auto count = std::min(submit_chunk_bytes, bytes.size() - offset);
-        const auto chunk = bytes.substr(offset, count);
-        const bool last = offset + count == bytes.size();
-        const auto status = co_await write_http2_stream_data_chunk(connection, stream_id, signal,
-            write_signal, output_budget, chunk, last ? end_stream : http2_end_stream::keep_open, aborted);
-        if (status != http2_stream_data_write_status::completed) {
-            co_return status;
-        }
-        offset += count;
-    } while (offset < bytes.size());
-    co_return http2_stream_data_write_status::completed;
-}
 }  // namespace ruvia::detail

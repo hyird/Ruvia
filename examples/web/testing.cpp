@@ -26,7 +26,7 @@ class audit_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
-        c.header("X-Audited", "yes");
+        c.edit_response().header("X-Audited", "yes");
     }
 };
 
@@ -54,7 +54,7 @@ private:
     ruvia::task<ruvia::http_response> create(ruvia::context& c) {
         const auto& note = c.req().validated<note_request>();
         ++c.worker_state<note_counter>().stored_;
-        c.status(ruvia::http_status::created);
+        c.draft().status(ruvia::http_status::created);
         co_return c.body(note.get<"text">().has_value() ? note.get<"text">()->view() : "empty");
     }
 
@@ -67,7 +67,7 @@ private:
 };
 
 ruvia::task<ruvia::http_response> notes_missing(ruvia::context& c) {
-    c.status(ruvia::http_status::not_found);
+    c.draft().status(ruvia::http_status::not_found);
     co_return c.text("no such note");
 }
 

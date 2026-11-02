@@ -57,9 +57,6 @@ http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_ro
       peer_settings_(role),
       events_(std::make_move_iterator(static_cast<http2_event*>(nullptr)),
           std::make_move_iterator(static_cast<http2_event*>(nullptr)), resource),
-      pending_sends_(std::size_t{0}, resource),
-      drained_data_streams_(std::size_t{0}, resource),
-      taken_drained_data_streams_(std::size_t{0}, resource),
       pinned_streams_(std::size_t{0}, resource),
       role_(role),
       connection_send_window_(http2_default_initial_window_size),
@@ -122,14 +119,6 @@ void http2_connection::reserve_event_slots(std::size_t count) {
                                  : events_.capacity() * 2;
         events_.reserve(std::max(required, doubled));
     }
-}
-
-std::span<const std::uint32_t> http2_connection::take_drained_data_streams() & noexcept {
-    // Swap-and-clear so each drain is reported exactly once; the returned span stays
-    // valid until the next call (double buffer, no allocation churn).
-    taken_drained_data_streams_.swap(drained_data_streams_);
-    drained_data_streams_.clear();
-    return taken_drained_data_streams_;
 }
 
 // =============================================================================
@@ -329,9 +318,6 @@ bool http2_connection::process_settings(const http2_frame_header& header_value, 
         // was last drained, exactly like the PING flood, since each appends an ACK below.
         ++consecutive_settings_;
         output_.append_frame(http2_frame_type::settings, http2_flag_ack, 0, {});
-        // SETTINGS_INITIAL_WINDOW_SIZE may have opened send windows: drain deferred DATA
-        // and report streams whose core-owned remainder completed.
-        mark_send_window_opened();
         if (receive_frame_metadata_) {
             // Last, after every throwing step: the view borrows the accepted input.
             events_.push_back(http2_event(http2_received_settings(payload_value)));
@@ -470,7 +456,7 @@ bool http2_connection::process_goaway(const http2_frame_header& header_value, st
 
     // Higher locally initiated streams were never processed and can be replayed on a
     // new connection. Close them inside the protocol core so flow-control debt,
-    // deferred DATA, stream-table storage, and peer concurrency slots cannot leak.
+    // stream-table storage, and peer concurrency slots cannot leak.
     for (std::size_t i = 0; i < unprocessed_count; ++i) {
         const auto stream_id = unprocessed_stream_ids[i];
         if (!close_stream_impl(stream_id, http2_stream_close_source::peer_goaway, goaway.error(),

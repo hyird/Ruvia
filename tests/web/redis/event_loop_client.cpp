@@ -550,9 +550,11 @@ ruvia::task<void> check_reconnect_after_budget_rejection(ruvia::redis_client& cl
     co_await client.shutdown();
 }
 
-ruvia::task<void> blocked_command(ruvia::redis_client& client) {
+ruvia::task<void> blocked_command(ruvia::redis_client& client, ruvia::stop_token stop = {}) {
     co_await client.connect();
-    (void)co_await client.handle().command("STALL");
+    auto handle = client.handle({.stop_token_ = std::move(stop)});
+    auto copied = handle;
+    (void)co_await copied.with_options({}).command("STALL");
 }
 
 ruvia::task<void> connect_until_stopped(ruvia::redis_client& client, bool& cancelled) {
@@ -599,15 +601,16 @@ ruvia::task<void> check_runtime_handle_timeout(ruvia::event_loop loop, ruvia::re
     co_await client.shutdown();
 }
 
-ruvia::task<void> check_runtime_handle_cancellation_bridge(ruvia::event_loop loop,
+ruvia::task<void> check_runtime_handle_cancellation_group(ruvia::event_loop loop,
     ruvia::redis_config config, ruvia::stop_source& base_stop,
     ruvia::stop_source& override_stop, ruvia::testing::test_context& ruvia_ctx) {
     config.command_timeout_.reset();
     ruvia::redis_client client(loop, config);
     co_await client.connect();
+    ruvia::stop_group group{base_stop.token(), override_stop.token()};
     auto configured = client.handle({.stop_token_ = base_stop.token()});
     auto copied = configured;
-    auto derived = copied.with_options({.stop_token_ = override_stop.token()});
+    auto derived = copied.with_options({.stop_token_ = group.token()});
     bool cancelled = false;
     try {
         (void)co_await derived.command("STALL");
@@ -628,19 +631,88 @@ RUVIA_TEST(redis_client_handle_options_survive_copy_and_derivation) {
     pool.join();
 }
 
-RUVIA_TEST(redis_client_handle_bridges_both_stop_tokens_after_copy_and_derivation) {
+RUVIA_TEST(redis_client_handle_uses_explicit_stop_group_after_copy_and_derivation) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     pool.start();
     for (const bool stop_base : {true, false}) {
         redis_peer peer;
         ruvia::stop_source base_stop;
         ruvia::stop_source override_stop;
-        auto operation = pool.loop(0).start(check_runtime_handle_cancellation_bridge(
+        auto operation = pool.loop(0).start(check_runtime_handle_cancellation_group(
             pool.loop(0), peer.config(), base_stop, override_stop, ruvia_ctx));
         peer.wait_for_blocked_command();
         (stop_base ? base_stop : override_stop).request_stop();
         operation.get();
     }
+    pool.join();
+}
+
+RUVIA_TEST(redis_client_accepts_many_user_sources_and_replaces_old_handle_cancellation) {
+    for (std::size_t selected = 0; selected != 6; ++selected) {
+        redis_peer peer;
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        auto config = peer.config();
+        config.command_timeout_.reset();
+        ruvia::redis_client client(pool.loop(0), config);
+        std::array<ruvia::stop_source, 6> sources;
+        std::array<ruvia::stop_token, 6> tokens;
+        for (std::size_t index = 0; index != sources.size(); ++index) {
+            tokens[index] = sources[index].token();
+        }
+        ruvia::stop_group group{tokens};
+        ruvia::stop_source old;
+        old.request_stop();
+        auto run = [&]() -> ruvia::task<void> {
+            co_await client.connect();
+            auto original = client.handle({.stop_token_ = old.token()});
+            auto copied = original;
+            auto configured = copied.with_options({.stop_token_ = group.token()}).with_options({});
+            auto cold = configured.command("STALL");
+            bool cancelled = false;
+            try {
+                (void)co_await std::move(cold);
+            } catch (const ruvia::redis_error& error) {
+                cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
+            }
+            RUVIA_CHECK(cancelled);
+            co_await client.shutdown();
+        };
+        pool.start();
+        auto pending = pool.loop(0).start(run());
+        peer.wait_for_blocked_command();
+        sources[selected].request_stop();
+        pending.get();
+        pool.join();
+    }
+}
+
+RUVIA_TEST(redis_client_cold_operation_retains_explicit_group_after_handle_destruction) {
+    redis_peer peer;
+    ruvia::event_loop_pool pool({.loop_count_ = 1});
+    ruvia::redis_client client(pool.loop(0), peer.config());
+    auto run = [&]() -> ruvia::task<void> {
+        co_await client.connect();
+        ruvia::stop_source first;
+        ruvia::stop_source second;
+        ruvia::stop_group cancellation{first.token(), second.token()};
+        auto cold = [&] {
+            auto configured = client.handle({.stop_token_ = cancellation.token()});
+            auto copied = configured;
+            return copied.with_options({}).command("PING");
+        }();
+        second.request_stop();
+        bool cancelled = false;
+        try {
+            (void)co_await std::move(cold);
+        } catch (const ruvia::redis_error& error) {
+            cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
+        }
+        RUVIA_CHECK(cancelled);
+        co_await client.handle().ping();
+        co_await client.shutdown();
+    };
+    pool.start();
+    pool.loop(0).start(run()).get();
     pool.join();
 }
 
@@ -974,8 +1046,11 @@ RUVIA_TEST(redis_client_close_and_shutdown_waiters_join_pending_commands) {
     redis_peer peer;
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     ruvia::redis_client client(pool.loop(0), peer.config());
+    std::array<ruvia::stop_source, 6> sources;
+    ruvia::stop_group group{sources[0].token(), sources[1].token(), sources[2].token(),
+        sources[3].token(), sources[4].token(), sources[5].token()};
     pool.start();
-    auto pending = pool.loop(0).start(blocked_command(client));
+    auto pending = pool.loop(0).start(blocked_command(client, group.token()));
     peer.wait_for_blocked_command();
     client.close();
     auto closing = pool.loop(0).start(client.shutdown());
@@ -992,6 +1067,7 @@ RUVIA_TEST(redis_client_close_and_shutdown_waiters_join_pending_commands) {
     pool.stop();
     pool.join();
     RUVIA_CHECK(cancelled);
+    RUVIA_CHECK(!group.token().stop_requested());
 }
 
 RUVIA_TEST(redis_client_event_loop_stop_awaits_retirement_of_pending_authentication) {

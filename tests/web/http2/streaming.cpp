@@ -37,7 +37,7 @@ struct sleeping_stream_observation final {
     std::atomic<bool> sse_wait_finished_{};
     std::atomic<int> head_loop_writes_{};
     std::atomic<bool> head_loop_aborted_{};
-    std::atomic<bool> head_loop_sleep_stopped_{};
+    std::atomic<bool> head_loop_sleep_rejected_{};
     std::atomic<bool> head_loop_token_stopped_{};
     std::atomic<bool> head_loop_finished_{};
     std::atomic<bool> naive_loop_failed_{};
@@ -73,32 +73,44 @@ class sleeping_stream_routes final {
     RUVIA_GET("/http2-stream-204", stream_204);
     RUVIA_ROUTES_END
 
-    // An SSE loop that only aborted() ends. After a HEAD every write succeeds
-    // without sending, and sleep() and the peer-EOF token report the finished
-    // response.
+    // HEAD 正常完成，不启动生产循环，也不会取消业务等待 token。
     ruvia::task<void> head_loop_sse(ruvia::context& context_value) {
+        if (context_value.req().query("not-modified").has_value()) {
+            context_value.draft().status(ruvia::http_status::not_modified);
+        }
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto writer = context_value.stream_sse();
-        int writes = 0;
-        while (!writer.aborted() && writes < 100) {
-            ++writes;
+        const auto token = writer.cancel_on_peer_eof();
+        if (co_await writer.commit() == ruvia::stream_commit_result::body) {
             co_await writer.write({.data_ = "tick"});
+            observed.head_loop_writes_ = 1;
+        } else {
+            observed.head_loop_writes_ = -1;
+            try {
+                co_await writer.write({.data_ = "late"});
+            } catch (const std::logic_error&) {
+                observed.head_loop_writes_ = 0;
+            }
+            try {
+                static_cast<void>(co_await writer.sleep(std::chrono::seconds(30)));
+            } catch (const std::logic_error&) {
+                observed.head_loop_sleep_rejected_ = true;
+            }
         }
-        co_await writer.write({.data_ = "late"});
-        observed.head_loop_writes_ = writes;
         observed.head_loop_aborted_ = writer.aborted();
-        observed.head_loop_token_stopped_ = writer.cancel_on_peer_eof().stop_requested();
-        observed.head_loop_sleep_stopped_ =
-            co_await writer.sleep(std::chrono::seconds(30)) == ruvia::timer_sleep_result::stop_requested;
+        observed.head_loop_token_stopped_ = token.stop_requested();
         co_await writer.end();
         observed.head_loop_finished_ = true;
     }
 
-    // A naive SSE loop that never checks aborted() or a sleep result: only a
-    // failing write ends it. The cap only keeps a regression from hanging.
+    // 提交结果结束无正文响应，不靠轮询取消或等待 peer 断开。
     ruvia::task<void> head_naive_sse(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto writer = context_value.stream_sse();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            observed.naive_loop_finished_ = true;
+            co_return;
+        }
         try {
             for (int i = 0; i < 1000; ++i) {
                 co_await writer.write({.data_ = "tick"});
@@ -114,7 +126,10 @@ class sleeping_stream_routes final {
 
     ruvia::task<void> head_trailer_write(ruvia::context& context_value) {
         auto& out = context_value.stream_text();
-        context_value.header("Trailer", "X-Complete");
+        context_value.draft().header("Trailer", "X-Complete");
+        if (co_await out.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await out.write("body");
         const ruvia::http_header_view trailers[] = {{"X-Complete", "yes"}};
         co_await out.end(trailers);
@@ -124,27 +139,35 @@ class sleeping_stream_routes final {
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto& out = context_value.stream_text();
         auto pre_token = out.cancel_on_peer_eof();
-        context_value.header("Trailer", "X-Complete");
+        context_value.draft().header("Trailer", "X-Complete");
         const ruvia::http_header_view trailers[] = {{"X-Complete", "yes"}};
-        co_await out.end(trailers);
+        if (co_await out.commit() == ruvia::stream_commit_result::body) {
+            co_await out.end(trailers);
+        }
         auto post_token = out.cancel_on_peer_eof();
-        const auto sleep_res = co_await out.sleep(std::chrono::seconds(10));
+        try {
+            static_cast<void>(co_await out.sleep(std::chrono::seconds(10)));
+        } catch (const std::logic_error&) {
+            observed.head_trailer_sleep_stopped_ = true;
+        }
         observed.head_trailer_aborted_ = out.aborted();
         observed.head_trailer_pre_stopped_ = pre_token.stop_requested();
         observed.head_trailer_post_stopped_ = post_token.stop_requested();
-        observed.head_trailer_sleep_stopped_ = sleep_res == ruvia::timer_sleep_result::stop_requested;
         observed.head_trailer_done_ = true;
     }
 
     ruvia::task<void> stream_custom(ruvia::context& context_value) {
-        context_value.header("Content-Encoding", "x-custom");
+        context_value.draft().header("Content-Encoding", "x-custom");
         auto& out = context_value.stream_text();
+        if (co_await out.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await out.write("payload");
         co_await out.end();
     }
 
     ruvia::task<void> stream_204(ruvia::context& context_value) {
-        context_value.status(ruvia::http_status::no_content);
+        context_value.draft().status(ruvia::http_status::no_content);
         co_await context_value.stream_text().end();
     }
 
@@ -165,11 +188,17 @@ class sleeping_stream_routes final {
     ruvia::task<void> post_sse(ruvia::context& context_value) {
         const auto received = co_await context_value.req().text();
         auto writer = context_value.stream_sse();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await writer.write({.data_ = received});
     }
 
     ruvia::task<void> paced_sse(ruvia::context& context_value) {
         auto writer = context_value.stream_sse();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         for (int i = 0; i < 4; ++i) {
             co_await writer.write({.data_ = "tick"});
             (void)co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(35));
@@ -190,6 +219,9 @@ class sleeping_stream_routes final {
     ruvia::task<void> quiet_sse(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto writer = context_value.stream_sse();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         const auto context_stop = context_value.stop_token();
         const auto stop = writer.cancel_on_peer_eof();
         co_await writer.write({.data_ = "ready"});
@@ -220,6 +252,9 @@ class sleeping_stream_routes final {
     ruvia::task<void> sleeping(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<sleeping_stream_observation>>();
         auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await writer.write("first\n");
         try {
             if (co_await writer.sleep(std::chrono::seconds(30)) == ruvia::timer_sleep_result::elapsed) {
@@ -650,53 +685,51 @@ RUVIA_TEST(http2_head_falls_back_to_sse_get_route_without_content) {
     server.finish();
 }
 
-// A completed head-only response is a success that can deliver nothing more:
-// the SSE handler's writes and end() succeed without sending, and aborted(),
-// sleep() and the peer-EOF token report it at once while the peer keeps the
-// connection open, instead of the handler running until the connection ends.
-RUVIA_TEST(http2_head_only_stream_completes_writes_and_reports_aborted) {
-    auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
-    std::pmr::unsynchronized_pool_resource resource;
-    asio::ip::tcp::socket client(io);
-    client.connect(server.endpoint());
-    asio::write(client, asio::buffer(request_wire(&resource, "HEAD", "/http2-head-loop-sse", {})));
-    client.non_blocking(true);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    bool ended = false;
-    while (!ended) {
-        const auto frame = http2_streaming_test::read_frame(client, deadline);
-        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
-            (frame.header_.flags_ & 0x1) == 0) {
-            std::string ack;
-            append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
-            asio::write(client, asio::buffer(ack));
-            continue;
+// 完成态拒绝非法生产/等待，aborted 与取消 token 只表示真实失败。
+RUVIA_TEST(http2_head_and_304_streams_complete_without_abort) {
+    for (const bool not_modified : {false, true}) {
+        auto& io = ruvia::test::new_test_io_context();
+        ruvia::test::http_server_fixture server(io);
+        std::pmr::unsynchronized_pool_resource resource;
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        asio::write(client, asio::buffer(request_wire(&resource, not_modified ? "GET" : "HEAD",
+                                not_modified ? "/http2-head-loop-sse?not-modified" : "/http2-head-loop-sse", {})));
+        client.non_blocking(true);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        bool ended = false;
+        while (!ended) {
+            const auto frame = http2_streaming_test::read_frame(client, deadline);
+            if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
+                (frame.header_.flags_ & 0x1) == 0) {
+                std::string ack;
+                append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
+                asio::write(client, asio::buffer(ack));
+                continue;
+            }
+            if (frame.header_.stream_id_ == 1) {
+                RUVIA_CHECK(frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers));
+                ended = (frame.header_.flags_ & 0x1) != 0;
+            }
         }
-        if (frame.header_.stream_id_ == 1) {
-            RUVIA_CHECK(frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers));
-            ended = (frame.header_.flags_ & 0x1) != 0;
-        }
-    }
 
-    auto& observed = *http2_streaming_test::sleeping_stream_observed;
-    const auto finish_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    while (!observed.head_loop_finished_ && std::chrono::steady_clock::now() < finish_deadline) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        auto& observed = *http2_streaming_test::sleeping_stream_observed;
+        const auto finish_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!observed.head_loop_finished_ && std::chrono::steady_clock::now() < finish_deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        RUVIA_CHECK(observed.head_loop_finished_.load());
+        RUVIA_CHECK_EQ(observed.head_loop_writes_.load(), 0);
+        RUVIA_CHECK(!observed.head_loop_aborted_.load());
+        RUVIA_CHECK(!observed.head_loop_token_stopped_.load());
+        RUVIA_CHECK(observed.head_loop_sleep_rejected_.load());
+        client.close();
+        server.finish();
     }
-    RUVIA_CHECK(observed.head_loop_finished_.load());
-    RUVIA_CHECK_EQ(observed.head_loop_writes_.load(), 1);
-    RUVIA_CHECK(observed.head_loop_aborted_.load());
-    RUVIA_CHECK(observed.head_loop_token_stopped_.load());
-    RUVIA_CHECK(observed.head_loop_sleep_stopped_.load());
-    client.close();
-    server.finish();
 }
 
-// The discarded writes after a HEAD succeed only while the connection lives:
-// once the client closes it, the next write of a loop that never checks
-// aborted() fails as a GET write would, and the handler ends promptly.
-RUVIA_TEST(http2_head_only_naive_loop_ends_when_the_client_closes) {
+// HEAD 在提交时完成，不要求对端断开才结束生产者。
+RUVIA_TEST(http2_head_only_producer_finishes_at_commit) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     std::pmr::unsynchronized_pool_resource resource;
@@ -728,7 +761,7 @@ RUVIA_TEST(http2_head_only_naive_loop_ends_when_the_client_closes) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     RUVIA_CHECK(observed.naive_loop_finished_.load());
-    RUVIA_CHECK(observed.naive_loop_failed_.load());
+    RUVIA_CHECK(!observed.naive_loop_failed_.load());
     server.finish();
 }
 
@@ -911,9 +944,9 @@ RUVIA_TEST(http2_head_stream_with_trailers_strips_trailer_header_and_stops_eof_t
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     RUVIA_CHECK(observed.head_trailer_done_.load());
-    RUVIA_CHECK(observed.head_trailer_aborted_.load());
-    RUVIA_CHECK(observed.head_trailer_pre_stopped_.load());
-    RUVIA_CHECK(observed.head_trailer_post_stopped_.load());
+    RUVIA_CHECK(!observed.head_trailer_aborted_.load());
+    RUVIA_CHECK(!observed.head_trailer_pre_stopped_.load());
+    RUVIA_CHECK(!observed.head_trailer_post_stopped_.load());
     RUVIA_CHECK(observed.head_trailer_sleep_stopped_.load());
     server.finish();
 }

@@ -281,6 +281,8 @@ public:
     db_handle(const db_handle& other) noexcept;
     db_handle& operator=(const db_handle&) = delete;
 
+    // Inherits an empty token; a supplied state replaces user cancellation.
+    // Timeout can only tighten. Accumulation requires a caller-owned stop_group.
     [[nodiscard]] db_handle with_options(operation_options options) const;
 #ifdef RUVIA_ENABLE_REDIS
     [[nodiscard]] db_query_result_cache query_result_cache() const;
@@ -450,6 +452,8 @@ public:
     // Idempotent and callable from any thread. Pool teardown runs on the bound
     // event loop; use shutdown() when its completion must be awaited.
     void close() noexcept;
+    // Pending pool waiters report db_error::code_type::closing, distinct from
+    // user-token cancellation (db_error::code_type::cancelled).
     // Requests cancellation, joins worker-owned operations, and completes on
     // the bound event loop after the client teardown is finished.
     [[nodiscard]] task<void> shutdown() &;

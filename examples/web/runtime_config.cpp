@@ -41,7 +41,7 @@ class global_header_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
-        c.header("X-Runtime-Example", "true");
+        c.edit_response().header("X-Runtime-Example", "true");
     }
 };
 
@@ -52,7 +52,7 @@ public:
 
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
-        c.header("X-Scoped-Example", value_);
+        c.edit_response().header("X-Scoped-Example", value_);
     }
 
 private:

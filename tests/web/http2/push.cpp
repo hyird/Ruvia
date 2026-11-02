@@ -71,12 +71,15 @@ public:
         if (context_value.req().header("x-promise") != "owned-request") {
             throw std::runtime_error("lost push request metadata");
         }
-        context_value.header("x-asset", "metadata");
+        context_value.draft().header("x-asset", "metadata");
         co_return context_value.text("pushed-body");
     }
     ruvia::task<void> large(ruvia::context& context_value) {
         auto& owner_value = *context_value.worker_state<std::shared_ptr<push_observation>>();
         std::string chunk(16384, 'p');
+        if (co_await context_value.stream().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         for (unsigned i = 0; i != 80; ++i) {
             co_await context_value.stream().write(chunk);
         }

@@ -12,6 +12,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/operation_timeout.h"
+
 #include "test_harness.h"
 
 namespace stop_token_test {
@@ -146,8 +148,8 @@ private:
 };
 
 // Moving an inline callable into stop_callback_state is the third move. Firing
-// there puts stop_requested() after register_callbacks()' preflight check but
-// before the first std::stop_callback finishes construction.
+// there puts stop_requested() after register_callback()'s preflight check but
+// before the intrusive node finishes construction.
 constexpr int move_into_callback_state = 3;
 
 }  // namespace
@@ -204,7 +206,8 @@ RUVIA_TEST(stop_token_registration_can_reset_during_synchronous_construction_cal
     std::atomic_int moves{0};
     std::atomic_int calls{0};
 
-    auto token = ruvia::combine_stop_tokens(first.token(), second.token());
+    ruvia::stop_group group{first.token(), second.token()};
+    auto token = group.token();
     reset_registration_move_state state_value{
         &first, &registration, &moves, &calls, move_into_callback_state, nullptr, nullptr};
     token.register_callback(registration, reset_registration_on_move(state_value));
@@ -233,7 +236,8 @@ RUVIA_TEST(stop_token_registration_can_reset_when_stop_races_with_callback_const
         stop_completed.store(true, std::memory_order_release);
     });
 
-    auto token = ruvia::combine_stop_tokens(first.token(), second.token());
+    ruvia::stop_group group{first.token(), second.token()};
+    auto token = group.token();
     reset_registration_move_state state_value{&first, &registration, &moves, &calls, move_into_callback_state,
         &registration_paused, &stop_completed};
     token.register_callback(registration, reset_registration_on_move(state_value));
@@ -249,7 +253,8 @@ RUVIA_TEST(stop_token_registration_can_reset_when_stop_races_with_callback_const
 RUVIA_TEST(combined_stop_token_observes_either_source) {
     ruvia::stop_source first;
     ruvia::stop_source second;
-    auto combined = ruvia::combine_stop_tokens(first.token(), second.token());
+    ruvia::stop_group group{first.token(), second.token()};
+    auto combined = group.token();
     RUVIA_CHECK(combined.stoppable());
     RUVIA_CHECK(!combined.stop_requested());
     second.request_stop();
@@ -260,10 +265,8 @@ RUVIA_TEST(combined_stop_registration_outlives_temporary_token) {
     ruvia::stop_source first;
     ruvia::stop_source second;
     int calls = 0;
-    auto registration =
-        ruvia::combine_stop_tokens(first.token(), second.token()).register_callback([&calls] {
-            ++calls;
-        });
+    ruvia::stop_group group{first.token(), second.token()};
+    auto registration = group.token().register_callback([&calls] { ++calls; });
     RUVIA_CHECK(registration.registered());
     second.request_stop();
     first.request_stop();
@@ -275,20 +278,21 @@ RUVIA_TEST(combined_stop_registration_reuses_storage_after_token_dies) {
     ruvia::stop_source second;
     int calls = 0;
     ruvia::stop_registration registration;
-    ruvia::combine_stop_tokens(first.token(), second.token())
-        .register_callback(registration, [&calls] { ++calls; });
+    ruvia::stop_group group{first.token(), second.token()};
+    group.token().register_callback(registration, [&calls] { ++calls; });
     RUVIA_CHECK(registration.registered());
     first.request_stop();
     second.request_stop();
     RUVIA_CHECK_EQ(calls, 1);
 }
 
-RUVIA_TEST(combined_stop_token_flattens_nested_sources) {
+RUVIA_TEST(stop_group_propagates_nested_sources) {
     ruvia::stop_source first;
     ruvia::stop_source second;
     ruvia::stop_source third;
-    auto nested = ruvia::combine_stop_tokens(
-        ruvia::combine_stop_tokens(first.token(), second.token()), third.token());
+    ruvia::stop_group inner{first.token(), second.token()};
+    ruvia::stop_group outer{inner.token(), third.token()};
+    auto nested = outer.token();
     int calls = 0;
     ruvia::stop_registration registration;
     nested.register_callback(registration, [&calls] { ++calls; });
@@ -298,41 +302,48 @@ RUVIA_TEST(combined_stop_token_flattens_nested_sources) {
     RUVIA_CHECK_EQ(calls, 1);
 }
 
-RUVIA_TEST(combined_stop_token_merges_duplicates_and_rejects_overflow) {
-    std::array<ruvia::stop_source, ruvia::max_stop_token_sources + 1> sources;
-    auto combined = sources[0].token();
-    for (std::size_t index = 1; index != ruvia::max_stop_token_sources; ++index) {
-        combined = ruvia::combine_stop_tokens(combined, sources[index].token());
+RUVIA_TEST(stop_group_supports_many_parents_and_merges_duplicate_notifications) {
+    for (std::size_t selected = 0; selected != 8; ++selected) {
+        std::array<ruvia::stop_source, 8> sources;
+        std::array<ruvia::stop_token, 9> tokens;
+        for (std::size_t index = 0; index != sources.size(); ++index) {
+            tokens[index] = sources[index].token();
+        }
+        tokens.back() = tokens.front();
+        ruvia::stop_group group{tokens};
+        int calls = 0;
+        auto registration = group.token().register_callback([&calls] { ++calls; });
+        sources[selected].request_stop();
+        RUVIA_CHECK_EQ(calls, 1);
+        for (auto& source : sources) {
+            source.request_stop();
+        }
+        RUVIA_CHECK_EQ(calls, 1);
     }
-    combined = ruvia::combine_stop_tokens(combined, sources[0].token());
-    bool rejected = false;
-    try {
-        static_cast<void>(ruvia::combine_stop_tokens(combined, sources.back().token()));
-    } catch (const std::length_error&) {
-        rejected = true;
-    }
-    RUVIA_CHECK(rejected);
-    sources[ruvia::max_stop_token_sources - 1].request_stop();
-    RUVIA_CHECK(combined.stop_requested());
 }
 
 RUVIA_TEST(combined_stop_token_handles_single_and_pre_stopped_inputs) {
     ruvia::stop_source source;
-    auto single = ruvia::combine_stop_tokens({}, source.token());
+    ruvia::stop_group single_group{{}, source.token(), source.token()};
+    auto single = single_group.token();
+    RUVIA_CHECK(single == source.token());
     source.request_stop();
     RUVIA_CHECK(single.stop_requested());
 
     ruvia::stop_source stopped;
     ruvia::stop_source idle;
     stopped.request_stop();
-    auto combined = ruvia::combine_stop_tokens(stopped.token(), idle.token());
+    ruvia::stop_group group{stopped.token(), idle.token()};
+    auto combined = group.token();
+    RUVIA_CHECK(combined == stopped.token());
     RUVIA_CHECK(combined.stop_requested());
 }
 
 RUVIA_TEST(combined_stop_token_observes_later_sources_after_earlier_source_dies) {
     std::optional<ruvia::stop_source> first(std::in_place);
     ruvia::stop_source second;
-    const auto combined = ruvia::combine_stop_tokens(first->token(), second.token());
+    const ruvia::stop_group group{first->token(), second.token()};
+    const auto combined = group.token();
     first.reset();
     RUVIA_CHECK(combined.stoppable());
     int calls = 0;
@@ -469,7 +480,8 @@ RUVIA_TEST(stop_token_registration_synchronous_race_leaves_registration_idle_and
         }
     };
 
-    auto token = ruvia::combine_stop_tokens(first.token(), second.token());
+    ruvia::stop_group first_group{first.token(), second.token()};
+    auto token = first_group.token();
     state_type first_state{&first, nullptr, &registration, &moves, &calls};
     token.register_callback(registration, stop_on_move_without_reset(first_state));
     RUVIA_CHECK(!registration.registered());
@@ -477,7 +489,8 @@ RUVIA_TEST(stop_token_registration_synchronous_race_leaves_registration_idle_and
 
     ruvia::stop_source fourth;
     moves.store(0, std::memory_order_relaxed);
-    auto second_token = ruvia::combine_stop_tokens(fourth.token(), second.token());
+    ruvia::stop_group second_group{fourth.token(), second.token()};
+    auto second_token = second_group.token();
     state_type second_state{&fourth, &third, &registration, &moves, &calls};
     second_token.register_callback(registration, stop_on_move_without_reset(second_state));
     RUVIA_CHECK(registration.registered());
@@ -526,11 +539,85 @@ RUVIA_TEST(stop_token_registration_reset_pending_before_stop_already_requested_s
         }
     };
 
-    auto token = ruvia::combine_stop_tokens(first.token(), second.token());
+    ruvia::stop_group group{first.token(), second.token()};
+    auto token = group.token();
     token.register_callback(registration, reset_then_stop_on_move(state));
     RUVIA_CHECK(first.stop_requested());
     RUVIA_CHECK(!registration.registered());
     RUVIA_CHECK_EQ(calls.load(std::memory_order_relaxed), 0);
     second.request_stop();
     RUVIA_CHECK_EQ(calls.load(std::memory_order_relaxed), 0);
+}
+
+RUVIA_TEST(stop_group_can_be_destroyed_from_its_downstream_callback) {
+    ruvia::stop_source first;
+    ruvia::stop_source second;
+    auto group = std::make_unique<ruvia::stop_group>(first.token(), second.token());
+    auto token = group->token();
+    int calls = 0;
+    ruvia::stop_registration registration;
+    token.register_callback(registration, [&] {
+        ++calls;
+        registration.reset();
+        group.reset();
+        second.request_stop();
+    });
+    first.request_stop();
+    RUVIA_CHECK(!group);
+    RUVIA_CHECK(token.stop_requested());
+    RUVIA_CHECK_EQ(calls, 1);
+}
+
+RUVIA_TEST(stop_group_destruction_waits_for_cross_thread_downstream_callback) {
+    ruvia::stop_source first;
+    ruvia::stop_source second;
+    auto group = std::make_unique<ruvia::stop_group>(first.token(), second.token());
+    std::atomic_bool entered{false};
+    std::atomic_bool released{false};
+    std::atomic_bool returned{false};
+    auto registration = group->token().register_callback([&] {
+        entered.store(true, std::memory_order_release);
+        while (!released.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        returned.store(true, std::memory_order_release);
+    });
+    std::thread stopper([&] { first.request_stop(); });
+    while (!entered.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    std::thread releaser([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        released.store(true, std::memory_order_release);
+    });
+    group.reset();
+    const bool waited = returned.load(std::memory_order_acquire);
+    releaser.join();
+    stopper.join();
+    RUVIA_CHECK(waited);
+}
+
+RUVIA_TEST(operation_options_replace_cancellation_and_keep_tighter_timeout) {
+    ruvia::stop_source base;
+    ruvia::stop_source replacement;
+    const ruvia::operation_options original{
+        .timeout_ = std::chrono::milliseconds(20), .stop_token_ = base.token()};
+    auto inherited = ruvia::override_operation_options(original, {});
+    auto replaced = ruvia::override_operation_options(inherited,
+        {.timeout_ = std::chrono::milliseconds(50), .stop_token_ = replacement.token()});
+    base.request_stop();
+    RUVIA_CHECK(inherited.stop_token_.stop_requested());
+    RUVIA_CHECK(!replaced.stop_token_.stop_requested());
+    RUVIA_CHECK(replaced.timeout_ == std::chrono::milliseconds(20));
+    replacement.request_stop();
+    RUVIA_CHECK(replaced.stop_token_.stop_requested());
+
+    ruvia::stop_token retired;
+    {
+        ruvia::stop_source source;
+        retired = source.token();
+    }
+    auto disabled = ruvia::override_operation_options(original, {.stop_token_ = retired});
+    RUVIA_CHECK(disabled.stop_token_ == retired);
+    RUVIA_CHECK(!disabled.stop_token_.stoppable());
 }

@@ -55,7 +55,6 @@ public:
 
     // http2_client_session handler.
     void on_http2_event(http2_event& event);
-    void on_http2_data_drained(std::uint32_t stream_id) noexcept;
     void on_http2_failure(const client_transport_result& transport, std::exception_ptr failure) noexcept;
 
 private:

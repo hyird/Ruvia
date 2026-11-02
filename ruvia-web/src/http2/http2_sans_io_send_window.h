@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <string_view>
-#include <type_traits>
 
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
@@ -18,9 +17,9 @@ enum class http2_send_window_wait_status : std::uint8_t {
     aborted,
 };
 
-// Wait until the HTTP core no longer owns queued DATA for this stream. The
-// Web-owned signal is only a wakeup edge; stream existence, abort, session end,
-// and queue state are re-checked together after every wake.
+// Wait for payload window availability. Input processing wakes the Web-owned
+// signal even when SETTINGS/WINDOW_UPDATE produces no application event.
+// Stream existence, abort and session end are re-checked after every wake.
 [[nodiscard]] task<http2_send_window_wait_status> await_http2_send_window(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
     http2_sans_io_stream_signal* signal, const bool* aborted = nullptr);
@@ -35,9 +34,9 @@ enum class http2_stream_data_write_status : std::uint8_t {
     content_length_incomplete,
 };
 
-// Splits caller-owned bytes into credit-sized submissions. Empty input still
-// submits one DATA frame; only the last slice receives the requested ending.
-// The caller keeps the bytes alive until the task completes.
+// Submits caller-owned input with a credit-sized payload allowance, retaining
+// each unconsumed suffix until window and output credit are available.
+// Empty END_STREAM bypasses payload credit. The caller keeps bytes alive.
 [[nodiscard]] task<http2_stream_data_write_status> write_http2_stream_data(
     ruvia::http2_connection& connection, std::uint32_t stream_id,
     http2_sans_io_stream_signal* signal, worker_signal& write_signal,

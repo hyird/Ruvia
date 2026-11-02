@@ -43,14 +43,13 @@ struct http2_client_session_start_result final {
     return {.status_ = client_transport_status::io_failed, .error_ = std::make_error_code(std::errc::protocol_error)};
 }
 
-// The handler owns the stream semantics above the connection: it consumes every
-// event, is told when queued DATA of a stream drained, and observes the single
-// terminal failure of each started generation (EOF included).
+// The handler owns stream semantics above the connection: it consumes every
+// application event and observes each generation's terminal failure. Payload
+// producers wait on state_signal(), also notified for SETTINGS/WINDOW_UPDATE.
 template <typename handler_type>
-concept http2_client_session_handler = requires(handler_type& handler, http2_event& event, std::uint32_t stream_id,
+concept http2_client_session_handler = requires(handler_type& handler, http2_event& event,
     const client_transport_result& transport, std::exception_ptr failure) {
     handler.on_http2_event(event);
-    { handler.on_http2_data_drained(stream_id) } noexcept;
     { handler.on_http2_failure(transport, failure) } noexcept;
 };
 
@@ -190,7 +189,7 @@ public:
     void wake_writer() noexcept {
         write_signal_.notify();
     }
-    // Notified on every state transition, completed write and drained event.
+    // Notified after every input batch, state transition and completed write.
     [[nodiscard]] worker_signal& state_signal() noexcept {
         return state_signal_;
     }
@@ -250,9 +249,6 @@ private:
     void drain() {
         while (auto event = connection_->next_event()) {
             handler_.on_http2_event(*event);
-        }
-        for (const auto stream_id : connection_->take_drained_data_streams()) {
-            handler_.on_http2_data_drained(stream_id);
         }
         if (connection_->wants_write()) {
             write_signal_.notify();

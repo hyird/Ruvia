@@ -145,6 +145,157 @@ RUVIA_TEST(db_repository_wildcard_projection_preserves_unknown_cte_columns_and_d
 }
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
+RUVIA_TEST(db_repository_scalar_results_own_text_across_reads_and_returning) {
+    const std::string first(192, 'a');
+    const std::string second(256, 'b');
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle,
+        {{.column_ = "name", .rows_ = {first}},
+            {.column_ = "name", .rows_ = {first, second}},
+            {.column_ = "name", .rows_ = {second}, .command_ = "UPDATE 1"},
+            {.column_ = "name", .rows_ = {second, first}, .command_ = "DELETE 2"},
+            {.column_ = "name", .rows_ = {"raw"}},
+            {.column_ = "name", .rows_ = {}}});
+    repository_runtime runtime;
+    db_client client(runtime.attachment_.loop(), peer.config());
+    test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
+        auto repository = connected.handle().repository<entity_type>();
+        auto read = repository.query_builder("i");
+        read.select({"name"});
+        const auto one = co_await read.get_scalar<std::pmr::string>();
+        const auto many = co_await read.get_scalars<string>();
+        auto update = repository.update_builder();
+        update.set("name", second).where(entity_type::column<"id">() == 1).returning({"name"});
+        const auto returned_one = co_await update.get_scalar<string>();
+        auto remove = repository.delete_builder();
+        remove.where(entity_type::column<"id">() > 0).returning({"name"});
+        const auto returned_many = co_await remove.get_scalars<std::pmr::string>();
+        {
+            const auto raw = co_await read.get_raw_many();
+            RUVIA_CHECK_EQ(raw.size(), std::size_t{1});
+            if (!raw.empty()) {
+                RUVIA_CHECK_EQ(raw.front()["name"].as<std::string_view>().value_or(""), "raw");
+            }
+        }
+        RUVIA_CHECK(!(co_await read.get_scalar<std::pmr::string>()).has_value());
+        // Each mapped query has released its raw rows, and later queries have
+        // reused the connection. All mapped strings must still own their data.
+        RUVIA_CHECK(one.has_value());
+        if (one) {
+            RUVIA_CHECK_EQ(std::string_view(*one), first);
+        }
+        RUVIA_CHECK_EQ(many.size(), std::size_t{2});
+        if (many.size() == 2) {
+            RUVIA_CHECK_EQ(many[0].view(), first);
+            RUVIA_CHECK_EQ(many[1].view(), second);
+        }
+        RUVIA_CHECK(returned_one.has_value());
+        if (returned_one) {
+            RUVIA_CHECK_EQ(returned_one->view(), second);
+        }
+        RUVIA_CHECK_EQ(returned_many.size(), std::size_t{2});
+        if (returned_many.size() == 2) {
+            RUVIA_CHECK_EQ(std::string_view(returned_many[0]), second);
+            RUVIA_CHECK_EQ(std::string_view(returned_many[1]), first);
+        }
+    });
+}
+
+using nullable_text_array = std::pmr::vector<std::optional<std::pmr::string>>;
+RUVIA_DB_ENTITY(array_entity, "array_items",
+    db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
+    db_column<"values", nullable_text_array>)
+RUVIA_DB_PROJECTION(array_projection,
+    db_column<"values", std::pmr::vector<std::optional<string>>>)
+
+RUVIA_TEST(db_repository_array_results_own_tokens_in_scalars_entities_and_projections) {
+    const std::string long_text(256, 'x');
+    const auto array_text = "{\"" + long_text + "\",NULL,\"NULL\",\"comma,quote\\\"slash\\\\\",\"\"}";
+    test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+        test::backend_startup_peer::after_startup::idle,
+        {{.column_ = "values", .rows_ = {array_text}},
+            {.column_ = "values", .rows_ = {array_text, "{}"}},
+            {.column_ = "values", .rows_ = {array_text}, .command_ = "UPDATE 1"},
+            {.column_ = "values", .rows_ = {array_text, "{}"}, .command_ = "DELETE 2"},
+            {.column_ = "values", .rows_ = {array_text}},
+            {.column_ = "values", .rows_ = {array_text}},
+            {.column_ = "values", .rows_ = {array_text}}});
+    repository_runtime runtime;
+    db_client client(runtime.attachment_.loop(), peer.config());
+    test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
+        auto repository = connected.handle().repository<array_entity>();
+        auto read = repository.query_builder("a");
+        read.select({"values"});
+        const auto one = co_await read.get_scalar<nullable_text_array>();
+        const auto many = co_await read.get_scalars<nullable_text_array>();
+        auto update = repository.update_builder();
+        update.set("id", 2).where(array_entity::column<"id">() == 1).returning({"values"});
+        const auto returned_one = co_await update.get_scalar<nullable_text_array>();
+        auto remove = repository.delete_builder();
+        remove.where(array_entity::column<"id">() > 0).returning({"values"});
+        const auto returned_many = co_await remove.get_scalars<nullable_text_array>();
+        const auto entity = co_await read.get_one();
+        const auto projection = co_await read.get_one<array_projection>();
+        bool rejected_null = false;
+        try {
+            (void)co_await read.get_scalar<std::pmr::vector<std::pmr::string>>();
+        } catch (const db_conversion_error& error) {
+            rejected_null = error.code() == db_conversion_error::code_type::invalid_format;
+        }
+        RUVIA_CHECK(rejected_null);
+        const auto check_array = [&](const nullable_text_array& values) {
+            RUVIA_CHECK_EQ(values.size(), std::size_t{5});
+            if (values.size() == 5) {
+                RUVIA_CHECK(values[0].has_value());
+                RUVIA_CHECK(!values[1].has_value());
+                RUVIA_CHECK(values[2].has_value());
+                RUVIA_CHECK(values[3].has_value());
+                RUVIA_CHECK(values[4].has_value());
+                if (values[0] && values[2] && values[3] && values[4]) {
+                    RUVIA_CHECK_EQ(std::string_view(*values[0]), long_text);
+                    RUVIA_CHECK_EQ(*values[2], "NULL");
+                    RUVIA_CHECK_EQ(*values[3], "comma,quote\"slash\\");
+                    RUVIA_CHECK(values[4]->empty());
+                }
+            }
+        };
+        RUVIA_CHECK(one.has_value());
+        if (one) {
+            check_array(*one);
+        }
+        RUVIA_CHECK_EQ(many.size(), std::size_t{2});
+        if (many.size() == 2) {
+            check_array(many[0]);
+            RUVIA_CHECK(many[1].empty());
+        }
+        RUVIA_CHECK(returned_one.has_value());
+        if (returned_one) {
+            check_array(*returned_one);
+        }
+        RUVIA_CHECK_EQ(returned_many.size(), std::size_t{2});
+        if (returned_many.size() == 2) {
+            check_array(returned_many[0]);
+            RUVIA_CHECK(returned_many[1].empty());
+        }
+        RUVIA_CHECK(entity.has_value());
+        if (entity) {
+            check_array(entity->get<"values">());
+        }
+        RUVIA_CHECK(projection.has_value());
+        if (projection) {
+            const auto& values = projection->get<"values">();
+            RUVIA_CHECK_EQ(values.size(), std::size_t{5});
+            if (values.size() == 5) {
+                RUVIA_CHECK(values[0].has_value());
+                RUVIA_CHECK(!values[1].has_value());
+                if (values[0]) {
+                    RUVIA_CHECK_EQ(values[0]->view(), long_text);
+                }
+            }
+        }
+    });
+}
+
 RUVIA_TEST(db_repository_wildcards_decode_result_names_and_reject_ambiguous_mapped_columns) {
     using reply = test::backend_startup_peer::postgres_reply;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,

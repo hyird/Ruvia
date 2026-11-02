@@ -193,6 +193,9 @@ class http1_interim_routes final {
     ruvia::task<void> cold_hints(ruvia::context& context_value) {
         auto cold = context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints));
         auto another = context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::processing));
+        if (co_await context_value.stream().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await context_value.stream().write("cold-final");
         bool rejected_after_final = false;
         try {

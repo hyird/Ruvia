@@ -54,16 +54,19 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `task<void> write(std::span<const std::byte> chunk) &` | 写入一段字节块（HTTP/1.1 自动使用 `Transfer-Encoding: chunked`，HTTP/2 使用 `DATA` 帧）；不带内容的响应头（`HEAD`、`304`）结束响应后，连接仍在时写入正常完成但不发送任何字节，连接结束后按 GET 对端中止的方式失败 |
+| `task<stream_commit_result> commit() &` | 显式提交头和 session；返回 `body` 才可生产正文，返回 `completed` 必须停止生产（HEAD、304 等正常无正文完成） |
+| `task<void> write(std::span<const std::byte> chunk) &` | 在正文阶段写入字节块（HTTP/1.1 chunked，HTTP/2 DATA）；不再隐式提交，提交前或完成后写入抛 `std::logic_error` |
 | `task<void> write(std::string_view chunk) &` | 写入一段字符串视图 |
 | `task<void> write(std::pmr::string&& chunk) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
 | `task<void> writeln(std::string_view chunk) &` | 写入文本并追加 `\n` |
-| `task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 等待指定时长；请求取消、停机，或响应已由不带内容的响应头（`HEAD`、`304`）结束时返回 `stop_requested`（后者立即返回）。HTTP/1 默认不主动检测断开；HTTP/2 流终止抛入站传输异常 |
-| `bool aborted() const noexcept` | 检查客户端连接或流是否已中止；不带内容的响应头（`HEAD`、`304`）结束响应后亦为 `true` |
+| `task<timer_sleep_result> sleep(std::chrono::milliseconds duration) &` | 仅在正文阶段等待；请求取消或停机返回 `stop_requested`，正常超时返回 `elapsed`；提交前/完成后调用抛 `std::logic_error`。HTTP/2 流终止抛传输异常 |
+| `bool aborted() const noexcept` | 只报告已观察到的真实失败/中止，正常完成（含 HEAD、304）为 `false` |
 | `stop_token cancel_on_peer_eof() &` | 显式启用读侧终止取消，返回供业务等待使用的组合 token，语义见下文 |
 | `task<void> end(std::span<const http_header_view> trailers = {}) &` | 正常结束流式响应，可选附带响应 Trailer 字段 |
 
 HTTP/2 服务端写循环直接等待 Worker 信号；没有输出时不创建额外的等待协程。
+
+提交、写入与结束共用线性输出通道；并发启动或重复提交抛 `std::logic_error`。头提交前的失败仍可替换为缓冲错误响应，提交后的失败不能再发送第二个响应头。正常无正文完成不通过异常控制流、不停止取消 token、不伪造成功写入；中间件后置代码仍正常执行。响应完成与请求体消费是两个独立阶段：必要时仍须读取/排空合法请求体，HTTP/1 在提交时未消费完整请求体则按关闭计划处理，不因稍后读取而恢复复用。
 
 ---
 
@@ -76,6 +79,9 @@ RUVIA_GET("/events", stream_events);
 
 ruvia::task<void> stream_events(ruvia::context& c) {
     auto sse = c.stream_sse();
+    if (co_await sse.commit() == ruvia::stream_commit_result::completed) {
+        co_return;
+    }
     co_await sse.write({
         .data_ = "hello",
         .event_ = "greeting",
@@ -88,9 +94,10 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 | `ruvia::sse_writer` 方法 | 说明 |
 | --- | --- |
+| `task<stream_commit_result> commit()` | 与普通流相同：先检查 `body` / `completed`，再启动订阅或事件生产 |
 | `task<void> write(const sse_message& message)` | 格式化并发送一条 SSE 事件（自动处理多行 `data:` 切分与 UTF-8 校验） |
 | `task<timer_sleep_result> sleep(std::chrono::milliseconds duration)` | 挂起等待指定时长 |
-| `bool aborted() const noexcept` | 检查客户端是否已断开；`HEAD` 请求的响应头结束响应后亦为 `true` |
+| `bool aborted() const noexcept` | 只报告真实失败，正常 HEAD 完成不是取消 |
 | `stop_token cancel_on_peer_eof()` | 与 `response_stream_writer` 同名方法相同 |
 | `task<void> end(std::span<const http_header_view> trailers = {})` | 结束 SSE 流 |
 
@@ -121,6 +128,9 @@ ruvia::task<void> stream_subscription(
     ruvia::channel_receiver<std::string>& subscription,
     std::string_view initial_snapshot) {
     auto sse = c.stream_sse();
+    if (co_await sse.commit() == ruvia::stream_commit_result::completed) {
+        co_return;
+    }
     const auto stop = sse.cancel_on_peer_eof();
     co_await sse.write({.data_ = initial_snapshot, .event_ = "snapshot"});
     while (!stop.stop_requested()) {
@@ -133,7 +143,7 @@ ruvia::task<void> stream_subscription(
 }
 ```
 
-在 handler 中持有订阅的 RAII owner 并 `co_await stream_subscription(...)`；返回后销毁订阅。若已有额外取消源，使用 `combine_stop_tokens(stop, extra_stop)` 后传给同一个等待。不要调用 Worker 的停止入口来取消单个 SSE。可运行的基本用法见 [streaming.cpp](../examples/web/streaming.cpp)。
+在 handler 中持有订阅的 RAII owner 并 `co_await stream_subscription(...)`；返回后销毁订阅。已有额外取消源时声明 `ruvia::stop_group group{stop, extra_stop};`，把 `group.token()` 传给等待，并让 group 存活到等待及取消后的 join 完成。不要用临时 group 返回 token，也不要停止整个 Worker 来取消单个 SSE。可运行示例见 [streaming.cpp](../examples/web/streaming.cpp)。
 
 ---
 
@@ -144,12 +154,12 @@ ruvia::task<void> stream_subscription(
 | `ruvia::context` / `context_request` 方法 | 适用协议与说明 |
 | --- | --- |
 | `co_await c.inform(const http_interim_response_head& response)` | 在最终响应头提交前发送 `1xx` 临时响应（如 `103 Early Hints`：`http_interim_response_head(http_status::early_hints, headers)`） |
-| `c.priority(http_priority_fields{.urgency_ = 2, .incremental_ = true})` | 设置 RFC 9218 `Priority` 响应优先级；通过 `c.req().priority()` 读取客户端请求优先级 |
+| `c.draft().priority(http_priority_fields{.urgency_ = 2, .incremental_ = true})` | 设置当前响应优先级；跨替换策略用 `c.policy().priority(...)`，客户端请求优先级用 `c.req().priority()` |
 | `bool c.push(http_push_request_view request)` | （HTTP/2）向开启了 Server Push 的客户端推送关联资源，同步返回 `bool` 表示是否被接纳；对端禁用推送，或已打开的推送流（不含仅预留的推送）已达到对端 `SETTINGS_MAX_CONCURRENT_STREAMS`（包括其为 0）时返回 `false`，不发送 `PUSH_PROMISE`；已预留的推送在提交响应头时仍无并发额度则以 `RST_STREAM(CANCEL)` 取消，不视为连接失败 |
 | `void c.advertise_origins(std::span<const std::string_view> origins)` | （HTTP/2）在连接上排入 RFC 8336 `ORIGIN` 帧，通告当前连接可合并服务的权威源集合 |
 | `void c.advertise_alternative_service(std::string_view value)` | （HTTP/2）在连接上排入 RFC 7838 `ALTSVC` 帧通告替代服务 |
 | `c.req().trailers()` / `c.req().trailer(name)` | 在流式请求体读取到 EOF 后，读取客户端发送的请求 Trailer 首部；按 RFC 9110 §6.5.1 不允许出现在 Trailer 中的字段（如 `Content-Length`、`Cache-Control`）被丢弃而不导致请求失败，也不会并入请求头 |
-| `co_await stream.end(trailers)` | 在流式响应结束时发送响应 Trailer 首部（需在写出首块前声明 `c.header("Trailer", "...")`） |
+| `co_await stream.end(trailers)` | 在正文阶段结束响应并发送 Trailer；须在 commit 前声明 `c.draft().header("Trailer", "...")`，completed 结果不生产 trailers |
 
 ---
 

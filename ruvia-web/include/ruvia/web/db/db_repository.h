@@ -292,7 +292,7 @@ struct db_map_raw_rows final {
         return std::move(rows);
     }
 };
-template <typename scalar_type>
+template <db_mapped_value scalar_type>
 struct db_map_scalar final {
     std::optional<scalar_type> operator()(db_rows&& rows, std::pmr::memory_resource* resource) const {
         if (rows.empty() || !rows.front()[std::size_t{0}].value()) {
@@ -303,7 +303,7 @@ struct db_map_scalar final {
         return out;
     }
 };
-template <typename scalar_type>
+template <db_mapped_value scalar_type>
 struct db_map_scalars final {
     std::pmr::vector<scalar_type> operator()(db_rows&& rows, std::pmr::memory_resource* resource) const {
         std::pmr::vector<scalar_type> result(pmr_resource_or_default(resource));
@@ -916,7 +916,9 @@ public:
         return executor_.template query_mapped<std::pair<entity_rows<output_type>, db_rows>>(
             target_query, detail::db_map_raw_and_entities<output_type>{std::move(mapper)});
     }
-    template <typename scalar_type>
+    // Scalars own all decoded data; get_scalar returns nullopt for no row or
+    // SQL NULL, while get_scalars rejects NULL rows. Arrays remain one-dimensional.
+    template <db_mapped_value scalar_type>
     [[nodiscard]] task<std::optional<scalar_type>> get_scalar() const {
         auto active_query = effective_query();
         auto query = (active_query ? *active_query : query_).clone(query_.resource());
@@ -924,7 +926,7 @@ public:
         query.copy_cache(query_, detail::db_cache_shape::one);
         return executor_.template query_mapped<std::optional<scalar_type>>(query, detail::db_map_scalar<scalar_type>{});
     }
-    template <typename scalar_type>
+    template <db_mapped_value scalar_type>
     [[nodiscard]] task<std::pmr::vector<scalar_type>> get_scalars() const {
         auto active_query = effective_query();
         const auto& target_query = active_query ? *active_query : query_;
@@ -1412,7 +1414,8 @@ public:
         }
         return executor_.template query_mapped<db_rows>(query_, detail::db_map_raw_rows{});
     }
-    template <typename scalar_type>
+    // RETURNING uses the same owning value and NULL contract as read scalars.
+    template <db_mapped_value scalar_type>
     [[nodiscard]] task<std::optional<scalar_type>> get_scalar() const {
         validate();
         if (!query_.returns_rows()) {
@@ -1420,7 +1423,7 @@ public:
         }
         return executor_.template query_mapped<std::optional<scalar_type>>(query_, detail::db_map_scalar<scalar_type>{});
     }
-    template <typename scalar_type>
+    template <db_mapped_value scalar_type>
     [[nodiscard]] task<std::pmr::vector<scalar_type>> get_scalars() const {
         validate();
         if (!query_.returns_rows()) {

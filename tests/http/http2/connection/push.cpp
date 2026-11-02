@@ -26,7 +26,7 @@ void submit_buffered_response(
     RUVIA_CHECK(std::holds_alternative<ruvia::http_buffered_response_write_plan>(head));
     if (const auto* plan = std::get_if<ruvia::http_buffered_response_write_plan>(&head)) {
         if (plan->send_body()) {
-            RUVIA_CHECK(server.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream) == ruvia::http2_data_submit_status::accepted);
+            RUVIA_CHECK(server.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ == ruvia::http2_data_submit_status::complete);
         }
     }
 }
@@ -336,7 +336,7 @@ RUVIA_TEST(http2_push_reservation_does_not_consume_peer_concurrency_until_respon
     RUVIA_CHECK(std::holds_alternative<ruvia::http2_response_head_submit_error>(second_blocked) &&
                 std::get<ruvia::http2_response_head_submit_error>(second_blocked) ==
                     ruvia::http2_response_head_submit_error::peer_stream_limit_reached);
-    RUVIA_CHECK(server.submit_data(std::get<0>(first).stream_id(), {}, ruvia::http2_end_stream::end_stream) == ruvia::http2_data_submit_status::accepted);
+    RUVIA_CHECK(server.submit_data(std::get<0>(first).stream_id(), {}, ruvia::http2_end_stream::end_stream, 65535).status_ == ruvia::http2_data_submit_status::complete);
     RUVIA_CHECK(std::holds_alternative<ruvia::http_response_stream_commit_plan>(server.submit_streaming_response_head(std::get<0>(second).stream_id(), ruvia::http_response{})));
 }
 

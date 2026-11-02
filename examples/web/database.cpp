@@ -91,7 +91,7 @@ private:
         co_await load_user_found(c, found);
         std::pmr::string body(c.allocator<char>());
         body.append(found ? "found\n" : "not found\n");
-        c.status(found ? ruvia::http_status::ok : ruvia::http_status::not_found);
+        c.draft().status(found ? ruvia::http_status::ok : ruvia::http_status::not_found);
         co_return c.text(std::move(body));
     }
 
@@ -109,7 +109,7 @@ private:
         body.append("created id=");
         append_unsigned(body, id);
         body.push_back('\n');
-        c.status(ruvia::http_status::created);
+        c.draft().status(ruvia::http_status::created);
         co_return c.text(std::move(body));
     }
 

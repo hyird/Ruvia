@@ -28,7 +28,7 @@ class configured_by_type final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
-        c.header("X-Config", level == 2 ? "two" : "other");
+        c.edit_response().header("X-Config", level == 2 ? "two" : "other");
     }
 };
 
@@ -37,7 +37,7 @@ class plain_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
-        c.header("X-Plain", "on");
+        c.edit_response().header("X-Plain", "on");
     }
 };
 
@@ -77,7 +77,7 @@ class configured_by_two_values final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
-        c.header("X-Config-Pair", a == 10 && b == 1000 ? "ok" : "bad");
+        c.edit_response().header("X-Config-Pair", a == 10 && b == 1000 ? "ok" : "bad");
     }
 };
 
@@ -86,7 +86,7 @@ public:
 class response_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next&) {
-        c.status(ruvia::http_status::accepted);
+        c.draft().status(ruvia::http_status::accepted);
         c.respond(c.text("returned by middleware"));
         co_return;
     }
@@ -194,7 +194,7 @@ RUVIA_TEST(route_rate_limit_rejection_reaches_the_error_handler) {
     app.on_error([counter = &calls](ruvia::context& c,
                      ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         ++*counter;
-        c.status(error.status());
+        c.draft().status(error.status());
         co_return c.text(error.code());
     });
     for (int i = 0; i < 10; ++i) {

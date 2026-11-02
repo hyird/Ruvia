@@ -8,8 +8,8 @@
 
 RUVIA_TEST(health_responses_use_context_response_state) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context_value) -> ruvia::task<void> {
-        context_value.header("X-Trace", "health");
-        context_value.set_cookie({.name_ = "probe", .value_ = "ok"});
+        context_value.draft().header("X-Trace", "health");
+        context_value.draft().set_cookie({.name_ = "probe", .value_ = "ok"});
 
         const auto response = ruvia::make_health_response(context_value);
         RUVIA_CHECK_EQ(response.status(), ruvia::http_status::ok);
@@ -34,7 +34,7 @@ RUVIA_TEST(readiness_response_defaults_to_ready) {
 
 RUVIA_TEST(readiness_response_keeps_explicit_failure_status) {
     (void)context_request_test::with_context(ruvia::test_request::get("/"), [&](ruvia::context& context_value) -> ruvia::task<void> {
-        context_value.status(ruvia::http_status::created);
+        context_value.draft().status(ruvia::http_status::created);
 
         const auto response =
             ruvia::make_readiness_response(context_value, {

@@ -2,6 +2,7 @@
 
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response_stream.h"
+#include "ruvia/web/streaming.h"
 
 // Streaming response sink for the sans-I/O HTTP/2 session (ruvia-web).
 //
@@ -11,9 +12,7 @@
 // and end() closes the stream. The shared dispatch_response_stream_with machinery calls
 // these via the response_stream*Thunk<Sink> function pointers, so the method set matches.
 //
-// Backpressure: a window-blocked submit parks on the stream's signal until the
-// session's reader reports the core drained the remainder (take_drained_data_streams), so
-// a slow consumer stalls the producer instead of growing the out-buffer without bound.
+// Backpressure is driven by partial DATA consumption and the transport budget.
 // Trailers are submitted semantically to the HTTP core, which owns their protocol bytes.
 
 #include <algorithm>
@@ -77,19 +76,25 @@ public:
     }
     const http_response_stream_commit_plan* commit_plan() const&& = delete;
 
-    // A completed body-suppressed head (HEAD / 304) can deliver nothing more,
-    // so it reads as aborted and a handler loop polling aborted() ends.
     [[nodiscard]] bool aborted() const noexcept {
-        return state_.aborted() || state_.body_suppressed_complete() ||
-               connection_.stream_aborted(stream_id_) || stream_signal_.terminated();
+        return state_.aborted() || (!state_.ended() &&
+                                       (connection_.stream_aborted(stream_id_) || stream_signal_.terminated()));
     }
 
     [[nodiscard]] stop_token cancel_on_peer_eof() {
         auto token = stream_signal_.terminal_stop_token();
-        if (state_.body_suppressed_complete() || connection_.stream_aborted(stream_id_)) {
+        if (connection_.stream_aborted(stream_id_)) {
             stream_signal_.stop();
         }
         return token;
+    }
+
+    task<stream_commit_result> commit() {
+        if (state_.committed()) {
+            throw std::logic_error("response stream is already committed");
+        }
+        co_await commit_head(http_response_trailer_intent::none);
+        co_return state_.ended() ? stream_commit_result::completed : stream_commit_result::body;
     }
 
     void bind_context(context* context_value) {
@@ -102,41 +107,12 @@ public:
     }
 
     task<void> write(std::string_view chunk) {
-        if (state_.body_suppressed_complete()) {
-            // Same discarded write as the HTTP/1 sink: a body-suppressed head
-            // already completed the response (HEAD, 304), so the write succeeds
-            // without sending -- but only while the connection and the stream
-            // live. Once either is gone it fails exactly as a GET write does,
-            // so a handler that never checks aborted() still ends. The minimal
-            // positive tick (a zero duration is await_ready) still suspends, so
-            // a handler that keeps writing in a loop yields the worker thread
-            // instead of hard-spinning the event loop.
-            throw_if_terminated();
-            if (connection_.stream_aborted(stream_id_)) {
-                throw inbound_transport_error(
-                    std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
-            }
-            // Connection termination stops the tick and fails the write.
-            (void)co_await sleep_for(write_signal_.worker(), std::chrono::steady_clock::duration(1),
-                stream_signal_.termination().token());
-            throw_if_terminated_during_sleep();
-            co_return;
-        }
         throw_if_terminated();
         throw_if_body_failed();
+        state_.ensure_body_allowed();
         if (chunk.empty()) {
             co_return;
         }
-        if (!state_.committed()) {
-            co_await commit(http_response_trailer_intent::none);
-            if (state_.body_suppressed_complete()) {
-                // The head just ended a body-suppressed response: the chunk is
-                // the body a GET would carry and is discarded.
-                co_return;
-            }
-        }
-        throw_if_body_failed();
-        state_.ensure_body_allowed();
         if (compression_.active()) {
             constexpr std::size_t input_chunk_bytes = http2_data_output_credit_bytes;
             std::size_t offset = 0;
@@ -189,13 +165,11 @@ public:
     }
 
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
-        if (state_.body_suppressed_complete()) {
-            co_return timer_sleep_result::stop_requested;
-        }
+        state_.ensure_body_allowed();
         // Connection termination wakes the sleep through the combined token and
         // then fails it; the caller's own stop still reports stop_requested.
-        const auto result = co_await sleep_for(write_signal_.worker(), duration,
-            combine_stop_tokens(stop_token_value, stream_signal_.termination().token()));
+        const stop_group stop_owner(stop_token_value, stream_signal_.termination().token());
+        const auto result = co_await sleep_for(write_signal_.worker(), duration, stop_owner.token());
         throw_if_terminated_during_sleep();
         if (connection_.stream_aborted(stream_id_)) {
             throw inbound_transport_error(
@@ -205,13 +179,6 @@ public:
     }
 
     task<void> end(std::span<const http_header_view> trailers) {
-        if (state_.body_suppressed_complete()) {
-            // Trailers are optional metadata (RFC 9110 6.5) that a
-            // body-suppressed response cannot carry: validated like any
-            // trailer section, then discarded.
-            static_cast<void>(validate_http_response_trailers(trailers));
-            co_return;
-        }
         // An empty terminal call is idempotent once our END_STREAM is already
         // committed locally; a later session/stream termination must not turn
         // dispatch cleanup into a transport failure.
@@ -229,7 +196,7 @@ public:
         // Preflight through the HTTP-owned result before committing the initial
         // response head. The typed section carries that proof to finish_response.
         if (!state_.committed()) {
-            co_await commit(trailer_intent);
+            co_await commit_head(trailer_intent);
         }
         throw_if_body_failed();
         if (state_.ended()) {
@@ -261,23 +228,12 @@ public:
             state_.mark_aborted();
             throw inbound_transport_error(std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream reset");
         }
-        if (result_value == http2_finish_status::queued) {
-            const auto wait_result =
-                co_await await_http2_send_window(connection_, stream_id_, &stream_signal_);
-            if (wait_result == http2_send_window_wait_status::aborted) {
-                state_.mark_aborted();
-                throw inbound_transport_error(stream_signal_.terminated() ? stream_signal_.terminal_error() : std::make_error_code(std::errc::connection_reset), "HTTP/2 response stream aborted");
-            }
-        }
         state_.mark_ended();
-        if (state_.body_suppressed_complete()) {
-            stream_signal_.stop();
-        }
     }
 
 private:
     // Callers check committed() before constructing this head-commit task.
-    task<void> commit(http_response_trailer_intent trailer_intent) {
+    task<void> commit_head(http_response_trailer_intent trailer_intent) {
         throw_if_terminated();
         throw_if_body_failed();
         try {
@@ -319,10 +275,6 @@ private:
                 state_.mark_aborted();
             }
             throw;
-        }
-        if (state_.body_suppressed_complete()) {
-            // The head ended the response; waits on the peer-EOF token end now.
-            stream_signal_.stop();
         }
     }
 

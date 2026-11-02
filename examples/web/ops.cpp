@@ -61,7 +61,10 @@ private:
     }
 
     ruvia::task<void> fail_after_head(ruvia::context& c) {
-        co_await c.stream_text().write("the response has already started\n");
+        if (co_await c.stream_text().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await c.stream().write("the response has already started\n");
         throw std::runtime_error("example streaming producer failed");
     }
 

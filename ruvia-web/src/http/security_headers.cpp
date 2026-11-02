@@ -1,7 +1,6 @@
 #include "ruvia/web/security_headers.h"
 
 #include <stdexcept>
-#include <type_traits>
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
@@ -13,9 +12,6 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] bool has_security_header(context& context_value, std::string_view name) {
-    return detail::context_access::has_response_header(context_value, name);
-}
 constexpr std::string_view content_security_policy_name = "Content-Security-Policy";
 constexpr std::string_view referrer_policy_name = "Referrer-Policy";
 constexpr std::string_view permissions_policy_name = "Permissions-Policy";
@@ -124,27 +120,14 @@ struct security_headers_policy final {
     return {header.name(), header.value()};
 }
 
-template <typename target_type, typename header_range_type>
-void apply_security_headers_to(target_type& target, const security_headers_policy& policy,
-    const header_range_type& custom_headers, bool secure_transport) {
+void apply_security_headers_to(context& target, const security_headers_policy& policy,
+    const std::pmr::vector<http_header>& custom_headers, bool secure_transport) {
     const auto set_header = [&target, replace_existing = policy.flags_.replace_existing_](
                                 std::string_view name, std::string_view value, bool skip_empty) {
         if (skip_empty && value.empty()) {
             return;
         }
-        if constexpr (std::is_same_v<target_type, http_response>) {
-            if (const auto existing = target.header(name)) {
-                if (!replace_existing || *existing == value) {
-                    return;
-                }
-            }
-            target.header_stable_view(name, value);
-        } else {
-            if (!replace_existing && has_security_header(target, name)) {
-                return;
-            }
-            detail::context_access::set_stable_response_header(target, name, value);
-        }
+        detail::context_access::security_header(target, name, value, replace_existing);
     };
     const auto set_secure_transport_header = [&set_header, secure_transport](
                                                  std::string_view name, std::string_view value) {
@@ -239,10 +222,6 @@ task<void> security_headers_middleware::handle(context& context_value, next& nex
     };
     apply_security_headers_to(context_value, policy, custom_headers_, secure_transport);
     co_await next_value();
-    if (!detail::context_access::output_committed(context_value)) {
-        apply_security_headers_to(detail::context_access::response_storage(context_value), policy,
-            custom_headers_, secure_transport);
-    }
 }
 
 }  // namespace ruvia

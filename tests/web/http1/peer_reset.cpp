@@ -82,14 +82,17 @@ class peer_reset_routes final {
     // Pauses past idle_timeout, so the server closes the connection before the
     // second write starts.
     ruvia::task<void> idle_stream(ruvia::context& c) {
-        co_await c.stream_text().write("first");
+        if (co_await c.stream_text().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await c.stream().write("first");
         (void)co_await ruvia::sleep_for(c.worker(), idle_timeout + 500ms);
-        co_await c.stream_text().write("second");
+        co_await c.stream().write("second");
         handlers_finished.fetch_add(1);
     }
 
     ruvia::task<void> head_only(ruvia::context& c) {
-        c.status(ruvia::http_status::no_content);
+        c.draft().status(ruvia::http_status::no_content);
         // A local timeout guarantees a closed socket; a peer RST alone need
         // not make the first small write fail on every supported transport.
         (void)co_await ruvia::sleep_for(c.worker(), idle_timeout + 500ms);
@@ -107,7 +110,7 @@ class peer_reset_routes final {
 
 ruvia::task<ruvia::http_response> count_error(ruvia::context& c, ruvia::http_error_info error) {
     error_handler_calls.fetch_add(1);
-    c.status(error.status());
+    c.draft().status(error.status());
     co_return c.text("error");
 }
 

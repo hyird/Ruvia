@@ -27,6 +27,7 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/middleware.h"
+#include "ruvia/web/security_headers.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/session.h"
 #include "ruvia/web/streaming.h"
@@ -92,7 +93,7 @@ public:
 
 std::atomic<int> head_loop_writes{0};
 std::atomic<bool> head_loop_aborted{false};
-std::atomic<bool> head_loop_sleep_stopped{false};
+std::atomic<bool> head_loop_sleep_rejected{false};
 std::atomic<bool> head_loop_token_stopped{false};
 std::atomic<bool> head_loop_completed{false};
 std::atomic<bool> naive_loop_failed{false};
@@ -118,6 +119,7 @@ public:
 class response_policy_routes final {
     RUVIA_ROUTES_BEGIN(response_policy_routes)
     RUVIA_GET("/policy-stream", stream);
+    RUVIA_GET("/policy-secure-stream", stream, ruvia::security_headers_middleware);
     RUVIA_GET("/policy-trailer-stream", trailer_stream);
     RUVIA_GET("/policy-plain", plain);
     RUVIA_GET("/policy-head-loop", head_loop);
@@ -134,33 +136,53 @@ class response_policy_routes final {
     RUVIA_ROUTES_END
 
     ruvia::task<void> stream(ruvia::context& context_value) {
+        if (context_value.req().query("fail").has_value()) {
+            context_value.draft().header("Content-Range", "bytes 0-2/10");
+            throw ruvia::http_error({.status_ = ruvia::http_status::conflict});
+        }
+        if (co_await context_value.stream().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await context_value.stream().write("chunk");
     }
 
-    // An SSE-style loop that only aborted() ends. After a HEAD every write
-    // succeeds without sending, and sleep() and the peer-EOF token report the
-    // finished response.
+    // 完成态不是取消：不启动正文生产，误用 write/sleep 必须明确拒绝。
     ruvia::task<void> head_loop(ruvia::context& context_value) {
-        auto& output = context_value.stream_text();
-        int writes = 0;
-        while (!output.aborted() && writes < 100) {
-            ++writes;
-            co_await output.write("tick");
+        if (context_value.req().query("not-modified").has_value()) {
+            context_value.draft().status(ruvia::http_status::not_modified);
         }
-        co_await output.writeln("late");
-        head_loop_writes.store(writes);
+        auto& output = context_value.stream_text();
+        const auto token = context_value.stop_token();
+        const auto phase = co_await output.commit();
+        if (phase == ruvia::stream_commit_result::body) {
+            co_await output.write("tick");
+            head_loop_writes.store(1);
+        } else {
+            head_loop_writes.store(-1);
+            try {
+                co_await output.write("late");
+            } catch (const std::logic_error&) {
+                head_loop_writes.store(0);
+            }
+            try {
+                static_cast<void>(co_await output.sleep(std::chrono::seconds(10)));
+            } catch (const std::logic_error&) {
+                head_loop_sleep_rejected.store(true);
+            }
+        }
         head_loop_aborted.store(output.aborted());
-        head_loop_token_stopped.store(output.cancel_on_peer_eof().stop_requested());
-        head_loop_sleep_stopped.store(
-            co_await output.sleep(std::chrono::seconds(10)) == ruvia::timer_sleep_result::stop_requested);
+        head_loop_token_stopped.store(token.stop_requested());
         co_await output.end();
         head_loop_completed.store(true);
     }
 
-    // A naive SSE loop that never checks aborted() or a sleep result: only a
-    // failing write ends it. The cap only keeps a regression from hanging.
+    // 即使没有轮询 aborted，显式提交结果也在循环开始前结束 HEAD。
     ruvia::task<void> head_naive(ruvia::context& context_value) {
         auto& output = context_value.stream_text();
+        if (co_await output.commit() == ruvia::stream_commit_result::completed) {
+            naive_loop_finished.store(true);
+            co_return;
+        }
         try {
             for (int i = 0; i < 1000; ++i) {
                 co_await output.write("tick");
@@ -177,16 +199,17 @@ class response_policy_routes final {
     ruvia::task<void> head_read_after_write(ruvia::context& context_value) {
         auto& output = context_value.stream_text();
         try {
-            co_await output.write("first");
-            static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(20)));
+            const auto phase = co_await output.commit();
+            if (phase == ruvia::stream_commit_result::body) {
+                co_await output.write("first");
+            }
             const auto body = co_await context_value.req().text();
             {
                 std::lock_guard lock(read_after_write_mutex);
                 read_after_write_body.assign(body);
             }
-            for (int i = 0; i < 1000; ++i) {
+            if (phase == ruvia::stream_commit_result::body) {
                 co_await output.write("tick");
-                static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(10)));
             }
         } catch (...) {
             read_after_write_failed.store(true);
@@ -198,7 +221,10 @@ class response_policy_routes final {
 
     ruvia::task<void> trailer_stream(ruvia::context& context_value) {
         auto& output = context_value.stream_text();
-        context_value.header("Trailer", "X-Complete");
+        context_value.draft().header("Trailer", "X-Complete");
+        if (co_await output.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await output.write("body");
         const std::array<ruvia::http_header_view, 1> trailers{{{"X-Complete", "yes"}}};
         co_await output.end(trailers);
@@ -368,11 +394,8 @@ RUVIA_TEST(http1_head_falls_back_to_response_stream_get_routes) {
     RUVIA_CHECK(lower_head(websocket_output).find("\r\nallow: get, options") != std::string::npos);
 }
 
-// A completed head-only response is a success that can deliver nothing more:
-// the handler's writes and end() succeed without sending, aborted(), sleep()
-// and the peer-EOF token report the finished response at once, so the handler
-// cannot hold the keep-alive connection and the pipelined GET is answered.
-RUVIA_TEST(http1_head_only_stream_completes_writes_and_reports_aborted) {
+// 完成头后不生产正文；非法写/等待明确失败，正常完成仍不是 abort。
+RUVIA_TEST(http1_head_only_stream_completes_without_cancellation) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     const auto output = exchange(server.endpoint(),
@@ -386,17 +409,44 @@ RUVIA_TEST(http1_head_only_stream_completes_writes_and_reports_aborted) {
     RUVIA_CHECK(text.find("tick") == std::string::npos);
     RUVIA_CHECK(text.ends_with("\r\n\r\nplain"));
     RUVIA_CHECK(text.find("late") == std::string::npos);
-    RUVIA_CHECK_EQ(head_loop_writes.load(), 1);
-    RUVIA_CHECK(head_loop_aborted.load());
-    RUVIA_CHECK(head_loop_token_stopped.load());
-    RUVIA_CHECK(head_loop_sleep_stopped.load());
+    RUVIA_CHECK_EQ(head_loop_writes.load(), 0);
+    RUVIA_CHECK(!head_loop_aborted.load());
+    RUVIA_CHECK(!head_loop_token_stopped.load());
+    RUVIA_CHECK(head_loop_sleep_rejected.load());
     RUVIA_CHECK(head_loop_completed.load());
 }
 
-// The discarded writes after a HEAD succeed only while the connection lives:
-// once the client closes it, the next write of a loop that never checks
-// aborted() fails as a GET write would, and the handler ends promptly.
-RUVIA_TEST(http1_head_only_naive_loop_ends_when_the_client_closes) {
+RUVIA_TEST(http1_not_modified_stream_commit_completes_without_abort) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto output = exchange(server.endpoint(),
+        "GET /policy-head-loop?not-modified HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    RUVIA_CHECK(output.has_value());
+    RUVIA_CHECK(output.value_or("").starts_with("HTTP/1.1 304 "));
+    RUVIA_CHECK(output.value_or("").ends_with("\r\n\r\n"));
+    RUVIA_CHECK_EQ(head_loop_writes.load(), 0);
+    RUVIA_CHECK(!head_loop_aborted.load());
+    RUVIA_CHECK(!head_loop_token_stopped.load());
+}
+
+RUVIA_TEST(http1_security_policy_covers_stream_head_and_precommit_error) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    for (const auto request : {
+             "GET /policy-secure-stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+             "HEAD /policy-secure-stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+             "GET /policy-secure-stream?fail HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"}) {
+        const auto output = exchange(server.endpoint(), request);
+        RUVIA_CHECK(output.has_value());
+        RUVIA_CHECK(output.value_or("").find("X-Frame-Options: DENY\r\n") != std::string::npos);
+        RUVIA_CHECK(output.value_or("").find("Content-Range:") == std::string::npos);
+    }
+    server.finish();
+}
+
+// HEAD 在提交时完成，不等待客户端断开，也不启动无限正文循环。
+RUVIA_TEST(http1_head_only_producer_finishes_at_commit) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     for (const std::string_view request : {
@@ -419,7 +469,7 @@ RUVIA_TEST(http1_head_only_naive_loop_ends_when_the_client_closes) {
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
         RUVIA_CHECK(naive_loop_finished.load());
-        RUVIA_CHECK(naive_loop_failed.load());
+        RUVIA_CHECK(!naive_loop_failed.load());
     }
 
     read_after_write_failed.store(false);
@@ -445,7 +495,7 @@ RUVIA_TEST(http1_head_only_naive_loop_ends_when_the_client_closes) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
     RUVIA_CHECK(read_after_write_finished.load());
-    RUVIA_CHECK(read_after_write_failed.load());
+    RUVIA_CHECK(!read_after_write_failed.load());
     {
         std::lock_guard lock(read_after_write_mutex);
         RUVIA_CHECK_EQ(read_after_write_body, "hello");

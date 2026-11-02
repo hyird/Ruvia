@@ -5,6 +5,8 @@
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 
+#include "context/context_response_state.h"
+
 // A redirect target the application supplies may contain bytes that are not
 // legal in a URI-reference carried by Location; ruvia-http percent-encodes
 // exactly those and leaves an already valid URI byte for byte intact.
@@ -48,7 +50,7 @@ namespace {
 
 }  // namespace
 
-http_response context::redirect(redirect_response_options options) const {
+http_response context::redirect(redirect_response_options options) {
     const auto location = options.location_.view();
     const auto status_code = options.status_;
     if (!is_http_redirect_status(status_code)) {
@@ -64,6 +66,7 @@ http_response context::redirect(redirect_response_options options) const {
     apply_response_state(response, status_code);
     std::pmr::string encoded_location(pool());
     response.header("Location", percent_encode_uri_reference(location, encoded_location));
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 

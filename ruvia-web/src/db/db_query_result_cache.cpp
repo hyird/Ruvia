@@ -78,7 +78,9 @@ task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr:
 }
 
 task<void> remove_keys(redis_handle redis, std::pmr::vector<std::pmr::string> keys, request_io_metrics* io_metrics,
-    operation_options options) {
+    operation_options options, stop_token shutdown) {
+    stop_group cancellation{options.stop_token_, std::move(shutdown)};
+    options.stop_token_ = cancellation.token();
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_timeout deadline_value(options.timeout_);
     auto deletion = delete_key_batch(redis, keys, keys.get_allocator().resource(), options, deadline_value);
@@ -88,7 +90,10 @@ task<void> remove_keys(redis_handle redis, std::pmr::vector<std::pmr::string> ke
 }
 
 task<void> clear_keys(
-    redis_handle redis, std::pmr::string pattern, request_io_metrics* io_metrics, operation_options options) {
+    redis_handle redis, std::pmr::string pattern, request_io_metrics* io_metrics, operation_options options,
+    stop_token shutdown) {
+    stop_group cancellation{options.stop_token_, std::move(shutdown)};
+    options.stop_token_ = cancellation.token();
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_timeout deadline_value(options.timeout_);
     auto* const resource = pattern.get_allocator().resource();
@@ -127,6 +132,7 @@ db_query_cache_state::~db_query_cache_state() = default;
 
 void db_query_cache_state::close_now() noexcept {
     closed_ = true;
+    stop_.request_stop();
 }
 
 void db_query_cache_state::require_open() const {
@@ -155,6 +161,8 @@ task<db_rows> db_query_cache_state::wrap(std::optional<std::chrono::milliseconds
 // fields independently of the Redis reply and later cache operations.
 task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::milliseconds duration,
     db_cache_query database, operation_options options, operation_timeout deadline) {
+    stop_group cancellation{options.stop_token_, stop_.token()};
+    options.stop_token_ = cancellation.token();
     const auto started = std::chrono::steady_clock::now();
     std::optional<std::pmr::string> bytes_value;
     try {
@@ -228,7 +236,7 @@ task<void> db_query_cache_state::remove(
     for (const auto id : ids) {
         append_db_cache_id_keys(keys, prefix_, id);
     }
-    return remove_keys(redis_, std::move(keys), io_metrics, std::move(options));
+    return remove_keys(redis_, std::move(keys), io_metrics, std::move(options), stop_.token());
 }
 
 task<void> db_query_cache_state::clear(request_io_metrics* io_metrics, operation_options options) {
@@ -237,7 +245,7 @@ task<void> db_query_cache_state::clear(request_io_metrics* io_metrics, operation
     pattern.reserve(prefix_.size() + 1);
     pattern.append(prefix_);
     pattern.push_back('*');
-    return clear_keys(redis_, std::move(pattern), io_metrics, std::move(options));
+    return clear_keys(redis_, std::move(pattern), io_metrics, std::move(options), stop_.token());
 }
 
 }  // namespace ruvia::detail

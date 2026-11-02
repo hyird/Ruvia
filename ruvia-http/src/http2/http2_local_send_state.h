@@ -44,15 +44,6 @@ private:
     constexpr http2_local_tunnel_open() noexcept = default;
 };
 
-// END_STREAM is accepted by the core but still sits behind flow-control-blocked
-// DATA or a deferred trailer section. No further semantic submission is legal.
-class http2_local_end_stream_queued final {
-private:
-    friend class http2_local_send_state;
-
-    constexpr http2_local_end_stream_queued() noexcept = default;
-};
-
 // The terminal HEADERS or DATA carrying END_STREAM has been materialized in the
 // core-owned outbound buffer. This endpoint is now half-closed(local).
 class http2_local_end_stream_committed final {
@@ -142,16 +133,8 @@ private:
         return true;
     }
 
-    [[nodiscard]] bool queue_end_stream() noexcept {
-        if (!content_open()) {
-            return false;
-        }
-        state_ = state_type(http2_local_end_stream_queued());
-        return true;
-    }
-
     [[nodiscard]] bool commit_end_stream() noexcept {
-        if (!content_open() && end_stream_queued() == nullptr) {
+        if (!content_open()) {
             return false;
         }
         state_ = state_type(http2_local_end_stream_committed());
@@ -196,11 +179,6 @@ public:
     }
     [[nodiscard]] constexpr const http2_local_tunnel_open* tunnel_open() const&& = delete;
 
-    [[nodiscard]] constexpr const http2_local_end_stream_queued* end_stream_queued() const& noexcept {
-        return std::get_if<http2_local_end_stream_queued>(&state_);
-    }
-    [[nodiscard]] constexpr const http2_local_end_stream_queued* end_stream_queued() const&& = delete;
-
     [[nodiscard]] constexpr const http2_local_end_stream_committed* end_stream_committed()
         const& noexcept {
         return std::get_if<http2_local_end_stream_committed>(&state_);
@@ -220,7 +198,7 @@ private:
 
     using state_type = std::variant<http2_local_head_pending, http2_local_request_content_open,
         http2_local_response_content_open, http2_local_connect_pending, http2_local_tunnel_open,
-        http2_local_end_stream_queued, http2_local_end_stream_committed, http2_stream_aborted>;
+        http2_local_end_stream_committed, http2_stream_aborted>;
 
     state_type state_;
 };

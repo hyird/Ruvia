@@ -383,9 +383,9 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
     return result_value;
 }
 
-http2_data_submit_status http2_connection::submit_data(
-    std::uint32_t stream_id, std::string_view bytes_value, http2_end_stream end_stream) {
-    const auto result_value = impl_->connection_.submit_data(stream_id, bytes_value, end_stream);
+http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id,
+    std::string_view bytes_value, http2_end_stream end_stream, std::size_t max_payload_bytes) {
+    const auto result_value = impl_->connection_.submit_data(stream_id, bytes_value, end_stream, max_payload_bytes);
     impl_->connection_.retry_deferred_stream_leases();
     return result_value;
 }
@@ -486,13 +486,6 @@ std::size_t http2_connection::available_request_streams(std::size_t local_limit)
     return impl_->connection_.available_local_request_streams(local_limit);
 }
 
-bool http2_connection::has_queued_data(std::uint32_t stream_id) const noexcept {
-    return impl_->connection_.has_queued_data(stream_id);
-}
-
-http2_data_queue_state http2_connection::data_queue_state(std::uint32_t stream_id) const noexcept {
-    return impl_->connection_.data_queue_state(stream_id);
-}
 std::size_t http2_connection::pending_data_output_bytes(std::uint32_t stream_id) const noexcept {
     return impl_->connection_.pending_data_output_bytes(stream_id);
 }
@@ -506,9 +499,6 @@ bool http2_connection::stream_aborted(std::uint32_t stream_id) const noexcept {
 http2_stream_receive_status http2_connection::stream_receive_status(
     std::uint32_t stream_id) const noexcept {
     return impl_->connection_.stream_receive_status(stream_id);
-}
-std::span<const std::uint32_t> http2_connection::take_drained_data_streams() & noexcept {
-    return impl_->connection_.take_drained_data_streams();
 }
 http2_server_request_release_status http2_connection::release(http2_request_head_event&& request) {
     if (request.endpoint_ == nullptr || request.stream_id_ == 0 ||

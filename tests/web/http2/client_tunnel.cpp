@@ -360,8 +360,8 @@ RUVIA_TEST(http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_i
                             "after",
                             8);
                         capsules.append("\x00\x00", 2);
-                        RUVIA_CHECK(connection.submit_data(head->stream_id(), capsules, ruvia::http2_end_stream::keep_open) ==
-                                    ruvia::http2_data_submit_status::accepted);
+                        RUVIA_CHECK(connection.submit_data(head->stream_id(), capsules, ruvia::http2_end_stream::keep_open, 65535).status_ ==
+                                    ruvia::http2_data_submit_status::complete);
                         request.emplace(std::move(*head));
                     } else if (auto* closed = event->stream_closed()) {
                         if (closed->source() == ruvia::http2_stream_close_source::peer) {
@@ -469,7 +469,7 @@ RUVIA_TEST(http2_client_half_closed_tunnel_resets_truncated_capsule_on_end_strea
                             "ab",
                             4);
                         (void)connection.submit_data(
-                            end->stream_id(), truncated, ruvia::http2_end_stream::end_stream);
+                            end->stream_id(), truncated, ruvia::http2_end_stream::end_stream, 65535);
                     } else if (auto* data = event->tunnel_data()) {
                         (void)connection.acknowledge(data->take_credit());
                     }
@@ -578,7 +578,7 @@ RUVIA_TEST(http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected_
                             end->stream_id(), std::string_view("\x00\x0a"
                                                                "ab",
                                                   4),
-                            ruvia::http2_end_stream::end_stream);
+                            ruvia::http2_end_stream::end_stream, 65535);
                         sent_truncated = true;
                     }
                 }

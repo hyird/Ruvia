@@ -162,7 +162,7 @@ websocket_client_state::operation_guard_type::~operation_guard_type() {
 websocket_client_handle websocket_client_state::handle(operation_options options) {
     lifecycle_.require_ready();
     validate_operation_options(options);
-    return websocket_client_handle(*this, lifecycle_.operation_scope(), lifecycle_.options(std::move(options)));
+    return websocket_client_handle(*this, lifecycle_.operation_scope(), std::move(options));
 }
 
 bool websocket_client_state::connected() {
@@ -198,7 +198,7 @@ websocket_client_handle websocket_client_handle::with_options(operation_options 
     validate_operation_options(options);
     registration_.require_active();
     return websocket_client_handle(
-        *state_, registration_.scope(), merge_operation_options(options_, std::move(options)));
+        *state_, registration_.scope(), override_operation_options(options_, std::move(options)));
 }
 
 task<std::optional<websocket_message>> websocket_client_handle::read() const {

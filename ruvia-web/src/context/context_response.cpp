@@ -25,18 +25,6 @@ namespace {
                         : std::string_view(reinterpret_cast<const char*>(body.data()), body.size());
 }
 
-void finalize_context_response(detail::context_response_state& state_value, http_response&& response,
-    http_response_header_transfer transfer) {
-    if (&response == &state_value.active_response()) {
-        state_value.finalize_active();
-        return;
-    }
-    if (const auto& metadata = state_value.metadata(); !metadata.headers().empty()) {
-        response.transfer_headers_from(metadata, transfer);
-    }
-    state_value.finalize(std::move(response));
-}
-
 // text() and stream_text(): plain UTF-8 text plus nosniff, so a browser never
 // sniffs application text into an active content type. An
 // X-Content-Type-Options the application set keeps its value.
@@ -49,8 +37,28 @@ void mark_plain_text(http_response& response) {
 
 }  // namespace
 
-void context::status(http_status_code status_code) {
-    response_state().update_metadata([status_code](http_response& response) { response.status(status_code); });
+http_response& context_response_editor::target() const {
+    if (owner_->response_output().committed()) {
+        throw std::logic_error("response metadata is already committed");
+    }
+    if (target_ == target_type::draft) {
+        return owner_->response_state().draft();
+    }
+    if (target_ == target_type::policy) {
+        return owner_->response_state().policy();
+    }
+    auto* response = owner_->response_state().final();
+    if (response == nullptr) {
+        throw std::logic_error("no selected response to edit");
+    }
+    return *response;
+}
+
+void context_response_editor::status(http_status_code status_code) {
+    target().status(status_code);
+    if (target_ == target_type::policy) {
+        owner_->response_state().policy_status(status_code);
+    }
 }
 
 std::pmr::string context::url_for(
@@ -62,115 +70,129 @@ std::pmr::string context::url_for(
         pattern, std::span<const std::string_view>(values.begin(), values.size()), arena());
 }
 
-void context::remove_header(std::string_view name) {
-    response_state().update_metadata([name](http_response& response) { response.remove_header(name); });
+void context_response_editor::remove_header(std::string_view name) {
+    target().remove_header(name);
 }
 
-void context::header(std::string_view name, std::string_view value, http_response_header_options options) {
-    response_state().update_metadata(
-        [&](http_response& response) { response.header(name, value, options); });
+void context_response_editor::header(std::string_view name, std::string_view value, http_response_header_options options) {
+    target().header(name, value, options);
 }
 
 void context::store_response(http_response&& response) {
-    finalize_context_response(response_state(), std::move(response), http_response_header_transfer::merge);
+    if (response_output().committed()) {
+        throw std::logic_error("response is already committed");
+    }
+    if (&response == response_state().final()) {
+        return;
+    }
+    response_state().finalize(std::move(response));
 }
 
-void context::store_assigned_response(http_response&& response) {
-    finalize_context_response(response_state(), std::move(response), http_response_header_transfer::assign);
-}
-
-http_response context::body(std::string_view body) const {
+http_response context::body(std::string_view body) {
     http_response response(arena());
     response.body(body);
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
-http_response context::body_owned(std::pmr::string&& body) const {
+http_response context::body_owned(std::pmr::string&& body) {
     http_response response(arena());
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
-http_response context::body(std::span<const std::byte> body) const {
+http_response context::body(std::span<const std::byte> body) {
     http_response response(arena());
     response.body(byte_body_view(body));
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
-http_response context::body(static_text body) const {
+http_response context::body(static_text body) {
     http_response response(arena());
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
-http_response context::text(std::string_view body) const {
+http_response context::text(std::string_view body) {
     http_response response(arena());
     mark_plain_text(response);
     response.body(body);
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
-http_response context::text_owned(std::pmr::string&& body) const {
+http_response context::text_owned(std::pmr::string&& body) {
     http_response response(arena());
     mark_plain_text(response);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
-http_response context::text(static_text body) const {
+http_response context::text(static_text body) {
     http_response response(arena());
     mark_plain_text(response);
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
 response_stream_writer& context::stream_text() {
-    response_state().update_metadata(mark_plain_text);
+    draft().header("Content-Type", "text/plain; charset=UTF-8");
+    if (!response_state().draft().header("X-Content-Type-Options")) {
+        draft().header("X-Content-Type-Options", "nosniff");
+    }
     return stream();
 }
 
-http_response context::json_serialized(std::pmr::string& body) const {
+http_response context::json_serialized(std::pmr::string& body) {
     http_response response(arena());
     response.content_type(http_content_type::application_json);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
-http_response context::html(std::string_view body) const {
+http_response context::html(std::string_view body) {
     http_response response(arena());
     response.content_type(http_content_type::text_html_utf8);
     response.body(body);
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
-http_response context::html_owned(std::pmr::string&& body) const {
+http_response context::html_owned(std::pmr::string&& body) {
     http_response response(arena());
     response.content_type(http_content_type::text_html_utf8);
     response.owned_body(std::move(body));
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
-http_response context::html(static_text body) const {
+http_response context::html(static_text body) {
     http_response response(arena());
     response.content_type(http_content_type::text_html_utf8);
     response.static_body(body.view());
     apply_response_state(response, std::nullopt);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
 http_response context::error(http_error_info_options options) const {
     auto response = detail::make_default_error_response(arena(), http_error_info(options));
-    apply_response_state(response, response.status());
     return response;
 }
 
@@ -190,13 +212,14 @@ task<http_response> context::not_found_task() {
 
     auto response = detail::make_default_error_response(arena(),
         http_error_info({.status_ = http_status::not_found, .message_ = "route not found"}));
-    apply_response_state(response, http_status::not_found);
     co_return response;
 }
 
-http_response context::streaming_head() const {
+http_response context::streaming_head() {
     http_response response(arena());
     apply_response_state(response, std::nullopt);
+    response_state().apply_policy(response);
+    static_cast<void>(response_state().take_draft());
     return response;
 }
 
@@ -208,13 +231,16 @@ task<http_response> detail::context_access::commit_streaming_head(context& conte
 }
 
 context& context::set_stable_response_header(std::string_view name, std::string_view value) {
-    response_state().update_metadata([&](http_response& response) { response.header_stable_view(name, value); });
+    if (response_output().committed()) {
+        throw std::logic_error("response headers are already committed");
+    }
+    response_state().draft().header_stable_view(name, value);
     return *this;
 }
 
 void context::apply_response_state(
-    http_response& response, std::optional<http_status_code> status_code) const {
-    const auto& metadata = response_state().metadata();
+    http_response& response, std::optional<http_status_code> status_code) {
+    const auto& metadata = response_state().draft();
     response.status(status_code.value_or(metadata.status()));
     if (!metadata.headers().empty()) {
         response.transfer_headers_from(metadata, http_response_header_transfer::apply);

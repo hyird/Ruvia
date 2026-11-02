@@ -24,7 +24,7 @@ http_response make_readiness_response(context& context_value, readiness_response
             throw std::invalid_argument("readiness state is invalid");
     }
 
-    context_value.status(http_status::service_unavailable);
+    context_value.draft().status(http_status::service_unavailable);
     const auto reason = options.unavailable_reason_.view();
     if (reason.empty()) {
         return detail::context_access::make_static_json_response(

@@ -17,9 +17,9 @@ namespace ruvia::detail {
 inline constexpr std::size_t http2_data_output_credit_bytes = 16 * 1024;
 inline constexpr std::size_t http2_data_output_credit_slots = 4;
 
-// Four frame-sized DATA reservations bound producer-owned/core-queued DATA at
-// 64 KiB per connection. HTTP/2 control frames have independent protocol output
-// storage and are deliberately not included in this DATA-only bound.
+// Four frame-sized DATA reservations bound encoded DATA at 64 KiB per
+// connection through socket completion. HTTP/2 control frames have independent
+// protocol output storage and are deliberately not included in this bound.
 class http2_data_output_budget final {
 public:
     explicit http2_data_output_budget(const worker_handle& worker_value)
@@ -28,8 +28,10 @@ public:
     http2_data_output_budget(const http2_data_output_budget&) = delete;
     http2_data_output_budget& operator=(const http2_data_output_budget&) = delete;
 
-    [[nodiscard]] task<bool> acquire(std::uint32_t stream_id, http2_sans_io_stream_signal& stream) {
-        while (!stream.terminated()) {
+    [[nodiscard]] task<bool> acquire(std::uint32_t stream_id, http2_sans_io_stream_signal& stream,
+        const ruvia::http2_connection& connection, const bool* aborted) {
+        while (!stream.terminated() && !connection.stream_aborted(stream_id) &&
+               (aborted == nullptr || !*aborted)) {
             const bool already_held = std::ranges::find(held_, stream_id) != held_.end();
             if (!already_held) {
                 for (auto& held : held_) {
@@ -78,7 +80,7 @@ public:
     }
 
     // Release a stream's reservation against the current core state immediately.
-    // This is required when reset/close discards queued DATA without producing a
+    // This is required when reset/close discards encoded DATA without producing a
     // socket completion callback. Already serialized bytes remain charged until
     // their containing socket batch completes.
     void release_and_reconcile(std::uint32_t stream_id,
@@ -102,8 +104,7 @@ public:
             if ((cancelled_[i] && written_[i] >= emitted_[i] &&
                     connection.pending_data_output_bytes(stream_id) == 0) ||
                 (!cancelled_[i] && written_[i] >= submitted_[i] &&
-                    connection.pending_data_output_bytes(stream_id) == 0 &&
-                    connection.data_queue_state(stream_id) != ruvia::http2_data_queue_state::queued)) {
+                    connection.pending_data_output_bytes(stream_id) == 0)) {
                 clear(i);
             }
         }

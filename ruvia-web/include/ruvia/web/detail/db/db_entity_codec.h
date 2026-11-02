@@ -67,7 +67,7 @@ struct postgresql_array_text final {
     return {source, elements};
 }
 
-template <typename t_type>
+template <db_mapped_value t_type>
 void decode_array_element(std::string_view text, t_type& value, std::pmr::memory_resource* resource) {
     if constexpr (is_optional<t_type>::value) {
         using v_type = typename is_optional<t_type>::value_type;
@@ -79,7 +79,7 @@ void decode_array_element(std::string_view text, t_type& value, std::pmr::memory
     }
 }
 
-template <typename t_type>
+template <db_mapped_value t_type>
 void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resource* resource) {
     using u_type = std::remove_cv_t<t_type>;
     if constexpr (is_optional<u_type>::value) {

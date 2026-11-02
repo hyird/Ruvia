@@ -387,7 +387,7 @@ http_client_handle http_client_handle::with_options(operation_options options) c
     validate_operation_options(options);
     registration_.require_active();
     http_client_handle copy(*this);
-    copy.options_ = merge_operation_options(options_, std::move(options));
+    copy.options_ = override_operation_options(options_, std::move(options));
     return copy;
 }
 

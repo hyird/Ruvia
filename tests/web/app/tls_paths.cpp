@@ -54,7 +54,10 @@ public:
 
     // Commits the response, then fails before the body is complete.
     ruvia::task<void> truncated(ruvia::context& context) {
-        co_await context.stream_text().write("partial");
+        if (co_await context.stream_text().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await context.stream().write("partial");
         throw std::runtime_error("upstream failed");
     }
 };

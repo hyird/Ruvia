@@ -28,6 +28,11 @@ namespace ruvia::detail {
 // Plain forwarding functions, not coroutines: each returns the sink's own task,
 // so a streamed chunk costs exactly the sink's frame and no wrapper frame.
 template <typename sink>
+task<stream_commit_result> response_stream_commit_thunk(void* target) {
+    return static_cast<sink*>(target)->commit();
+}
+
+template <typename sink>
 task<void> response_stream_write_thunk(void* target, std::string_view chunk) {
     return static_cast<sink*>(target)->write(chunk);
 }
@@ -71,7 +76,7 @@ stop_token response_stream_cancel_on_peer_eof_thunk(void* target) {
 template <typename sink>
 [[nodiscard]] response_stream_writer make_response_stream_writer(
     sink& sink_value, std::pmr::memory_resource& resource) noexcept {
-    return streaming_access::make_response_stream_writer(resource, &sink_value, &response_stream_write_thunk<sink>,
+    return streaming_access::make_response_stream_writer(resource, &sink_value, &response_stream_commit_thunk<sink>, &response_stream_write_thunk<sink>,
         &response_stream_end_thunk<sink>, &response_stream_sleep_thunk<sink>,
         &response_stream_bind_context_thunk<sink>, &response_stream_release_context_thunk<sink>,
         &response_stream_committed_thunk<sink>, &response_stream_aborted_thunk<sink>,

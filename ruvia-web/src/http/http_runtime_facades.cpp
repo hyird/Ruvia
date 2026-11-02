@@ -17,6 +17,12 @@
 
 namespace {
 
+ruvia::task<ruvia::stream_commit_result> commit_stream(void* target,
+    ruvia::task<ruvia::stream_commit_result> (*commit)(void*), bool& output_active) {
+    auto lease = ruvia::detail::claim_operation_lane(output_active, "response stream output operation is already in progress");
+    co_return co_await commit(target);
+}
+
 ruvia::task<void> write_transferred_chunk(void* target,
     ruvia::task<void> (*write)(void*, std::string_view), std::pmr::string chunk,
     bool& output_active) {
@@ -167,6 +173,15 @@ task<std::optional<std::string_view>> body_reader::text() & {
     return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::string_view>(read_, read_active_));
 }
 
+task<stream_commit_result> response_stream_writer::commit() & {
+    require_active();
+    return ::ruvia::make_scoped_operation(operation_scope_, commit_stream(target_, commit_, output_active_));
+}
+
+task<stream_commit_result> sse_writer::commit() {
+    return writer().commit();
+}
+
 task<void> response_stream_writer::write(std::span<const std::byte> chunk) & {
     return write(as_chars(chunk));
 }
@@ -201,7 +216,10 @@ task<timer_sleep_result> response_stream_writer::sleep(
 
 stop_token response_stream_writer::cancel_on_peer_eof() & {
     require_active();
-    stop_token_ = combine_stop_tokens(stop_token_, cancel_on_peer_eof_(target_));
+    if (!peer_stop_) {
+        peer_stop_.emplace(stop_token_, cancel_on_peer_eof_(target_));
+        stop_token_ = peer_stop_->token();
+    }
     return stop_token_;
 }
 

@@ -224,7 +224,7 @@ RUVIA_TEST(csrf_rejection_reaches_the_error_handler) {
     app.on_error([seen = &seen_code](ruvia::context& c,
                      ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         *seen = std::string(error.code());
-        c.status(error.status());
+        c.draft().status(error.status());
         co_return c.text("handled");
     });
     app.use<csrf_test::csrf_test_middleware>(&csrf);

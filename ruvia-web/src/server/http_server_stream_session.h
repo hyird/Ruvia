@@ -470,6 +470,9 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                         std::exception_ptr exception;
                         try {
                             response = co_await routes_value.invoke_route(*resolved, context_value);
+                            if (!resolved->route().has_middleware()) {
+                                context_access::apply_response_policy(context_value, response);
+                            }
                         } catch (...) {
                             exception = std::current_exception();
                         }

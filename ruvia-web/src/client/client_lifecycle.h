@@ -95,9 +95,8 @@ public:
         return operations_;
     }
 
-    [[nodiscard]] operation_options options(operation_options options) const {
-        return merge_operation_options(
-            operation_options{.timeout_ = std::nullopt, .stop_token_ = stop_.token()}, std::move(options));
+    [[nodiscard]] stop_token token() const noexcept {
+        return stop_.token();
     }
 
     void request_close() noexcept {

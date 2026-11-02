@@ -13,11 +13,11 @@
 class decorate_response final {
 public:
     ruvia::task<void> handle(ruvia::context& context_value, ruvia::next& next_value) {
-        context_value.header("X-Before", "set");
+        context_value.draft().header("X-Before", "set");
         // next() is a single-shot continuation. Await it exactly once; do not
         // store it, detach it, or attempt to restart the downstream handler.
         co_await next_value();
-        context_value.header("X-After", "set");
+        context_value.edit_response().header("X-After", "set");
     }
 };
 
@@ -30,8 +30,8 @@ public:
             // challenge (RFC 9110 15.5.2); this demo's credential is the
             // X-Demo-Key header, so it names its own scheme rather than
             // Bearer, which would tell clients to send Authorization.
-            context_value.status(ruvia::http_status::unauthorized);
-            context_value.header("WWW-Authenticate", R"(DemoKey realm="middleware-next")");
+            context_value.draft().status(ruvia::http_status::unauthorized);
+            context_value.draft().header("WWW-Authenticate", R"(DemoKey realm="middleware-next")");
             context_value.respond(context_value.text("demo key required\n"));
             co_return;
         }

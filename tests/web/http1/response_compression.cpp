@@ -105,14 +105,14 @@ class response_compression_routes final {
     }
 
     ruvia::task<ruvia::http_response> head_declared(ruvia::context& context_value) {
-        context_value.header("Content-Length", std::to_string(small_body.size()));
+        context_value.draft().header("Content-Length", std::to_string(small_body.size()));
         co_return context_value.text("");
     }
     ruvia::task<ruvia::http_response> head_bare(ruvia::context& context_value) {
         co_return context_value.text("");
     }
     ruvia::task<ruvia::http_response> empty_get(ruvia::context& context_value) {
-        context_value.header("ETag", "\"empty-v1\"");
+        context_value.draft().header("ETag", "\"empty-v1\"");
         co_return context_value.text("");
     }
     ruvia::task<ruvia::http_response> redirect_get(ruvia::context& context_value) {
@@ -127,12 +127,12 @@ class response_compression_routes final {
     }
     ruvia::task<ruvia::http_response> head_comma_declared(ruvia::context& context_value) {
         const auto len = std::to_string(small_body.size());
-        context_value.header("Content-Length", len + ", " + len);
+        context_value.draft().header("Content-Length", len + ", " + len);
         co_return context_value.text("");
     }
     ruvia::task<ruvia::http_response> head_zero_declared(ruvia::context& context_value) {
-        context_value.header("ETag", "\"empty-v1\"");
-        context_value.header("Content-Length", "0");
+        context_value.draft().header("ETag", "\"empty-v1\"");
+        context_value.draft().header("Content-Length", "0");
         co_return context_value.text("");
     }
     ruvia::task<ruvia::http_response> custom_coding(ruvia::context& context_value) {
@@ -154,23 +154,29 @@ class response_compression_routes final {
         co_return context_value.text(body);
     }
     ruvia::task<void> stream_custom_coding(ruvia::context& context_value) {
-        context_value.header("Content-Encoding", "x-custom");
+        context_value.draft().header("Content-Encoding", "x-custom");
         auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await writer.write("custom-stream-payload");
         co_await writer.end();
     }
     ruvia::task<void> stream_mixed_coding(ruvia::context& context_value) {
-        context_value.header("Content-Encoding", "br, x-custom");
+        context_value.draft().header("Content-Encoding", "br, x-custom");
         auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await writer.write("mixed-stream-payload");
         co_await writer.end();
     }
     ruvia::task<void> stream_no_content(ruvia::context& context_value) {
-        context_value.status(ruvia::http_status::no_content);
+        context_value.draft().status(ruvia::http_status::no_content);
         co_await context_value.stream_text().end();
     }
     ruvia::task<void> stream_not_modified(ruvia::context& context_value) {
-        context_value.status(ruvia::http_status::not_modified);
+        context_value.draft().status(ruvia::http_status::not_modified);
         co_await context_value.stream_text().end();
     }
     ruvia::task<ruvia::http_response> tiny(ruvia::context& context_value) {
@@ -179,7 +185,7 @@ class response_compression_routes final {
 
     ruvia::task<ruvia::http_response> digest(ruvia::context& context_value) {
         const auto field = context_value.req().query("field").value_or("");
-        context_value.header(field, "sha-256=:AAAA:");
+        context_value.draft().header(field, "sha-256=:AAAA:");
         co_return context_value.text(std::string_view(small_body));
     }
 

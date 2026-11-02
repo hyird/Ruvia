@@ -392,7 +392,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         local_connection_state_.open() == nullptr || peer_goaway_ || !parent_value || parent_value->is_aborted() ||
         (associated_stream_id & 1U) == 0 || !http2_remote_final_head_decoded(*parent_value) ||
         parent_value->tunnel().not_connect() == nullptr || parent_value->local_send().end_stream_committed() ||
-        parent_value->local_send().end_stream_queued() || next_push_stream_id_ > 0x7fffffffU) {
+        next_push_stream_id_ > 0x7fffffffU) {
         return error_type::invalid_state;
     }
     if (!peer_settings_.enable_push()) {

@@ -1239,9 +1239,10 @@ RUVIA_TEST(http_client_handle_options_override_pool_timeout_and_start_when_opera
             server.on_request([&base_stop, &derived_stop, stop_base] {
                 (stop_base ? base_stop : derived_stop).request_stop();
             });
+            ruvia::stop_group cancellation{base_stop.token(), derived_stop.token()};
             auto base = client.with_options({.stop_token_ = base_stop.token()});
             auto copied = base;
-            auto derived = copied.with_options({.stop_token_ = derived_stop.token()});
+            auto derived = copied.with_options({.stop_token_ = cancellation.token()});
             bool cancelled = false;
             try {
                 (void)co_await derived.send({.target_ = stop_base ? "/stop-base" : "/stop-derived"});
@@ -2666,7 +2667,7 @@ RUVIA_TEST(tls_client_sends_close_notify_before_closing) {
                             (void)connection.submit_response_head(stream_id, response,
                                 ruvia::plan_buffered_http_response_write(built.known_method(), response));
                             (void)connection.submit_data(
-                                stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream);
+                                stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535);
                             (void)connection.release(std::move(*request));
                         }
                     }
@@ -3732,8 +3733,8 @@ RUVIA_TEST(http2_cold_start_cancelled_waiter_does_not_close_active_session) {
                     const auto head = connection.submit_response_head(
                         stream_id, response, ruvia::plan_buffered_http_response_write(built.known_method(), response));
                     if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(head) ||
-                        connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream) !=
-                            ruvia::http2_data_submit_status::accepted ||
+                        connection.submit_data(stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535).status_ !=
+                            ruvia::http2_data_submit_status::complete ||
                         connection.release(std::move(*request)) != ruvia::http2_server_request_release_status::released) {
                         throw std::runtime_error("HTTP/2 response submission failed");
                     }
@@ -3859,7 +3860,7 @@ RUVIA_TEST(http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_mi
                         (void)connection.submit_response_head(stream_id, response,
                             ruvia::plan_buffered_http_response_write(built.known_method(), response));
                         (void)connection.submit_data(
-                            stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream);
+                            stream_id, response.body_bytes(), ruvia::http2_end_stream::end_stream, 65535);
                         (void)connection.release(std::move(*request));
                         // GOAWAY precedes the close so the client retires this
                         // session deterministically: seen before the next send it

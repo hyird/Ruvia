@@ -22,10 +22,16 @@
 
 | 头文件 | 核心公开类型 / 函数 | 说明与契约 |
 | --- | --- | --- |
-| `"ruvia/core/stop_token.h"` | `class stop_source final`、`class stop_token final`、`class stop_registration final`、`combine_stop_tokens(first, second)` | 零堆分配侵入式回调注册的协作式取消原语。`token.register_callback(fn)` 返回自有的 `stop_registration`；`token.register_callback(registration, fn)` 注册到调用方持有的 `stop_registration`（重复注册替换先前回调）；单个 `stop_token` 最多合并观察 `max_stop_token_sources`（4）个源；`stop_registration` 析构时自动注销并同步等待正在执行的回调返回 |
-| `"ruvia/core/operation_options.h"` / `"ruvia/core/operation_timeout.h"` | `struct operation_options final`、`validate_operation_options`、`merge_operation_options`、`class operation_timeout final`、`template <typename Kind = std::monostate> class operation_deadline final` | 通用操作选项（`timeout_` 与 `stop_token_`）、跨异步阶段共享的 `steady_clock` 截止时间计算器与零分配三态（inactive / active / expired）截止期状态机 |
+| `"ruvia/core/stop_token.h"` | `class stop_source final`、`class stop_token final`、`class stop_registration final`、`class stop_group final` | `stop_token` 只观察一个状态；`stop_group` 显式拥有父源注册和下游取消状态。`token.register_callback(fn)` 返回自有注册；`token.register_callback(registration, fn)` 替换调用方持有的注册。每个注册只嵌入一个侵入式节点，不额外分配节点；析构自动注销，并等待其他线程正在执行的回调结束 |
+| `"ruvia/core/operation_options.h"` / `"ruvia/core/operation_timeout.h"` | `struct operation_options final`、`validate_operation_options`、`override_operation_options`、`class operation_timeout final`、`template <typename Kind = std::monostate> class operation_deadline final` | 通用操作选项（`timeout_` 与 `stop_token_`）、跨异步阶段共享的 `steady_clock` 截止时间计算器与零分配三态（inactive / active / expired）截止期状态机 |
 | `"ruvia/core/worker_timer.h"` | `class worker_timer_registration final`、`class worker_timer_cancellation final`、`enum class worker_timer_outcome { expired, cancelled }` | 单 Worker 侵入式定时器注册句柄，配合 `worker_handle::schedule_timer` 使用；提供 `cancel()`（静默取消）与 `cancel_and_notify()` |
 | `"ruvia/core/timer.h"` | `enum class timer_sleep_result { elapsed, stop_requested }`、`class sleep_operation final`、`sleep_for(const worker_handle&, duration, [stop_token])` | 在绑定 Worker 上挂起当前协程指定时长；返回可丢弃、仅启动前可移动的单次冷 `sleep_operation`，须在绑定 Worker 上 `co_await` 启动。若传入的 `stop_token` 触发或 Worker 停止定时器，返回 `stop_requested` 而不抛异常 |
+
+`stop_group group{first.token(), second.token(), ...}` 或 `stop_group group{tokens_span}` 可组合任意数量的父状态，也可输入另一个 group 的 `token()`。group 不可复制或移动，必须保持地址稳定并存活到使用其 token 的所有操作结束 / join；token 的复制不会延长 group 的父源注册寿命。0 / 1 个不同有效源直接透传，不创建新状态；真实多源组合创建一个下游状态，前两个父注册内嵌，更多父注册按实际数量分配。重复源与嵌套源都只触发每个下游回调一次，不存在用户源容量被框架内部源占用的问题。
+
+`request_stop()` 支持跨线程；已停止状态的注册同步执行回调。回调可注销自身，也可销毁正在转发的 group；group 先注销父注册再退役自身取消源。回调在请求取消的线程执行，不可直接修改其他 Worker 所有的状态，应向 owner Worker 投递通知。源先销毁不会使已有 token 悬空；`has_state()` 区分空 token 与源已退役的 token，`stoppable()` 表示状态是否仍可能取消或已经取消。
+
+所有客户端 handle 的 `with_options` 使用相同规则：未指定 token 继承，提供非空 token 则替换原用户取消状态，不隐式累积；超时始终取已有值与新值中较紧的上限。需要累计时由调用方持有 `stop_group` 并传入其 token。客户端关闭通过自身 backend 的关闭、等待唤醒和 join 主链独立生效，不因 token 替换而失效，也不为每次派生 handle 建立共享取消树。Redis 独立客户端未提供 token 时沿用客户端生命周期 token，满足阻塞命令 / 订阅需要明确取消边界的契约；显式 token 替换后仍受客户端关闭约束。数据库借用外部 Redis 的缓存操作由缓存 owner 的独立停止源中止，不关闭外部 Redis 客户端。
 
 ---
 
@@ -174,9 +180,9 @@ while (auto ev = conn.next_event()) {
     if (auto* req_head = ev->request_head()) {
         std::uint32_t stream_id = req_head->stream_id();
         ruvia::http_response resp(resource);
-        resp.status(ruvia::http_status::ok);
-        resp.body("hello h2");
-        (void)conn.submit_buffered_response(stream_id, resp);
+        resp.status(ruvia::http_status::no_content);
+        // 无正文响应由 HEADERS 一次结束；有正文时保留请求租约并驱动下述 DATA 契约。
+        (void)conn.submit_streaming_response_head(stream_id, std::move(resp));
         (void)conn.release(std::move(*req_head));
     }
 }
@@ -192,6 +198,8 @@ while (conn.wants_write()) {
 
 - **流控凭证 `http2_received_data_credit`**：`message_body_chunk()` 与 `tunnel_data()` 事件携带移动专属的流控凭证；当上层消费完缓冲数据后，通过析构凭证或调用 `conn.acknowledge(std::move(credit))` 触发连接与流级 `WINDOW_UPDATE` 帧发送，实现精确背压。
 - **服务端请求租约 `http2_request_head_event`**：持有服务端流请求头的底层内存租约；请求处理完毕后调用 `conn.release(std::move(event))` 归还存储。
+- **DATA 部分消费 `submit_data(stream_id, bytes, end_stream, max_payload_bytes)`**：返回 `http2_data_submit_result{consumed_bytes_, status_}`，本次只编码 `min(bytes.size(), max_payload_bytes, 连接窗口, 流窗口)` 字节；帧头开销另计。`complete` 只表示这次输入全部消费，不表示 socket 已写完；`backpressured` 可以消费零字节或一个前缀。协议层既不借用也不复制未消费后缀，调用方必须保存后缀并按实际消费量推进，取得输出预算或收到 `WINDOW_UPDATE` / `SETTINGS` 后显式重试。窗口更新不会自动产生 DATA，也没有旧的 queued/drained 队列通知。`expectation_pending` 和 `closed` 均消费零字节；前者等待 `100 Continue` 或显式 `release_request_content()`，后者停止发送。`pending_data_output_bytes()` 与输出批次 observer 仍用于已编码 DATA 和 socket 写完成记账；它们不能代替应用层输出预算。
+- **长度与终结**：每次先验证完整输入及其终结意图是否符合 `Content-Length`，再预留该次允许编码的全部帧空间；非法长度或分配异常不提交半个前缀。长度计数只推进 `consumed_bytes_`。`END_STREAM` 仅在终结输入全部消费后提交，空终结输入即使窗口和 payload 许可为零也提交一帧空 DATA；结束后不能重复终结。所有正文都消费完后才调用 `finish_request()` / `finish_response()` 提交 trailers，保证 terminal HEADERS 排在正文之后；finish 不再排队等待未消费正文。
 - **对端帧元数据 `receive_frame_metadata_`**：开启后（客户端与服务端均可），连接把已应用的非 ACK `SETTINGS`（保留线上顺序、未知项与重复项）、已应用的 `WINDOW_UPDATE`、`PRIORITY` 帧及 `HEADERS` 优先级字段，分别以 `received_settings()`、`received_window_update()`、`received_priority()` 事件按线上顺序与其他事件一同发布；`HEADERS` 的优先级事件先于该帧产生的请求头事件。关闭（默认）时不产生这些事件，也不做额外工作。请求伪首部的线上顺序始终由请求头事件的 `request_view().pseudo_header_order_` 提供。
 - **优雅排空 `begin_drain()` / `finish_drain()` / `draining()` / `drain_final()`**：服务端按 RFC 9113 §6.8 两阶段排空——先发 `GOAWAY(2^31-1, NO_ERROR)` 与 `PING`，继续接纳在途的流；收到该 `PING` 的 ACK 或所有者调用 `finish_drain()` 后发出携带最后对端流 ID 的最终 `GOAWAY` 并拒绝之后的流（对端此间新开超过 128 条流时提前进入最终阶段，属产品上限）。RFC 只要求至少一个往返时间，不要求等到 ACK：所有者以 `finish_drain()` 为往返等待设定时间上限；未在排空时调用则直接以最终边界进入排空（适用于对端已结束输入、无法再开流）。收到对端合法 `GOAWAY` 时同样立即进入最终阶段（其发送方不得再开流），包括已在往返中的排空。`drain_final()` 为真后，所有者在剩余流结束时即可关闭连接。客户端角色一步发出最终 `GOAWAY`。
 - **服务端 `CONNECT` 乐观数据**：接受/拒绝前收到的 `DATA` 以 `tunnel_data()` 事件发布，其流控凭证由所有者持有到接受隧道后消费；`submit_connect_response_head()` 接受后再发布 `tunnel_end()`（若请求半边已结束）。非 2xx 拒绝后到达的 `DATA` 丢弃并归还流控额度。RFC 8441 `:protocol = websocket` 的提前 `DATA` 同样保留（RFC 6455 §4.1 的等待规则只约束客户端）。非 2xx 拒绝响应后服务端以 `RST_STREAM(NO_ERROR)` 结束流。已建立隧道上的未知扩展帧被丢弃（RFC 9113 §5.5），`ALTSVC`/`ORIGIN` 帧也被忽略（RFC 7838 §4、RFC 8336 §2.1）。

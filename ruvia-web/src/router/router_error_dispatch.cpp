@@ -158,7 +158,7 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
     } catch (...) {
         exception = std::current_exception();
     }
-    co_return co_await handle_exception(request, memory, exception, services, error_handler);
+    co_return co_await finalize_failure(context_value, exception);
 }
 
 task<http_response> detail::route_table::handle_exception(const http_request& request,
@@ -180,7 +180,9 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
     }
 
     auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
-    co_return co_await handle_exception(context_value, exception, error_handler);
+    auto response = co_await handle_exception(context_value, exception, error_handler);
+    detail::context_access::apply_response_policy(context_value, response);
+    co_return response;
 }
 
 task<http_response> detail::route_table::handle_not_found(
@@ -210,9 +212,14 @@ task<http_response> detail::route_table::handle_not_found(
         }
         co_return co_await handle_exception(terminal_context, exception);
     };
-    auto response =
-        co_await run_unmatched_chain(context_value, callback_access::bind<task<http_response>(context&)>(terminal));
-    co_return response;
+    std::exception_ptr exception;
+    try {
+        co_return co_await run_unmatched_chain(
+            context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+    } catch (...) {
+        exception = std::current_exception();
+    }
+    co_return co_await finalize_failure(context_value, exception);
 }
 
 task<http_response> detail::route_table::handle_exception(
@@ -225,6 +232,7 @@ task<http_response> detail::route_table::handle_exception(context& context_value
     std::exception_ptr exception, http_error_handler_ref error_handler) const {
     rethrow_inbound_transport_error(exception);
     detail::context_access::set_error(context_value, exception);
+    detail::context_access::discard_draft(context_value);
     const auto error_info = classify_exception(context_value.arena(), exception);
     report_unexpected_failure(error_info, exception, error_handler);
 

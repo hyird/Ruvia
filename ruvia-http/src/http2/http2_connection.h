@@ -12,12 +12,10 @@
 // timeouts live entirely in the caller; any runtime can drive it, nghttp2-style.
 //
 // Design mirrors nghttp2's mem_recv / mem_send: feed() ~ nghttp2_session_mem_recv,
-// take_output_batch() ~ nghttp2_session_mem_send. Flow-control back
-// pressure has explicit ownership: submit_data either accepts the full input (possibly
-// copying a deferred suffix) or accepts none until the prior queued input drains.
-// Final response Content-Length uses the same ownership boundary: accepted bytes are
-// counted once for the whole input, committed bytes advance only when DATA is framed,
-// and a mismatch is rejected before output/window/state mutation.
+// take_output_batch() ~ nghttp2_session_mem_send. DATA consumes only the prefix
+// permitted by the caller's payload allowance and both send windows. The caller
+// retains the suffix; no deferred DATA queue exists. Content-Length and terminal
+// intent are validated before output/window/state mutation.
 //
 // All protocol primitives it builds on (frame codec, HPACK, stream state, flow
 // control, input buffer, settings) are already pure and reused as-is. Generic frame
@@ -65,20 +63,6 @@
 #include "websocket/websocket_server_negotiation.h"
 
 namespace ruvia::detail {
-
-// A response body the send window could not fully drain: the core keeps the unsent
-// remainder and flushes it as WINDOW_UPDATE/SETTINGS reopen the window (nghttp2-style
-// deferred data). At most one queued submission exists per stream.
-struct http2_pending_send final {
-    std::uint32_t stream_id_{0};
-    std::pmr::string bytes_;
-    std::size_t offset_{0};
-    http2_end_stream end_stream_{http2_end_stream::keep_open};
-    // A terminal trailer HEADERS block queued atomically by finish_response behind
-    // flow-control-deferred DATA. It goes out AFTER that DATA drains (RFC 9113
-    // §8.1), carrying END_STREAM in place of the body.
-    std::pmr::string trailer_block_;
-};
 
 class http2_connection final {
     // One role-aware receive phase owns connection startup. Keeping this as one enum
@@ -163,8 +147,8 @@ public:
     submit_streaming_response_head(
         std::uint32_t stream_id, http_response head,
         http_response_trailer_intent trailer_intent);
-    [[nodiscard]] http2_data_submit_status submit_data(
-        std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream);
+    [[nodiscard]] http2_data_submit_result submit_data(std::uint32_t stream_id,
+        std::string_view chunk, http2_end_stream end_stream, std::size_t max_payload_bytes);
     // Submit a typed interim 1xx head. http_interim_response_head excludes 101 and
     // cannot carry content; the initial-head phase remains open for the required
     // final response. Invalid HTTP/2 fields reject transactionally.
@@ -186,8 +170,7 @@ public:
     // (possibly empty). Its typed value proves shared validation already completed;
     // HPACK encoding, DATA/trailer ordering, and END_STREAM are one transaction.
     // An incomplete declared Content-Length is rejected without changing the
-    // body-open phase. A flow-control-blocked body keeps the
-    // terminal marker queued behind it once the full length is core-owned.
+    // body-open phase. The caller submits trailers only after consuming all body input.
     [[nodiscard]] std::variant<std::uint32_t, http2_push_submit_error> submit_push_promise(
         std::uint32_t associated_stream_id, http_push_request_view request);
     [[nodiscard]] http2_finish_status finish_request(std::uint32_t stream_id,
@@ -200,11 +183,6 @@ public:
     [[nodiscard]] http2_submit_status submit_priority_update(std::uint32_t stream_id, http_priority_fields fields);
 
     [[nodiscard]] http2_submit_status submit_reset(std::uint32_t stream_id, http2_error_code error);
-
-    // Returns streams whose core-owned DATA remainder just fully drained after a
-    // WINDOW_UPDATE/SETTINGS change. Their owner may now submit the next source chunk.
-    [[nodiscard]] std::span<const std::uint32_t> take_drained_data_streams() & noexcept;
-    [[nodiscard]] std::span<const std::uint32_t> take_drained_data_streams() && = delete;
 
     // --- lifecycle / timeout ---------------------------------------------------
     // A local connection error is terminal: its GOAWAY has been queued and the I/O
@@ -362,10 +340,6 @@ public:
     // 100 response remains observable but emits no duplicate Continue signal.
     [[nodiscard]] http2_request_content_release_status release_request_content(
         std::uint32_t stream_id) noexcept;
-    // True while submit_data left a window-blocked remainder queued for this stream
-    // (the owner waits for the drain report before pulling its next body chunk).
-    [[nodiscard]] bool has_queued_data(std::uint32_t stream_id) const noexcept;
-    [[nodiscard]] http2_data_queue_state data_queue_state(std::uint32_t stream_id) const noexcept;
     [[nodiscard]] std::size_t pending_data_output_bytes(std::uint32_t stream_id) const noexcept;
     [[nodiscard]] std::optional<http2_send_window_state> send_window_state(
         std::uint32_t stream_id) const noexcept;
@@ -410,39 +384,15 @@ private:
     void abandon_stream_lease_checked(std::uint32_t stream_id);
     void retry_deferred_stream_lease(std::uint32_t stream_id) noexcept;
 
-    // A WINDOW_UPDATE/SETTINGS change drains core-owned DATA remainders into the
-    // outbound buffer. A stream whose remainder fully drains is reported through
-    // drained_data_streams_ so the owner can pull its next source chunk.
-    void mark_send_window_opened();
-
     // Emit a response header block as HEADERS + CONTINUATION frames (atomic sequence,
     // RFC 9113 §6.10) into the outbound buffer, ending the stream when end_stream is set.
     void append_response_header_frames(
         http2_stream_state& stream, std::string_view header_block, http2_end_stream end_stream,
         std::size_t additional_output_bytes = 0, std::size_t additional_output_segments = 0);
-    struct prepared_data_submission final {
-        prepared_data_submission() = default;
-        prepared_data_submission(const prepared_data_submission&) = delete;
-        prepared_data_submission& operator=(const prepared_data_submission&) = delete;
-        prepared_data_submission(prepared_data_submission&&) = delete;
-        prepared_data_submission& operator=(prepared_data_submission&&) = delete;
-
-        std::string_view input_;
-        std::optional<http2_pending_send> deferred_;
-        std::size_t output_bytes_{0};
-        std::size_t output_segments_{0};
-        http2_end_stream end_stream_{http2_end_stream::keep_open};
-    };
-    [[nodiscard]] http2_data_submit_status prepare_data_submission(http2_stream_state& stream,
-        std::string_view chunk, http2_end_stream end_stream, const http2_local_content_state& content,
-        prepared_data_submission& prepared);
-    [[nodiscard]] http2_data_submit_status commit_data_submission(
-        http2_stream_state& stream, prepared_data_submission& prepared);
     void commit_connect_response_head(http2_stream_state& stream, bool terminal_remote_half);
-    // Emit DATA frames for data.substr(offset) while the send window allows, returning
-    // the new offset (== data.size() when fully sent). Consumes send-window credit.
-    [[nodiscard]] std::size_t send_data_up_to_window(http2_stream_state& stream, std::string_view data,
-        std::size_t offset, http2_end_stream end_stream);
+    // Emit a preflighted, fully reserved DATA prefix and consume its send credit.
+    void append_data_frames(http2_stream_state& stream, std::string_view data,
+        http2_end_stream end_stream);
 
     // Consume complete frames from `buffer` starting at `offset` (advanced past each
     // consumed frame; a trailing partial frame is left for the caller). Returns false on
@@ -573,7 +523,6 @@ private:
         close_notification_type notification = close_notification_type::emit_event);
     [[nodiscard]] bool was_closed_by_peer_reset(
         std::uint32_t stream_id, const http2_stream_state* retained_stream) const noexcept;
-    void discard_deferred_stream_state(std::uint32_t stream_id);
     // Preserve a removed stream's banked debt as batched connection credit.
     void flush_window_debt(http2_stream_state& stream);
     void reserve_stream_close_effects();
@@ -625,11 +574,6 @@ private:
     // event queue drained by peek_event()/consume_event()
     std::pmr::vector<http2_event> events_;
     std::size_t event_offset_{0};
-
-    // flow-control-deferred response bodies + streams that just fully drained
-    std::pmr::vector<http2_pending_send> pending_sends_;
-    std::pmr::vector<std::uint32_t> drained_data_streams_;
-    std::pmr::vector<std::uint32_t> taken_drained_data_streams_;  // double buffer for returned spans
 
     // streams with an in-flight handler; close_stream keeps these alive (see pin_stream)
     std::pmr::vector<std::uint32_t> pinned_streams_;

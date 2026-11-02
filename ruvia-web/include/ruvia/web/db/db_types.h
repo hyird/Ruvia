@@ -254,6 +254,16 @@ concept db_text_scalar = std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
                              std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::pmr::string> ||
                              std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>);
 
+template <typename t_type, bool allow_array = true>
+struct db_mapped_value_traits : std::bool_constant<db_text_scalar<t_type> && !std::is_same_v<t_type, std::string_view>> {};
+
+template <typename t_type, bool allow_array>
+struct db_mapped_value_traits<std::optional<t_type>, allow_array> : db_mapped_value_traits<t_type, allow_array> {};
+
+template <typename t_type, bool allow_array>
+struct db_mapped_value_traits<std::pmr::vector<t_type>, allow_array>
+    : std::bool_constant<allow_array && db_mapped_value_traits<t_type, false>::value> {};
+
 // The one text-to-scalar conversion for database results: fields and array
 // elements accept the same boolean tokens and numeric syntax.
 template <db_text_scalar t_type>
@@ -296,6 +306,13 @@ template <db_text_scalar t_type>
 }
 
 }  // namespace detail
+
+// Mapped SQL values own their text independently of db_rows: numbers, bool,
+// std::pmr::string, ruvia::string, and one-dimensional std::pmr::vector values.
+// Optional wrappers preserve ownership, including nullable array elements;
+// borrowed views, references, and nested arrays are not mapped value types.
+template <typename t_type>
+concept db_mapped_value = detail::db_mapped_value_traits<t_type>::value;
 
 class db_value final {
 private:
@@ -376,6 +393,8 @@ public:
     [[nodiscard]] std::optional<std::string_view> value() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> value() const&& = delete;
 
+    // string_view is a raw borrow, valid only while this field's row storage
+    // remains alive. Repository mapped results instead require db_mapped_value.
     template <detail::db_text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const& {
         const auto source_value = value();

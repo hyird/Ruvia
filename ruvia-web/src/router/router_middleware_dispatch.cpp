@@ -205,16 +205,13 @@ task<http_response> detail::route_table::respond_through_chain(
         co_return detail::context_access::release_response(context_value);
     }
     if (auto exception = context_value.exception()) {
-        co_return co_await handle_exception(context_value, exception);
+        co_return co_await finalize_failure(context_value, exception);
     }
     throw std::logic_error("context is not finalized; middleware must set a response or await next()");
 }
 
 task<http_response> detail::route_table::run_unmatched_chain(
     context& context_value, route_handler terminal) const {
-    if (plan_->unmatched_middleware_count_ == 0) {
-        return terminal(context_value);
-    }
     return respond_through_chain(
         middleware_chain{.table_ = this,
             .frames_ = std::span<const route_middleware>(middleware_frames_)

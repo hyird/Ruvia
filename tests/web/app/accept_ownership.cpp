@@ -87,7 +87,7 @@ public:
         owner.check(context);
         (void)co_await ruvia::sleep_for(context.worker(), 1ms, context.stop_token());
         owner.check(context);
-        context.header("X-Connection-Worker", std::to_string(worker_id));
+        context.draft().header("X-Connection-Worker", std::to_string(worker_id));
         co_return context.text(std::move(body));
     }
 };

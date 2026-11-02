@@ -199,6 +199,9 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
         std::exception_ptr exception;
         try {
             response = co_await invoke_route(*resolved, context_value);
+            if (!resolved->route().has_middleware()) {
+                detail::context_access::apply_response_policy(context_value, response);
+            }
             co_return;
         } catch (...) {
             exception = std::current_exception();

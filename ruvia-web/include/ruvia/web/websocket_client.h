@@ -118,6 +118,8 @@ public:
     websocket_client_handle(const websocket_client_handle& other) noexcept;
     websocket_client_handle& operator=(const websocket_client_handle&) = delete;
 
+    // Inherits an empty token; a supplied state replaces user cancellation.
+    // Timeout can only tighten. Accumulation requires a caller-owned stop_group.
     [[nodiscard]] websocket_client_handle with_options(operation_options options) const;
     [[nodiscard]] task<std::optional<websocket_message>> read() const;
     [[nodiscard]] task<void> text(std::string_view payload, websocket_send_options options = {}) const;

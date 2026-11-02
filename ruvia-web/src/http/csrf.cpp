@@ -82,7 +82,7 @@ task<void> csrf_protection::handle(context& c, next& next_value) {
             .secure_ = connection.scheme() == http_scheme::https ? cookie_attribute_policy::emit
                                                                  : cookie_attribute_policy::omit,
         };
-        c.set_cookie({.name_ = cookie_name_, .value_ = token, .attributes_ = options});
+        c.policy().set_cookie({.name_ = cookie_name_, .value_ = token, .attributes_ = options});
     }
     co_await next_value();
 }

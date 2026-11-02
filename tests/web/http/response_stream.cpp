@@ -41,6 +41,9 @@ struct stream_lane_observation final {
     std::atomic<bool> write_overlap_rejected_{};
     std::atomic<bool> end_overlap_rejected_{};
     std::atomic<bool> completed_{};
+    std::atomic<bool> uncommitted_write_rejected_{};
+    std::atomic<bool> repeated_commit_rejected_{};
+    std::atomic<int> committed_metadata_rejected_{};
     std::atomic<bool> endless_write_failed_{};
     std::atomic<int> uaf_phase_{};
     std::atomic<bool> uaf_route_done_{};
@@ -76,6 +79,29 @@ class stream_lane_routes final {
     ruvia::task<void> output(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
         auto& writer = context_value.stream_text();
+        auto draft = context_value.draft();
+        auto policy = context_value.policy();
+        auto selected = context_value.edit_response();
+        try {
+            co_await writer.write("not-committed");
+        } catch (const std::logic_error&) {
+            observed.uncommitted_write_rejected_ = true;
+        }
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        try {
+            static_cast<void>(co_await writer.commit());
+        } catch (const std::logic_error&) {
+            observed.repeated_commit_rejected_ = true;
+        }
+        for (auto editor : {draft, policy, selected}) {
+            try {
+                editor.header("X-Too-Late", "forbidden");
+            } catch (const std::logic_error&) {
+                ++observed.committed_metadata_rejected_;
+            }
+        }
         std::string payload = "first";
         auto first = writer.write(payload);
         auto last = writer.writeln("second");
@@ -105,13 +131,16 @@ class stream_lane_routes final {
         co_await writes.join();
         co_await std::move(last);
         co_await std::move(end);
-        observed.completed_ = true;
+        observed.completed_ = !writer.aborted() && !context_value.stop_token().stop_requested();
     }
 
     // Streams until the peer goes away, like an SSE feed a browser tab closes.
     ruvia::task<void> endless(ruvia::context& context_value) {
         auto& observed = *context_value.worker_state<std::shared_ptr<stream_lane_observation>>();
         auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         const std::string chunk(16384, 'x');
         try {
             for (;;) {
@@ -126,7 +155,10 @@ class stream_lane_routes final {
     // Commits the response, then fails the way an awaited upstream request
     // that timed out does.
     ruvia::task<void> upstream_timeout(ruvia::context& context_value) {
-        co_await context_value.stream_text().write("partial");
+        if (co_await context_value.stream_text().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await context_value.stream().write("partial");
         throw std::system_error(asio::error::make_error_code(asio::error::timed_out), "upstream request");
     }
 
@@ -134,13 +166,19 @@ class stream_lane_routes final {
     // Expect: 100-continue.
     ruvia::task<void> stream_then_read_body(ruvia::context& context_value) {
         auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await writer.write("x");
         const auto body = co_await context_value.req().text();
         co_await writer.write(body);
     }
 
     ruvia::task<void> never_stream(ruvia::context& context_value) {
-        co_await context_value.stream_text().write("never");
+        if (co_await context_value.stream_text().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await context_value.stream().write("never");
     }
 
     ruvia::task<ruvia::http_response> plain(ruvia::context& context_value) {
@@ -152,20 +190,27 @@ class stream_lane_routes final {
         auto& out = context_value.stream_text();
         auto& reader = context_value.req().body_reader();
         try {
-            co_await out.write("head");
+            const auto phase = co_await out.commit();
+            if (phase == ruvia::stream_commit_result::body) {
+                co_await out.write("head");
+            }
             observed.uaf_phase_.store(1);
             static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(25)));
 
             auto r1 = co_await reader.read();
             auto r2 = co_await reader.read();
 
-            co_await out.write("discarded1");
+            if (phase == ruvia::stream_commit_result::body) {
+                co_await out.write("body1");
+            }
             observed.uaf_phase_.store(2);
             static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(25)));
 
             auto r3 = co_await reader.read();
 
-            co_await out.write("discarded2");
+            if (phase == ruvia::stream_commit_result::body) {
+                co_await out.write("body2");
+            }
             observed.uaf_phase_.store(3);
             static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(25)));
 
@@ -235,6 +280,9 @@ RUVIA_TEST(response_stream_cold_outputs_share_a_lane_only_when_started) {
     RUVIA_CHECK(stream_lane_observed->write_overlap_rejected_);
     RUVIA_CHECK(stream_lane_observed->end_overlap_rejected_);
     RUVIA_CHECK(stream_lane_observed->completed_);
+    RUVIA_CHECK(stream_lane_observed->uncommitted_write_rejected_);
+    RUVIA_CHECK(stream_lane_observed->repeated_commit_rejected_);
+    RUVIA_CHECK_EQ(stream_lane_observed->committed_metadata_rejected_.load(), 3);
 }
 
 // A peer that resets a streaming response (a closed SSE tab) ends the
@@ -325,7 +373,7 @@ RUVIA_TEST(response_stream_body_read_after_commit_sends_no_continue) {
     RUVIA_CHECK(response.ends_with("\r\n\r\n1\r\nx\r\n4\r\nabcd\r\n0\r\n\r\n"));
 }
 
-RUVIA_TEST(response_stream_head_transfer_coded_chunked_body_survives_peer_monitor_reallocation) {
+RUVIA_TEST(response_stream_completed_head_preserves_transfer_coded_request_consumption) {
     const auto gzip_member = [](std::string_view input, int level) {
         z_stream zs{};
         if (deflateInit2(&zs, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY) != Z_OK) {

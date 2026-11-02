@@ -60,10 +60,12 @@ class routes final {
         const auto mode = c.req().query("mode").value_or("token");
         const auto original = c.stop_token();
         auto writer = c.stream_sse();
-        auto token = mode == "default" ? original : writer.cancel_on_peer_eof();
-        if (mode == "explicit") {
-            token = ruvia::combine_stop_tokens(token, explicit_stop.token());
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
         }
+        auto token = mode == "default" ? original : writer.cancel_on_peer_eof();
+        const ruvia::stop_group wait_stop(token, mode == "explicit" ? explicit_stop.token() : ruvia::stop_token{});
+        token = wait_stop.token();
         co_await writer.write({.data_ = "first"});
         if (mode == "default") {
             default_cancelled.store(co_await ruvia::sleep_for(c.worker(), 200ms, token) ==
@@ -90,6 +92,9 @@ class routes final {
 
     ruvia::task<void> pipeline(ruvia::context& c) {
         auto& writer = c.stream();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         const auto token = writer.cancel_on_peer_eof();
         co_await writer.write("pipeline-first");
         (void)co_await ruvia::sleep_for(c.worker(), 100ms, token);
@@ -103,18 +108,29 @@ class routes final {
         } catch (const std::logic_error&) {
             body_rejected.fetch_add(1);
         }
-        if (c.req().query("early").has_value()) {
+        const bool early = c.req().query("early").has_value();
+        if (early) {
+            if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+                static_cast<void>(co_await c.req().text());
+                co_return;
+            }
             co_await writer.write("early");
         }
         const auto received = co_await c.req().text();
         (void)writer.cancel_on_peer_eof();
         body_complete.fetch_add(1);
+        if (!early && co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await writer.write(received);
     }
 
     ruvia::task<void> post_sse(ruvia::context& c) {
         const auto received = co_await c.req().text();
         auto writer = c.stream_sse();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await writer.write({.data_ = received});
     }
 
@@ -346,7 +362,7 @@ RUVIA_TEST(http1_passive_stream_disconnect_is_opt_in_and_recycles_connections) {
         .on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
             errors.fetch_add(1);
             std::cerr << "stream_disconnect error: " << error.code() << ": " << error.message() << '\n';
-            c.status(error.status());
+            c.draft().status(error.status());
             co_return c.text("unexpected-error");
         })
         .on_start([&started] { started.release(); });

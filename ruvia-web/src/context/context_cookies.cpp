@@ -15,24 +15,24 @@
 namespace ruvia {
 namespace {
 
-void write_cookie(detail::context_response_state& state_value, std::string_view name, std::string_view value,
+void write_cookie(http_response& response, std::string_view name, std::string_view value,
     const cookie_options& options) {
     const set_cookie_plan plan(name, value, options);
-    state_value.update_metadata([&plan](http_response& response) { response.set_cookie(plan); });
+    response.set_cookie(plan);
 }
 
 }  // namespace
 
-void context::set_cookie(set_cookie_options options) {
-    write_cookie(response_state(), options.name_.view(), options.value_.view(), options.attributes_);
+void context_response_editor::set_cookie(set_cookie_options options) {
+    write_cookie(target(), options.name_.view(), options.value_.view(), options.attributes_);
 }
 
-void context::set_signed_cookie(set_signed_cookie_options options) {
+void context_response_editor::set_signed_cookie(set_signed_cookie_options options) {
     const auto name = options.name_.view();
     const auto value = options.value_.view();
     const auto secret = options.secret_.view();
     std::array<char, 128> wire_name_inline{};
-    std::pmr::string wire_name_heap(pool());
+    std::pmr::string wire_name_heap(owner_->pool());
     std::string_view wire_name = name;
     if (options.attributes_.prefix_) {
         const auto prefix = ruvia::http_cookie_prefix_text(*options.attributes_.prefix_);
@@ -49,10 +49,10 @@ void context::set_signed_cookie(set_signed_cookie_options options) {
         }
     }
     char signature[detail::cookie_signature_size];
-    detail::write_cookie_signature(signature, secret, wire_name, value, pool());
+    detail::write_cookie_signature(signature, secret, wire_name, value, owner_->pool());
     const auto signed_size = value.size() + 1U + detail::cookie_signature_size;
     std::array<char, 256> signed_inline{};
-    std::pmr::string signed_heap(pool());
+    std::pmr::string signed_heap(owner_->pool());
     std::string_view signed_view;
     if (signed_size <= signed_inline.size()) {
         if (!value.empty()) {
@@ -68,13 +68,13 @@ void context::set_signed_cookie(set_signed_cookie_options options) {
         signed_heap.append(signature, sizeof(signature));
         signed_view = signed_heap;
     }
-    write_cookie(response_state(), name, signed_view, options.attributes_);
+    write_cookie(target(), name, signed_view, options.attributes_);
 }
 
-void context::delete_cookie(delete_cookie_options options) {
+void context_response_editor::delete_cookie(delete_cookie_options options) {
     options.attributes_.max_age_.reset();
     options.attributes_.expires_ = cookie_deletion_expires;
-    write_cookie(response_state(), options.name_.view(), "", options.attributes_);
+    write_cookie(target(), options.name_.view(), "", options.attributes_);
 }
 
 }  // namespace ruvia

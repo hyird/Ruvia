@@ -217,7 +217,7 @@ for (const auto& worker : ruvia::app().workers()) {
 
 | 类别 | 宏名称 | 处理器成员函数签名 | 说明 |
 | --- | --- | --- | --- |
-| 缓冲或流式响应路由 | `RUVIA_GET(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `GET` 路由并自动提供 `HEAD` 回退（返回 `task<http_response>` 时为缓冲响应；返回 `task<void>` 时自动推导为 `c.stream()` / `c.stream_text()` / `c.stream_sse()` 流式响应）。`HEAD` 请求运行同一处理器与中间件，`c.req().method()` 仍为 `"HEAD"`，框架只发送响应头并丢弃响应体（流式处理器首次写入响应体时提交响应头；只要承载该响应的连接仍在，该写入及之后的 `write()` 均正常完成但不发送任何字节，`end()` 的 Trailer 校验后丢弃；连接一旦结束（对端关闭或重置、服务端因超时/排空/停机关闭，HTTP/2 还包括流被重置），下一次写入即按 GET 在对端中止后的方式失败，因此不检查 `aborted()` 的循环最迟与 GET 同时结束。HTTP/1 在该响应头之后即监视连接读侧（请求体尚未读完时，若处理器随后读取请求体则自动收回监视器及其已缓冲字节）：可复用连接上跟在流水线请求之后的对端结束视为半关闭并照常应答后续请求，其余对端结束即结束连接。此后 `aborted()` 为 `true`、`sleep()` 立即返回 `stop_requested`、`cancel_on_peer_eof()` 的 token 处于停止状态），`Allow` 同时列出 `HEAD`；WebSocket 路由不提供 `HEAD` 回退 |
+| 缓冲或流式响应路由 | `RUVIA_GET(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 自动提供 `HEAD` 回退并将其列入 `Allow`；仍运行同一处理器与中间件，`c.req().method()` 为 `"HEAD"`。缓冲响应省略正文；流式/SSE 必须先 `co_await writer.commit()`，返回 `completed` 时停止正文生产（HEAD/304 为正常完成，`aborted()` 为 false，不取消 token），返回 `body` 才可写入。请求体消费/排空与响应完成独立，默认不创建读侧断连监控，也不破坏 pipeline 写半关闭语义。WebSocket 路由不提供 HEAD 回退 |
 | 缓冲或流式路由 | `RUVIA_POST(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `POST` 路由（附加 `ruvia::stream_body` 时流式消费请求体；返回 `task<void>` 时流式写出响应/SSE） |
 | 缓冲或流式路由 | `RUVIA_PUT(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `PUT` 路由（可附加 `ruvia::stream_body` 流式消费请求体） |
 | 缓冲或流式路由 | `RUVIA_DELETE(path, handler, ...)` | `task<http_response> handler(context&)` 或 `task<void> handler(context&)` | 注册 `DELETE` 路由 |
@@ -271,9 +271,9 @@ HTTP/1 定长正文已完整预读且无需内容解码时，缓冲读取直接�
 
 ```cpp
 ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
-    c.status(ruvia::http_status::created);
-    c.header("X-Custom", "value");
-    c.set_cookie({
+    c.draft().status(ruvia::http_status::created);
+    c.draft().header("X-Custom", "value");
+    c.draft().set_cookie({
         .name_ = "theme",
         .value_ = "dark",
         .attributes_ = {
@@ -294,17 +294,21 @@ ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
 
 | `ruvia::context` 响应方法 | 说明 |
 | --- | --- |
-| `void status(http_status_code code)` | 设置最终响应状态码（`200..599`） |
-| `void header(name, value, options = {})` / `void remove_header(name)` | 设置（默认 `replace`，可指定 `http_response_header_mode::append`）或移除响应头 |
-| `void set_cookie(set_cookie_options)` / `set_signed_cookie(set_signed_cookie_options)` / `delete_cookie(delete_cookie_options)` | 设置普通 Cookie、HMAC 签名 Cookie 或使指定 Cookie 立即过期（发送过去的 `Expires` 日期，不使用 `Max-Age=0`）。`max_age_ = 0s` 同样写成过去的 `Expires`（RFC 6265 §4.1.1 的 `max-age-av` 以非零数字开头），并覆盖同时设置的 `expires_` |
+| `c.draft()` / `c.edit_response()` / `c.policy()` | 返回显式元数据 editor：分别编辑下一次构造的草稿、已选定的缓冲响应、跨替换的请求级响应策略 |
+| `editor.status(code)` / `header(name, value, options = {})` / `remove_header(name)` / `priority(fields)` | 设置 `200..599` 状态、响应头或 RFC 9218 优先级；头默认替换，可指定 `http_response_header_mode::append` |
+| `editor.set_cookie(options)` / `set_signed_cookie(options)` / `delete_cookie(options)` | 设置普通/HMAC 签名 Cookie 或用过去的 `Expires` 使其过期；`max_age_ = 0s` 同样使用过去的 `Expires`，并覆盖同时设置的 `expires_` |
 | `http_response text(...)` / `html(...)` / `body(...)` | 构造 `text/plain; charset=utf-8`、`text/html; charset=utf-8` 或原始响应体（支持字符串字面量、`std::string_view`、`std::pmr::string&&`、`std::span<const std::byte>`、`ruvia::static_text`） |
-| `template <typename T> http_response json(const T& model) const` | 将 `RUVIA_MODEL` 实例序列化为 `application/json` 响应 |
-| `http_response redirect(redirect_response_options options) const` | 构造重定向响应（默认 `302 Found`，可通过 `.status_` 指定 `301`/`307`/`308` 等）。绝对或 `//` 开头的 Location 若在 authority 内（`//` 之后、首个 `/`、`?`、`#` 之前）含 `\` 则抛出 `std::invalid_argument`：浏览器把 `\` 当作路径分隔符，编码为 `%5C` 会改变实际访问的主机 |
-| `http_response file(file_response_options options) const` | 发送磁盘文件响应（支持自动 Range 与条件请求处理） |
-| `http_response static_file(const static_root& root, static_file_response_options options) const` | 从预构建的 `static_root` 快照发送静态文件响应 |
+| `template <typename T> http_response json(const T& model)` | 将 `RUVIA_MODEL` 实例序列化为 `application/json` 响应 |
+| `http_response redirect(redirect_response_options options)` | 构造重定向响应（默认 `302 Found`）；绝对或 `//` 开头的 Location authority 含 `\` 时抛 `std::invalid_argument`，避免浏览器把反斜杠当路径分隔符而改变主机 |
+| `http_response file(file_response_options options)` | 构造磁盘文件响应，支持 Range 与条件请求 |
+| `http_response static_file(const static_root& root, static_file_response_options options)` | 从预构建的 `static_root` 快照构造响应 |
 | `http_response error(http_error_info_options options) const` | 构造标准 JSON 错误响应 |
 | `task<http_response> not_found()` | 调用当前匹配的 404 处理器生成响应 |
-| `void respond(http_response&& response)` / `const http_response* response() const noexcept` | 在返回 `task<void>` 的中间件中提前提交响应或检查下游响应 |
+| `void respond(http_response&&)` / `const http_response* response() const noexcept` | 选择或替换尚未提交的缓冲响应 / 只读观察选定响应（不包含尚待应用的 policy，不是最终线上响应头） |
+
+草稿字段只属于下一次成功的 `body/text/json/html/file/static_file/redirect` 构造；成功后草稿清空，构造失败则保留。`error()` 构造独立错误响应，不继承草稿。异常进入错误处理器前框架清空失败处理器的草稿，避免表示字段污染错误响应。
+
+`respond()` 只接管传入响应，不合并草稿或被替换响应。`edit_response()` 明确修改当前已选响应；没有响应时抛 `std::logic_error`。需要跨替换保留的字段必须显式写入 `policy()`：它在缓冲响应交付或流式提交时应用一次，**也适用于错误响应**。默认不覆盖状态，显式 `policy().status(...)` 则连错误状态也覆盖；不要把表示相关的 `Content-Range`、`ETag` 等放入通用策略。安全头中间件以默认/覆盖策略保留配置的冲突规则，session 与 CSRF Cookie 使用明确的请求级策略，不依赖 `next()` 前后时机。所有 editor（包括此前保存的 editor）在流式提交后修改均抛 `std::logic_error`。
 
 ### 3.3 进程内子请求（`"ruvia/web/context.h"`）
 
@@ -353,10 +357,11 @@ auto digest = std::move(result).value();
 class timing_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
-        // 前置处理
-        co_await next_value(); // single-shot，推进下游中间件与路由处理器
-        // 后置处理（此时可通过 c.response() 查看响应或通过 c.header() 追加响应头）
-        c.header("X-Processed", "true");
+        // 跨替换保留的策略在 next 前或后声明含义相同。
+        c.policy().header("X-Policy", "retained");
+        co_await next_value();
+        // 仅对当前缓冲响应后处理；不能修改已经提交的流式响应。
+        c.edit_response().header("X-Processed", "true");
     }
 };
 ```

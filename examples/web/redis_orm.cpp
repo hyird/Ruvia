@@ -75,7 +75,7 @@ private:
         }
         cached_user_response response({.resource_ = c.arena()});
         fill(response, user_value);
-        c.status(ruvia::http_status::created);
+        c.draft().status(ruvia::http_status::created);
         co_return c.json(response);
     }
     ruvia::task<ruvia::http_response> find(ruvia::context& c) {

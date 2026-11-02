@@ -27,7 +27,7 @@ class request_id_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
-        c.header("X-Example", "basic-http");
+        c.edit_response().header("X-Example", "basic-http");
     }
 };
 
@@ -59,14 +59,13 @@ ruvia::task<ruvia::http_response> example_error_handler(
 // whole path segments ("/api" scopes "/api/x" but never "/apix"); requests
 // outside every prefix keep using the app-wide handlers above.
 ruvia::task<ruvia::http_response> api_not_found(ruvia::context& c) {
-    c.status(ruvia::http_status::not_found);
     co_return c.error({.status_ = ruvia::http_status::not_found,
         .code_ = "api_not_found",
         .message_ = "no such API endpoint"});
 }
 
 ruvia::task<ruvia::http_response> api_error(ruvia::context& c, ruvia::http_error_info error) {
-    c.header("X-Api-Error", "true");
+    c.policy().header("X-Api-Error", "true");
     co_return c.error({.status_ = error.status(),
         .code_ = error.code(),
         .message_ = error.message(),
@@ -149,8 +148,8 @@ private:
         const auto body = co_await c.req().text();
         std::pmr::string owned(c.allocator<char>());
         owned.assign(body.data(), body.size());
-        c.status(ruvia::http_status::created);
-        c.header("X-Echo", "true");
+        c.draft().status(ruvia::http_status::created);
+        c.draft().header("X-Echo", "true");
         co_return c.text(std::move(owned));
     }
 
@@ -183,8 +182,8 @@ private:
     }
 
     ruvia::task<ruvia::http_response> options(ruvia::context& c) {
-        c.status(ruvia::http_status::no_content);
-        c.header("Allow", "GET, HEAD, OPTIONS");
+        c.draft().status(ruvia::http_status::no_content);
+        c.draft().header("Allow", "GET, HEAD, OPTIONS");
         co_return c.text("");
     }
 

@@ -71,6 +71,9 @@ private:
 
     ruvia::task<void> chunks(ruvia::context& c) {
         auto& stream = c.stream_text();
+        if (co_await stream.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await stream.write("part 1\n");
         co_await stream.writeln("part 2");
         if (co_await stream.sleep(std::chrono::milliseconds(20)) ==
@@ -84,6 +87,9 @@ private:
 
     ruvia::task<void> events_value(ruvia::context& c) {
         auto events_value = c.stream_sse();
+        if (co_await events_value.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         // 显式接受 HTTP/1 写半关闭也结束 SSE；把同一 token 传给业务订阅等待。
         const auto stop = events_value.cancel_on_peer_eof();
         co_await events_value.write({.data_ = "connected", .event_ = "open", .id_ = "1"});

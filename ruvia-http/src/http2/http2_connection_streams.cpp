@@ -93,9 +93,7 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         // completion can finally release storage and refill the rapid-reset budget.
         flush_window_debt(*stream);
         detach_active_header_block(*stream);
-        discard_deferred_stream_state(stream_id);
-        // A normally drained send still owes its owner a completion notification.
-        // Only an abort below cancels notifications that the owner has not taken.
+        http2_release_local_header_block(*stream);
         if (closed_streams_.source(stream_id) != http2_stream_close_source::peer) {
             closed_streams_.remember(stream_id, http2_stream_close_source::local);
         }
@@ -127,14 +125,6 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
     std::erase(pinned_streams_, stream_id);
 }
 
-void http2_connection::discard_deferred_stream_state(std::uint32_t stream_id) {
-    std::erase_if(pending_sends_,
-        [stream_id](const http2_pending_send& pending) { return pending.stream_id_ == stream_id; });
-    if (auto* stream = streams_.find(stream_id); stream != nullptr) {
-        http2_release_local_header_block(*stream);
-    }
-}
-
 bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_close_source source_value,
     http2_error_code error, close_notification_type notification) {
     auto* stream = streams_.find(stream_id);
@@ -153,8 +143,9 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
     if (stream != nullptr && !stream->is_aborted()) {
         detach_active_header_block(*stream);
     }
-    std::erase(drained_data_streams_, stream_id);
-    discard_deferred_stream_state(stream_id);
+    if (stream != nullptr) {
+        http2_release_local_header_block(*stream);
+    }
     if (stream == nullptr || stream->is_aborted()) {
         return false;
     }

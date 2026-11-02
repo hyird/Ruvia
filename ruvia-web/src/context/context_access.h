@@ -32,21 +32,22 @@ struct context_access final {
     }
 
     [[nodiscard]] static http_response static_file_resolved(
-        const context& context_value, const static_root& root, std::string_view relative,
+        context& context_value, const static_root& root, std::string_view relative,
         std::string_view content_type_value, static_root_entry_view base_entry,
         static_file_selection_mode mode);
 
     [[nodiscard]] static http_response make_static_json_response(
-        const context& context_value, std::string_view json_body) {
+        context& context_value, std::string_view json_body) {
         http_response response(context_value.arena());
         response.content_type(http_content_type::application_json);
         response.static_body(json_body);
         context_value.apply_response_state(response, std::nullopt);
+        static_cast<void>(context_value.response_state().take_draft());
         return response;
     }
 
     [[nodiscard]] static http_response make_owned_json_response(
-        const context& context_value, std::pmr::string& json_body) {
+        context& context_value, std::pmr::string& json_body) {
         return context_value.json_serialized(json_body);
     }
 
@@ -70,35 +71,32 @@ struct context_access final {
         context_value.store_response(std::move(response));
     }
 
-    [[nodiscard]] static http_response& response_storage(context& context_value) {
-        return context_value.response_storage();
+    [[nodiscard]] static const http_response_headers& handshake_headers(context& context_value) {
+        auto& state = context_value.response_state();
+        state.apply_policy(state.draft());
+        return state.draft().headers();
+    }
+    [[nodiscard]] static http_response& response_policy(context& context_value) {
+        return context_value.response_state().policy();
+    }
+    static void discard_draft(context& context_value) {
+        static_cast<void>(context_value.response_state().take_draft());
+    }
+    static void apply_response_policy(context& context_value, http_response& response) {
+        context_value.response_state().apply_policy(response);
+    }
+    static void security_header(context& context_value, std::string_view name, std::string_view value, bool replace) {
+        auto& state = context_value.response_state();
+        auto& response = replace ? state.policy() : state.defaults();
+        response.header_stable_view(name, value);
     }
 
-    // The metadata overlay of a final response, or nullptr before one exists.
-    // Header changes staged after a response became final must land here as
-    // well as on the response itself, so a replacement built afterwards (an
-    // outer middleware's respond(), an error handler) still carries them; see
-    // context_response_state::update_metadata.
-    [[nodiscard]] static http_response* final_response_metadata(context& context_value) noexcept {
-        auto* final_state = context_value.response_state().final();
-        return final_state == nullptr ? nullptr : &final_state->metadata();
-    }
-
-    [[nodiscard]] static bool has_response_header(
-        const context& context_value, std::string_view name) noexcept {
-        return context_value.response_state().active_response().header(name).has_value();
-    }
-
-    static void set_stable_response_header(
-        context& context_value, std::string_view name, std::string_view value) {
-        (void)context_value.set_stable_response_header(name, value);
-    }
     // The status the handler set; a file response sends it for the full body.
     [[nodiscard]] static http_status_code response_status(const context& context_value) noexcept {
-        return context_value.response_state().metadata().status();
+        return context_value.response_state().draft().status();
     }
 
-    static void apply_response_state(const context& context_value, http_response& response,
+    static void apply_response_state(context& context_value, http_response& response,
         std::optional<http_status_code> status_code) {
         context_value.apply_response_state(response, status_code);
     }
@@ -128,11 +126,11 @@ struct context_access final {
 
     // The final response, for the dispatcher to return; see
     // context_response_state::release_final.
-    [[nodiscard]] static http_response&& release_response(context& context_value) noexcept {
+    [[nodiscard]] static http_response&& release_response(context& context_value) {
         return context_value.response_state().release_final();
     }
 
-    [[nodiscard]] static http_response streaming_head(const context& context_value) {
+    [[nodiscard]] static http_response streaming_head(context& context_value) {
         return context_value.streaming_head();
     }
 

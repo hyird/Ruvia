@@ -93,10 +93,6 @@ public:
     }
     [[nodiscard]] constexpr const http2_local_content_known_length* known_length() const&& = delete;
 
-    [[nodiscard]] std::uint64_t accepted_bytes() const noexcept {
-        return accepted_bytes_;
-    }
-
     // Transactional preflight for one submit_data input. No counters change here.
     // A terminal known-length submission must complete the declared length exactly;
     // callers can retry a rejected input with a corrected terminal flag or size.
@@ -127,15 +123,8 @@ public:
         return http2_local_content_check::accepted;
     }
 
-    void accept(std::size_t bytes_value) noexcept {
-        accepted_bytes_ += static_cast<std::uint64_t>(bytes_value);
-    }
-
-    // "Committed" means materialized as DATA payload in the connection's outbound
-    // buffer, not flushed by a socket. The connection calls this at the single frame
-    // emission point, including deferred WINDOW_UPDATE drains.
     void commit(std::size_t bytes_value) noexcept {
-        committed_bytes_ += static_cast<std::uint64_t>(bytes_value);
+        accepted_bytes_ += static_cast<std::uint64_t>(bytes_value);
     }
 
     [[nodiscard]] bool length_complete() const noexcept {
@@ -154,12 +143,10 @@ private:
     void reset(content_type content) noexcept {
         content_ = content;
         accepted_bytes_ = 0;
-        committed_bytes_ = 0;
     }
 
     content_type content_;
     std::uint64_t accepted_bytes_{0};
-    std::uint64_t committed_bytes_{0};
 };
 
 }  // namespace ruvia::detail

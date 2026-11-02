@@ -99,6 +99,16 @@ public:
         result.get();
     }
 
+    void stall_next_read(std::function<void()> on_read) {
+        std::promise<void> configured;
+        auto ready = configured.get_future();
+        asio::post(io_, [this, &configured, on_read = std::move(on_read)]() mutable {
+            on_read_ = std::move(on_read);
+            configured.set_value();
+        });
+        ready.get();
+    }
+
     // Rethrows the first connection failure instead of reporting a count.
     [[nodiscard]] std::size_t key_count() {
         std::promise<std::size_t> counted;
@@ -230,6 +240,11 @@ private:
         try {
             for (;;) {
                 auto arguments = co_await read_command(*socket, buffer);
+                if (!arguments.empty() && arguments.front() == "GET" && on_read_) {
+                    auto on_read = std::exchange(on_read_, {});
+                    on_read();
+                    continue;
+                }
                 const auto reply = execute(arguments);
                 co_await asio::async_write(*socket, asio::buffer(reply), asio::use_awaitable);
             }
@@ -246,6 +261,7 @@ private:
     std::vector<std::shared_ptr<socket_type>> sockets_;
     std::map<std::string, std::string, std::less<>> store_;
     std::optional<std::string> poison_;
+    std::function<void()> on_read_;
     std::exception_ptr failure_;
     bool closing_{false};
     std::thread thread_;
@@ -539,6 +555,58 @@ RUVIA_TEST(db_query_result_cache_rejects_corrupt_zero_column_entries) {
                 failure = std::current_exception();
             }
             co_await database.shutdown();
+        } catch (...) {
+            if (!failure) {
+                failure = std::current_exception();
+            }
+        }
+        co_await redis.shutdown();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    try {
+        ruvia::test::drive_backend_task(attachment, exercise());
+    } catch (...) {
+        ruvia::test::retire_backend_attachment(attachment);
+        throw;
+    }
+    ruvia::test::retire_backend_attachment(attachment);
+}
+
+RUVIA_TEST(db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_redis) {
+    redis_store_peer redis_peer;
+    ruvia::test::backend_startup_peer database_peer(
+        ruvia::test::backend_startup_peer::protocol::postgresql, false,
+        ruvia::test::backend_startup_peer::after_startup::idle);
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    const ruvia::redis_config redis_config{.host_ = "127.0.0.1",
+        .port_ = redis_peer.port(),
+        .tls_ = {.mode_ = ruvia::client_tls_mode::disabled},
+        .pool_size_per_worker_ = 1};
+    auto exercise = [&]() -> ruvia::task<void> {
+        ruvia::redis_client redis(attachment.loop(), redis_config);
+        std::exception_ptr failure;
+        try {
+            co_await redis.connect();
+            ruvia::db_client database(attachment.loop(), database_peer.config(), redis.handle(), ruvia::db_cache_config{});
+            try {
+                co_await database.connect();
+                redis_peer.stall_next_read([&database] { database.close(); });
+                bool cancelled = false;
+                try {
+                    (void)co_await read_sql_cached(database.handle(), "cancel-cache");
+                } catch (const ruvia::redis_error& error) {
+                    cancelled = error.code() == ruvia::redis_error::code_type::cancelled ||
+                                error.code() == ruvia::redis_error::code_type::closing;
+                }
+                RUVIA_CHECK(cancelled);
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            co_await database.shutdown();
+            RUVIA_CHECK(!(co_await redis.handle().get("still-open")));
         } catch (...) {
             if (!failure) {
                 failure = std::current_exception();

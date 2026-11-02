@@ -81,9 +81,9 @@ private:
                         .content_ = ruvia::http_client_request_content_view::bytes(incoming_body),
                     });
             auto response = co_await std::move(operation);
-            c.status(response.status());
+            c.draft().status(response.status());
             if (const auto content_type = response.header("content-type")) {
-                c.header("content-type", *content_type);
+                c.draft().header("content-type", *content_type);
             }
             // read_all() also reserves against this client pool's retained-result budget.
             auto body = co_await response.body().read_all();
@@ -115,16 +115,21 @@ private:
             }));
         } catch (const ruvia::http_client_error& error) {
             const auto failure = report_upstream_failure(error);
-            c.status(failure.status_);
+            c.draft().status(failure.status_);
             error_body = failure.message_;
         }
         if (!response) {
-            co_await c.stream_text().write(error_body);
+            if (co_await c.stream_text().commit() == ruvia::stream_commit_result::body) {
+                co_await c.stream().write(error_body);
+            }
             co_return;
         }
-        c.status(response->status());
+        c.draft().status(response->status());
         if (const auto content_type = response->header("content-type")) {
-            c.header("content-type", *content_type);
+            c.draft().header("content-type", *content_type);
+        }
+        if (co_await c.stream().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
         }
         co_await response->body().pipe_to(c.stream());
     }

@@ -130,7 +130,7 @@ private:
         response.ensure<"tags">().emplace_back(ruvia::string("created", {.resource_ = c.arena()}));
         response.ensure<"tags">().emplace_back(
             ruvia::string("validated", {.resource_ = c.arena()}));
-        c.status(ruvia::http_status::created);
+        c.draft().status(ruvia::http_status::created);
         co_return c.json(response);
     }
 

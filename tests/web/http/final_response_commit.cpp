@@ -27,7 +27,7 @@ class invalid_final_response_routes final {
 
     // 426 must name the required protocol in Upgrade (RFC 9110 15.5.22).
     ruvia::task<ruvia::http_response> upgrade_required(ruvia::context& context_value) {
-        context_value.status(ruvia::http_status::upgrade_required);
+        context_value.draft().status(ruvia::http_status::upgrade_required);
         co_return context_value.text("upgrade");
     }
 };

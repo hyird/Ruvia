@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <functional>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -86,7 +85,6 @@ body_pipeline_handover stream_body_reader<stream_type>::take_pipeline(
 template <typename stream_type>
 task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>::read() {
     require_not_failed();
-    co_await release_peer_monitor();
     try {
         if (body_plan_.chunked() != nullptr) {
             if (continue_pending_) {
@@ -115,7 +113,6 @@ task<std::optional<std::span<const std::byte>>> stream_body_reader<stream_type>:
 template <typename stream_type>
 task<std::string_view> stream_body_reader<stream_type>::read_all(std::pmr::string& body) {
     require_not_failed();
-    co_await release_peer_monitor();
     try {
         if (const auto* known_length = body_plan_.known_length()) {
             const auto content_length = known_length->content_length();
@@ -195,46 +192,6 @@ template <typename stream_type>
 task<void> stream_body_reader<stream_type>::send_continue() {
     co_await interim_output_.send_continue();
     continue_pending_ = false;
-}
-
-template <typename stream_type>
-task<void> stream_body_reader<stream_type>::release_peer_monitor() {
-    if (peer_monitor_ == nullptr) {
-        co_return;
-    }
-    auto* monitor = std::exchange(peer_monitor_, nullptr);
-    monitor->cancel();
-    try {
-        co_await monitor->join();
-    } catch (...) {
-        peer_eof_observed_ = true;
-    }
-    if (monitor->peer_aborted()) {
-        peer_eof_observed_ = true;
-    }
-    const auto monitored = monitor->pipeline();
-    if (!monitored.empty()) {
-        if (body_plan_.chunked() != nullptr && !initial_body_and_pipeline_.empty()) {
-            materialize_initial_remainder(monitored.size());
-        }
-        const auto current_view = buffer_.view();
-        const bool transfer_in_buffer =
-            !transfer_input_.empty() && !current_view.empty() &&
-            std::greater_equal<const char*>{}(transfer_input_.data(), current_view.data()) &&
-            std::less_equal<const char*>{}(transfer_input_.data() + transfer_input_.size(),
-                current_view.data() + current_view.size());
-        const auto transfer_offset =
-            transfer_in_buffer ? static_cast<std::size_t>(transfer_input_.data() - current_view.data()) : 0;
-        if (transfer_input_.empty() && initial_body_and_pipeline_.empty() && read_cursor_ != 0) {
-            buffer_.consume(read_cursor_);
-            read_cursor_ = 0;
-        }
-        buffer_.append(monitored);
-        if (transfer_in_buffer) {
-            transfer_input_ = std::string_view(buffer_.data() + transfer_offset, transfer_input_.size());
-        }
-        monitor->clear_pipeline();
-    }
 }
 
 template <typename stream_type>

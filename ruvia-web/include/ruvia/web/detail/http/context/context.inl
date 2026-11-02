@@ -23,7 +23,7 @@ inline const std::remove_cvref_t<t_type>& context::request_state() const {
 
 template <typename t_type>
     requires detail::is_model<t_type>
-inline http_response context::json(const t_type& value) const {
+inline http_response context::json(const t_type& value) {
     auto body = to_json(value, {.resource_ = arena()});
     return json_serialized(body);
 }

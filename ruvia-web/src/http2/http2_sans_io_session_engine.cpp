@@ -677,6 +677,9 @@ task<void> http2_sans_io_session_engine::dispatch_one_inner(std::uint32_t stream
                             stream_body_failure.has_value() && context_value.exception() == nullptr) {
                             throw http_request_body_protocol_error(*stream_body_failure);
                         }
+                        if (!resolved->route().has_middleware()) {
+                            context_access::apply_response_policy(context_value, response);
+                        }
                     } catch (...) {
                         exception = std::current_exception();
                     }
@@ -1060,11 +1063,13 @@ void http2_sans_io_session_engine::drain_events() {
             }
         }
     }
-    for (const auto stream_id : connection_.take_drained_data_streams()) {
-        if (auto* signal = stream_runtimes_.signal_for(stream_id)) {
+    // SETTINGS and WINDOW_UPDATE can restore DATA capacity without publishing
+    // an application event; producers must retry their caller-owned suffixes.
+    stream_runtimes_.for_each([](http2_sans_io_stream_runtime& runtime) {
+        if (auto* signal = runtime.signal()) {
             signal->wake();
         }
-    }
+    });
     output_budget_.wake();
 }
 

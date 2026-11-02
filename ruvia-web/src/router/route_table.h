@@ -102,12 +102,13 @@ public:
         context_services services, static_file_selection_mode static_file_mode, http_response& response) const;
     // HTTP/1 holds a matched buffered route's context in its existing session
     // frame and awaits this non-coroutine entry directly. Other callers use
-    // dispatch_buffered_response to own that lifetime. In both cases destroy
-    // the context before completing body consumption and before its arena.
+    // dispatch_buffered_response to own that lifetime. Direct callers apply
+    // context_access::apply_response_policy once for routes without middleware.
+    // Destroy the context before body completion and before its arena.
     [[nodiscard]] task<http_response> invoke_route(const resolved_route& resolved, context& context) const;
-    // Failed buffered/stream invocations share this context-aware completion,
-    // preserving metadata regardless of failure depth. If it fails, destroy
-    // the context before the request-only handle_exception fallback.
+    // Failed buffered/stream invocations preserve only the explicit policy;
+    // discarded representation fields never enter the replacement error.
+    // If finalization fails, destroy the context before the request-only fallback.
     [[nodiscard]] task<http_response> finalize_failure(context& context, std::exception_ptr exception) const;
     task<http_response> handle_error(const http_request& request, request_memory& memory,
         http_error_info error, context_services services) const;

@@ -26,15 +26,6 @@ public:
                std::holds_alternative<aborted_after_commit_type>(state_);
     }
 
-    // True once a body-suppressed head (HEAD / 304 semantics) has completed the
-    // message: a successful response that can deliver nothing more. Sinks
-    // complete body writes, trailers and end() without sending anything,
-    // report aborted(), and answer sleep() with stop_requested.
-    [[nodiscard]] bool body_suppressed_complete() const noexcept {
-        // An ended stream always holds its commit plan.
-        return ended() && commit_plan()->body_plan().body_suppressed();
-    }
-
     [[nodiscard]] const http_response_stream_commit_plan* commit_plan() const& noexcept {
         if (const auto* value = std::get_if<body_open_type>(&state_)) {
             return &value->plan_;

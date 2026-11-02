@@ -26,6 +26,7 @@
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/web/context.h"
+#include "ruvia/web/streaming.h"
 
 #include "body/http_lazy_buffered_body.h"
 #include "context/context_access.h"
@@ -81,10 +82,6 @@ public:
         lazy_buffered_body<stream_type>&, http_response_coding_selection,
         http_response_coding_availability, std::pmr::memory_resource* = nullptr) = delete;
 
-    ~response_stream_sink() {
-        request_body_.reader().bind_peer_monitor(nullptr);
-    }
-
     [[nodiscard]] bool committed() const noexcept {
         return state_.committed();
     }
@@ -94,10 +91,8 @@ public:
     }
     const http_response_stream_commit_plan* commit_plan() const&& = delete;
 
-    // A completed body-suppressed head (HEAD / 304) can deliver nothing more,
-    // so it reads as aborted and a handler loop polling aborted() ends.
     [[nodiscard]] bool aborted() const noexcept {
-        return state_.aborted() || state_.body_suppressed_complete() || peer_aborted();
+        return state_.aborted() || (!state_.ended() && peer_aborted());
     }
 
     [[nodiscard]] http1_request_connection_plan connection_plan() const noexcept {
@@ -111,23 +106,13 @@ public:
         if (peer_monitor_) {
             return peer_monitor_->token();
         }
-        if (state_.body_suppressed_complete()) {
-            // A body-suppressed head already ended a successful response, so
-            // there is nothing left to wait for: a stopped token, as sleep()
-            // reports stop_requested.
-            if (!head_only_stop_) {
-                head_only_stop_.emplace();
-                head_only_stop_->request_stop();
-            }
-            return head_only_stop_->token();
-        }
         if (state_.ended() || state_.aborted()) {
             throw std::logic_error("peer EOF monitoring cannot start on a finished response stream");
         }
         if (request_body_.consumption() != http1_request_body_consumption::complete) {
             throw std::logic_error("peer EOF monitoring requires a fully consumed request body");
         }
-        start_peer_monitor(http1_peer_eof_meaning::abandons_response);
+        start_peer_monitor();
         return peer_monitor_->token();
     }
 
@@ -140,7 +125,6 @@ public:
     }
 
     task<void> finish_peer_monitor() {
-        request_body_.reader().bind_peer_monitor(nullptr);
         if (peer_monitor_) {
             peer_monitor_->cancel();
             co_await peer_monitor_->join();
@@ -149,6 +133,14 @@ public:
 
     [[nodiscard]] std::string_view monitored_pipeline() const noexcept {
         return peer_monitor_ ? peer_monitor_->pipeline() : std::string_view{};
+    }
+
+    task<stream_commit_result> commit() {
+        if (state_.committed()) {
+            throw std::logic_error("response stream is already committed");
+        }
+        co_await commit_head(http_response_trailer_intent::none);
+        co_return state_.ended() ? stream_commit_result::completed : stream_commit_result::body;
     }
 
     template <typename sink>
@@ -196,8 +188,8 @@ private:
         });
     }
 
-    void start_peer_monitor(http1_peer_eof_meaning eof_meaning) {
-        peer_monitor_.emplace(stream_, worker_, inbound_resource_, request_body_.pipeline_size(), eof_meaning);
+    void start_peer_monitor() {
+        peer_monitor_.emplace(stream_, worker_, inbound_resource_, request_body_.pipeline_size());
         try {
             peer_monitor_->start();
         } catch (...) {
@@ -206,47 +198,7 @@ private:
         }
     }
 
-    void ensure_body_suppressed_peer_monitor() {
-        if (!worker_.is_current()) {
-            return;
-        }
-        if (peer_monitor_ && peer_monitor_->stopped() && !peer_monitor_->peer_aborted()) {
-            request_body_.reader().bind_peer_monitor(nullptr);
-            peer_monitor_.reset();
-        }
-        if (!peer_monitor_) {
-            const auto meaning = connection_plan_.disposition() == http1_close_policy::allow_reuse
-                                     ? http1_peer_eof_meaning::ends_idle_connection
-                                     : http1_peer_eof_meaning::abandons_response;
-            start_peer_monitor(meaning);
-            if (request_body_.consumption() != http1_request_body_consumption::complete) {
-                request_body_.reader().bind_peer_monitor(&*peer_monitor_);
-            }
-        }
-        peer_monitor_->request_stop();
-    }
-
-    // A body write after a body-suppressed head completed the response (HEAD,
-    // 304) succeeds without sending -- the body a GET would carry is discarded
-    // -- only while the connection that carried the response lives. Once the
-    // peer has left (seen by the peer monitor) or this server closed the
-    // socket (timeout, drain, shutdown), it fails exactly as a GET body write
-    // fails then, so a handler that never checks aborted() still ends.
-    task<void> discard_body_write() {
-        ensure_body_suppressed_peer_monitor();
-        ensure_peer_writable();
-        if (!stream_.lowest_layer().is_open()) {
-            const std::error_code error = asio::error::bad_descriptor;
-            mark_write_failure(error);
-            throw inbound_transport_error(error, "failed to write HTTP response stream body");
-        }
-        // The minimal positive tick (a zero duration is await_ready) still
-        // suspends, so a handler that keeps writing in a loop yields the
-        // worker thread instead of hard-spinning the event loop.
-        static_cast<void>(co_await sleep_for(worker_, std::chrono::steady_clock::duration(1)));
-    }
-
-    task<void> commit(http_response_trailer_intent trailer_intent) {
+    task<void> commit_head(http_response_trailer_intent trailer_intent) {
         ensure_peer_writable();
         if (state_.committed()) {
             if (trailer_intent == http_response_trailer_intent::present) {
@@ -305,43 +257,19 @@ private:
             mark_write_failure(ec);
             throw inbound_transport_error(ec, "failed to write HTTP response stream head");
         }
-        if (state_.body_suppressed_complete()) {
-            // The head completed the response. Watch the connection from now
-            // on so discarded writes of a handler still running fail once the
-            // peer leaves; if the request body is still unread, the body
-            // reader reclaims the monitor and any bytes it buffered before
-            // reading the socket. Any peer-EOF token handed out stops now.
-            ensure_body_suppressed_peer_monitor();
-        }
     }
 
     task<timer_sleep_result> sleep(std::chrono::milliseconds duration, const stop_token& stop_token_value) {
-        if (state_.body_suppressed_complete()) {
-            co_return timer_sleep_result::stop_requested;
-        }
+        state_.ensure_body_allowed();
         co_return co_await sleep_for(worker_, duration, stop_token_value);
     }
 
     task<void> write(std::string_view chunk) {
-        if (state_.body_suppressed_complete()) {
-            co_await discard_body_write();
-            co_return;
-        }
         ensure_peer_writable();
+        state_.ensure_body_allowed();
         if (chunk.empty()) {
             co_return;
         }
-        // Only the first chunk needs the asynchronous head-commit path.
-        if (!state_.committed()) {
-            co_await commit(http_response_trailer_intent::none);
-            if (state_.body_suppressed_complete()) {
-                // The head just ended a body-suppressed response (HEAD, 304):
-                // the chunk is the body a GET would carry and is discarded.
-                co_return;
-            }
-        }
-        ensure_peer_writable();
-        state_.ensure_body_allowed();
 
         if (compression_.active()) {
             try {
@@ -400,20 +328,13 @@ private:
     }
 
     task<void> end(std::span<const http_header_view> trailers) {
-        if (state_.body_suppressed_complete()) {
-            // Trailers are optional metadata (RFC 9110 6.5) that a
-            // body-suppressed response cannot carry: validated like any
-            // trailer section, then discarded.
-            static_cast<void>(validate_http_response_trailers(trailers));
-            co_return;
-        }
-        ensure_peer_writable();
         if (state_.ended()) {
             if (!trailers.empty()) {
                 throw std::logic_error("response stream is already ended");
             }
             co_return;
         }
+        ensure_peer_writable();
 
         const auto trailer_section = validate_http_response_trailers(trailers);
         const auto trailer_intent = response_trailer_intent(trailer_section);
@@ -424,7 +345,7 @@ private:
             http_clear_pmr_string_retaining_small(trailers_);
         }
 
-        co_await commit(trailer_intent);
+        co_await commit_head(trailer_intent);
         ensure_peer_writable();
         if (state_.ended()) {
             co_return;
@@ -482,8 +403,6 @@ private:
     http_interim_response_output* interim_output_{};
     std::pmr::memory_resource* inbound_resource_;
     std::optional<http1_peer_eof_monitor<stream_type>> peer_monitor_;
-    // A stopped token for cancel_on_peer_eof() after a body-suppressed head.
-    std::optional<stop_source> head_only_stop_;
 };
 
 }  // namespace ruvia::detail

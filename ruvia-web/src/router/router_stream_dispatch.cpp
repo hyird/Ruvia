@@ -61,8 +61,8 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
         } else {
             // The stream terminal: a websocket or tunnel upgrade commits the
             // session the middleware chain opened before its handshake head,
-            // then the handler runs. A response stream commits it lazily with
-            // its head, so the handler may still change the session first.
+            // then the handler runs. A response stream commits it explicitly
+            // with commit() (or end() for an empty response).
             auto terminal = [&handler_invoked, &handler, &route](context& terminal_context) -> task<void> {
                 if (route.endpoint().response_stream() == nullptr && session_access::available(terminal_context)) {
                     co_await session_access::commit(terminal_context);
@@ -79,8 +79,8 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
                 }
                 if (!handler_invoked && !detail::context_access::output_committed(context_value)) {
                     throw std::logic_error(
-                        "context is not finalized; stream middleware must set a response, write "
-                        "the stream, or await next()");
+                        "context is not finalized; stream middleware must select a response, "
+                        "commit the stream, or await next()");
                 }
             }
         }
@@ -122,7 +122,17 @@ task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
         // chance to adjust an uncommitted head; an already committed writer no
         // longer needs the context.
         if (response_stream_output != nullptr) {
-            co_await response_stream_output->writer().end();
+            try {
+                co_await response_stream_output->writer().end();
+            } catch (...) {
+                exception = std::current_exception();
+            }
+            if (exception != nullptr) {
+                if (detail::context_access::output_committed(context_value)) {
+                    std::rethrow_exception(exception);
+                }
+                co_return co_await finalize_failure(context_value, exception);
+            }
         }
         co_return std::nullopt;
     }

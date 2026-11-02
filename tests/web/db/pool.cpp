@@ -260,18 +260,18 @@ RUVIA_TEST(db_pool_shutdown_wakes_waiters_while_all_connections_are_leased) {
         auto first = co_await handle.begin_transaction();
         auto second = co_await handle.begin_transaction();
         task_scope pending(value.worker());
-        bool cancelled = false;
+        bool closing = false;
         const auto wait_for_connection = [&]() -> task<void> {
             try {
                 (void)co_await handle.query("SELECT blocked");
             } catch (const db_error& error) {
-                cancelled = error.code() == db_error::code_type::cancelled;
+                closing = error.code() == db_error::code_type::closing;
             }
         };
         pending.spawn(wait_for_connection());
         value.close();
         co_await pending.join();
-        RUVIA_CHECK(cancelled);
+        RUVIA_CHECK(closing);
     });
     peer.wait_for_disconnects();
 }

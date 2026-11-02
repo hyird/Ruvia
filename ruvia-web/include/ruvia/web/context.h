@@ -434,6 +434,31 @@ struct delete_cookie_options final {
     cookie_options attributes_{};
 };
 
+// 显式选择草稿或已选响应的元数据编辑能力；不暴露可绕过提交检查的引用。
+// 每次修改都检查尚未提交，保存 editor 也不能在提交后修改头。
+class context_response_editor final {
+public:
+    void status(http_status_code status_code);
+    void header(std::string_view name, std::string_view value, http_response_header_options options = {});
+    void priority(http_priority_fields fields);
+    void remove_header(std::string_view name);
+    void set_cookie(set_cookie_options options);
+    void set_signed_cookie(set_signed_cookie_options options);
+    void delete_cookie(delete_cookie_options options);
+
+private:
+    friend class context;
+    enum class target_type { draft,
+        selected,
+        policy };
+    context_response_editor(context& owner, target_type target) noexcept
+        : owner_(&owner),
+          target_(target) {}
+    [[nodiscard]] http_response& target() const;
+    context* owner_;
+    target_type target_;
+};
+
 struct static_file_response_options final {
     borrowed_text relative_path_{};
     borrowed_text content_type_{};
@@ -484,6 +509,7 @@ struct file_response_options final {
 class context final {
 private:
     friend class context_request;
+    friend class context_response_editor;
     friend struct detail::context_access;
     friend struct detail::session_access;
     template <typename t_type>
@@ -498,7 +524,7 @@ private:
         const detail::context_services& services);
 
     [[nodiscard]] http_response static_file(const static_root& root, static_file_response_options options,
-        detail::static_file_selection_mode mode) const;
+        detail::static_file_selection_mode mode);
 
 public:
     // Sends a bodyless 1xx head before the final response. Fields are copied
@@ -686,71 +712,66 @@ public:
         return std::pmr::polymorphic_allocator<t_type>(arena());
     }
 
-    // Route handlers construct one final response, so context accepts only
-    // 200..599. Informational heads belong to a dedicated protocol submit path.
-    // Status, headers and cookies set before a final response exists are the
-    // metadata every response built from this context starts from. Set after a
-    // final response exists (for example after next()), they post-process that
-    // response and also become the metadata of a response that replaces it.
-    void status(http_status_code status_code);
+    // draft() 只编辑下一次构造的响应草稿，与是否调用 next()/respond() 无关。
+    // body/text/json/html/file/static_file/redirect 成功后消费草稿，失败则保留；
+    // stream commit 消费草稿。error() 独立构造，不继承草稿或已选响应。
+    [[nodiscard]] context_response_editor draft() noexcept {
+        return context_response_editor(*this, context_response_editor::target_type::draft);
+    }
 
-    void header(std::string_view name, std::string_view value, http_response_header_options options = {});
-    // Response priority hints for downstream intermediaries. Absent members
-    // stay absent so the intermediary can merge them with client parameters.
-    void priority(http_priority_fields fields);
+    // 明确后处理已 respond 的缓冲响应；尚无响应或已提交时修改抛 logic_error。
+    // 字段只属于当前响应，下一次替换不继承；跨替换字段显式写入 policy()。
+    [[nodiscard]] context_response_editor edit_response() noexcept {
+        return context_response_editor(*this, context_response_editor::target_type::selected);
+    }
 
-    // Remove a response header set by this handler, before the response is
-    // committed. Setting header(name, std::nullopt) to mean deletion was a
-    // hidden sentinel; removal now has its own named entry point.
-    void remove_header(std::string_view name);
+    // 显式跨替换策略，只在最终交付/stream commit 时应用一次；builder 不继承它。
+    // header/cookie 覆盖同名或同 cookie 身份的响应字段；append 保留重复语义。
+    // 警告：显式 policy().status() 也覆盖错误响应；默认不强制任何状态。
+    // response() 观察的是尚未应用 policy 的选定响应，不是最终 wire head。
+    // 与 draft/edit_response 一样，提交后任何修改均抛 logic_error。
+    [[nodiscard]] context_response_editor policy() noexcept {
+        return context_response_editor(*this, context_response_editor::target_type::policy);
+    }
 
-    void set_cookie(set_cookie_options options);
-    void set_signed_cookie(set_signed_cookie_options options);
-    void delete_cookie(delete_cookie_options options);
-
-    // Observe the final response produced by downstream middleware or a terminal
-    // handler. Internal provisional response storage is never exposed here.
+    // 只读观察已选择的缓冲响应（不包含尚待应用的 policy）；没有响应则为 nullptr。
     [[nodiscard]] const http_response* response() const noexcept;
 
-    // End middleware dispatch with an explicitly constructed response. Calling
-    // next() after respond() is a control-flow error and becomes a 500 response;
-    // a middleware may still call respond() after next() to replace an
-    // uncommitted downstream response. A replacement -- and an error raised
-    // after next() -- carries none of the replaced response's status or headers,
-    // only the context metadata set after that response became final.
+    // 将独立响应移入 context；替换丢弃旧响应全部字段，不自动合并草稿。
+    // next() 在 respond() 后启动是控制流错误；已提交后不得替换。
     void respond(http_response&& response);
 
     // Body builders copy their input into response-owned storage, except
     // static_text, which explicitly borrows static bytes without copying, and
     // std::pmr::string&&, which transfers compatible arena allocations.
-    [[nodiscard]] http_response body(std::string_view body = {}) const;
+    [[nodiscard]] http_response body(std::string_view body = {});
     template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] http_response body(string_type&& body_value) const {
+    [[nodiscard]] http_response body(string_type&& body_value) {
         return body_owned(std::move(body_value));
     }
-    [[nodiscard]] http_response body(std::span<const std::byte> body) const;
-    [[nodiscard]] http_response body(static_text body) const;
+    [[nodiscard]] http_response body(std::span<const std::byte> body);
+    [[nodiscard]] http_response body(static_text body);
 
     // text/plain; charset=UTF-8 with X-Content-Type-Options: nosniff (an
     // application-set X-Content-Type-Options is kept), like stream_text().
-    [[nodiscard]] http_response text(std::string_view body) const;
+    [[nodiscard]] http_response text(std::string_view body);
     template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] http_response text(string_type&& body_value) const {
+    [[nodiscard]] http_response text(string_type&& body_value) {
         return text_owned(std::move(body_value));
     }
-    [[nodiscard]] http_response text(static_text body) const;
+    [[nodiscard]] http_response text(static_text body);
 
     template <typename t_type>
         requires detail::is_model<t_type>
-    [[nodiscard]] http_response json(const t_type& value) const;
+    [[nodiscard]] http_response json(const t_type& value);
 
-    [[nodiscard]] http_response html(std::string_view body) const;
+    [[nodiscard]] http_response html(std::string_view body);
     template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] http_response html(string_type&& body_value) const {
+    [[nodiscard]] http_response html(string_type&& body_value) {
         return html_owned(std::move(body_value));
     }
-    [[nodiscard]] http_response html(static_text body) const;
-    [[nodiscard]] http_response redirect(redirect_response_options options) const;
+    [[nodiscard]] http_response html(static_text body);
+    [[nodiscard]] http_response redirect(redirect_response_options options);
 
     // File helpers honor If-Range only for matching strong ETags. Last-Modified
     // dates are weak and do not authorize a partial response.
@@ -759,7 +780,7 @@ public:
     // checked again right before sending: a file changed in place since file()
     // fails a single plain-TCP body before its head leaves and aborts any
     // other transfer before its bytes.
-    [[nodiscard]] http_response file(file_response_options options) const;
+    [[nodiscard]] http_response file(file_response_options options);
 
     // relative_path_ is a decoded file path below the root, such as
     // req().param("*") of a wildcard route; it is never percent-decoded again.
@@ -767,34 +788,32 @@ public:
     // segment, an absolute path, or a NUL is 403 -- rejected, never resolved,
     // whichever parameter it came from -- and an unindexed name 404.
     [[nodiscard]] http_response static_file(
-        const static_root& root, static_file_response_options options) const;
+        const static_root& root, static_file_response_options options);
 
     [[nodiscard]] http_response error(http_error_info_options options) const;
 
     [[nodiscard]] task<http_response> not_found();
 
 private:
-    [[nodiscard]] http_response streaming_head() const;
-    [[nodiscard]] http_response body_owned(std::pmr::string&& body) const;
-    [[nodiscard]] http_response text_owned(std::pmr::string&& body) const;
-    [[nodiscard]] http_response html_owned(std::pmr::string&& body) const;
+    [[nodiscard]] http_response streaming_head();
+    [[nodiscard]] http_response body_owned(std::pmr::string&& body);
+    [[nodiscard]] http_response text_owned(std::pmr::string&& body);
+    [[nodiscard]] http_response html_owned(std::pmr::string&& body);
 
     [[nodiscard]] task<http_response> not_found_task();
     [[nodiscard]] task<dispatch_response> dispatch_task(std::pmr::string method,
         std::pmr::string target, std::pmr::string body, std::pmr::vector<http_header> headers,
         ::ruvia::stop_token stop);
     context& set_stable_response_header(std::string_view name, std::string_view value);
-    void apply_response_state(http_response& response, std::optional<http_status_code> status_code) const;
+    void apply_response_state(http_response& response, std::optional<http_status_code> status_code);
 
-    [[nodiscard]] http_response json_serialized(std::pmr::string& body) const;
+    [[nodiscard]] http_response json_serialized(std::pmr::string& body);
 
     [[nodiscard]] std::pmr::string& decoded_body() const;
     [[nodiscard]] detail::context_request_storage& request_storage() const;
     [[nodiscard]] detail::context_services& services() noexcept;
     [[nodiscard]] const detail::context_services& services() const noexcept;
-    [[nodiscard]] http_response& response_storage();
     void store_response(http_response&& response);
-    void store_assigned_response(http_response&& response);
     void store_error(std::exception_ptr exception) noexcept {
         error_ = std::move(exception);
     }

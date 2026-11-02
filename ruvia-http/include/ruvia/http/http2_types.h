@@ -17,7 +17,6 @@ class http2_connection;
 
 enum class http2_finish_status : std::uint8_t {
     accepted,
-    queued,
     // The stream disappeared or was reset while its owner was finishing it.
     closed,
 };
@@ -100,7 +99,6 @@ struct http2_send_window_state final {
     std::int32_t connection_window_{0};
     std::int32_t stream_window_{0};
     std::uint32_t available_{0};
-    bool queued_data_{false};
 };
 
 // feed() has all-or-nothing ownership for each supplied span; it never partially
@@ -132,7 +130,7 @@ using http2_data_output_observer_type = void (*)(void*, std::uint32_t, std::size
 
 // Initial-head/control submission status. closed is an expected race with a
 // reset peer; invalid_state is a caller contract violation and emits no bytes.
-// queued/backpressured belong on http2_data_submit_status, not here.
+// DATA flow-control progress is reported separately below.
 enum class http2_submit_status : std::uint8_t {
     accepted,
     closed,
@@ -141,16 +139,18 @@ enum class http2_submit_status : std::uint8_t {
     peer_capability_unavailable,
 };
 
-enum class http2_data_queue_state : std::uint8_t { drained,
-    queued,
-    aborted };
-
 enum class http2_data_submit_status : std::uint8_t {
-    accepted,
-    queued,
+    complete,
     backpressured,
     expectation_pending,
     closed,
+};
+
+// Only consumed_bytes_ have been copied into serialized DATA. The unconsumed
+// suffix always remains caller-owned. complete concerns this input, not socket I/O.
+struct http2_data_submit_result final {
+    std::size_t consumed_bytes_{0};
+    http2_data_submit_status status_{http2_data_submit_status::complete};
 };
 
 enum class http2_request_content_release_status : std::uint8_t {

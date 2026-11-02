@@ -181,10 +181,6 @@ public:
         local_content_.begin_known_length(length);
     }
 
-    void accept_local_content(std::size_t bytes_value) noexcept {
-        local_content_.accept(bytes_value);
-    }
-
     void commit_local_content(std::size_t bytes_value) noexcept {
         local_content_.commit(bytes_value);
     }
@@ -341,10 +337,6 @@ public:
             return false;
         }
         return lifecycle_.reject_local_connect();
-    }
-
-    [[nodiscard]] bool queue_local_end_stream() noexcept {
-        return lifecycle_.queue_local_end_stream();
     }
 
     [[nodiscard]] bool commit_local_end_stream() noexcept {

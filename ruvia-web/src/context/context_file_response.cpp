@@ -386,7 +386,7 @@ void add_file_headers(http_response& response, const file_response_source& sourc
     return plan.authorized_by_if_range() ? file_header_set::if_range_partial : file_header_set::full;
 }
 
-void apply_file_response_state(const context& context_value, const file_response_source& source_value,
+void apply_file_response_state(context& context_value, const file_response_source& source_value,
     http_response& response, std::optional<http_status_code> status_code) {
     detail::context_access::apply_response_state(context_value, response, status_code);
     // Declare the negotiation dimension after context response metadata is
@@ -399,12 +399,12 @@ void apply_file_response_state(const context& context_value, const file_response
     }
 }
 
-void set_file_body(const context& context_value, file_response_source& source_value,
+void set_file_body(context& context_value, file_response_source& source_value,
     http_response& response, std::uint64_t offset, std::uint64_t length) {
     source_value.body_.set_body(response, context_value.arena(), source_value.size_, offset, length);
 }
 
-void set_full_file_body(const context& context_value, file_response_source& source_value,
+void set_full_file_body(context& context_value, file_response_source& source_value,
     http_response& response) {
     source_value.body_.set_full_body(response, context_value.arena(), source_value.size_);
 }
@@ -417,7 +417,7 @@ void validate_indexed_file_for_bodyless_response(
     }
 }
 
-[[nodiscard]] http_response make_not_modified_response(const context& context_value,
+[[nodiscard]] http_response make_not_modified_response(context& context_value,
     const file_response_source& source_value, const file_validators& validators,
     bool& indexed_file_validated, http_status_code status_code) {
     validate_indexed_file_for_bodyless_response(source_value, indexed_file_validated);
@@ -427,7 +427,7 @@ void validate_indexed_file_for_bodyless_response(
     return response;
 }
 
-[[nodiscard]] http_response make_full_file_response(const context& context_value,
+[[nodiscard]] http_response make_full_file_response(context& context_value,
     file_response_source& source_value, const file_validators& validators,
     std::optional<http_status_code> status_code) {
     http_response response(context_value.arena());
@@ -437,7 +437,7 @@ void validate_indexed_file_for_bodyless_response(
     return response;
 }
 
-[[nodiscard]] http_response make_multipart_response(const context& context_value,
+[[nodiscard]] http_response make_multipart_response(context& context_value,
     file_response_source& source_value, const file_validators& validators,
     const http_byte_range_set& ranges, file_header_set header_set) {
     std::array<char, detail::secure_token_size> boundary_token;
@@ -461,7 +461,7 @@ void validate_indexed_file_for_bodyless_response(
     return response;
 }
 
-[[nodiscard]] http_response make_file_response(const context& context_value, file_response_source source_value) {
+[[nodiscard]] http_response make_file_response(context& context_value, file_response_source source_value) {
     const auto& request = detail::context_access::request(context_value);
     std::array<char, detail::static_file_etag_size> etag_storage{};
     std::array<char, http_imf_fixdate_size> last_modified_storage{};
@@ -525,7 +525,7 @@ void validate_indexed_file_for_bodyless_response(
 
 }  // namespace
 
-http_response context::file(file_response_options options) const {
+http_response context::file(file_response_options options) {
     const auto not_found = [] {
         return http_error({.status_ = ruvia::http_status::not_found,
             .code_ = "not_found",
@@ -552,7 +552,7 @@ http_response context::file(file_response_options options) const {
     const auto& snapshot = opened.snapshot_;
 
     const auto content_type_value = options.content_type_.view();
-    return make_file_response(*this,
+    auto response = make_file_response(*this,
         file_response_source{
             .body_ = file_response_body_source::file(file_response_path(
                 native_path, snapshot.identity_, std::move(opened.handle_), read_policy)),
@@ -568,16 +568,18 @@ http_response context::file(file_response_options options) const {
             .content_coding_ = http_content_coding::identity,
             .negotiates_encoding_ = false,
         });
+    detail::context_access::discard_draft(*this);
+    return response;
 }
 
-http_response context::static_file(const static_root& root, static_file_response_options options) const {
+http_response context::static_file(const static_root& root, static_file_response_options options) {
     const auto mode = services().precompressed_static_files() ? detail::static_file_selection_mode::precompressed
                                                               : detail::static_file_selection_mode::identity_only;
     return static_file(root, options, mode);
 }
 
 http_response detail::context_access::static_file_resolved(
-    const context& context_value, const static_root& root, std::string_view relative,
+    context& context_value, const static_root& root, std::string_view relative,
     std::string_view content_type_value, detail::static_root_entry_view base_entry,
     detail::static_file_selection_mode mode) {
     // Serve a precompressed variant when the client accepts one; the bytes and
@@ -611,7 +613,7 @@ http_response detail::context_access::static_file_resolved(
     const auto response_last_modified =
         memory_variant == nullptr ? served_entry.last_modified() : memory_variant->last_modified();
 
-    return make_file_response(context_value,
+    auto response = make_file_response(context_value,
         file_response_source{
             .body_ = memory_variant != nullptr ? file_response_body_source::bytes_value(memory_variant->bytes())
                      : resident_bytes != nullptr
@@ -633,10 +635,12 @@ http_response detail::context_access::static_file_resolved(
             .negotiates_encoding_ = true,
             .validate_indexed_file_for_bodyless_response_ = memory_variant == nullptr && resident_bytes == nullptr,
         });
+    discard_draft(context_value);
+    return response;
 }
 
 http_response context::static_file(const static_root& root, static_file_response_options options,
-    detail::static_file_selection_mode mode) const {
+    detail::static_file_selection_mode mode) {
     // relative_path_ is a decoded file path -- a wildcard capture from
     // req().param("*") is passed as is -- so it is never percent-decoded here:
     // a second decode would turn "%252E%252E" into a ".." no route or path

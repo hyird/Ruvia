@@ -62,7 +62,7 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> same_name_cookie(ruvia::context& c) {
-        c.set_cookie({.name_ = "ruvia_session", .value_ = "handler"});
+        c.draft().set_cookie({.name_ = "ruvia_session", .value_ = "handler"});
         c.session().clear();
         co_return c.text("ok");
     }

@@ -69,20 +69,19 @@ void exercise_client(ruvia::testing::test_context& ruvia_ctx, bool reset_peer, b
         for (;;) {
             while (!outbound.empty()) {
                 const auto count = std::min<std::size_t>(outbound.size(), 16384);
-                const auto result_value = connection.submit_data(1, std::string_view(outbound.data(), count), ruvia::http2_end_stream::keep_open);
-                if (result_value == ruvia::http2_data_submit_status::backpressured) {
-                    break;
-                }
-                RUVIA_CHECK(result_value == ruvia::http2_data_submit_status::accepted || result_value == ruvia::http2_data_submit_status::queued);
-                outbound.erase(0, count);
-                if (result_value == ruvia::http2_data_submit_status::queued) {
+                const auto result_value = connection.submit_data(1, std::string_view(outbound.data(), count), ruvia::http2_end_stream::keep_open, count);
+                RUVIA_CHECK(result_value.status_ == ruvia::http2_data_submit_status::complete ||
+                            result_value.status_ == ruvia::http2_data_submit_status::backpressured);
+                outbound.erase(0, result_value.consumed_bytes_);
+                if (result_value.status_ != ruvia::http2_data_submit_status::complete) {
                     break;
                 }
             }
             if (finish_value && outbound.empty() && !ended) {
-                const auto result_value = connection.submit_data(1, {}, ruvia::http2_end_stream::end_stream);
-                RUVIA_CHECK(result_value == ruvia::http2_data_submit_status::accepted || result_value == ruvia::http2_data_submit_status::queued);
-                ended = true;
+                const auto result_value = connection.submit_data(1, {}, ruvia::http2_end_stream::end_stream, 0);
+                RUVIA_CHECK(result_value.status_ == ruvia::http2_data_submit_status::complete);
+                RUVIA_CHECK_EQ(result_value.consumed_bytes_, std::size_t{0});
+                ended = result_value.status_ == ruvia::http2_data_submit_status::complete;
             }
             if (connection.wants_write()) {
                 ruvia::testing::drain_output(connection, wire);
@@ -289,11 +288,11 @@ void exercise_closing_peer(ruvia::testing::test_context& ruvia_ctx, closing_peer
             if (behavior != closing_peer::no_close && behavior != closing_peer::end_without_close) {
                 const auto close = websocket->output_plan();
                 RUVIA_CHECK(!close.bytes().empty());
-                RUVIA_CHECK(connection.submit_data(1, close.bytes(), ruvia::http2_end_stream::keep_open) == ruvia::http2_data_submit_status::accepted);
+                RUVIA_CHECK(connection.submit_data(1, close.bytes(), ruvia::http2_end_stream::keep_open, 65535).status_ == ruvia::http2_data_submit_status::complete);
                 (void)websocket->consume_output(close.bytes().size());
             }
             if (behavior == closing_peer::clean_release || behavior == closing_peer::end_without_close) {
-                RUVIA_CHECK(connection.submit_data(1, {}, ruvia::http2_end_stream::end_stream) == ruvia::http2_data_submit_status::accepted);
+                RUVIA_CHECK(connection.submit_data(1, {}, ruvia::http2_end_stream::end_stream, 65535).status_ == ruvia::http2_data_submit_status::complete);
             }
             // Publish the DATA/END_STREAM before releasing the real server lease.
             // Its half-open retirement emits NO_ERROR, in the same socket write.
@@ -460,8 +459,8 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
                         const auto end_flag = mode == handshake_end::close_without_end_stream
                                                   ? ruvia::http2_end_stream::keep_open
                                                   : ruvia::http2_end_stream::end_stream;
-                        RUVIA_CHECK(connection.submit_data(head->stream_id(), close.bytes(), end_flag) ==
-                                    ruvia::http2_data_submit_status::accepted);
+                        RUVIA_CHECK(connection.submit_data(head->stream_id(), close.bytes(), end_flag, 65535).status_ ==
+                                    ruvia::http2_data_submit_status::complete);
                     }
                     request.emplace(std::move(*head));
                 }

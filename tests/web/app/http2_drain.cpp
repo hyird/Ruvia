@@ -75,6 +75,9 @@ public:
     // of its stream ends the sleep in time.
     ruvia::task<void> stalled(ruvia::context& context) {
         auto& writer = context.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
         co_await writer.write(std::string_view("ready"));
         try {
             (void)co_await writer.sleep(std::chrono::seconds(30));

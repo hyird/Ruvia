@@ -315,8 +315,8 @@ RUVIA_TEST(file_response_preserves_normal_status_before_evaluating_request_condi
         static_file_test_request request;
         request.add_header(item.condition_);
         with_static_context(request, [&](ruvia::context& context_value) {
-            context_value.status(item.status_);
-            context_value.header("X-Context", "preserved");
+            context_value.draft().status(item.status_);
+            context_value.draft().header("X-Context", "preserved");
             std::optional<ruvia::http_response> response;
             try {
                 response.emplace(indexed ? context_value.static_file(root, {.relative_path_ = "payload.txt"})
@@ -727,7 +727,7 @@ RUVIA_TEST(static_file_preserves_context_vary_when_adding_accept_encoding) {
     static_file_test_request request;
     request.set_method("GET");
     with_static_context(request, [&](ruvia::context& context_value) {
-        context_value.header("Vary", "Origin");
+        context_value.draft().header("Vary", "Origin");
 
         const auto response =
             context_value.static_file(root, {.relative_path_ = "app.js", .content_type_ = "text/javascript"});

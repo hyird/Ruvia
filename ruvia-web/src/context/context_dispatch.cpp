@@ -131,7 +131,8 @@ task<dispatch_response> context::dispatch_task(std::pmr::string method, std::pmr
             throw std::logic_error("dispatch requires a buffered route");
         }
     }
-    const auto stop = combine_stop_tokens(capabilities_.stop_token(), std::move(stop_token_value));
+    const stop_group stop_owner(capabilities_.stop_token(), std::move(stop_token_value));
+    const auto stop = stop_owner.token();
     if (stop.stop_requested()) {
         throw std::system_error(asio::error::operation_aborted);
     }
