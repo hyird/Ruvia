@@ -67,8 +67,12 @@ namespace {
 }  // namespace
 
 http_response_headers http_response_headers::clone(std::size_t additional_headers) const {
+    const auto existing = size();
+    if (additional_headers > heap_.max_size() - existing) {
+        throw std::length_error("HTTP response header table is too large");
+    }
     http_response_headers copy(detail::http_resolved_pmr_resource_tag{}, resource_);
-    copy.reserve(size() + additional_headers);
+    copy.reserve(existing + additional_headers);
     for (const auto& header_value : *this) {
         // Static descriptors can be shared; owning descriptors must keep an
         // independent allocation so either block may be changed or destroyed.

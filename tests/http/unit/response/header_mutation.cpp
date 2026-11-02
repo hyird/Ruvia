@@ -1,8 +1,10 @@
 #include <cstddef>
 #include <iterator>
+#include <limits>
 #include <memory_resource>
 #include <new>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/http_response.h"
@@ -144,6 +146,39 @@ RUVIA_TEST(response_commit_headers_leaves_staged_response_independent) {
     RUVIA_CHECK_EQ(staged.header("Content-Type").value_or(""), "application/json");
     RUVIA_CHECK_EQ(response.header("Content-Type").value_or(""), "text/plain");
     RUVIA_CHECK_EQ(response.headers().size(), std::size_t{1});
+}
+
+RUVIA_TEST(response_header_clone_rejects_overflow_without_changing_source) {
+    for (const std::size_t count : {std::size_t{1}, std::size_t{9}}) {
+        failing_memory_resource resource;
+        {
+            ruvia::http_response response(&resource);
+            for (std::size_t index = 0; index < count; ++index) {
+                response.header("X-Clone-" + std::to_string(index), "original");
+            }
+            const auto additional = (std::numeric_limits<std::size_t>::max)() - count + 1;
+            bool rejected = false;
+            try {
+                (void)response.headers().clone(additional);
+            } catch (const std::length_error&) {
+                rejected = true;
+            }
+            RUVIA_CHECK(rejected);
+            RUVIA_CHECK_EQ(response.headers().size(), count);
+            for (std::size_t index = 0; index < count; ++index) {
+                RUVIA_CHECK_EQ(response.header("X-Clone-" + std::to_string(index)).value_or(""), "original");
+            }
+            auto staged = response.headers().clone(1);
+            staged.header("X-Clone-0", "changed");
+            staged.header("X-Extra", "added");
+            RUVIA_CHECK_EQ(response.header("X-Clone-0").value_or(""), "original");
+            RUVIA_CHECK(!response.header("X-Extra"));
+            response.commit_headers(std::move(staged));
+            RUVIA_CHECK_EQ(response.header("X-Clone-0").value_or(""), "changed");
+            RUVIA_CHECK_EQ(response.header("X-Extra").value_or(""), "added");
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
 }
 
 RUVIA_TEST(response_content_type_constants_are_valid_fields_set_without_allocation) {

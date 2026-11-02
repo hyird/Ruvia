@@ -278,6 +278,7 @@ public:
     void set_cookie(const set_cookie_plan& plan);
     // Owned bytes are copied so either block may change or be destroyed;
     // stable views are shared. Reserves room for additional_headers more fields.
+    // Throws length_error before cloning if the total field count cannot fit.
     [[nodiscard]] http_response_headers clone(std::size_t additional_headers = 0) const;
 
 private:
