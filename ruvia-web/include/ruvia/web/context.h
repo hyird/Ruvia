@@ -106,19 +106,20 @@ private:
 
 class tls_connection_transport final {
 public:
-    // The verified peer certificate subject DN for mutual TLS, or empty when
-    // no client certificate was presented.
-    [[nodiscard]] constexpr std::string_view client_certificate_subject() const noexcept {
+    // Verified client certificate subject DN. Absence means no certificate;
+    // an engaged empty value is a certificate with an empty Subject (RFC 5280
+    // section 4.1.2.6), not an unauthenticated connection.
+    [[nodiscard]] constexpr std::optional<std::string_view> client_certificate_subject() const noexcept {
         return client_certificate_subject_;
     }
 
 private:
     friend class conn_info;
 
-    explicit constexpr tls_connection_transport(std::string_view client_certificate_subject) noexcept
+    explicit constexpr tls_connection_transport(std::optional<std::string_view> client_certificate_subject) noexcept
         : client_certificate_subject_(client_certificate_subject) {}
 
-    std::string_view client_certificate_subject_;
+    std::optional<std::string_view> client_certificate_subject_;
 };
 
 // Runtime connection metadata associated with a Web request. This information
@@ -212,7 +213,7 @@ private:
     }
 
     [[nodiscard]] static constexpr conn_info tls(
-        std::string_view remote_address, std::string_view client_certificate_subject) noexcept {
+        std::string_view remote_address, std::optional<std::string_view> client_certificate_subject) noexcept {
         return conn_info(remote_address, tls_connection_transport(client_certificate_subject));
     }
 

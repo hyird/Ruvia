@@ -320,7 +320,7 @@ public:
         std::basic_string<char, traits_type, allocator_type>&&, std::uint16_t) const = delete;
 
     [[nodiscard]] context_services with_tls_transport(std::string_view remote_address,
-        std::string_view client_certificate_subject, std::uint16_t remote_port,
+        std::optional<std::string_view> client_certificate_subject, std::uint16_t remote_port,
         tls_served_certificate& served_certificate) const noexcept {
         auto services = *this;
         services.connection_services_.info_ = conn_info::tls(remote_address, client_certificate_subject);
@@ -331,7 +331,7 @@ public:
     }
 
     template <typename traits_type, typename allocator_type>
-    context_services with_tls_transport(std::basic_string<char, traits_type, allocator_type>&&, std::string_view,
+    context_services with_tls_transport(std::basic_string<char, traits_type, allocator_type>&&, std::optional<std::string_view>,
         std::uint16_t, tls_served_certificate&) const = delete;
 
     template <typename traits_type, typename allocator_type>

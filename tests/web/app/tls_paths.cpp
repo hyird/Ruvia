@@ -45,11 +45,20 @@ class tls_path_controller final {
 public:
     RUVIA_ROUTES_BEGIN(tls_path_controller)
     RUVIA_GET("/tls", secure);
+    RUVIA_GET("/tls-peer", peer_identity);
     RUVIA_GET("/tls-truncated", truncated);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> secure(ruvia::context& context) {
         co_return context.text(std::string_view("secure"));
+    }
+
+    ruvia::task<ruvia::http_response> peer_identity(ruvia::context& context) {
+        const auto connection = context.conn();
+        const auto subject = connection.tls()->client_certificate_subject();
+        co_return context.text(!subject           ? std::string_view("absent")
+                               : subject->empty() ? std::string_view("present-empty")
+                                                  : *subject);
     }
 
     // Commits the response, then fails before the body is complete.
@@ -119,6 +128,73 @@ std::string encrypted_private_key(ruvia::test::tls_identity& identity, std::stri
     return std::string(data, static_cast<std::size_t>(size));
 }
 
+// A verified identity may have no Subject attributes (RFC 5280 section 4.1.2.6).
+// A separate, conforming CA avoids relying on direct trust of an empty-subject
+// leaf. The existing named test identity remains separately trusted.
+asio::ssl::context empty_subject_client(ruvia::test::tls_identity& issuer,
+    const std::filesystem::path& trust_bundle) {
+    auto* const key = SSL_CTX_get0_privatekey(issuer.context_.native_handle());
+    const auto authority = std::unique_ptr<X509, decltype(&X509_free)>(X509_new(), X509_free);
+    const auto authority_name = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
+    if (!authority || !authority_name || X509_set_version(authority.get(), 2) != 1 ||
+        ASN1_INTEGER_set(X509_get_serialNumber(authority.get()), 3) != 1 ||
+        !X509_gmtime_adj(X509_getm_notBefore(authority.get()), -60) ||
+        !X509_gmtime_adj(X509_getm_notAfter(authority.get()), 86400) ||
+        X509_set_pubkey(authority.get(), key) != 1 ||
+        X509_NAME_add_entry_by_txt(authority_name.get(), "CN", MBSTRING_ASC,
+            reinterpret_cast<const unsigned char*>("empty-subject-client-ca"), -1, -1, 0) != 1 ||
+        X509_set_subject_name(authority.get(), authority_name.get()) != 1 ||
+        X509_set_issuer_name(authority.get(), authority_name.get()) != 1) {
+        throw std::runtime_error("cannot create empty-subject client CA");
+    }
+    X509V3_CTX authority_context{};
+    X509V3_set_ctx(&authority_context, authority.get(), authority.get(), nullptr, nullptr, 0);
+    const auto constraints = std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)>(
+        X509V3_EXT_nconf_nid(nullptr, &authority_context, NID_basic_constraints, "critical,CA:TRUE"),
+        X509_EXTENSION_free);
+    if (!constraints || X509_add_ext(authority.get(), constraints.get(), -1) != 1 ||
+        ruvia::test::sign_tls_certificate(authority.get(), key) <= 0) {
+        throw std::runtime_error("cannot sign empty-subject client CA");
+    }
+    const auto certificate = std::unique_ptr<X509, decltype(&X509_free)>(X509_new(), X509_free);
+    const auto subject = std::unique_ptr<X509_NAME, decltype(&X509_NAME_free)>(X509_NAME_new(), X509_NAME_free);
+    if (!certificate || !subject || X509_set_version(certificate.get(), 2) != 1 ||
+        ASN1_INTEGER_set(X509_get_serialNumber(certificate.get()), 2) != 1 ||
+        !X509_gmtime_adj(X509_getm_notBefore(certificate.get()), -60) ||
+        !X509_gmtime_adj(X509_getm_notAfter(certificate.get()), 86400) ||
+        X509_set_pubkey(certificate.get(), key) != 1 ||
+        X509_set_subject_name(certificate.get(), subject.get()) != 1 ||
+        X509_set_issuer_name(certificate.get(), authority_name.get()) != 1) {
+        throw std::runtime_error("cannot create empty-subject client identity");
+    }
+    X509V3_CTX extension_context{};
+    X509V3_set_ctx(&extension_context, authority.get(), certificate.get(), nullptr, nullptr, 0);
+    const auto alternative_name = std::unique_ptr<X509_EXTENSION, decltype(&X509_EXTENSION_free)>(
+        X509V3_EXT_nconf_nid(nullptr, &extension_context, NID_subject_alt_name,
+            "critical,URI:urn:ruvia:test:client"),
+        X509_EXTENSION_free);
+    if (!alternative_name || X509_add_ext(certificate.get(), alternative_name.get(), -1) != 1 ||
+        ruvia::test::sign_tls_certificate(certificate.get(), key) <= 0) {
+        throw std::runtime_error("cannot sign empty-subject client identity");
+    }
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    if (SSL_CTX_use_certificate(client.native_handle(), certificate.get()) != 1 ||
+        SSL_CTX_use_PrivateKey(client.native_handle(), key) != 1) {
+        throw std::runtime_error("cannot load empty-subject client identity");
+    }
+    const auto encoded = std::unique_ptr<BIO, decltype(&BIO_free)>(BIO_new(BIO_s_mem()), BIO_free);
+    if (!encoded || PEM_write_bio_X509(encoded.get(), authority.get()) != 1) {
+        throw std::runtime_error("cannot encode empty-subject client certificate");
+    }
+    char* bytes = nullptr;
+    const auto size = BIO_get_mem_data(encoded.get(), &bytes);
+    std::ofstream output(trust_bundle, std::ios::binary | std::ios::app);
+    if (size <= 0 || bytes == nullptr || !output.write(bytes, size)) {
+        throw std::runtime_error("cannot trust empty-subject client certificate");
+    }
+    return client;
+}
+
 template <typename fn_type>
 bool throws_system_error(fn_type&& fn) {
     try {
@@ -170,11 +246,17 @@ std::string client_https_get(
 // Verifies the server chain against the test CA; `host` is both the SNI name
 // and, when `verify_host` is set, the name the certificate must match.
 std::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
-    const std::filesystem::path& ca_file, const char* host, bool verify_host) {
+    const std::filesystem::path& ca_file, const char* host, bool verify_host,
+    std::string_view target = "/tls", SSL_CTX* client_identity = nullptr) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.load_verify_file(ca_file.string());
     client.set_verify_mode(asio::ssl::verify_peer);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    if (client_identity != nullptr &&
+        (SSL_use_certificate(stream.native_handle(), SSL_CTX_get0_certificate(client_identity)) != 1 ||
+            SSL_use_PrivateKey(stream.native_handle(), SSL_CTX_get0_privatekey(client_identity)) != 1)) {
+        throw std::runtime_error("cannot present TLS test client identity");
+    }
     if (SSL_set_tlsext_host_name(stream.native_handle(), host) != 1 ||
         (verify_host && SSL_set1_host(stream.native_handle(), host) != 1)) {
         return {};
@@ -184,7 +266,7 @@ std::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpo
     if (!error) {
         stream.handshake(asio::ssl::stream_base::client, error);
     }
-    const auto request = std::string("GET /tls HTTP/1.1\r\nHost: ") + host + "\r\nConnection: close\r\n\r\n";
+    const auto request = std::string("GET ") + std::string(target) + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n";
     if (!error) {
         asio::write(stream, asio::buffer(request), error);
     }
@@ -197,10 +279,10 @@ std::string https_get(asio::io_context& io, const asio::ip::tcp::endpoint& endpo
     return response;
 }
 
-bool serves_secure_body(const std::string& response) {
+bool serves_secure_body(const std::string& response, std::string_view expected = "secure") {
     const auto body_start = response.find("\r\n\r\n");
     return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos &&
-           std::string_view(response).substr(body_start + 4) == "secure";
+           std::string_view(response).substr(body_start + 4) == expected;
 }
 
 // RFC 9112 §9.8: an HTTP/1.0 response body is delimited by the close, so a
@@ -417,6 +499,7 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
     std::filesystem::copy_file(identity.ca_file_, certificate);
     std::filesystem::copy_file(identity.ca_file_, client_ca);
     write_file(private_key, encrypted_private_key(identity, password));
+    auto empty_client = empty_subject_client(identity, client_ca);
 
     asio::io_context io;
     asio::ip::tcp::acceptor reservation(io, {asio::ip::address_v4::loopback(), 0});
@@ -473,6 +556,15 @@ RUVIA_TEST(https_serves_credentials_from_non_ascii_paths_across_runs) {
         if (ready) {
             RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true)));
             RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "sni.test", false)));
+            RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
+                                               "/tls-peer"),
+                "absent"));
+            RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
+                                               "/tls-peer", identity.context_.native_handle()),
+                "CN=localhost"));
+            RUVIA_CHECK(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true,
+                                               "/tls-peer", empty_client.native_handle()),
+                "present-empty"));
             RUVIA_CHECK_EQ(client_https_get(endpoint.port(), client_ca,
                                {.certificate_chain_file_ = certificate,
                                    .private_key_file_ = private_key,

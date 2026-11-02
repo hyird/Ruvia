@@ -559,12 +559,13 @@ task<void> worker_connections::run_tls_session(
             }
         }
         std::pmr::string client_certificate(memory_.allocator<char>());
+        std::optional<std::string_view> client_subject;
         if (listener_value.tls()->client_certificates_.has_value()) {
-            extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
+            client_subject = extract_tls_client_certificate(tls_stream.native_handle(), client_certificate);
         }
         tls_served_certificate served_certificate(SSL_get_certificate(tls_stream.native_handle()));
         const auto services = capabilities_.make_context_services(stop_token_)
-                                  .with_tls_transport(remote_address, client_certificate, remote_port, served_certificate);
+                                  .with_tls_transport(remote_address, client_subject, remote_port, served_certificate);
         const auto close_mode = is_http2_alpn_selected(tls_stream)
                                     ? co_await run_http2(tls_stream, socket, services)
                                     : co_await run_stream(listener_value, tls_stream, socket, services);
