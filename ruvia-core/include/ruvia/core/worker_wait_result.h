@@ -48,9 +48,18 @@ enum class worker_wait_status : std::uint8_t {
 
 // Worker-bound waits have five mutually exclusive outcomes. A status is always
 // available for exhaustive handling; only value owns a payload.
+// The outcome category is fixed at construction. Construction and extraction
+// follow the payload's copy/move semantics; a failed payload move never leaves
+// an existing outcome without a category. Rebuild an owning optional to replace
+// an outcome instead of assigning it.
 template <typename t_type>
 class worker_wait_result final {
 public:
+    worker_wait_result(const worker_wait_result&) = default;
+    worker_wait_result(worker_wait_result&&) = default;
+    worker_wait_result& operator=(const worker_wait_result&) = delete;
+    worker_wait_result& operator=(worker_wait_result&&) = delete;
+
     [[nodiscard]] worker_wait_status status() const noexcept {
         return std::holds_alternative<detail::worker_wait_value<t_type>>(result_)
                    ? worker_wait_status::value

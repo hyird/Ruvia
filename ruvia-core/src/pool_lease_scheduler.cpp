@@ -195,7 +195,9 @@ bool pool_lease_acquire::await_ready() {
         throw std::logic_error("pool lease acquire cannot be awaited");
     }
     awaited_ = true;
-    result_ = owner_->try_acquire(stop_token_);
+    if (auto acquired = owner_->try_acquire(stop_token_)) {
+        result_.emplace(std::move(*acquired));
+    }
     return result_.has_value();
 }
 

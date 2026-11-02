@@ -32,9 +32,9 @@ class http_client_tunnel;
 class http_udp_tunnel;
 class http_datagram_stream;
 
-// Owns one capsule payload. Its storage remains valid across subsequent reads
-// and stream destruction. Like other worker results, destroy it on its owner
-// worker before that worker retires.
+// Owns one capsule payload. Its storage remains valid across subsequent reads,
+// stream destruction and connection retirement, even if input remains unread.
+// Like other worker results, destroy it on its owner worker before that worker retires.
 class http_capsule final {
 public:
     http_capsule(const http_capsule&) = delete;
@@ -100,8 +100,9 @@ private:
     detail::http_capsule_stream_state* state_{};
 };
 
-// Owned opaque HTTP Datagram payload, valid across later reads and client
-// shutdown. Destroy results on their worker before the worker retires.
+// Owned opaque HTTP Datagram payload, valid across later reads, stream and
+// connection retirement, and client shutdown even if input remains unread.
+// Destroy results on their worker before the worker retires.
 class http_datagram final {
 public:
     http_datagram(const http_datagram&) = delete;

@@ -158,7 +158,10 @@ public:
     [[nodiscard]] task<void> pipe_to(response_stream_writer& output) &;
     task<void> pipe_to(response_stream_writer&) && = delete;
 
-    [[nodiscard]] bool complete() const noexcept;
+    // 尚有未读正文或接收尚未终止时返回 false；耗尽后仅正常完成返回 true。
+    // 失败时与 read() 一样抛出，包括客户端提前关闭；独立上传失败不影响
+    // 已完整接收的响应。移动后不再持有状态的响应仍返回 true。
+    [[nodiscard]] bool complete() const;
 
 private:
     friend class http_client_response;

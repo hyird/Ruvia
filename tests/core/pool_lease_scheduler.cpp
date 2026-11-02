@@ -218,7 +218,7 @@ ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
             resource.live_blocks_ != baseline_blocks) {
             co_return;
         }
-        retained_result = acquired;
+        retained_result.emplace(acquired);
     }
 
     for (std::size_t i = 0; i < 32; ++i) {

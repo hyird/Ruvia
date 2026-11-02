@@ -119,6 +119,13 @@ public:
         }
         read_scope_.close();
         output_scope_.close();
+        // Results pin the worker/client payload domain, not transport input.
+        // Retire cold frames first; started operations must already be joined
+        // before releasing even an unconsumed connection-owned suffix.
+        input_ = {};
+        owned_input_.reset();
+        offset_ = 0;
+        server_ = nullptr;
     }
     // Parse the currently available input synchronously. Capsules the reader
     // does not keep are skipped by the decoder without allocating them or
@@ -185,6 +192,8 @@ public:
     std::optional<http_client_tunnel> client_;
     http_capsule_decoder decoder_;
     http_capsule_config config_;
+    // Server chunks belong to the connection's inbound budget, unlike payload_.
+    // close() releases them while the borrowed tunnel is still alive.
     std::optional<std::pmr::string> owned_input_;
     std::string_view input_;
     std::size_t offset_{};

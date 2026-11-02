@@ -360,6 +360,10 @@ std::string_view text = body_bytes.text();
 
 响应体若采用全部受支持的 `Content-Encoding` 编码栈（`gzip`、`deflate`、`br`、`zstd`；`identity` 视为无编码且不计入编码层数上限），在交付首个字节前自动解码，并从 `response.headers()` 中移除 `Content-Encoding` 与编码前的 `Content-Length`（RFC 9110 §8.4）；`206` 响应或包含未知编码 token 的响应按原样交付并保留 `Content-Encoding`；语法非法或超过 `max_content_codings` 层数的已知编码栈以 `protocol_error` 失败。
 
+`response.body().complete()` 是会检查失败的成功完成查询，不承诺 `noexcept`：尚有未消费的缓冲正文或接收尚未终止时返回 `false`；正文耗尽且正常完成才返回 `true`。耗尽后发生截断、取消或异常退役时，它与 `read()` 一样抛出原响应异常；客户端提前关闭且未保存其他响应异常时抛出 `http_client_error::closing`，不能把停机当作正常 EOF。已缓冲的数据仍可用 `read()` / `text()` 逐块读取，耗尽后才暴露失败；`read_all()` 则必须确认整个剩余响应成功才能交付结果。移动后不再持有状态的响应保留 `complete() == true` 的查询语义。
+
+响应完成与上传完成相互独立：若响应已经完整接收，单独的上传失败不会使该响应的读取或 `complete()` 失败；上传错误仍由 `exchange.body()` 的操作报告。上传 writer 的同名 `complete()` 不是上述响应成功查询。
+
 ### 5.4 流式请求体上传、`100-continue` 与客户端隧道
 
 - **流式上传 (`open_request`)**：

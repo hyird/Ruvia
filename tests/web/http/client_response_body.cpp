@@ -725,9 +725,11 @@ RUVIA_TEST(client_response_body_collectors_return_public_results) {
     server.start();
     auto operation = [&]() -> ruvia::task<void> {
         auto response = co_await client.handle().send({.target_ = "/collect"});
+        RUVIA_CHECK(!response.body().complete());
         auto cold_read = response.body().read();
         auto cold_text = response.body().text();
         auto collected = co_await response.body().read_all();
+        RUVIA_CHECK(response.body().complete());
         RUVIA_CHECK_EQ(collected.size(), expected.size());
         const std::string_view collected_view(
             reinterpret_cast<const char*>(collected.bytes().data()), collected.size());
@@ -738,9 +740,58 @@ RUVIA_TEST(client_response_body_collectors_return_public_results) {
         RUVIA_CHECK(!(co_await std::move(cold_text)));
         RUVIA_CHECK(!(co_await response.body().text()));
         co_await client.shutdown();
+        RUVIA_CHECK(response.body().complete());
         RUVIA_CHECK_EQ(collected_view, expected);
     };
     run_operation(worker, io, operation);
+}
+
+RUVIA_TEST(client_response_body_completion_preserves_truncation_after_buffered_bytes) {
+    for (const auto& prefix : {std::string{}, std::string("abc")}) {
+        auto& io = ruvia::test::new_test_io_context();
+        test_worker worker(io);
+        scripted_head_peer peer(io, worker.handle_,
+            {"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n" + prefix});
+        ruvia::http_client client(worker.attachment_.loop(), local_http_client_config(peer.port()));
+        peer.start();
+        auto operation = [&]() -> ruvia::task<void> {
+            auto response = co_await client.handle().send({.target_ = "/truncated"});
+            std::optional<ruvia::http_client_error::code_type> response_error;
+            try {
+                (void)co_await response.body().read_all();
+            } catch (const ruvia::http_client_error& error) {
+                response_error = error.code();
+            }
+            RUVIA_CHECK(response_error.has_value());
+            std::string received;
+            while (received.size() < prefix.size()) {
+                RUVIA_CHECK(!response.body().complete());
+                const auto chunk = co_await response.body().text();
+                if (!chunk) {
+                    break;
+                }
+                received.append(*chunk);
+            }
+            RUVIA_CHECK_EQ(received, prefix);
+            std::optional<ruvia::http_client_error::code_type> completion_error;
+            try {
+                (void)response.body().complete();
+            } catch (const ruvia::http_client_error& error) {
+                completion_error = error.code();
+            }
+            RUVIA_CHECK(completion_error == response_error);
+            std::optional<ruvia::http_client_error::code_type> read_error;
+            try {
+                (void)co_await response.body().read();
+            } catch (const ruvia::http_client_error& error) {
+                read_error = error.code();
+            }
+            RUVIA_CHECK(read_error == response_error);
+            co_await peer.wait();
+            co_await client.shutdown();
+        };
+        run_operation(worker, io, operation);
+    }
 }
 
 // A response is complete at its declared Content-Length. Bytes beyond that
@@ -916,6 +967,7 @@ RUVIA_TEST(http_client_replaces_host_only_cookie_with_same_named_domain_cookie) 
         for (const auto* target : {"/host", "/domain", "/check"}) {
             auto response = co_await client.handle().send({.target_ = target});
             RUVIA_CHECK((co_await response.body().read_all()).empty());
+            RUVIA_CHECK(response.body().complete());
         }
         co_await peer.wait();
         RUVIA_CHECK_EQ(peer.requests_.size(), std::size_t{3});
@@ -1688,6 +1740,21 @@ RUVIA_TEST(client_shutdown_keeps_incomplete_response_error_observable) {
                                        error.code() == ruvia::http_client_error::code_type::io_error;
         }
         RUVIA_CHECK(retained_response_failed);
+        std::optional<ruvia::http_client_error::code_type> read_error;
+        try {
+            while (co_await response->body().read()) {
+            }
+        } catch (const ruvia::http_client_error& error) {
+            read_error = error.code();
+        }
+        RUVIA_CHECK(read_error.has_value());
+        std::optional<ruvia::http_client_error::code_type> completion_error;
+        try {
+            (void)response->body().complete();
+        } catch (const ruvia::http_client_error& error) {
+            completion_error = error.code();
+        }
+        RUVIA_CHECK(completion_error == read_error);
         response.reset();
     };
     run_operation(worker, io, operation);
@@ -2186,6 +2253,7 @@ void exercise_early_response_during_upload(ruvia::testing::test_context& ruvia_c
                 chunk->begin(), chunk->end(), [](std::byte value) { return value == std::byte{'r'}; }));
         }
         RUVIA_CHECK_EQ(response_bytes, upload_peer::rejected_body_size);
+        RUVIA_CHECK(response.body().complete());
         peer.release_response();
         co_await peer.wait();
         RUVIA_CHECK(client.handle().stats().plaintext_bytes_sent_ >=
@@ -3393,6 +3461,7 @@ RUVIA_TEST(http_client_bounds_unfinished_upload_after_response_body_completion) 
         }
         co_await client.shutdown();
         RUVIA_CHECK(!(co_await response.body().text()).has_value());
+        RUVIA_CHECK(response.body().complete());
     };
     run_operation(worker, io, operation);
 }

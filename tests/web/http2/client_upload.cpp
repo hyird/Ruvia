@@ -526,12 +526,20 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                     cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
                 }
                 RUVIA_CHECK(cancelled);
+                bool completion_cancelled = false;
+                try {
+                    (void)retained->body().complete();
+                } catch (const ruvia::http_client_error& error) {
+                    completion_cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+                }
+                RUVIA_CHECK(completion_cancelled);
             } else if (mode == response_mode::buffered) {
                 const std::string payload(65536, 'b');
                 auto response = co_await client.handle().send({.method_ = "POST", .target_ = "/upload", .content_ = ruvia::http_client_request_content_view::bytes(payload)});
                 RUVIA_CHECK(response.status() == ruvia::http_status::no_content);
                 const auto bytes = co_await response.body().read_all();
                 RUVIA_CHECK(bytes.bytes().empty());
+                RUVIA_CHECK(response.body().complete());
             } else if (mode == response_mode::streaming) {
                 const std::string payload(streaming_payload_bytes, 's');
                 auto exchange = co_await client.handle().open_request({.method_ = "POST", .target_ = "/upload"},
@@ -540,6 +548,7 @@ void exercise(ruvia::testing::test_context& ruvia_ctx, response_mode mode) {
                 RUVIA_CHECK(response.status() == ruvia::http_status::no_content);
                 const auto bytes = co_await response.body().read_all();
                 RUVIA_CHECK(bytes.bytes().empty());
+                RUVIA_CHECK(response.body().complete());
                 co_await exchange.body().write(payload);
                 co_await exchange.body().end();
                 RUVIA_CHECK(exchange.body().complete());

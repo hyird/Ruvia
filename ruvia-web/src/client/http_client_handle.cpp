@@ -227,9 +227,19 @@ void detail::http_client_response_state::promote_pending_data() {
     state_value.notify_producer_space();
 }
 
-bool http_client_response_body::complete() const noexcept {
-    return state_ == nullptr || (state_->receive_complete() && state_->offset_ == state_->buffered_.size() &&
-                                    state_->pending_.empty());
+bool http_client_response_body::complete() const {
+    if (state_ == nullptr) {
+        return true;
+    }
+    if (!state_->receive_complete() || state_->offset_ != state_->buffered_.size() ||
+        !state_->pending_.empty()) {
+        return false;
+    }
+    state_->rethrow_response_failure();
+    if (state_->pool_closed_) {
+        throw http_client_error(http_client_error::code_type::closing, "HTTP response body read failed");
+    }
+    return true;
 }
 
 task<std::optional<std::span<const std::byte>>> http_client_response_body::read() & {
