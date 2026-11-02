@@ -14,6 +14,7 @@
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/port_number.h"
 
 namespace ruvia {
 // Already-expanded proxy URI path, borrowed until open_udp_tunnel() returns.
@@ -24,7 +25,7 @@ struct http_client_udp_tunnel_request_view final {
 
 struct http_connect_udp_target_view final {
     std::string_view host_{};
-    std::uint16_t port_{0};
+    port_number port_{};
 };
 struct http_connect_udp_target final {
     // resource passed to the parser must outlive this result.

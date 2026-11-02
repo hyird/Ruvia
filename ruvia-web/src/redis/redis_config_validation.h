@@ -12,7 +12,7 @@ namespace ruvia::detail {
 inline void validate_redis_config(const redis_config& config) {
     validate_client_tls_config(config.tls_);
     validate_client_origin_host(config.host_, "redis host must not be empty", "redis host is invalid");
-    detail::ensure_non_zero_port(config.port_, "redis port must not be zero");
+    detail::ensure_non_zero_port(config.port_.value(), "redis port must not be zero");
     detail::ensure_positive_size(config.pool_size_per_worker_, "redis pool size must be greater than zero");
     detail::ensure_positive_size(
         config.blocking_pool_size_per_worker_, "redis blocking pool size must be greater than zero");

@@ -106,6 +106,7 @@ pool.join();
 | 头文件 | 核心公开类型 / 函数 | 说明 |
 | --- | --- | --- |
 | `"ruvia/http/borrowed_text.h"` | `class borrowed_text final` | 只读字符串借用视图，拒绝直接绑定临时拥有型字符串，但不延长底层文本生命周期；集合 option 使用 `std::span<const T>` 借用连续存储，调用方必须保持存储有效直到消费入口完成读取或拥有化，`span` 本身不阻止悬垂 |
+| `"ruvia/http/port_number.h"` | `class port_number final` | 原始整数宽度受检的端口值；在格式化或原生 API 边界用 `value()` 显式解包 |
 | `"ruvia/http/http_io_buffer.h"` | `class http_io_buffer final` | PMR 流式读写缓冲区：`prepare(n)` / `prepare_spare()`、`commit(n)`、`append(bytes)`、`data()` / `view()`、`consume(n)`、`clear_retaining_small()`；返回借用的四个入口只接受左值，缓冲区存储须覆盖异步 I/O 与视图消费 |
 | `"ruvia/http/http_protocol_version.h"` / `"ruvia/http/http_known_method.h"` | `http_protocol_version`（`http10`, `http11`, `http2`）、`http_scheme`（`http`, `https`）、`http_known_method`、`classify_http_method`、`is_valid_http_method_token` | 协议版本、Scheme 与 HTTP 方法分类及幂等/安全性判断 |
 | `"ruvia/http/http_status.h"` | `class http_status_code final`、`namespace ruvia::http_status`、`http_reason_phrase` | 强类型 HTTP 状态码（`100..599`）与标准状态码常量（`http_status::ok`、`not_found` 等） |
@@ -115,6 +116,8 @@ pool.join();
 | `"ruvia/http/url_encoding.h"` / `"ruvia/http/http_hex.h"` / `"ruvia/http/http_base64.h"` | `decode_url_component`、`validate_url_encoding`、`visit_url_encoded_pairs`、`percent_encode_uri_reference`、`uri_paths_equivalent`、`compare_uri_paths`、`http_encode_lower_hex`、`http_base64_encode`、`http_base64_decode` | URL 百分号/表单编解码、RFC 3986 URI-reference 规范化编码（`decode_url_component` 与 `percent_encode_uri_reference` 无需变换时返回输入视图本身、不分配，否则把结果写入调用方提供的 `std::pmr::string` 并返回其视图；解码只在百分号编码非法时返回 `nullopt`）、路由使用的路径规范形式比较（字面 `/` 分段、段内按百分号解码后的字节比较，`%2F` 不作分隔符）、十六进制转换、标准与 URL-safe Base64 编解码 |
 
 `http_status_code::from_value()`、`try_from_value()` 与 `is_valid_value()` 接受原始整数类型并在窄化前检查 `100..599`；超宽或负数不能通过截断变成有效状态码。浮点、枚举及其他依赖隐式转换的调用须先由调用方完成明确的整数转换和相应校验；不要为迁移预先窄化到 `uint16_t`，否则会丢失原始边界信息。
+
+端口输入统一使用 `port_number`：包括 `http_origin_options::port_`、`http_connect_udp_target_view::port_`，以及 Web 的 HTTP / WebSocket 客户端、监听、数据库和 Redis 配置；可选端口仍保留 `std::optional`。合法整数可直接填入，构造前按原始宽度检查 `0..65535`，负数或超范围值抛出 `std::invalid_argument`；需要无异常探测时用 `port_number::try_from_value()`。浮点与枚举不隐式接受，也不提供到原始整数的隐式转换；不要在调用前窄化。零端口与缺省端口不同，各入口原有的非零限制不变；已解析的协议端口和系统观察结果仍可返回 `std::uint16_t`。
 
 ---
 

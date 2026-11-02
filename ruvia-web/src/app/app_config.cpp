@@ -53,10 +53,10 @@ application& application::listen(listen_config config) {
             std::pmr::vector<detail::http_server_listener_definition> replacement(resource);
             replacement.reserve(config.http_.has_value() && config.https_.has_value() ? 2 : 1);
             if (config.http_.has_value()) {
-                const auto endpoint = asio::ip::tcp::endpoint(address, *config.http_);
+                const auto endpoint = asio::ip::tcp::endpoint(address, config.http_->value());
                 if (config.auto_https_redirect_) {
                     replacement.emplace_back(endpoint,
-                        detail::http_server_listener_definition::redirect_http_to_https{*config.https_});
+                        detail::http_server_listener_definition::redirect_http_to_https{config.https_->value()});
                 } else {
                     replacement.emplace_back(endpoint);
                 }
@@ -64,7 +64,7 @@ application& application::listen(listen_config config) {
             if (config.https_.has_value()) {
                 // Credentials load once, here; the definition keeps no file name or password.
                 auto tls = detail::load_http_server_tls(config.tls_, resource);
-                replacement.emplace_back(asio::ip::tcp::endpoint(address, *config.https_),
+                replacement.emplace_back(asio::ip::tcp::endpoint(address, config.https_->value()),
                     std::move(tls));
             }
             state_value.listeners_ = std::move(replacement);

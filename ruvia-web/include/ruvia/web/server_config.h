@@ -30,6 +30,7 @@
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_status.h"
+#include "ruvia/http/port_number.h"
 #include "ruvia/web/detail/callback.h"
 #include "ruvia/web/detail/callback_ref.h"
 #include "ruvia/web/http_client_types.h"
@@ -148,8 +149,9 @@ struct listen_config final {
     // Numeric IPv4 or IPv6 bind address, normalized when application::listen consumes
     // this configuration.
     borrowed_text address_{"0.0.0.0"};
-    std::optional<std::uint16_t> http_{};
-    std::optional<std::uint16_t> https_{};
+    // Values are checked before narrowing; an enabled service must be non-zero.
+    std::optional<port_number> http_{};
+    std::optional<port_number> https_{};
     tls_config tls_{};
     bool auto_https_redirect_{false};
 };

@@ -317,7 +317,7 @@ Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.htm
 | --- | --- | --- |
 | `scheme_` | `http_scheme`（默认 `https`） | `http_scheme::http` 或 `https` |
 | `host_` | `borrowed_text` | 目标主机名或 IP（必填，outbound origin 在创建时固定） |
-| `port_` | `std::optional<std::uint16_t>` | 目标端口（缺省按 scheme 使用 80 或 443） |
+| `port_` | `std::optional<port_number>` | 目标端口（缺省按 scheme 使用 80 或 443）；整数输入的受检转换与解包见[端口值契约](core-and-http.md#1-基础类型缓冲与编码工具) |
 | `protocol_` | `http_client_protocol`（默认 `negotiate`） | `negotiate`（TLS 下通过 ALPN 协商 H2/H1.1，明文使用 H1.1）、`http1_only`、`http2_only`（明文下使用 H2 prior knowledge） |
 | `connection_count_` | `std::size_t`（默认 `1`） | 每个客户端实例维护的最大连接数 |
 | `max_concurrent_http2_streams_per_connection_` | `std::size_t`（默认 `100`） | 单条 HTTP/2 连接并发流上限 |

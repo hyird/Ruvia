@@ -15,6 +15,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/port_number.h"
 #include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/tls_config.h"
 
@@ -31,8 +32,8 @@ class redis_x_read_group_result;
 struct redis_config {
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
     std::string host_{"127.0.0.1"};
-    // Must be non-zero.
-    std::uint16_t port_{6379};
+    // Checked before narrowing; must be non-zero.
+    port_number port_{6379};
     std::string username_{};
     std::string password_{};
     client_tls_config tls_{};

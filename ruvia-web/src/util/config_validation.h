@@ -7,6 +7,8 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/http/port_number.h"
+
 namespace ruvia::detail {
 
 // A configured host whose port is a separate field: brackets and a lone colon
@@ -48,9 +50,9 @@ inline void ensure_non_zero_port(std::uint16_t port, const char* message) {
 }
 
 inline void ensure_non_zero_optional_port(
-    const std::optional<std::uint16_t>& port, const char* message) {
+    const std::optional<port_number>& port, const char* message) {
     if (port.has_value()) {
-        ensure_non_zero_port(*port, message);
+        ensure_non_zero_port(port->value(), message);
     }
 }
 

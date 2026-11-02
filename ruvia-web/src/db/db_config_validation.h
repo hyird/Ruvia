@@ -35,7 +35,7 @@ private:
 }
 
 [[nodiscard]] inline std::uint16_t configured_db_port(const db_config& config) noexcept {
-    return config.port_.value_or(default_db_port(config.driver_));
+    return config.port_.has_value() ? config.port_->value() : default_db_port(config.driver_);
 }
 
 inline void validate_db_config(const db_config& config) {

@@ -127,7 +127,7 @@ private:
         : scheme_(source_value.scheme_),
           protocol_(source_value.protocol_),
           host_(source_value.host_.view(), resource),
-          port_(source_value.port_.value_or(source_value.scheme_ == websocket_scheme::wss ? 443 : 80)),
+          port_(source_value.port_.value_or(source_value.scheme_ == websocket_scheme::wss ? 443 : 80).value()),
           uri_host_(client_uri_host(source_value.host_.view(), resource)),
           origin_(make_origin(scheme_, uri_host_, port_)),
           authority_(make_http_origin_authority(origin_, resource)),

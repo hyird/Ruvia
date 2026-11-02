@@ -157,7 +157,7 @@ std::optional<http_connect_udp_error> validate_connect_udp_response(
 }
 }  // namespace
 std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_path(http_connect_udp_target_view target, std::pmr::memory_resource* resource) {
-    if (!valid_host(target.host_) || !target.port_) {
+    if (!valid_host(target.host_) || target.port_ == 0) {
         return http_connect_udp_error::invalid_target;
     }
     std::size_t encoded_host_size = 0;
@@ -165,7 +165,7 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
         encoded_host_size += detail::is_unreserved_byte(c) ? 1U : 3U;
     }
     std::array<char, http_max_unsigned_decimal_size> port_buffer{};
-    const auto port_digits = http_format_unsigned(port_buffer, target.port_);
+    const auto port_digits = http_format_unsigned(port_buffer, target.port_.value());
     std::pmr::string result_value(resource ? resource : std::pmr::get_default_resource());
     result_value.reserve(prefix.size() + encoded_host_size + 1U + port_digits.size() + 1U);
     result_value.append(prefix);

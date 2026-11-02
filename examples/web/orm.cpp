@@ -179,10 +179,10 @@ task<void> run(const db_config& settings, event_loop_attachment& attachment) {
         if (const auto* port = std::getenv("RUVIA_ORM_CACHE_REDIS_PORT")) {
 #ifdef RUVIA_ENABLE_REDIS
             const auto value = std::stoul(port);
-            if (value == 0 || value > 65535) {
+            if (value == 0) {
                 throw std::invalid_argument("invalid cache Redis port");
             }
-            redis_config config{.port_ = static_cast<std::uint16_t>(value)};
+            redis_config config{.port_ = value};
             config.tls_ = example::backend_tls("RUVIA_ORM_CACHE_REDIS");
             if (const auto* host = std::getenv("RUVIA_ORM_CACHE_REDIS_HOST")) {
                 config.host_ = host;
@@ -237,10 +237,10 @@ db_config config() {
     read("RUVIA_DB_DATABASE", result_value.database_);
     if (const auto* port = std::getenv("RUVIA_DB_PORT")) {
         const auto value = std::stoul(port);
-        if (value == 0 || value > 65535) {
+        if (value == 0) {
             throw std::invalid_argument("invalid database port");
         }
-        result_value.port_ = static_cast<std::uint16_t>(value);
+        result_value.port_ = value;
     }
     result_value.connect_timeout_ = std::chrono::seconds(5);
     result_value.query_timeout_ = std::chrono::seconds(10);

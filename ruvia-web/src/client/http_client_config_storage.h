@@ -83,7 +83,7 @@ private:
     template <typename source_type>
     [[nodiscard]] static std::uint16_t resolved_port(const source_type& source_value) noexcept {
         if constexpr (std::same_as<source_type, http_client_config>) {
-            return source_value.port_.value_or(source_value.scheme_ == http_scheme::https ? 443 : 80);
+            return source_value.port_.value_or(source_value.scheme_ == http_scheme::https ? 443 : 80).value();
         } else {
             return source_value.port_;
         }

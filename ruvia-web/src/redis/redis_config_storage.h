@@ -48,6 +48,13 @@ private:
         return source_value;
     }
 
+    [[nodiscard]] static std::uint16_t resolved_port(const redis_config& source) noexcept {
+        return source.port_.value();
+    }
+    [[nodiscard]] static std::uint16_t resolved_port(const redis_config_storage& source) noexcept {
+        return source.port_;
+    }
+
     // Public configuration parses the TLS files every pool's context
     // installs; allocator-rebound copies share them.
     template <typename source_type>
@@ -68,7 +75,7 @@ private:
     redis_config_storage(
         validated_config_tag_type, const source_type& source_value, std::pmr::memory_resource* resource)
         : host_(source_value.host_, resource),
-          port_(source_value.port_),
+          port_(resolved_port(source_value)),
           username_(source_value.username_, resource),
           password_(source_value.password_, resource),
           tls_(tls_storage(source_value, resource)),

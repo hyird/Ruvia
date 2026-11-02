@@ -21,6 +21,7 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/port_number.h"
 #include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/tls_config.h"
@@ -43,7 +44,7 @@ struct websocket_client_config final {
     websocket_client_protocol protocol_{websocket_client_protocol::http1};
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
     borrowed_text host_{};
-    std::optional<std::uint16_t> port_{};
+    std::optional<port_number> port_{};
     borrowed_text target_{"/"};
     // Application request fields. A User-Agent field replaces user_agent_.
     std::span<const http_header_view> headers_{};

@@ -67,7 +67,7 @@ private:
     struct validated_config_tag_type final {};
 
     [[nodiscard]] static std::uint16_t resolved_port(const db_config& source) noexcept {
-        return source.port_.value_or(default_db_port(source.driver_));
+        return configured_db_port(source);
     }
     [[nodiscard]] static std::uint16_t resolved_port(const db_config_storage& source) noexcept {
         return source.port_;

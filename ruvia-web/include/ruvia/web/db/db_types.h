@@ -19,6 +19,7 @@
 
 #include "ruvia/core/operation_options.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/port_number.h"
 #include "ruvia/web/integer.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/tls_config.h"
@@ -89,8 +90,9 @@ struct db_config final {
     db_driver driver_{db_driver::unspecified};
     // Host name or unbracketed address only; keep the port in port.
     std::string host_{"127.0.0.1"};
-    // Absence selects the driver's standard port: 3306 or 5432.
-    std::optional<std::uint16_t> port_{};
+    // Absence selects the driver's standard port: 3306 or 5432. Explicit values
+    // are checked before narrowing and must be non-zero.
+    std::optional<port_number> port_{};
     std::string username_{};
     std::string password_{};
     client_tls_config tls_{};

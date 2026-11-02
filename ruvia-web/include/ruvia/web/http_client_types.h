@@ -14,6 +14,7 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/port_number.h"
 #include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/tls_config.h"
 namespace ruvia {
@@ -77,7 +78,7 @@ struct http_client_config final {
     http_scheme scheme_{http_scheme::https};
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
     borrowed_text host_{};
-    std::optional<std::uint16_t> port_{};
+    std::optional<port_number> port_{};
     std::size_t connection_count_{1};
     std::size_t max_concurrent_http2_streams_per_connection_{100};
     std::size_t max_buffered_requests_{1024};

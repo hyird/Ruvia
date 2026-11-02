@@ -22,7 +22,7 @@ void validate_origin_host(std::string_view host) {
 
 std::uint16_t resolved_origin_port(http_scheme scheme, const http_origin_options& options) noexcept {
     if (options.port_.has_value()) {
-        return *options.port_;
+        return options.port_->value();
     }
     return scheme == http_scheme::https ? std::uint16_t{443} : std::uint16_t{80};
 }

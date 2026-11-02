@@ -21,6 +21,7 @@
 #include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/port_number.h"
 
 namespace ruvia {
 
@@ -43,7 +44,7 @@ enum class http_request_field_source : std::uint8_t { generated,
 
 struct http_origin_options final {
     borrowed_text host_{};
-    std::optional<std::uint16_t> port_{};
+    std::optional<port_number> port_{};
 };
 
 class http_origin_view final {
