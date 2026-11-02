@@ -163,6 +163,7 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
   - 函数、触发器与 TimescaleDB：`create_function`、`create_trigger_function`、`create_trigger`、`create_hypertable`、`set_compression`、`add_compression_policy`、`add_retention_policy`
   - 调用 `schema.compile("0001_init")` 直接生成 `std::pmr::vector<db_migration>` 供 `db_migrator::migrate` 执行。
 - **`db_procedure`**：结构化构建 PL/pgSQL 过程块（变量声明、`select_into`、`begin_if`/`else_if`/`otherwise`/`end_if`、异常捕获块 `begin_block`/`catch_sql_state`、循环与 `raise_exception`）。
+  - `begin_block()` 与 `apply(schema)` 的分配失败保留原正文和控制栈；资源恢复后可重试同一操作。`apply` 在完整追加本次 schema 的 SQL 及语句终止符后才发布，不留下半条语句。
 
 ---
 
@@ -329,6 +330,8 @@ ruvia::app()
 | Streams | `xread_group(group, consumer, streams, redis_x_read_group_options)` |
 | Pub/Sub | `publish(channel, payload)`、`subscription()` |
 | RediSearch ORM | `repository<Entity>(redis_repository_config)` |
+
+`redis_scan_options::match_` 使用 `std::optional<borrowed_text>` 区分未指定与空模式：默认 `nullopt` 不发送 `MATCH`，`match_ = ""` 则发送 `MATCH ""`，只匹配空 key／字段／成员；普通模式如 `"user:*"` 仍按 Redis glob 规则筛选。原先用空字符串清除过滤的调用须改为 `match_ = std::nullopt` 或 `match_.reset()`，不得再依赖空模式被忽略。四种 scan 方法共享此契约，命令入口同步复制模式，保存 options 时仍须保持借用文本有效。依据 [Redis SCAN 的 MATCH 语义](https://redis.io/docs/latest/commands/scan/#the-match-option)。
 
 #### 写入与复制／落盘屏障
 

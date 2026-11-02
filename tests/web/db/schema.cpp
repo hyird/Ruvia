@@ -1,11 +1,15 @@
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <new>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "ruvia/web/db/db_schema.h"
 
+#include "failing_memory_resource.h"
 #include "test_harness.h"
 
 using ruvia::db_data_type;
@@ -697,6 +701,90 @@ RUVIA_TEST(db_schema_timescale_options_cover_direct_settings_and_rejections) {
     RUVIA_CHECK(throws_on([&] { maria.remove_compression_policy("t"); }));
     RUVIA_CHECK(throws_on([&] { maria.add_retention_policy("t", interval); }));
     RUVIA_CHECK(throws_on([&] { maria.remove_retention_policy("t"); }));
+}
+
+RUVIA_TEST(db_procedure_begin_block_failure_preserves_control_state_and_allows_retry) {
+    db_procedure expected;
+    expected.begin_block();
+    expected.end_block();
+    const auto baseline = expected.body();
+    expected.begin_block();
+    expected.end_block();
+    const auto complete = expected.body();
+    bool reached_success = false;
+    for (std::size_t failure_point = 0; failure_point < 16; ++failure_point) {
+        failing_memory_resource resource;
+        {
+            db_procedure procedure(&resource);
+            procedure.begin_block();
+            procedure.end_block();
+            resource.fail_after(failure_point);
+            bool failed = false;
+            try {
+                procedure.begin_block();
+            } catch (const std::bad_alloc&) {
+                failed = true;
+            }
+            resource.allow_allocations();
+            if (failed) {
+                RUVIA_CHECK_EQ(procedure.body(), baseline);
+                procedure.begin_block();
+            }
+            procedure.end_block();
+            RUVIA_CHECK_EQ(procedure.body(), complete);
+            if (!failed) {
+                reached_success = true;
+            }
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+        if (reached_success) {
+            break;
+        }
+    }
+    RUVIA_CHECK(reached_success);
+}
+
+RUVIA_TEST(db_procedure_apply_failure_preserves_complete_statements_and_allows_retry) {
+    db_schema schema({.driver_ = db_driver::postgresql});
+    const std::string first_name(63, 'a');
+    const std::string second_name(63, 'b');
+    schema.create_schema(first_name);
+    schema.create_schema(second_name);
+    db_procedure expected;
+    expected.begin_block();
+    expected.end_block();
+    const auto baseline = expected.body();
+    expected.apply(schema);
+    const auto complete = expected.body();
+    bool reached_success = false;
+    for (std::size_t failure_point = 0; failure_point < 16; ++failure_point) {
+        failing_memory_resource resource;
+        {
+            db_procedure procedure(&resource);
+            procedure.begin_block();
+            procedure.end_block();
+            resource.fail_after(failure_point);
+            bool failed = false;
+            try {
+                procedure.apply(schema);
+            } catch (const std::bad_alloc&) {
+                failed = true;
+            }
+            resource.allow_allocations();
+            if (failed) {
+                RUVIA_CHECK_EQ(procedure.body(), baseline);
+                procedure.apply(schema);
+            } else {
+                reached_success = true;
+            }
+            RUVIA_CHECK_EQ(procedure.body(), complete);
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+        if (reached_success) {
+            break;
+        }
+    }
+    RUVIA_CHECK(reached_success);
 }
 
 RUVIA_TEST(db_procedure_public_helpers_render_and_validate) {

@@ -20,7 +20,7 @@ namespace {
     if (options.count_.has_value() && *options.count_ == 0) {
         throw std::invalid_argument("configured redis scan count must be greater than zero");
     }
-    return (!options.match_.empty() ? 2U : 0U) + (options.count_.has_value() ? 2U : 0U);
+    return (options.match_.has_value() ? 2U : 0U) + (options.count_.has_value() ? 2U : 0U);
 }
 
 [[nodiscard]] std::pmr::vector<std::pmr::string> redis_scan_args(std::string_view command,

@@ -186,6 +186,8 @@ struct db_variable_definition final {
 
 // Structured PL/pgSQL for migration blocks and trigger functions. All inputs
 // are consumed synchronously. The procedure owns its generated body in PMR.
+// Failed begin_block() and apply() leave the prior body and control stack
+// unchanged, so allocation failures may be caught and the operation retried.
 class db_procedure final {
 public:
     explicit db_procedure(std::pmr::memory_resource* resource = nullptr);

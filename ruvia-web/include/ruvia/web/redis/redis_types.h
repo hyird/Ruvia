@@ -231,7 +231,9 @@ struct redis_scan_options {
     // arguments. Keep MATCH zero-copy while rejecting owning-string rvalues
     // that would leave a saved options value with an already-dangling view.
     std::optional<redis_scan_cursor> cursor_{};
-    ::ruvia::borrowed_text match_{};
+    // nullopt omits MATCH; an engaged empty pattern matches only empty names.
+    // Assign nullopt (not "") to disable filtering.
+    std::optional<::ruvia::borrowed_text> match_{};
     std::optional<std::uint64_t> count_{};
 };
 

@@ -216,9 +216,9 @@ void append_redis_scan_options(std::pmr::vector<std::pmr::string>& args,
     if (options.count_.has_value() && *options.count_ == 0) {
         throw std::invalid_argument("configured redis scan count must be greater than zero");
     }
-    if (!options.match_.empty()) {
+    if (options.match_.has_value()) {
         emplace_redis_string(args, "MATCH");
-        emplace_redis_string(args, options.match_);
+        emplace_redis_string(args, *options.match_);
     }
     if (options.count_.has_value()) {
         emplace_redis_string(args, "COUNT");

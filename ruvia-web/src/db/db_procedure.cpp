@@ -172,10 +172,12 @@ void db_procedure::apply(const db_schema& schema) {
             throw std::invalid_argument("nontransactional schema operations cannot run in a procedure");
         }
     }
+    procedure_append_guard guard(statements_, 0);
     for (const auto& statement : schema.statements_) {
         statements_ += statement.sql_;
         statements_ += ";\n";
     }
+    guard.commit();
 }
 void db_procedure::begin_if(db_expression condition) {
     procedure_append_guard guard(statements_, 48U);
@@ -210,8 +212,10 @@ void db_procedure::end_if() {
     blocks_.pop_back();
 }
 void db_procedure::begin_block() {
-    blocks_.push_back(block_type::begin);
+    procedure_append_guard guard(statements_, 6U);
     statements_ += "BEGIN\n";
+    blocks_.push_back(block_type::begin);
+    guard.commit();
 }
 void db_procedure::catch_sql_state(std::string_view state_value) {
     if (blocks_.empty() || (blocks_.back() != block_type::begin && blocks_.back() != block_type::exception)) {
