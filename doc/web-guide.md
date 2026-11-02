@@ -58,6 +58,8 @@ int main() {
 | `std::vector<web_worker_handle> workers() const` | 获取全部业务 worker 的跨线程派发句柄 |
 | `web_worker_handle worker_for(std::uint64_t key) const` / `worker_for(std::string_view key) const` | 按哈希键确定性选择单个业务 worker 句柄 |
 
+应用回调（`app_hook`、访问/故障日志回调、错误/404 处理器）独占目标；空函数指针与 `nullptr` 一样构造空回调。清空、替换或析构时先将 owner 置空，再析构目标，因此目标的资源释放可以再次清空同一 owner。目标析构中的重入仅支持清空，不得向该 owner 安装新目标。
+
 ---
 
 ### 1.2 服务器、监听、TLS、压缩与 CORS 配置（`"ruvia/web/server_config.h"`）

@@ -25,18 +25,25 @@ public:
 
     template <typename callable_type, typename stored_type = std::decay_t<callable_type>>
         requires(!std::is_same_v<stored_type, callback_owner> &&
-                    std::is_invocable_r_v<result_type, stored_type&, args_types...> &&
-                    (!is_noexcept || (!std::is_lvalue_reference_v<callable_type> &&
-                                         std::is_nothrow_invocable_r_v<result_type, stored_type&, args_types...>)))
-    callback_owner(callable_type&& callable)
-        : view_(construct_pmr_object<stored_type>(process_resource(), std::forward<callable_type>(callable)),
-              [](void* target, args_types... args) noexcept(is_noexcept) -> result_type {
-                  return (*static_cast<stored_type*>(target))(std::forward<args_types>(args)...);
-              }),
-          destroy_([](void* target, std::pmr::memory_resource* resource) noexcept {
-              destroy_pmr_object(static_cast<stored_type*>(target), resource);
-          }),
-          resource_(process_resource()) {}
+                 std::is_invocable_r_v<result_type, stored_type&, args_types...> &&
+                 (!is_noexcept || (!std::is_lvalue_reference_v<callable_type> &&
+                                      std::is_nothrow_invocable_r_v<result_type, stored_type&, args_types...>)))
+    callback_owner(callable_type&& callable) {
+        if constexpr (std::is_pointer_v<stored_type>) {
+            if (callable == nullptr) {
+                return;
+            }
+        }
+        auto* resource = process_resource();
+        auto* target = construct_pmr_object<stored_type>(resource, std::forward<callable_type>(callable));
+        view_ = {target, [](void* value, args_types... args) noexcept(is_noexcept) -> result_type {
+                     return (*static_cast<stored_type*>(value))(std::forward<args_types>(args)...);
+                 }};
+        destroy_ = [](void* value, std::pmr::memory_resource* owner_resource) noexcept {
+            destroy_pmr_object(static_cast<stored_type*>(value), owner_resource);
+        };
+        resource_ = resource;
+    }
 
     callback_owner(const callback_owner&) = delete;
     callback_owner& operator=(const callback_owner&) = delete;
@@ -93,12 +100,13 @@ private:
     }
 
     void reset() noexcept {
-        if (destroy_ != nullptr) {
-            destroy_(view_.target_, resource_);
+        const auto view = std::exchange(view_, {});
+        const auto destroy = std::exchange(destroy_, nullptr);
+        auto* resource = std::exchange(resource_, nullptr);
+        // 目标析构可能再次清空 owner；调用用户代码前先退役全部拥有状态。
+        if (destroy != nullptr) {
+            destroy(view.target_, resource);
         }
-        view_ = {};
-        destroy_ = nullptr;
-        resource_ = nullptr;
     }
 
     view_type view_;

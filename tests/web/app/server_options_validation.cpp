@@ -237,3 +237,75 @@ RUVIA_TEST(self_contained_app_callbacks_release_owned_state) {
     }
     RUVIA_CHECK(not_found_state.expired());
 }
+
+RUVIA_TEST(app_callbacks_treat_null_function_targets_as_empty) {
+    void (*hook_target)() = nullptr;
+    ruvia::app_hook hook(hook_target);
+    RUVIA_CHECK(!hook);
+    bool empty_call_rejected = false;
+    try {
+        hook();
+    } catch (const std::logic_error&) {
+        empty_call_rejected = true;
+    }
+    RUVIA_CHECK(empty_call_rejected);
+
+    void (*access_target)(const ruvia::access_log_record&) noexcept = nullptr;
+    ruvia::access_log_callback access(std::move(access_target));
+    RUVIA_CHECK(!access);
+
+    ruvia::task<ruvia::http_response> (*error_target)(ruvia::context&, ruvia::http_error_info) = nullptr;
+    ruvia::http_error_handler error(error_target);
+    RUVIA_CHECK(!error);
+}
+
+RUVIA_TEST(app_hook_retires_owner_before_target_destruction) {
+    for (int retirement = 0; retirement != 3; ++retirement) {
+        int destroyed = 0;
+        int replacement_calls = 0;
+        bool owner_was_empty = false;
+        {
+            ruvia::app_hook hook;
+            const auto release = [&](int* value) noexcept {
+                ++destroyed;
+                owner_was_empty = !hook;
+                // 旧实现先报告状态失败，避免递归销毁拖垮整个测试进程。
+                if (owner_was_empty) {
+                    hook = nullptr;
+                }
+                delete value;
+            };
+            hook = [guard = std::unique_ptr<int, decltype(release)>(new int{0}, release)] {};
+            if (retirement == 0) {
+                hook = static_cast<void (*)()>(nullptr);
+                RUVIA_CHECK(!hook);
+            } else if (retirement == 1) {
+                hook = [&] { ++replacement_calls; };
+                hook();
+            }
+        }
+        RUVIA_CHECK(owner_was_empty);
+        RUVIA_CHECK_EQ(destroyed, 1);
+        RUVIA_CHECK_EQ(replacement_calls, retirement == 1 ? 1 : 0);
+    }
+}
+
+RUVIA_TEST(noexcept_app_callback_retires_owner_before_target_destruction) {
+    int destroyed = 0;
+    bool owner_was_empty = false;
+    ruvia::access_log_callback callback;
+    const auto release = [&](int* value) noexcept {
+        ++destroyed;
+        owner_was_empty = !callback;
+        if (owner_was_empty) {
+            callback = nullptr;
+        }
+        delete value;
+    };
+    callback = [guard = std::unique_ptr<int, decltype(release)>(new int{0}, release)](
+                   const ruvia::access_log_record&) noexcept {};
+    callback = nullptr;
+    RUVIA_CHECK(!callback);
+    RUVIA_CHECK(owner_was_empty);
+    RUVIA_CHECK_EQ(destroyed, 1);
+}

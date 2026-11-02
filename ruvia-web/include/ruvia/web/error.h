@@ -263,9 +263,12 @@ using http_not_found_handler_ref = callback_ref<task<http_response>(context&)>;
 // the logger, config, or metrics sink the handler needs. A self-contained
 // callable is owned by the handler value; references captured by that callable
 // must still outlive the registered handler.
+// 空函数指针构造空处理器。清空、替换或析构时，目标析构前 owner 已为空；
+// 目标析构仅支持再次清空同一 owner，不得在其中向该 owner 安装新目标。
 using http_error_handler = detail::callback<task<http_response>(context&, http_error_info)>;
 
 // Answers a request that matched no route.
+// 空函数指针与目标析构重入的契约同 http_error_handler。
 using http_not_found_handler = detail::callback<task<http_response>(context&)>;
 
 struct scoped_error_handler_options final {

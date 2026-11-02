@@ -325,6 +325,8 @@ using access_log_callback_ref = callback_ref<void(const access_log_record&) noex
 
 // application-owned access-log listener. Request dispatch receives only an internal,
 // allocation-free callback_ref and never participates in this owner's lifetime.
+// 空函数指针构造空回调。清空、替换或析构时，目标析构前 owner 已为空；
+// 目标析构仅支持再次清空同一 owner，不得在其中向该 owner 安装新目标。
 using access_log_callback = detail::callback<void(const access_log_record&) noexcept>;
 
 // One connection lost to an exception that escaped its session: a handler bug
@@ -400,6 +402,7 @@ using connection_failure_callback_ref = callback_ref<void(const connection_failu
 // line of defense for a connection, where a second failure would have nowhere
 // left to go, so the requirement is enforced at compile time rather than
 // swallowed at runtime.
+// 空函数指针与目标析构重入的契约同 access_log_callback。
 using connection_failure_callback = detail::callback<void(const connection_failure_record&) noexcept>;
 
 // A self-contained startup/shutdown callback, invoked on the application::run() caller.
@@ -409,6 +412,7 @@ using connection_failure_callback = detail::callback<void(const connection_failu
 // references captured by that callable must still
 // outlive the registered hook. Invoking an empty hook is a programming error
 // and throws std::logic_error.
+// 空函数指针与目标析构重入的契约同 access_log_callback。
 using app_hook = detail::callback<void()>;
 
 static_assert(sizeof(app_hook) == 4 * sizeof(void*));
