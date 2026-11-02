@@ -97,7 +97,7 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;
     }
-    [[nodiscard]] decode_transaction_type begin_transaction() noexcept;
+    [[nodiscard]] decode_transaction_type begin_transaction();
     [[nodiscard]] std::optional<hpack_decode_error> decode(
         std::string_view block, void* target, header_callback_type callback);
     [[nodiscard]] std::optional<hpack_decode_error> decode(std::string_view block, void* target,
@@ -179,6 +179,7 @@ private:
     void clear_dynamic() noexcept;
     void evict_dynamic_to_fit(std::size_t entry_size);
     void retire_dynamic_prefix(std::size_t begin) noexcept;
+    void require_idle() const;
     void begin_decode_transaction() noexcept;
     void commit_decode_transaction() noexcept;
     void rollback_decode_transaction() noexcept;

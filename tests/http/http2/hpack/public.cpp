@@ -784,3 +784,107 @@ RUVIA_TEST(hpack_public_single_block_churn_preserves_indexed_names_and_rollback)
         }
     }
 }
+
+RUVIA_TEST(hpack_public_callback_cannot_replace_the_active_block_or_its_capacity) {
+    for (const bool resize : {false, true}) {
+        ruvia::hpack_decoder decoder;
+        ruvia::hpack_decoder independent;
+        const std::string insertion{static_cast<char>(0x40), 0x01, 'a', 0x01, 'b'};
+        std::size_t callbacks = 0;
+        std::size_t rejected = 0;
+        const auto result = decoder.decode(insertion, [&](std::string_view name, std::string_view value) {
+            ++callbacks;
+            try {
+                if (resize) {
+                    decoder.set_max_dynamic_table_size(0);
+                } else {
+                    (void)decoder.decode({}, [](auto, auto) { return true; });
+                }
+            } catch (const std::logic_error&) {
+                ++rejected;
+            }
+            RUVIA_CHECK_EQ(name, "a");
+            RUVIA_CHECK_EQ(value, "b");
+            std::size_t independent_fields = 0;
+            RUVIA_CHECK(!independent.decode(std::string_view("\x82", 1), [&](auto inner_name, auto inner_value) {
+                                        ++independent_fields;
+                                        RUVIA_CHECK_EQ(inner_name, ":method");
+                                        RUVIA_CHECK_EQ(inner_value, "GET");
+                                        return true;
+                                    })
+                    .has_value());
+            RUVIA_CHECK_EQ(independent_fields, std::size_t{1});
+            return true;
+        });
+        RUVIA_CHECK(!result.has_value());
+        RUVIA_CHECK_EQ(callbacks, std::size_t{1});
+        RUVIA_CHECK_EQ(rejected, std::size_t{1});
+        std::size_t indexed_fields = 0;
+        RUVIA_CHECK(!decoder.decode(std::string_view("\xbe", 1), [&](auto name, auto value) {
+                                ++indexed_fields;
+                                RUVIA_CHECK_EQ(name, "a");
+                                RUVIA_CHECK_EQ(value, "b");
+                                return true;
+                            })
+                .has_value());
+        RUVIA_CHECK_EQ(indexed_fields, std::size_t{1});
+        decoder.set_max_dynamic_table_size(0);
+        RUVIA_CHECK(decoder.decode(std::string_view("\xbe", 1), [](auto, auto) { return true; }) == ruvia::hpack_decode_error::invalid_index);
+    }
+}
+
+RUVIA_TEST(hpack_public_uncaught_callback_state_error_preserves_block_commit_and_rollback) {
+    for (const bool resize : {false, true}) {
+        for (const bool malformed : {false, true}) {
+            ruvia::hpack_decoder decoder;
+            const auto accept = [](auto, auto) { return true; };
+            const std::string seed{static_cast<char>(0x40), 0x01, 's', 0x01, 't'};
+            RUVIA_CHECK(!decoder.decode(seed, accept).has_value());
+            std::string block{static_cast<char>(0x40), 0x01, 'a', 0x01, 'b',
+                static_cast<char>(0x40), 0x01, 'c', 0x01, 'd'};
+            if (malformed) {
+                block.push_back(static_cast<char>(0x80));
+            }
+            std::size_t callbacks = 0;
+            bool state_error = false;
+            try {
+                (void)decoder.decode(block, [&](auto, auto) {
+                    ++callbacks;
+                    if (resize) {
+                        decoder.set_max_dynamic_table_size(0);
+                    } else {
+                        (void)decoder.decode({}, accept);
+                    }
+                    return true;
+                });
+            } catch (const std::logic_error&) {
+                state_error = true;
+            }
+            RUVIA_CHECK(state_error);
+            RUVIA_CHECK_EQ(callbacks, std::size_t{1});
+            std::size_t indexed_fields = 0;
+            const auto newest = decoder.decode(std::string_view("\xbe", 1), [&](auto name, auto value) {
+                ++indexed_fields;
+                RUVIA_CHECK_EQ(name, malformed ? "s" : "c");
+                RUVIA_CHECK_EQ(value, malformed ? "t" : "d");
+                return true;
+            });
+            RUVIA_CHECK(!newest.has_value());
+            RUVIA_CHECK_EQ(indexed_fields, std::size_t{1});
+            indexed_fields = 0;
+            const auto previous = decoder.decode(std::string_view("\xbf", 1), [&](auto name, auto value) {
+                ++indexed_fields;
+                RUVIA_CHECK_EQ(name, "a");
+                RUVIA_CHECK_EQ(value, "b");
+                return true;
+            });
+            if (malformed) {
+                RUVIA_CHECK(previous == ruvia::hpack_decode_error::invalid_index);
+                RUVIA_CHECK_EQ(indexed_fields, std::size_t{0});
+            } else {
+                RUVIA_CHECK(!previous.has_value());
+                RUVIA_CHECK_EQ(indexed_fields, std::size_t{1});
+            }
+        }
+    }
+}

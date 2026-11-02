@@ -51,10 +51,16 @@ public:
     hpack_decoder(hpack_decoder&&) noexcept;
     hpack_decoder& operator=(hpack_decoder&&) noexcept;
 
+    // Only between decode() calls. During a header callback this throws
+    // std::logic_error before changing either the allowance or the table.
     void set_max_dynamic_table_size(std::size_t bytes);
 
     // Header name/value views are borrowed only for the callback invocation.
     // Copy into owned storage when retaining a field beyond that invocation.
+    // A callback must keep this decoder's implementation alive until decode()
+    // returns. Nested decode() on the same implementation throws std::logic_error;
+    // a different decoder may be used. Callback exceptions are rethrown after
+    // consuming a valid block and synchronizing its dynamic table.
     template <typename callback>
         requires std::predicate<callback&, std::string_view, std::string_view>
     [[nodiscard]] std::optional<hpack_decode_error> decode(std::string_view block, callback&& callback_value) {

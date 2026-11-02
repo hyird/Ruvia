@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <exception>
+#include <stdexcept>
 #include <variant>
 
 #include "ruvia/http/http_pmr_string.h"
@@ -43,13 +44,21 @@ void hpack_decoder::decode_transaction_type::rollback() noexcept {
 }
 
 void hpack_decoder::set_max_dynamic_table_size(std::size_t bytes_value) {
+    require_idle();
     allowed_dynamic_size_ = bytes_value;
     max_dynamic_size_ = std::min(max_dynamic_size_, bytes_value);
     evict_dynamic_to_fit(0);
 }
 
-hpack_decoder::decode_transaction_type hpack_decoder::begin_transaction() noexcept {
+hpack_decoder::decode_transaction_type hpack_decoder::begin_transaction() {
+    require_idle();
     return decode_transaction_type(*this);
+}
+
+void hpack_decoder::require_idle() const {
+    if (decode_transaction_active_) {
+        throw std::logic_error("HPACK decoder is processing a field block");
+    }
 }
 
 hpack_decoder::step_result_type hpack_decoder::decode_integer(const unsigned char*& cursor_value,

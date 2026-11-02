@@ -213,6 +213,8 @@ while (conn.wants_write()) {
 }
 ```
 
+独立 `hpack_decoder` 每次 `decode()` 处理一个完整字段块；回调只借用本次字段的名称和值，必须保持 decoder 的实现存活直到调用返回。同一实现处于字段块解码期间，再次 `decode()` 或调用 `set_max_dynamic_table_size()` 均抛出 `std::logic_error`，且不提交该嵌套操作；容量修改移到块之间，不同 decoder 仍可嵌套使用。这是库的状态独占契约，不是 RFC 的额外输入限制。回调异常不截断合法块的消费，动态表完成同步后再重抛；后续编码错误则回滚整个块，并优先保留最初的回调异常。
+
 - **流控凭证 `http2_received_data_credit`**：`message_body_chunk()` 与 `tunnel_data()` 事件携带移动专属的流控凭证；当上层消费完缓冲数据后，通过析构凭证或调用 `conn.acknowledge(std::move(credit))` 触发连接与流级 `WINDOW_UPDATE` 帧发送，实现精确背压。
 - **服务端请求租约 `http2_request_head_event`**：持有服务端流请求头的底层内存租约；请求处理完毕后调用 `conn.release(std::move(event))` 归还存储。
 - **DATA 部分消费 `submit_data(stream_id, bytes, end_stream, max_payload_bytes)`**：返回 `http2_data_submit_result{consumed_bytes_, status_}`，本次只编码 `min(bytes.size(), max_payload_bytes, 连接窗口, 流窗口)` 字节；帧头开销另计。`complete` 只表示这次输入全部消费，不表示 socket 已写完；`backpressured` 可以消费零字节或一个前缀。协议层既不借用也不复制未消费后缀，调用方必须保存后缀并按实际消费量推进，取得输出预算或收到 `WINDOW_UPDATE` / `SETTINGS` 后显式重试。窗口更新不会自动产生 DATA，也没有旧的 queued/drained 队列通知。`expectation_pending` 和 `closed` 均消费零字节；前者等待 `100 Continue` 或显式 `release_request_content()`，后者停止发送。`pending_data_output_bytes()` 与输出批次 observer 仍用于已编码 DATA 和 socket 写完成记账；它们不能代替应用层输出预算。
