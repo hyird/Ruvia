@@ -237,6 +237,8 @@ private:
 - `payload()`（返回 `std::string_view`，在下一次 `read()` 启动前有效）
 - `text()` / `binary()`（返回 `bool`）
 
+`websocket_message::borrow(opcode, borrowed_text payload)` 用于调用方自有存储的零拷贝消息；字符串字面量、`std::string_view` 和具名 `std::string` / `std::pmr::string` 可直接传入，拥有型字符串右值（包括 `const` 右值）被编译器拒绝。需要发送临时字符串时使用 `text()` / `binary()` 的拥有化入口，不要预先转成 `string_view` 绕过生命周期检查。`borrow()` 不延长存储寿命；消息视图及 `send()` 操作完成前必须保持 owner 和字节有效。
+
 ---
 
 ## 4. HTTP `CONNECT` 与 `CONNECT-UDP` 隧道

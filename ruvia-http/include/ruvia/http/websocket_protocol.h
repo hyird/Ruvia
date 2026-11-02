@@ -12,6 +12,8 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/borrowed_text.h"
+
 namespace ruvia {
 
 // awaiting_peer_eof: a client completed the close handshake and, per RFC 6455
@@ -193,12 +195,12 @@ private:
 
 class websocket_message final {
 public:
-    // Construct a message view over caller-owned payload storage. The payload
-    // must remain valid until the next read on its connection or until the
-    // caller otherwise stops using this view.
+    // Construct a zero-copy message over caller-owned payload storage, rejecting
+    // direct owning-string temporaries. Keep that storage alive and unchanged
+    // until the view, or a send operation borrowing it, is no longer in use.
     [[nodiscard]] static constexpr websocket_message borrow(
-        websocket_opcode opcode, std::string_view payload_value) noexcept {
-        return websocket_message(opcode, payload_value);
+        websocket_opcode opcode, borrowed_text payload_value) noexcept {
+        return websocket_message(opcode, payload_value.view());
     }
 
     websocket_message(const websocket_message&) noexcept = default;
