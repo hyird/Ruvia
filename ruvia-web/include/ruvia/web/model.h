@@ -1172,6 +1172,9 @@ namespace ruvia {
 // the complete token; from_json<Model>() owns it in the model resource instead.
 // Move construction preserves borrowing/ownership. Move assignment keeps the
 // target resource and owns the result (copying borrowed/incompatible storage).
+// A successful move or rvalue field transfer resets the source to its default
+// token without allocation. Failed rebinding preserves both tokens; self-move
+// assignment is a no-op. Existing views must be refreshed after either changes.
 // Views and potentially borrowed get<T>() results must not outlive their token.
 // Default construction represents JSON null.
 class json_value final {
@@ -1214,10 +1217,15 @@ public:
 
     json_value(json_value&& other) noexcept
         : resource_(other.resource_),
-          storage_(std::move(other.storage_)) {}
+          storage_(std::move(other.storage_)) {
+        other.storage_.assign_borrowed("null");
+    }
 
     json_value& operator=(json_value&& other) {
-        storage_.assign_from(std::move(other.storage_), resource_);
+        if (this != &other) {
+            storage_.assign_from(std::move(other.storage_), resource_);
+            other.storage_.assign_borrowed("null");
+        }
         return *this;
     }
 
@@ -1330,7 +1338,9 @@ private:
     }
 
     [[nodiscard]] json_value rebind_for_model(std::pmr::memory_resource* resource) && {
-        return json_value(resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
+        auto rebound = json_value(resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
+        storage_.assign_borrowed("null");
+        return rebound;
     }
 
     std::pmr::memory_resource* resource_;
@@ -1374,10 +1384,15 @@ public:
 
     json_object(json_object&& other) noexcept
         : resource_(other.resource_),
-          storage_(std::move(other.storage_)) {}
+          storage_(std::move(other.storage_)) {
+        other.storage_.assign_borrowed("{}");
+    }
 
     json_object& operator=(json_object&& other) {
-        storage_.assign_from(std::move(other.storage_), resource_);
+        if (this != &other) {
+            storage_.assign_from(std::move(other.storage_), resource_);
+            other.storage_.assign_borrowed("{}");
+        }
         return *this;
     }
 
@@ -1459,7 +1474,9 @@ private:
     }
 
     [[nodiscard]] json_object rebind_for_model(std::pmr::memory_resource* resource) && {
-        return json_object(resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
+        auto rebound = json_object(resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
+        storage_.assign_borrowed("{}");
+        return rebound;
     }
 
     std::pmr::memory_resource* resource_;

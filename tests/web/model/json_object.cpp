@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/web/model.h"
 
@@ -14,6 +15,64 @@ RUVIA_MODEL(json_object_child, RUVIA_REQUIRED_FIELD(name, ruvia::string));
 RUVIA_MODEL(json_object_envelope,
     RUVIA_REQUIRED_FIELD(child, json_object_child),
     RUVIA_REQUIRED_FIELD(items, ruvia::array<json_object_child>));
+RUVIA_MODEL(json_token_holder,
+    RUVIA_OPTIONAL_FIELD(object, ruvia::json_object),
+    RUVIA_OPTIONAL_FIELD(items, ruvia::array<ruvia::json_value>));
+
+RUVIA_TEST(json_token_moves_preserve_complete_tokens_and_reset_sources) {
+    const std::string input = "{\"payload\":\"" + std::string(160, 'x') + "\"}";
+    const auto check = [&]<typename token_type>(std::string_view empty) {
+        ruvia::test::counting_memory_resource source_resource;
+        ruvia::test::counting_memory_resource target_resource;
+        {
+            for (const bool owning : {false, true}) {
+                auto source = token_type::parse(input, {.resource_ = &source_resource});
+                if (owning) {
+                    token_type owned({.resource_ = &source_resource});
+                    owned = std::move(source);
+                    source = std::move(owned);
+                }
+                token_type moved(std::move(source));
+                RUVIA_CHECK_EQ(moved.view(), std::string_view(input));
+                RUVIA_CHECK_EQ(source.view(), empty);
+                RUVIA_CHECK(source.resource() == &source_resource);
+                token_type target({.resource_ = &target_resource});
+                target = std::move(moved);
+                RUVIA_CHECK_EQ(target.view(), std::string_view(input));
+                RUVIA_CHECK_EQ(moved.view(), empty);
+                RUVIA_CHECK(target.resource() == &target_resource);
+                auto* const self = &target;
+                target = std::move(*self);
+                RUVIA_CHECK_EQ(target.view(), std::string_view(input));
+                source = std::move(target);
+                RUVIA_CHECK_EQ(source.view(), std::string_view(input));
+                RUVIA_CHECK_EQ(target.view(), empty);
+            }
+        }
+        RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(target_resource.live_allocations(), std::size_t{0});
+    };
+    check.template operator()<ruvia::json_value>("null");
+    check.template operator()<ruvia::json_object>("{}");
+}
+
+RUVIA_TEST(json_token_field_transfers_leave_the_source_model_serializable) {
+    auto source = ruvia::from_json<json_token_holder>(R"({"object":{"keep":true},"items":[[1,2]]})");
+    ruvia::json_object object(std::move(source.ensure<"object">()));
+    RUVIA_CHECK_EQ(object.view(), std::string_view(R"({"keep":true})"));
+    RUVIA_CHECK_EQ(ruvia::to_json(source), R"({"object":{},"items":[[1,2]]})");
+    json_token_holder target;
+    target.set<"object">(std::move(object));
+    RUVIA_CHECK_EQ(object.view(), std::string_view("{}"));
+    auto& source_items = source.ensure<"items">();
+    target.ensure<"items">().push_back(std::move(source_items[0]));
+    RUVIA_CHECK(source_items[0].is_null());
+    RUVIA_CHECK_EQ(source_items[0].view(), std::string_view("null"));
+    RUVIA_CHECK_EQ(ruvia::to_json(source), R"({"object":{},"items":[null]})");
+    RUVIA_CHECK_EQ(ruvia::to_json(target), R"({"object":{"keep":true},"items":[[1,2]]})");
+    target.set<"object">(std::move(target.ensure<"object">()));
+    RUVIA_CHECK_EQ(ruvia::to_json(target), R"({"object":{"keep":true},"items":[[1,2]]})");
+}
 
 RUVIA_TEST(json_value_parse_classifies_kinds_and_rejects_trailing_input) {
     const auto object = ruvia::json_value::parse(R"({"name":"ada"})");

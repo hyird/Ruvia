@@ -497,6 +497,7 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
 - **零拷贝动态 JSON 视图（`"ruvia/web/model.h"`）**：
   - `ruvia::json_object::parse(std::string_view body, model_parse_options options = {})` / `ruvia::json_value::parse(std::string_view body, model_parse_options options = {})`（直接返回值，语法非法抛 `std::invalid_argument`）
   - 支持 `obj.get<ruvia::string>("key")`、`obj.get<ruvia::int64>("count")`、`obj.for_each_field([](std::string_view key, const ruvia::json_value& val) { ... })`、`val.for_each_element([](const ruvia::json_value& item) { ... })`。
+  - 移动构造保留 token 的借用/拥有方式；移动赋值保留目标 PMR 并拥有化结果。成功移动或右值字段转移后，源 `json_value` 恢复为 `null`，源 `json_object` 恢复为 `{}`，源 PMR 不变，仍可查询、赋值或作为模型成员序列化；重置本身不分配。自移动赋值保持原值；跨资源拥有化失败时两端原值均保留。移动后重新取得借用视图，不继续使用旧视图。
 - **命令式校验器 `ruvia::validator`（`"ruvia/web/validation.h"`）**：
   - 提供 `.required(opt, field)`、`.min_length(opt, field, n)`、`.max_length(opt, field, n)`、`.range(opt, field, low, high)`、`.one_of(opt, field, list)`、`.add(field, code, message)`，最后调用 `.throw_if_invalid(validation_failure_options = {})` 抛出携带 issues 的 `ruvia::http_error`（默认 400 / `validation_failed`）。
 

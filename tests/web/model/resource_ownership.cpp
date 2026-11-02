@@ -201,6 +201,37 @@ RUVIA_TEST(model_resource_failed_rebind_preserves_destination_and_reclaims_tempo
     RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
 }
 
+RUVIA_TEST(model_dynamic_token_failed_move_keeps_source_destination_and_resources) {
+    const std::string input = "{\"payload\":\"" + std::string(160, 'x') + "\"}";
+    const auto check = [&]<typename token_type>(std::string_view empty) {
+        reject_after_resource target_resource;
+        ruvia::test::counting_memory_resource source_resource;
+        {
+            token_type source({.resource_ = &source_resource});
+            source = token_type::parse(input);
+            token_type target({.resource_ = &target_resource});
+            target_resource.remaining_ = 0;
+            bool failed = false;
+            try {
+                target = std::move(source);
+            } catch (const std::bad_alloc&) {
+                failed = true;
+            }
+            RUVIA_CHECK(failed);
+            RUVIA_CHECK_EQ(source.view(), std::string_view(input));
+            RUVIA_CHECK_EQ(target.view(), empty);
+            target_resource.remaining_.reset();
+            target = std::move(source);
+            RUVIA_CHECK_EQ(source.view(), empty);
+            RUVIA_CHECK_EQ(target.view(), std::string_view(input));
+        }
+        RUVIA_CHECK_EQ(source_resource.live_allocations(), std::size_t{0});
+        RUVIA_CHECK_EQ(target_resource.allocations_.live_allocations(), std::size_t{0});
+    };
+    check.template operator()<ruvia::json_value>("null");
+    check.template operator()<ruvia::json_object>("{}");
+}
+
 RUVIA_TEST(model_resource_moves_reject_a_source_that_owns_the_destination) {
     ruvia::test::counting_memory_resource resource;
     const std::string text(160, 'f');
