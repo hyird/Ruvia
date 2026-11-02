@@ -149,7 +149,6 @@ struct mysql_wait final {
         const auto milliseconds = mysql_get_timeout_value_ms(&connection);
         driver_deadline = worker_timer_deadline_after(std::chrono::milliseconds(milliseconds == 0 ? 1 : milliseconds));
     }
-    const auto selected_deadline = select_mysql_wait_deadline(operation_deadline, driver_deadline);
     db_socket_readiness wanted = db_socket_readiness::none;
     if ((status & MYSQL_WAIT_READ) != 0) {
         wanted = wanted | db_socket_readiness::read;
@@ -162,6 +161,7 @@ struct mysql_wait final {
     }
 
     if (wanted == db_socket_readiness::none) {
+        const auto selected_deadline = select_mysql_wait_deadline(operation_deadline, driver_deadline);
         if (!selected_deadline.deadline_) {
             throw db_error(
                 db_error::code_type::io_error, db_driver::mariadb, "MariaDB requested an unsupported empty wait");
@@ -174,6 +174,10 @@ struct mysql_wait final {
         throw mysql_socket_error("MariaDB returned an invalid socket for an active wait",
             std::make_error_code(std::errc::bad_file_descriptor));
     }
+    // Native MariaDB options round to seconds; enforce the public millisecond
+    // limit here, like the shared pipeline and PostgreSQL socket paths.
+    const auto selected_deadline = select_mysql_wait_deadline(
+        deadline_value.constrained_by(db_io_timeout(pool.config(), wanted)).deadline(), driver_deadline);
     return mysql_wait{pool, selected_deadline.source_,
         pool.wait_socket(index, native, wanted, selected_deadline.deadline_, deadline_value)};
 }
@@ -1150,6 +1154,13 @@ task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t 
     co_return start;
 }
 
+namespace {
+
+task<void> finish_mysql_stream(mariadb_pool& pool, std::size_t index, void* result_value,
+    const operation_options& options, operation_timeout deadline_value);
+
+}  // namespace
+
 task<std::optional<db_row>> mariadb_driver::read_stream_row(pool_type& pool, std::size_t index, void* result_value,
     std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_options& options) {
@@ -1159,9 +1170,9 @@ task<std::optional<db_row>> mariadb_driver::read_stream_row(pool_type& pool, std
 
     auto cancellation = pool.cancel_on_stop(index, options.stop_token_);
     auto* raw_result = static_cast<MYSQL_RES*>(result_value);
+    const auto deadline_value = mysql_stream_deadline(pool, options);
     try {
         pool.throw_if_aborted(index);
-        const auto deadline_value = mysql_stream_deadline(pool, options);
         MYSQL_ROW row = nullptr;
         int status = mysql_fetch_row_start(&row, raw_result);
         while (status != 0) {
@@ -1200,12 +1211,14 @@ task<std::optional<db_row>> mariadb_driver::read_stream_row(pool_type& pool, std
     // EOF is not a read failure. The close path owns slot release, including
     // its own failure path, so it must run outside the read-error guard.
     cancellation.finish();
-    co_await close_stream(pool, index, result_value, resource, options);
+    co_await finish_mysql_stream(pool, index, result_value, options, deadline_value);
     co_return std::nullopt;
 }
 
-task<void> mariadb_driver::close_stream(pool_type& pool, std::size_t index, void* result_value,
-    std::pmr::memory_resource*, const operation_options& options) {
+namespace {
+
+task<void> finish_mysql_stream(mariadb_pool& pool, std::size_t index, void* result_value,
+    const operation_options& options, operation_timeout deadline_value) {
     if (result_value == nullptr) {
         co_return;
     }
@@ -1214,7 +1227,6 @@ task<void> mariadb_driver::close_stream(pool_type& pool, std::size_t index, void
     auto* raw_result = static_cast<MYSQL_RES*>(result_value);
     try {
         pool.throw_if_aborted(index);
-        const auto deadline_value = mysql_stream_deadline(pool, options);
         // The result-set terminator carries the final server status:
         // https://mariadb.com/docs/server/reference/clientserver-protocol/4-server-response-packets/eof_packet
         // libmariadb's free_result drains unread rows without decoding that
@@ -1251,6 +1263,13 @@ task<void> mariadb_driver::close_stream(pool_type& pool, std::size_t index, void
         pool.release_slot(index);
         throw;
     }
+}
+
+}  // namespace
+
+task<void> mariadb_driver::close_stream(pool_type& pool, std::size_t index, void* result_value,
+    std::pmr::memory_resource*, const operation_options& options) {
+    return finish_mysql_stream(pool, index, result_value, options, mysql_stream_deadline(pool, options));
 }
 
 void mariadb_driver::discard_stream(void* result) noexcept {

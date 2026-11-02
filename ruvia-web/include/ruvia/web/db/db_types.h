@@ -101,7 +101,8 @@ struct db_config final {
     std::size_t pool_size_per_worker_{1};
     // Absence disables the corresponding timeout.
     std::optional<std::chrono::milliseconds> connect_timeout_{std::chrono::seconds(5)};
-    // Bound one socket wait for readability or writability, for both drivers.
+    // Bound one socket wait for readability or writability, for both drivers,
+    // with millisecond precision (including exclusive transactions and streams).
     std::optional<std::chrono::milliseconds> read_timeout_{};
     std::optional<std::chrono::milliseconds> write_timeout_{};
     std::optional<std::chrono::milliseconds> query_timeout_{std::chrono::seconds(30)};

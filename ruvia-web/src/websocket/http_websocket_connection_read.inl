@@ -35,20 +35,36 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
         active_read.start();
         try {
             for (;;) {
-                // poll() can queue an automatic Pong/Close. Keep that mutation mutually
-                // exclusive with an in-flight application/heartbeat write so the core's
-                // pending-output storage cannot reallocate under async I/O.
-                if (write_phase_ != write_phase_type::idle) {
-                    co_await wait_for_write_idle();
+                std::optional<websocket_event> event;
+                {
+                    // RFC 6455 sections 5.5.1/5.5.2: poll() may queue an
+                    // automatic Close/Pong. Reserve the next message boundary
+                    // and retain the lane through that control output flush.
+                    if (write_phase_ != write_phase_type::idle) {
+                        co_await wait_for_write_idle(write_wait_type::reader);
+                    }
+                    write_guard_type write_guard(*this, write_phase_type::application);
+                    event = protocol_.next_event();
+                    if (event.has_value()) {
+                        if (event->ping() != nullptr) {
+                            co_await flush_protocol_output_now();
+                        } else if (event->close() != nullptr || event->protocol_error() != nullptr || event->transport_end() != nullptr) {
+                            liveness_state_ = websocket_liveness_idle{};
+                            co_await flush_protocol_output_now();
+                        }
+                    }
                 }
-                const auto event = protocol_.next_event();
                 if (!event.has_value()) {
                     if (!(co_await read_more())) {
                         // EOF is an abnormal websocket close when no peer Close was
                         // received. The core discards unsent WS output and plans the
                         // transport end.
+                        if (write_phase_ != write_phase_type::idle) {
+                            co_await wait_for_write_idle(write_wait_type::reader);
+                        }
+                        write_guard_type write_guard(*this, write_phase_type::application);
                         protocol_.notify_transport_eof();
-                        co_await flush_protocol_output_exclusive();
+                        co_await flush_protocol_output_now();
                         close_stream();
                         co_return std::nullopt;
                     }
@@ -60,7 +76,6 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                     co_return *message;
                 }
                 if (event->ping() != nullptr) {
-                    co_await flush_protocol_output_exclusive();
                     continue;
                 }
                 if (event->pong() != nullptr) {
@@ -70,11 +85,8 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                     continue;
                 }
                 if (event->close() != nullptr || event->protocol_error() != nullptr || event->transport_end() != nullptr) {
-                    // These observations terminate the application read side. websocket_output_plan
-                    // remains the sole authority for flushing Close bytes and mapping
-                    // orderly transport completion.
-                    liveness_state_ = websocket_liveness_idle{};
-                    co_await flush_protocol_output_exclusive();
+                    // The poll's exclusive lane already flushed the protocol's
+                    // Close/end-transport plan before this read completes.
                     co_return std::nullopt;
                 }
                 throw std::logic_error("unexpected WebSocket protocol event");

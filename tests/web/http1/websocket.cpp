@@ -55,6 +55,7 @@ const auto websocket_eof_observed = std::make_shared<websocket_eof_observation>(
 // Large enough that loopback socket buffers cannot absorb it, so the write
 // stays active while the client does not read.
 constexpr std::size_t stalled_payload_size = std::size_t{16} << 20;
+constexpr std::size_t fair_handoff_messages = 33;
 
 class http1_websocket_routes final {
     RUVIA_ROUTES_BEGIN(http1_websocket_routes)
@@ -74,6 +75,7 @@ class http1_websocket_routes final {
     RUVIA_GET_WS("/http1-websocket-eof", read_until_eof);
     RUVIA_GET_WS("/http1-websocket-longest-heartbeat", write_stalled, longest_heartbeat);
     RUVIA_GET_WS("/http1-websocket-write-only-heartbeat", write_without_reading, short_heartbeat);
+    RUVIA_GET_WS("/http1-websocket-fair-handoff", write_with_pending_read, longest_heartbeat);
     RUVIA_GET_WS("/http1-websocket-required-subprotocol", accept_only, required_subprotocol);
     RUVIA_GET_WS("/http1-websocket-upstream-reset", fail_on_upstream_reset);
     RUVIA_GET_WS("/http1-websocket-echo-send", echo_send);
@@ -107,6 +109,32 @@ class http1_websocket_routes final {
 
     ruvia::task<void> write_stalled(ruvia::context& context_value) {
         co_await context_value.websocket().binary(std::string(stalled_payload_size, 'w'));
+    }
+
+    ruvia::task<void> write_with_pending_read(ruvia::context& context_value) {
+        auto& websocket_value = context_value.websocket();
+        ruvia::task_scope writes(context_value.worker());
+        const auto send = [&]() -> ruvia::task<void> {
+            co_await websocket_value.binary(std::string(stalled_payload_size, 'w'));
+            for (std::size_t index = 1; index != fair_handoff_messages; ++index) {
+                co_await websocket_value.text("tick");
+            }
+        };
+        // spawn() starts the first write up to its transport suspension before
+        // read() reserves its turn. The peer has not drained any payload yet.
+        writes.spawn(send());
+        std::exception_ptr failure;
+        try {
+            while (co_await websocket_value.read()) {
+            }
+        } catch (...) {
+            failure = std::current_exception();
+            websocket_value.abort();
+        }
+        co_await writes.join();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
     }
 
     // Never reads, so no Pong is ever polled. Idle long enough for a Ping to
@@ -270,10 +298,156 @@ std::string noise_message(std::size_t size) {
     }
     return message;
 }
+
+void check_fair_handoff(ruvia::testing::test_context& ruvia_ctx, bool peer_close) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::http_server_fixture server(io);
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    std::exception_ptr failure;
+    std::size_t messages = 0;
+    std::optional<std::size_t> pong_after;
+    std::optional<std::size_t> close_after;
+    auto run = [&]() -> ruvia::task<void> {
+        asio::steady_timer watchdog(io, std::chrono::seconds(10));
+        watchdog.async_wait([&](std::error_code error) {
+            if (!error) {
+                ruvia::close_socket(client);
+            }
+        });
+        try {
+            const auto send = [&](std::string_view bytes) -> ruvia::task<void> {
+                const auto result = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    asio::async_write(client, asio::buffer(bytes), std::move(handler));
+                });
+                if (result.error_code()) {
+                    throw std::system_error(result.error_code());
+                }
+            };
+            const auto receive = [&](char* bytes, std::size_t size) -> ruvia::task<void> {
+                const auto result = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    asio::async_read(client, asio::buffer(bytes, size), std::move(handler));
+                });
+                if (result.error_code()) {
+                    throw std::system_error(result.error_code());
+                }
+            };
+            // Send control frames with the upgrade, before draining the stalled
+            // first message. Both are masked with the legal all-zero mask.
+            constexpr std::array<char, 10> ping{'\x89', '\x84', '\0', '\0', '\0', '\0', 'f', 'a', 'i', 'r'};
+            constexpr std::array<char, 8> close{'\x88', '\x82', '\0', '\0', '\0', '\0', '\x03', '\xe8'};
+            std::string upgrade =
+                "GET /http1-websocket-fair-handoff HTTP/1.1\r\n"
+                "Host: 127.0.0.1\r\n"
+                "Connection: Upgrade\r\n"
+                "Upgrade: websocket\r\n"
+                "Sec-WebSocket-Version: 13\r\n"
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+            upgrade.append(ping.data(), ping.size());
+            if (peer_close) {
+                upgrade.append(close.data(), close.size());
+            }
+            co_await send(upgrade);
+            std::string head;
+            char byte{};
+            while (!head.ends_with("\r\n\r\n")) {
+                co_await receive(&byte, 1);
+                head.push_back(byte);
+            }
+            RUVIA_CHECK(head.starts_with("HTTP/1.1 101 "));
+            std::array<char, 65536> input{};
+            bool close_sent = peer_close;
+            while (!close_after.has_value()) {
+                std::array<unsigned char, 2> frame{};
+                co_await receive(reinterpret_cast<char*>(frame.data()), frame.size());
+                RUVIA_CHECK((frame[0] & 0x80U) != 0);
+                RUVIA_CHECK((frame[1] & 0x80U) == 0);
+                std::uint64_t length = frame[1] & 0x7fU;
+                if (length == 126 || length == 127) {
+                    const std::size_t size = length == 126 ? 2 : 8;
+                    std::array<unsigned char, 8> extended{};
+                    co_await receive(reinterpret_cast<char*>(extended.data()), size);
+                    length = 0;
+                    for (std::size_t index = 0; index != size; ++index) {
+                        length = (length << 8U) | extended[index];
+                    }
+                }
+                const auto opcode = frame[0] & 0x0fU;
+                if (opcode == 2) {
+                    RUVIA_CHECK_EQ(messages, std::size_t{0});
+                    RUVIA_CHECK_EQ(length, stalled_payload_size);
+                    while (length != 0) {
+                        const auto size = static_cast<std::size_t>(std::min<std::uint64_t>(input.size(), length));
+                        co_await receive(input.data(), size);
+                        RUVIA_CHECK(std::string_view(input.data(), size).find_first_not_of('w') == std::string_view::npos);
+                        length -= size;
+                    }
+                    ++messages;
+                } else {
+                    if (length > input.size()) {
+                        throw std::runtime_error("unexpected WebSocket frame size");
+                    }
+                    co_await receive(input.data(), static_cast<std::size_t>(length));
+                    const std::string_view payload(input.data(), static_cast<std::size_t>(length));
+                    if (opcode == 1) {
+                        RUVIA_CHECK_EQ(payload, std::string_view("tick"));
+                        ++messages;
+                    } else if (opcode == 10) {
+                        RUVIA_CHECK_EQ(payload, std::string_view("fair"));
+                        pong_after = messages;
+                    } else if (opcode == 8) {
+                        RUVIA_CHECK_EQ(payload, std::string_view("\x03\xe8", 2));
+                        close_after = messages;
+                    } else {
+                        throw std::runtime_error("unexpected WebSocket opcode");
+                    }
+                }
+                if (!close_sent && messages == fair_handoff_messages && pong_after.has_value()) {
+                    co_await send(std::string_view(close.data(), close.size()));
+                    close_sent = true;
+                }
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        ruvia::close_socket(client);
+        (void)watchdog.cancel();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    io.run();
+    root.get();
+    server.finish();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    RUVIA_CHECK(pong_after.has_value());
+    if (pong_after.has_value()) {
+        RUVIA_CHECK(*pong_after < fair_handoff_messages);
+    }
+    RUVIA_CHECK(close_after.has_value());
+    if (peer_close && close_after.has_value()) {
+        RUVIA_CHECK(*close_after < fair_handoff_messages);
+    } else if (!peer_close) {
+        RUVIA_CHECK_EQ(messages, fair_handoff_messages);
+    }
+}
 }  // namespace http1_websocket_test
 
 using http1_websocket_test::stalled_payload_size;
 using http1_websocket_test::websocket_eof_observed;
+
+// A reader blocked behind one complete application message gets a protocol
+// poll and automatic Pong/Close flush before a sequential writer drains its
+// entire finite burst. The peer keeps reading; there is no timer-based yield.
+RUVIA_TEST(http1_websocket_fair_handoff_polls_ping_between_sequential_writes) {
+    http1_websocket_test::check_fair_handoff(ruvia_ctx, false);
+}
+
+RUVIA_TEST(http1_websocket_fair_handoff_flushes_peer_close_between_sequential_writes) {
+    http1_websocket_test::check_fair_handoff(ruvia_ctx, true);
+}
 
 // A peer that closes its TCP send direction without a Close frame ends the
 // websocket read side (RFC 6455 7.1.5, abnormal closure); read() reports the

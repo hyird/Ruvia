@@ -12,6 +12,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/timer.h"
 #include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_types.h"
 
@@ -41,6 +42,32 @@ inline ruvia::task<void> query_with(
     } catch (const ruvia::db_error& error) {
         pipeline_test::record_failure(error, result);
     }
+}
+
+inline ruvia::task<void> transaction_query(ruvia::db_transaction& transaction, pipeline_test::outcome& result, bool& completed) {
+    try {
+        const auto rows = co_await transaction.query("SELECT v FROM delayed_transaction");
+        result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
+    } catch (const ruvia::db_error& error) {
+        pipeline_test::record_failure(error, result);
+    }
+    completed = true;
+}
+
+inline ruvia::task<void> finish_stream(ruvia::db_stream_result& stream, bool close,
+    pipeline_test::outcome& result, bool& completed) {
+    try {
+        if (close) {
+            co_await stream.close();
+            result.value_ = "closed";
+        } else {
+            const auto row = co_await stream.read();
+            result.value_ = row ? "unexpected row" : "eof";
+        }
+    } catch (const ruvia::db_error& error) {
+        pipeline_test::record_failure(error, result);
+    }
+    completed = true;
 }
 
 }  // namespace mariadb_pipeline_test
@@ -204,6 +231,102 @@ RUVIA_TEST(db_mariadb_stream_completion_preserves_result_boundaries_and_pipeline
             RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
         }
     }
+}
+
+// Fetching the row-set EOF and draining a CALL's final status belong to the
+// same read(). The peer sends legal packets on each side of that boundary:
+// resetting the deadline at EOF would let the final OK turn a timeout into EOF.
+RUVIA_TEST(db_mariadb_stream_eof_and_procedure_status_share_one_read_deadline) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer({{.rows_ = {"first"}, .procedure_ = true, .row_end_hold_ = 1, .procedure_status_hold_ = 2},
+                       {.rows_ = {"clean"}}},
+        peer_type::after_startup::reaccept);
+    auto config = mariadb_pipeline_test::config(peer);
+    config.read_timeout_.reset();
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config);
+    pipeline_test::outcome result;
+    pipeline_test::outcome next;
+    bool completed = false;
+    bool completed_before_status = false;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        auto stream = co_await handle.with_options({.timeout_ = std::chrono::milliseconds(200)})
+                          .query_stream("CALL delayed_status()");
+        const auto first = co_await stream.read();
+        RUVIA_CHECK(first.has_value());
+        if (first) {
+            RUVIA_CHECK((*first)["v"].as<std::string_view>() == "first");
+        }
+        task_scope reading(connected.worker());
+        reading.spawn(mariadb_pipeline_test::finish_stream(stream, false, result, completed));
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(120));
+        peer.release_hold(1);
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(160));
+        completed_before_status = completed;
+        peer.release_hold(2);
+        co_await reading.join();
+        RUVIA_CHECK(!stream.active());
+        co_await stream.close();
+        co_await pipeline_test::query(handle, "SELECT v FROM after_stream_timeout", next);
+    });
+    RUVIA_CHECK(completed_before_status);
+    RUVIA_CHECK(result.error_ == db_error::code_type::timeout);
+    RUVIA_CHECK(result.value_.empty());
+    RUVIA_CHECK(next.value_ == "clean");
+    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    RUVIA_CHECK((peer.maria_queries() ==
+                 std::vector<std::string>{"CALL delayed_status()", "SELECT v FROM after_stream_timeout"}));
+}
+
+// A separate close() gets a fresh operation budget, even after the stream has
+// been idle longer than that budget. It still drains both result boundaries.
+RUVIA_TEST(db_mariadb_explicit_stream_close_has_its_own_operation_deadline) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer({{.rows_ = {"first"}, .procedure_ = true, .row_end_hold_ = 1, .procedure_status_hold_ = 2},
+                       {.rows_ = {"clean"}}},
+        peer_type::after_startup::idle);
+    auto config = mariadb_pipeline_test::config(peer);
+    config.read_timeout_.reset();
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config);
+    pipeline_test::outcome result;
+    pipeline_test::outcome next;
+    bool completed = false;
+    bool completed_before_status = true;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        auto stream = co_await handle.with_options({.timeout_ = std::chrono::milliseconds(200)})
+                          .query_stream("CALL close_after_idle()");
+        const auto first = co_await stream.read();
+        RUVIA_CHECK(first.has_value());
+        if (first) {
+            RUVIA_CHECK((*first)["v"].as<std::string_view>() == "first");
+        }
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(250));
+        RUVIA_CHECK(stream.active());
+        task_scope closing(connected.worker());
+        closing.spawn(mariadb_pipeline_test::finish_stream(stream, true, result, completed));
+        peer.release_hold(1);
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(80));
+        completed_before_status = completed;
+        peer.release_hold(2);
+        co_await closing.join();
+        RUVIA_CHECK(!stream.active());
+        co_await stream.close();
+        co_await pipeline_test::query(handle, "SELECT v FROM after_explicit_close", next);
+    });
+    RUVIA_CHECK(!completed_before_status);
+    RUVIA_CHECK(!result.error_.has_value());
+    RUVIA_CHECK(result.value_ == "closed");
+    RUVIA_CHECK(next.value_ == "clean");
+    RUVIA_CHECK_EQ(peer.startups(), std::size_t{1});
+    RUVIA_CHECK((peer.maria_queries() ==
+                 std::vector<std::string>{"CALL close_after_idle()", "SELECT v FROM after_explicit_close"}));
 }
 
 // A rejected result shape still ran its SQL. BEGIN and disabled autocommit
@@ -520,6 +643,49 @@ RUVIA_TEST(db_mariadb_read_timeout_fails_every_pipelined_statement) {
     }
     RUVIA_CHECK(outcomes[3].value_ == "d");
     RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+}
+
+// The transaction's exclusive lane must honor the millisecond socket-wait
+// limit, not libmariadb's whole-second native timer or the five-second query
+// budget. A late valid reply cannot revive its retired transaction/lease.
+RUVIA_TEST(db_mariadb_transaction_read_timeout_is_millisecond_bounded_and_retires_its_lease) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer({{.column_ = "", .status_ = 3},
+                       {.rows_ = {"late"}, .status_ = 3, .hold_ = 1}, {.rows_ = {"clean"}}},
+        peer_type::after_startup::reaccept);
+    auto config = mariadb_pipeline_test::config(peer);
+    config.read_timeout_ = std::chrono::milliseconds(100);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config);
+    pipeline_test::outcome result;
+    pipeline_test::outcome next;
+    bool completed = false;
+    bool completed_before_reply = false;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        auto transaction = co_await handle.begin_transaction();
+        RUVIA_CHECK(transaction.active());
+        task_scope querying(connected.worker());
+        querying.spawn(mariadb_pipeline_test::transaction_query(transaction, result, completed));
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(350));
+        completed_before_reply = completed;
+        peer.release_hold(1);
+        co_await querying.join();
+        RUVIA_CHECK(!transaction.active());
+        if (!transaction.active()) {
+            co_await pipeline_test::query(handle, "SELECT v FROM after_transaction_timeout", next);
+        }
+    });
+    RUVIA_CHECK(completed_before_reply);
+    RUVIA_CHECK(result.error_ == db_error::code_type::timeout);
+    RUVIA_CHECK(result.value_.empty());
+    RUVIA_CHECK(next.value_ == "clean");
+    RUVIA_CHECK_EQ(peer.startups(), std::size_t{2});
+    RUVIA_CHECK((peer.maria_queries() ==
+                 std::vector<std::string>{"START TRANSACTION", "SELECT v FROM delayed_transaction",
+                     "SELECT v FROM after_transaction_timeout"}));
 }
 
 // A statement that leaves its connection inside a transaction (BEGIN through

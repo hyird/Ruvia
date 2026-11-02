@@ -43,7 +43,9 @@ void server_websocket_connection<stream_type>::finish_write(write_phase_type pha
         std::terminate();
     }
     write_phase_ = write_phase_type::idle;
-    restart_pong_window(steady_now_ms());
+    if (std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
+        restart_pong_window(steady_now_ms());
+    }
     if (going_away_pending_) {
         start_going_away();
     }
@@ -57,8 +59,8 @@ void server_websocket_connection<stream_type>::start_going_away() noexcept {
         going_away_pending_ = false;
         return;
     }
-    if (write_phase_ != write_phase_type::idle) {
-        // The lane owner's finish_write() starts the close.
+    if (write_phase_ != write_phase_type::idle || reader_waiting_) {
+        // The lane owner or reserved reader's finish_write() starts the close.
         going_away_pending_ = true;
         return;
     }
@@ -105,6 +107,11 @@ void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) 
             return;
         case websocket_liveness_decision::send_ping:
             break;
+    }
+    if (reader_waiting_) {
+        // Let an already blocked reader poll its buffered control frames
+        // before a scanner heartbeat claims the next message boundary.
+        return;
     }
 
     liveness_state_ = websocket_sending_ping(++heartbeat_sequence_);

@@ -101,6 +101,9 @@ public:
     ~db_stream_result();
 
     [[nodiscard]] bool active() const noexcept;
+    // Each read has one operation deadline, including any EOF/trailing-result
+    // drain needed before returning nullopt. A separate close starts its own
+    // deadline; idle time between operations is not charged.
     task<std::optional<db_row>> read() &;
     task<std::optional<db_row>> read() && = delete;
     task<void> close() &;

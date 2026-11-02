@@ -48,8 +48,8 @@ task<void> server_websocket_connection<stream_type>::write_owned(websocket_opcod
     {
         write_operation_lease_type active_write(std::move(write_lease));
         static_cast<void>(active_write);
-        if (write_phase_ != write_phase_type::idle) {
-            co_await wait_for_write_idle();
+        if (write_phase_ != write_phase_type::idle || reader_waiting_) {
+            co_await wait_for_write_idle(write_wait_type::writer);
         }
         write_guard_type write_guard(*this, write_phase_type::application);
         // The caller keeps the payload alive until this write completes, so an
@@ -77,8 +77,8 @@ task<void> server_websocket_connection<stream_type>::close_owned(::ruvia::websoc
     {
         write_operation_lease_type active_write(std::move(write_lease));
         static_cast<void>(active_write);
-        if (write_phase_ != write_phase_type::idle) {
-            co_await wait_for_write_idle();
+        if (write_phase_ != write_phase_type::idle || reader_waiting_) {
+            co_await wait_for_write_idle(write_wait_type::writer);
         }
         const auto reason = options.reason_.view();
         bool flush_output = false;
@@ -147,9 +147,28 @@ task<void> server_websocket_connection<stream_type>::detach_and_drain_writes() {
 }
 
 template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::wait_for_write_idle() {
-    while (write_phase_ != write_phase_type::idle) {
-        co_await background_write_signal_.wait();
+task<void> server_websocket_connection<stream_type>::wait_for_write_idle(write_wait_type type) {
+    const bool reader = type == write_wait_type::reader;
+    try {
+        while (write_phase_ != write_phase_type::idle || (!reader && reader_waiting_)) {
+            if (reader) {
+                // finish_write() wakes through worker_signal, so a sequential
+                // writer can resume inline before this reader gets its turn.
+                reader_waiting_ = true;
+            }
+            co_await background_write_signal_.wait();
+        }
+        if (reader) {
+            // The caller polls and flushes control output under a write guard
+            // before yielding; releasing that guard wakes held-back writers.
+            reader_waiting_ = false;
+        }
+    } catch (...) {
+        if (reader) {
+            reader_waiting_ = false;
+            notify_write_idle();
+        }
+        throw;
     }
 }
 
@@ -175,15 +194,6 @@ bool server_websocket_connection<stream_type>::accept_submitted_frame(websocket_
             throw std::invalid_argument("websocket control frame is too large");
     }
     throw std::logic_error("unexpected websocket frame submit status");
-}
-
-template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::flush_protocol_output_exclusive() {
-    if (write_phase_ != write_phase_type::idle) {
-        co_await wait_for_write_idle();
-    }
-    write_guard_type write_guard(*this, write_phase_type::application);
-    co_await flush_protocol_output_now();
 }
 
 template <typename stream_type>

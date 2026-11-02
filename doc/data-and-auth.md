@@ -54,6 +54,8 @@ ruvia::app().database({
 
 数据库 TLS 复用 `client_tls_config`。`verify_identity` 在握手内完成证书链与 RFC 9525 subjectAltName 校验，先于发送登录或启动消息：DNS 名只匹配 DNS SAN，IP 只匹配 IP SAN，不回退到主题 CN；PostgreSQL 可用 `tls_.server_name_` 覆盖验证名，MariaDB 当前要求数字 IP 且不接受覆盖名。`max_outgoing_records_` 默认 `2^23`（范围 `1..2^23`），限制单连接发出的全部 TLS 记录并在到达上限时终止连接。系统 DNS 查询超时、取消、客户端关闭或 Worker 停机时不等待不可抢占的底层 `getaddrinfo` 返回。
 
+`read_timeout_` / `write_timeout_` 按毫秒限制每次对应方向的 socket 等待，普通查询、事务和流式结果均适用；MariaDB 原生选项的秒级取整不会放宽框架配置。单次流式 `read()` 的 operation timeout 包含 EOF 后的最终状态排空，不会在阶段切换时重新计时；另一次显式 `close()` 使用自己的新预算，流空闲时间不计入它。
+
 ### 1.2 直接查询、编译期 SQL 校验与流式游标（`db_handle`）
 
 在路由中通过 `c.db()`（或 `c.db("alias")`）获取 `ruvia::db_handle`。ORM 与直接查询保持独立公开路线，均可直接在 `db_handle` 或 `db_transaction` 上调用。

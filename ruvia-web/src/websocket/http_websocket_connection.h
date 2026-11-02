@@ -117,6 +117,11 @@ private:
         adopt,
     };
 
+    enum class write_wait_type : std::uint8_t {
+        reader,
+        writer,
+    };
+
     enum class read_phase_type : std::uint8_t {
         idle,
         reserved,
@@ -276,12 +281,12 @@ private:
         websocket_opcode opcode, std::string_view payload, write_operation_lease_type write_lease, bool compress);
     task<void> close_owned(::ruvia::websocket_close_options options, write_operation_lease_type write_lease);
     task<void> write_heartbeat_ping();
-    // Callers check write_phase_ first, so an idle lane costs no coroutine frame.
-    task<void> wait_for_write_idle();
+    // A blocked reader reserves the next message boundary. Writers must also
+    // check reader_waiting_ before taking an otherwise idle lane.
+    task<void> wait_for_write_idle(write_wait_type type);
     // Maps a rejected submit to its exception; false when the protocol is no
     // longer open and nothing was queued.
     bool accept_submitted_frame(websocket_frame_submit_status status);
-    task<void> flush_protocol_output_exclusive();
     task<void> flush_protocol_output_now();
     // Reads more transport bytes into buffer_. Between frames the read is
     // sized by recent traffic, so an idle connection holds little read storage.
@@ -314,6 +319,7 @@ private:
     worker_signal reader_done_signal_;
     write_phase_type write_phase_{write_phase_type::idle};
     bool write_active_{false};
+    bool reader_waiting_{false};
     read_phase_type read_phase_{read_phase_type::idle};
     websocket_liveness_state_type liveness_state_{websocket_liveness_idle{}};
     bool going_away_pending_{false};

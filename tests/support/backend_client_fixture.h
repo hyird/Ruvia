@@ -168,6 +168,11 @@ public:
         // place of columns_, as when a table was altered between the prepare
         // and the execution, or as a UNION of YEAR columns is described.
         std::vector<maria_column> prepare_columns_;
+        // Nonzero: send metadata and rows first, then hold the row-set EOF
+        // until release_hold() names it. Packet sequence numbers stay intact.
+        std::size_t row_end_hold_{0};
+        // Like row_end_hold_, but holds only a procedure's trailing OK.
+        std::size_t procedure_status_hold_{0};
     };
 
     explicit backend_startup_peer(protocol selected = protocol::postgresql, bool defer_authentication = true,
@@ -1048,7 +1053,8 @@ private:
 
     // The packets answering one command, sequence numbers from 1: text rows
     // for a COM_QUERY, binary rows for a COM_STMT_EXECUTE.
-    static void maria_response(std::string& response, const maria_reply& reply, bool binary) {
+    static void maria_response(std::string& response, const maria_reply& reply, bool binary,
+        std::vector<std::pair<std::size_t, std::size_t>>& holds) {
         unsigned char sequence = 1;
         const auto ok = [&](std::uint64_t affected, std::uint64_t insert_id, std::uint16_t status,
                             const std::vector<std::pair<std::string, std::string>>& tracked) {
@@ -1122,11 +1128,17 @@ private:
             error();
             return;
         }
+        if (reply.row_end_hold_ != 0) {
+            holds.emplace_back(response.size(), reply.row_end_hold_);
+        }
         // Server status bit 8: more results follow.
         eof = std::string("\xfe\0\0", 3);
         maria_status(eof, static_cast<std::uint16_t>(reply.procedure_ ? reply.status_ | 8 : reply.status_));
         maria_packet(response, eof, sequence++);
         if (reply.procedure_) {
+            if (reply.procedure_status_hold_ != 0) {
+                holds.emplace_back(response.size(), reply.procedure_status_hold_);
+            }
             ok(0, 0, reply.status_, {});
         }
     }
@@ -1228,13 +1240,28 @@ private:
                 continue;
             }
             std::string response;
+            std::vector<std::pair<std::size_t, std::size_t>> holds;
             for (const char type : answered) {
                 if (next_maria_ == maria_replies_.size()) {
                     break;
                 }
-                maria_response(response, maria_replies_[next_maria_++], type == '\x17');
+                maria_response(response, maria_replies_[next_maria_++], type == '\x17', holds);
             }
-            co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+            std::size_t sent = 0;
+            for (const auto& [offset, hold] : holds) {
+                if (offset != sent) {
+                    co_await asio::async_write(socket, asio::buffer(response.data() + sent, offset - sent), asio::use_awaitable);
+                    sent = offset;
+                }
+                while (std::ranges::find(released_holds_, hold) == released_holds_.end() && !closing_) {
+                    std::error_code ignored;
+                    co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, ignored));
+                }
+                if (closing_) {
+                    co_return false;
+                }
+            }
+            co_await asio::async_write(socket, asio::buffer(response.data() + sent, response.size() - sent), asio::use_awaitable);
         }
         co_return false;
     }

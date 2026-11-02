@@ -81,12 +81,17 @@ public:
 
     /// Only one read operation may run at a time. Starting another before the
     /// current operation completes throws std::logic_error. Unstarted operations may coexist.
+    /// One reader may overlap one writer. A reader waiting behind an in-flight
+    /// message polls control frames at message boundaries before the writer's
+    /// next operation; the current complete message is never interrupted.
     [[nodiscard]] task<std::optional<websocket_message>> read() &;
     task<std::optional<websocket_message>> read() && = delete;
 
     /// The string_view overloads copy payloads into owner-worker PMR storage
     /// before returning. PMR-string inputs with the matching owner allocator
     /// can transfer their existing allocation; incompatible inputs are copied.
+    /// Output operations share one write lane: starting a second before the
+    /// current operation completes throws std::logic_error.
     task<void> text(std::string_view payload, websocket_send_options options = {}) &;
     task<void> text(std::string_view, websocket_send_options = {}) && = delete;
 
