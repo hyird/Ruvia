@@ -43,7 +43,7 @@ RUVIA_TEST(http1_streaming_request_chunked_upload_and_trailers) {
     auto chunk = writer.plan_chunk(payload_value);
     RUVIA_CHECK((chunk.index() == 0));
     RUVIA_CHECK_EQ(std::get<0>(chunk).prefix(), std::string_view("5\r\n"));
-    RUVIA_CHECK_EQ(std::get<0>(chunk).suffix_, std::string_view("\r\n"));
+    RUVIA_CHECK_EQ(std::get<0>(chunk).suffix(), std::string_view("\r\n"));
     writer.commit_chunk();
     std::array<char, 128> finish_value{};
     const std::array trailers{ruvia::http_header_view{"Digest", "value"}};
@@ -101,8 +101,8 @@ RUVIA_TEST(http1_streaming_request_known_length_and_continue_gate) {
     RUVIA_CHECK(!(writer.plan_finish({}).index() == 0));
     auto chunk = writer.plan_chunk(payload_value);
     RUVIA_CHECK((chunk.index() == 0));
-    RUVIA_CHECK_EQ(std::get<0>(chunk).prefix_size_, 0u);
-    RUVIA_CHECK(std::get<0>(chunk).suffix_.empty());
+    RUVIA_CHECK(std::get<0>(chunk).prefix().empty());
+    RUVIA_CHECK(std::get<0>(chunk).suffix().empty());
     writer.commit_chunk();
     RUVIA_CHECK(!(writer.plan_chunk(payload_value).index() == 0));
     auto finish_value = writer.plan_finish({});

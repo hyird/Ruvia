@@ -32,15 +32,30 @@ enum class http1_request_content_write_error : std::uint8_t {
 // A final response before upload completion requires abort(), not an implicit FIN.
 class http1_request_content_writer final {
 public:
-    struct chunk final {
+    class chunk final {
+    public:
+        // Only the prefix borrows this snapshot; retain the chunk until the
+        // scatter-gather write has consumed it. The payload still borrows input.
+        [[nodiscard]] constexpr std::string_view prefix() const& noexcept {
+            return std::string_view(prefix_.data(), prefix_size_);
+        }
+        std::string_view prefix() const&& = delete;
+
+        [[nodiscard]] constexpr std::span<const char> payload() const noexcept {
+            return payload_;
+        }
+        [[nodiscard]] constexpr std::string_view suffix() const noexcept {
+            return suffix_;
+        }
+
+    private:
+        friend class http1_request_content_writer;
+        chunk() noexcept = default;
+
         std::array<char, 2 * sizeof(std::size_t) + 2> prefix_{};
         std::size_t prefix_size_{0};
         std::span<const char> payload_{};
         std::string_view suffix_{};
-
-        [[nodiscard]] constexpr std::string_view prefix() const noexcept {
-            return std::string_view(prefix_.data(), prefix_size_);
-        }
     };
     explicit http1_request_content_writer(const http1_client_streaming_request_content& plan) noexcept;
     void release_content() noexcept;

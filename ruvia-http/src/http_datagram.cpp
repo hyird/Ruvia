@@ -52,11 +52,13 @@ std::variant<std::size_t, http_capsule_codec_error> encode_capsule_var_int(std::
 }
 // CONNECT-UDP context ID 0 (RFC 9298 section 5) as its one-byte variable-length integer.
 constexpr std::string_view udp_payload_context_id{"\0", 1};
+}  // namespace
 // One DATAGRAM capsule (RFC 9297 section 3.5) whose value is `context_prefix`
 // followed by the borrowed payload.
-std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(
+std::variant<http_datagram_write_plan, http_datagram_error> http_datagram_session::plan_datagram_capsule(
     std::span<const char> payload_value, std::string_view context_prefix) noexcept {
-    http_datagram_write_plan plan{.payload_ = payload_value};
+    http_datagram_write_plan plan;
+    plan.payload_ = payload_value;
     const auto header = encode_http_capsule_header(
         plan.prefix_, http_datagram_capsule_type, context_prefix.size() + payload_value.size());
     if (header.index() != 0) {
@@ -67,7 +69,6 @@ std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsul
     plan.prefix_size_ += context_prefix.size();
     return plan;
 }
-}  // namespace
 std::optional<bool> parse_http_capsule_protocol(std::string_view value) noexcept {
     detail::http_structured_parser parser{detail::http_structured_text_input{value}};
     parser.spaces();

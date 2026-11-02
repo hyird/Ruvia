@@ -672,7 +672,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                 // The write lane has its own deadline, so the concurrent
                 // response reader keeps its read deadline.
                 const std::array<asio::const_buffer, 3> parts{asio::buffer(planned.prefix()),
-                    asio::buffer(planned.payload_), asio::buffer(planned.suffix_)};
+                    asio::buffer(planned.payload()), asio::buffer(planned.suffix())};
                 co_await write(parts, timeout);
                 writer.commit_chunk();
                 upload.output_.acknowledge_chunk();

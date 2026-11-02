@@ -68,14 +68,31 @@ RUVIA_TEST(http_udp_capsule_session_checks_context_size_and_half_close) {
     ruvia::http_datagram_session session;
     const std::string payload = "udp";
     const auto plan = session.prepare_udp_datagram(payload);
-    RUVIA_CHECK(plan.index() == 0 && std::get<0>(plan).prefix_size_ == 3);
-    RUVIA_CHECK(std::get<0>(plan).payload_.data() == payload.data());
-    std::string wire(std::get<0>(plan).prefix_.data(), std::get<0>(plan).prefix_size_);
+    RUVIA_CHECK(plan.index() == 0);
+    std::string wire(std::get<0>(plan).prefix());
     wire.append(payload);
-    const auto value = std::string_view(wire).substr(2);
+    std::string capsule;
+    struct capsule_capture final {
+        std::string& bytes_;
+        bool datagram_{true};
+    } captured{capsule};
+    ruvia::http_capsule_decoder decoder;
+    const auto status = decoder.feed(
+        wire, true, [](void* context, ruvia::http_capsule_event event) {
+            auto& capture = *static_cast<capsule_capture*>(context);
+            capture.datagram_ = capture.datagram_ && event.type_ == ruvia::http_datagram_capsule_type;
+            if (!event.payload_.empty()) {
+                capture.bytes_.append(event.payload_.data(), event.payload_.size());
+            }
+        },
+        &captured);
+    RUVIA_CHECK(captured.datagram_);
+    RUVIA_CHECK(status == ruvia::http_capsule_status::end);
+    const auto value = std::string_view(capsule);
     const auto received = session.receive_udp_datagram(value);
-    RUVIA_CHECK(received.index() == 0 && std::get<0>(received) && std::get<0>(received)->payload_.size() == 3);
-    wire[2] = 2;
+    RUVIA_CHECK(received.index() == 0 && std::get<0>(received));
+    RUVIA_CHECK(std::string_view(std::get<0>(received)->payload_.data(), std::get<0>(received)->payload_.size()) == payload);
+    capsule[0] = 2;
     const auto dropped = session.receive_udp_datagram(value);
     RUVIA_CHECK(dropped.index() == 0 && !std::get<0>(dropped));
     const std::string too_large(65528, 'x');

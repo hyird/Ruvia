@@ -102,14 +102,26 @@ enum class http_datagram_error : std::uint8_t {
     payload_too_large,
     malformed,
 };
-struct http_datagram_write_plan final {
+// A valid output snapshot produced by http_datagram_session. The inline prefix
+// belongs to this plan; payload() continues to borrow the caller's input.
+class http_datagram_write_plan final {
+public:
+    [[nodiscard]] constexpr std::string_view prefix() const& noexcept {
+        return std::string_view(prefix_.data(), prefix_size_);
+    }
+    std::string_view prefix() const&& = delete;
+
+    [[nodiscard]] constexpr std::span<const char> payload() const noexcept {
+        return payload_;
+    }
+
+private:
+    friend class http_datagram_session;
+    http_datagram_write_plan() noexcept = default;
+
     std::array<char, 24> prefix_{};
     std::size_t prefix_size_{0};
     std::span<const char> payload_{};
-
-    [[nodiscard]] constexpr std::string_view prefix() const noexcept {
-        return std::string_view(prefix_.data(), prefix_size_);
-    }
 };
 // One accepted HTTP Datagram channel, with optional CONNECT-UDP semantics. Construct after request negotiation (clients
 // may optimistically send before the response). Owns no memory or transport.
@@ -143,6 +155,9 @@ public:
     std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> receive_udp_datagram(input_type&&) const noexcept = delete;
 
 private:
+    [[nodiscard]] static std::variant<http_datagram_write_plan, http_datagram_error> plan_datagram_capsule(
+        std::span<const char> payload, std::string_view context_prefix) noexcept;
+
     bool send_open_{true};
     bool receive_open_{true};
 };

@@ -1220,7 +1220,7 @@ RUVIA_TEST(http1_client_forwards_options_content_without_inventing_media_type) {
             if (chunk.index() != 0) {
                 continue;
             }
-            wire.append(std::get<0>(chunk).prefix()).append(incoming.body_).append(std::get<0>(chunk).suffix_);
+            wire.append(std::get<0>(chunk).prefix()).append(incoming.body_).append(std::get<0>(chunk).suffix());
             content.commit_chunk();
             std::array<char, 32> final_buffer;
             const auto finish = content.plan_finish(final_buffer);

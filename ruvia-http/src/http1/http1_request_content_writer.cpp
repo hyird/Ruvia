@@ -53,7 +53,8 @@ std::variant<http1_request_content_writer::chunk, error_type> http1_request_cont
     if (length_ && payload_value.size() > *length_ - committed_) {
         return error_type::length_mismatch;
     }
-    chunk result{.payload_ = payload_value};
+    chunk result;
+    result.payload_ = payload_value;
     if (!length_ && !payload_value.empty()) {
         http1_chunk_header header_value(payload_value.size());
         auto prefix = header_value.view();

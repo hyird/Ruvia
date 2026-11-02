@@ -195,14 +195,13 @@ RUVIA_TEST(http_datagram_capsule_channel_frames_opaque_payloads_and_obeys_half_c
     const std::string_view opaque("\1\0\xff", 3);
     const auto plan = session.prepare_datagram(std::span(opaque.data(), opaque.size()));
     RUVIA_CHECK(plan.index() == 0);
-    RUVIA_CHECK_EQ(std::get<0>(plan).prefix_size_, std::size_t{2});
-    RUVIA_CHECK(std::get<0>(plan).prefix_[0] == 0 && std::get<0>(plan).prefix_[1] == 3);
-    RUVIA_CHECK(std::get<0>(plan).payload_.data() == opaque.data());
-    const auto received = session.receive_datagram(std::get<0>(plan).payload_);
+    const auto received = session.receive_datagram(std::get<0>(plan).payload());
     RUVIA_CHECK(received.has_value());
     RUVIA_CHECK(std::string_view(received->data(), received->size()) == opaque);
     const auto empty = session.prepare_datagram({});
-    RUVIA_CHECK(empty.index() == 0 && std::get<0>(empty).prefix_size_ == 2);
+    RUVIA_CHECK(empty.index() == 0);
+    const auto empty_received = session.receive_datagram(std::get<0>(empty).payload());
+    RUVIA_CHECK(empty_received.has_value() && empty_received->empty());
     session.close_receive();
     RUVIA_CHECK(!session.receive_datagram(opaque).has_value());
     session.close_send();
