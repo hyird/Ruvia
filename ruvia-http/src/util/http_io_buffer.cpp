@@ -28,14 +28,14 @@ http_io_buffer::~http_io_buffer() {
     release();
 }
 
-std::span<char> http_io_buffer::prepare(std::size_t bytes) {
+std::span<char> http_io_buffer::prepare(std::size_t bytes) & {
     if (capacity_ - end_ < bytes) {
         make_room(bytes);
     }
     return std::span<char>(storage_ + end_, bytes);
 }
 
-std::span<char> http_io_buffer::prepare_spare() noexcept {
+std::span<char> http_io_buffer::prepare_spare() & noexcept {
     move_window_to_front();
     return std::span<char>(storage_ + end_, capacity_ - end_);
 }

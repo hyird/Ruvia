@@ -14,6 +14,8 @@ namespace ruvia {
 // publishes the bytes it wrote. Unlike std::pmr::string, growing for a read never
 // initializes the bytes the read is about to overwrite, and uninitialized
 // bytes are never part of the readable window.
+// Every storage borrow requires an lvalue owner. Keep the storage alive until
+// its readable view or writable span has been consumed, including pending I/O.
 //
 // consume() only advances the window, so views of readable bytes stay valid
 // until the next prepare(), prepare_spare(), append(), reserve(), shrink_to()
@@ -37,21 +39,24 @@ public:
     }
 
     // Readable bytes.
-    [[nodiscard]] char* data() noexcept {
+    [[nodiscard]] char* data() & noexcept {
         return storage_ + begin_;
     }
-    [[nodiscard]] const char* data() const noexcept {
+    [[nodiscard]] const char* data() const& noexcept {
         return storage_ + begin_;
     }
+    char* data() && = delete;
+    const char* data() const&& = delete;
     [[nodiscard]] std::size_t size() const noexcept {
         return end_ - begin_;
     }
     [[nodiscard]] bool empty() const noexcept {
         return begin_ == end_;
     }
-    [[nodiscard]] std::string_view view() const noexcept {
+    [[nodiscard]] std::string_view view() const& noexcept {
         return std::string_view(data(), size());
     }
+    std::string_view view() const&& = delete;
     // Bytes the storage holds without reallocating, readable bytes included.
     [[nodiscard]] std::size_t capacity() const noexcept {
         return capacity_;
@@ -61,13 +66,15 @@ public:
     // Compacts when the consumed prefix covers the live bytes and makes room;
     // otherwise grows geometrically to amortize small read/write cycles.
     // Throws std::length_error when the size exceeds the addressable range.
-    [[nodiscard]] std::span<char> prepare(std::size_t bytes);
+    [[nodiscard]] std::span<char> prepare(std::size_t bytes) &;
+    std::span<char> prepare(std::size_t) && = delete;
     // Every uninitialized byte of the current storage after the readable
     // ones, never growing it: a consumed prefix is reclaimed by moving the
     // readable bytes to the front. Filling all spare storage this way moves
     // each byte at most once per read, whereas prepare(capacity() - size())
     // may grow geometrically on every call.
-    [[nodiscard]] std::span<char> prepare_spare() noexcept;
+    [[nodiscard]] std::span<char> prepare_spare() & noexcept;
+    std::span<char> prepare_spare() && = delete;
     // Appends the first `bytes` bytes of the writable space, which the caller
     // has written. Throws std::length_error past the storage.
     void commit(std::size_t bytes);
