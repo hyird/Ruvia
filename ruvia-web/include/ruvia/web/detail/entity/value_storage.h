@@ -115,7 +115,23 @@ template <typename t_type, typename v_type>
 void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource* resource) {
     constexpr bool movable_rvalue =
         !std::is_lvalue_reference_v<v_type> && !std::is_const_v<std::remove_reference_t<v_type>>;
-    if constexpr (std::is_same_v<t_type, string>) {
+    if constexpr (std::is_arithmetic_v<t_type> && is_ruvia_scalar<v_type>) {
+        assign_entity_value(out, value.value_, resource);
+    } else if constexpr (is_model_integer<t_type> && std::is_arithmetic_v<std::remove_cvref_t<v_type>>) {
+        // 整数输入先检查范围；浮点输入须由调用方显式选择整数转换策略。
+        if constexpr (is_model_integer<std::remove_cvref_t<v_type>>) {
+            out = integer_value<t_type>(value).value_;
+        } else {
+            out = integer_value<t_type>(+value).value_;
+        }
+    } else if constexpr (std::is_floating_point_v<t_type> &&
+                         std::is_arithmetic_v<std::remove_cvref_t<v_type>>) {
+        if constexpr (std::is_floating_point_v<std::remove_cvref_t<v_type>>) {
+            out = checked_model_float<t_type>(value);
+        } else {
+            out = static_cast<t_type>(value);
+        }
+    } else if constexpr (std::is_same_v<t_type, string>) {
         if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, string>) {
             if (value.resource() == resource) {
                 string owned(std::move(value));
@@ -150,7 +166,8 @@ void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource*
         }
     } else if constexpr (is_pmr_vector<t_type>::value) {
         using element_type = typename is_pmr_vector<t_type>::value_type;
-        if constexpr (std::is_arithmetic_v<element_type>) {
+        if constexpr (std::is_arithmetic_v<element_type> &&
+                      std::is_same_v<element_type, std::remove_cvref_t<decltype(*value.begin())>>) {
             if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, t_type>) {
                 if (value.get_allocator().resource() == resource) {
                     t_type owned(std::move(value));

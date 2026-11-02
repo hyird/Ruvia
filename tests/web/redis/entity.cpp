@@ -1,6 +1,8 @@
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 
@@ -22,7 +24,49 @@ RUVIA_REDIS_ENTITY(nullable_redis_text, "text_value",
     RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}),
     RUVIA_REDIS_COLUMN(text, ruvia::string, ruvia::redis_column_options{.nullable_ = true}));
 
+RUVIA_REDIS_ENTITY(numeric_redis_entity, "numeric_input",
+    RUVIA_REDIS_COLUMN(id, std::int32_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(score, float, ruvia::redis_column_options{.nullable_ = true}));
+
 }  // namespace
+
+RUVIA_TEST(redis_entity_rejects_numeric_overflow_without_changing_identity_or_field_state) {
+    numeric_redis_entity value;
+    value.set<"id">(7);
+    const auto above_signed = static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) + 1;
+    bool id_rejected = false;
+    try {
+        value.set<"id">(above_signed);
+    } catch (const std::out_of_range&) {
+        id_rejected = true;
+    }
+    RUVIA_CHECK(id_rejected);
+    RUVIA_CHECK_EQ(value.get<"id">(), 7);
+    // 绑定层接受的有限 double，仍可能无法表示为实体的 float 字段。
+    const auto oversized = ruvia::from_json<ruvia::double_value>("1.7976931348623157e308");
+    RUVIA_CHECK_EQ(oversized.value_, (std::numeric_limits<double>::max)());
+    for (int state = 0; state != 3; ++state) {
+        if (state == 1) {
+            value.set_null<"score">();
+        } else if (state == 2) {
+            value.set<"score">(1.5);
+        }
+        bool score_rejected = false;
+        try {
+            value.set<"score">(oversized);
+        } catch (const std::out_of_range&) {
+            score_rejected = true;
+        }
+        RUVIA_CHECK(score_rejected);
+        RUVIA_CHECK_EQ(value.is_set<"score">(), state != 0);
+        RUVIA_CHECK_EQ(value.is_null<"score">(), state == 1);
+        if (state == 2) {
+            RUVIA_CHECK_EQ(value.get<"score">(), 1.5F);
+        }
+    }
+    value.set<"id">(ruvia::int64{(std::numeric_limits<std::int32_t>::min)()});
+    RUVIA_CHECK_EQ(value.get<"id">(), (std::numeric_limits<std::int32_t>::min)());
+}
 
 RUVIA_TEST(redis_entity_tracks_unset_value_and_null_states) {
     ruvia::test::counting_memory_resource resource;

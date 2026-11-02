@@ -276,6 +276,9 @@ struct redis_entity_storage final {
 }  // namespace detail
 
 #define RUVIA_REDIS_COLUMN(name, value_type, ...) ::ruvia::redis_column<::ruvia::fixed_string{#name}, value_type __VA_OPT__(, ) __VA_ARGS__>
+
+// set<field>() 检查整数范围与有限浮点溢出；整数列不隐式接受浮点输入。
+// 失败保留原值和 unset/null 状态；经可变 get() 或显式转换执行的赋值由调用方负责。
 #define RUVIA_REDIS_ENTITY(name, key_prefix, ...)                                                                      \
     struct name final {                                                                                                \
     private:                                                                                                           \

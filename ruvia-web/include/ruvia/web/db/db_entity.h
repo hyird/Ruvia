@@ -863,6 +863,10 @@ private:
 #define RUVIA_DB_ONE_TO_ONE(name, target, ...) ::ruvia::db_one_to_one<::ruvia::fixed_string{#name}, target, __VA_ARGS__>
 #define RUVIA_DB_ONE_TO_MANY(name, target, inverse) ::ruvia::db_one_to_many<::ruvia::fixed_string{#name}, target, ::ruvia::fixed_string{#inverse}>
 #define RUVIA_DB_MANY_TO_MANY(name, target, mapping_type) ::ruvia::db_many_to_many<::ruvia::fixed_string{#name}, target, mapping_type>
+
+// set<field>() 检查整数范围与有限浮点溢出，数组及 optional 元素递归使用相同规则。
+// 整数列不隐式接受浮点输入；调用方须显式选择转换策略。失败保留原值和 unset/null 状态。
+// 此保证不拦截调用方通过可变 get() 或显式转换自行执行的数值赋值。
 #define RUVIA_DB_ENTITY(name, table, ...)                                                                             \
     struct name final {                                                                                               \
     private:                                                                                                          \

@@ -1,7 +1,9 @@
 #include <cstdint>
+#include <limits>
 #include <memory_resource>
 #include <new>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -32,6 +34,14 @@ RUVIA_DB_ENTITY(string_array_entity, "string_arrays",
 RUVIA_DB_ENTITY(owned_container_entity, "owned_containers",
     ruvia::db_column<"text", std::pmr::string>,
     ruvia::db_column<"values", std::pmr::vector<std::pmr::string>>)
+
+RUVIA_DB_ENTITY(numeric_input_entity, "numeric_input",
+    ruvia::db_column<"signed_value", std::int32_t, ruvia::db_column_options{.nullable_ = true}>,
+    ruvia::db_column<"unsigned_value", std::uint32_t, ruvia::db_column_options{.nullable_ = true}>,
+    ruvia::db_column<"real_value", float, ruvia::db_column_options{.nullable_ = true}>,
+    ruvia::db_column<"values", std::pmr::vector<std::int32_t>>,
+    ruvia::db_column<"optional_values", std::pmr::vector<std::optional<std::int32_t>>>,
+    ruvia::db_column<"real_values", std::pmr::vector<float>>)
 
 class equivalent_memory_resource final : public std::pmr::memory_resource {
 public:
@@ -77,6 +87,103 @@ RUVIA_TEST(db_entity_tracks_unset_null_and_value_states) {
     RUVIA_CHECK(!entity.is_set<"id">());
     RUVIA_CHECK_EQ(entity::table_name(), std::string_view("users"));
     RUVIA_CHECK_EQ(entity::column_index<"name">(), std::size_t{1});
+}
+
+RUVIA_TEST(db_entity_numeric_overflow_preserves_value_null_and_unset) {
+    const auto above_signed = static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) + 1;
+    const auto below_signed = static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::min)()) - 1;
+    const auto above_unsigned = static_cast<std::uint64_t>((std::numeric_limits<std::uint32_t>::max)()) + 1;
+    for (int state = 0; state != 3; ++state) {
+        numeric_input_entity value;
+        if (state == 1) {
+            value.set_null<"signed_value">().set_null<"unsigned_value">().set_null<"real_value">();
+        } else if (state == 2) {
+            value.set<"signed_value">(7).set<"unsigned_value">(9).set<"real_value">(1.5);
+        }
+        const auto check_rejected = [&](auto assign) {
+            bool rejected = false;
+            try {
+                assign();
+            } catch (const std::out_of_range&) {
+                rejected = true;
+            }
+            RUVIA_CHECK(rejected);
+        };
+        check_rejected([&] { value.set<"signed_value">(above_signed); });
+        check_rejected([&] { value.set<"signed_value">(below_signed); });
+        check_rejected([&] { value.set<"signed_value">((std::numeric_limits<std::uint64_t>::max)()); });
+        check_rejected([&] { value.set<"signed_value">(ruvia::int64{above_signed}); });
+        check_rejected([&] { value.set<"unsigned_value">(-1); });
+        check_rejected([&] { value.set<"unsigned_value">(above_unsigned); });
+        check_rejected([&] { value.set<"real_value">((std::numeric_limits<double>::max)()); });
+        check_rejected([&] { value.set<"real_value">(-(std::numeric_limits<double>::max)()); });
+        check_rejected([&] { value.set<"real_value">(ruvia::double_value{(std::numeric_limits<double>::max)()}); });
+        RUVIA_CHECK_EQ(value.is_set<"signed_value">(), state != 0);
+        RUVIA_CHECK_EQ(value.is_set<"unsigned_value">(), state != 0);
+        RUVIA_CHECK_EQ(value.is_set<"real_value">(), state != 0);
+        RUVIA_CHECK_EQ(value.is_null<"signed_value">(), state == 1);
+        RUVIA_CHECK_EQ(value.is_null<"unsigned_value">(), state == 1);
+        RUVIA_CHECK_EQ(value.is_null<"real_value">(), state == 1);
+        if (state == 2) {
+            RUVIA_CHECK_EQ(value.get<"signed_value">(), 7);
+            RUVIA_CHECK_EQ(value.get<"unsigned_value">(), 9U);
+            RUVIA_CHECK_EQ(value.get<"real_value">(), 1.5F);
+        }
+    }
+}
+
+RUVIA_TEST(db_entity_numeric_arrays_reject_late_overflow_without_partial_replacement) {
+    numeric_input_entity value;
+    value.set<"values">(std::vector<std::int32_t>{11, 12});
+    value.set<"optional_values">(std::vector<std::optional<std::int32_t>>{11, std::nullopt, 12});
+    value.set<"real_values">(std::vector<float>{1.5F, 2.5F});
+    const auto above_signed = static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) + 1;
+    const auto check_rejected = [&](auto assign) {
+        bool rejected = false;
+        try {
+            assign();
+        } catch (const std::out_of_range&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    };
+    check_rejected([&] { value.set<"values">(std::vector<std::int64_t>{42, above_signed}); });
+    check_rejected([&] {
+        value.set<"optional_values">(std::vector<std::optional<std::int64_t>>{42, std::nullopt, above_signed});
+    });
+    check_rejected([&] { value.set<"real_values">(std::vector<double>{0.5, (std::numeric_limits<double>::max)()}); });
+    RUVIA_CHECK_EQ(value.get<"values">().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(value.get<"values">()[0], 11);
+    RUVIA_CHECK_EQ(value.get<"values">()[1], 12);
+    RUVIA_CHECK_EQ(value.get<"optional_values">().size(), std::size_t{3});
+    RUVIA_CHECK_EQ(*value.get<"optional_values">()[0], 11);
+    RUVIA_CHECK(!value.get<"optional_values">()[1]);
+    RUVIA_CHECK_EQ(*value.get<"optional_values">()[2], 12);
+    RUVIA_CHECK_EQ(value.get<"real_values">().size(), std::size_t{2});
+    RUVIA_CHECK_EQ(value.get<"real_values">()[0], 1.5F);
+    RUVIA_CHECK_EQ(value.get<"real_values">()[1], 2.5F);
+}
+
+RUVIA_TEST(db_entity_numeric_set_accepts_representable_boundaries_and_scalar_wrappers) {
+    numeric_input_entity value;
+    const auto minimum = static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::min)());
+    const auto maximum = static_cast<std::uint64_t>((std::numeric_limits<std::int32_t>::max)());
+    value.set<"signed_value">(ruvia::int64{minimum});
+    RUVIA_CHECK_EQ(value.get<"signed_value">(), minimum);
+    value.set<"signed_value">(maximum);
+    RUVIA_CHECK_EQ(value.get<"signed_value">(), (std::numeric_limits<std::int32_t>::max)());
+    value.set<"unsigned_value">(static_cast<std::uint64_t>((std::numeric_limits<std::uint32_t>::max)()));
+    RUVIA_CHECK_EQ(value.get<"unsigned_value">(), (std::numeric_limits<std::uint32_t>::max)());
+    value.set<"values">(std::vector<std::int64_t>{minimum, static_cast<std::int64_t>(maximum)});
+    RUVIA_CHECK_EQ(value.get<"values">()[0], minimum);
+    RUVIA_CHECK_EQ(value.get<"values">()[1], (std::numeric_limits<std::int32_t>::max)());
+    value.set<"real_value">(ruvia::double_value{static_cast<double>((std::numeric_limits<float>::max)())});
+    RUVIA_CHECK_EQ(value.get<"real_value">(), (std::numeric_limits<float>::max)());
+    value.set<"real_value">(std::numeric_limits<double>::infinity());
+    RUVIA_CHECK_EQ(value.get<"real_value">(), std::numeric_limits<float>::infinity());
+    value.set<"real_values">(std::vector<std::int64_t>{-7, 9});
+    RUVIA_CHECK_EQ(value.get<"real_values">()[0], -7.0F);
+    RUVIA_CHECK_EQ(value.get<"real_values">()[1], 9.0F);
 }
 
 RUVIA_TEST(db_entity_set_normalizes_nested_owned_values_to_entity_resource) {
