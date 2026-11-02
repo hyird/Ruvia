@@ -63,10 +63,12 @@
         template <::ruvia::fixed_string field, typename value_type>                                        \
         t_type& set(value_type&&) && = delete;                                                             \
         template <::ruvia::fixed_string field>                                                             \
+            requires requires(storage_type& storage) { storage.template ensure<field>(); }                 \
         [[nodiscard]] decltype(auto) ensure() & RUVIA_LIFETIMEBOUND {                                      \
             return fields_.template ensure<field>();                                                       \
         }                                                                                                  \
         template <::ruvia::fixed_string field>                                                             \
+            requires requires(storage_type& storage) { storage.template ensure<field>(); }                 \
         [[nodiscard]] decltype(auto) ensure() && = delete;                                                 \
         template <::ruvia::fixed_string field>                                                             \
             requires requires(storage_type& storage) { storage.template reset<field>(); }                  \

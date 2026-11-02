@@ -42,6 +42,19 @@ template <typename target_type, typename input_type>
     return static_cast<target_type>(input);
 }
 
+template <typename target_type, std::floating_point input_type>
+[[nodiscard]] constexpr target_type checked_model_float(input_type input) noexcept(
+    (std::numeric_limits<input_type>::max)() <= (std::numeric_limits<target_type>::max)()) {
+    constexpr auto source_max = (std::numeric_limits<input_type>::max)();
+    constexpr auto target_max = (std::numeric_limits<target_type>::max)();
+    if constexpr (source_max > target_max) {
+        if ((input > target_max || input < -target_max) && input <= source_max && input >= -source_max) {
+            throw std::out_of_range("model floating value is out of range");
+        }
+    }
+    return static_cast<target_type>(input);
+}
+
 struct model_value_factory;
 struct model_value_rebind_access;
 
@@ -283,11 +296,20 @@ struct bool_value final {
     }
 };
 
+struct double_value;
+
+// Finite floating inputs are checked before narrowing; explicit nonfinite
+// inputs and the conversion semantics of user-defined inputs are preserved.
 struct float_value final {
     float value_{0};
     constexpr float_value() noexcept = default;
     constexpr float_value(float input) noexcept
         : value_(input) {}
+    template <std::floating_point input_type>
+        requires(!std::same_as<input_type, float>)
+    constexpr float_value(input_type input) noexcept(noexcept(detail::checked_model_float<float>(input)))
+        : value_(detail::checked_model_float<float>(input)) {}
+    constexpr float_value(const double_value& input);
     [[nodiscard]] constexpr operator float() const noexcept {
         return value_;
     }
@@ -298,10 +320,17 @@ struct double_value final {
     constexpr double_value() noexcept = default;
     constexpr double_value(double input) noexcept
         : value_(input) {}
+    template <std::floating_point input_type>
+        requires(!std::same_as<input_type, double>)
+    constexpr double_value(input_type input) noexcept(noexcept(detail::checked_model_float<double>(input)))
+        : value_(detail::checked_model_float<double>(input)) {}
     [[nodiscard]] constexpr operator double() const noexcept {
         return value_;
     }
 };
+
+constexpr float_value::float_value(const double_value& input)
+    : value_(detail::checked_model_float<float>(input.value_)) {}
 
 // Accepts its exact integer type unchecked, other integers after a range
 // check, and rejects every non-integer type at compile time.

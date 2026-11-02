@@ -413,6 +413,8 @@ const auto& user = c.request_state<current_user>();
 - **字符串与字节**：`ruvia::string`（UTF-8 字符串）、`ruvia::bytes`（JSON 中以 Base64 编码的二进制数据）
 - **复合与容器类型**：嵌套的另一个 `RUVIA_MODEL` 类型、`ruvia::array<T>`（连续数组）、`ruvia::boxed_array<T>`（支持前向声明的自引用递归模型数组）
 
+`float_value` / `double_value` 的构造与模型 `set()` 在宽浮点数窄化前检查有限值范围：超出目标类型有限范围时抛 `std::out_of_range`，setter 保留原字段值或 null 状态。范围内仍按目标浮点类型舍入；显式 NaN/infinity 的既有行为不变，JSON 序列化为 `null`。
+
 #### 字段声明与属性修饰宏
 
 | 宏 | 说明 |
@@ -455,11 +457,11 @@ RUVIA_MODEL(create_user_request,
 
 #### 模型成员方法
 
-- `m.get<"username">()`：获取字段引用（对 `ruvia::string` 可调用 `.view()`，对标量包装可调用 `.value()` 或隐式转换）
+- `m.get<"username">()`：获取只读字段值；非空必填字段返回引用，其余字段返回只读 `std::optional` 引用。`ruvia::string` 可调用 `.view()`，标量包装可读取 `.value_` 或隐式转换。
 - `m.set<"username">("alice")`：设置字段值（支持链式调用）
-- `m.is_present<"role">()` / `m.is_null<"nickname">()`：检查字段是否已设置或是否为 `null`
-- `m.ensure<"nested">()`：确保嵌套对象/数组已初始化并返回可变引用
-- `m.reset<"nickname">()`：重置可选或可空字段
+- `m.is_present<"role">()`：查询输入中是否出现该字段，默认值及应用后续修改不改变输入来源记录；`m.is_null<"nickname">()` 查询当前字段是否为 `null`。
+- `m.ensure<"nested">()`：确保可原地修改的字段已初始化并返回可变引用。`json_value` 字段不提供此入口：用 `get()` 读取，用 `set<"field">(token)` 替换；声明 `RUVIA_NULLABLE` 后可用 `set<"field">(nullptr)` 设置 null。这样 token 替换与字段 null 状态始终经过同一个检查入口。
+- `m.reset<"nickname">()`：将可选字段恢复为缺失状态；必填字段不提供此入口，可空必填字段用 `set(nullptr)` 设置 null。
 
 #### 路由级多源绑定中间件
 

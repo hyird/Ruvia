@@ -92,6 +92,11 @@ public:
     }
 
     template <fixed_string field>
+        requires requires(typename std::tuple_element_t<model_field_index<field, descriptor_types...>(),
+                              std::tuple<descriptor_types...>>::field_type& slot,
+            std::pmr::memory_resource* resource) {
+            slot.ensure(resource);
+        }
     [[nodiscard]] decltype(auto) ensure() & RUVIA_LIFETIMEBOUND {
         constexpr auto index = model_field_index<field, descriptor_types...>();
         return std::get<index>(fields_).ensure(resource_);

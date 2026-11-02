@@ -1,5 +1,7 @@
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <limits>
 #include <memory_resource>
 #include <span>
@@ -22,6 +24,18 @@ RUVIA_MODEL(wide_values,
     RUVIA_OPTIONAL_FIELD(u32, ruvia::uint32),
     RUVIA_OPTIONAL_FIELD(i64, ruvia::int64),
     RUVIA_OPTIONAL_FIELD(u64, ruvia::uint64));
+RUVIA_MODEL(floating_nullable,
+    RUVIA_OPTIONAL_FIELD(single, ruvia::float_value, RUVIA_NULLABLE),
+    RUVIA_OPTIONAL_FIELD(real, ruvia::double_value, RUVIA_NULLABLE));
+
+struct convertible_real final {
+    constexpr operator float() const noexcept {
+        return 1.25f;
+    }
+    constexpr operator double() const noexcept {
+        return 2.5;
+    }
+};
 }  // namespace
 
 RUVIA_TEST(model_narrow_value_types_preserve_boundaries) {
@@ -136,6 +150,99 @@ RUVIA_TEST(model_integer_assignment_rejects_out_of_range_without_replacing_value
     check_rejected([&] { model.set<"i64">(ruvia::uint64{(std::numeric_limits<std::uint64_t>::max)()}); });
     check_rejected([&] { model.set<"u64">(-1); });
     check_rejected([&] { model.set<"u64">(ruvia::int64{-1}); });
+}
+
+RUVIA_TEST(model_floating_construction_rejects_finite_overflow_before_narrowing) {
+    const auto check_rejected = [&](auto construct) {
+        bool rejected = false;
+        try {
+            construct();
+        } catch (const std::out_of_range&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    };
+    const double above_float_max = std::nextafter(
+        static_cast<double>((std::numeric_limits<float>::max)()), std::numeric_limits<double>::infinity());
+    check_rejected([&] { (void)ruvia::float_value(above_float_max); });
+    check_rejected([&] { (void)ruvia::float_value(ruvia::double_value{-above_float_max}); });
+    const long double above_float_max_extended = std::nextafter(
+        static_cast<long double>((std::numeric_limits<float>::max)()), std::numeric_limits<long double>::infinity());
+    check_rejected([&] { (void)ruvia::float_value(above_float_max_extended); });
+    if constexpr ((std::numeric_limits<long double>::max)() > (std::numeric_limits<double>::max)()) {
+        const long double above_double_max = std::nextafter(
+            static_cast<long double>((std::numeric_limits<double>::max)()), std::numeric_limits<long double>::infinity());
+        check_rejected([&] { (void)ruvia::double_value(above_double_max); });
+        check_rejected([&] { (void)ruvia::double_value(-above_double_max); });
+    }
+}
+
+RUVIA_TEST(model_floating_assignment_rejects_overflow_without_replacing_values_or_null) {
+    auto value = ruvia::from_json<floating_nullable>(R"({"single":7,"real":9})");
+    auto null_value = ruvia::from_json<floating_nullable>(R"({"single":null,"real":null})");
+    const auto check_rejected = [&](auto assign) {
+        for (auto* model : {&value, &null_value}) {
+            bool rejected = false;
+            try {
+                assign(*model);
+            } catch (const std::out_of_range&) {
+                rejected = true;
+            }
+            RUVIA_CHECK(rejected);
+        }
+        RUVIA_CHECK_EQ(value.get<"single">()->value_, 7.0f);
+        RUVIA_CHECK_EQ(value.get<"real">()->value_, 9.0);
+        RUVIA_CHECK(!value.is_null<"single">() && !value.is_null<"real">());
+        RUVIA_CHECK(value.is_present<"single">() && value.is_present<"real">());
+        RUVIA_CHECK(null_value.is_null<"single">() && null_value.is_null<"real">());
+        RUVIA_CHECK(null_value.is_present<"single">() && null_value.is_present<"real">());
+        RUVIA_CHECK_EQ(ruvia::to_json(null_value), R"({"single":null,"real":null})");
+    };
+    check_rejected([](auto& model) { model.template set<"single">((std::numeric_limits<double>::max)()); });
+    check_rejected([](auto& model) { model.template set<"single">(ruvia::double_value{-(std::numeric_limits<double>::max)()}); });
+    if constexpr ((std::numeric_limits<long double>::max)() > (std::numeric_limits<double>::max)()) {
+        check_rejected([](auto& model) { model.template set<"real">((std::numeric_limits<long double>::max)()); });
+    }
+}
+
+RUVIA_TEST(model_floating_construction_preserves_boundaries_rounding_and_scalar_inputs) {
+    constexpr auto float_max = (std::numeric_limits<float>::max)();
+    constexpr ruvia::float_value positive{static_cast<double>(float_max)};
+    constexpr ruvia::float_value negative{ruvia::double_value{-static_cast<double>(float_max)}};
+    constexpr ruvia::float_value rounded{1.0 + std::numeric_limits<float>::epsilon() / 4.0};
+    constexpr ruvia::double_value double_boundary{static_cast<long double>((std::numeric_limits<double>::max)())};
+    constexpr ruvia::double_value double_rounded{1.0L + std::numeric_limits<double>::epsilon() / 4.0L};
+    RUVIA_CHECK_EQ(positive.value_, float_max);
+    RUVIA_CHECK_EQ(negative.value_, -float_max);
+    RUVIA_CHECK_EQ(rounded.value_, 1.0f);
+    RUVIA_CHECK_EQ(double_boundary.value_, (std::numeric_limits<double>::max)());
+    RUVIA_CHECK_EQ(double_rounded.value_, 1.0);
+    RUVIA_CHECK_EQ(ruvia::float_value(17).value_, 17.0f);
+    RUVIA_CHECK_EQ(ruvia::double_value(ruvia::int32{-17}).value_, -17.0);
+    RUVIA_CHECK_EQ(ruvia::float_value(true).value_, 1.0f);
+    RUVIA_CHECK_EQ(ruvia::double_value(ruvia::bool_value{false}).value_, 0.0);
+    RUVIA_CHECK_EQ(ruvia::double_value(ruvia::float_value{1.25f}).value_, 1.25);
+    constexpr ruvia::float_value custom_float{convertible_real{}};
+    constexpr ruvia::double_value custom_double{convertible_real{}};
+    RUVIA_CHECK_EQ(custom_float.value_, 1.25f);
+    RUVIA_CHECK_EQ(custom_double.value_, 2.5);
+}
+
+RUVIA_TEST(model_floating_construction_and_assignment_preserve_explicit_nonfinite_inputs) {
+    const auto infinity = std::numeric_limits<double>::infinity();
+    const auto nan = std::numeric_limits<double>::quiet_NaN();
+    RUVIA_CHECK_EQ(ruvia::float_value(infinity).value_, std::numeric_limits<float>::infinity());
+    RUVIA_CHECK_EQ(ruvia::float_value(ruvia::double_value{-infinity}).value_, -std::numeric_limits<float>::infinity());
+    RUVIA_CHECK(std::isnan(ruvia::float_value(ruvia::double_value{nan}).value_));
+    RUVIA_CHECK_EQ(ruvia::double_value(std::numeric_limits<long double>::infinity()).value_, infinity);
+    RUVIA_CHECK(std::isnan(ruvia::double_value(std::numeric_limits<long double>::quiet_NaN()).value_));
+    floating_nullable model;
+    model.set<"single">(ruvia::double_value{infinity});
+    model.set<"real">(nan);
+    RUVIA_CHECK(std::isinf(model.get<"single">()->value_));
+    RUVIA_CHECK(std::isnan(model.get<"real">()->value_));
+    RUVIA_CHECK(!model.is_null<"single">() && !model.is_null<"real">());
+    RUVIA_CHECK_EQ(ruvia::to_json(model), R"({"single":null,"real":null})");
 }
 
 RUVIA_TEST(model_bytes_own_and_compare_without_allocator_identity) {

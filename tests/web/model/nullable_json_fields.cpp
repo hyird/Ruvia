@@ -124,7 +124,7 @@ RUVIA_TEST(json_value_response_fields_write_raw_tokens) {
     }
 
     json_bag_response response({.resource_ = &resource});
-    response.set<"payload">(std::move(parsed_value.ensure<"payload">()));
+    response.set<"payload">(*parsed_value.get<"payload">());
     response.set<"object">(std::move(parsed_value.ensure<"object">()));
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(response, {.resource_ = &resource})),
         std::string_view(R"({"payload":[1,2],"object":{"a":1}})"));

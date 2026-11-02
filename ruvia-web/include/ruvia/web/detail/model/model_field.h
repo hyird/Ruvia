@@ -115,17 +115,14 @@ public:
         requires required
     = delete;
 
-    // Materializes an empty value when none is held. The empty json_value is
-    // the token null, which a non-nullable field cannot hold (matching assign),
-    // so ensure on such a field without a value throws and leaves it unchanged.
-    [[nodiscard]] field_value_type& ensure(std::pmr::memory_resource* resource) {
+    // Dynamic JSON tokens require whole-value assignment to keep null state
+    // synchronized; only values that cannot become JSON null expose mutation.
+    [[nodiscard]] field_value_type& ensure(std::pmr::memory_resource* resource)
+        requires(!detail::is_ruvia_json_value<field_value_type>)
+    {
         if (!value_) {
-            if constexpr (detail::is_ruvia_json_value<field_value_type> && !nullable) {
-                throw std::invalid_argument("ensuring an absent JSON value requires RUVIA_NULLABLE");
-            } else {
-                value_.emplace(
-                    detail::make_request_value<field_value_type>(resolved_pmr_resource_tag{}, resource));
-            }
+            value_.emplace(
+                detail::make_request_value<field_value_type>(resolved_pmr_resource_tag{}, resource));
         }
         state_ = detail::model_field_state::parsed;
         return *value_;
