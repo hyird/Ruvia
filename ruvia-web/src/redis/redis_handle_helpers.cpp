@@ -143,11 +143,20 @@ void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_
     throw redis_error(redis_error::code_type::command_error, message);
 }
 
-bool validate_redis_pooled_command(std::span<const std::string_view> args, bool allow_blocking) {
+bool validate_redis_pooled_command(std::span<const std::string_view> args, bool allow_blocking, bool allow_barrier) {
     if (args.empty() || args.front().empty()) {
         throw std::invalid_argument("redis command requires a command name");
     }
     const auto command = args.front();
+    // Redis barriers use the current connection's last write offset, not the
+    // client's other pooled connections: https://redis.io/docs/latest/commands/wait/
+    if (is_redis_token(command, "WAIT") || is_redis_token(command, "WAITAOF")) {
+        if (!allow_barrier) {
+            throw std::invalid_argument(
+                "redis WAIT and WAITAOF require a non-transaction pipeline containing the writes");
+        }
+        return true;
+    }
     const auto reject_stateful = [] {
         throw std::invalid_argument(
             "stateful redis commands are not allowed through pooled command()");
@@ -159,7 +168,6 @@ bool validate_redis_pooled_command(std::span<const std::string_view> args, bool 
                 is_redis_token(command, "QUIT") || is_redis_token(command, "SYNC")) {
                 reject_stateful();
             }
-            blocking = is_redis_token(command, "WAIT");
             break;
         case 5:
             if (is_redis_token(command, "HELLO") || is_redis_token(command, "MULTI") ||
@@ -186,7 +194,6 @@ bool validate_redis_pooled_command(std::span<const std::string_view> args, bool 
                 is_redis_token(command, "UNWATCH")) {
                 reject_stateful();
             }
-            blocking = is_redis_token(command, "WAITAOF");
             break;
         case 8:
             if (is_redis_token(command, "READONLY") || is_redis_token(command, "REPLCONF")) {

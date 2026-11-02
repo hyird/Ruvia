@@ -229,6 +229,10 @@ RUVIA_DB_PROJECTION(device_summary,
 
 ### 3.4 Builder 与直接 Query 的组合边界
 
+`insert_builder(entity/span)` 与后续 `.values(entity/span)` 使用同一实体写入规则：每批可以包含设置了不同字段的实体，重复调用按行追加，不替换旧行或重新解释旧列。列按首次出现的批次合并（批内遵循实体声明顺序），缺失字段补 `DEFAULT`；因此不同分批方式可以改变 SQL 列顺序，但不改变每行字段对应的数据。单个全默认实体保留为一行，之后可追加显式字段行，也可在已有显式列时追加默认行；所有行都没有显式列的多行 INSERT 仍被拒绝。空批次与失败批次不改变此前 SQL、参数或默认 upsert 更新列集合；`.values()` 与 `.insert_from()` 不可混用。
+
+写 Builder 的 `.set(span<db_assignment>)`、`.set({...})` 和 `.set(entity)` 整批提交：字段校验与表达式导入完成后才发布 SET 列表，后续项失败不会留下此前项的部分更新。失败前已构建的 SQL 与参数语义不变；此保证针对查询构建，不等同于数据库事务。
+
 读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 或其 PMR resource 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入，因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
 
 读 Builder 的 `query()` 保留原组合视图语义：它只暴露平面查询，拒绝 relation hydration；**不会应用** `get_many()` / `get_query_and_parameters()` 等执行入口经 `effective_query()` 添加的软删除过滤。组合时若需要排除软删除行，应在源 Builder 显式添加相应条件。写 Builder 的视图先执行既有写安全校验（例如 UPDATE / DELETE 必须有条件），保留完整 INSERT / UPDATE / DELETE / `on_conflict()` 与 `RETURNING`；没有增加新的 SQL 生成路线。
@@ -314,7 +318,7 @@ ruvia::app()
 
 | 分类 | 方法 |
 | --- | --- |
-| 连接与通用 | `with_options(operation_options)`、`ping()`、`command(args...)`（发送任意原始 Redis 命令并返回 `redis_value`） |
+| 连接与通用 | `with_options(operation_options)`、`ping()`、`command(args...)`（发送适合单次池化租约的原始 Redis 命令并返回 `redis_value`，拒绝连接状态命令和 `WAIT` / `WAITAOF`） |
 | String 与 Key | `get`、`mget`、`set(key, val, redis_set_options)`、`mset`、`get_del`、`append`、`strlen`、`incr`、`incr_by`、`decr`、`decr_by`、`del`、`unlink`、`exists`、`touch`、`type`、`rename`、`rename_nx`、`expire`、`expire_at`、`persist`、`ttl`、`pttl` |
 | Hash | `hget`、`hset`、`hmget`、`hget_all`、`hdel`、`hexists`、`hlen`、`hkeys`、`hvals`、`hincr_by` |
 | List | `lpush`、`rpush`、`lpop`、`rpop`、`llen`、`lrange`、`lindex`、`lset`、`ltrim`、`lrem`、`blpop`、`brpop` |
@@ -324,6 +328,33 @@ ruvia::app()
 | Streams | `xread_group(group, consumer, streams, redis_x_read_group_options)` |
 | Pub/Sub | `publish(channel, payload)`、`subscription()` |
 | RediSearch ORM | `repository<Entity>(redis_repository_config)` |
+
+#### 写入与复制／落盘屏障
+
+`WAIT` / `WAITAOF` 依据 **current connection** 的前序写入 offset 工作；独立的 `handle.set()` 与 `handle.command()` 不保证共享连接。因此单次 `command("WAIT", ...)` / `command("WAITAOF", ...)` 同步抛出 `std::invalid_argument`。请将需要保护的写入和屏障放进同一非事务 `redis_pipeline`：
+
+```cpp
+auto batch = c.redis().with_options({
+    .timeout_ = std::chrono::seconds(2),
+    .stop_token_ = c.stop_token(),
+}).pipeline();
+batch.set("session:42", "value").command("WAIT", "1", "1000");
+const auto replies = co_await std::move(batch).exec();
+for (const auto& reply : replies) {
+    if (reply.kind() == ruvia::redis_value::kind_type::error) {
+        throw ruvia::redis_error(ruvia::redis_error::code_type::command_error, reply.error());
+    }
+}
+if (replies[1].integer() < 1) {
+    throw std::runtime_error("未达到要求的副本确认数量");
+}
+```
+
+- 整批命令共用普通池的一次租约及同一连接；屏障只保护本批中位于它之前的写入，不保护此前独立调用的写入。`WAITAOF` 可替换为 `.command("WAITAOF", "1", "1", "1000")`，分别检查返回数组中本地与副本的 fsync 计数；需要 Redis 7.2+，请求本地 fsync 时需启用 AOF。
+- 含屏障的批次必须继承 `operation_options.timeout_` 或可取消的 `stop_token_`。独立 `redis_client` 的句柄默认继承 owner 取消；请求句柄可如上显式配置。`timeout_` 覆盖整次操作，普通池 `redis_config::command_timeout_` 仍约束整批发送与全部回复，不为屏障停用，也不逐条重启。Redis 命令参数中的 `0` 只表示服务端无限等待，不能绕过客户端的超时／取消。
+- 超时、取消、传输或协议失败沿已有池执行主链关闭连接并释放租约，不把残留回复交给后续操作；已完成写入不回滚。完整的 Redis 命令错误保留在对应 `redis_value` 中，其他回复仍读取完毕。调用方须先检查写入是否成功，再检查确认计数；服务端超时返回的计数可能小于目标，而不是抛出超时异常。
+- `redis_transaction` 继续拒绝两种屏障：Redis 在 `MULTI` 内不会为它们阻塞等待。其他阻塞命令仍不允许进入 pipeline/transaction，单次阻塞命令继续使用独立阻塞池。
+- `WAIT` / `WAITAOF` 改善数据安全性，但不使 Redis 成为强一致存储，不保证故障切换后绝不丢写。官方连接历史、事务与返回值限制参见 [WAIT](https://redis.io/docs/latest/commands/wait/) 与 [WAITAOF](https://redis.io/docs/latest/commands/waitaof/)。
 
 ### 4.3 Pub/Sub 独占订阅连接（`redis_subscription`）
 

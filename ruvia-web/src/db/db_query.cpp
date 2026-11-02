@@ -1682,8 +1682,8 @@ db_query& db_query::select(std::span<const db_expression> projections) {
     for (const auto expression : projections) {
         (void)require_expression(expression);
     }
-    s.projections_.clear();
     s.projections_.reserve(projections.size());
+    s.projections_.clear();
     for (const auto expression : projections) {
         s.projections_.push_back(expression.node_);
     }
@@ -1798,8 +1798,8 @@ db_query& db_query::group_by(std::span<const db_expression> expressions) {
     for (const auto expression : expressions) {
         (void)require_expression(expression);
     }
-    s.groups_.clear();
     s.groups_.reserve(expressions.size());
+    s.groups_.clear();
     for (const auto expression : expressions) {
         s.groups_.push_back(expression.node_);
     }
@@ -1824,6 +1824,7 @@ db_query& db_query::or_having(db_expression predicate) {
 db_query& db_query::order_by(db_expression expression, db_order_direction direction, db_nulls_order nulls) {
     const auto index = require_expression(expression);
     auto& s = storage();
+    s.orders_.reserve(1);
     s.orders_.clear();
     s.orders_.push_back({index, direction, nulls});
     return *this;
@@ -1864,8 +1865,8 @@ db_query& db_query::distinct_on(std::span<const db_expression> expressions) {
     for (const auto expression : expressions) {
         (void)require_expression(expression);
     }
-    s.distinct_on_.clear();
     s.distinct_on_.reserve(expressions.size());
+    s.distinct_on_.clear();
     for (const auto expression : expressions) {
         s.distinct_on_.push_back(expression.node_);
     }
@@ -1877,8 +1878,8 @@ db_query& db_query::returning(std::span<const db_expression> expressions) {
     for (const auto expression : expressions) {
         (void)require_expression(expression);
     }
-    s.returning_.clear();
     s.returning_.reserve(expressions.size());
+    s.returning_.clear();
     for (const auto expression : expressions) {
         s.returning_.push_back(expression.node_);
     }
@@ -1898,14 +1899,20 @@ db_query& db_query::insert_into(std::string_view table_value, std::span<const st
         }
     }
     auto& s = storage();
-    s.kind_ = db_query_kind::insert;
-    s.target_ = table_value;
-    s.target_alias_ = alias;
-    s.columns_.clear();
-    s.columns_.reserve(columns.size());
-    for (const auto column : columns) {
-        s.columns_.emplace_back(column);
+    if (s.kind_ == db_query_kind::insert && !s.rows_.empty() && !std::ranges::equal(s.columns_, columns)) {
+        throw std::invalid_argument("INSERT rows already use a different column list");
     }
+    std::pmr::string target(table_value, s.resource_);
+    std::pmr::string target_alias(alias, s.resource_);
+    std::pmr::vector<std::pmr::string> staged_columns(s.resource_);
+    staged_columns.reserve(columns.size());
+    for (const auto column : columns) {
+        staged_columns.emplace_back(column);
+    }
+    s.target_.swap(target);
+    s.target_alias_.swap(target_alias);
+    s.columns_.swap(staged_columns);
+    s.kind_ = db_query_kind::insert;
     return *this;
 }
 db_query& db_query::values(std::span<const db_expression> row) {
@@ -1918,15 +1925,89 @@ db_query& db_query::values(std::span<const db_expression> row) {
     for (const auto expression : row) {
         values.push_back(require_expression(expression));
     }
+    s.rows_.push_back(std::move(values));
     if (s.kind_ != db_query_kind::insert) {
         s.kind_ = db_query_kind::values;
     }
-    s.rows_.push_back(std::move(values));
+    return *this;
+}
+db_query& db_query::insert_rows(std::span<const std::string_view> columns,
+    std::span<const db_expression> values, std::size_t row_count) {
+    auto& s = storage();
+    if (s.kind_ != db_query_kind::insert || s.insert_query_ != no_db_node) {
+        throw std::invalid_argument("named INSERT rows require an INSERT without SELECT");
+    }
+    if (row_count == 0 ||
+        (columns.empty() ? !values.empty()
+                         : values.size() / columns.size() != row_count || values.size() % columns.size() != 0)) {
+        throw std::invalid_argument("INSERT batch dimensions differ");
+    }
+    if (row_count > s.rows_.max_size() - s.rows_.size()) {
+        throw std::length_error("INSERT has too many rows");
+    }
+    for (const auto& row : s.rows_) {
+        if (row.size() != s.columns_.size()) {
+            throw std::invalid_argument("existing INSERT rows do not match their named columns");
+        }
+    }
+    for (const auto expression : values) {
+        (void)require_expression(expression);
+    }
+    detail::node_index_map positions(columns.size(), s.resource_);
+    std::pmr::vector<std::pmr::string> new_columns(s.resource_);
+    for (std::size_t index = 0; index < columns.size(); ++index) {
+        detail::require_name(columns[index]);
+        for (std::size_t earlier = 0; earlier < index; ++earlier) {
+            if (columns[earlier] == columns[index]) {
+                throw std::invalid_argument("duplicate INSERT column");
+            }
+        }
+        const auto existing = std::ranges::find(s.columns_, columns[index]);
+        if (existing != s.columns_.end()) {
+            positions[index] = static_cast<std::size_t>(existing - s.columns_.begin());
+        } else {
+            if (new_columns.empty()) {
+                new_columns = s.columns_;
+            }
+            positions[index] = new_columns.size();
+            new_columns.emplace_back(columns[index]);
+        }
+    }
+    const auto width = new_columns.empty() ? s.columns_.size() : new_columns.size();
+    if (width == 0 && (row_count != 1 || !s.rows_.empty())) {
+        throw std::invalid_argument("bulk default-only inserts require at least one explicit column");
+    }
+    const bool needs_default = width > columns.size() || (!s.rows_.empty() && width > s.columns_.size());
+    const auto default_node = needs_default ? default_value().node_ : no_db_node;
+    std::pmr::vector<std::pmr::vector<std::size_t>> rows(s.resource_);
+    rows.reserve(row_count);
+    for (std::size_t row_index = 0; row_index < row_count; ++row_index) {
+        auto& row = rows.emplace_back();
+        row.assign(width, default_node);
+        for (std::size_t column = 0; column < columns.size(); ++column) {
+            row[positions[column]] = values[row_index * columns.size() + column].node_;
+        }
+    }
+    // Capacity changes are not visible query semantics. Complete every possible
+    // allocation before extending old rows or publishing any new row.
+    s.rows_.reserve(s.rows_.size() + row_count);
+    if (!new_columns.empty()) {
+        for (auto& row : s.rows_) {
+            row.reserve(width);
+        }
+        for (auto& row : s.rows_) {
+            row.resize(width, default_node);
+        }
+        s.columns_.swap(new_columns);
+    }
+    for (auto& row : rows) {
+        s.rows_.push_back(std::move(row));
+    }
     return *this;
 }
 db_query& db_query::insert_from(const db_query& query) {
-    if (storage().kind_ != db_query_kind::insert) {
-        throw std::invalid_argument("INSERT SELECT requires an INSERT target");
+    if (storage().kind_ != db_query_kind::insert || !storage().rows_.empty()) {
+        throw std::invalid_argument("INSERT SELECT requires an INSERT target without VALUES");
     }
     query.require_select_query();
     auto snapshot = query.clone(resource());
@@ -2001,8 +2082,45 @@ db_query& db_query::set(const db_assignment& assignment) {
     return set(assignment.column_, assignment.expression(*this));
 }
 db_query& db_query::set(std::span<const db_assignment> assignments) {
+    if (assignments.size() == 1) {
+        return set(assignments.front());
+    }
+    auto& s = storage();
+    if (s.kind_ != db_query_kind::update) {
+        throw std::invalid_argument("SET requires an UPDATE");
+    }
+    std::pmr::vector<detail::db_stored_assignment> prepared(s.resource_);
+    prepared.reserve(assignments.size());
+    detail::node_index_map positions(assignments.size(), s.resource_);
+    const auto previous_count = s.assignments_.size();
+    std::size_t added = 0;
     for (const auto& assignment : assignments) {
-        set(assignment);
+        const auto column = assignment.column_.view();
+        detail::require_name(column);
+        const auto expression = require_expression(assignment.expression(*this));
+        const auto previous = std::ranges::find(prepared, column, &detail::db_stored_assignment::column_);
+        if (previous != prepared.end()) {
+            previous->expression_ = expression;
+            continue;
+        }
+        const auto existing = std::ranges::find(s.assignments_, column, &detail::db_stored_assignment::column_);
+        if (existing != s.assignments_.end()) {
+            positions[prepared.size()] = static_cast<std::size_t>(existing - s.assignments_.begin());
+        } else {
+            if (added == s.assignments_.max_size() - previous_count) {
+                throw std::length_error("UPDATE has too many assignments");
+            }
+            positions[prepared.size()] = previous_count + added++;
+        }
+        prepared.emplace_back(column, expression, s.resource_);
+    }
+    s.assignments_.reserve(previous_count + added);
+    for (std::size_t index = 0; index < prepared.size(); ++index) {
+        if (positions[index] < previous_count) {
+            s.assignments_[positions[index]].expression_ = prepared[index].expression_;
+        } else {
+            s.assignments_.push_back(std::move(prepared[index]));
+        }
     }
     return *this;
 }

@@ -65,7 +65,11 @@ void redis_batch<mode>::expire_capability(void* target) noexcept {
 template <redis_batch_mode mode>
 redis_batch<mode>& redis_batch<mode>::command(std::span<const std::string_view> args) {
     require_ready();
-    (void)validate_redis_pooled_command(args, false);
+    const bool barrier = validate_redis_pooled_command(args, false, mode == redis_batch_mode::pipeline);
+    if (barrier && !options_.stop_token_.stoppable() && !options_.timeout_.has_value()) {
+        throw std::invalid_argument(
+            "redis barrier pipeline requires a stop_token or finite operation timeout");
+    }
     return append_owned(make_owned_redis_command(resource(), args));
 }
 

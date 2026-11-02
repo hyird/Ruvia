@@ -1208,6 +1208,8 @@ public:
     [[nodiscard]] static std::pmr::string render_expression(db_expression expression, db_driver driver,
         std::pmr::memory_resource* resource, db_parameter_mode mode = db_parameter_mode::literal);
 
+    // Replacing SELECT, GROUP BY, DISTINCT ON or RETURNING lists preserves
+    // the previous clause on validation or allocation failure.
     db_query& select(std::span<const db_expression> projections);
     db_query& select(std::initializer_list<db_expression> projections) {
         return select(std::span<const db_expression>(projections.begin(), projections.size()));
@@ -1251,6 +1253,8 @@ public:
     db_query& returning(std::initializer_list<db_expression> expressions) {
         return returning(std::span<const db_expression>(expressions.begin(), expressions.size()));
     }
+    // Existing positional rows cannot be reinterpreted with a different column
+    // list. Use insert_rows() to append named rows and grow the column union.
     db_query& insert_into(std::string_view table, std::span<const std::string_view> columns = {}, std::string_view alias = {});
     db_query& insert_into(std::string_view table_value, std::initializer_list<std::string_view> columns, std::string_view alias = {}) {
         return insert_into(table_value, std::span<const std::string_view>(columns.begin(), columns.size()), alias);
@@ -1259,11 +1263,20 @@ public:
     db_query& values(std::initializer_list<db_expression> row) {
         return values(std::span<const db_expression>(row.begin(), row.size()));
     }
+    // Appends a row-major batch to an INSERT, matching fields by column name.
+    // Missing fields in old/new rows become DEFAULT. values.size() must equal
+    // columns.size() * row_count and every expression must belong to this query.
+    // One explicit default-only row is supported; multiple all-default rows
+    // require at least one named column. A rejected batch preserves SQL semantics.
+    db_query& insert_rows(std::span<const std::string_view> columns,
+        std::span<const db_expression> values, std::size_t row_count);
     db_query& insert_from(const db_query& query);
     db_query& on_conflict(const db_conflict_options& conflict);
     db_query& update(std::string_view table, std::string_view alias = {});
     db_query& set(std::string_view column, db_expression value);
     db_query& set(const db_assignment& assignment);
+    // A batch is published only after every assignment is prepared. Failure
+    // preserves the previous assignments; duplicate columns use the last value.
     db_query& set(std::span<const db_assignment> assignments);
     db_query& set(std::initializer_list<db_assignment> assignments) {
         return set(std::span<const db_assignment>(assignments.begin(), assignments.size()));

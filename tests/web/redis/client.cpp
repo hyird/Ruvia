@@ -84,6 +84,11 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_op
             }
             RUVIA_CHECK(rejected);
         }
+        for (auto word : {"WAIT", "wait", "WaItAoF"}) {
+            RUVIA_CHECK(throws_invalid_argument([&] { (void)bounded.command(word, "1", "1000"); }));
+            auto transaction = bounded.transaction();
+            RUVIA_CHECK(throws_invalid_argument([&] { transaction.command(word, "1", "1000"); }));
+        }
 
         // Standalone clients always inherit an owner stop token, so indefinite
         // blocking requests are bounded by cancellation rather than rejected.

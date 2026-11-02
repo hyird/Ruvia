@@ -60,6 +60,8 @@ public:
     redis_batch(redis_batch&& other) noexcept;
     redis_batch& operator=(redis_batch&&) = delete;
 
+    // 非事务 pipeline 接受 WAIT/WAITAOF；其他阻塞命令以及事务内屏障均拒绝。
+    // 屏障要求继承的 operation_options 有 timeout_ 或可取消的 stop_token_。
     redis_batch& command(std::span<const std::string_view> args);
     redis_batch& command(std::initializer_list<std::string_view> args) = delete;
 
@@ -445,6 +447,8 @@ public:
     [[nodiscard]] const worker_handle& worker() const&;
     const worker_handle& worker() const&& = delete;
 
+    // 单次租约没有可依赖的前序写入历史；WAIT/WAITAOF 在此同步拒绝。
+    // 将写入与屏障合并到同一非事务 pipeline，参见 pipeline()。
     task<redis_value> command(std::span<const std::string_view> args) const;
     task<redis_value> command(
         std::initializer_list<std::string_view> args) const = delete;
@@ -651,6 +655,23 @@ public:
         return script_exists(std::span<const std::string_view>(views));
     }
 
+    // 每批命令共享一次租约及同一连接，WAIT/WAITAOF 只保护该批中位于
+    // 屏障之前的写入，不保护此前通过独立 handle 调用完成的写入。
+    // 迁移示例（不能写成先 co_await set()，再独立 command("WAIT", ...)）：
+    //   auto batch = redis.with_options({.timeout_ = std::chrono::seconds(2)}).pipeline();
+    //   batch.set("key", "value").command("WAIT", "1", "1000");
+    //   auto replies = co_await std::move(batch).exec();
+    // 检查每条写入回复是否为 error，再检查 replies[1].integer() >= 1；
+    // WAITAOF 使用 command("WAITAOF", "1", "1", "1000")，检查返回数组的
+    // 本地与副本 fsync 数量。服务端超时仍返回计数，不代表已达到目标。
+    // 整批继承 operation_options 的总超时/取消；普通池 command_timeout_
+    // 仍限制整批写入与全部回复，不因屏障而停用或逐条重启。
+    // 屏障必须有 operation timeout 或可取消 token；timeout=0 的 Redis
+    // 参数不绕过客户端限制。取消/传输失败关闭连接，已完成写入不回滚。
+    // WAIT/WAITAOF 不赋予 Redis 强一致性；事务内不阻塞，故 transaction 拒绝。
+    // Redis 的 current connection 契约：
+    // https://redis.io/docs/latest/commands/wait/
+    // https://redis.io/docs/latest/commands/waitaof/
     [[nodiscard]] redis_pipeline pipeline() const;
     [[nodiscard]] redis_transaction transaction() const;
 

@@ -13,6 +13,7 @@
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_query.h"
 
+#include "failing_memory_resource.h"
 #include "memory_resource_fixture.h"
 #include "test_harness.h"
 
@@ -46,6 +47,161 @@ template <typename fn_type>
 std::string compile_sql(fn_type&& fn) {
     auto statement = fn();
     return std::string(statement.sql());
+}
+
+RUVIA_TEST(db_query_values_kind_changes_only_after_the_row_is_committed) {
+    bool succeeded = false;
+    for (std::size_t fail_after = 0; fail_after < 32 && !succeeded; ++fail_after) {
+        failing_memory_resource resource;
+        {
+            db_query query(&resource);
+            query.select(query.value(3));
+            const std::array row{query.value(4)};
+            resource.fail_after(fail_after);
+            try {
+                query.values(row);
+                succeeded = true;
+            } catch (const std::bad_alloc&) {
+            }
+            resource.allow_allocations();
+            if (succeeded) {
+                query.select({});
+            }
+            const auto result = query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(result.sql(), succeeded ? "VALUES (4)" : "SELECT 3");
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
+    RUVIA_CHECK(succeeded);
+}
+
+RUVIA_TEST(db_query_batch_set_rejects_partial_updates_and_keeps_last_duplicate) {
+    for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+        db_query query;
+        query.update("accounts").set("balance", query.value(100));
+        query.where(query.binary(query.column("id"), op_type::equal, query.value(7)));
+        const auto original = compile_sql([&] { return query.compile(driver, nullptr, db_parameter_mode::literal); });
+        bool rejected = false;
+        try {
+            query.set({{"balance", db_expr::value(0)}, {"", db_expr::value(1)}});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK_EQ(compile_sql([&] { return query.compile(driver, nullptr, db_parameter_mode::literal); }), original);
+        query.set({{"balance", db_expr::value(1)}, {"revision", db_expr::value(2)}, {"balance", db_expr::value(3)}});
+        const auto committed = query.compile(driver, nullptr, db_parameter_mode::literal);
+        RUVIA_CHECK_EQ(committed.sql(), driver == db_driver::postgresql
+                                            ? "UPDATE \"accounts\" SET \"balance\" = 3, \"revision\" = 2 WHERE (\"id\" = 7)"
+                                            : "UPDATE `accounts` SET `balance` = 3, `revision` = 2 WHERE (`id` = 7)");
+    }
+}
+
+RUVIA_TEST(db_query_batch_set_allocation_failure_preserves_executable_assignments) {
+    const std::string name(40, 'n');
+    bool succeeded = false;
+    for (std::size_t fail_after = 0; fail_after < 64 && !succeeded; ++fail_after) {
+        failing_memory_resource resource;
+        {
+            db_query query(&resource);
+            query.update("accounts").set("balance", query.value(100));
+            const auto original = compile_sql([&] { return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal); });
+            const std::array assignments{
+                db_assignment{"balance", db_expr::value(0)}, db_assignment{name, db_expr::value(5)}};
+            resource.fail_after(fail_after);
+            try {
+                query.set(assignments);
+                succeeded = true;
+            } catch (const std::bad_alloc&) {
+            }
+            resource.allow_allocations();
+            const auto current = compile_sql([&] { return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal); });
+            RUVIA_CHECK_EQ(current, succeeded
+                                        ? "UPDATE \"accounts\" SET \"balance\" = 0, \"" + name + "\" = 5"
+                                        : original);
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
+    RUVIA_CHECK(succeeded);
+}
+
+RUVIA_TEST(db_query_named_insert_batch_is_atomic_across_column_growth) {
+    bool succeeded = false;
+    for (std::size_t fail_after = 0; fail_after < 64 && !succeeded; ++fail_after) {
+        failing_memory_resource resource;
+        {
+            db_query query(&resource);
+            query.insert_into("pairs", {"a"}).values({query.value(11)});
+            const std::array<std::string_view, 1> columns{"b"};
+            const std::array values{query.value(22)};
+            const auto original = compile_sql([&] { return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal); });
+            resource.fail_after(fail_after);
+            try {
+                query.insert_rows(columns, values, 1);
+                succeeded = true;
+            } catch (const std::bad_alloc&) {
+            }
+            resource.allow_allocations();
+            const auto current = compile_sql([&] { return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal); });
+            RUVIA_CHECK_EQ(current, succeeded
+                                        ? "INSERT INTO \"pairs\" (\"a\", \"b\") VALUES (11, DEFAULT), (DEFAULT, 22)"
+                                        : original);
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
+    RUVIA_CHECK(succeeded);
+}
+
+RUVIA_TEST(db_query_insert_target_cannot_reinterpret_rows_and_rejected_batches_preserve_them) {
+    db_query query;
+    query.insert_into("pairs", {"a"}).values({query.value(11)});
+    const auto original = compile_sql([&] { return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal); });
+    RUVIA_CHECK(testing::throws_on([&] { query.insert_into("pairs", {"b"}); }));
+    const std::array<std::string_view, 1> columns{"b"};
+    const std::array values{query.value(22)};
+    RUVIA_CHECK(testing::throws_on([&] { query.insert_rows(columns, values, 2); }));
+    db_query source;
+    source.select(source.value(9));
+    RUVIA_CHECK(testing::throws_on([&] { query.insert_from(source); }));
+    RUVIA_CHECK_EQ(compile_sql([&] { return query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal); }), original);
+    query.insert_rows(columns, values, 1);
+    const auto committed = query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+    RUVIA_CHECK_EQ(committed.sql(), "INSERT INTO \"pairs\" (\"a\", \"b\") VALUES (11, DEFAULT), (DEFAULT, 22)");
+}
+
+RUVIA_TEST(db_query_list_replacement_keeps_previous_clauses_when_growth_fails) {
+    using setter_type = db_query& (db_query::*)(std::span<const db_expression>);
+    for (const auto setter : {static_cast<setter_type>(&db_query::select),
+             static_cast<setter_type>(&db_query::group_by),
+             static_cast<setter_type>(&db_query::distinct_on),
+             static_cast<setter_type>(&db_query::returning)}) {
+        failing_memory_resource resource;
+        {
+            db_query query(&resource);
+            const auto column = query.column("id");
+            if (setter == static_cast<setter_type>(&db_query::returning)) {
+                query.update("items").set("id", query.value(1));
+            } else {
+                query.select(column).from("items");
+            }
+            const std::array initial{column};
+            (query.*setter)(initial);
+            const auto original = compile_sql([&] { return query.compile(db_driver::postgresql, nullptr); });
+            std::array<db_expression, 128> expanded;
+            expanded.fill(column);
+            resource.fail_after(0);
+            bool failed = false;
+            try {
+                (query.*setter)(expanded);
+            } catch (const std::bad_alloc&) {
+                failed = true;
+            }
+            resource.allow_allocations();
+            RUVIA_CHECK(failed);
+            RUVIA_CHECK_EQ(compile_sql([&] { return query.compile(db_driver::postgresql, nullptr); }), original);
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
 }
 
 RUVIA_TEST(db_query_reuses_postgresql_parameters_for_grouped_expressions) {

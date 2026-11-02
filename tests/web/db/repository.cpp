@@ -1061,6 +1061,179 @@ RUVIA_TEST(db_repository_write_inputs_cover_default_sparse_nullable_and_composit
     });
 }
 
+RUVIA_TEST(db_repository_insert_batches_merge_columns_without_reinterpreting_rows) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
+        auto repository = client.handle().repository<entity_type>();
+        std::array<entity_type, 2> entities;
+        entities[0].set<"id">(17);
+        entities[1].set<"name">("second");
+        auto batch = repository.insert_builder(std::span<const entity_type>(entities));
+        auto appended = repository.insert_builder(entities[0]);
+        appended.values(entities[1]);
+        auto reversed = repository.insert_builder(entities[1]);
+        reversed.values(entities[0]);
+        db_query expected_rows;
+        expected_rows.insert_into("items", {"id", "name"})
+            .values({expected_rows.value(17), expected_rows.default_value()})
+            .values({expected_rows.default_value(), expected_rows.value("second")});
+        db_query expected_reversed;
+        expected_reversed.insert_into("items", {"name", "id"})
+            .values({expected_reversed.value("second"), expected_reversed.default_value()})
+            .values({expected_reversed.default_value(), expected_reversed.value(17)});
+        for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+            const auto expected = batch.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto actual = appended.query().compile(driver, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(actual.sql(), expected.sql());
+            const auto positioned = expected_rows.compile(driver, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(actual.sql(), positioned.sql());
+            const auto reverse = reversed.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto positioned_reverse = expected_reversed.compile(driver, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(reverse.sql(), positioned_reverse.sql());
+            const auto bound = appended.query().compile(driver, nullptr);
+            RUVIA_CHECK_EQ(bound.params().size(), std::size_t{2});
+        }
+        const borrowed_text keys[]{"id"};
+        const auto driver = database_config().driver_;
+        reversed.on_conflict(driver == db_driver::postgresql
+                                 ? db_upsert_options{.conflict_paths_ = keys}
+                                 : db_upsert_options{.any_unique_key_ = true});
+        const auto upsert = reversed.get_query_and_parameters();
+        RUVIA_CHECK(upsert.sql().find(driver == db_driver::postgresql
+                                          ? "\"name\" = excluded.\"name\""
+                                          : "`name` = VALUES(`name`)") != std::string_view::npos);
+        co_return;
+    });
+}
+
+RUVIA_TEST(db_repository_insert_defaults_and_rejected_batches_preserve_existing_rows) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
+        auto repository = client.handle().repository<entity_type>();
+        std::array<entity_type, 3> entities;
+        entities[1].set<"name">("explicit");
+        auto appended = repository.insert_builder(entities[0]);
+        for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+            const auto before = appended.query().compile(driver, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(before.sql(), driver == db_driver::postgresql
+                                             ? "INSERT INTO \"items\" DEFAULT VALUES"
+                                             : "INSERT INTO `items` () VALUES ()");
+            RUVIA_CHECK(testing::throws_on([&] { appended.values(std::span<const entity_type>{}); }));
+            RUVIA_CHECK(testing::throws_on([&] { appended.values(entities[2]); }));
+            const auto after = appended.query().compile(driver, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(after.sql(), before.sql());
+        }
+        appended.values(entities[1]).values(entities[2]);
+        auto batch = repository.insert_builder(std::span<const entity_type>(entities));
+        db_query expected_rows;
+        expected_rows.insert_into("items", {"name"})
+            .values({expected_rows.default_value()})
+            .values({expected_rows.value("explicit")})
+            .values({expected_rows.default_value()});
+        for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+            const auto expected = batch.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto before = appended.query().compile(driver, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(before.sql(), expected.sql());
+            const auto positioned = expected_rows.compile(driver, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(before.sql(), positioned.sql());
+            RUVIA_CHECK(testing::throws_on([&] { appended.values(std::span<const entity_type>{}); }));
+            const auto after = appended.query().compile(driver, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(after.sql(), before.sql());
+            const auto parameterized = appended.query().compile(driver, nullptr);
+            RUVIA_CHECK_EQ(parameterized.params().size(), std::size_t{1});
+        }
+        co_return;
+    });
+}
+
+RUVIA_TEST(db_repository_insert_sources_cannot_replace_or_append_value_rows) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
+        auto repository = client.handle().repository<entity_type>();
+        entity_type entity;
+        entity.set<"name">("retained");
+        auto source = repository.query_builder();
+        source.select({"id"});
+        db_query raw_source;
+        raw_source.select(raw_source.value(8));
+        auto values = repository.insert_builder(entity);
+        auto defaults = repository.insert_builder(entity_type{});
+        auto selected = repository.insert_builder();
+        selected.insert_from({"id"}, source);
+        for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+            const auto before = values.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto default_before = defaults.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto selected_before = selected.query().compile(driver, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK(testing::throws_on([&] { values.insert_from({"id"}, source); }));
+            RUVIA_CHECK(testing::throws_on([&] { values.insert_from({"name"}, raw_source); }));
+            RUVIA_CHECK(testing::throws_on([&] { defaults.insert_from({"id"}, raw_source); }));
+            RUVIA_CHECK(testing::throws_on([&] { selected.values(entity); }));
+            RUVIA_CHECK(testing::throws_on([&] { selected.values(entity_type{}); }));
+            const auto after = values.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto default_after = defaults.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto selected_after = selected.query().compile(driver, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(after.sql(), before.sql());
+            RUVIA_CHECK_EQ(default_after.sql(), default_before.sql());
+            RUVIA_CHECK_EQ(selected_after.sql(), selected_before.sql());
+        }
+        const borrowed_text keys[]{"id"};
+        const auto driver = database_config().driver_;
+        values.on_conflict(driver == db_driver::postgresql
+                               ? db_upsert_options{.conflict_paths_ = keys}
+                               : db_upsert_options{.any_unique_key_ = true});
+        const auto upsert = values.get_query_and_parameters();
+        RUVIA_CHECK(upsert.sql().find(driver == db_driver::postgresql
+                                          ? "\"name\" = excluded.\"name\""
+                                          : "`name` = VALUES(`name`)") != std::string_view::npos);
+        co_return;
+    });
+}
+
+RUVIA_TEST(db_repository_batch_set_rejects_invalid_suffix_without_publishing_prefix) {
+    repository_runtime runtime;
+    test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
+        auto repository = client.handle().repository<computed_entity_type>();
+        auto update = repository.update_builder("i");
+        update.set("name", "original").where(computed_entity_type::column<"id">() == 7);
+        const std::array invalid{
+            db_assignment{"unknown", db_expr::value(9)},
+            db_assignment{"name_length", db_expr::value(9)},
+            db_assignment{"name", db_expr{}},
+        };
+        for (const auto& rejected : invalid) {
+            for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+                const auto before = update.query().compile(driver, nullptr, db_parameter_mode::literal);
+                const auto bound_before = update.query().compile(driver, nullptr);
+                const db_assignment assignments[]{
+                    {"name", db_expr::value("not committed")},
+                    {"id", db_expr::value(99)},
+                    rejected,
+                };
+                RUVIA_CHECK(testing::throws_on([&] { update.set(std::span<const db_assignment>(assignments)); }));
+                const auto after = update.query().compile(driver, nullptr, db_parameter_mode::literal);
+                const auto bound_after = update.query().compile(driver, nullptr);
+                RUVIA_CHECK_EQ(after.sql(), before.sql());
+                RUVIA_CHECK_EQ(bound_after.sql(), bound_before.sql());
+                RUVIA_CHECK_EQ(bound_after.params().size(), bound_before.params().size());
+            }
+        }
+        db_query expressions;
+        update.set({{"name", expressions.value("committed")}, {"id", expressions.value(8)}});
+        computed_entity_type changes;
+        changes.set<"name">("entity");
+        changes.set<"id">(10);
+        update.set(changes);
+        for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
+            const auto statement = update.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto expected_value = db_query::render_expression(expressions.value("entity"), driver, nullptr);
+            const auto expected_assignment = std::string(driver == db_driver::postgresql ? "\"name\" = " : "`name` = ") + std::string(expected_value);
+            RUVIA_CHECK(statement.sql().find(expected_assignment) != std::string_view::npos);
+            RUVIA_CHECK(statement.sql().find(driver == db_driver::postgresql ? "\"id\" = 10" : "`id` = 10") != std::string_view::npos);
+        }
+        co_return;
+    });
+}
+
 RUVIA_TEST(db_repository_upsert_option_families_validate_paths_and_driver_rules) {
     const std::array drivers{
 #ifdef RUVIA_ENABLE_POSTGRESQL

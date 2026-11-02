@@ -1478,7 +1478,8 @@ private:
                         throw std::invalid_argument("INSERT cannot have both VALUES and SELECT");
                     }
                     query(nested(s, s.insert_query_), depth + 1);
-                } else if (s.rows_.empty()) {
+                } else if (s.rows_.empty() ||
+                           (s.columns_.empty() && s.rows_.size() == 1 && s.rows_.front().empty())) {
                     if (!s.columns_.empty()) {
                         throw std::invalid_argument("INSERT column list requires input rows");
                     }

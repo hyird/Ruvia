@@ -29,7 +29,7 @@ namespace ruvia::detail {
 void throw_if_redis_error(const redis_value& value);
 void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_t index);
 [[nodiscard]] bool validate_redis_pooled_command(
-    std::span<const std::string_view> args, bool allow_blocking);
+    std::span<const std::string_view> args, bool allow_blocking, bool allow_barrier = false);
 [[nodiscard]] bool redis_set_returns_previous(redis_set_previous_value_policy policy);
 [[nodiscard]] bool redis_x_read_group_uses_no_ack(redis_x_read_group_acknowledgement_policy policy);
 

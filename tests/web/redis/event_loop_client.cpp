@@ -60,6 +60,10 @@ public:
         valid_nested_array,
         reject_then_ping,
         batch_echo,
+        barrier_success,
+        barrier_stall,
+        barrier_malformed,
+        barrier_error,
         transaction_success,
         transaction_exec_error,
         transaction_wrong_exec,
@@ -188,6 +192,7 @@ private:
     template <typename stream_type>
     asio::awaitable<void> serve_connection(stream_type& stream, asio::streambuf& buffer, bool slow_select) {
         bool in_transaction = false;
+        bool write_seen = false;
         std::vector<std::vector<std::string>> transaction_commands;
         std::vector<std::string> queued_replies;
         for (;;) {
@@ -220,7 +225,29 @@ private:
                                           mode_ == mode_type::transaction_exec_error ||
                                           mode_ == mode_type::transaction_wrong_exec ||
                                           mode_ == mode_type::transaction_queue_error;
-            if (transaction_mode && (in_transaction || args.front() == "MULTI")) {
+            const bool barrier_mode = mode_ == mode_type::barrier_success || mode_ == mode_type::barrier_stall ||
+                                      mode_ == mode_type::barrier_malformed || mode_ == mode_type::barrier_error;
+            if (barrier_mode && (args.front() == "SET" || args.front() == "WAIT" || args.front() == "WAITAOF")) {
+                transaction_commands.push_back(args);
+                if (args.front() == "SET") {
+                    write_seen = true;
+                    reply = "+OK\r\n";
+                } else if (mode_ == mode_type::barrier_stall || mode_ == mode_type::barrier_malformed) {
+                    batch_commands_.set_value(transaction_commands);
+                    blocked_.set_value();
+                    if (mode_ == mode_type::barrier_stall) {
+                        // Leave the barrier reply unread until cancellation closes this socket.
+                        continue;
+                    }
+                    reply = "?invalid\r\n";
+                } else if (args.front() == "WAIT") {
+                    reply = mode_ == mode_type::barrier_error ? "-ERR barrier failed\r\n" : (write_seen ? ":1\r\n" : ":0\r\n");
+                } else {
+                    // State belongs to this accepted socket, not to the peer.
+                    reply = write_seen ? "*2\r\n:1\r\n:1\r\n" : "*2\r\n:0\r\n:0\r\n";
+                    batch_commands_.set_value(transaction_commands);
+                }
+            } else if (transaction_mode && (in_transaction || args.front() == "MULTI")) {
                 transaction_commands.push_back(args);
                 if (args.front() == "MULTI") {
                     in_transaction = true;
@@ -826,6 +853,43 @@ RUVIA_TEST(redis_pipeline_owns_binary_input_and_retains_ordered_replies) {
     pool.join();
 }
 
+RUVIA_TEST(redis_pipeline_barriers_follow_writes_on_the_same_connection_and_drain_command_errors) {
+    for (const auto mode : {redis_peer::mode_type::barrier_success, redis_peer::mode_type::barrier_error}) {
+        redis_peer peer(mode);
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::redis_client client(pool.loop(0), peer.config());
+        auto exercise = [&]() -> ruvia::task<void> {
+            co_await client.connect();
+            auto pipeline = client.handle({.timeout_ = std::chrono::seconds(1)}).pipeline();
+            pipeline.set("barrier-key", "value").command("WAIT", "1", "100").command("WAITAOF", "1", "1", "100");
+            const auto replies = co_await std::move(pipeline).exec();
+            RUVIA_CHECK_EQ(replies.size(), std::size_t{3});
+            if (replies.size() == 3) {
+                RUVIA_CHECK_EQ(replies[0].string(), std::string_view("OK"));
+                if (mode == redis_peer::mode_type::barrier_error) {
+                    RUVIA_CHECK(replies[1].kind() == ruvia::redis_value::kind_type::error);
+                } else {
+                    RUVIA_CHECK_EQ(replies[1].integer(), std::int64_t{1});
+                }
+                const auto fsynced = replies[2].array();
+                RUVIA_CHECK_EQ(fsynced.size(), std::size_t{2});
+                if (fsynced.size() == 2) {
+                    RUVIA_CHECK_EQ(fsynced[0].integer(), std::int64_t{1});
+                    RUVIA_CHECK_EQ(fsynced[1].integer(), std::int64_t{1});
+                }
+            }
+            co_await client.handle().ping();
+            co_await client.shutdown();
+        };
+        pool.start();
+        pool.loop(0).start(exercise()).get();
+        pool.join();
+        const std::vector<std::vector<std::string>> expected{
+            {"SET", "barrier-key", "value"}, {"WAIT", "1", "100"}, {"WAITAOF", "1", "1", "100"}};
+        RUVIA_CHECK(peer.batch_commands() == expected);
+    }
+}
+
 RUVIA_TEST(redis_transaction_owns_framing_and_handles_exec_outcomes) {
     for (const auto mode : {redis_peer::mode_type::transaction_success, redis_peer::mode_type::transaction_exec_error,
              redis_peer::mode_type::transaction_wrong_exec, redis_peer::mode_type::transaction_queue_error}) {
@@ -973,12 +1037,21 @@ RUVIA_TEST(redis_client_expire_at_preserves_the_requested_deadline) {
 
 ruvia::task<void> check_pipeline_abort_and_reconnect(ruvia::redis_client& client,
     ruvia::operation_options options, ruvia::redis_error::code_type expected,
-    ruvia::testing::test_context& ruvia_ctx) {
+    ruvia::testing::test_context& ruvia_ctx, std::string_view barrier = {}) {
     co_await client.connect();
     std::exception_ptr failure;
     try {
         auto pipeline = client.handle(std::move(options)).pipeline();
-        pipeline.command("STALL");
+        if (barrier.empty()) {
+            pipeline.command("STALL");
+        } else {
+            pipeline.set("barrier-key", "value");
+            if (barrier == "WAIT") {
+                pipeline.command(barrier, "1", "0");
+            } else {
+                pipeline.command(barrier, "1", "1", "0");
+            }
+        }
         bool rejected = false;
         try {
             (void)co_await std::move(pipeline).exec();
@@ -1021,6 +1094,41 @@ RUVIA_TEST(redis_pipeline_timeout_and_cancellation_release_the_slot_for_reconnec
         }
         pending.get();
         pool.join();
+    }
+}
+
+RUVIA_TEST(redis_pipeline_barrier_timeout_cancellation_and_protocol_failure_retire_the_connection) {
+    for (const auto barrier : {"WAIT", "WAITAOF"}) {
+        for (const auto failure : {0, 1, 2, 3}) {
+            const bool cancel = failure == 1;
+            const bool pool_timeout = failure == 2;
+            const bool malformed = failure == 3;
+            redis_peer peer(malformed ? redis_peer::mode_type::barrier_malformed : redis_peer::mode_type::barrier_stall);
+            ruvia::event_loop_pool pool({.loop_count_ = 1});
+            auto config = peer.config();
+            config.command_timeout_ = pool_timeout ? std::chrono::milliseconds(100) : std::chrono::seconds(5);
+            ruvia::redis_client client(pool.loop(0), config);
+            ruvia::stop_source stop;
+            ruvia::operation_options options{.stop_token_ = stop.token()};
+            if (!pool_timeout) {
+                options.timeout_ = cancel || malformed ? std::chrono::seconds(5) : std::chrono::milliseconds(100);
+            }
+            const auto expected = malformed ? ruvia::redis_error::code_type::protocol_error : (cancel ? ruvia::redis_error::code_type::cancelled : ruvia::redis_error::code_type::timeout);
+            pool.start();
+            auto pending = pool.loop(0).start(check_pipeline_abort_and_reconnect(client, options, expected, ruvia_ctx, barrier));
+            peer.wait_for_blocked_command();
+            if (cancel) {
+                stop.request_stop();
+            }
+            pending.get();
+            pool.join();
+            std::vector<std::vector<std::string>> commands{{"SET", "barrier-key", "value"}, {barrier, "1"}};
+            if (std::string_view(barrier) == "WAITAOF") {
+                commands.back().push_back("1");
+            }
+            commands.back().push_back("0");
+            RUVIA_CHECK(peer.batch_commands() == commands);
+        }
     }
 }
 
