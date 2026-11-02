@@ -448,4 +448,7 @@ if (bearer) {
 
 - `jwt_bearer_token` 只返回符合 RFC 6750 `b64token` 语法（`ALPHA / DIGIT / - . _ ~ + /`，末尾可跟 `=`）的令牌；含空格、逗号等其他字符时返回 `std::nullopt`。
 - 自定义声明的值可以是任意 JSON 值（RFC 7519 §2）。载荷整体仍校验 JSON 语法与声明名唯一性；字符串值经 `claims()` / `claim(name)` 暴露，数字、布尔、`null`、数组与对象等非字符串自定义声明按 RFC 7519 §4 忽略，不导致令牌被拒绝。注册声明（`iss` / `sub` / `aud` / `jti` / `exp` / `nbf` / `iat`）类型不符时仍拒绝。
+- 时间声明遵循 [RFC 7519 §2 NumericDate](https://www.rfc-editor.org/rfc/rfc7519#section-2)。`expires_at()`、`not_before()`、`issued_at()` 返回借用的 `const jwt_numeric_date*`，`nullptr` 表示声明缺失；不再返回 `optional<system_clock::time_point>`。`text()` 保留完整十进制数字（包括小数和指数），`to_time_point()` 仅在宿主时钟能精确表示其范围与精度时返回时间点，否则返回 `nullopt`，不会饱和、舍入或把亚 tick 的非零值当作零。
+- `exp` / `nbf` 验证直接比较精确 NumericDate 与当前时间及 `leeway_`，不经过宿主时间点转换；边界分别为 `exp == now - leeway` 已过期、`nbf == now + leeway` 已生效（[§4.1.4–4.1.5](https://www.rfc-editor.org/rfc/rfc7519#section-4.1.4)）。签发的正 `expires_in_` / `not_before_delay_` 向上取整到整秒，零偏移向下取整；超出宿主时钟范围的结果仍保留所请求的秒数。`leeway_` 只应补偿实际时钟偏差，通常不超过几分钟。
+- 载荷及 NumericDate 独立拥有解码内容，不借用输入 token；指定的 PMR resource 必须覆盖整个结果及其析构。时间指针、`text()` 和其他载荷视图不可跨越 payload 的移动或销毁；需要长期保留时复制文本。移出的源 NumericDate 表示数学零，不再代表原声明。
 - `jwt_decode_unverified` 在不校验签名与时间声明的前提下解码载荷，但仍按 RFC 7519 §7.2 校验三段式结构与 JOSE Header（要求合法的 Base64url/JSON 对象、唯一的键名、非空字符串 `"alg"`，并拒绝 `"crit"` 与 `"b64"` 扩展）。

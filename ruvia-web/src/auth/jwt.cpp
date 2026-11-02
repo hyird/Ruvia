@@ -3,9 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
-#include <cstdint>
-#include <limits>
-#include <ratio>
 #include <span>
 #include <stdexcept>
 
@@ -14,6 +11,7 @@
 #include "ruvia/web/detail/json/json_escape.h"
 
 #include "auth/hmac.h"
+#include "auth/jwt_date.h"
 #include "auth/jwt_primitives.h"
 #include "util/constant_time.h"
 
@@ -21,88 +19,6 @@ namespace ruvia {
 
 namespace detail {
 namespace {
-
-// Split without subtracting a rounded time_point: floor(seconds) at the
-// clock's minimum can itself lie below the representable clock range.
-using jwt_clock_second_ratio_type = std::ratio_divide<std::chrono::seconds::period,
-    std::chrono::system_clock::period>;
-static_assert(jwt_clock_second_ratio_type::den == 1 && jwt_clock_second_ratio_type::num > 1,
-    "JWT time arithmetic requires an integral subsecond system clock");
-static_assert(std::numeric_limits<std::chrono::system_clock::rep>::is_integer &&
-                  std::numeric_limits<std::chrono::system_clock::rep>::is_signed &&
-                  std::numeric_limits<std::chrono::system_clock::rep>::digits <=
-                      std::numeric_limits<std::chrono::seconds::rep>::digits,
-    "JWT whole-second distances must fit in the signed seconds representation");
-
-struct jwt_clock_parts final {
-    std::chrono::seconds whole_seconds_{};
-    std::chrono::system_clock::duration fraction_{};
-};
-
-[[nodiscard]] constexpr jwt_clock_parts jwt_split_clock_time(std::chrono::system_clock::time_point value) noexcept {
-    auto seconds = std::chrono::duration_cast<std::chrono::seconds>(value.time_since_epoch());
-    auto remainder = value.time_since_epoch().count() % jwt_clock_second_ratio_type::num;
-    if (remainder < 0) {
-        seconds -= std::chrono::seconds{1};
-        remainder += jwt_clock_second_ratio_type::num;
-    }
-    return {seconds, std::chrono::system_clock::duration{remainder}};
-}
-
-[[nodiscard]] std::chrono::system_clock::time_point jwt_time_with_offset(
-    std::chrono::system_clock::time_point value, std::chrono::seconds offset) noexcept {
-    using clock_type = std::chrono::system_clock;
-    const auto parts = jwt_split_clock_time(value);
-    constexpr auto minimum = jwt_split_clock_time(clock_type::time_point::min());
-    constexpr auto maximum = jwt_split_clock_time(clock_type::time_point::max());
-    if (offset > maximum.whole_seconds_ - parts.whole_seconds_) {
-        return clock_type::time_point::max();
-    }
-    if (offset < minimum.whole_seconds_ - parts.whole_seconds_) {
-        return clock_type::time_point::min();
-    }
-    const auto target = parts.whole_seconds_ + offset;
-    if (target == minimum.whole_seconds_) {
-        if (parts.fraction_ < minimum.fraction_) {
-            return clock_type::time_point::min();
-        }
-        // Do not convert the minimum's floored seconds back into clock ticks:
-        // that intermediate can underflow even when the final value fits.
-        return clock_type::time_point::min() + (parts.fraction_ - minimum.fraction_);
-    }
-    if (target == maximum.whole_seconds_ && parts.fraction_ > maximum.fraction_) {
-        return clock_type::time_point::max();
-    }
-    return clock_type::time_point(std::chrono::duration_cast<clock_type::duration>(target) + parts.fraction_);
-}
-
-[[nodiscard]] std::int64_t jwt_epoch_seconds(std::chrono::system_clock::time_point value) {
-    return std::chrono::duration_cast<std::chrono::seconds>(value.time_since_epoch()).count();
-}
-
-// RFC 7519 §4.1.4: a token is valid only while the current time is *before*
-// "exp", so at now == exp (no leeway) it MUST be rejected. leeway widens the
-// accepted window past exp.
-[[nodiscard]] bool jwt_token_expired(jwt_clock_parts now_parts,
-    std::chrono::system_clock::time_point expires_at, std::chrono::seconds leeway) noexcept {
-    const auto expires_parts = jwt_split_clock_time(expires_at);
-    // Subsecond clock resolution keeps the whole-second distance representable
-    // even when subtracting time_points directly would overflow their duration.
-    const auto distance = now_parts.whole_seconds_ - expires_parts.whole_seconds_;
-    return distance > leeway ||
-           (distance == leeway && now_parts.fraction_ >= expires_parts.fraction_);
-}
-
-// RFC 7519 §4.1.5: a token is valid only when the current time is *after or
-// equal to* "nbf"; leeway widens the accepted window earlier. Rejected while
-// now (plus leeway) is still strictly before nbf.
-[[nodiscard]] bool jwt_token_not_yet_valid(jwt_clock_parts now_parts,
-    std::chrono::system_clock::time_point not_before, std::chrono::seconds leeway) noexcept {
-    const auto not_before_parts = jwt_split_clock_time(not_before);
-    const auto distance = not_before_parts.whole_seconds_ - now_parts.whole_seconds_;
-    return distance > leeway ||
-           (distance == leeway && not_before_parts.fraction_ > now_parts.fraction_);
-}
 
 [[nodiscard]] bool jwt_is_reserved_claim(std::string_view name) noexcept {
     return name == "iss" || name == "sub" || name == "aud" || name == "exp" || name == "nbf" ||
@@ -237,12 +153,6 @@ void validate_jwt_hmac_secret(std::size_t digest_size, std::string_view secret) 
 
 }  // namespace
 
-std::chrono::system_clock::time_point jwt_from_epoch_seconds(std::int64_t value) {
-    // Use the same saturating conversion for integer NumericDates and offsets.
-    // Converting unbounded seconds directly to clock ticks would overflow.
-    return jwt_time_with_offset(std::chrono::system_clock::time_point{}, std::chrono::seconds{value});
-}
-
 }  // namespace detail
 
 namespace {
@@ -308,14 +218,14 @@ bool jwt_payload::has_audience(std::string_view audience) const noexcept {
 std::string_view jwt_payload::id() const& noexcept {
     return id_;
 }
-std::optional<std::chrono::system_clock::time_point> jwt_payload::expires_at() const noexcept {
-    return expires_at_;
+const jwt_numeric_date* jwt_payload::expires_at() const& noexcept {
+    return expires_at_ ? &*expires_at_ : nullptr;
 }
-std::optional<std::chrono::system_clock::time_point> jwt_payload::not_before() const noexcept {
-    return not_before_;
+const jwt_numeric_date* jwt_payload::not_before() const& noexcept {
+    return not_before_ ? &*not_before_ : nullptr;
 }
-std::optional<std::chrono::system_clock::time_point> jwt_payload::issued_at() const noexcept {
-    return issued_at_;
+const jwt_numeric_date* jwt_payload::issued_at() const& noexcept {
+    return issued_at_ ? &*issued_at_ : nullptr;
 }
 std::span<const jwt_claim> jwt_payload::claims() const& noexcept {
     return claims_;
@@ -364,24 +274,16 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
     if (!options.id_.empty()) {
         detail::jwt_append_json_member(payload, first, "jti", options.id_);
     }
-    detail::jwt_append_json_member(payload, first, "iat", detail::jwt_epoch_seconds(now));
+    std::array<char, 21> date_buffer;
+    detail::jwt_append_json_numeric_date(payload, first, "iat",
+        detail::jwt_signing_date(date_buffer, now, std::chrono::seconds{0}));
     if (options.expires_in_.has_value()) {
-        const auto requested = detail::jwt_time_with_offset(now, *options.expires_in_);
-        const auto expires_seconds = options.expires_in_->count() == 0
-                                         ? detail::jwt_epoch_seconds(requested)
-                                         : std::chrono::ceil<std::chrono::seconds>(
-                                               requested.time_since_epoch())
-                                               .count();
-        detail::jwt_append_json_member(payload, first, "exp", expires_seconds);
+        detail::jwt_append_json_numeric_date(payload, first, "exp",
+            detail::jwt_signing_date(date_buffer, now, *options.expires_in_));
     }
     if (options.not_before_delay_.has_value()) {
-        const auto requested = detail::jwt_time_with_offset(now, *options.not_before_delay_);
-        const auto not_before_seconds = options.not_before_delay_->count() == 0
-                                            ? detail::jwt_epoch_seconds(requested)
-                                            : std::chrono::ceil<std::chrono::seconds>(
-                                                  requested.time_since_epoch())
-                                                  .count();
-        detail::jwt_append_json_member(payload, first, "nbf", not_before_seconds);
+        detail::jwt_append_json_numeric_date(payload, first, "nbf",
+            detail::jwt_signing_date(date_buffer, now, *options.not_before_delay_));
     }
     for (const auto& claim : options.claims_) {
         detail::jwt_append_json_member(payload, first, claim.name_.view(), claim.value_.view());
@@ -433,17 +335,21 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
     }
     const detail::jwt_decoded_section payload_json(parts.payload_, resolved);
     auto payload_value = detail::jwt_payload_access::decode_payload_json(payload_json.view(), resolved);
-    if (options.expiration_claim_ == jwt_expiration_claim_policy::require && !payload_value.expires_at()) {
+    const auto* expires_at = payload_value.expires_at();
+    const auto* not_before = payload_value.not_before();
+    if (options.expiration_claim_ == jwt_expiration_claim_policy::require && expires_at == nullptr) {
         throw jwt_error(jwt_error::code_type::missing_claim, "JWT token is missing exp claim");
     }
-    if (payload_value.expires_at() || payload_value.not_before()) {
-        const auto now_parts = detail::jwt_split_clock_time(std::chrono::system_clock::now());
-        if (payload_value.expires_at() &&
-            detail::jwt_token_expired(now_parts, *payload_value.expires_at(), options.leeway_)) {
+    if (expires_at != nullptr || not_before != nullptr) {
+        const auto now = std::chrono::system_clock::now();
+        // RFC 7519 §4.1.4: exp == now - leeway is already expired.
+        if (expires_at != nullptr &&
+            detail::jwt_compare_numeric_date(expires_at->text(), now, -options.leeway_) != std::strong_ordering::greater) {
             throw jwt_error(jwt_error::code_type::expired, "JWT token is expired");
         }
-        if (payload_value.not_before() &&
-            detail::jwt_token_not_yet_valid(now_parts, *payload_value.not_before(), options.leeway_)) {
+        // RFC 7519 §4.1.5: nbf == now + leeway is already valid.
+        if (not_before != nullptr &&
+            detail::jwt_compare_numeric_date(not_before->text(), now, options.leeway_) == std::strong_ordering::greater) {
             throw jwt_error(jwt_error::code_type::not_yet_valid, "JWT token is not yet valid");
         }
     }

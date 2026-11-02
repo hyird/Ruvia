@@ -1,5 +1,6 @@
 #include "ruvia/web/auth/jwt.h"
 
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -8,7 +9,6 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -119,6 +119,22 @@ std::string signed_token_with_payload(std::string_view secret_value, std::string
     return signed_token_with_header_and_payload(secret_value, R"({"alg":"HS256","typ":"JWT"})", payload_json);
 }
 
+// Describe host ticks using public chrono metadata, without converting a
+// boundary through floating point or overflowing a host time_point.
+int host_tick_decimal_places() {
+    using period = std::chrono::system_clock::duration::period;
+    auto denominator = period::den;
+    int places = 0;
+    while (denominator > 1 && denominator % 10 == 0) {
+        denominator /= 10;
+        ++places;
+    }
+    if (period::num != 1 || denominator != 1) {
+        throw std::runtime_error("test requires decimal system_clock ticks");
+    }
+    return places;
+}
+
 }  // namespace
 
 RUVIA_TEST(jwt_sign_verify_round_trip_preserves_claims) {
@@ -159,13 +175,18 @@ RUVIA_TEST(jwt_payload_is_move_only_and_transfers_pmr_storage_without_allocating
     auto options = sign_options(secret);
     options.audience_ = audience;
     options.claims_ = claims;
+    options.not_before_delay_ = std::chrono::seconds(0);
     const auto token = sign(options);
     ruvia::test::counting_memory_resource upstream;
     {
         ruvia::test::equivalent_tracking_resource resource(upstream);
         auto input = ruvia::jwt_decode_unverified({.token_ = token, .resource_ = &resource});
-        const auto expires_at = input.expires_at();
-        const auto issued_at = input.issued_at();
+        RUVIA_CHECK(input.expires_at() != nullptr);
+        RUVIA_CHECK(input.issued_at() != nullptr);
+        RUVIA_CHECK(input.not_before() != nullptr);
+        const std::string expires_at(input.expires_at() ? input.expires_at()->text() : "");
+        const std::string issued_at(input.issued_at() ? input.issued_at()->text() : "");
+        const std::string not_before(input.not_before() ? input.not_before()->text() : "");
         const auto attempts = resource.allocation_attempts();
         if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
             resource.reject_allocations_after(0);
@@ -179,8 +200,49 @@ RUVIA_TEST(jwt_payload_is_move_only_and_transfers_pmr_storage_without_allocating
         RUVIA_CHECK_EQ(moved.subject(), std::string_view("user-1"));
         RUVIA_CHECK(moved.has_audience(audience));
         RUVIA_CHECK_EQ(moved.claim(claim_name).value_or("missing"), std::string_view(claim_value));
-        RUVIA_CHECK_EQ(moved.expires_at(), expires_at);
-        RUVIA_CHECK_EQ(moved.issued_at(), issued_at);
+        RUVIA_CHECK(moved.expires_at() != nullptr);
+        RUVIA_CHECK(moved.issued_at() != nullptr);
+        RUVIA_CHECK(moved.not_before() != nullptr);
+        if (moved.expires_at() && moved.issued_at() && moved.not_before()) {
+            RUVIA_CHECK_EQ(moved.expires_at()->text(), expires_at);
+            RUVIA_CHECK_EQ(moved.issued_at()->text(), issued_at);
+            RUVIA_CHECK_EQ(moved.not_before()->text(), not_before);
+        }
+    }
+    RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
+    RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
+}
+
+RUVIA_TEST(jwt_payload_move_transfers_long_numeric_dates_without_allocating) {
+    const auto token = signed_token_with_payload(secret,
+        R"({"exp":1.234567890123456789e999999999999999999999999,"nbf":-9.876543210987654321e999999999999999999999999,"iat":1e-999999999999999999999999})");
+    ruvia::test::counting_memory_resource upstream;
+    {
+        ruvia::test::equivalent_tracking_resource resource(upstream);
+        auto input = ruvia::jwt_decode_unverified({.token_ = token, .resource_ = &resource});
+        RUVIA_CHECK(input.expires_at() != nullptr);
+        RUVIA_CHECK(input.not_before() != nullptr);
+        RUVIA_CHECK(input.issued_at() != nullptr);
+        const std::string expires_at(input.expires_at() ? input.expires_at()->text() : "");
+        const std::string not_before(input.not_before() ? input.not_before()->text() : "");
+        const std::string issued_at(input.issued_at() ? input.issued_at()->text() : "");
+        const auto attempts = resource.allocation_attempts();
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            resource.reject_allocations_after(0);
+        }
+        ruvia::jwt_payload moved(std::move(input));
+        resource.allow_allocations();
+        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
+            RUVIA_CHECK_EQ(resource.allocation_attempts(), attempts);
+        }
+        RUVIA_CHECK(moved.expires_at() != nullptr);
+        RUVIA_CHECK(moved.not_before() != nullptr);
+        RUVIA_CHECK(moved.issued_at() != nullptr);
+        if (moved.expires_at() && moved.not_before() && moved.issued_at()) {
+            RUVIA_CHECK_EQ(moved.expires_at()->text(), expires_at);
+            RUVIA_CHECK_EQ(moved.not_before()->text(), not_before);
+            RUVIA_CHECK_EQ(moved.issued_at()->text(), issued_at);
+        }
     }
     RUVIA_CHECK_EQ(upstream.live_allocations(), std::size_t{0});
     RUVIA_CHECK_EQ(upstream.allocation_count(), upstream.deallocation_count());
@@ -458,7 +520,7 @@ RUVIA_TEST(jwt_verify_enforces_time_claims) {
     valid_now.not_before_delay_ = std::chrono::seconds(0);
     const auto valid_now_token = sign(valid_now);
     const auto valid_now_payload = decode_jwt_unverified(valid_now_token);
-    RUVIA_CHECK(valid_now_payload.not_before().has_value());
+    RUVIA_CHECK(valid_now_payload.not_before() != nullptr);
 
     // not_before: a token whose nbf is in the future is not yet valid, unless the
     // configured leeway covers the gap.
@@ -478,50 +540,58 @@ RUVIA_TEST(jwt_not_before_delay_never_starts_before_the_requested_time) {
     using clock_type = std::chrono::system_clock;
     using namespace std::chrono;
 
-    auto before = clock_type::now();
-    while (before - floor<seconds>(before) < milliseconds(150) ||
-           before - floor<seconds>(before) > milliseconds(750)) {
-        std::this_thread::sleep_for(milliseconds(10));
-        before = clock_type::now();
-    }
+    const auto before = clock_type::now();
     auto options = sign_options(secret);
     options.not_before_delay_ = seconds(1);
     const auto token = sign(options);
     const auto after = clock_type::now();
     const auto payload_value = decode_jwt_unverified(token);
-    RUVIA_CHECK(payload_value.not_before().has_value());
-    RUVIA_CHECK(*payload_value.not_before() >= before + seconds(1));
-    RUVIA_CHECK(*payload_value.not_before() < after + seconds(2));
+    RUVIA_CHECK(payload_value.not_before() != nullptr);
+    if (payload_value.not_before()) {
+        const auto not_before = payload_value.not_before()->to_time_point();
+        RUVIA_CHECK(not_before.has_value());
+        if (not_before) {
+            RUVIA_CHECK(*not_before >= before + seconds(1));
+            RUVIA_CHECK(*not_before < after + seconds(2));
+        }
+    }
 
     options.not_before_delay_ = seconds(0);
     const auto immediate = sign(options);
     const auto immediate_payload = decode_jwt_unverified(immediate);
-    RUVIA_CHECK(immediate_payload.not_before().has_value());
-    RUVIA_CHECK(*immediate_payload.not_before() <= clock_type::now());
+    RUVIA_CHECK(immediate_payload.not_before() != nullptr);
+    if (immediate_payload.not_before()) {
+        const auto not_before = immediate_payload.not_before()->to_time_point();
+        RUVIA_CHECK(not_before.has_value());
+        if (not_before) {
+            RUVIA_CHECK(*not_before <= clock_type::now());
+        }
+    }
 }
 
 RUVIA_TEST(jwt_expires_in_never_expires_before_requested_duration_or_not_before) {
     using clock_type = std::chrono::system_clock;
     using namespace std::chrono;
 
-    auto before = clock_type::now();
-    while (before - floor<seconds>(before) < milliseconds(150) ||
-           before - floor<seconds>(before) > milliseconds(750)) {
-        std::this_thread::sleep_for(milliseconds(10));
-        before = clock_type::now();
-    }
+    const auto before = clock_type::now();
     auto options = sign_options(secret);
     options.not_before_delay_ = seconds(1);
     options.expires_in_ = seconds(2);
     const auto token = sign(options);
     const auto after = clock_type::now();
     const auto payload_value = decode_jwt_unverified(token);
-    RUVIA_CHECK(payload_value.expires_at().has_value());
-    RUVIA_CHECK(payload_value.not_before().has_value());
+    RUVIA_CHECK(payload_value.expires_at() != nullptr);
+    RUVIA_CHECK(payload_value.not_before() != nullptr);
     if (payload_value.expires_at() && payload_value.not_before()) {
-        RUVIA_CHECK(*payload_value.expires_at() >= before + seconds(2));
-        RUVIA_CHECK(*payload_value.expires_at() < after + seconds(3));
-        RUVIA_CHECK(*payload_value.expires_at() > *payload_value.not_before());
+        const auto expires_at = payload_value.expires_at()->to_time_point();
+        const auto not_before = payload_value.not_before()->to_time_point();
+        RUVIA_CHECK(expires_at.has_value());
+        RUVIA_CHECK(not_before.has_value());
+        if (expires_at && not_before) {
+            RUVIA_CHECK(*expires_at >= before + seconds(2));
+            RUVIA_CHECK(*expires_at < after + seconds(3));
+            RUVIA_CHECK(*expires_at > *not_before);
+        }
     }
 }
 
@@ -661,17 +731,215 @@ RUVIA_TEST(jwt_verify_handles_extreme_and_fractional_epoch_claims) {
     const auto fractional =
         signed_token_with_payload(secret, R"({"sub":"u","iat":1.5,"exp":4102444800.5})");
     const auto fractional_payload = verify_jwt(fractional, verify_options(secret));
-    RUVIA_CHECK(fractional_payload.issued_at().has_value());
-    const auto issued_seconds =
-        std::chrono::duration<long double>(fractional_payload.issued_at()->time_since_epoch())
-            .count();
-    RUVIA_CHECK(issued_seconds > 1.49L && issued_seconds < 1.51L);
+    RUVIA_CHECK(fractional_payload.issued_at() != nullptr);
+    if (fractional_payload.issued_at()) {
+        RUVIA_CHECK_EQ(fractional_payload.issued_at()->text(), std::string_view("1.5"));
+        const auto issued_at = fractional_payload.issued_at()->to_time_point();
+        RUVIA_CHECK(issued_at.has_value());
+        if (issued_at) {
+            RUVIA_CHECK_EQ(issued_at->time_since_epoch(), std::chrono::milliseconds(1500));
+        }
+    }
 
     auto allow_no_exp = verify_options(secret);
     allow_no_exp.expiration_claim_ = jwt_expiration_claim_policy::allow_missing;
     const auto far_nbf = signed_token_with_payload(secret, R"({"sub":"u","nbf":99999999999})");
     RUVIA_CHECK(throws_jwt_error(
         [&] { (void)verify_jwt(far_nbf, allow_no_exp); }, jwt_error::code_type::not_yet_valid));
+}
+
+RUVIA_TEST(jwt_large_leeway_does_not_collapse_out_of_range_dates_to_host_limits) {
+    auto options = verify_options(secret);
+    options.expiration_claim_ = jwt_expiration_claim_policy::allow_missing;
+    options.leeway_ = std::chrono::seconds{2000000000000LL};
+    for (const auto* date : {"999999999999999", "1e999999999999999999999999999999"}) {
+        const auto token = signed_token_with_payload(secret, std::string(R"({"nbf":)") + date + "}");
+        RUVIA_CHECK(throws_jwt_error(
+            [&] { (void)verify_jwt(token, options); }, jwt_error::code_type::not_yet_valid));
+    }
+    for (const auto* date : {"-999999999999999", "-1e999999999999999999999999999999"}) {
+        const auto token = signed_token_with_payload(secret, std::string(R"({"exp":)") + date + "}");
+        RUVIA_CHECK(throws_jwt_error(
+            [&] { (void)verify_jwt(token, options); }, jwt_error::code_type::expired));
+    }
+
+    // A large leeway is itself legal: it covers dates outside the host clock's
+    // range when their mathematical distance is small enough.
+    const auto covered = signed_token_with_payload(secret, R"({"sub":"covered","nbf":1000000000000,"exp":-1000000000000})");
+    const auto payload_value = verify_jwt(covered, options);
+    RUVIA_CHECK_EQ(payload_value.subject(), std::string_view("covered"));
+}
+
+RUVIA_TEST(jwt_numeric_dates_own_exact_json_text_and_convert_only_exact_values) {
+    using clock_type = std::chrono::system_clock;
+    const struct {
+        std::string_view text_;
+        std::optional<std::chrono::milliseconds> exact_;
+    } cases[] = {
+        {"0", std::chrono::milliseconds(0)},
+        {"-0", std::chrono::milliseconds(0)},
+        {"-0.000e+999999999999999999999999999999", std::chrono::milliseconds(0)},
+        {"0e-999999999999999999999999999999", std::chrono::milliseconds(0)},
+        {"1.5", std::chrono::milliseconds(1500)},
+        {"-1.5", std::chrono::milliseconds(-1500)},
+        {"-0.5", std::chrono::milliseconds(-500)},
+        {"15e-1", std::chrono::milliseconds(1500)},
+        {"1.500000000000000000000000000000000000000000000000", std::chrono::milliseconds(1500)},
+        {"1e999999999999999999999999999999", std::nullopt},
+        {"-1e999999999999999999999999999999", std::nullopt},
+        {"1e309", std::nullopt},
+        {"-1e309", std::nullopt},
+        {"1e-4000", std::nullopt},
+        {"-1e-4000", std::nullopt},
+        {"1e-999999999999999999999999999999", std::nullopt},
+        {"-1e-999999999999999999999999999999", std::nullopt},
+        {"1.000000000000000000000000000000000000000000000001", std::nullopt},
+        {"-1.000000000000000000000000000000000000000000000001", std::nullopt},
+        {"999999999999999", std::nullopt},
+        {"-999999999999999", std::nullopt},
+    };
+    for (const auto& test : cases) {
+        const auto payload_value = [&] {
+            const auto token = signed_token_with_payload(secret,
+                std::string(R"({"iat":)") + std::string(test.text_) + "}");
+            auto options = verify_options(secret);
+            options.expiration_claim_ = jwt_expiration_claim_policy::allow_missing;
+            auto wrong_key = options;
+            wrong_key.secret_ = other_secret;
+            RUVIA_CHECK(throws_jwt_error(
+                [&] { (void)verify_jwt(token, wrong_key); }, jwt_error::code_type::signature_mismatch));
+            return verify_jwt(token, options);
+        }();
+        RUVIA_CHECK(payload_value.expires_at() == nullptr);
+        RUVIA_CHECK(payload_value.not_before() == nullptr);
+        RUVIA_CHECK(payload_value.issued_at() != nullptr);
+        if (payload_value.issued_at()) {
+            RUVIA_CHECK_EQ(payload_value.issued_at()->text(), test.text_);
+            const auto converted = payload_value.issued_at()->to_time_point();
+            RUVIA_CHECK_EQ(converted.has_value(), test.exact_.has_value());
+            if (converted && test.exact_) {
+                RUVIA_CHECK_EQ(*converted, clock_type::time_point(*test.exact_));
+            }
+        }
+    }
+
+    const auto owned = [&] {
+        const auto token = signed_token_with_payload(secret,
+            R"({"exp":1.234567890123456789e999999999999999999999999,"nbf":-9.876543210987654321e999999999999999999999999,"iat":1e-999999999999999999999999})");
+        return verify_jwt(token, verify_options(secret));
+    }();
+    RUVIA_CHECK(owned.expires_at() != nullptr);
+    RUVIA_CHECK(owned.not_before() != nullptr);
+    RUVIA_CHECK(owned.issued_at() != nullptr);
+    if (owned.expires_at() && owned.not_before() && owned.issued_at()) {
+        RUVIA_CHECK_EQ(owned.expires_at()->text(), std::string_view("1.234567890123456789e999999999999999999999999"));
+        RUVIA_CHECK_EQ(owned.not_before()->text(), std::string_view("-9.876543210987654321e999999999999999999999999"));
+        RUVIA_CHECK_EQ(owned.issued_at()->text(), std::string_view("1e-999999999999999999999999"));
+        RUVIA_CHECK(!owned.expires_at()->to_time_point().has_value());
+        RUVIA_CHECK(!owned.not_before()->to_time_point().has_value());
+        RUVIA_CHECK(!owned.issued_at()->to_time_point().has_value());
+    }
+    // Decimal exponent and mantissa displacement cancel before range checks.
+    // Each spelling is exactly one second despite hundreds of input digits.
+    for (const auto& magnitude : {"1" + std::string(300, '0') + "e-300",
+             "0." + std::string(300, '0') + "1e301"}) {
+        for (const bool negative : {false, true}) {
+            const auto date = (negative ? "-" : "") + magnitude;
+            const auto token = signed_token_with_payload(secret, R"({"iat":)" + date + "}");
+            const auto payload_value = decode_jwt_unverified(token);
+            RUVIA_CHECK(payload_value.issued_at() != nullptr);
+            if (payload_value.issued_at()) {
+                const auto converted = payload_value.issued_at()->to_time_point();
+                RUVIA_CHECK(converted.has_value());
+                if (converted) {
+                    RUVIA_CHECK_EQ(*converted, clock_type::time_point(std::chrono::seconds(negative ? -1 : 1)));
+                }
+            }
+        }
+    }
+}
+
+RUVIA_TEST(jwt_numeric_date_conversion_preserves_host_endpoints_and_rejects_subticks) {
+    using clock_type = std::chrono::system_clock;
+    const auto places = host_tick_decimal_places();
+    const auto exponent = "e-" + std::to_string(places);
+    for (const auto expected : {clock_type::time_point::min(), clock_type::time_point::max(),
+             clock_type::time_point(clock_type::duration(-1)), clock_type::time_point(clock_type::duration(1))}) {
+        const auto date = std::to_string(expected.time_since_epoch().count()) + exponent;
+        const auto token = signed_token_with_payload(secret, R"({"iat":)" + date + "}");
+        const auto payload_value = decode_jwt_unverified(token);
+        RUVIA_CHECK(payload_value.issued_at() != nullptr);
+        if (payload_value.issued_at()) {
+            RUVIA_CHECK_EQ(payload_value.issued_at()->text(), date);
+            const auto converted = payload_value.issued_at()->to_time_point();
+            RUVIA_CHECK(converted.has_value());
+            if (converted) {
+                RUVIA_CHECK_EQ(*converted, expected);
+            }
+        }
+    }
+    const auto max_ticks = static_cast<std::uint64_t>(clock_type::time_point::max().time_since_epoch().count());
+    const auto min_magnitude = std::uint64_t{0} - static_cast<std::uint64_t>(clock_type::time_point::min().time_since_epoch().count());
+    for (const auto& date : {std::to_string(max_ticks + 1) + exponent,
+             "-" + std::to_string(min_magnitude + 1) + exponent,
+             "1e-" + std::to_string(places + 1), "-1e-" + std::to_string(places + 1)}) {
+        const auto token = signed_token_with_payload(secret, R"({"iat":)" + date + "}");
+        const auto payload_value = decode_jwt_unverified(token);
+        RUVIA_CHECK(payload_value.issued_at() != nullptr);
+        if (payload_value.issued_at()) {
+            RUVIA_CHECK_EQ(payload_value.issued_at()->text(), date);
+            RUVIA_CHECK(!payload_value.issued_at()->to_time_point().has_value());
+        }
+    }
+}
+
+RUVIA_TEST(jwt_signing_large_offsets_preserves_mathematical_seconds_without_saturation) {
+    using namespace std::chrono;
+    using clock_type = system_clock;
+    for (const auto offset : {seconds{2000000000000LL}, seconds::max()}) {
+        auto options = sign_options(secret);
+        options.expires_in_ = offset;
+        options.not_before_delay_ = offset;
+        const auto before = clock_type::now();
+        const auto token = sign(options);
+        const auto after = clock_type::now();
+        const auto payload_value = decode_jwt_unverified(token);
+        RUVIA_CHECK(payload_value.expires_at() != nullptr);
+        RUVIA_CHECK(payload_value.not_before() != nullptr);
+        RUVIA_CHECK(payload_value.issued_at() != nullptr);
+        const auto offset_seconds = static_cast<std::uint64_t>(offset.count());
+        const auto lower = static_cast<std::uint64_t>(ceil<seconds>(before.time_since_epoch()).count()) + offset_seconds;
+        const auto upper = static_cast<std::uint64_t>(ceil<seconds>(after.time_since_epoch()).count()) + offset_seconds;
+        for (const auto* date : {payload_value.expires_at(), payload_value.not_before()}) {
+            if (!date) {
+                continue;
+            }
+            // Parse the JSON integer independently, rather than going through
+            // the same host-clock conversion that previously saturated it.
+            std::uint64_t value = 0;
+            const auto text = date->text();
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+            RUVIA_CHECK(parsed.ec == std::errc{});
+            RUVIA_CHECK_EQ(parsed.ptr, text.data() + text.size());
+            RUVIA_CHECK(value >= lower);
+            RUVIA_CHECK(value <= upper);
+            RUVIA_CHECK(!date->to_time_point().has_value());
+        }
+        if (payload_value.issued_at()) {
+            const auto issued_at = payload_value.issued_at()->to_time_point();
+            RUVIA_CHECK(issued_at.has_value());
+            if (issued_at) {
+                RUVIA_CHECK(*issued_at >= floor<seconds>(before));
+                RUVIA_CHECK(*issued_at <= floor<seconds>(after));
+            }
+        }
+        RUVIA_CHECK(throws_jwt_error(
+            [&] { (void)verify_jwt(token, verify_options(secret)); }, jwt_error::code_type::not_yet_valid));
+        options.not_before_delay_ = std::nullopt;
+        const auto expiration_only = sign(options);
+        const auto verified = verify_jwt(expiration_only, verify_options(secret));
+        RUVIA_CHECK_EQ(verified.subject(), std::string_view("user-1"));
+    }
 }
 
 RUVIA_TEST(jwt_verify_rejects_expired_token) {

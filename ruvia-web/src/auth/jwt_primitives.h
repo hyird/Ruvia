@@ -4,9 +4,7 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <cstring>
 #include <memory_resource>
 #include <optional>
@@ -83,13 +81,10 @@ private:
 
 void jwt_append_json_member(
     jwt_json_buffer& out, bool& first, std::string_view name, std::string_view value);
-void jwt_append_json_member(
-    jwt_json_buffer& out, bool& first, std::string_view name, std::int64_t value);
+void jwt_append_json_numeric_date(
+    jwt_json_buffer& out, bool& first, std::string_view name, std::string_view value);
 void jwt_validate_jose_header(std::string_view json,
     std::optional<std::string_view> expected_algorithm, std::pmr::memory_resource* resource);
-
-// Saturates at the system clock's range instead of overflowing its ticks.
-[[nodiscard]] std::chrono::system_clock::time_point jwt_from_epoch_seconds(std::int64_t value);
 
 struct jwt_payload_access final {
     [[nodiscard]] static jwt_claim claim(std::pmr::string name, std::pmr::string value) noexcept {

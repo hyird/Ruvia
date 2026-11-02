@@ -1,9 +1,5 @@
 #include <algorithm>
 #include <array>
-#include <charconv>
-#include <chrono>
-#include <cmath>
-#include <cstdint>
 #include <forward_list>
 #include <functional>
 #include <memory_resource>
@@ -15,14 +11,13 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/json/json_array_elements.h"
 #include "ruvia/web/detail/json/json_escape.h"
 #include "ruvia/web/detail/json/json_lex.h"
 #include "ruvia/web/detail/json/json_object_fields.h"
 #include "ruvia/web/detail/json/json_string.h"
-#include "ruvia/web/detail/util/decimal_number.h"
 
+#include "auth/jwt_date.h"
 #include "auth/jwt_primitives.h"
 
 namespace ruvia {
@@ -117,47 +112,14 @@ template <typename visitor_type, typename prepare_type = std::nullptr_t>
     return true;
 }
 
-[[nodiscard]] std::optional<std::chrono::system_clock::time_point> jwt_parse_json_numeric_date(
-    std::string_view value) {
+[[nodiscard]] std::optional<std::string_view> jwt_parse_json_numeric_date(std::string_view value) {
     skip_json_whitespace(value);
-    if (value.empty()) {
-        return std::nullopt;
+    while (!value.empty() &&
+           (value.back() == ' ' || value.back() == '\t' ||
+               value.back() == '\r' || value.back() == '\n')) {
+        value.remove_suffix(1);
     }
-
-    std::int64_t parsed_value = 0;
-    const auto [ptr, ec] = std::from_chars(value.data(), value.data() + value.size(), parsed_value);
-    if (ec == std::errc{}) {
-        auto remaining = value.substr(static_cast<std::size_t>(ptr - value.data()));
-        skip_json_whitespace(remaining);
-        if (remaining.empty()) {
-            return jwt_from_epoch_seconds(parsed_value);
-        }
-    }
-
-    auto fractional_text = value;
-    while (!fractional_text.empty() &&
-           (fractional_text.back() == ' ' || fractional_text.back() == '\t' ||
-               fractional_text.back() == '\r' || fractional_text.back() == '\n')) {
-        fractional_text.remove_suffix(1);
-    }
-    const auto parsed_fractional = detail::parse_decimal_number<long double>(fractional_text);
-    if (!parsed_fractional || !std::isfinite(*parsed_fractional)) {
-        return std::nullopt;
-    }
-
-    const auto fractional = *parsed_fractional;
-
-    using clock_type = std::chrono::system_clock;
-    const auto max_seconds = std::chrono::duration<long double>(clock_type::duration::max()).count();
-    const auto min_seconds = std::chrono::duration<long double>(clock_type::duration::min()).count();
-    if (fractional >= max_seconds) {
-        return clock_type::time_point::max();
-    }
-    if (fractional <= min_seconds) {
-        return clock_type::time_point::min();
-    }
-    return clock_type::time_point(std::chrono::duration_cast<clock_type::duration>(
-        std::chrono::duration<long double>(fractional)));
+    return jwt_is_numeric_date(value) ? std::optional(value) : std::nullopt;
 }
 
 [[nodiscard]] std::optional<std::pmr::string> jwt_decode_json_string_token(
@@ -192,20 +154,15 @@ void jwt_append_json_member(
     append_json_string<json_hex_case::lower>(out, value);
 }
 
-void jwt_append_json_member(
-    jwt_json_buffer& out, bool& first, std::string_view name, std::int64_t value) {
+void jwt_append_json_numeric_date(
+    jwt_json_buffer& out, bool& first, std::string_view name, std::string_view value) {
     if (!first) {
         out.push_back(',');
     }
     first = false;
     append_json_string<json_hex_case::lower>(out, name);
     out.push_back(':');
-    std::array<char, 32> buffer;
-    const auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if (ec != std::errc{}) {
-        throw std::logic_error("failed to format JWT numeric claim");
-    }
-    out.append(buffer.data(), static_cast<std::size_t>(ptr - buffer.data()));
+    out.append(value);
 }
 
 void jwt_validate_jose_header(std::string_view json,
@@ -371,21 +328,21 @@ bool detail::jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_v
         }
         if (key == "exp") {
             if (const auto exp = detail::jwt_parse_json_numeric_date(value)) {
-                payload_value.expires_at_ = *exp;
+                payload_value.expires_at_.emplace(jwt_numeric_date(*exp, resolved));
                 return true;
             }
             return false;
         }
         if (key == "nbf") {
             if (const auto nbf = detail::jwt_parse_json_numeric_date(value)) {
-                payload_value.not_before_ = *nbf;
+                payload_value.not_before_.emplace(jwt_numeric_date(*nbf, resolved));
                 return true;
             }
             return false;
         }
         if (key == "iat") {
             if (const auto iat = detail::jwt_parse_json_numeric_date(value)) {
-                payload_value.issued_at_ = *iat;
+                payload_value.issued_at_.emplace(jwt_numeric_date(*iat, resolved));
                 return true;
             }
             return false;

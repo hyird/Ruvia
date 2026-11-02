@@ -128,6 +128,27 @@ struct jwt_decode_unverified_options final {
     std::pmr::memory_resource* resource_{nullptr};
 };
 
+// JWT NumericDate 的精确十进制表示，不受宿主时钟范围或浮点精度限制。
+// 存储归所属 payload 的 PMR；资源必须覆盖结果及其析构。移动后源值为 0。
+class jwt_numeric_date final {
+public:
+    jwt_numeric_date(const jwt_numeric_date&) = delete;
+    jwt_numeric_date& operator=(const jwt_numeric_date&) = delete;
+    jwt_numeric_date(jwt_numeric_date&& other) noexcept;
+    jwt_numeric_date& operator=(jwt_numeric_date&&) = delete;
+
+    [[nodiscard]] std::string_view text() const& noexcept;
+    std::string_view text() const&& = delete;
+    // 仅在范围及小数精度都能被宿主时钟精确表示时转换；否则返回 nullopt。
+    // JWT 验证直接比较 NumericDate，不依赖此转换。
+    [[nodiscard]] std::optional<std::chrono::system_clock::time_point> to_time_point() const noexcept;
+
+private:
+    friend struct detail::jwt_payload_access;
+    jwt_numeric_date(std::string_view text, std::pmr::memory_resource* resource);
+    std::pmr::string text_;
+};
+
 class jwt_payload final {
 public:
     jwt_payload(const jwt_payload&) = delete;
@@ -145,9 +166,13 @@ public:
     [[nodiscard]] bool has_audience(std::string_view audience) const noexcept;
     [[nodiscard]] std::string_view id() const& noexcept;
     [[nodiscard]] std::string_view id() const&& = delete;
-    [[nodiscard]] std::optional<std::chrono::system_clock::time_point> expires_at() const noexcept;
-    [[nodiscard]] std::optional<std::chrono::system_clock::time_point> not_before() const noexcept;
-    [[nodiscard]] std::optional<std::chrono::system_clock::time_point> issued_at() const noexcept;
+    // nullptr 表示声明缺失。返回值及 text() 是借用，payload 移动或销毁前须结束使用。
+    [[nodiscard]] const jwt_numeric_date* expires_at() const& noexcept;
+    const jwt_numeric_date* expires_at() const&& = delete;
+    [[nodiscard]] const jwt_numeric_date* not_before() const& noexcept;
+    const jwt_numeric_date* not_before() const&& = delete;
+    [[nodiscard]] const jwt_numeric_date* issued_at() const& noexcept;
+    const jwt_numeric_date* issued_at() const&& = delete;
     // String-valued custom claims, decoded. A claim value may be any JSON
     // value (RFC 7519 §2) and unknown claims are ignored (§4): custom claims
     // holding numbers, booleans, null, arrays or objects are syntax- and
@@ -167,9 +192,9 @@ private:
     std::pmr::string subject_;
     std::pmr::vector<std::pmr::string> audiences_;
     std::pmr::string id_;
-    std::optional<std::chrono::system_clock::time_point> expires_at_;
-    std::optional<std::chrono::system_clock::time_point> not_before_;
-    std::optional<std::chrono::system_clock::time_point> issued_at_;
+    std::optional<jwt_numeric_date> expires_at_;
+    std::optional<jwt_numeric_date> not_before_;
+    std::optional<jwt_numeric_date> issued_at_;
     std::pmr::vector<jwt_claim> claims_;
 };
 
