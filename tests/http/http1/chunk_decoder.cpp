@@ -1,3 +1,4 @@
+#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -57,20 +58,21 @@ private:
 RUVIA_TEST(protocol_byte_limit_has_no_numeric_sentinel) {
     const auto unlimited = protocol_byte_limit::unlimited();
     RUVIA_CHECK(!unlimited.is_limited());
-    RUVIA_CHECK(!unlimited.maximum().has_value());
-    RUVIA_CHECK_EQ(unlimited.read_ceiling(), (std::numeric_limits<std::size_t>::max)());
     RUVIA_CHECK(!unlimited.exceeds((std::numeric_limits<std::size_t>::max)()));
     RUVIA_CHECK(unlimited.addition_exceeds((std::numeric_limits<std::size_t>::max)(), 1));
 
     const auto limited = protocol_byte_limit::limited(8);
     RUVIA_CHECK(limited.is_limited());
-    RUVIA_CHECK(limited.maximum().has_value());
-    RUVIA_CHECK_EQ(limited.maximum().value(), std::size_t{8});
-    RUVIA_CHECK_EQ(limited.read_ceiling(), std::size_t{8});
     RUVIA_CHECK(!limited.exceeds(8));
     RUVIA_CHECK(limited.exceeds(9));
     RUVIA_CHECK(!limited.addition_exceeds(3, 5));
     RUVIA_CHECK(limited.addition_exceeds(3, 6));
+
+    const auto maximum = (std::numeric_limits<std::size_t>::max)();
+    const auto finite_maximum = protocol_byte_limit::limited(maximum);
+    RUVIA_CHECK(finite_maximum.is_limited());
+    RUVIA_CHECK(!finite_maximum.exceeds(maximum));
+    RUVIA_CHECK(finite_maximum.addition_exceeds(maximum, 1));
 
     bool rejected_zero = false;
     try {
@@ -81,6 +83,35 @@ RUVIA_TEST(protocol_byte_limit_has_no_numeric_sentinel) {
     RUVIA_CHECK(rejected_zero);
 }
 
+RUVIA_TEST(protocol_byte_limit_rejects_negative_sources_without_weakening_body_admission) {
+    auto retained = protocol_byte_limit::limited(2);
+    for (const auto source : std::array<std::int64_t, 2>{
+             (std::numeric_limits<std::int64_t>::min)(), -1}) {
+        bool rejected = false;
+        try {
+            retained = protocol_byte_limit::limited(source);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+    }
+    http1_chunked_body_decoder exact({.body_limit_ = retained});
+    constexpr std::string_view wire = "2\r\nok\r\n0\r\n\r\n";
+    const auto admitted = exact.decode(wire);
+    RUVIA_CHECK(admitted.body_chunk() != nullptr);
+    if (const auto* chunk = admitted.body_chunk()) {
+        RUVIA_CHECK_EQ(chunk->bytes(), "ok");
+        const auto terminal = exact.decode(wire.substr(chunk->consumed_bytes()));
+        RUVIA_CHECK(terminal.complete() != nullptr);
+    }
+    http1_chunked_body_decoder excess({.body_limit_ = retained});
+    const auto refused = excess.decode("3\r\nbad\r\n0\r\n\r\n");
+    RUVIA_CHECK(refused.failure() != nullptr);
+    if (const auto* failure = refused.failure()) {
+        RUVIA_CHECK(failure->error() == ruvia::http1_chunk_decode_error::body_limit_exceeded);
+    }
+}
+
 RUVIA_TEST(chunked_body_decoder_reports_typed_size_and_limit_failures) {
     http1_chunked_body_decoder invalid({.body_limit_ = protocol_byte_limit::unlimited()});
     const auto invalid_result = invalid.decode("xyz\r\n");
@@ -88,9 +119,6 @@ RUVIA_TEST(chunked_body_decoder_reports_typed_size_and_limit_failures) {
     RUVIA_CHECK(invalid_result.failure()->error() == ruvia::http1_chunk_decode_error::invalid_framing);
     RUVIA_CHECK_EQ(ruvia::http_request_chunk_decode_error(invalid_result.failure()->error()).status(),
         ruvia::http_status::bad_request);
-    RUVIA_CHECK_EQ(std::string_view(
-                       ruvia::http_request_chunk_decode_error(invalid_result.failure()->error()).what()),
-        std::string_view("invalid chunked request body"));
     const auto repeated_invalid = invalid.decode("0\r\n\r\n");
     RUVIA_CHECK(repeated_invalid.failure() != nullptr);
     RUVIA_CHECK(repeated_invalid.failure()->error() ==

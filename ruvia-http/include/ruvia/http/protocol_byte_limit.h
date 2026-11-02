@@ -1,9 +1,11 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 namespace ruvia {
 
@@ -17,11 +19,14 @@ public:
         return protocol_byte_limit();
     }
 
-    [[nodiscard]] static protocol_byte_limit limited(std::size_t bytes_value) {
-        if (bytes_value == 0) {
-            throw std::invalid_argument("protocol byte limit must be greater than zero");
+    // Validate the original integer before converting to the stored size.
+    // Negative inputs must not become effectively unbounded positive ceilings.
+    template <std::integral integer_type>
+    [[nodiscard]] static protocol_byte_limit limited(integer_type bytes_value) {
+        if (!std::in_range<std::size_t>(+bytes_value) || +bytes_value == 0) {
+            throw std::invalid_argument("protocol byte limit must be positive and representable");
         }
-        return protocol_byte_limit(bytes_value);
+        return protocol_byte_limit(static_cast<std::size_t>(bytes_value));
     }
 
     [[nodiscard]] bool is_limited() const noexcept {
