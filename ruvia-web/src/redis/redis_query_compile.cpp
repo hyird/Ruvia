@@ -121,9 +121,9 @@ void validate_entity_prefix(std::string_view entity_prefix, std::string_view tab
     }
 }
 
-// Bound text is the write encoding (encode_redis_number) of the value in the
-// column's type, so it parses to exactly the double RediSearch indexed for
-// that stored value: a float32 0.1 is written and bounded as "0.100000001".
+// Bound text shares encode_redis_number with entity writes and never narrows a
+// literal. A float operand keeps float's encoding for a float32 column and is
+// widened for other numeric columns; double operands always keep their width.
 // The optional exclusive marker '(' precedes the number in the same buffer.
 using redis_numeric_bound_buffer = std::array<char, redis_scalar_scratch_size + 1>;
 
@@ -140,12 +140,18 @@ using redis_numeric_bound_buffer = std::array<char, redis_scalar_scratch_size + 
             require_redis_exact_number(static_cast<double>(value.unsigned_value()));
             number = encode_redis_number(value.unsigned_value(), scratch);
             break;
+        case redis_literal_kind::float32: {
+            const float real = value.float32_value();
+            require_redis_exact_number(real);
+            number = column_kind == redis_column_kind::float32
+                         ? encode_redis_number(real, scratch)
+                         : encode_redis_number(static_cast<double>(real), scratch);
+            break;
+        }
         case redis_literal_kind::real: {
             const double real = value.real_value();
             require_redis_exact_number(real);
-            number = column_kind == redis_column_kind::float32
-                         ? encode_redis_number(static_cast<float>(real), scratch)
-                         : encode_redis_number(real, scratch);
+            number = encode_redis_number(real, scratch);
             break;
         }
         default:
@@ -194,8 +200,11 @@ using redis_numeric_bound_buffer = std::array<char, redis_scalar_scratch_size + 
                 throw std::invalid_argument("Redis integer primary key is invalid");
             }
             return encode_redis_number(value.unsigned_value(), scratch);
+        case redis_literal_kind::float32:
         case redis_literal_kind::real: {
-            const double number = value.real_value();
+            const double number = value.kind() == redis_literal_kind::float32
+                                      ? static_cast<double>(value.float32_value())
+                                      : value.real_value();
             if (!std::isfinite(number) || std::trunc(number) != number ||
                 std::fabs(number) > redis_max_exact_integer ||
                 (column_kind == redis_column_kind::unsigned_value && number < 0.0)) {

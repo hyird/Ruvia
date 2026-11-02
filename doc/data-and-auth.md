@@ -157,6 +157,7 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 - **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`（Upsert；MariaDB 仅支持 `.any_unique_key_` 的 `ON DUPLICATE KEY UPDATE`，`excluded(col)` 编译为 `VALUES(col)`）、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
 - **表达式**：`column`、`value`、`excluded`、`call`、`coalesce`、`null_if`、`greatest`、`least`、`case_when`、`cast`、`aggregate`、`filter`、`over`（窗口函数）、`exists`、`subquery`。
+- **写入分类**：`has_writes()` 只依据当前语句及仍有效的 CTE / 集合操作；被替换的来源和未发布的失败追加快照不计入。含写入 CTE 的集合操作不能作为 `from`、`join`、表达式子查询或 `insert_from` 的只读来源；入口拒绝时不挂入该子查询，写入须保留在顶层 CTE。
 
 ### 2.2 `ruvia::db_schema` 与 `ruvia::db_procedure`
 
@@ -414,6 +415,8 @@ auto rows = co_await repo.find({
 ```
 
 ORM 写入和删除先按脚本摘要执行；收到 `NOSCRIPT` 后释放该错误回复，再以脚本正文重试。两次执行共享同一操作超时与取消边界。
+
+NUMERIC 谓词保留输入精度，不再把 double 边界先窄化成 float32 列类型；比较、`between`、`in` / `not_in` 共用该规则。`0.1f` 与 float 字段写入使用同一 float 十进制编码，向其他数值列比较时只提升为 double；`0.1` 则始终保留 double 编码，两者可能不同。索引比较的对象仍是 RediSearch 解析 HASH 十进制文本得到的 double，而非未序列化的宿主浮点位模式。原先依赖 double 自动舍入至列类型的调用方须显式传入 float；窄列不能吞掉 `16777216.5` 等更宽的范围边界。
 
 ---
 

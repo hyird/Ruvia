@@ -42,6 +42,9 @@ struct redis_predicate_access;
 // the filter is built, so the filter may outlive the strings used to build it.
 // Compilers normalize their output into the destination worker pool before
 // returning an operation.
+// NUMERIC predicates retain literal precision: float operands keep float's
+// stored encoding for float32 columns and widen for other numeric columns;
+// double operands never narrow. Cast explicitly when float rounding is intended.
 class redis_predicate final {
 public:
     redis_predicate() noexcept = default;

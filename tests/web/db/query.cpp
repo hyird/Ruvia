@@ -824,6 +824,80 @@ RUVIA_TEST(db_query_data_modifications_require_top_level_or_cte_placement) {
     RUVIA_CHECK(testing::throws_on([&] { (void)nested.compile(db_driver::postgresql, nullptr); }));
 }
 
+RUVIA_TEST(db_query_set_operands_cannot_hide_write_ctes_from_subquery_admission) {
+    db_query removed;
+    removed.delete_from("device").returning({removed.column("id")});
+    db_query branch;
+    branch.select(branch.value(1)).with("removed", removed);
+    db_query combined;
+    combined.select(combined.value(0)).combine(db_set_operation::union_all, branch);
+    RUVIA_CHECK(combined.has_writes());
+    RUVIA_CHECK(combined.clone(nullptr).has_writes());
+    db_query moved(std::move(combined));
+    RUVIA_CHECK(moved.has_writes());
+    for (unsigned operation = 0; operation != 4; ++operation) {
+        db_query outer;
+        outer.select(outer.value(7)).from("retained");
+        bool rejected = false;
+        try {
+            switch (operation) {
+                case 0:
+                    outer.from(moved, "hidden");
+                    break;
+                case 1:
+                    (void)outer.subquery(moved);
+                    break;
+                case 2:
+                    outer.join(db_join_type::cross, moved, {}, "hidden");
+                    break;
+                case 3:
+                    outer.insert_into("archive", {"id"}).insert_from(moved);
+                    break;
+            }
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        if (operation != 3) {
+            RUVIA_CHECK(!outer.has_writes());
+            const auto statement = outer.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(statement.sql(), "SELECT 7 FROM \"retained\"");
+        }
+    }
+}
+
+RUVIA_TEST(db_query_failed_cte_append_does_not_publish_a_write_classification) {
+    db_query removed;
+    removed.delete_from("device").returning({removed.column("id")});
+    bool succeeded = false;
+    bool failed = false;
+    for (std::size_t fail_after = 0; fail_after != 64 && !succeeded; ++fail_after) {
+        failing_memory_resource resource;
+        {
+            db_query query(&resource);
+            query.select(query.value(7));
+            resource.fail_after(fail_after);
+            try {
+                query.with("removed", removed);
+                succeeded = true;
+            } catch (const std::bad_alloc&) {
+                failed = true;
+                resource.allow_allocations();
+                RUVIA_CHECK(!query.has_writes());
+                const auto unchanged = query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                RUVIA_CHECK_EQ(unchanged.sql(), "SELECT 7");
+                query.with("removed", removed);
+            }
+            resource.allow_allocations();
+            RUVIA_CHECK(query.has_writes());
+            const auto statement = query.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+            RUVIA_CHECK_EQ(statement.sql(), "WITH \"removed\" AS (DELETE FROM \"device\" RETURNING \"id\") SELECT 7");
+        }
+        RUVIA_CHECK_EQ(resource.live_allocations(), std::size_t{0});
+    }
+    RUVIA_CHECK(failed && succeeded);
+}
+
 RUVIA_TEST(db_predicate_composes_typed_fields_and_literal_parameters) {
     std::string name(150, 'a');
     auto condition = (entity_type::column<"id">() >= 7) && (entity_type::column<"name">() == name);

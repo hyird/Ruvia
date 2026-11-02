@@ -1101,6 +1101,8 @@ public:
     [[nodiscard]] db_query clone(std::pmr::memory_resource* resource) const;
     [[nodiscard]] bool returns_rows() const;
     [[nodiscard]] bool has_where() const;
+    // Classifies the current statement and its active CTE/set-operation graph,
+    // never snapshots retained after a source replacement or failed append.
     [[nodiscard]] bool has_writes() const;
     [[nodiscard]] bool has_grouping() const;
     db_query& cache(const db_cache_setting_type& setting);

@@ -31,13 +31,14 @@ enum class redis_literal_kind : std::uint8_t { null,
     string,
     signed_integer,
     unsigned_integer,
+    float32,
     real,
     boolean };
 
 // Literals own their text immediately. Only Redis scalar values are accepted;
 // SQL expressions, statements and backend parameter types cannot enter this AST.
 class redis_literal final {
-    using storage_type = std::variant<std::monostate, std::pmr::string, std::int64_t, std::uint64_t, double, bool>;
+    using storage_type = std::variant<std::monostate, std::pmr::string, std::int64_t, std::uint64_t, float, double, bool>;
 
 public:
     explicit redis_literal(std::pmr::memory_resource*) noexcept {}
@@ -61,8 +62,13 @@ public:
     }
     template <typename value_type>
         requires std::is_floating_point_v<value_type>
-    redis_literal(value_type value, std::pmr::memory_resource*)
-        : storage_(static_cast<double>(value)) {}
+    redis_literal(value_type value, std::pmr::memory_resource*) {
+        if constexpr (std::is_same_v<value_type, float>) {
+            storage_.emplace<float>(value);
+        } else {
+            storage_.emplace<double>(static_cast<double>(value));
+        }
+    }
     redis_literal(const string& value, std::pmr::memory_resource* resource)
         : redis_literal(value.view(), resource) {}
     redis_literal(redis_literal&&) noexcept = default;
@@ -91,6 +97,9 @@ public:
     }
     std::uint64_t unsigned_value() const noexcept {
         return std::get<std::uint64_t>(storage_);
+    }
+    float float32_value() const noexcept {
+        return std::get<float>(storage_);
     }
     double real_value() const noexcept {
         return std::get<double>(storage_);

@@ -1257,17 +1257,18 @@ bool db_query::returns_rows() const {
     return storage().returns_rows();
 }
 void db_query::require_select_query() const {
-    if (storage().kind_ != db_query_kind::select && storage().kind_ != db_query_kind::values) {
+    if (has_writes()) {
         throw std::invalid_argument("subqueries require SELECT or VALUES; use a CTE for DML RETURNING");
-    }
-    for (const auto& cte : storage().ctes_) {
-        storage().queries_.at(cte.query_).require_select_query();
     }
 }
 bool db_query::has_writes() const {
     const auto& s = storage();
+    // Every source/expression subquery passes require_select_query(). Only
+    // active CTEs and set operands can carry writes; queries_ also owns retired
+    // sources and incomplete appends, which must not classify the current SQL.
     return (s.kind_ != db_query_kind::select && s.kind_ != db_query_kind::values) ||
-           std::ranges::any_of(s.queries_, [](const auto& query) { return query.has_writes(); });
+           std::ranges::any_of(s.ctes_, [&](const auto& cte) { return s.queries_.at(cte.query_).has_writes(); }) ||
+           std::ranges::any_of(s.set_operations_, [&](const auto& operand) { return s.queries_.at(operand.query_).has_writes(); });
 }
 bool db_query::has_where() const {
     return storage().predicate_ != no_db_node;

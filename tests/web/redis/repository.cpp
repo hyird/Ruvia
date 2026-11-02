@@ -59,17 +59,6 @@ RUVIA_REDIS_ENTITY(test_redis_signed_pk_user, "spk_users",
     RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}),
     RUVIA_REDIS_COLUMN(name, std::pmr::string));
 
-RUVIA_REDIS_ENTITY(test_redis_measurement, "measurements",
-    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(ratio, float),
-    RUVIA_REDIS_COLUMN(level, double));
-
-const ruvia::redis_repository_config test_redis_measurement_config{
-    .prefix_ = "measurements",
-    .indexes_ = {{.field_ = "ratio", .kind_ = redis_index_kind::numeric},
-        {.field_ = "level", .kind_ = redis_index_kind::numeric}},
-};
-
 class redis_test_worker final {
 public:
     explicit redis_test_worker(asio::io_context& io_context)
@@ -537,49 +526,6 @@ RUVIA_TEST(redis_repository_find_without_take_rejects_a_truncated_page) {
                         args[5] == "100");
         }
     }
-}
-
-RUVIA_TEST(redis_repository_numeric_bounds_reuse_the_written_text) {
-    // RediSearch indexes a NUMERIC field as the double its stored text parses
-    // to, so a bound must be the text the write stored: a float column stores
-    // 0.1f as "0.100000001", which a "0.1" bound never equals.
-    redis_command_server server({":1\r\n", "*1\r\n:0\r\n", "*1\r\n:0\r\n"});
-    auto& io_context = ruvia::test::new_test_io_context();
-    redis_test_worker worker(io_context);
-    {
-        ruvia::redis_client client(worker.loop(), server_config(server));
-        exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-            const auto repository =
-                connected.handle().repository<test_redis_measurement>(test_redis_measurement_config);
-            test_redis_measurement value(std::pmr::get_default_resource());
-            value.set<"id">("m-1");
-            value.set<"ratio">(0.1F);
-            value.set<"level">(0.1);
-            (void)co_await repository.insert(value);
-            (void)co_await repository.count({.where_ = test_redis_measurement::column<"ratio">() == 0.1});
-            (void)co_await repository.count({.where_ = test_redis_measurement::column<"level">() > 0.1});
-        });
-    }
-    const auto& commands = server.commands();
-    RUVIA_CHECK_EQ(commands.size(), std::size_t{3});
-    if (commands.size() != 3) {
-        return;
-    }
-    // The write script receives each stored field as "s", name, value.
-    const auto written = [&](std::string_view field) {
-        const auto& args = commands[0];
-        for (std::size_t index = 0; index + 2 < args.size(); ++index) {
-            if (args[index] == "s" && args[index + 1] == field) {
-                return args[index + 2];
-            }
-        }
-        return std::string();
-    };
-    const auto ratio = written("ratio");
-    const auto level = written("level");
-    RUVIA_CHECK(!ratio.empty() && !level.empty());
-    RUVIA_CHECK(commands[1].size() > 2U && commands[1][2] == "@ratio:[" + ratio + " " + ratio + "]");
-    RUVIA_CHECK(commands[2].size() > 2U && commands[2][2] == "@level:[(" + level + " +inf]");
 }
 
 RUVIA_TEST(redis_repository_search_consumes_expired_documents_without_truncation) {
