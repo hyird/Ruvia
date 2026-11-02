@@ -121,9 +121,10 @@ private:
 // unrecorded, to be retried on the next run: write MariaDB migrations to be
 // re-applicable -- CREATE TABLE IF NOT EXISTS and friends -- or guard them.
 //
-// The text of every applied migration is recorded as a digest. Editing one that
-// has already run is reported instead of silently skipped, because the edit
-// would otherwise reach only machines that had not migrated yet.
+// Every applied migration must have a recorded SHA-256 digest matching its SQL.
+// Missing columns, NULL/empty digests and mismatches are rejected, never adopted
+// from the current source. Upgrade legacy history only after independently
+// verifying the SQL actually applied; then record that SQL's digest explicitly.
 //
 // db_config's timeouts apply here as they do on a worker: without connect_timeout
 // or query_timeout_ a stalled backend blocks startup indefinitely.

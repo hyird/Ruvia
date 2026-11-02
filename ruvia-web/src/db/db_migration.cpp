@@ -102,28 +102,16 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
     // The CHECK is deliberately unnamed: MySQL scopes CHECK constraint names to
     // the schema, so a fixed name would collide the moment a second migration
     // table is created in one database.
-    sql.append(" checksum CHAR(64), CHECK (migration_id <> ''))");
+    sql.append(" checksum CHAR(64) NOT NULL, CHECK (migration_id <> ''))");
     return sql;
 }
 
-// Tables created before migrations were checksummed have no column for one.
-// Asking the catalogue is the portable way to find out: ALTER TABLE ... ADD
-// COLUMN IF NOT EXISTS is a MariaDB and PostgreSQL extension that MySQL does
-// not accept, and running an unguarded ALTER would fail on every later run.
+// Verify existing history even for an empty migration list. A missing digest
+// column cannot be reconstructed from today's SQL without inventing history.
 [[nodiscard]] constexpr std::string_view checksum_column_probe_sql(db_driver driver) noexcept {
     return driver == db_driver::postgresql
                ? "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = $1 AND column_name = 'checksum'"
                : "SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = 'checksum'";
-}
-
-[[nodiscard]] std::pmr::string build_add_checksum_column_sql(
-    std::string_view table_value, db_driver driver, std::pmr::memory_resource* resource) {
-    std::pmr::string sql(resource);
-    sql.reserve(table_value.size() + 48);
-    sql.append("ALTER TABLE ");
-    detail::append_db_identifier(sql, table_value, driver);
-    sql.append(" ADD COLUMN checksum CHAR(64)");
-    return sql;
 }
 
 [[nodiscard]] std::pmr::string build_find_migration_sql(
@@ -148,20 +136,6 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
     return sql;
 }
 
-// A row written before checksums were recorded carries none. Adopting the
-// current text as that row's baseline is the only choice available -- whatever
-// ran back then is unknowable -- and it means the next edit is caught.
-[[nodiscard]] std::pmr::string build_adopt_checksum_sql(
-    std::string_view table_value, db_driver driver, std::pmr::memory_resource* resource) {
-    std::pmr::string sql(resource);
-    sql.reserve(table_value.size() + 72);
-    sql.append("UPDATE ");
-    detail::append_db_identifier(sql, table_value, driver);
-    sql.append(driver == db_driver::postgresql ? " SET checksum = $1 WHERE migration_id = $2"
-                                               : " SET checksum = ? WHERE migration_id = ?");
-    return sql;
-}
-
 void append_migration_id(std::pmr::vector<std::pmr::string>& ids, std::string_view id) {
     ids.emplace_back();
     ids.back().assign(id.data(), id.size());
@@ -171,7 +145,7 @@ void append_migration_id(std::pmr::vector<std::pmr::string>& ids, std::string_vi
     std::string_view id, std::pmr::memory_resource* resource) {
     constexpr std::string_view prefix = "database migration '";
     constexpr std::string_view suffix =
-        "' was edited after it was applied; its recorded checksum no longer matches";
+        "' cannot be verified; its recorded checksum is missing or does not match";
     std::pmr::string message(resource);
     message.reserve(prefix.size() + id.size() + suffix.size());
     message.append(prefix);
@@ -315,11 +289,7 @@ private:
 
         std::array<db_value, 1> table_params{db_value{std::string_view(options.table_)}};
         if ((co_await handle.query(checksum_column_probe_sql(driver), std::span<const db_value>(table_params))).empty()) {
-            auto add_column = [&] {
-                const auto sql = build_add_checksum_column_sql(options.table_, driver, resource);
-                return handle.execute(sql);
-            }();
-            (void)co_await std::move(add_column);
+            throw std::runtime_error("database migration history has no checksum column");
         }
         if (migrations.empty()) {
             co_return;
@@ -327,26 +297,13 @@ private:
 
         auto find_sql = build_find_migration_sql(options.table_, driver, resource);
         auto insert_sql = build_insert_migration_sql(options.table_, driver, resource);
-        std::optional<std::pmr::string> adopt_sql;
         for (const auto& migration : migrations) {
             const auto checksum = detail::migration_checksum(migration.sql(), resource);
             std::array<db_value, 1> find_params{db_value{migration.id()}};
             auto existing = co_await handle.query(find_sql, std::span<const db_value>(find_params));
             if (!existing.empty()) {
                 const auto value = existing[0][0].value();
-                const bool adopt = !value || value->empty();
-                const bool drift = !adopt && *value != std::string_view(checksum);
-                {
-                    const auto discarded = std::move(existing);
-                }
-                if (adopt) {
-                    if (!adopt_sql.has_value()) {
-                        adopt_sql.emplace(build_adopt_checksum_sql(options.table_, driver, resource));
-                    }
-                    std::array<db_value, 2> adopt_params{
-                        db_value{std::string_view(checksum)}, db_value{migration.id()}};
-                    (void)co_await handle.execute(*adopt_sql, std::span<const db_value>(adopt_params));
-                } else if (drift) {
+                if (!value || *value != std::string_view(checksum)) {
                     throw migration_drift(migration.id(), resource);
                 }
                 append_migration_id(report.skipped_, migration.id());

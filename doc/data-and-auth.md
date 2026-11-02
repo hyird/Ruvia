@@ -139,6 +139,8 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 // report.applied(), report.skipped(), report.changed()
 ```
 
+迁移历史必须保留原始 SQL 的 SHA-256 摘要。摘要列缺失、对应记录的摘要为 `NULL` / 空值或与正文不符时均拒绝继续，不再自动建列或把当前正文补记为已执行历史；空迁移列表也要求已有历史表包含摘要列。旧表升级前须独立核实实际执行过的 SQL，再显式补齐其摘要，不能直接采信当前源码。新表的 `checksum` 列为 `NOT NULL`；历史校验失败不改写既有记录，修复历史后可重新运行。
+
 ---
 
 ## 2. SQL 构建器、Schema DDL 与存储过程

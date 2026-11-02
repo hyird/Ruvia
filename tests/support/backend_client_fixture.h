@@ -70,6 +70,8 @@ public:
         std::string column_{"v"};
         std::uint32_t type_{25};
         std::vector<std::string> rows_;
+        // Marks NULL fields in the single-column rows_ representation.
+        std::vector<bool> null_rows_;
         std::string command_{"SELECT 1"};
         char status_{'I'};
         bool deferred_{false};
@@ -604,11 +606,16 @@ private:
                         message(response, reply.copy_ == postgres_copy_direction::input ? 'G' : 'H', copy);
                         return;
                     }
-                    for (const auto& value : reply.rows_) {
+                    for (std::size_t index = 0; index < reply.rows_.size(); ++index) {
+                        const bool null = index < reply.null_rows_.size() && reply.null_rows_[index];
+                        const auto& value = reply.rows_[index];
                         std::string row;
                         append_short(row, 1);
-                        append_integer(row, static_cast<std::uint32_t>(value.size()));
-                        row.append(value);
+                        append_integer(row, null ? std::numeric_limits<std::uint32_t>::max()
+                                                 : static_cast<std::uint32_t>(value.size()));
+                        if (!null) {
+                            row.append(value);
+                        }
                         message(response, 'D', row);
                         if (!complete) {
                             return;
