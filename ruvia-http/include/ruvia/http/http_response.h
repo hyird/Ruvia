@@ -446,6 +446,9 @@ public:
     // 标记随移动转移；重新设置正文会清除它，不影响 GET 等方法的正文规则。
     void head_metadata_body() noexcept;
     [[nodiscard]] bool has_head_metadata_body() const noexcept;
+    // File segments retain their path and identity even when their length is
+    // zero. Empty byte bodies have no segments; multipart bodies retain their
+    // planned sequence of file ranges and boundary bytes.
     [[nodiscard]] std::size_t body_segment_count() const noexcept;
     [[nodiscard]] http_response_body_segment_view body_segment(std::size_t index) const& RUVIA_LIFETIMEBOUND;
     http_response_body_segment_view body_segment(std::size_t index) const&& = delete;

@@ -122,9 +122,6 @@ RUVIA_TEST(csrf_token_is_48_lowercase_hex_chars) {
 }
 
 RUVIA_TEST(csrf_custom_names_validate_at_construction) {
-    RUVIA_CHECK(!throws_invalid([] {
-        (void)ruvia::csrf_protection({.cookie_name_ = "APP-XSRF", .header_name_ = "X-APP-XSRF"});
-    }));
     RUVIA_CHECK(throws_invalid(
         [] { (void)ruvia::csrf_protection({.cookie_name_ = "", .header_name_ = "X-XSRF-TOKEN"}); }));
     RUVIA_CHECK(throws_invalid([] {
@@ -133,6 +130,35 @@ RUVIA_TEST(csrf_custom_names_validate_at_construction) {
     RUVIA_CHECK(throws_invalid([] {
         (void)ruvia::csrf_protection({.cookie_name_ = "XSRF-TOKEN", .header_name_ = "Bad Header"});
     }));
+}
+
+RUVIA_TEST(csrf_rejects_safelisted_and_ambient_token_fields) {
+    for (const std::string_view name : {"Accept", "aCcEpT-LaNgUaGe", "Content-Language",
+             "CONTENT-TYPE", "Range", "Origin", "Host", "Content-Length", "Cookie",
+             "uSeR-aGeNt", "Sec-Fetch-Site", "sEc-Ch-Ua", "Proxy-Authorization",
+             "Access-Control-Request-Headers", "X-Forwarded-For", "Forwarded",
+             "X-Real-IP", "Save-Data", "DPR", "X-Requested-With"}) {
+        RUVIA_CHECK(throws_invalid([name] {
+            (void)ruvia::csrf_protection({.header_name_ = std::string(name)});
+        }));
+    }
+}
+
+RUVIA_TEST(csrf_custom_token_fields_preserve_issue_and_validation_round_trip) {
+    for (const std::string_view name : {"X-App-Csrf", "Csrf-Token", "Security-Token"}) {
+        ruvia::csrf_protection csrf({.cookie_name_ = "APP-XSRF", .header_name_ = std::string(name)});
+        const auto issued = run_csrf(csrf, "APP-XSRF", name, http_known_method::get, false, {}, false, {});
+        RUVIA_CHECK(issued.accepted_);
+        RUVIA_CHECK(issued.reseeded_);
+        const auto start = issued.set_cookie_.find('=') + 1;
+        const auto token = issued.set_cookie_.substr(start, issued.set_cookie_.find(';', start) - start);
+        const auto accepted = run_csrf(csrf, "APP-XSRF", name, http_known_method::post, true, token, true, token);
+        RUVIA_CHECK(accepted.accepted_);
+        const auto missing = run_csrf(csrf, "APP-XSRF", name, http_known_method::post, true, token, false, {});
+        RUVIA_CHECK_EQ(missing.status_, std::uint16_t{403});
+        const auto mismatched = run_csrf(csrf, "APP-XSRF", name, http_known_method::post, true, token, true, "different");
+        RUVIA_CHECK_EQ(mismatched.status_, std::uint16_t{403});
+    }
 }
 
 RUVIA_TEST(csrf_middleware_owns_custom_names_after_source_destruction) {

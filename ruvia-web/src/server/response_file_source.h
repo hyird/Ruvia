@@ -30,7 +30,8 @@
 //
 // Every file range is re-validated against its snapshot identity on the read
 // that completes it, so the final bytes of a range are never released for a
-// file that changed while being sent.
+// file that changed while being sent. Empty ranges use the same I/O path to
+// validate before the head is committed, without allocating a read buffer.
 
 namespace ruvia::detail {
 

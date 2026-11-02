@@ -53,7 +53,7 @@ std::size_t http_response::body_segment_count() const noexcept {
     if (const auto* multipart = body.multipart_body()) {
         return multipart->segment_count();
     }
-    return body.size() == 0 ? 0 : 1;
+    return body.file().has_value() || body.size() != 0 ? 1 : 0;
 }
 
 http_response_body_segment_view http_response::body_segment(std::size_t index) const& {

@@ -3,7 +3,9 @@
 #include <array>
 #include <cstddef>
 #include <stdexcept>
+#include <string_view>
 
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/context.h"
@@ -28,12 +30,47 @@ std::string_view generate_secure_token(std::span<char, secure_token_size> buffer
 
 namespace ruvia {
 
+namespace {
+
+[[nodiscard]] bool is_csrf_token_header(std::string_view name) noexcept {
+    // Fetch §2.2.2: safelisted fields do not require a CORS preflight, while
+    // forbidden fields belong to the browser rather than the token submitter.
+    // https://fetch.spec.whatwg.org/#cors-safelisted-request-header
+    // https://fetch.spec.whatwg.org/#forbidden-request-header
+    for (const std::string_view prefix : {"sec-", "proxy-", "access-control-request-", "x-forwarded-"}) {
+        if (name.size() >= prefix.size() && http_ascii_equals_ignore_case(name.substr(0, prefix.size()), prefix)) {
+            return false;
+        }
+    }
+    for (const std::string_view reserved : {
+             "accept", "accept-language", "content-language", "content-type", "range",
+             "accept-charset", "accept-encoding", "connection", "content-length",
+             "cookie", "cookie2", "date", "dnt", "expect", "host", "keep-alive",
+             "origin", "permissions-policy", "referer", "set-cookie", "te",
+             "trailer", "transfer-encoding", "upgrade", "via",
+             // Also exclude known ambient browser/client-hint and proxy fields.
+             // This is our token-channel policy, not an extra Fetch prohibition.
+             "user-agent", "priority", "save-data", "device-memory", "dpr", "width",
+             "viewport-width", "downlink", "ect", "rtt", "forwarded", "x-real-ip",
+             "x-requested-with"}) {
+        if (http_ascii_equals_ignore_case(name, reserved)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
 const csrf_protection_config& csrf_protection::validate(const csrf_protection_config& source_value) {
     if (!is_valid_http_header_name(source_value.cookie_name_)) {
         throw std::invalid_argument("CSRF cookie name must be a valid HTTP token");
     }
     if (!is_valid_http_header_name(source_value.header_name_)) {
         throw std::invalid_argument("CSRF header name must be a valid HTTP field name");
+    }
+    if (!is_csrf_token_header(source_value.header_name_)) {
+        throw std::invalid_argument("CSRF token requires a script-supplied custom request field");
     }
     return source_value;
 }

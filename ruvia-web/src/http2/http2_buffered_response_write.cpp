@@ -1,6 +1,7 @@
 #include "http2/http2_buffered_response_write.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -77,6 +78,29 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
         co_return std::nullopt;
     }
 
+    std::optional<response_file_source> source;
+    auto chunk = response_body_chunk::end();
+    // Prefetch through the same reader that supplies the remaining body.
+    // Empty file segments validate here before HEADERS can end the stream;
+    // HEAD and status-suppressed bodies do not transfer a representation.
+    if (!write_plan.body_plan().body_suppressed() &&
+        (response.file_body() || response.has_multipart_file_body())) {
+        source.emplace(response, file_io_);
+        chunk = co_await source->next();
+        // The blocking read may have yielded while the peer closed its stream.
+        runtime = stream_runtimes_.find(stream_id);
+        signal = runtime != nullptr ? runtime->signal() : nullptr;
+        if (connection_.stream_aborted(stream_id) || (signal != nullptr && signal->terminated())) {
+            co_return std::nullopt;
+        }
+        if (chunk.kind() == response_body_chunk::kind_type::failed) {
+            submit_reset_no_throw(connection_, stream_id, http2_error_code::internal_error);
+            output_budget_.release_and_reconcile(stream_id, connection_);
+            wake_writer();
+            co_return std::nullopt;
+        }
+    }
+
     const auto head_result =
         connection_.submit_response_head(stream_id, response, std::move(write_plan));
     const auto* submitted_head = std::get_if<http_buffered_response_write_plan>(&head_result);
@@ -111,10 +135,8 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
         co_return committed_status;
     }
 
-    if (response.file_body() || response.has_multipart_file_body()) {
-        response_file_source source(response, file_io_);
+    if (source) {
         for (;;) {
-            const auto chunk = co_await source.next();
             if (chunk.kind() == response_body_chunk::kind_type::end) {
                 const auto ended = co_await write_data(stream_id, {}, http2_end_stream::end_stream);
                 if (ended != data_write_result_type::completed) {
@@ -139,6 +161,7 @@ task<std::optional<http_status_code>> http2_buffered_response_writer::write(
                     co_return fail_after_commit();
                 }
             }
+            chunk = co_await source->next();
         }
     }
 

@@ -110,7 +110,7 @@ void response_file_source::read_ahead(read_state& state, std::size_t bytes, bool
         }
     }
     const auto remaining = bytes - state.filled_;
-    if (!read_exact(input, state.buffer_.data() + state.filled_, remaining)) {
+    if (remaining != 0 && !read_exact(input, state.buffer_.data() + state.filled_, remaining)) {
         // The committed length can no longer be honoured.
         state.error_ = std::make_error_code(std::errc::io_error);
         return;
@@ -128,7 +128,7 @@ task<bool> response_file_source::fill(std::size_t bytes, bool completes_range) {
     }
     state_.filled_ = 0;
 #if defined(__linux__)
-    if (!state_.reopen_ && state_.input_) {
+    if (bytes != 0 && !state_.reopen_ && state_.input_) {
         state_.filled_ = state_.input_->read_cached(state_.position_, state_.buffer_.data(), bytes);
         state_.position_ += state_.filled_;
         state_.reposition_ = true;
@@ -184,9 +184,12 @@ task<response_body_chunk> response_file_source::next() {
         }
         const auto segment = response_.body_segment(next_segment_++);
         if (segment.file_) {
-            if (segment.file_->length() != 0) {
-                select_file(*segment.file_);
-                range_remaining_ = segment.file_->length();
+            select_file(*segment.file_);
+            range_remaining_ = segment.file_->length();
+            // Empty files still complete a range: validate their snapshot
+            // through the same owned I/O state before releasing the head.
+            if (range_remaining_ == 0 && !(co_await fill(0, true))) {
+                co_return response_body_chunk::failed();
             }
             continue;
         }

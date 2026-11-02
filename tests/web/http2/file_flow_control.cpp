@@ -5,6 +5,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <memory_resource>
 #include <random>
 #include <stdexcept>
@@ -22,6 +23,7 @@
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/static_files.h"
 
 #include "http_server_fixture.h"
 #include "test_harness.h"
@@ -36,11 +38,15 @@ std::filesystem::path& file_path() {
     return path;
 }
 
+std::unique_ptr<ruvia::static_root> empty_root;
+
 class file_routes final {
     RUVIA_ROUTES_BEGIN(file_routes)
     RUVIA_GET("/http2-file-flow-control", file);
     RUVIA_GET("/http2-file-mutated", mutated_file);
     RUVIA_GET("/http2-file-ok", ok_text);
+    RUVIA_GET("/http2-indexed-empty", indexed_empty);
+    RUVIA_GET("/http2-empty-mutated", mutated_empty);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> file(ruvia::context& context_value) {
@@ -65,6 +71,23 @@ class file_routes final {
             output << "x";
         }
         co_return response;
+    }
+
+    ruvia::task<ruvia::http_response> mutated_empty(ruvia::context& context_value) {
+        const auto path = std::filesystem::current_path() / "ruvia_http2_empty_file" / "body.bin";
+        {
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        }
+        auto response = context_value.file({.path_ = path});
+        {
+            std::ofstream output(path, std::ios::binary | std::ios::trunc);
+            output << "changed";
+        }
+        co_return response;
+    }
+
+    ruvia::task<ruvia::http_response> indexed_empty(ruvia::context& context_value) {
+        co_return context_value.static_file(*empty_root, {.relative_path_ = "body.bin"});
     }
 
     ruvia::task<ruvia::http_response> ok_text(ruvia::context& context_value) {
@@ -407,6 +430,145 @@ RUVIA_TEST(http2_failed_file_writes_release_output_budget_slots) {
     RUVIA_CHECK_EQ(resets_seen, std::size_t{5});
     RUVIA_CHECK_EQ(final_status, std::string("200"));
     RUVIA_CHECK_EQ(final_body, std::string("alive"));
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+RUVIA_TEST(http2_empty_file_validation_precedes_end_stream_headers) {
+    using namespace http2_file_flow_control_test;
+    const auto directory = std::filesystem::current_path() / "ruvia_http2_empty_file";
+    std::error_code ignored;
+    std::filesystem::remove_all(directory, ignored);
+    std::filesystem::create_directories(directory);
+    const auto path = directory / "body.bin";
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::http_server_fixture server(io);
+    std::exception_ptr failure;
+    bool expired = false;
+    auto run = [&]() -> ruvia::task<void> {
+        asio::ip::tcp::socket socket(io);
+        asio::steady_timer watchdog(io, std::chrono::seconds(5));
+        watchdog.async_wait([&](std::error_code error) {
+            if (!error) {
+                expired = true;
+                ruvia::close_socket(socket);
+            }
+        });
+        try {
+            const auto connected = co_await ruvia::async_asio([&](auto handler) {
+                socket.async_connect(server.endpoint(), std::move(handler));
+            });
+            if (connected.error_code()) {
+                throw std::system_error(connected.error_code());
+            }
+            const auto send_bytes = [&](std::string_view bytes) -> ruvia::task<void> {
+                const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                    asio::async_write(socket, asio::buffer(bytes), std::move(handler));
+                });
+                if (written.error_code()) {
+                    throw std::system_error(written.error_code());
+                }
+            };
+            std::pmr::unsynchronized_pool_resource resource;
+            ruvia::hpack_decoder decoder({.resource_ = &resource});
+            std::string preface(ruvia::http2_client_preface);
+            append_frame(preface, ruvia::http2_frame_type::settings, 0, 0, {});
+            co_await send_bytes(preface);
+            // Valid empty, changed, removed, changed after framing, then a
+            // healthy stream proves failed validation remains stream-local.
+            for (std::uint32_t stream_id = 1; stream_id <= 9; stream_id += 2) {
+                const bool indexed_invalid = stream_id == 3 || stream_id == 5;
+#if defined(__linux__)
+                const bool framing_invalid = stream_id == 7;
+#else
+                // c.file already owns the empty inline snapshot here.
+                const bool framing_invalid = false;
+#endif
+                if (stream_id <= 5) {
+                    {
+                        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+                    }
+                    empty_root = std::make_unique<ruvia::static_root>(directory,
+                        ruvia::static_root_options{
+                            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
+                        });
+                    if (stream_id == 3) {
+                        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+                        output << "changed";
+                    } else if (stream_id == 5) {
+                        RUVIA_CHECK(std::filesystem::remove(path));
+                    }
+                }
+                std::pmr::string block(&resource);
+                ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+                ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
+                ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
+                ruvia::hpack_encoder::encode_header(block, ":path",
+                    stream_id == 9 ? "/http2-file-ok" : stream_id == 7 ? "/http2-empty-mutated"
+                                                                       : "/http2-indexed-empty");
+                std::string request;
+                append_frame(request, ruvia::http2_frame_type::headers, 0x5, stream_id, block);
+                co_await send_bytes(request);
+                bool ended = false;
+                bool reset = false;
+                bool saw_head = false;
+                std::string status;
+                std::string body;
+                while (!ended && !reset) {
+                    const auto frame = co_await read_frame(socket);
+                    if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
+                        (frame.header_.flags_ & 0x1) == 0) {
+                        std::string ack;
+                        append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
+                        co_await send_bytes(ack);
+                    } else if (frame.header_.stream_id_ == stream_id) {
+                        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
+                            saw_head = true;
+                            (void)decoder.decode(frame.payload_, [&](std::string_view name, std::string_view value) {
+                                if (name == ":status") {
+                                    status = value;
+                                }
+                                return true;
+                            });
+                            ended = (frame.header_.flags_ & 0x1) != 0;
+                        } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
+                            body.append(frame.payload_);
+                            ended = (frame.header_.flags_ & 0x1) != 0;
+                        } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
+                            reset = true;
+                        }
+                    }
+                }
+                if (framing_invalid) {
+                    RUVIA_CHECK(reset);
+                    RUVIA_CHECK(!saw_head);
+                    RUVIA_CHECK(body.empty());
+                } else if (indexed_invalid) {
+                    RUVIA_CHECK(reset || ended);
+                    RUVIA_CHECK(!saw_head || status != "200");
+                } else {
+                    RUVIA_CHECK(ended);
+                    RUVIA_CHECK(!reset);
+                    RUVIA_CHECK_EQ(status, std::string("200"));
+                    RUVIA_CHECK_EQ(body, stream_id == 9 ? std::string("alive") : std::string{});
+                }
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        ruvia::close_socket(socket);
+        (void)watchdog.cancel();
+        server.finish();
+        attachment.stop();
+    };
+    auto operation = attachment.loop().start(run());
+    io.run();
+    operation.get();
+    empty_root.reset();
+    std::filesystem::remove_all(directory, ignored);
+    RUVIA_CHECK(!expired);
     if (failure) {
         std::rethrow_exception(failure);
     }

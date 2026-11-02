@@ -370,6 +370,43 @@ RUVIA_TEST(response_file_body_moves_leave_sources_empty_and_reusable) {
         RUVIA_CHECK_EQ(target.body_segment_count(), std::size_t{1}); });
 }
 
+RUVIA_TEST(empty_file_ranges_remain_segments_after_response_moves) {
+    const std::filesystem::path path("empty-response-file.bin");
+    const auto identity = ruvia::http_response_file_identity::checked({11, 22, 33, 44});
+    for (const std::uint64_t size : {0, 23}) {
+        check_response_body_moves(ruvia_ctx, [&](http_response& source) { source.file_body(path.native(), size, size, 0, identity); }, [&](const http_response& target) {
+            RUVIA_CHECK_EQ(target.body_segment_count(), std::size_t{1});
+            const auto segment = target.body_segment(0);
+            RUVIA_CHECK(segment.bytes_.empty());
+            RUVIA_CHECK(segment.file_.has_value());
+            if (segment.file_) {
+                RUVIA_CHECK(segment.file_->to_path() == path);
+                RUVIA_CHECK_EQ(segment.file_->size(), size);
+                RUVIA_CHECK_EQ(segment.file_->offset(), size);
+                RUVIA_CHECK_EQ(segment.file_->length(), std::uint64_t{0});
+                RUVIA_CHECK(segment.file_->identity() == identity);
+            }
+            RUVIA_CHECK_EQ(ruvia::plan_buffered_http_response_write(
+                               ruvia::http_known_method::get, target).content_length(),
+                std::uint64_t{0}); });
+    }
+}
+
+RUVIA_TEST(empty_byte_representations_have_no_segments) {
+    http_response response(std::pmr::new_delete_resource());
+    RUVIA_CHECK_EQ(response.body_segment_count(), std::size_t{0});
+    response.body("");
+    RUVIA_CHECK_EQ(response.body_segment_count(), std::size_t{0});
+    response.static_body("");
+    RUVIA_CHECK_EQ(response.body_segment_count(), std::size_t{0});
+    response.owned_body(std::pmr::string(response.memory_resource()));
+    RUVIA_CHECK_EQ(response.body_segment_count(), std::size_t{0});
+    response.file_bytes_body(std::pmr::string(response.memory_resource()));
+    RUVIA_CHECK_EQ(response.body_segment_count(), std::size_t{0});
+    response.head_metadata_body();
+    RUVIA_CHECK_EQ(response.body_segment_count(), std::size_t{0});
+}
+
 RUVIA_TEST(response_multipart_body_moves_leave_sources_empty_and_reusable) {
     const std::filesystem::path path("retained-multipart-response.bin");
     const auto identity = ruvia::http_response_file_identity::checked({55, 66, 77, 88});

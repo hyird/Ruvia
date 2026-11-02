@@ -251,6 +251,108 @@ RUVIA_TEST(pipelined_file_responses_arrive_complete_and_in_order) {
     fs::remove_all(transfer_dir(), ignored);
 }
 
+RUVIA_TEST(empty_file_responses_preserve_pipeline_framing) {
+    std::error_code ignored;
+    fs::remove_all(transfer_dir(), ignored);
+    fs::create_directories(transfer_dir());
+    write_file(transfer_dir() / "small.bin", "");
+    indexed_root = std::make_unique<ruvia::static_root>(transfer_dir(),
+        ruvia::static_root_options{
+            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
+        });
+
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    std::string requests = get("/file-transfer/small");
+    requests += get("/file-transfer/indexed-small");
+    requests += "HEAD /file-transfer/small HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    requests += "HEAD /file-transfer/indexed-small HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    requests += get("/file-transfer/text", "Connection: close\r\n");
+    const auto wire = exchange(io, server.endpoint(), requests);
+    const auto responses = split_responses(wire, {false, false, true, true, false});
+    RUVIA_CHECK_EQ(responses.size(), std::size_t{5});
+    if (responses.size() == 5) {
+        for (std::size_t index = 0; index != 4; ++index) {
+            RUVIA_CHECK_EQ(responses[index].status_, std::string("200"));
+            RUVIA_CHECK_EQ(content_length(responses[index].head_), std::optional<std::size_t>(0));
+            RUVIA_CHECK(responses[index].body_.empty());
+        }
+        RUVIA_CHECK_EQ(responses.back().status_, std::string("200"));
+        RUVIA_CHECK_EQ(responses.back().body_, std::string("between"));
+    }
+    std::size_t framed = 0;
+    for (const auto& response : responses) {
+        framed += response.head_.size() + 2 + response.body_.size();
+    }
+    RUVIA_CHECK_EQ(framed, wire.size());
+
+    server.finish();
+    indexed_root.reset();
+    fs::remove_all(transfer_dir(), ignored);
+}
+
+RUVIA_TEST(changed_or_deleted_indexed_empty_file_never_commits_success) {
+    std::error_code ignored;
+    fs::remove_all(transfer_dir(), ignored);
+    fs::create_directories(transfer_dir());
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    for (const bool remove : {false, true}) {
+        const auto path = transfer_dir() / "small.bin";
+        write_file(path, "");
+        indexed_root = std::make_unique<ruvia::static_root>(transfer_dir(),
+            ruvia::static_root_options{
+                .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
+            });
+        if (remove) {
+            RUVIA_CHECK(fs::remove(path));
+        } else {
+            // A size change is deterministic even on coarse timestamp clocks.
+            write_file(path, "changed");
+        }
+        const auto get_wire = exchange(
+            io, server.endpoint(), get("/file-transfer/indexed-small", "Connection: close\r\n"));
+        RUVIA_CHECK(!get_wire.starts_with("HTTP/1.1 200 "));
+        const auto head_wire = exchange(io, server.endpoint(),
+            "HEAD /file-transfer/indexed-small HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        RUVIA_CHECK(!head_wire.starts_with("HTTP/1.1 200 "));
+        server.finish();
+        indexed_root.reset();
+    }
+    fs::remove_all(transfer_dir(), ignored);
+}
+
+#if defined(__linux__)
+// Other platforms may own an inline snapshot when c.file returns. Linux
+// retains a file segment, including for an empty file, until its first read.
+RUVIA_TEST(empty_file_changed_after_framing_does_not_commit_a_pipeline_head) {
+    std::error_code ignored;
+    fs::remove_all(transfer_dir(), ignored);
+    fs::create_directories(transfer_dir());
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto path = transfer_dir() / "empty.bin";
+    write_file(path, "");
+    rewritten = false;
+    asio::ip::tcp::socket socket(io);
+    socket.connect(server.endpoint());
+    const auto requests = get("/file-transfer/held/empty.bin") +
+                          get("/file-transfer/text", "Connection: close\r\n");
+    asio::write(socket, asio::buffer(requests));
+    const bool held = held_response_framed.try_acquire_for(std::chrono::seconds(5));
+    RUVIA_CHECK(held);
+    write_file(path, "changed");
+    rewritten = true;
+    std::string wire;
+    asio::read(socket, asio::dynamic_buffer(wire), ignored);
+    // Neither the stale zero-length 200 nor the following response may
+    // escape once the first response's file validation fails.
+    RUVIA_CHECK(wire.empty());
+    server.finish();
+    fs::remove_all(transfer_dir(), ignored);
+}
+#endif
+
 RUVIA_TEST(changed_indexed_file_is_never_sent_under_a_stale_head) {
     std::error_code ignored;
     fs::remove_all(transfer_dir(), ignored);

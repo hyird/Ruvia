@@ -200,7 +200,7 @@ task<http1_buffered_response_write_result> finish_file_response_write(stream_typ
 #if defined(_WIN32)
     if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket> &&
                   native_response_file_write_available) {
-        if (response_plan.send_body() && !response.has_multipart_file_body()) {
+        if (!response_plan.body_plan().body_suppressed() && !response.has_multipart_file_body()) {
             // The file is opened (or its framing handle borrowed) and, when
             // small, read before any byte is sent: a file that is missing or
             // changed fails before the head commits a status.
@@ -247,16 +247,15 @@ task<http1_buffered_response_write_result> finish_file_response_write(stream_typ
 #endif
     response_file_source source(response, file_io);
     auto first = response_body_chunk::end();
-#if defined(__linux__)
-    if (response_plan.send_body()) {
-        // 先验证并读取首块，再提交响应头；首块和头共用一次散集写。
+    if (!response_plan.body_plan().body_suppressed()) {
+        // Validate the first file range before committing the head, including
+        // empty files for which send_body() correctly reports no payload.
         first = co_await source.next();
         if (first.kind() == response_body_chunk::kind_type::failed) {
             co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
                 std::make_error_code(std::errc::io_error), 0);
         }
     }
-#endif
     const std::array<asio::const_buffer, 2> buffers{asio::buffer(head.view()), asio::buffer(first.bytes())};
     auto write_completion = co_await ruvia::async_asio<std::size_t>(
         [&stream, &progress, &buffers](auto handler) mutable {
@@ -266,11 +265,9 @@ task<http1_buffered_response_write_result> finish_file_response_write(stream_typ
         co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
             write_completion.error_code(), write_completion.result());
     }
-#if defined(__linux__)
     if (first.kind() == response_body_chunk::kind_type::end) {
         co_return classify_http1_buffered_response_write(response_plan, response_head_bytes, {}, response_head_bytes);
     }
-#endif
     for (;;) {
         const auto chunk = co_await source.next();
         if (chunk.kind() == response_body_chunk::kind_type::end) {
