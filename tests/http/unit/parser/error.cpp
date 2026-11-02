@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -29,6 +30,31 @@ RUVIA_TEST(http_status_code_validates_the_wire_value_boundary) {
         threw = true;
     }
     RUVIA_CHECK(threw);
+}
+
+RUVIA_TEST(http_status_code_rejects_original_integers_before_wire_narrowing) {
+    const auto check_rejected = [&](auto input) {
+        RUVIA_CHECK(!ruvia::http_status_code::is_valid_value(input));
+        RUVIA_CHECK(!ruvia::http_status_code::try_from_value(input).has_value());
+        bool threw = false;
+        try {
+            (void)ruvia::http_status_code::from_value(input);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        RUVIA_CHECK(threw);
+    };
+    check_rejected(std::int64_t{65736});
+    check_rejected(std::int64_t{-65336});
+    check_rejected((std::numeric_limits<std::int64_t>::min)());
+    check_rejected((std::numeric_limits<std::int64_t>::max)());
+    check_rejected(std::uint64_t{65736});
+    check_rejected((std::numeric_limits<std::uint64_t>::max)());
+
+    RUVIA_CHECK(ruvia::http_status_code::try_from_value(std::int64_t{100}) ==
+                ruvia::http_status::continue_value);
+    RUVIA_CHECK(ruvia::http_status_code::try_from_value(std::uint64_t{599}) ==
+                ruvia::http_status_code::from_value(599));
 }
 
 RUVIA_TEST(http_reason_phrase_is_conventional_http1_presentation) {

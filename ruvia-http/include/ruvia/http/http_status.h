@@ -2,6 +2,7 @@
 
 #include <array>
 #include <compare>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -15,23 +16,28 @@ namespace ruvia {
 // representable, while arbitrary integers cannot leak into protocol APIs.
 class http_status_code final {
 public:
-    [[nodiscard]] static constexpr http_status_code from_value(std::uint16_t value) {
+    // Validate the original integer before narrowing to the stored wire value.
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr http_status_code from_value(integer_type value) {
         if (!is_valid_value(value)) {
             throw std::invalid_argument("HTTP status code must be in 100..599");
         }
-        return http_status_code(value, validated_tag_type{});
+        return http_status_code(static_cast<std::uint16_t>(value), validated_tag_type{});
     }
 
+    template <std::integral integer_type>
     [[nodiscard]] static constexpr std::optional<http_status_code> try_from_value(
-        std::uint16_t value) noexcept {
+        integer_type value) noexcept {
         if (!is_valid_value(value)) {
             return std::nullopt;
         }
-        return http_status_code(value, validated_tag_type{});
+        return http_status_code(static_cast<std::uint16_t>(value), validated_tag_type{});
     }
 
-    [[nodiscard]] static constexpr bool is_valid_value(std::uint16_t value) noexcept {
-        return value >= 100 && value <= 599;
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
+        const auto integer_value = +value;
+        return integer_value >= 100 && integer_value <= 599;
     }
 
     [[nodiscard]] constexpr std::uint16_t value() const noexcept {

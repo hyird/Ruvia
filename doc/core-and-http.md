@@ -114,6 +114,8 @@ pool.join();
 | `"ruvia/http/http_target_origin.h"` | `decide_http_target_origin`、`http_target_origin`、`http_target_origin_connection`、`http_target_origin_action` | RFC 9110 §7.4 目标源判定：服务器提供连接事实（是否 TLS、对端是否可信网关），返回接受、需按证书校验的主机（DNS 名去掉末尾点 / IPv4 / IPv6 网络字节序）或 `421` 拒绝；明文连接上的 `https` 目标直接判为 misdirected，零分配 |
 | `"ruvia/http/url_encoding.h"` / `"ruvia/http/http_hex.h"` / `"ruvia/http/http_base64.h"` | `decode_url_component`、`validate_url_encoding`、`visit_url_encoded_pairs`、`percent_encode_uri_reference`、`uri_paths_equivalent`、`compare_uri_paths`、`http_encode_lower_hex`、`http_base64_encode`、`http_base64_decode` | URL 百分号/表单编解码、RFC 3986 URI-reference 规范化编码（`decode_url_component` 与 `percent_encode_uri_reference` 无需变换时返回输入视图本身、不分配，否则把结果写入调用方提供的 `std::pmr::string` 并返回其视图；解码只在百分号编码非法时返回 `nullopt`）、路由使用的路径规范形式比较（字面 `/` 分段、段内按百分号解码后的字节比较，`%2F` 不作分隔符）、十六进制转换、标准与 URL-safe Base64 编解码 |
 
+`http_status_code::from_value()`、`try_from_value()` 与 `is_valid_value()` 接受原始整数类型并在窄化前检查 `100..599`；超宽或负数不能通过截断变成有效状态码。浮点、枚举及其他依赖隐式转换的调用须先由调用方完成明确的整数转换和相应校验；不要为迁移预先窄化到 `uint16_t`，否则会丢失原始边界信息。
+
 ---
 
 ### 2. HTTP 首部、缓存、条件请求、范围与 Cookie

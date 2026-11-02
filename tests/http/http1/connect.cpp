@@ -27,7 +27,7 @@ RUVIA_TEST(http1_connect_head_transfers_to_tunnel_without_message_framing_for_ev
     for (const auto version : {ruvia::http_protocol_version::http10, ruvia::http_protocol_version::http11}) {
         for (unsigned status = 200; status != 300; ++status) {
             ruvia::http_response response(&resource);
-            response.status(ruvia::http_status_code::from_value(static_cast<std::uint16_t>(status)));
+            response.status(ruvia::http_status_code::from_value(status));
             response.header("x-tunnel", "established");
             const auto plan = ruvia::prepare_http1_connect_response_head(response, version);
             ruvia::http_response_head_buffer head{std::pmr::polymorphic_allocator<char>(&resource)};
