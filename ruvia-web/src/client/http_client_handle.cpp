@@ -104,9 +104,6 @@ void http_client_response::reprioritize(http_priority priority) & {
         throw std::logic_error("response owner has moved");
     }
     check_response_operation_affinity(state_);
-    if (priority.urgency_ > 7) {
-        throw std::invalid_argument("HTTP priority urgency must be between 0 and 7");
-    }
     if (state_->complete_) {
         // The peer already finished the stream; there is nothing left to schedule.
         return;

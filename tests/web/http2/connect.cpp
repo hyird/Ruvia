@@ -122,7 +122,7 @@ public:
     }
     ruvia::task<ruvia::http_response> prio_idle(ruvia::context& context_value) {
         context_value.worker_state<std::shared_ptr<connect_observation>>()->seen_urgency_ =
-            static_cast<int>(context_value.req().priority().urgency_);
+            static_cast<int>(context_value.req().priority().urgency_.value());
         co_return context_value.text("ok");
     }
     ruvia::task<ruvia::http_response> push_parent_cancel(ruvia::context& context_value) {

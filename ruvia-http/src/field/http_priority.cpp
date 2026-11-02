@@ -85,8 +85,8 @@ std::variant<std::monostate, http_priority_error> parse_priority_members(detail:
             return http_priority_error::invalid_syntax;
         }
         if (key == "u") {
-            fields_value.urgency_ = item.kind_ == item_type::kind_type::integer && item.integer_ >= 0 && item.integer_ <= 7
-                                        ? std::optional<std::uint8_t>(static_cast<std::uint8_t>(item.integer_))
+            fields_value.urgency_ = item.kind_ == item_type::kind_type::integer
+                                        ? http_priority_urgency::try_from_value(item.integer_)
                                         : std::nullopt;
         }
         if (key == "i") {
@@ -123,15 +123,12 @@ std::variant<http_priority_fields, http_priority_error> parse_http_priority(std:
     return fields;
 }
 std::variant<std::size_t, http_priority_error> encode_http_priority(std::span<char> output, http_priority_fields fields_value) noexcept {
-    if (fields_value.urgency_ && *fields_value.urgency_ > 7) {
-        return http_priority_error::invalid_value;
-    }
     std::array<char, 12> bytes_value{};
     std::size_t count = 0;
     if (fields_value.urgency_) {
         bytes_value[count++] = 'u';
         bytes_value[count++] = '=';
-        bytes_value[count++] = static_cast<char>('0' + *fields_value.urgency_);
+        bytes_value[count++] = static_cast<char>('0' + fields_value.urgency_->value());
     }
     if (fields_value.incremental_) {
         if (count) {

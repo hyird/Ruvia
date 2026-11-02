@@ -1,4 +1,7 @@
 #include <array>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
 #include <string_view>
 #include <variant>
 
@@ -112,4 +115,60 @@ RUVIA_TEST(http_priority_http2_frame_roundtrips_and_output_bounds) {
     RUVIA_CHECK((decoded.index() == 0) && std::get<0>(decoded).element_id_ == 5 && !std::get<0>(decoded).push_ && std::get<0>(decoded).fields_.urgency_ == 1);
     RUVIA_CHECK((ruvia::encode_http_priority(std::span(bytes_value).first(1), {.urgency_ = 2}).index() != 0));
     RUVIA_CHECK((ruvia::encode_http2_priority_update(bytes_value, 0, {}).index() != 0));
+}
+
+RUVIA_TEST(http_priority_rejects_wide_local_urgency_without_replacing_an_existing_signal) {
+    std::array<char, 64> bytes{};
+    const auto rejects = [&](auto input) {
+        try {
+            (void)ruvia::encode_http_priority(bytes, {.urgency_ = input});
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+    for (const auto input : std::array<std::int64_t, 7>{
+             std::numeric_limits<std::int64_t>::min(), -256, -1, 8,
+             256, 259, std::numeric_limits<std::int64_t>::max()}) {
+        RUVIA_CHECK(rejects(input));
+    }
+    RUVIA_CHECK(rejects(std::numeric_limits<std::uint64_t>::max()));
+
+    ruvia::http_priority_fields fields{.urgency_ = 2, .incremental_ = true};
+    bool rejected = false;
+    try {
+        fields.urgency_ = 259;
+    } catch (const std::invalid_argument&) {
+        rejected = true;
+    }
+    RUVIA_CHECK(rejected);
+    const auto encoded = ruvia::encode_http_priority(bytes, fields);
+    RUVIA_CHECK(encoded.index() == 0);
+    if (const auto* count = std::get_if<std::size_t>(&encoded)) {
+        const auto reparsed = ruvia::parse_http_priority(std::string_view(bytes.data(), *count));
+        RUVIA_CHECK(reparsed.index() == 0);
+        if (const auto* retained = std::get_if<ruvia::http_priority_fields>(&reparsed)) {
+            RUVIA_CHECK(retained->urgency_ == 2);
+            RUVIA_CHECK(retained->incremental_ == true);
+        }
+    }
+}
+
+RUVIA_TEST(http_priority_ignores_out_of_range_peer_urgency_instead_of_narrowing_it) {
+    // RFC 9218 section 4 requires ignoring successfully parsed values outside
+    // the urgency domain, including one that replaces a valid earlier member.
+    for (const auto value : {"u=-256", "u=-1", "u=8", "u=256", "u=259", "u=2, u=256"}) {
+        const auto parsed = ruvia::parse_http_priority(value);
+        RUVIA_CHECK(parsed.index() == 0);
+        if (const auto* fields = std::get_if<ruvia::http_priority_fields>(&parsed)) {
+            RUVIA_CHECK(!fields->urgency_.has_value());
+            RUVIA_CHECK(fields->request_priority().urgency_ == 3);
+        }
+    }
+    const auto maximum = ruvia::parse_http_priority("u=7, i=?0");
+    RUVIA_CHECK(maximum.index() == 0);
+    if (const auto* fields = std::get_if<ruvia::http_priority_fields>(&maximum)) {
+        RUVIA_CHECK(fields->urgency_ == 7);
+        RUVIA_CHECK(fields->incremental_ == false);
+    }
 }

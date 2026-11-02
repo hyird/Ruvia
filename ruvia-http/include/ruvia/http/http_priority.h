@@ -1,24 +1,73 @@
 #pragma once
 
+#include <compare>
+#include <concepts>
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <variant>
 
 #include "ruvia/http/http_header.h"
 
 namespace ruvia {
 
+// RFC 9218 section 4.1: urgency is 0..7, defaulting to 3. Local numeric
+// inputs are checked before narrowing. Peer fields instead use the tolerant
+// parser below, which ignores out-of-range values as required by section 4.
+class http_priority_urgency final {
+public:
+    constexpr http_priority_urgency() noexcept = default;
+
+    template <std::integral integer_type>
+    constexpr http_priority_urgency(integer_type value)
+        : value_(is_valid_value(value)
+                     ? static_cast<std::uint8_t>(value)
+                     : throw std::invalid_argument("HTTP priority urgency must be between 0 and 7")) {}
+
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
+        return std::cmp_greater_equal(+value, 0) && std::cmp_less_equal(+value, 7);
+    }
+
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr std::optional<http_priority_urgency> try_from_value(integer_type value) noexcept {
+        if (!is_valid_value(value)) {
+            return std::nullopt;
+        }
+        return http_priority_urgency(static_cast<std::uint8_t>(value), validated_tag_type{});
+    }
+
+    [[nodiscard]] constexpr std::uint8_t value() const noexcept {
+        return value_;
+    }
+
+    friend constexpr auto operator<=>(http_priority_urgency, http_priority_urgency) = default;
+
+private:
+    struct validated_tag_type {};
+
+    constexpr http_priority_urgency(std::uint8_t value, validated_tag_type) noexcept
+        : value_(value) {}
+
+    std::uint8_t value_{3};
+};
+
+static_assert(std::is_trivially_copyable_v<http_priority_urgency>);
+static_assert(sizeof(http_priority_urgency) == sizeof(std::uint8_t));
+
 struct http_priority final {
-    std::uint8_t urgency_{3};
+    http_priority_urgency urgency_{};
     bool incremental_{false};
 };
 struct http_priority_fields final {
-    std::optional<std::uint8_t> urgency_{};
+    std::optional<http_priority_urgency> urgency_{};
     std::optional<bool> incremental_{};
     [[nodiscard]] constexpr http_priority request_priority() const noexcept {
-        return {urgency_.value_or(3), incremental_.value_or(false)};
+        return {urgency_.value_or(http_priority_urgency{}), incremental_.value_or(false)};
     }
 };
 enum class http_priority_error : std::uint8_t { invalid_syntax,
