@@ -45,16 +45,19 @@ public:
         waiter.queued_ = false;
     }
 
-    // Hand the freed slot `index` to the next waiter and resume it. Returns true
-    // if a waiter took the slot, false if the queue was empty.
-    [[nodiscard]] bool resume_next(std::size_t index) noexcept {
+    // Commit the freed slot to the next waiter before deferring its continuation.
+    // Cancellation and closure cannot replace this result after the handoff.
+    [[nodiscard]] bool commit_handoff(
+        std::size_t index, std::coroutine_handle<>& continuation) noexcept {
+        continuation = {};
         if (head_ == nullptr) {
             return false;
         }
         auto* waiter = head_;
         remove(*waiter);
         waiter->complete(worker_wait_result_access::value(index));
-        waiter->resume();
+        waiter->cancel_registrations();
+        continuation = waiter->take_continuation();
         return true;
     }
 

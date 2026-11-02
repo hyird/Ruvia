@@ -1,5 +1,6 @@
 #include "ruvia/core/pool_lease_scheduler.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <initializer_list>
@@ -330,6 +331,65 @@ ruvia::task<void> exercise_pmr_test(asio::io_context& io_context,
 
 }  // namespace
 
+namespace ruvia::test::lease_handoff {
+
+struct handoff_state final {
+    std::size_t depth_{};
+    std::size_t peak_{};
+    std::size_t completed_{};
+    bool ordered_{true};
+};
+
+task<void> release_immediately(
+    pool_lease_scheduler& scheduler, handoff_state& state, std::size_t index) {
+    const auto result = co_await scheduler.acquire(std::nullopt);
+    if (!result.has_value()) {
+        state.ordered_ = false;
+        co_return;
+    }
+    state.ordered_ = state.ordered_ && state.completed_ == index;
+    ++state.completed_;
+    ++state.depth_;
+    state.peak_ = std::max(state.peak_, state.depth_);
+    scheduler.release(result.value());
+    --state.depth_;
+}
+
+task<void> exercise_long_chain(const worker_handle& worker, bool& success) {
+    constexpr std::size_t waiter_count = 512;
+    pool_lease_scheduler scheduler(1, worker);
+    task_scope scope(worker);
+    handoff_state state;
+    const auto held = co_await scheduler.acquire(std::nullopt);
+    for (std::size_t index = 0; index != waiter_count; ++index) {
+        scope.spawn(release_immediately(scheduler, state, index));
+    }
+    scheduler.release(held.value());
+    co_await scope.join();
+    success = state.peak_ == 1 && state.depth_ == 0 &&
+              state.completed_ == waiter_count && state.ordered_;
+}
+
+task<void> exercise_committed_handoff(const worker_handle& worker, bool& success) {
+    pool_lease_scheduler scheduler(1, worker);
+    task_scope scope(worker);
+    stop_source cancellation;
+    std::optional<worker_wait_status> handed_off;
+    std::optional<worker_wait_status> closed;
+    const auto held = co_await scheduler.acquire(std::nullopt);
+    scope.spawn(observe_waiter(scheduler, std::chrono::seconds(30), cancellation.token(), handed_off));
+    scope.spawn(observe_waiter(scheduler, std::nullopt, {}, closed));
+    scheduler.release(held.value());
+    const bool handoff_deferred = !handed_off.has_value();
+    cancellation.request_stop();
+    (void)scheduler.close();
+    co_await scope.join();
+    success = handoff_deferred && handed_off == worker_wait_status::value &&
+              closed == worker_wait_status::closed;
+}
+
+}  // namespace ruvia::test::lease_handoff
+
 int main() {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
@@ -345,7 +405,11 @@ int main() {
     bool cancellation_success = false;
     bool pmr_lifecycle_success = false;
     bool mixed_waiters_success = false;
+    bool handoff_chain_success = false;
+    bool committed_handoff_success = false;
     ruvia::test::run_worker_tasks(attachment,
+        ruvia::test::lease_handoff::exercise_long_chain(worker_value, handoff_chain_success),
+        ruvia::test::lease_handoff::exercise_committed_handoff(worker_value, committed_handoff_success),
         exercise_lease_and_close(lease_scheduler, io_context, lease_success),
         exercise_worker_bound_acquire_timeout(worker_timeout_scheduler, worker_timeout_success),
         exercise_nonpositive_timeout_does_not_steal_same_turn_release(
@@ -357,6 +421,7 @@ int main() {
     return lease_success && worker_timeout_success && nonpositive_timeout_success &&
                    saturated_timeout_success &&
                    cancellation_success && pmr_lifecycle_success && mixed_waiters_success &&
+                   handoff_chain_success && committed_handoff_success &&
                    test_scheduler_owns_timeout_for_lazy_acquires() &&
                    test_scheduler_retains_worker_binding_for_lazy_acquires()
                ? 0

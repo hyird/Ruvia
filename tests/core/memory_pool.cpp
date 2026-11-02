@@ -8,6 +8,7 @@
 #include <memory_resource>
 #include <new>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -594,6 +595,44 @@ RUVIA_TEST(worker_memory_default_owner_ignores_global_default_resource) {
         RUVIA_CHECK(std::pmr::get_default_resource() == &global_default);
     }
     RUVIA_CHECK(std::pmr::get_default_resource() == previous);
+}
+
+RUVIA_TEST(worker_memory_construction_failure_reclaims_storage_and_allows_retry) {
+    counting_resource baseline;
+    {
+        const ruvia::worker_memory worker(baseline);
+    }
+    const auto construction_attempts = baseline.attempts_;
+    RUVIA_CHECK(construction_attempts != 0);
+
+    for (std::size_t failure_point = 1; failure_point <= construction_attempts; ++failure_point) {
+        counting_resource upstream;
+        upstream.fail_at_ = failure_point;
+        bool rejected = false;
+        try {
+            const ruvia::worker_memory worker(upstream);
+        } catch (const std::bad_alloc&) {
+            rejected = true;
+        }
+        RUVIA_CHECK(rejected);
+        RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
+        RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
+        RUVIA_CHECK(upstream.matched_returns_);
+
+        upstream.fail_at_.reset();
+        {
+            const ruvia::worker_memory worker(upstream);
+            auto* const storage = static_cast<std::byte*>(worker.resource()->allocate(64));
+            std::fill_n(storage, 64, std::byte{0x5a});
+            RUVIA_CHECK(std::ranges::all_of(std::span(storage, 64), [](std::byte value) {
+                return value == std::byte{0x5a};
+            }));
+            worker.resource()->deallocate(storage, 64);
+        }
+        RUVIA_CHECK_EQ(upstream.live_bytes_, std::size_t{0});
+        RUVIA_CHECK_EQ(upstream.allocations_, upstream.returns_);
+        RUVIA_CHECK(upstream.matched_returns_);
+    }
 }
 
 RUVIA_TEST(worker_memory_pool_data_growth_failure_preserves_existing_storage) {

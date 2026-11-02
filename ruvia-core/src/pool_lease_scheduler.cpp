@@ -97,7 +97,11 @@ public:
         if (slot >= busy_.size() || busy_[slot] == 0) {
             std::terminate();
         }
-        if (!closing_ && waiter_state_->queue_.resume_next(slot)) {
+        std::coroutine_handle<> continuation;
+        if (!closing_ && waiter_state_->queue_.commit_handoff(slot, continuation)) {
+            if (continuation) {
+                worker_.defer_resume(continuation);
+            }
             return;
         }
         busy_[slot] = 0;

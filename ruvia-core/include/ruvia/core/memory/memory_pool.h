@@ -49,6 +49,8 @@ void validate_memory_pool_config(const memory_pool_config& config);
 // upstream at once, and trim() returns every cached block. Larger or
 // over-aligned blocks pass straight through. Whether returned memory reaches
 // the OS is up to the C allocator. The pool must outlive every object using it.
+// Construction propagates allocation failures and returns all storage acquired
+// during the failed construction to its upstream.
 class worker_memory final {
 public:
     // Uses the process-lifetime mimalloc resource directly, never the global

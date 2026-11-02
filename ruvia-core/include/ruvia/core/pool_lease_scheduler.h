@@ -49,6 +49,10 @@ public:
     [[nodiscard]] pool_lease_acquire acquire(
         const std::optional<std::chrono::milliseconds>& timeout, stop_token stop = {});
 
+    // Return a caller-owned slot on the bound worker. A queued acquire takes
+    // ownership before this call returns, but its coroutine resumes in a later
+    // worker turn, never inline here. Later cancellation or close() cannot
+    // replace that committed acquisition.
     void release(std::size_t slot) noexcept;
     [[nodiscard]] bool close() noexcept;
     [[nodiscard]] bool closing() const noexcept;

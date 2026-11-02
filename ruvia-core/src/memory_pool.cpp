@@ -243,7 +243,7 @@ void task_frame_cache_release() noexcept {
 
 class worker_memory::impl_type final {
 public:
-    impl_type(std::pmr::memory_resource& upstream, std::size_t retained_block_bytes) noexcept
+    impl_type(std::pmr::memory_resource& upstream, std::size_t retained_block_bytes)
         : blocks_(upstream, retained_block_bytes),
           pool_(worker_pool_options, &blocks_) {}
 
