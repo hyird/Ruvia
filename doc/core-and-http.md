@@ -81,7 +81,7 @@ pool.join();
 | `"ruvia/core/memory/pmr_object.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)`、`construct_pmr_object`、`destroy_pmr_object`、`make_pmr_object` | 进程级线程安全 mimalloc PMR 适配资源、回退辅助与 PMR 对象构造/销毁工具 |
 | `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器 |
 | `"ruvia/core/local_ring_queue.h"` | `class local_ring_queue<T>` | 预分配容量的单线程零分配环形队列 |
-| `"ruvia/core/bytes.h"` / `"ruvia/core/failure_report.h"` / `"ruvia/core/socket.h"` | `as_bytes`、`as_chars`、`error_code_text`、`system_error_text`、`parse_ip_address`、`close_socket` | 字节/字符视图转换、跨平台 UTF-8 系统错误文本转换、严格 IPv4/IPv6 字面量解析（返回 `std::optional<asio::ip::address>`）与取消未完成 I/O 后关闭 TCP socket |
+| `"ruvia/core/bytes.h"` / `"ruvia/core/failure_report.h"` / `"ruvia/core/socket.h"` | `as_bytes`、`as_chars`、`error_code_text`、`system_error_text`、`parse_ip_address`、`close_socket` | 字节/字符零拷贝视图转换（拒绝绑定临时拥有型字符串或连续字节容器，调用方须保持底层存储存活到消费完成）、跨平台 UTF-8 系统错误文本转换、严格 IPv4/IPv6 字面量解析（返回 `std::optional<asio::ip::address>`）与取消未完成 I/O 后关闭 TCP socket |
 
 `move_only_function<R(Args...)>` 的引用结果必须由目标直接返回兼容引用，允许增加 cv 限定及派生到基类转换；返回值或需要产生临时量的结果不能绑定到引用签名。不同工具链采用相同约束，不依赖编译警告阻止悬垂。需要自定义引用转换（包括按值返回 `std::reference_wrapper`）时，用显式 `-> T&` / `-> const T&` 的适配 lambda 返回实际存活对象；包装器不延长该对象的寿命。值返回签名仍支持正常隐式转换。
 
