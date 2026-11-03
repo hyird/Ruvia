@@ -587,3 +587,22 @@ RUVIA_TEST(representation_response_plan_rejects_unknown_policy) {
     }
     RUVIA_CHECK(threw);
 }
+
+RUVIA_TEST(representation_response_plan_accepts_named_owner_etag_and_evaluates_preconditions) {
+    std::string std_etag(R"("named-etag")");
+    std::pmr::string pmr_etag(R"(W/"named-etag")");
+    const ruvia::http_selected_representation_metadata std_metadata{
+        .length_ = 10,
+        .etag_ = std_etag,
+    };
+    const ruvia::http_selected_representation_metadata pmr_metadata{
+        .length_ = 10,
+        .etag_ = pmr_etag,
+    };
+    RUVIA_CHECK(std_metadata.etag_.data() == std_etag.data());
+    RUVIA_CHECK(pmr_metadata.etag_.data() == pmr_etag.data());
+    RUVIA_CHECK_EQ(planned_status("GET", "If-None-Match", R"("named-etag")", std_metadata),
+        ruvia::http_status::not_modified);
+    RUVIA_CHECK_EQ(planned_status("GET", "If-None-Match", R"("named-etag")", pmr_metadata),
+        ruvia::http_status::not_modified);
+}

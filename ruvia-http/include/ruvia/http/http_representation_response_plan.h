@@ -6,6 +6,7 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_byte_range.h"
 #include "ruvia/http/http_status.h"
 
@@ -18,7 +19,7 @@ class http_request;
 // borrowed only during planning; the resulting plan retains no input views.
 struct http_selected_representation_metadata final {
     http_content_length length_{};
-    std::string_view etag_{};
+    borrowed_text etag_{};
     std::optional<std::time_t> last_modified_{};
     // Only authorizes a date-form If-Range when last_modified is also present.
     // Ordinary date preconditions do not require a strong validator.
