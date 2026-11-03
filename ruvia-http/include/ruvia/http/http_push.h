@@ -7,15 +7,16 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia {
 
 struct http_push_request_view final {
-    std::string_view method_{"GET"};
-    std::string_view scheme_{"https"};
-    std::string_view authority_{};
-    std::string_view path_{"/"};
+    borrowed_text method_{"GET"};
+    borrowed_text scheme_{"https"};
+    borrowed_text authority_{};
+    borrowed_text path_{"/"};
     std::span<const http_header_view> headers_{};
 };
 

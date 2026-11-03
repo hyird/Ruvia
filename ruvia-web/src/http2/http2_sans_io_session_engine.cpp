@@ -353,7 +353,7 @@ bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_
     }
     const auto original = head->request_view();
     if (!http_ascii_equals_ignore_case(original.scheme_, request.scheme_) ||
-        !http_authorities_equal(borrowed_text(original.authority_), borrowed_text(request.authority_),
+        !http_authorities_equal(borrowed_text(original.authority_), request.authority_,
             http_ascii_equals_ignore_case(original.scheme_, "https") ? 443 : 80)) {
         throw std::invalid_argument("push request must use its associated request origin");
     }

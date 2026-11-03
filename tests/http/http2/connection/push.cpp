@@ -1326,3 +1326,46 @@ RUVIA_TEST(http2_push_remote_promise_flood_does_not_starve_client_request_submis
         ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
     RUVIA_CHECK(std::holds_alternative<std::uint32_t>(sub2));
 }
+
+RUVIA_TEST(http2_push_request_view_accepts_named_owners_and_copies_before_owner_mutation) {
+    ruvia::testing::output_relay relay;
+    std::pmr::unsynchronized_pool_resource resource;
+    auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true});
+    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    relay.transfer(client, server);
+    relay.transfer(server, client);
+    relay.transfer(client, server);
+    RUVIA_CHECK(std::holds_alternative<std::uint32_t>(
+        client.submit_request_head(ruvia::http2_regular_request_head_view{.authority_ = "example.test"})));
+    relay.transfer(client, server);
+    auto request_event = server.next_event();
+    RUVIA_CHECK(request_event && request_event->request_head());
+    auto request_end = server.next_event();
+    RUVIA_CHECK(request_end && request_end->message_end());
+    std::string method("GET");
+    std::pmr::string scheme("https", &resource);
+    std::string authority("example.test");
+    std::pmr::string path("/owned-asset", &resource);
+    const ruvia::http_push_request_view request{
+        .method_ = method,
+        .scheme_ = scheme,
+        .authority_ = authority,
+        .path_ = path,
+    };
+    const auto push = server.submit_push_request(1, request);
+    RUVIA_CHECK(push.index() == 0);
+    method.assign("PUT");
+    scheme.assign("http");
+    authority.assign("other.test");
+    path.assign("/mutated");
+    if (push.index() == 0) {
+        RUVIA_CHECK_EQ(std::get<0>(push).request_view().path_, std::string_view("/owned-asset"));
+    }
+    relay.transfer(server, client);
+    const auto promise = client.next_event();
+    RUVIA_CHECK(promise && promise->push_promise());
+    if (promise && promise->push_promise()) {
+        RUVIA_CHECK_EQ(promise->push_promise()->request_.path_, std::string_view("/owned-asset"));
+        RUVIA_CHECK_EQ(promise->push_promise()->request_.authority_, std::string_view("example.test"));
+    }
+}

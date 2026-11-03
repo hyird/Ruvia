@@ -410,8 +410,9 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
                                                           : http_known_method::unknown;
     const auto default_port = http_uri_scheme_default_port(request.scheme_);
     if (known_method == http_known_method::unknown ||
-        !http2_is_valid_outbound_regular_request_head(request.method_, known_method, request.scheme_,
-            default_port, request.authority_, request.path_, request.headers_,
+        !http2_is_valid_outbound_regular_request_head(request.method_.view(), known_method,
+            request.scheme_.view(), default_port, request.authority_.view(), request.path_.view(),
+            request.headers_,
             http_request_content_indication::no_content, {}, http_client_request_expectation::none,
             http_request_field_source::generated)) {
         return error_type::invalid_request;
