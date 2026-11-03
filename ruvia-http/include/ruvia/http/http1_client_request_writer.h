@@ -14,6 +14,7 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_request_content_semantics.h"
 
 namespace ruvia {
 
@@ -38,7 +39,7 @@ struct http1_client_request_head_view final {
     borrowed_text target_{"/"};
     std::span<const http_header_view> headers_{};
     // A value sends Content-Length; absent sends Transfer-Encoding: chunked.
-    std::optional<std::uint64_t> content_length_{};
+    std::optional<http_content_length> content_length_{};
 };
 
 class http1_client_streaming_request_content final {

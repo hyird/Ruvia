@@ -370,7 +370,7 @@ std::string_view text = body_bytes.text();
 
 ### 5.4 流式请求体上传、`100-continue` 与客户端隧道
 
-- **流式上传 (`open_request`)**：
+- **流式上传 (`open_request`)**：`http_client_upload_config::content_length_` 使用 `std::optional<http_content_length>`，负数在进入请求准备前即被拒绝（见[出站 Content-Length 契约](core-and-http.md#41-http10--http11-状态机)）。
   ```cpp
   auto exchange = co_await client.open_request(
       {.method_ = "POST", .target_ = "/upload"},

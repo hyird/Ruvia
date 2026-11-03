@@ -14,6 +14,7 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/tls_config.h"
@@ -50,7 +51,7 @@ struct http_client_push_config final {
 struct http_client_upload_config final {
     // A known length must be fulfilled exactly; HTTP/1 trailers require chunked
     // framing. Without trailers, HTTP/1 finalization uses fixed-size wire storage.
-    std::optional<std::uint64_t> content_length_{};
+    std::optional<http_content_length> content_length_{};
     http_client_request_expectation expectation_{http_client_request_expectation::none};
     std::size_t max_chunk_bytes_{64 * 1024};
     std::chrono::milliseconds continue_timeout_{1000};

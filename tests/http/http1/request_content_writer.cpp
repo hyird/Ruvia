@@ -1,5 +1,7 @@
 #include <algorithm>
 #include <array>
+#include <cstdint>
+#include <limits>
 #include <new>
 #include <span>
 #include <stdexcept>
@@ -9,6 +11,7 @@
 
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http1_request_content_writer.h"
+#include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http_limits.h"
 
 #include "test_harness.h"
@@ -228,4 +231,28 @@ RUVIA_TEST(http1_streaming_request_finish_accepts_trailer_descriptors_stored_in_
         RUVIA_CHECK_EQ(std::get<0>(planned), std::string_view("0\r\nX-One: first\r\nX-Two: second\r\n\r\n"));
     }
     writer.commit_finish();
+}
+
+RUVIA_TEST(http_content_length_rejects_negative_sources_without_mutating_existing_options) {
+    ruvia::http1_client_request_head_view request{.method_ = "POST", .target_ = "/upload", .content_length_ = 3};
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
+        RUVIA_CHECK(!ruvia::http_content_length::try_from_value(invalid).has_value());
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { request.content_length_ = invalid; }));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::http2_request_content::known_length(invalid); }));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)ruvia::http2_request_content::streaming(invalid); }));
+    }
+    std::array<char, 256> head{};
+    const auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(
+        ruvia::http_origin_view::http({.host_ = "example.com"}), request, head);
+    const auto* retained = std::get_if<ruvia::prepared_http1_client_request>(&prepared);
+    RUVIA_CHECK(retained != nullptr && retained->content_plan().streaming() != nullptr);
+    if (retained && retained->content_plan().streaming()) {
+        RUVIA_CHECK(retained->content_plan().streaming()->content_length() == 3);
+        RUVIA_CHECK(retained->head().find("Content-Length: 3\r\n") != std::string_view::npos);
+    }
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    const auto h2_known = ruvia::http2_request_content::known_length(maximum);
+    const auto h2_streaming = ruvia::http2_request_content::streaming(maximum);
+    RUVIA_CHECK(h2_known.known_length_content() && h2_known.known_length_content()->length() == maximum);
+    RUVIA_CHECK(h2_streaming.streaming_content() && h2_streaming.streaming_content()->expected_length() == maximum);
 }

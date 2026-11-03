@@ -224,8 +224,11 @@ struct request_head_write_plan final {
     http1_client_request_prepare_error error = http1_client_request_prepare_error::invalid_header;
     const auto* content_bytes = content.borrowed_bytes();
     const bool explicit_content = content_bytes != nullptr || streaming != nullptr;
-    const auto length = streaming ? streaming->content_length_ : content_bytes ? std::optional<std::uint64_t>(content_bytes->value().size())
-                                                                               : std::nullopt;
+    const auto length = streaming       ? (streaming->content_length_
+                                                  ? std::optional<std::uint64_t>(streaming->content_length_->value())
+                                                  : std::nullopt)
+                        : content_bytes ? std::optional<std::uint64_t>(content_bytes->value().size())
+                                        : std::nullopt;
     const bool chunked = streaming && !length;
     if (!analyze_headers(headers, header_facts, error, policy.field_source_)) {
         return detail::http1_client_request_prepare_result_access::failure(error);

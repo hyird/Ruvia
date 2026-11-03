@@ -1195,7 +1195,7 @@ RUVIA_TEST(http1_client_forwards_options_content_without_inventing_media_type) {
             }
             return writer.prepare_streaming(origin,
                 ruvia::http1_client_request_head_view{.method_ = method,
-                    .content_length_ = entry == 1 ? std::optional<std::uint64_t>{4} : std::nullopt},
+                    .content_length_ = entry == 1 ? std::optional<ruvia::http_content_length>{4} : std::nullopt},
                 output, policy);
         };
         const auto generated = prepare("OPTIONS", ruvia::http_request_field_source::generated);

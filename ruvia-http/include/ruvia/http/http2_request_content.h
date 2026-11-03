@@ -4,6 +4,8 @@
 #include <optional>
 #include <variant>
 
+#include "ruvia/http/http_request_content_semantics.h"
+
 namespace ruvia {
 
 // One outbound content contract determines both Content-Length and END_STREAM.
@@ -49,13 +51,15 @@ public:
     }
     // Zero describes no content: it does not require OPTIONS Content-Type and
     // cannot use Expect: 100-continue. TRACE omits the zero Content-Length.
-    [[nodiscard]] static constexpr http2_request_content known_length(std::uint64_t length) noexcept {
-        return http2_request_content(http2_known_length_request_content(length));
+    [[nodiscard]] static constexpr http2_request_content known_length(http_content_length length) noexcept {
+        return http2_request_content(http2_known_length_request_content(length.value()));
     }
     // A known zero keeps the send half open until finish_request() or an empty
     // END_STREAM; it cannot send content or wait for 100 Continue.
-    [[nodiscard]] static constexpr http2_request_content streaming(std::optional<std::uint64_t> length = {}) noexcept {
-        return http2_request_content(http2_streaming_request_content(length));
+    [[nodiscard]] static constexpr http2_request_content streaming(
+        std::optional<http_content_length> length = {}) noexcept {
+        return http2_request_content(http2_streaming_request_content(
+            length ? std::optional<std::uint64_t>(length->value()) : std::nullopt));
     }
     [[nodiscard]] constexpr const http2_request_without_content* without_content() const& noexcept {
         return std::get_if<http2_request_without_content>(&value_);

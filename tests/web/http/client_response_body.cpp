@@ -1894,7 +1894,7 @@ RUVIA_TEST(http_client_upload_exchange_owns_chunks_and_trailers_and_drives_conti
             const bool known = mode == upload_peer::mode_type::known_length;
             const bool expect_continue = mode == upload_peer::mode_type::continue_value || mode == upload_peer::mode_type::continue_timeout;
             auto exchange_value = co_await client.handle().open_request({.method_ = "POST", .target_ = "/upload"},
-                {.content_length_ = known ? std::optional<std::uint64_t>{6} : std::nullopt,
+                {.content_length_ = known ? std::optional<ruvia::http_content_length>{6} : std::nullopt,
                     .expectation_ = expect_continue ? ruvia::http_client_request_expectation::continue_value : ruvia::http_client_request_expectation::none,
                     .max_chunk_bytes_ = 3,
                     .continue_timeout_ = std::chrono::milliseconds(20)});
@@ -2013,7 +2013,7 @@ RUVIA_TEST(http1_small_upload_completes_with_a_bounded_response_budget) {
             try {
                 auto exchange = co_await client.handle().open_request(
                     {.method_ = "POST", .target_ = "/upload"},
-                    {.content_length_ = known ? std::optional<std::uint64_t>{6} : std::nullopt,
+                    {.content_length_ = known ? std::optional<ruvia::http_content_length>{6} : std::nullopt,
                         .max_chunk_bytes_ = 3});
                 co_await exchange.body().write("abc");
                 co_await exchange.body().write("def");
@@ -3287,7 +3287,7 @@ RUVIA_TEST(http_client_finishes_upload_after_an_early_persistent_response_before
             auto operation = [&]() -> ruvia::task<void> {
                 const acceptor_closer closer{acceptor};
                 auto exchange = co_await client.handle().open_request({.method_ = "POST", .target_ = "/early"},
-                    {.content_length_ = known_length ? std::optional<std::uint64_t>{3} : std::nullopt,
+                    {.content_length_ = known_length ? std::optional<ruvia::http_content_length>{3} : std::nullopt,
                         .expectation_ = expect_continue ? ruvia::http_client_request_expectation::continue_value
                                                         : ruvia::http_client_request_expectation::none,
                         .continue_timeout_ = std::chrono::milliseconds(timeout_release ? 20 : 60000)});

@@ -178,6 +178,8 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 
 `http1_request_content_writer::chunk` 与 `http_datagram_write_plan` 是对应写入器／会话产出的只读分段快照，不再开放默认构造和可写的前缀缓冲、长度及正文成员。保留具名计划，通过 `prefix()`、`payload()`（请求块另有 `suffix()`）组成 scatter-gather 写入。`prefix()` 借用计划自身的内联存储，只允许左值调用；计划必须存活且不变，直到传输已消费前缀。`payload()` 仍借用原始输入，其寿命独立于计划，调用方同样须保留输入直到消费完成。复制／移动计划保留独立的内联前缀与原有正文借用，不分配、不复制正文。
 
+流式与定长请求声明共用 `"ruvia/http/http_request_content_semantics.h"` 的 `http_content_length`：包括 `http1_client_request_head_view::content_length_`、`http2_request_content::known_length()` / `streaming()`，以及 Web 的 `http_client_upload_config::content_length_`（可选位置仍保留 `std::optional`）。非负整数可直接填入，构造前检查 `0..UINT64_MAX`，负数抛出 `std::invalid_argument`，无异常探测用 `http_content_length::try_from_value()`。不隐式接受浮点或枚举，需要整数时用 `value()` 解包；不要预先转成无符号数。已解析或已计算的协议长度仍返回 `std::uint64_t` / `std::size_t`。
+
 HTTP/1 请求头与响应头解析的字段描述符共用内部存储（`parser/http_header_descriptor_storage.h`）：前 32 项内联，超出后整体迁入传入的 PMR（缺省为默认资源）并按实际字段数增长。服务端 `parsed_request_header_block` 与客户端 `http1_client_parsed_response_head` 均不按首部字节上限预留线程栈数组，也不增加字段数量限制；64 KiB 首部字节上限仍然生效。服务端请求视图零拷贝借用输入缓冲区，客户端最终响应头拥有字段数据，原始输入可在解析完成后释放。PMR 分配失败以 `std::bad_alloc` 传出，此时不发布 head_ready 或成功状态；释放资源后可用同一缓冲区与偏移重试，但部分元数据可能残留，不保证回滚。PMR 须存活至其拥有的描述符存储释放：服务端请求为 `http_request::reset()` 或请求对象析构，客户端响应头为 `take_headers()` 返回的向量或响应头析构。
 
 请求转发使用 `"ruvia/http/http_client.h"` 的 `enum class http_request_field_source : std::uint8_t { generated, forwarded }`，不要把收到的字段当成新配置字段逐项送入 `is_valid_http_request_application_field`：
