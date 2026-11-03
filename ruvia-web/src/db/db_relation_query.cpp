@@ -175,7 +175,8 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     for (const auto& key : key_names) {
         page.add_order_by(page.column(key, "__ruvia_ranked"));
     }
-    page.limit(s.limit_).offset(s.offset_);
+    page.limit(s.limit_ ? std::optional<query_row_count>(*s.limit_) : std::nullopt)
+        .offset(s.offset_ ? std::optional<query_row_count>(*s.offset_) : std::nullopt);
     db_query included(s.resource_);
     const auto page_alias = root_alias == "__ruvia_page" ? "__ruvia_page_1" : "__ruvia_page";
     included.select(included.value(1)).from(page, page_alias);

@@ -603,13 +603,9 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
     std::optional<std::uint64_t> take_override) {
     resource = pmr_resource_or_default(resource);
     const redis_query_compiler compiler(mapping, resource);
-    constexpr auto max_redis_integer = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
-    const auto skip = options.skip_.value_or(0U);
-    const auto requested_take = options.take_.value_or(redis_find_default_take);
+    const auto skip = options.skip_ ? options.skip_->value() : 0U;
+    const auto requested_take = options.take_ ? options.take_->value() : redis_find_default_take;
     const auto take = take_override.value_or(requested_take);
-    if (skip > max_redis_integer || requested_take > max_redis_integer || (!count_only && take > max_redis_integer)) {
-        throw std::invalid_argument("Redis Search LIMIT exceeds signed 64-bit range");
-    }
     std::optional<std::pmr::string> sort_field_name;
     if (options.order_.has_value()) {
         const auto& order = *options.order_;

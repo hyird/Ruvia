@@ -17,6 +17,7 @@
 
 #include "ruvia/web/db/db_types.h"
 #include "ruvia/web/detail/db/db_parameter_pack.h"
+#include "ruvia/web/entity_rows.h"
 
 namespace ruvia {
 
@@ -171,7 +172,7 @@ private:
 
 struct db_window_boundary final {
     db_frame_boundary kind_{db_frame_boundary::current_row};
-    std::uint64_t offset_{0};
+    query_row_count offset_{};
 };
 struct db_window_frame_options final {
     db_window_frame kind_{db_window_frame::rows};
@@ -1244,8 +1245,8 @@ public:
     db_query& order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value);
     db_query& add_order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value);
     db_query& clear_order();
-    db_query& limit(std::optional<std::uint64_t> count);
-    db_query& offset(std::optional<std::uint64_t> count);
+    db_query& limit(std::optional<query_row_count> count);
+    db_query& offset(std::optional<query_row_count> count);
     db_query& distinct(bool enabled = true);
     db_query& distinct_on(std::span<const db_expression> expressions);
     db_query& distinct_on(std::initializer_list<db_expression> expressions) {

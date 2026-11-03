@@ -37,8 +37,8 @@ struct db_find_options final {
     db_predicate where_{};
     std::span<const borrowed_text> relations_{};
     std::span<const db_find_order> order_{};
-    std::optional<std::uint64_t> skip_{};
-    std::optional<std::uint64_t> take_{};
+    std::optional<query_row_count> skip_{};
+    std::optional<query_row_count> take_{};
     std::optional<db_lock_options> lock_{};
     db_cache_setting_type cache_{};
     bool with_deleted_{false};

@@ -567,7 +567,7 @@ private:
         });
     }
     void boundary(const db_window_boundary& boundary) {
-        if (boundary.kind_ != db_frame_boundary::preceding && boundary.kind_ != db_frame_boundary::following && boundary.offset_ != 0) {
+        if (boundary.kind_ != db_frame_boundary::preceding && boundary.kind_ != db_frame_boundary::following && boundary.offset_.value() != 0) {
             throw std::invalid_argument("a non-offset window frame boundary has an offset");
         }
         switch (boundary.kind_) {
@@ -575,14 +575,14 @@ private:
                 output_.sql_ += "UNBOUNDED PRECEDING";
                 break;
             case db_frame_boundary::preceding:
-                append_db_number(output_.sql_, boundary.offset_);
+                append_db_number(output_.sql_, boundary.offset_.value());
                 output_.sql_ += " PRECEDING";
                 break;
             case db_frame_boundary::current_row:
                 output_.sql_ += "CURRENT ROW";
                 break;
             case db_frame_boundary::following:
-                append_db_number(output_.sql_, boundary.offset_);
+                append_db_number(output_.sql_, boundary.offset_.value());
                 output_.sql_ += " FOLLOWING";
                 break;
             case db_frame_boundary::unbounded_following:

@@ -213,9 +213,6 @@ std::pmr::vector<std::pmr::string> redis_command_with_key_fields(std::string_vie
 
 void append_redis_scan_options(std::pmr::vector<std::pmr::string>& args,
     const redis_scan_options& options, std::pmr::memory_resource* resource) {
-    if (options.count_.has_value() && *options.count_ == 0) {
-        throw std::invalid_argument("configured redis scan count must be greater than zero");
-    }
     if (options.match_.has_value()) {
         emplace_redis_string(args, "MATCH");
         emplace_redis_string(args, *options.match_);
@@ -223,7 +220,7 @@ void append_redis_scan_options(std::pmr::vector<std::pmr::string>& args,
     if (options.count_.has_value()) {
         emplace_redis_string(args, "COUNT");
         std::pmr::string count(resource);
-        append_redis_number(count, *options.count_);
+        append_redis_number(count, options.count_->value());
         args.emplace_back(std::move(count));
     }
 }
@@ -284,9 +281,6 @@ std::pmr::vector<std::pmr::string> redis_x_read_group_args(std::string_view grou
     if (streams.empty()) {
         throw std::invalid_argument("redis xreadgroup requires at least one stream");
     }
-    if (options.count_.has_value() && *options.count_ == 0) {
-        throw std::invalid_argument("redis xreadgroup count must be greater than zero");
-    }
     for (const auto& stream : streams) {
         if (stream.stream_.empty() || stream.id_.empty()) {
             throw std::invalid_argument("redis xreadgroup stream and id must not be empty");
@@ -304,7 +298,7 @@ std::pmr::vector<std::pmr::string> redis_x_read_group_args(std::string_view grou
     if (options.count_.has_value()) {
         emplace_redis_string(args, "COUNT");
         std::pmr::string count(resource);
-        append_redis_number(count, *options.count_);
+        append_redis_number(count, options.count_->value());
         args.emplace_back(std::move(count));
     }
     if (options.block_.has_value()) {

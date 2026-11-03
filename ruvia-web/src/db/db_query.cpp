@@ -1838,18 +1838,12 @@ db_query& db_query::clear_order() {
     storage().orders_.clear();
     return *this;
 }
-db_query& db_query::limit(std::optional<std::uint64_t> count) {
-    if (count && *count > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-        throw std::invalid_argument("database limit exceeds signed 64-bit range");
-    }
-    storage().limit_ = count;
+db_query& db_query::limit(std::optional<query_row_count> count) {
+    storage().limit_ = count ? std::optional<std::uint64_t>(count->value()) : std::nullopt;
     return *this;
 }
-db_query& db_query::offset(std::optional<std::uint64_t> count) {
-    if (count && *count > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
-        throw std::invalid_argument("database offset exceeds signed 64-bit range");
-    }
-    storage().offset_ = count;
+db_query& db_query::offset(std::optional<query_row_count> count) {
+    storage().offset_ = count ? std::optional<std::uint64_t>(count->value()) : std::nullopt;
     return *this;
 }
 db_query& db_query::distinct(bool enabled) {

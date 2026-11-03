@@ -89,6 +89,15 @@ RUVIA_TEST(redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_op
             auto transaction = bounded.transaction();
             RUVIA_CHECK(throws_invalid_argument([&] { transaction.command(word, "1", "1000"); }));
         }
+        for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}, std::int64_t{0}}) {
+            RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.scan({.count_ = invalid}); }));
+            RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.xread_group("workers", "consumer", streams, {.count_ = invalid}); }));
+        }
+        for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1,
+                 (std::numeric_limits<std::uint64_t>::max)()}) {
+            RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.scan({.count_ = invalid}); }));
+            RUVIA_CHECK(throws_invalid_argument([&] { (void)redis.xread_group("workers", "consumer", streams, {.count_ = invalid}); }));
+        }
 
         // Standalone clients always inherit an owner stop token, so indefinite
         // blocking requests are bounded by cancellation rather than rejected.

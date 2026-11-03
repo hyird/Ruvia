@@ -678,12 +678,16 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
         RUVIA_CHECK(throws_invalid_argument([&] {
             (void)repository.find_one({.where_ = test_redis_user::column<"id">() == ""});
         }));
-        RUVIA_CHECK(throws_invalid_argument([&] {
-            (void)repository.find_one({.take_ = std::numeric_limits<std::uint64_t>::max()});
-        }));
-        RUVIA_CHECK(throws_invalid_argument([&] {
-            (void)repository.count({.skip_ = std::numeric_limits<std::uint64_t>::max()});
-        }));
+        for (const auto invalid : {std::numeric_limits<std::int64_t>::min(),
+                 std::numeric_limits<std::int64_t>::min() + 5, std::int64_t{-1}}) {
+            RUVIA_CHECK(throws_invalid_argument([&] { (void)repository.find_one({.take_ = invalid}); }));
+            RUVIA_CHECK(throws_invalid_argument([&] { (void)repository.count({.skip_ = invalid}); }));
+        }
+        for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1,
+                 (std::numeric_limits<std::uint64_t>::max)()}) {
+            RUVIA_CHECK(throws_invalid_argument([&] { (void)repository.find_one({.take_ = invalid}); }));
+            RUVIA_CHECK(throws_invalid_argument([&] { (void)repository.count({.skip_ = invalid}); }));
+        }
         RUVIA_CHECK(throws_invalid_argument([&] {
             (void)repository.exists({.order_ = ruvia::redis_find_order{.field_ = "missing_field"}});
         }));

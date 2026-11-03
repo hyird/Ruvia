@@ -1,15 +1,61 @@
 #pragma once
 
+#include <compare>
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <stdexcept>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia {
+// Non-negative row count or offset in SQL and RediSearch 64-bit signed range.
+// Checked before narrowing so negative integers cannot wrap into huge counts.
+class query_row_count final {
+public:
+    constexpr query_row_count() noexcept = default;
+
+    template <std::integral integer_type>
+    constexpr query_row_count(integer_type value)
+        : value_(is_valid_value(value)
+                     ? static_cast<std::uint64_t>(value)
+                     : throw std::invalid_argument("query row count must be in 0..9223372036854775807")) {}
+
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
+        return std::cmp_greater_equal(+value, 0) && std::in_range<std::int64_t>(+value);
+    }
+
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr std::optional<query_row_count> try_from_value(integer_type value) noexcept {
+        if (!is_valid_value(value)) {
+            return std::nullopt;
+        }
+        return query_row_count(static_cast<std::uint64_t>(value), validated_tag_type{});
+    }
+
+    [[nodiscard]] constexpr std::uint64_t value() const noexcept {
+        return value_;
+    }
+
+    friend constexpr auto operator<=>(query_row_count, query_row_count) = default;
+
+private:
+    struct validated_tag_type {};
+
+    constexpr query_row_count(std::uint64_t value, validated_tag_type) noexcept
+        : value_(value) {}
+
+    std::uint64_t value_{0};
+};
+
+static_assert(std::is_trivially_copyable_v<query_row_count>);
+static_assert(sizeof(query_row_count) == sizeof(std::uint64_t));
 
 // A move-only entity collection. Elements share this collection's resource;
 // the resource owner must outlive the collection and every element.

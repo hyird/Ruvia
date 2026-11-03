@@ -1245,8 +1245,21 @@ RUVIA_TEST(db_query_clause_source_and_join_methods_cover_state_and_dialect_rules
     RUVIA_CHECK(cleared.sql().find(" LIMIT ") == std::string_view::npos);
     RUVIA_CHECK(cleared.sql().find(" OFFSET ") == std::string_view::npos);
     RUVIA_CHECK(cleared.sql().find("DISTINCT") == std::string_view::npos);
-    RUVIA_CHECK(testing::throws_on([&] { query.limit(static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1); }));
-    RUVIA_CHECK(testing::throws_on([&] { query.offset(static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1); }));
+    query.limit(7).offset(3);
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(),
+             std::numeric_limits<std::int64_t>::min() + 5, std::int64_t{-1}}) {
+        RUVIA_CHECK(testing::throws_on([&] { query.limit(invalid); }));
+        RUVIA_CHECK(testing::throws_on([&] { query.offset(invalid); }));
+    }
+    for (const auto invalid : {static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1,
+             (std::numeric_limits<std::uint64_t>::max)()}) {
+        RUVIA_CHECK(testing::throws_on([&] { query.limit(invalid); }));
+        RUVIA_CHECK(testing::throws_on([&] { query.offset(invalid); }));
+    }
+    const auto retained_pagination = query.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK(retained_pagination.sql().find(" LIMIT $6 OFFSET $7") != std::string_view::npos);
+    RUVIA_CHECK_EQ(retained_pagination.params().size(), std::size_t{7});
+    query.limit(std::nullopt).offset(std::nullopt);
 
     db_query derived;
     derived.select(derived.column("id")).from("cq_source");
@@ -1513,6 +1526,13 @@ RUVIA_TEST(db_query_window_frame_and_date_part_enumerations_cover_each_value) {
                                 {.frame_ = db_window_frame_options{.start_ = {db_frame_boundary::current_row, 1}}}))
         .from("cq_window");
     RUVIA_CHECK(testing::throws_on([&] { (void)invalid_boundary.compile(db_driver::postgresql, nullptr); }));
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
+        RUVIA_CHECK(testing::throws_on([&] { (void)db_window_boundary{db_frame_boundary::preceding, invalid}; }));
+    }
+    RUVIA_CHECK(testing::throws_on([&] {
+        (void)db_window_boundary{
+            db_frame_boundary::following, static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)()) + 1};
+    }));
     db_query reversed;
     reversed.select(reversed.over(reversed.call("row_number"),
                         {.frame_ = db_window_frame_options{.start_ = {db_frame_boundary::following, 0},

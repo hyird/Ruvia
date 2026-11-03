@@ -339,8 +339,8 @@ inline constexpr std::uint64_t redis_find_default_take = 100;
 struct redis_find_options final {
     redis_predicate where_{};
     std::optional<redis_find_order> order_{};
-    std::optional<std::uint64_t> skip_{};
-    std::optional<std::uint64_t> take_{};
+    std::optional<query_row_count> skip_{};
+    std::optional<query_row_count> take_{};
 };
 
 enum class redis_index_kind : std::uint8_t {
@@ -425,7 +425,9 @@ public:
         const auto memory = resource();
         auto args = detail::compile_redis_find(mapping(), options, memory);
         detail::redis_map_many<entity_type> mapper{{std::pmr::string(mapping().prefix_, memory)},
-            options.take_.has_value() ? std::nullopt : std::optional<std::uint64_t>(options.skip_.value_or(0U))};
+            options.take_.has_value()
+                ? std::nullopt
+                : std::optional<std::uint64_t>(options.skip_ ? options.skip_->value() : 0U)};
         return handle_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
     }
 
@@ -446,7 +448,7 @@ public:
                 return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
             }
         }
-        const auto take = options.take_.has_value() ? (std::min)(*options.take_, std::uint64_t{1}) : std::uint64_t{1};
+        const auto take = options.take_.has_value() ? (std::min)(options.take_->value(), std::uint64_t{1}) : std::uint64_t{1};
         auto args = detail::compile_redis_find(mapping(), options, memory, false, take);
         detail::redis_map_first<entity_type> mapper{{std::pmr::string(mapping().prefix_, memory)}};
         return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));

@@ -155,6 +155,7 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 `db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `std::span<const T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样借用集合及元素中的文本。请使用具名 `const std::array` 或 C 数组保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。`std::span` 不拥有元素，不延长生命周期，也不能阻止所有悬垂。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
 
 - **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。
+  `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `skip_`、`take_` 共用 `"ruvia/web/entity_rows.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`（Upsert；MariaDB 仅支持 `.any_unique_key_` 的 `ON DUPLICATE KEY UPDATE`，`excluded(col)` 编译为 `VALUES(col)`）、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
 - **表达式**：`column`、`value`、`excluded`、`call`、`coalesce`、`null_if`、`greatest`、`least`、`case_when`、`cast`、`aggregate`、`filter`、`over`（窗口函数）、`exists`、`subquery`。
 - **写入分类**：`has_writes()` 只依据当前语句及仍有效的 CTE / 集合操作；被替换的来源和未发布的失败追加快照不计入。含写入 CTE 的集合操作不能作为 `from`、`join`、表达式子查询或 `insert_from` 的只读来源；入口拒绝时不挂入该子查询，写入须保留在顶层 CTE。
@@ -337,6 +338,8 @@ ruvia::app()
 | RediSearch ORM | `repository<Entity>(redis_repository_config)` |
 
 `redis_scan_options::match_` 使用 `std::optional<borrowed_text>` 区分未指定与空模式：默认 `nullopt` 不发送 `MATCH`，`match_ = ""` 则发送 `MATCH ""`，只匹配空 key／字段／成员；普通模式如 `"user:*"` 仍按 Redis glob 规则筛选。原先用空字符串清除过滤的调用须改为 `match_ = std::nullopt` 或 `match_.reset()`，不得再依赖空模式被忽略。四种 scan 方法共享此契约，命令入口同步复制模式，保存 options 时仍须保持借用文本有效。依据 [Redis SCAN 的 MATCH 语义](https://redis.io/docs/latest/commands/scan/#the-match-option)。
+
+`redis_scan_options::count_` 与 `redis_x_read_group_options::count_` 使用 `std::optional<redis_positive_count>`：未指定不发送 `COUNT`，指定整数时在构造阶段检查 `1..INT64_MAX`，零、负数或超范围抛出 `std::invalid_argument`，无异常探测用 `redis_positive_count::try_from_value()`。不隐式接受浮点或枚举，需要整数时用 `value()` 解包；不要预先窄化输入。
 
 #### 写入与复制／落盘屏障
 

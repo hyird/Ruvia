@@ -17,9 +17,6 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] std::size_t redis_scan_option_arg_count(const redis_scan_options& options) {
-    if (options.count_.has_value() && *options.count_ == 0) {
-        throw std::invalid_argument("configured redis scan count must be greater than zero");
-    }
     return (options.match_.has_value() ? 2U : 0U) + (options.count_.has_value() ? 2U : 0U);
 }
 

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <chrono>
+#include <compare>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
@@ -9,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -101,9 +104,51 @@ enum class redis_x_read_group_acknowledgement_policy : std::uint8_t {
     track_pending,
     no_ack,
 };
+// Strictly positive Redis batch count in signed 64-bit wire range. Checked
+// before narrowing so negative or zero inputs cannot wrap into huge counts.
+class redis_positive_count final {
+public:
+    constexpr redis_positive_count() noexcept = default;
+
+    template <std::integral integer_type>
+    constexpr redis_positive_count(integer_type value)
+        : value_(is_valid_value(value)
+                     ? static_cast<std::uint64_t>(value)
+                     : throw std::invalid_argument("Redis count must be in 1..9223372036854775807")) {}
+
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
+        return std::cmp_greater(+value, 0) && std::in_range<std::int64_t>(+value);
+    }
+
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr std::optional<redis_positive_count> try_from_value(integer_type value) noexcept {
+        if (!is_valid_value(value)) {
+            return std::nullopt;
+        }
+        return redis_positive_count(static_cast<std::uint64_t>(value), validated_tag_type{});
+    }
+
+    [[nodiscard]] constexpr std::uint64_t value() const noexcept {
+        return value_;
+    }
+
+    friend constexpr auto operator<=>(redis_positive_count, redis_positive_count) = default;
+
+private:
+    struct validated_tag_type {};
+
+    constexpr redis_positive_count(std::uint64_t value, validated_tag_type) noexcept
+        : value_(value) {}
+
+    std::uint64_t value_{1};
+};
+
+static_assert(std::is_trivially_copyable_v<redis_positive_count>);
+static_assert(sizeof(redis_positive_count) == sizeof(std::uint64_t));
 
 struct redis_x_read_group_options final {
-    std::optional<std::uint64_t> count_{};
+    std::optional<redis_positive_count> count_{};
     std::optional<redis_block_wait> block_{};
     redis_x_read_group_acknowledgement_policy acknowledgement_{
         redis_x_read_group_acknowledgement_policy::track_pending};
@@ -235,7 +280,7 @@ struct redis_scan_options {
     // nullopt omits MATCH; an engaged empty pattern matches only empty names.
     // Assign nullopt (not "") to disable filtering.
     std::optional<::ruvia::borrowed_text> match_{};
-    std::optional<std::uint64_t> count_{};
+    std::optional<redis_positive_count> count_{};
 };
 
 class redis_key_value final {
