@@ -13,6 +13,7 @@
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_request_content_semantics.h"
 
 namespace ruvia {
 
@@ -55,7 +56,7 @@ public:
     }
 
 private:
-    friend http_byte_range_set resolve_http_byte_range_set(std::string_view, std::uint64_t) noexcept;
+    friend http_byte_range_set resolve_http_byte_range_set(std::string_view, http_content_length) noexcept;
 
     std::array<range, capacity> ranges_{};
     std::size_t count_{};
@@ -63,7 +64,8 @@ private:
 };
 
 [[nodiscard]] inline http_byte_range_set resolve_http_byte_range_set(
-    std::string_view field_value, std::uint64_t representation_length) noexcept {
+    std::string_view field_value, http_content_length representation_length_value) noexcept {
+    const auto representation_length = representation_length_value.value();
     http_byte_range_set result;
     field_value = http_trim_ows(field_value);
     constexpr std::string_view unit = "bytes";

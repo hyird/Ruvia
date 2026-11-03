@@ -464,13 +464,15 @@ public:
     // runtime framed the response from; the body owns it and releases it on
     // destruction or replacement. Path and range validation precede body
     // replacement; a rejected call releases `opened`.
-    void file_body(http_native_path_view_type file, std::uint64_t size, std::uint64_t offset,
-        std::uint64_t length, http_response_file_identity identity, http_response_file_handle opened = {});
-    void multipart_file_body(http_native_path_view_type file, std::uint64_t size,
+    void file_body(http_native_path_view_type file, http_content_length size,
+        http_content_length offset, http_content_length length, http_response_file_identity identity,
+        http_response_file_handle opened = {});
+    void multipart_file_body(http_native_path_view_type file, http_content_length size,
         http_response_file_identity identity, http_multipart_byte_range_plan&& plan,
         http_response_file_handle opened = {});
-    void content_range(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
-    void content_range_unsatisfied(std::uint64_t size);
+    void content_range(
+        http_content_length offset, http_content_length length, http_content_length size);
+    void content_range_unsatisfied(http_content_length size);
     void add_vary_token(std::string_view token);
     void reserve_headers(std::size_t count);
     [[nodiscard]] std::pmr::memory_resource* memory_resource() const noexcept;

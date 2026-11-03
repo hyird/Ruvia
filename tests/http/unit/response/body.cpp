@@ -176,6 +176,11 @@ RUVIA_TEST(response_file_setter_keeps_typed_identity_and_validates_before_replac
     RUVIA_CHECK(throws_invalid_argument([&] {
         response.file_body(std::filesystem::path("invalid-range.bin").native(), 10, 8, 3, unchecked);
     }));
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
+        RUVIA_CHECK(throws_invalid_argument([&] { response.file_body(path.native(), invalid, 0, 0, unchecked); }));
+        RUVIA_CHECK(throws_invalid_argument([&] { response.file_body(path.native(), 10, invalid, 0, unchecked); }));
+        RUVIA_CHECK(throws_invalid_argument([&] { response.file_body(path.native(), 10, 0, invalid, unchecked); }));
+    }
     RUVIA_CHECK(!response.file_body().has_value());
     RUVIA_CHECK_EQ(response.body_bytes(), std::string_view("preserved"));
 

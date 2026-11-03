@@ -17,7 +17,7 @@ class http_request;
 // does not describe cache misses or select a representation. ETag text is
 // borrowed only during planning; the resulting plan retains no input views.
 struct http_selected_representation_metadata final {
-    std::uint64_t length_{0};
+    http_content_length length_{};
     std::string_view etag_{};
     std::optional<std::time_t> last_modified_{};
     // Only authorizes a date-form If-Range when last_modified is also present.

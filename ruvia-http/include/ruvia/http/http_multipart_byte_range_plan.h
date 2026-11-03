@@ -64,7 +64,7 @@ public:
 
 private:
     friend http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
-        const http_byte_range_set&, std::uint64_t, std::string_view, std::string_view, std::pmr::memory_resource*);
+        const http_byte_range_set&, http_content_length, std::string_view, std::string_view, std::pmr::memory_resource*);
 
     struct storage final {
         static constexpr std::size_t max_segments = http_byte_range_set::capacity * 2 + 1;
@@ -92,7 +92,7 @@ private:
 // plan_http_representation_response() answers multiple ranges of a coded
 // representation with the full representation instead.
 [[nodiscard]] http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
-    const http_byte_range_set& ranges, std::uint64_t representation_length,
+    const http_byte_range_set& ranges, http_content_length representation_length,
     std::string_view media_type, std::string_view boundary, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia

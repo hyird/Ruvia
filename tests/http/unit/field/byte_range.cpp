@@ -292,6 +292,10 @@ RUVIA_TEST(byte_range_set_empty_representation_uses_ignore_policy) {
     RUVIA_CHECK(is_ignored_range("bytes=0-99", 0));
     RUVIA_CHECK(is_ignored_range("bytes=-1", 0));
     RUVIA_CHECK(is_ignored_range("BYTES=0-", 0));
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
+        RUVIA_CHECK(ruvia::testing::throws_on(
+            [&] { (void)resolve_http_byte_range_set("bytes=0-1", invalid); }));
+    }
 }
 
 RUVIA_TEST(byte_range_set_rejects_out_of_range_index) {

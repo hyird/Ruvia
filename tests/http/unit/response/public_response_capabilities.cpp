@@ -116,6 +116,13 @@ RUVIA_TEST(response_public_cookie_and_metadata_capabilities) {
     response.add_vary_token("Accept-Encoding");
     RUVIA_CHECK_EQ(response.header("Content-Range").value_or(""), "bytes 5-7/10");
     RUVIA_CHECK_EQ(response.header("Vary").value_or(""), "Accept-Encoding");
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { response.content_range(invalid, 3, 10); }));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { response.content_range(5, invalid, 10); }));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { response.content_range(5, 3, invalid); }));
+        RUVIA_CHECK(ruvia::testing::throws_on([&] { response.content_range_unsatisfied(invalid); }));
+    }
+    RUVIA_CHECK_EQ(response.header("Content-Range").value_or(""), "bytes 5-7/10");
     response.add_vary_token(" Accept-Encoding ");
     RUVIA_CHECK_EQ(response.header("Vary").value_or(""), "Accept-Encoding");
     bool invalid_vary_rejected = false;

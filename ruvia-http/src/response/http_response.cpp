@@ -287,35 +287,37 @@ void http_response::apply_encoded_representation(
     update.publish();
 }
 
-void http_response::file_body(http_native_path_view_type file, std::uint64_t size,
-    std::uint64_t offset, std::uint64_t length, http_response_file_identity identity,
+void http_response::file_body(http_native_path_view_type file, http_content_length size,
+    http_content_length offset, http_content_length length, http_response_file_identity identity,
     http_response_file_handle opened) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
-    if (offset > size || length > size - offset) {
+    if (offset.value() > size.value() || length.value() > size.value() - offset.value()) {
         throw std::invalid_argument("file response byte range is outside the file");
     }
 
-    body_.set_owned_file(memory_resource(), file, size, offset, length, identity, std::move(opened));
+    body_.set_owned_file(memory_resource(), file, size.value(), offset.value(), length.value(),
+        identity, std::move(opened));
 }
 
-void http_response::multipart_file_body(http_native_path_view_type file, std::uint64_t size,
+void http_response::multipart_file_body(http_native_path_view_type file, http_content_length size,
     http_response_file_identity identity, http_multipart_byte_range_plan&& plan,
     http_response_file_handle opened) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
-    body_.set_multipart(memory_resource(), file, size, identity, std::move(plan), std::move(opened));
+    body_.set_multipart(
+        memory_resource(), file, size.value(), identity, std::move(plan), std::move(opened));
 }
 
 void http_response::content_range(
-    std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
-    headers_.set_content_range(offset, length, size);
+    http_content_length offset, http_content_length length, http_content_length size) {
+    headers_.set_content_range(offset.value(), length.value(), size.value());
 }
 
-void http_response::content_range_unsatisfied(std::uint64_t size) {
-    headers_.set_content_range_unsatisfied(size);
+void http_response::content_range_unsatisfied(http_content_length size) {
+    headers_.set_content_range_unsatisfied(size.value());
 }
 
 void http_response::add_vary_token(std::string_view token) {

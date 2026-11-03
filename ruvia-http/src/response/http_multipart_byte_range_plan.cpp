@@ -11,8 +11,9 @@
 namespace ruvia {
 
 http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
-    const http_byte_range_set& ranges, std::uint64_t representation_length,
+    const http_byte_range_set& ranges, http_content_length representation_length_value,
     std::string_view media_type, std::string_view boundary, std::pmr::memory_resource* resource) {
+    const auto representation_length = representation_length_value.value();
     if (ranges.ignored() || ranges.unsatisfiable() || ranges.size() < 2 ||
         ranges.size() > http_byte_range_set::capacity || representation_length == 0 ||
         !is_valid_http_content_type_field_value(media_type) ||
