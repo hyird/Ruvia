@@ -187,8 +187,7 @@ RUVIA_TEST(http1_interim_response_writer_enforces_size_limit) {
     std::vector<http_header_view> many(80, http_header_view("X-Hint", "value"));
     std::array<char, 2048> many_buffer{};
     const auto many_result = prepare_http1_interim_response_head(
-        http_interim_response_head(
-            ruvia::http_status::early_hints, std::span<const http_header_view>(many)),
+        http_interim_response_head(ruvia::http_status::early_hints, many),
         many_buffer);
     RUVIA_CHECK(std::holds_alternative<prepared_http1_interim_response>(many_result));
 
@@ -196,3 +195,15 @@ RUVIA_TEST(http1_interim_response_writer_enforces_size_limit) {
     const http_header_view oversized[] = {{"X-Hint", oversized_value}};
     RUVIA_CHECK(rejects_without_writing(oversized, '!'));
 }
+
+static_assert(std::is_constructible_v<ruvia::borrowed_http_headers, std::vector<http_header_view>&>);
+static_assert(std::is_constructible_v<ruvia::borrowed_http_headers, const std::vector<http_header_view>&>);
+static_assert(std::is_constructible_v<ruvia::borrowed_http_headers, const std::pmr::vector<http_header_view>&>);
+static_assert(std::is_constructible_v<ruvia::borrowed_http_headers, const std::array<http_header_view, 1>&>);
+static_assert(!std::is_constructible_v<ruvia::borrowed_http_headers, std::vector<http_header_view>>);
+static_assert(!std::is_constructible_v<ruvia::borrowed_http_headers, std::pmr::vector<http_header_view>>);
+static_assert(!std::is_constructible_v<ruvia::borrowed_http_headers, std::array<http_header_view, 1>>);
+static_assert(!std::is_constructible_v<ruvia::borrowed_http_headers, std::initializer_list<http_header_view>>);
+static_assert(std::is_constructible_v<http_interim_response_head, ruvia::http_status_code, const std::vector<http_header_view>&>);
+static_assert(!std::is_constructible_v<http_interim_response_head, ruvia::http_status_code, std::vector<http_header_view>>);
+static_assert(!std::is_constructible_v<http_interim_response_head, ruvia::http_status_code, std::array<http_header_view, 1>>);

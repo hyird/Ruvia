@@ -17,7 +17,7 @@ struct http_push_request_view final {
     borrowed_text scheme_{"https"};
     borrowed_text authority_{};
     borrowed_text path_{"/"};
-    std::span<const http_header_view> headers_{};
+    borrowed_http_headers headers_{};
 };
 
 // Detached promise metadata owns its decoded bytes independently of feed input.

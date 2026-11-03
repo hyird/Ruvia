@@ -95,7 +95,7 @@ struct websocket_server_handshake_options final {
     // Framing, connection, and Sec-websocket fields belong to the handshake
     // itself. Names/values must be valid fields; values cannot start or end
     // with SP/HTAB.
-    std::span<const http_header_view> response_headers_{};
+    borrowed_http_headers response_headers_{};
     websocket_deflate_config deflate_{};
 };
 

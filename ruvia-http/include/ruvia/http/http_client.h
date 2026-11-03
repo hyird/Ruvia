@@ -171,7 +171,7 @@ struct http_client_request_view {
     // unchanged until synchronous preparation/submission consumes them. The
     // HTTP/1 writer permits metadata to overlap its emitted head and owns the
     // small set of facts needed by the later response exchange.
-    std::span<const http_header_view> headers_{};
+    borrowed_http_headers headers_{};
     http_client_request_content_view content_{http_client_request_content_view::none()};
 };
 
@@ -182,7 +182,7 @@ struct http_client_tunnel_request_view final {
     ::ruvia::borrowed_text authority_{};
     ::ruvia::borrowed_text protocol_{};
     ::ruvia::borrowed_text target_{};
-    std::span<const http_header_view> headers_{};
+    borrowed_http_headers headers_{};
 };
 
 }  // namespace ruvia

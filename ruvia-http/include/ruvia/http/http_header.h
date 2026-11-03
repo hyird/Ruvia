@@ -1,11 +1,16 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <memory_resource>
+#include <ranges>
+#include <span>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/http/borrowed_text.h"
@@ -185,5 +190,90 @@ private:
     std::string_view name_;
     std::string_view value_;
 };
+
+// Zero-copy HTTP header-view span held by a request, response, handshake, or
+// client option struct. Like borrowed_text, it accepts borrowed spans and
+// contiguous owning-container lvalues while rejecting temporary owning
+// containers (std::vector, std::pmr::vector, std::array) and initializer_list
+// values whose backing storage would expire before the struct is consumed.
+class borrowed_http_headers final {
+public:
+    constexpr borrowed_http_headers() noexcept = default;
+
+    constexpr borrowed_http_headers(std::span<const http_header_view> headers) noexcept
+        : headers_(headers) {}
+
+    template <typename range_type>
+        requires(!std::same_as<std::remove_cvref_t<range_type>, borrowed_http_headers>) &&
+                (!std::same_as<std::remove_cvref_t<range_type>, std::span<const http_header_view>>) &&
+                (!std::same_as<std::remove_cvref_t<range_type>, std::span<http_header_view>>) &&
+                std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
+                std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, http_header_view>
+    constexpr borrowed_http_headers(range_type&& headers) noexcept
+        : headers_(std::ranges::data(headers), std::ranges::size(headers)) {}
+
+    template <detail::http_temporary_owning_range<http_header_view> headers_type>
+    borrowed_http_headers(headers_type&&) = delete;
+
+    constexpr borrowed_http_headers(std::initializer_list<http_header_view>) = delete;
+
+    constexpr borrowed_http_headers& operator=(std::span<const http_header_view> headers) noexcept {
+        headers_ = headers;
+        return *this;
+    }
+
+    template <typename range_type>
+        requires(!std::same_as<std::remove_cvref_t<range_type>, borrowed_http_headers>) &&
+                (!std::same_as<std::remove_cvref_t<range_type>, std::span<const http_header_view>>) &&
+                (!std::same_as<std::remove_cvref_t<range_type>, std::span<http_header_view>>) &&
+                std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
+                std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, http_header_view>
+    constexpr borrowed_http_headers& operator=(range_type&& headers) noexcept {
+        headers_ = std::span<const http_header_view>(std::ranges::data(headers), std::ranges::size(headers));
+        return *this;
+    }
+
+    template <detail::http_temporary_owning_range<http_header_view> headers_type>
+    borrowed_http_headers& operator=(headers_type&&) = delete;
+
+    constexpr borrowed_http_headers& operator=(std::initializer_list<http_header_view>) = delete;
+
+    [[nodiscard]] constexpr std::span<const http_header_view> view() const noexcept {
+        return headers_;
+    }
+
+    [[nodiscard]] constexpr operator std::span<const http_header_view>() const noexcept {
+        return headers_;
+    }
+
+    [[nodiscard]] constexpr const http_header_view* data() const noexcept {
+        return headers_.data();
+    }
+
+    [[nodiscard]] constexpr std::size_t size() const noexcept {
+        return headers_.size();
+    }
+
+    [[nodiscard]] constexpr bool empty() const noexcept {
+        return headers_.empty();
+    }
+
+    [[nodiscard]] constexpr auto begin() const noexcept {
+        return headers_.begin();
+    }
+
+    [[nodiscard]] constexpr auto end() const noexcept {
+        return headers_.end();
+    }
+
+    [[nodiscard]] constexpr const http_header_view& operator[](std::size_t index) const noexcept {
+        return headers_[index];
+    }
+
+private:
+    std::span<const http_header_view> headers_{};
+};
+
+static_assert(sizeof(borrowed_http_headers) == sizeof(std::span<const http_header_view>));
 
 }  // namespace ruvia

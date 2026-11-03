@@ -261,7 +261,7 @@ static_assert(std::is_nothrow_move_assignable_v<conn_info>);
 struct dispatch_options final {
     borrowed_text method_{};
     borrowed_text target_{};
-    std::span<const http_header_view> headers_{};
+    borrowed_http_headers headers_{};
     borrowed_text body_{};
     stop_token stop_token_{};
 };

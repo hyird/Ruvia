@@ -83,9 +83,10 @@ void analyze_http1_fields(const http_interim_response_head& response, http1_inte
 
 }  // namespace
 
-http_interim_response_head::http_interim_response_head(http_status_code status_code, header_init_type headers)
+http_interim_response_head::http_interim_response_head(
+    http_status_code status_code, borrowed_http_headers headers)
     : status_code_(status_code),
-      headers_(headers) {
+      headers_(headers.view()) {
     if (!detail::http_interim_status_code_valid(status_code)) {
         throw std::invalid_argument(status_code == http_status::switching_protocols
                                         ? "Switching Protocols requires a dedicated protocol driver"

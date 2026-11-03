@@ -21,7 +21,7 @@ namespace ruvia {
 // Already-expanded proxy URI path, borrowed until open_udp_tunnel() returns.
 struct http_client_udp_tunnel_request_view final {
     borrowed_text target_{};
-    std::span<const http_header_view> headers_{};
+    borrowed_http_headers headers_{};
 };
 
 struct http_connect_udp_target_view final {
@@ -55,7 +55,7 @@ struct http_connect_udp_request_view final {
     borrowed_text scheme_{"https"};
     borrowed_text authority_{};
     borrowed_text path_{};
-    std::span<const http_header_view> headers_{};
+    borrowed_http_headers headers_{};
 };
 // Recipient checks. The connect-udp token selects the Capsule Protocol, so
 // Capsule-Protocol is optional; a non-Boolean, ?0 or repeated field is treated as

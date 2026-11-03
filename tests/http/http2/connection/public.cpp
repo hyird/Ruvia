@@ -5853,3 +5853,24 @@ RUVIA_TEST(http2_public_skipped_stream_resets_do_not_evict_peer_reset_history) {
     RUVIA_CHECK(server.feed(dup_rst) == ruvia::http2_feed_result::protocol_failure);
     RUVIA_CHECK(server.connection_error() == ruvia::http2_error_code::stream_closed);
 }
+
+namespace {
+
+template <typename headers_type>
+concept push_request_view_accepts_headers = requires(headers_type&& headers) {
+    ruvia::http_push_request_view{.headers_ = std::forward<headers_type>(headers)};
+};
+
+template <typename headers_type>
+concept regular_request_view_accepts_headers = requires(headers_type&& headers) {
+    ruvia::http2_regular_request_head_view{.headers_ = std::forward<headers_type>(headers)};
+};
+
+static_assert(push_request_view_accepts_headers<const std::vector<ruvia::http_header_view>&>);
+static_assert(!push_request_view_accepts_headers<std::vector<ruvia::http_header_view>>);
+static_assert(!push_request_view_accepts_headers<std::array<ruvia::http_header_view, 1>>);
+static_assert(regular_request_view_accepts_headers<const std::vector<ruvia::http_header_view>&>);
+static_assert(!regular_request_view_accepts_headers<std::vector<ruvia::http_header_view>>);
+static_assert(!regular_request_view_accepts_headers<std::array<ruvia::http_header_view, 1>>);
+
+}  // namespace

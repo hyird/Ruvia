@@ -216,7 +216,7 @@ std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_
     if (!authority || authority->host().empty() || !is_valid_http_origin_form_target(request.path_)) {
         return http_connect_udp_error::invalid_request;
     }
-    const auto parsed_value = fields(request.headers_,
+    const auto parsed_value = fields(request.headers_.view(),
         sending ? handshake_message_role::request_sender : handshake_message_role::request_recipient,
         http_connect_udp_error::invalid_request);
     if (parsed_value.index() != 0) {

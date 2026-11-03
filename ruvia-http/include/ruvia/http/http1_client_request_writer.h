@@ -37,7 +37,7 @@ struct http1_client_request_prepare_result_access;
 struct http1_client_request_head_view final {
     borrowed_text method_{"GET"};
     borrowed_text target_{"/"};
-    std::span<const http_header_view> headers_{};
+    borrowed_http_headers headers_{};
     // A value sends Content-Length; absent sends Transfer-Encoding: chunked.
     std::optional<http_content_length> content_length_{};
 };
