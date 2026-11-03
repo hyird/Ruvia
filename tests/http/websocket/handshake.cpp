@@ -494,3 +494,24 @@ RUVIA_TEST(ws_handshake_application_values_are_valid_for_both_http_versions) {
     handshake.for_each_response_part([&](std::string_view part) { response.append(part); });
     RUVIA_CHECK((response.find("x-test: \r\n") != std::string_view::npos));
 }
+
+namespace {
+
+template <typename subprotocols_type>
+concept ws_server_handshake_accepts_subprotocols = requires(subprotocols_type&& subprotocols) {
+    ruvia::websocket_server_handshake_options{.supported_subprotocols_ = std::forward<subprotocols_type>(subprotocols)};
+};
+
+template <typename subprotocols_type>
+concept ws_handshake_validation_accepts_subprotocols = requires(subprotocols_type&& subprotocols) {
+    ruvia::websocket_handshake_validation_options{.supported_subprotocols_ = std::forward<subprotocols_type>(subprotocols)};
+};
+
+static_assert(ws_server_handshake_accepts_subprotocols<const std::vector<std::string_view>&>);
+static_assert(!ws_server_handshake_accepts_subprotocols<std::vector<std::string_view>>);
+static_assert(!ws_server_handshake_accepts_subprotocols<std::array<std::string_view, 1>>);
+static_assert(ws_handshake_validation_accepts_subprotocols<const std::vector<std::string_view>&>);
+static_assert(!ws_handshake_validation_accepts_subprotocols<std::vector<std::string_view>>);
+static_assert(!ws_handshake_validation_accepts_subprotocols<std::array<std::string_view, 1>>);
+
+}  // namespace

@@ -18,7 +18,7 @@ class http2_connection;
 class http_client_response_head;
 
 struct websocket_client_negotiation_config_view final {
-    std::span<const std::string_view> subprotocols_{};
+    borrowed_span<std::string_view> subprotocols_{};
     websocket_client_deflate_offer deflate_{};
 };
 // The one failure shape of a client opening handshake over HTTP/1.1 Upgrade

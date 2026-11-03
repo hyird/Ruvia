@@ -113,43 +113,7 @@ struct validation_issue_access final {
 }
 
 }  // namespace detail
-namespace detail {
-
-template <typename range_type>
-concept http_temporary_owning_validation_issue_range =
-    !std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
-    !std::ranges::borrowed_range<range_type> &&
-    std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, validation_issue>;
-
-}  // namespace detail
-
-class borrowed_validation_issues final {
-public:
-    constexpr borrowed_validation_issues() noexcept = default;
-
-    constexpr borrowed_validation_issues(std::span<const validation_issue> issues) noexcept
-        : issues_(issues) {}
-
-    template <typename range_type>
-        requires std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
-                 std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, validation_issue>
-    constexpr borrowed_validation_issues(range_type&& issues) noexcept
-        : issues_(std::ranges::data(issues), std::ranges::size(issues)) {}
-
-    template <detail::http_temporary_owning_validation_issue_range issues_type>
-    borrowed_validation_issues(issues_type&&) = delete;
-
-    [[nodiscard]] constexpr std::span<const validation_issue> view() const noexcept {
-        return issues_;
-    }
-
-    [[nodiscard]] constexpr operator std::span<const validation_issue>() const noexcept {
-        return issues_;
-    }
-
-private:
-    std::span<const validation_issue> issues_{};
-};
+using borrowed_validation_issues = borrowed_span<validation_issue>;
 
 struct http_error_info_options final {
     http_status_code status_{http_status::internal_server_error};

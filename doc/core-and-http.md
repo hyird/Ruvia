@@ -105,7 +105,7 @@ pool.join();
 
 | 头文件 | 核心公开类型 / 函数 | 说明 |
 | --- | --- | --- |
-| `"ruvia/http/borrowed_text.h"` | `class borrowed_text final` | 只读字符串借用视图，拒绝直接绑定临时拥有型字符串，但不延长底层文本生命周期；集合 option 使用 `std::span<const T>` 借用连续存储，调用方必须保持存储有效直到消费入口完成读取或拥有化，`span` 本身不阻止悬垂 |
+| `"ruvia/http/borrowed_text.h"` | `class borrowed_text final`、`template <typename element_type> class borrowed_span final` | 只读字符串与连续元素序列借用视图，拒绝直接绑定临时拥有型字符串、临时连续容器（`std::vector`、`std::pmr::vector`、`std::array`）及 `std::initializer_list`，但不延长底层 owner 的生命周期；调用方仍须保持命名存储有效直到消费入口完成读取或拥有化 |
 | `"ruvia/http/port_number.h"` | `class port_number final` | 原始整数宽度受检的端口值；在格式化或原生 API 边界用 `value()` 显式解包 |
 | `"ruvia/http/protocol_byte_limit.h"` | `class protocol_byte_limit final` | 显式有限／无限字节预算：默认和 `unlimited()` 不限量，`limited(n)` 接受原始整数，在窄化前检查严格正数且可表示为 `std::size_t`，否则抛出 `std::invalid_argument`；浮点和枚举不隐式接受，不要预先窄化输入；`SIZE_MAX` 仍是有限预算，不是无限哨兵 |
 | `"ruvia/http/http_io_buffer.h"` | `class http_io_buffer final` | PMR 流式读写缓冲区：`prepare(n)` / `prepare_spare()`、`commit(n)`、`append(bytes)`、`data()` / `view()`、`consume(n)`、`clear_retaining_small()`；返回借用的四个入口只接受左值，缓冲区存储须覆盖异步 I/O 与视图消费 |

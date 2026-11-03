@@ -192,14 +192,14 @@ struct db_source_column final {
 struct db_source_options final {
     bool lateral_{false};
     bool with_ordinality_{false};
-    std::span<const db_source_column> columns_{};
+    borrowed_span<db_source_column> columns_{};
 };
 // span 及元素中的文本均为借用；with 入口同步复制或导入。
 // 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_cte_options final {
     bool recursive_{false};
     db_materialization materialization_{db_materialization::default_value};
-    std::span<const borrowed_text> columns_{};
+    borrowed_span<borrowed_text> columns_{};
 };
 // span 及元素中的文本均为借用；lock/set_lock 入口同步复制或导入。
 // 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
@@ -207,7 +207,7 @@ struct db_lock_options final {
     db_row_lock mode_{db_row_lock::update};
     bool nowait_{false};
     bool skip_locked_{false};
-    std::span<const borrowed_text> tables_{};
+    borrowed_span<borrowed_text> tables_{};
 };
 
 class db_query;

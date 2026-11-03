@@ -90,7 +90,7 @@ private:
 // CONNECT.
 struct websocket_server_handshake_options final {
     // Server preference order. Every entry must be a nonempty, unique HTTP token.
-    std::span<const std::string_view> supported_subprotocols_{};
+    borrowed_span<std::string_view> supported_subprotocols_{};
     // Additional response fields, copied before the response plan is returned.
     // Framing, connection, and Sec-websocket fields belong to the handshake
     // itself. Names/values must be valid fields; values cannot start or end
@@ -104,7 +104,7 @@ struct websocket_handshake_validation_options final {
     // refuse a client offering none of them, instead of accepting without a
     // Sec-WebSocket-Protocol response field. When set, a request whose offer
     // shares no entry with supported_subprotocols_ fails validation.
-    std::span<const std::string_view> supported_subprotocols_{};
+    borrowed_span<std::string_view> supported_subprotocols_{};
     bool require_subprotocol_{false};
 };
 

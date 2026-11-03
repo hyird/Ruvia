@@ -103,7 +103,7 @@ struct jwt_sign_options final {
     borrowed_text id_{};
     std::optional<std::chrono::seconds> expires_in_{std::chrono::hours(1)};
     std::optional<std::chrono::seconds> not_before_delay_{};
-    std::span<const jwt_claim_view> claims_{};
+    borrowed_span<jwt_claim_view> claims_{};
     std::pmr::memory_resource* resource_{nullptr};
 };
 

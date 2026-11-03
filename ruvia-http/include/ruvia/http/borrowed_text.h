@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <initializer_list>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -113,5 +115,97 @@ private:
 };
 
 static_assert(sizeof(borrowed_text) == sizeof(std::string_view));
+
+// Zero-copy element span held by an option or message-view struct. Accepts
+// borrowed spans and contiguous owning-container lvalues while rejecting
+// temporary owning containers (std::vector, std::pmr::vector, std::array) and
+// initializer_list values whose backing storage would expire before the struct
+// is consumed.
+template <typename element_type>
+class borrowed_span final {
+public:
+    constexpr borrowed_span() noexcept = default;
+
+    constexpr borrowed_span(std::span<const element_type> values) noexcept
+        : values_(values) {}
+
+    template <typename range_type>
+        requires(!std::same_as<std::remove_cvref_t<range_type>, borrowed_span>) &&
+                (!std::same_as<std::remove_cvref_t<range_type>, std::span<const element_type>>) &&
+                (!std::same_as<std::remove_cvref_t<range_type>, std::span<element_type>>) &&
+                std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
+                std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, element_type>
+    constexpr borrowed_span(range_type&& values) noexcept
+        : values_(std::ranges::data(values), std::ranges::size(values)) {}
+
+    template <detail::http_temporary_owning_range<element_type> range_type>
+    borrowed_span(range_type&&) = delete;
+
+    constexpr borrowed_span(std::initializer_list<element_type>) = delete;
+
+    constexpr borrowed_span& operator=(std::span<const element_type> values) noexcept {
+        values_ = values;
+        return *this;
+    }
+
+    template <typename range_type>
+        requires(!std::same_as<std::remove_cvref_t<range_type>, borrowed_span>) &&
+                (!std::same_as<std::remove_cvref_t<range_type>, std::span<const element_type>>) &&
+                (!std::same_as<std::remove_cvref_t<range_type>, std::span<element_type>>) &&
+                std::is_lvalue_reference_v<range_type&&> && std::ranges::contiguous_range<range_type> &&
+                std::same_as<std::remove_cv_t<std::ranges::range_value_t<range_type>>, element_type>
+    constexpr borrowed_span& operator=(range_type&& values) noexcept {
+        values_ = std::span<const element_type>(std::ranges::data(values), std::ranges::size(values));
+        return *this;
+    }
+
+    template <detail::http_temporary_owning_range<element_type> range_type>
+    borrowed_span& operator=(range_type&&) = delete;
+
+    constexpr borrowed_span& operator=(std::initializer_list<element_type>) = delete;
+
+    [[nodiscard]] constexpr std::span<const element_type> view() const noexcept {
+        return values_;
+    }
+
+    [[nodiscard]] constexpr operator std::span<const element_type>() const noexcept {
+        return values_;
+    }
+
+    [[nodiscard]] constexpr const element_type* data() const noexcept {
+        return values_.data();
+    }
+
+    [[nodiscard]] constexpr std::size_t size() const noexcept {
+        return values_.size();
+    }
+
+    [[nodiscard]] constexpr bool empty() const noexcept {
+        return values_.empty();
+    }
+
+    [[nodiscard]] constexpr auto begin() const noexcept {
+        return values_.begin();
+    }
+
+    [[nodiscard]] constexpr auto end() const noexcept {
+        return values_.end();
+    }
+
+    [[nodiscard]] constexpr const element_type& front() const noexcept {
+        return values_.front();
+    }
+
+    [[nodiscard]] constexpr const element_type& back() const noexcept {
+        return values_.back();
+    }
+
+    [[nodiscard]] constexpr const element_type& operator[](std::size_t index) const noexcept {
+        return values_[index];
+    }
+
+private:
+    std::span<const element_type> values_{};
+};
 
 }  // namespace ruvia

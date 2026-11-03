@@ -48,7 +48,7 @@ struct websocket_client_config final {
     borrowed_text target_{"/"};
     // Application request fields. A User-Agent field replaces user_agent_.
     borrowed_http_headers headers_{};
-    std::span<const borrowed_text> subprotocols_{};
+    borrowed_span<borrowed_text> subprotocols_{};
     websocket_client_deflate_offer deflate_{};
     std::size_t max_message_bytes_{default_max_websocket_message_bytes};
     std::chrono::milliseconds connect_timeout_{5000};

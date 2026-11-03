@@ -1738,3 +1738,24 @@ RUVIA_TEST(db_repository_decodes_postgresql_array_bounds_in_element_order) {
 
 }  // namespace db_repository_array_test
 #endif
+
+namespace {
+
+template <typename columns_type>
+concept db_find_options_accepts_select = requires(columns_type&& columns) {
+    ruvia::db_find_options{.select_ = std::forward<columns_type>(columns)};
+};
+
+template <typename columns_type>
+concept db_upsert_options_accepts_conflict_paths = requires(columns_type&& columns) {
+    ruvia::db_upsert_options{.conflict_paths_ = std::forward<columns_type>(columns)};
+};
+
+static_assert(db_find_options_accepts_select<const std::vector<ruvia::borrowed_text>&>);
+static_assert(!db_find_options_accepts_select<std::vector<ruvia::borrowed_text>>);
+static_assert(!db_find_options_accepts_select<std::array<ruvia::borrowed_text, 1>>);
+static_assert(db_upsert_options_accepts_conflict_paths<const std::vector<ruvia::borrowed_text>&>);
+static_assert(!db_upsert_options_accepts_conflict_paths<std::vector<ruvia::borrowed_text>>);
+static_assert(!db_upsert_options_accepts_conflict_paths<std::array<ruvia::borrowed_text, 1>>);
+
+}  // namespace
