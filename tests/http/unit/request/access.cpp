@@ -240,3 +240,20 @@ RUVIA_TEST(owned_header_lowercase_copy_normalizes_only_the_name_in_one_allocatio
     }
     RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
 }
+
+namespace {
+
+template <typename method_type, typename target_type, typename body_type>
+concept make_parsed_request_accepts = requires(method_type&& method, target_type&& target, body_type&& body) {
+    ruvia::make_parsed_http_request(std::forward<method_type>(method), std::forward<target_type>(target),
+        std::span<const ruvia::http_header_view>{}, std::forward<body_type>(body),
+        std::pmr::get_default_resource());
+};
+
+static_assert(make_parsed_request_accepts<const std::string&, const std::string&, const std::vector<std::byte>&>);
+static_assert(!make_parsed_request_accepts<std::string, const std::string&, const std::vector<std::byte>&>);
+static_assert(!make_parsed_request_accepts<const std::string&, std::string, const std::vector<std::byte>&>);
+static_assert(!make_parsed_request_accepts<const std::string&, const std::string&, std::vector<std::byte>>);
+static_assert(!make_parsed_request_accepts<const std::string&, const std::string&, std::array<std::byte, 1>>);
+
+}  // namespace

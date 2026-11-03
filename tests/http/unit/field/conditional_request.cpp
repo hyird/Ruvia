@@ -106,3 +106,15 @@ RUVIA_TEST(http_etag_preconditions_fold_repeated_field_lines) {
     RUVIA_CHECK(existence.if_match_.matches());
     RUVIA_CHECK(existence.if_match_.wildcard_);
 }
+
+namespace {
+
+template <typename request_type>
+concept conditional_headers_accepts_request = requires(request_type&& request) {
+    ruvia::get_http_conditional_headers(std::forward<request_type>(request));
+};
+
+static_assert(conditional_headers_accepts_request<const ruvia::http_request&>);
+static_assert(!conditional_headers_accepts_request<ruvia::http_request>);
+
+}  // namespace

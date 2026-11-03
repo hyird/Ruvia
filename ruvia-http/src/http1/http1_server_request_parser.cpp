@@ -258,18 +258,20 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
 }
 
 http_request make_parsed_http_request(
-    std::string_view method, std::string_view target, std::span<const http_header_view> headers,
-    std::span<const std::byte> body, std::pmr::memory_resource* resource) {
-    if (!is_valid_http_method_token(method)) {
+    borrowed_text method, borrowed_text target, std::span<const http_header_view> headers,
+    borrowed_span<std::byte> body, std::pmr::memory_resource* resource) {
+    const auto method_view = method.view();
+    const auto target_text = target.view();
+    if (!is_valid_http_method_token(method_view)) {
         throw http_parse_protocol_error(http_parse_error::invalid_request_line);
     }
     auto request = http_request_access::make();
     http_request_access::set_resource(request, resource);
-    http_request_access::set_method(request, method);
-    http_request_access::set_target(request, target);
+    http_request_access::set_method(request, method_view);
+    http_request_access::set_target(request, target_text);
 
     request_target_view target_view;
-    if (!parse_request_target(request.known_method(), target, target_view)) {
+    if (!parse_request_target(request.known_method(), target_text, target_view)) {
         throw http_parse_protocol_error(http_parse_error::invalid_request_target);
     }
     // The same recipient field rules as the wire parsers: repeated singleton
@@ -315,7 +317,7 @@ http_request make_parsed_http_request(
             throw http_parse_protocol_error(http_parse_error::header_too_large);
         }
     }
-    http_request_access::set_body(request, body);
+    http_request_access::set_body(request, body.view());
     return request;
 }
 

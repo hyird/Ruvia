@@ -49,6 +49,7 @@ struct http_conditional_headers final {
 // invalid date conditions (RFC 9110 sections 13.1.3 and 13.1.4); their views
 // are empty here rather than exposing the last line as an effective condition.
 [[nodiscard]] http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept;
+http_conditional_headers get_http_conditional_headers(const http_request&&) = delete;
 
 // One entity-tag precondition field's outcome, accumulated across every field
 // line of that name. `valid` is false for a malformed field, which the caller

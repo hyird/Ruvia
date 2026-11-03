@@ -183,7 +183,7 @@ private:
 // are intentionally not interpreted because this API represents an
 // already-parsed request.
 [[nodiscard]] http_request make_parsed_http_request(
-    std::string_view method, std::string_view target, std::span<const http_header_view> headers,
-    std::span<const std::byte> body, std::pmr::memory_resource* resource);
+    borrowed_text method, borrowed_text target, std::span<const http_header_view> headers,
+    borrowed_span<std::byte> body, std::pmr::memory_resource* resource);
 
 }  // namespace ruvia
