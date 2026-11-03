@@ -22,8 +22,8 @@ hpack_decoder::~hpack_decoder() = default;
 hpack_decoder::hpack_decoder(hpack_decoder&&) noexcept = default;
 hpack_decoder& hpack_decoder::operator=(hpack_decoder&&) noexcept = default;
 
-void hpack_decoder::set_max_dynamic_table_size(std::size_t bytes_value) {
-    impl_->set_max_dynamic_table_size(bytes_value);
+void hpack_decoder::set_max_dynamic_table_size(hpack_table_size bytes_value) {
+    impl_->set_max_dynamic_table_size(bytes_value.value());
 }
 
 std::optional<hpack_decode_error> hpack_decoder::decode_with_callback(

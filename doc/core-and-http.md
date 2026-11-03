@@ -225,6 +225,8 @@ while (conn.wants_write()) {
 }
 ```
 
+
+`hpack_encoder::encode_indexed()` 与 `encode_header_with_name_index()` 的索引输入使用 `hpack_index`：窄化前检查 `1..UINT32_MAX`，零、负数或超范围抛出 `std::invalid_argument`（无异常探测用 `hpack_index::try_from_value()`）。`hpack_encoder::encode_dynamic_table_size_update()` 与 `hpack_decoder::set_max_dynamic_table_size()` 的容量输入使用 `hpack_table_size`：窄化前检查 `0..UINT32_MAX`，负数或超范围抛出 `std::invalid_argument`（无异常探测用 `hpack_table_size::try_from_value()`）。两者均不隐式接受浮点或枚举，需要整数时用 `value()` 解包；不要预先窄化输入。
 独立 `hpack_decoder` 每次 `decode()` 处理一个完整字段块；回调只借用本次字段的名称和值，必须保持 decoder 的实现存活直到调用返回。同一实现处于字段块解码期间，再次 `decode()` 或调用 `set_max_dynamic_table_size()` 均抛出 `std::logic_error`，且不提交该嵌套操作；容量修改移到块之间，不同 decoder 仍可嵌套使用。这是库的状态独占契约，不是 RFC 的额外输入限制。回调异常不截断合法块的消费，动态表完成同步后再重抛；后续编码错误则回滚整个块，并优先保留最初的回调异常。
 
 - **流控凭证 `http2_received_data_credit`**：`message_body_chunk()` 与 `tunnel_data()` 事件携带移动专属的流控凭证；当上层消费完缓冲数据后，通过析构凭证或调用 `conn.acknowledge(std::move(credit))` 触发连接与流级 `WINDOW_UPDATE` 帧发送，实现精确背压。

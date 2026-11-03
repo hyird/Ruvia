@@ -93,16 +93,13 @@ void encode_unindexed_literal(std::pmr::string& out, bool never_indexed,
 
 }  // namespace
 
-void hpack_encoder::encode_indexed(std::pmr::string& out, std::uint32_t index) {
-    if (index == 0) {
-        throw std::invalid_argument("HPACK indexed fields require a nonzero index");
-    }
-    encode_hpack_integer(out, 0x80, 7, index);
+void hpack_encoder::encode_indexed(std::pmr::string& out, hpack_index index) {
+    encode_hpack_integer(out, 0x80, 7, index.value());
 }
 
-void hpack_encoder::encode_dynamic_table_size_update(std::pmr::string& out, std::uint32_t maximum) {
+void hpack_encoder::encode_dynamic_table_size_update(std::pmr::string& out, hpack_table_size maximum) {
     // RFC 7541 §6.3: 001xxxxx followed by an HPACK integer with a 5-bit prefix.
-    encode_hpack_integer(out, 0x20, 5, maximum);
+    encode_hpack_integer(out, 0x20, 5, maximum.value());
 }
 
 void hpack_encoder::encode_header(
@@ -145,18 +142,15 @@ void hpack_encoder::encode_header(
     encode_unindexed_literal(out, never_indexed, 0, name, value);
 }
 
-void hpack_encoder::encode_header_with_name_index(std::pmr::string& out, std::uint32_t name_index,
+void hpack_encoder::encode_header_with_name_index(std::pmr::string& out, hpack_index name_index,
     std::string_view value, hpack_header_with_name_index_options options) {
-    if (name_index == 0) {
-        throw std::invalid_argument("HPACK indexed names require a nonzero index");
-    }
     validate_hpack_string_length(value);
     if (detail::http_text_overlaps(value, std::string_view(out.data(), out.size() + 1))) {
         const std::pmr::string owned_value(value, out.get_allocator());
-        encode_unindexed_literal(out, options.never_indexed_, name_index, {}, owned_value);
+        encode_unindexed_literal(out, options.never_indexed_, name_index.value(), {}, owned_value);
         return;
     }
-    encode_unindexed_literal(out, options.never_indexed_, name_index, {}, value);
+    encode_unindexed_literal(out, options.never_indexed_, name_index.value(), {}, value);
 }
 
 void hpack_encoder::encode_status(std::pmr::string& out, http_status_code status) {

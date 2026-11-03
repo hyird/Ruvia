@@ -156,23 +156,59 @@ RUVIA_TEST(hpack_public_name_index_encoder_accepts_values_borrowed_from_output) 
     }
 }
 
-RUVIA_TEST(hpack_public_encoder_rejects_zero_indices_before_writing) {
-    for (const auto mode : {0, 1, 2}) {
-        std::pmr::string output("existing bytes");
-        bool rejected = false;
-        try {
-            if (mode == 0) {
-                ruvia::hpack_encoder::encode_indexed(output, 0);
-            } else {
-                ruvia::hpack_encoder::encode_header_with_name_index(
-                    output, 0, "value", {.never_indexed_ = mode == 2});
+RUVIA_TEST(hpack_public_encoder_and_decoder_reject_invalid_indices_and_table_sizes_before_mutation) {
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1},
+             std::int64_t{0}, static_cast<std::int64_t>((std::numeric_limits<std::uint32_t>::max)()) + 1}) {
+        RUVIA_CHECK(!ruvia::hpack_index::try_from_value(invalid).has_value());
+        for (const auto mode : {0, 1, 2}) {
+            std::pmr::string output("existing bytes");
+            bool rejected = false;
+            try {
+                if (mode == 0) {
+                    ruvia::hpack_encoder::encode_indexed(output, invalid);
+                } else {
+                    ruvia::hpack_encoder::encode_header_with_name_index(
+                        output, invalid, "value", {.never_indexed_ = mode == 2});
+                }
+            } catch (const std::invalid_argument&) {
+                rejected = true;
             }
-        } catch (const std::invalid_argument&) {
-            rejected = true;
+            RUVIA_CHECK(rejected);
+            RUVIA_CHECK_EQ(output, std::string_view("existing bytes"));
         }
-        RUVIA_CHECK(rejected);
-        RUVIA_CHECK_EQ(output, std::string_view("existing bytes"));
     }
+    ruvia::hpack_decoder decoder;
+    decoder.set_max_dynamic_table_size(64);
+    for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1},
+             static_cast<std::int64_t>((std::numeric_limits<std::uint32_t>::max)()) + 1}) {
+        RUVIA_CHECK(!ruvia::hpack_table_size::try_from_value(invalid).has_value());
+        std::pmr::string output("existing bytes");
+        bool rejected_encode = false;
+        try {
+            ruvia::hpack_encoder::encode_dynamic_table_size_update(output, invalid);
+        } catch (const std::invalid_argument&) {
+            rejected_encode = true;
+        }
+        RUVIA_CHECK(rejected_encode);
+        RUVIA_CHECK_EQ(output, std::string_view("existing bytes"));
+        bool rejected_limit = false;
+        try {
+            decoder.set_max_dynamic_table_size(invalid);
+        } catch (const std::invalid_argument&) {
+            rejected_limit = true;
+        }
+        RUVIA_CHECK(rejected_limit);
+    }
+    const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+    RUVIA_CHECK(!ruvia::hpack_index::try_from_value(maximum).has_value());
+    RUVIA_CHECK(!ruvia::hpack_table_size::try_from_value(maximum).has_value());
+    std::pmr::string excess;
+    ruvia::hpack_encoder::encode_dynamic_table_size_update(excess, 65);
+    RUVIA_CHECK(decoder.decode(excess, [](auto, auto) { return true; }) ==
+                ruvia::hpack_decode_error::dynamic_table_size);
+    std::pmr::string exact;
+    ruvia::hpack_encoder::encode_dynamic_table_size_update(exact, 64);
+    RUVIA_CHECK(!decoder.decode(exact, [](auto, auto) { return true; }).has_value());
 }
 
 RUVIA_TEST(hpack_public_encoder_preserves_output_when_alias_copy_fails) {
