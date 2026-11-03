@@ -245,8 +245,8 @@ http_origin_view http_client_resolved_redirect::origin() const& {
 std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error>
 resolve_http_client_redirect_target(
     const http_origin_view& origin, http_client_redirect_target_options options) {
-    const auto current_target = options.current_target_;
-    auto location = options.location_;
+    const auto current_target = options.current_target_.view();
+    auto location = options.location_.view();
     if (!is_valid_http_origin_form_target(current_target)) {
         return http_client_redirect_resolution_error::invalid_current_target;
     }

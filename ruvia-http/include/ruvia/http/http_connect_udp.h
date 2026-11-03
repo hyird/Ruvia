@@ -8,6 +8,7 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_header.h"
@@ -19,12 +20,12 @@
 namespace ruvia {
 // Already-expanded proxy URI path, borrowed until open_udp_tunnel() returns.
 struct http_client_udp_tunnel_request_view final {
-    std::string_view target_{};
+    borrowed_text target_{};
     std::span<const http_header_view> headers_{};
 };
 
 struct http_connect_udp_target_view final {
-    std::string_view host_{};
+    borrowed_text host_{};
     port_number port_{};
 };
 struct http_connect_udp_target final {
@@ -49,11 +50,11 @@ enum class http_connect_udp_error : std::uint8_t {
 struct http_connect_udp_request_view final {
     // HTTP/1.1 Upgrade versus HTTP/2 Extended CONNECT.
     http_protocol_version version_{http_protocol_version::http11};
-    std::string_view method_{"GET"};
-    std::string_view protocol_{"connect-udp"};
-    std::string_view scheme_{"https"};
-    std::string_view authority_{};
-    std::string_view path_{};
+    borrowed_text method_{"GET"};
+    borrowed_text protocol_{"connect-udp"};
+    borrowed_text scheme_{"https"};
+    borrowed_text authority_{};
+    borrowed_text path_{};
     std::span<const http_header_view> headers_{};
 };
 // Recipient checks. The connect-udp token selects the Capsule Protocol, so

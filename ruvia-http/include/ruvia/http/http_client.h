@@ -179,9 +179,9 @@ struct http_client_request_view {
 // uses authority-form and leaves protocol/target empty. Extended CONNECT uses
 // protocol, authority and an origin-form target on HTTP/2.
 struct http_client_tunnel_request_view final {
-    std::string_view authority_{};
-    std::string_view protocol_{};
-    std::string_view target_{};
+    ::ruvia::borrowed_text authority_{};
+    ::ruvia::borrowed_text protocol_{};
+    ::ruvia::borrowed_text target_{};
     std::span<const http_header_view> headers_{};
 };
 

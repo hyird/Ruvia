@@ -161,7 +161,7 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
         return http_connect_udp_error::invalid_target;
     }
     std::size_t encoded_host_size = 0;
-    for (const unsigned char c : target.host_) {
+    for (const unsigned char c : target.host_.view()) {
         encoded_host_size += detail::is_unreserved_byte(c) ? 1U : 3U;
     }
     std::array<char, http_max_unsigned_decimal_size> port_buffer{};
@@ -169,7 +169,7 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
     std::pmr::string result_value(resource ? resource : std::pmr::get_default_resource());
     result_value.reserve(prefix.size() + encoded_host_size + 1U + port_digits.size() + 1U);
     result_value.append(prefix);
-    for (const unsigned char c : target.host_) {
+    for (const unsigned char c : target.host_.view()) {
         if (detail::is_unreserved_byte(c)) {
             result_value.push_back(static_cast<char>(c));
         } else {
@@ -242,12 +242,12 @@ std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_
         }
     }
     if (request.version_ != http_protocol_version::http11) {
-        if (request.method_ != "CONNECT" || request.protocol_ != "connect-udp" ||
+        if (request.method_.view() != "CONNECT" || request.protocol_.view() != "connect-udp" ||
             !is_http_or_https_scheme(request.scheme_) || found.connection_field_ ||
             found.upgrade_field_ || found.http2_forbidden_) {
             return http_connect_udp_error::invalid_request;
         }
-    } else if (request.method_ != "GET" ||
+    } else if (request.method_.view() != "GET" ||
                (!request.scheme_.empty() && !is_http_or_https_scheme(request.scheme_)) ||
                !found.upgrade_ || !found.connection_ || !found.host_) {
         return http_connect_udp_error::invalid_request;

@@ -288,10 +288,15 @@ private:
     // Relays a subrequest named by the query as status and body; X-Test-Relayed
     // tells a relayed answer from a failure escaping dispatch().
     ruvia::task<ruvia::http_response> subrequest(ruvia::context& c) {
-        const auto child = co_await c.dispatch({
-            .method_ = c.req().query("method").value_or("GET"),
-            .target_ = c.req().query("target").value_or("/"),
+        std::string method(c.req().query("method").value_or("GET"));
+        std::pmr::string target(c.req().query("target").value_or("/"), c.arena());
+        auto pending = c.dispatch({
+            .method_ = method,
+            .target_ = target,
         });
+        method.assign("PUT");
+        target.assign("/mutated");
+        const auto child = co_await std::move(pending);
         c.draft().status(child.status());
         c.draft().header("X-Test-Relayed", "1");
         co_return c.text(child.body());

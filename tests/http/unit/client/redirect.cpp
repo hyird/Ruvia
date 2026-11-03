@@ -490,3 +490,19 @@ RUVIA_TEST(http_client_redirect_resolution_reports_typed_failures) {
     check_redirect_resolution_failure(ruvia_ctx, origin, "not-a-target", "/x",
         http_client_redirect_resolution_error::invalid_current_target);
 }
+
+RUVIA_TEST(http_client_redirect_target_options_accept_named_owners_and_copy_into_resolved_redirect) {
+    const auto origin = origin_for("example.com", 80);
+    std::string current_target("/a/b");
+    std::pmr::string location("https://other.example:8443/next");
+    const auto result_value = resolve_http_client_redirect_target(
+        origin, {.current_target_ = current_target, .location_ = location});
+    current_target.assign("/mutated");
+    location.assign("https://wrong.example/");
+    const auto* resolved = std::get_if<http_client_resolved_redirect>(&result_value);
+    RUVIA_CHECK(resolved != nullptr);
+    if (resolved != nullptr) {
+        RUVIA_CHECK_EQ(resolved->host(), std::string_view("other.example"));
+        RUVIA_CHECK_EQ(resolved->target(), std::string_view("/next"));
+    }
+}

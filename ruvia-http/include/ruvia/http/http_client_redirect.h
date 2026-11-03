@@ -14,6 +14,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_client.h"
 
 namespace ruvia {
@@ -108,8 +109,8 @@ enum class http_client_redirect_resolution_error : std::uint8_t {
 };
 
 struct http_client_redirect_target_options final {
-    std::string_view current_target_{};
-    std::string_view location_{};
+    borrowed_text current_target_{};
+    borrowed_text location_{};
     std::pmr::memory_resource* resource_{nullptr};
 };
 

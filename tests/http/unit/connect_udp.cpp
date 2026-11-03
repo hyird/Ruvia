@@ -464,3 +464,34 @@ RUVIA_TEST(http_connect_udp_sender_and_recipient_field_validation) {
     RUVIA_CHECK(ruvia::validate_http_connect_udp_request(h2_bad_te_req).has_value());
     RUVIA_CHECK(ruvia::validate_http_connect_udp_request_to_send(h2_bad_te_req).has_value());
 }
+
+RUVIA_TEST(http_connect_udp_views_accept_named_owners_and_preserve_addresses) {
+    std::string host("example.test");
+    std::pmr::string method("CONNECT");
+    std::string protocol("connect-udp");
+    std::pmr::string scheme("https");
+    std::string authority("example.test");
+    std::pmr::string path("/.well-known/masque/udp/192.0.2.1/443/");
+    const ruvia::http_connect_udp_target_view target_view{.host_ = host, .port_ = 443};
+    const ruvia::http_client_udp_tunnel_request_view tunnel_view{.target_ = path};
+    const std::array fields{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
+    const ruvia::http_connect_udp_request_view request_view{
+        .version_ = ruvia::http_protocol_version::http2,
+        .method_ = method,
+        .protocol_ = protocol,
+        .scheme_ = scheme,
+        .authority_ = authority,
+        .path_ = path,
+        .headers_ = fields,
+    };
+    RUVIA_CHECK(target_view.host_.data() == host.data());
+    RUVIA_CHECK(tunnel_view.target_.data() == path.data());
+    RUVIA_CHECK(request_view.method_.data() == method.data());
+    RUVIA_CHECK(request_view.protocol_.data() == protocol.data());
+    RUVIA_CHECK(request_view.scheme_.data() == scheme.data());
+    RUVIA_CHECK(request_view.authority_.data() == authority.data());
+    RUVIA_CHECK(request_view.path_.data() == path.data());
+    const auto encoded = ruvia::encode_http_connect_udp_path(target_view);
+    RUVIA_CHECK(std::holds_alternative<std::pmr::string>(encoded));
+    RUVIA_CHECK(!ruvia::validate_http_connect_udp_request_to_send(request_view).has_value());
+}

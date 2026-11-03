@@ -70,9 +70,9 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
     // The operation is lazy and the options borrow caller storage: take owned
     // copies now. The subrequest is built directly as a parsed request; it
     // never round-trips through a wire format.
-    std::pmr::string method(options.method_, pool());
-    std::pmr::string target(options.target_, pool());
-    std::pmr::string body(options.body_, pool());
+    std::pmr::string method(options.method_.view(), pool());
+    std::pmr::string target(options.target_.view(), pool());
+    std::pmr::string body(options.body_.view(), pool());
     std::pmr::vector<http_header> headers(pool());
     if (!options.headers_.empty()) {
         headers.reserve(options.headers_.size());

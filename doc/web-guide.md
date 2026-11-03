@@ -318,7 +318,7 @@ ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
 
 ### 3.3 进程内子请求（`"ruvia/web/context.h"`）
 
-在控制器或中间件内可通过 `co_await c.dispatch({...})` 在当前 worker 内直接重入路由表发起虚拟子请求（不经过网络 socket）：
+在控制器或中间件内可通过 `co_await c.dispatch({...})` 在当前 worker 内直接重入路由表发起虚拟子请求（不经过网络 socket；`dispatch_options` 的 `method_`、`target_`、`body_` 使用 `borrowed_text`，拒绝临时拥有型字符串并在 `dispatch()` 返回前复制）：
 
 ```cpp
 auto sub = co_await c.dispatch({

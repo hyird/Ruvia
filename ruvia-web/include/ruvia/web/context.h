@@ -259,10 +259,10 @@ static_assert(std::is_nothrow_move_assignable_v<conn_info>);
 // Cancellation combines `stop_token_` with the calling context's stop token;
 // subrequest handlers have no total execution timeout.
 struct dispatch_options final {
-    std::string_view method_{};
-    std::string_view target_{};
+    borrowed_text method_{};
+    borrowed_text target_{};
     std::span<const http_header_view> headers_{};
-    std::string_view body_{};
+    borrowed_text body_{};
     stop_token stop_token_{};
 };
 

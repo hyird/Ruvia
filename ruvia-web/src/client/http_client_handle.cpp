@@ -458,20 +458,20 @@ task<http_client_tunnel_result> http_client_handle::open_udp_tunnel(const http_c
 task<http_client_tunnel_result> http_client_handle::open_tunnel(const http_client_tunnel_request_view& head, http_client_tunnel_config config) const {
     registration_.require_active();
     if (config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes ||
-        (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority(borrowed_text(head.authority_))))) {
+        (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority(head.authority_)))) {
         throw std::invalid_argument("invalid CONNECT request or tunnel policy");
     }
-    if (head.protocol_ == "connect-udp" && validate_http_connect_udp_request_to_send({.version_ = http_protocol_version::http2,
-                                                                                         .method_ = "CONNECT",
-                                                                                         .scheme_ = scheme() == http_scheme::https ? "https" : "http",
-                                                                                         .authority_ = head.authority_,
-                                                                                         .path_ = head.target_,
-                                                                                         .headers_ = head.headers_})
-                                               .has_value()) {
+    if (head.protocol_.view() == "connect-udp" && validate_http_connect_udp_request_to_send({.version_ = http_protocol_version::http2,
+                                                                                                .method_ = "CONNECT",
+                                                                                                .scheme_ = scheme() == http_scheme::https ? "https" : "http",
+                                                                                                .authority_ = head.authority_,
+                                                                                                .path_ = head.target_,
+                                                                                                .headers_ = head.headers_})
+                                                      .has_value()) {
         throw std::invalid_argument("invalid CONNECT-UDP request head");
     }
-    detail::http_client_request_storage request("CONNECT", head.target_, head.headers_, pmr_resource_or_default(resource_));
-    request.set_tunnel(head.authority_, head.protocol_);
+    detail::http_client_request_storage request("CONNECT", head.target_.view(), head.headers_, pmr_resource_or_default(resource_));
+    request.set_tunnel(head.authority_.view(), head.protocol_.view());
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_tunnel(std::move(request), config, options_));
 }
 
