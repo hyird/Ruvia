@@ -107,9 +107,9 @@ inline void http_visit_semicolon_parameters_quoted_field(
 // the closing DQUOTE are never read.
 class http_quoted_string_cursor final {
 public:
-    explicit constexpr http_quoted_string_cursor(std::string_view input) noexcept
-        : input_(input),
-          state_(!input.empty() && input.front() == '"' ? state_type::open : state_type::failed) {}
+    explicit constexpr http_quoted_string_cursor(borrowed_text input) noexcept
+        : input_(input.view()),
+          state_(!input_.empty() && input_.front() == '"' ? state_type::open : state_type::failed) {}
 
     [[nodiscard]] constexpr bool next(unsigned char& out) noexcept {
         if (state_ != state_type::open) {

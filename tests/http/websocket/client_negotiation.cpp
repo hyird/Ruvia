@@ -268,3 +268,26 @@ RUVIA_TEST(websocket_h2_client_response_head_reports_end_stream_only_from_header
         }
     }
 }
+
+namespace {
+
+template <typename fields_type>
+concept ws_client_negotiation_accepts_fields =
+    requires(const ruvia::websocket_client_negotiation& negotiation, fields_type&& fields) {
+        negotiation.validate_fields(std::forward<fields_type>(fields));
+    };
+
+template <typename head_type>
+concept ws_client_negotiation_accepts_response_head =
+    requires(const ruvia::websocket_client_negotiation& negotiation, head_type&& head) {
+        negotiation.validate_response(std::forward<head_type>(head), true);
+        ruvia::validate_http2_websocket_client_response(negotiation, std::forward<head_type>(head), true);
+    };
+
+static_assert(ws_client_negotiation_accepts_fields<const std::vector<ruvia::http_header>&>);
+static_assert(!ws_client_negotiation_accepts_fields<std::vector<ruvia::http_header>>);
+static_assert(!ws_client_negotiation_accepts_fields<std::array<ruvia::http_header, 1>>);
+static_assert(ws_client_negotiation_accepts_response_head<const ruvia::http_client_response_head&>);
+static_assert(!ws_client_negotiation_accepts_response_head<ruvia::http_client_response_head>);
+
+}  // namespace

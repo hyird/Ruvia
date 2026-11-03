@@ -514,4 +514,27 @@ static_assert(ws_handshake_validation_accepts_subprotocols<const std::vector<std
 static_assert(!ws_handshake_validation_accepts_subprotocols<std::vector<std::string_view>>);
 static_assert(!ws_handshake_validation_accepts_subprotocols<std::array<std::string_view, 1>>);
 
+template <typename protocol_type>
+concept ws_subprotocol_set_accepts_append = requires(ruvia::websocket_subprotocol_set& set, protocol_type&& protocol) {
+    set.append(std::forward<protocol_type>(protocol));
+};
+
+template <typename list_type>
+concept ws_subprotocol_set_accepts_append_list = requires(ruvia::websocket_subprotocol_set& set, list_type&& list) {
+    set.append_list(std::forward<list_type>(list));
+};
+
+template <typename list_type>
+concept ws_subprotocol_set_accepts_append_offered_list =
+    requires(ruvia::websocket_subprotocol_set& set, list_type&& list) {
+        set.append_offered_list(std::forward<list_type>(list));
+    };
+
+static_assert(ws_subprotocol_set_accepts_append<const std::string&>);
+static_assert(!ws_subprotocol_set_accepts_append<std::string>);
+static_assert(ws_subprotocol_set_accepts_append_list<const std::string&>);
+static_assert(!ws_subprotocol_set_accepts_append_list<std::string>);
+static_assert(ws_subprotocol_set_accepts_append_offered_list<const std::string&>);
+static_assert(!ws_subprotocol_set_accepts_append_offered_list<std::string>);
+
 }  // namespace

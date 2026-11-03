@@ -298,5 +298,8 @@ private:
 [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
 validate_http2_websocket_client_response(
     const websocket_client_negotiation& negotiation, const http_client_response_head& head, bool stream_open);
+std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
+validate_http2_websocket_client_response(
+    const websocket_client_negotiation&, const http_client_response_head&&, bool) = delete;
 
 }  // namespace ruvia

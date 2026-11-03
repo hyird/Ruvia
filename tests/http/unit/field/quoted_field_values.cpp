@@ -85,3 +85,8 @@ RUVIA_TEST(accept_quality_quoted_comma_does_not_split_item) {
     using ruvia::http_accepts_encoding;
     RUVIA_CHECK(!http_accepts_encoding(R"(gzip;note="a,b";q=0)", "gzip"));
 }
+
+static_assert(std::is_constructible_v<ruvia::http_quoted_string_cursor, const std::string&>);
+static_assert(std::is_constructible_v<ruvia::http_quoted_string_cursor, std::string_view>);
+static_assert(!std::is_constructible_v<ruvia::http_quoted_string_cursor, std::string>);
+static_assert(!std::is_constructible_v<ruvia::http_quoted_string_cursor, std::pmr::string>);

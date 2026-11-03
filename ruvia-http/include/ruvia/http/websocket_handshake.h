@@ -34,24 +34,25 @@ class websocket_subprotocol_set final {
 public:
     // Strict: every protocol must be a new token (configuration and the
     // offers a client sends, which RFC 6455 section 4.1 requires to be unique).
-    [[nodiscard]] bool append(std::string_view protocol) noexcept {
-        if (!is_valid_http_header_name(protocol) || size_ == protocols_.size() || contains(protocol)) {
+    [[nodiscard]] bool append(borrowed_text protocol) noexcept {
+        const auto protocol_view = protocol.view();
+        if (!is_valid_http_header_name(protocol_view) || size_ == protocols_.size() || contains(protocol_view)) {
             return false;
         }
-        protocols_[size_++] = protocol;
+        protocols_[size_++] = protocol_view;
         return true;
     }
 
     // Strict list form of append(); empty list elements are ignored.
-    [[nodiscard]] bool append_list(std::string_view value) noexcept {
-        return append_elements(value, false);
+    [[nodiscard]] bool append_list(borrowed_text value) noexcept {
+        return append_elements(value.view(), false);
     }
 
     // A received Sec-WebSocket-Protocol offer. Uniqueness binds the sending
     // client only (RFC 6455 section 4.1); a server receiving a repeated
     // protocol skips it (section 4.2.1 imposes no recipient check).
-    [[nodiscard]] bool append_offered_list(std::string_view value) noexcept {
-        return append_elements(value, true);
+    [[nodiscard]] bool append_offered_list(borrowed_text value) noexcept {
+        return append_elements(value.view(), true);
     }
 
     [[nodiscard]] bool contains(std::string_view protocol) const noexcept {

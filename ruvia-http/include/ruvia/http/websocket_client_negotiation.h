@@ -80,6 +80,9 @@ public:
     // in `fields` alone, without status or connection-specific field checks.
     [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
     validate_fields(std::span<const http_header> fields) const;
+    template <detail::http_temporary_owning_range<http_header> fields_type>
+    std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
+    validate_fields(fields_type&&) const = delete;
     // submit_http2_websocket_client_request() with this negotiation.
     [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>
     submit_http2_request(http2_connection& connection,
@@ -88,6 +91,8 @@ public:
     // validate_http2_websocket_client_response() with this negotiation.
     [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
     validate_response(const http_client_response_head& head, bool stream_open) const;
+    std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
+    validate_response(const http_client_response_head&&, bool) const = delete;
     // The resource the configuration was copied into.
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;
@@ -128,4 +133,7 @@ prepare_http1_websocket_client_request(const http_origin_view& origin, std::stri
 [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
 validate_http1_websocket_client_response(std::span<const char, 24> encoded_key,
     const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response);
+std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
+validate_http1_websocket_client_response(std::span<const char, 24>,
+    const websocket_client_negotiation&, const http1_parsed_client_response_head&&) = delete;
 }  // namespace ruvia
