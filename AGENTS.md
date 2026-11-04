@@ -73,7 +73,7 @@
 - 涉及协议义务的代码注释与变更说明应标注具体适用的 RFC 条款；内部约束不得冒充 RFC 要求，偏离 `SHOULD` 须说明理由。
 - 校验限于协议语法、分帧、路由、安全边界和明确资源限制，不以“更严格”代替正确性。产品限制单独说明，不冒充 RFC 要求，也不为字段数、分块数或消息数另设无依据限制。
 - 沿「请求解析 → 正文分帧与解码 → 响应计划与序列化 → 网络驱动与生命周期回收」完整主链审查，不只检查孤立函数。
-- HTTP/1 重点核对 `Host` 与请求目标、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为；增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节。
+- HTTP/1 与通用表示语义：重点核对 `Host` 与请求目标、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为；增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；条件请求遵循 RFC 9110 §13.2.2 优先级，`Range` 解析使用定长零分配集合（`http_byte_range_set`，上限 16 防分片 DoS）并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，绝不重复发送相同表示字节）。
 - HTTP/2 重点核对连接前言与 `SETTINGS` 同步、流状态机与并发/流控窗口、HPACK 动态表上限与伪首部/普通首部顺序、帧长度与填充/优先级约束、`GOAWAY` / `RST_STREAM` / `PING` 及 Extended `CONNECT`（RFC 8441），严格区分流级错误与连接级错误（RFC 9113 §5.4）：
   - 出站 HPACK 编码绝不插入动态表条目（容量缩减直接置零），确保状态有界与确定性；
   - `enable_push_` 与 `ORIGIN` 帧（RFC 8336，仅限认证 TLS 连接，严禁用于 `h2c` 或显式代理）仅限客户端启用，服务端构造时直接拒绝；
@@ -122,8 +122,11 @@
 - 平台监听模型：
   - POSIX（Linux 等）：使用 `SO_REUSEADDR` + `SO_REUSEPORT`，缺失或设置失败则启动失败；每个 worker 直接接受本 worker 的监听器。
   - Windows：每个 worker 使用 `SO_REUSEADDR` 独立绑定监听 socket，全部 ready 后在共享监听句柄矩阵上发起原生 `AcceptEx`，不使用单监听回退（不保证严格均衡，也不阻止其他进程复用端口）。监听 IOCP 收到属于其他 worker 的完成时，只向 origin worker 的预留有界完成槽（容量由 worker 与监听器矩阵确定，不占用普通业务队列）发布结果并唤醒，禁止在当前线程处理或销毁 origin 的 socket、业务状态及 PMR。
-- 跨线程业务调度走有界队列，禁止直接操作其他 worker 的连接或状态；已持有资源的冷路径异步清理使用 `event_loop::defer_cleanup` 获取退役保护租约，绕过普通业务队列有界准入但保证在事件循环释放物理上下文前执行完毕。跨 worker 有界 `channel` 在构造期预分配槽位，预留（`reserved_`）与已入队（`queued_`）合并计入容量上限，防止并发发送超发。调度入口与事件循环同属一个 owner，入口先于上下文退役；请求期只借用稳定 worker 句柄，显式卸载可复制一次。
-- 跨 worker 投递的业务数据须持有独立所有权，不传递请求或连接的借用状态；确需共享可变数据时须明确同步与一致性语义，避免数据竞争和违反契约的更新丢失，可共享的数据优先使用不可变快照。
+- 跨线程调度、唤醒与通道：
+  - 跨线程业务调度走有界队列，禁止直接操作其他 worker 的连接或状态；调度入口与事件循环同属一个 owner，入口先于上下文退役；请求期只借用稳定 worker 句柄，显式卸载可复制一次；
+  - 跨线程唤醒（`worker_notification`）采用原子锁存与非阻塞原生写，已存在未决锁存时自动合并（`coalesced`）避免唤醒风暴，析构前须确保生产者静默且 owner worker 已显式 `close()` 并 `join` 挂起等待；
+  - 已持有资源的冷路径异步清理使用 `event_loop::defer_cleanup` 获取退役保护租约，绕过普通业务队列有界准入但保证在事件循环释放物理上下文前执行完毕；
+  - 跨 worker 有界 `channel` 在构造期预分配槽位，预留（`reserved_`）与已入队（`queued_`）合并计入容量上限防超发；跨 worker 投递的数据须持有独立所有权，确需共享可变数据时须明确同步与一致性语义，优先使用不可变快照。
 
 协程、结构化并发、租约与连接池：
 
@@ -155,14 +158,19 @@
 - `controller` 和中间件保持 per-worker。进程只拥有一份不可变路由查找计划，各 worker 路由契约必须一致；路由和中间件链在启动前构建，冲突启动即报错。
 - 上下文只暴露 typed capability；callback 由应用拥有。
 - 响应元数据显式分为下一次构造消耗的 `draft()`、当前缓冲响应的 `edit_response()` 和交付时应用的跨替换 `policy()`；替换不自动继承旧响应字段。流式生产者先 `commit()` 并区分正文阶段与正常完成，正常完成不得伪装成取消或中止。
-- `model_type` 使用编译期 schema，解析、校验和序列化职责分离；必填与可空独立（`RUVIA_OPTIONAL_FIELD` 仅允许字段缺失，允许 `null` 须显式声明 `RUVIA_NULLABLE`，`RUVIA_DEFAULT` 仅作用于缺失的可选字段）。
+- `model_type` 使用编译期 schema，解析、校验和序列化职责分离：必填与可空独立（`RUVIA_OPTIONAL_FIELD` 仅允许字段缺失，允许 `null` 须显式声明 `RUVIA_NULLABLE`，`RUVIA_DEFAULT` 仅作用于缺失的可选字段）；数值转换拒绝 `bool`/字符充当整数并执行精确整数与窄化浮点范围检查；跨分配器拥有化支持递归重绑定（`rebind_for_model`），移动操作检测源与目标地址重叠（`model_address_within`）防止自包含结构移动时先销毁自身存储。
 - ORM 与直接查询保持独立公开路线，不混用内部实现。映射结果的标量及容器元素必须递归拥有数据；借用字段读取只在显式持有原始结果的路线提供。
 - 数据库与 Redis 韧性：
   - 事务外查询/执行可按驱动契约共享流水线连接，事务内独占连接租约；涉及数据库事务与其他外部 I/O 的流程须明确一致性边界和失败补偿，避免持有数据库事务或锁等待无关远程操作；
-  - 编译期 SQL 字面量（`fixed_string`）在编译期（`consteval` / `static_assert`）拒绝 NUL 字节、推导或验证数据库方言（MariaDB `?` vs PostgreSQL `$n`，正确跳过注释、字符串与 dollar-quoted 标签/含 `$` 标识符）并断言占位符数与实参个数严格匹配；单次 SQL 执行与迁移（`db_migration`）严格限制为单条语句，迁移 ID 在启动期做大小写不敏感去重校验；PostgreSQL 迁移默认将 DDL 与迁移记录写入置于同一事务（仅不支持事务的 DDL 显式声明 `unwrapped`），且必须识别已执行迁移内容被篡改；
+  - 编译期 SQL 字面量（`fixed_string`）在编译期（`consteval` / `static_assert`）拒绝 NUL 字节、推导或验证数据库方言（MariaDB `?` vs PostgreSQL `$n`，正确跳过注释、字符串与 dollar-quoted 标签/含 `$` 标识符）并断言占位符数与实参个数严格匹配；
+  - 单次 SQL 执行与迁移（`db_migration`）严格限制为单条语句，迁移 ID 在启动期做大小写不敏感去重校验；PostgreSQL 迁移默认将 DDL 与迁移记录写入置于同一事务（仅不支持事务的 DDL 显式声明 `unwrapped`），且必须识别已执行迁移内容被篡改；
   - Redis 批处理（`redis_batch`）在调用返回前完成参数拥有化：事务（`transaction`）内严禁包含阻塞命令或同步屏障，非事务 `pipeline` 仅允许携带具备明确 `timeout_` 或可取消 `stop_token_` 的 `WAIT` / `WAITAOF` 屏障，拒绝无限期占用连接槽的阻塞命令；
   - 数据库查询结果缓存（Redis 承载）须共享同一操作的剩余截止期（`operation_timeout`）与组合取消令牌（`stop_group`）：遇到取消或停机（`cancelled` / `closing`）时必须立即上抛，不得被容错开关静默吞掉；截止期超时统一按查询超时处理。
-- `http_client` 与 `websocket_client` 可独立绑定事件循环，应用上下文只提供便捷入口；outbound origin 启动前固定，请求期不建池，传输层支持 Happy Eyeballs 并发连接尝试与冗余分支取消；出站重定向由 `ruvia-http` 生成 RFC 9110 §15.4 方法/正文改写计划（如改写为 `GET` 时 `content_disposition::drop` 剥离表示与内容首部）及无 DNS 同源判定（IPv6 字面量按二进制地址比较），跨源凭证剥离与重定向次数上限由 `ruvia-web` I/O 驱动强制执行。
+- 出站客户端（`http_client` / `websocket_client`）：
+  - 可独立绑定事件循环，应用上下文只提供便捷入口；outbound origin 启动前固定，请求期不建池，传输层支持 Happy Eyeballs 并发连接尝试与冗余分支取消；
+  - 强制执行两级出站结果内存预算（`http_client_result_budget_config`：已保留结果 `max_retained_bytes_` 与在途分配 `max_in_flight_bytes_`）；`request_timeout_` 覆盖从获取连接槽到响应体被慢速消费者完整排空的全周期，超时立即失败并销毁连接；
+  - 连接通告（`ORIGIN` / `Alt-Svc`）仅作有界只读观测，绝不自动改变已注册 origin、连接归并、TLS 身份或缓存策略；
+  - 出站重定向由 `ruvia-http` 生成 RFC 9110 §15.4 方法/正文改写计划（如改写为 `GET` 时 `content_disposition::drop` 剥离表示与内容首部）及无 DNS 同源判定（IPv6 字面量按二进制地址比较），跨源凭证剥离与重定向次数上限由 `ruvia-web` I/O 驱动强制执行。
 
 ## README 内容规范
 
