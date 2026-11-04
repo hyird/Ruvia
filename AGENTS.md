@@ -77,7 +77,7 @@
 - 校验限于协议语法、分帧、路由、安全边界和明确资源限制，不以“更严格”代替正确性。产品限制单独说明，不冒充 RFC 要求，也不为字段数、分块数或消息数另设无依据限制。
 - 沿「请求解析 → 正文分帧与解码 → 响应计划与序列化 → 网络驱动与生命周期回收」完整主链审查，不只检查孤立函数。
 - HTTP/1 与通用表示语义：
-  - 重点核对 `Host` 与请求目标、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为（通用 1xx 临时响应排除 `101 Switching Protocols`，`101` 仅由专用协议升级驱动边界生成；若 1xx 含 `Connection: close`，按 RFC 9112 在刷出后立即关闭连接；`CONNECT` 与 `TRACE` 接受显式零长度分帧但拒绝非空正文，而 `OPTIONS` 正文要求 `Content-Type` 仅约束发送方 RFC 9110 §9.3.7，入站准入不因缺失 `Content-Type` 拒绝）；
+  - 重点核对 `Host` 与请求目标（`http_authority_view` 拒绝 `userinfo` 并严格区分端口缺省、空端口与显式数值端口；默认端口未知即 `0` 时，缺省/空端口绝不与显式 `:0` 相等，非法 authority 永不相等）、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为（通用 1xx 临时响应排除 `101 Switching Protocols`，`101` 仅由专用协议升级驱动边界生成；若 1xx 含 `Connection: close`，按 RFC 9112 在刷出后立即关闭连接；`CONNECT` 与 `TRACE` 接受显式零长度分帧但拒绝非空正文，而 `OPTIONS` 正文要求 `Content-Type` 仅约束发送方 RFC 9110 §9.3.7，入站准入不因缺失 `Content-Type` 拒绝）；
   - HTTP/1 客户端请求准备阶段由写入器原子决定 `Expect: 100-continue` 发射与正文门控（`continue_gated`，门控等待超时归属 I/O 运行时策略），并将进入线面计划的协议事实打包为自包含状态（`http1_client_exchange_state`）移交响应解析器，使响应解析彻底脱离调用方请求方法与首部存储的生命周期且常规请求零分配；携带正文的客户端请求必须在通知外部已完整写出预备请求正文后才可接受 `101`，且 `1xx` 的 `allow_reuse` 仅允许当前交换继续等待最终响应而不提前归还连接池；
   - 增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；逗号列表与分号参数统一复用唯一引号感知扫描器（`http_find_unquoted_delimiter`，识别 `quoted-string` 与 `\"` 转义），但 `Cookie` 解析按 RFC 6265 严禁赋予 `"` 引号包裹语义；
   - 请求 `Trailer`（`http_request_trailers`）独立于初始请求头存储并按全有或全无及独立字节预算追加，禁止字段（RFC 9110 §6.5.1）在显式追加或 HTTP/2 下直接拒绝，而在 HTTP/1 接收时计入字节预算后按 RFC 9112 §7.1.2 丢弃不保留；响应 `Trailer` 通过 `validate_http_response_trailers` 先行构造借用证明（`http_response_trailer_section`），响应头序列化（`append_http1_response_head`）优先保留显式 `Date`（未设置时复用缓存时间）且从同一十进制 token 测量并写出 `Content-Length`；
@@ -102,7 +102,7 @@
 - 侵入式零分配调度与按需惰性分配：worker 内的连接超时跟踪、周期扫描节点（`connection_scanner`）、槽位等待队列与取消注册优先使用内嵌于连接或协程栈帧的地址稳定侵入式节点；取消状态与非必选帧元数据仅在首次被观察或启用时按需分配，未观察路径零开销。
 - 栈上小缓冲优化（SBO）、按需拥有化（Copy-on-Unfold/Unescape）与挂起前提前释放：
   - 高频有界短数据与回调（如 `move_only_function` 满足尺寸/对齐且 `nothrow_move_constructible` 的可调用目标、JWT 段解码、已校验的 `multipart_boundary`、小批量键视图数组）优先使用栈上或内联定长缓冲，仅超限时回退动态分配；单线程有界环（`local_ring_queue`）在启动期一次性构造全部槽位，运行期通过 `prepare_push` / `commit_push` / `cancel_push` 两阶段协议实现零分配入队与异常回滚；
-  - 协议解析（如 `multipart_part`、首部字段）对未折叠、未转义的原始切片直接以 `std::string_view` 借用调用方缓冲，仅对发生折叠展开或转义解码的字段分配 PMR 存储；WebSocket 未压缩且无掩码帧支持零拷贝发送（`submit_borrowed_frame`），无上下文接管的 `permessage-deflate` 方向同步复用共享编解码器；
+  - 协议解析（如 `multipart_part`、首部字段）对未折叠、未转义的原始切片直接以 `std::string_view` 借用调用方缓冲，仅对发生折叠展开或转义解码的字段分配 PMR 存储；拥有型 `http_header` 检查长度求和溢出并在单次分配中连续存放名与值（已绑定资源的实例赋值时始终保留目标 `memory_resource*`）；`http_request` 仅拥有紧凑首部描述符块而借用底层协议输入，在输入存储退役前复用实例须调用 `reset()` 清空描述符与借用视图；WebSocket 未压缩且无掩码帧支持零拷贝发送（`submit_borrowed_frame`），无上下文接管的 `permessage-deflate` 方向同步复用共享编解码器；
   - 异步操作在构造冷任务完成参数拥有化后，调用方应在 `co_await` 进入网络 I/O 挂起前立即释放不再使用的临时源容器，缩短并发挂起期的内存驻留。
 - 预算、背压、防压缩炸弹与防慢速攻击：
   - 框架的长期队列、缓存、连接池等待队列和外部输入驱动的缓冲，须明确资源预算及背压、拒绝或淘汰机制；重试须可取消且受生命周期约束；
