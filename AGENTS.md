@@ -66,13 +66,13 @@
   - 静态文件服务在构造期归一化根目录并建立不可变内存索引（支持按预算常驻高频小文件），默认拒绝隐藏路径段（`.` 开头或含 `/.`）、符号链接越界与非普通文件；非常驻文件在打开读取时校验底层身份（device、inode、mtime），磁盘文件被修改时严格 fail closed 报错拒绝以防按旧长度发送截断/错位内容；后台刷新在 worker 外全量构建并在请求间隙原子切换，构建中途任一文件系统操作失败则完整保留旧快照。
   - 代理转发首部（`Forwarded` / `X-Forwarded-*`）仅在可信代理（`trusted_proxy_config`）下采信；CORS 校验遇到畸形或重复/多值 `Origin` 与 `Access-Control-Request-Method` 时绝不生成跨源授权首部（严禁从多值 `Origin` 中挑选其一放行），动态跨源响应自动追加对应 `Vary` 令牌防缓存污染；Cookie 签名、JWT 验证等安全凭证对比使用常量时间比较，JWT 强制校验满足 RFC 7518 的 HMAC 最小密钥字节长度并默认要求 `exp` 过期声明。
   - TLS 安全基线（RFC 9846 / RFC 9525）：证书、私钥与 CA 在注册时一次性加载校验，私钥口令副本在返回前主动擦除（cleanse）；仅协商 TLS 1.2（强制 ECDHE + AEAD，拒绝重协商）或 TLS 1.3；证书主机名严格匹配 `subjectAltName`（`DNS-ID` 最左完整标签通配、`IP` 精确匹配，禁用 `Common Name`）；连接发出的 TLS 记录总数受 `max_outgoing_records_` 硬上限约束（`KeyUpdate` 不重置计数，达限即终止连接以符合 RFC 9846 §5.5）；Ticket 密钥定期轮换并销毁过期密钥，跨 worker 会话恢复严格绑定原 `server_name`。
-- 跨平台 UTF-8 与输出脱敏：对外文本及传递给 OpenSSL / 数据库驱动的文件路径统一使用合法 UTF-8，禁止在 Windows 下经 ANSI 代码页窄化；受限长度文本或校验诊断按字节上限截断时必须回退半个多字节序列以保持 UTF-8 码点完整；系统错误信息先转换编码，JSON 输出始终转义合法。对外错误响应不回显内部异常、SQL、宿主路径或上游细节，服务端脱敏后记录诊断原因；日志、代码与制品不得包含真实凭据。
-- 故障隔离与不变量恢复：对端正常断开、自身停机或排空引起的中止属于正常结束，不按故障上报或计数；真实异常必须上报，不得静默吞掉。单次请求、单个 HTTP/2 流、单条连接或单次后端调用的超时、取消与协议错误严格隔离在当前作用域内回收，不得破坏 worker 状态机或升级为进程故障；可恢复异常捕获边界保留的对象必须维持完整不变量。
+- 跨平台 UTF-8 与输出脱敏：对外文本及传递给 OpenSSL / 数据库驱动的文件路径统一使用合法 UTF-8，禁止在 Windows 下经 ANSI 代码页窄化；Windows 下 `std::system_category()` 与 `asio::system_category()` 错误消息必须经 `FormatMessageW` 转为 UTF-8（`error_code_text` / `system_error_text`），防止本地 ANSI 编码污染 JSON 与日志；受限长度文本或校验诊断按字节上限截断时必须回退半个多字节序列以保持 UTF-8 码点完整。对外错误响应不回显内部异常、SQL、宿主路径或上游细节，服务端脱敏后记录诊断原因；日志、代码与制品不得包含真实凭据。
+- 故障隔离、不变量恢复与兜底限流汇聚：对端正常断开、自身停机或排空引起的中止属于正常结束，不按故障上报或计数；真实异常必须上报，不得静默吞掉。无调用方重抛的后台/回调异常统一路由至 `report_unhandled_failure`（内置速率限制并将被抑制计数随下一条放行诊断一并输出，通过 `equivalent_failures` 将多单元观察到的同一根因合并为单行汇报；生命周期 owner 重抛其一时仅上报未重抛的其余异常）。单次请求、单个 HTTP/2 流、单条连接或单次后端调用的超时、取消与协议错误严格隔离在当前作用域内回收，不得破坏 worker 状态机或升级为进程故障；可恢复异常捕获边界保留的对象必须维持完整不变量。
 
 ## 协议实现与审查
 
 - HTTP/1.0、HTTP/1.1、HTTP/2、TLS、WebSocket、HTTP 隧道（含 CONNECT-UDP / Capsule）、缓存、条件请求、范围请求、压缩、DNS 等协议及其扩展的实现必须符合适用的现行 RFC，以正文、适用更新及已验证勘误为准。HTTP 参照 RFC 9110/9111/9112/9113，TLS 1.3 参照 [RFC 9846](https://www.rfc-editor.org/info/rfc9846/)（取代 RFC 8446）。
-- 区分 MUST、SHOULD、MAY 及发送方、接收方、中间代理的义务，不把发送方的 MUST NOT 自动变成接收方的拒绝规则。出站首部显式区分本端生成（`generated`）与代理转发（`forwarded`，RFC 9110 §2.2：保留收到的 `Content-Type`、`Origin` 与 CORS 请求值并容忍 `Content-Encoding` / `Upgrade` 中的合法空成员，但绝不放宽字段字节安全、单例首部计数或写入器所有权，且按 §7.6.1 剥离/重建逐跳首部）。按规范忽略、容忍或规范化输入；未知但合法的扩展不等于格式错误，不支持的能力按协议处理。
+- 区分 MUST、SHOULD、MAY 及发送方、接收方、中间代理的义务，不把发送方的 MUST NOT 自动变成接收方的拒绝规则。代应用构建请求的组件独占协议托管首部（`Host`、`Content-Length`、`Transfer-Encoding`、`Trailer`、`Expect`、`Connection`、`Keep-Alive`、`Proxy-Connection`、`TE`、`Upgrade`），拒绝应用层直接传入这些首部或首尾含 SP/HTAB 的字段值；出站首部显式区分本端生成（`generated`）与代理转发（`forwarded`，RFC 9110 §2.2：保留收到的 `Content-Type`、`Origin` 与 CORS 请求值并容忍 `Content-Encoding` / `Upgrade` 中的合法空成员，但绝不放宽字段字节安全、单例首部计数或写入器所有权，且按 §7.6.1 剥离/重建逐跳首部）。按规范忽略、容忍或规范化输入；未知但合法的扩展不等于格式错误，不支持的能力按协议处理。
 - 涉及协议义务的代码注释与变更说明应标注具体适用的 RFC 条款；内部约束不得冒充 RFC 要求，偏离 `SHOULD` 须说明理由。
 - 校验限于协议语法、分帧、路由、安全边界和明确资源限制，不以“更严格”代替正确性。产品限制单独说明，不冒充 RFC 要求，也不为字段数、分块数或消息数另设无依据限制。
 - 沿「请求解析 → 正文分帧与解码 → 响应计划与序列化 → 网络驱动与生命周期回收」完整主链审查，不只检查孤立函数。
@@ -81,7 +81,7 @@
   - HTTP/1 客户端请求准备阶段由写入器原子决定 `Expect: 100-continue` 发射与正文门控（`continue_gated`，门控等待超时归属 I/O 运行时策略），并将进入线面计划的协议事实打包为自包含状态（`http1_client_exchange_state`）移交响应解析器，使响应解析彻底脱离调用方请求方法与首部存储的生命周期且常规请求零分配；携带正文的客户端请求必须在通知外部已完整写出预备请求正文后才可接受 `101`，且 `1xx` 的 `allow_reuse` 仅允许当前交换继续等待最终响应而不提前归还连接池；客户端响应头保留原始状态码（`received_status()`）但将收到的 `600..999` 按 RFC 9110 §15 映射为 `500` 处理，且 `HEAD` 响应（含 `205`）的 `Content-Length` 仅作元数据而不作为接收正文长度；
   - 增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；逗号列表与分号参数统一复用唯一引号感知扫描器（`http_find_unquoted_delimiter`，识别 `quoted-string` 与 `\"` 转义），但 `Cookie` 解析按 RFC 6265 严禁赋予 `"` 引号包裹语义；
   - 首部与 `Trailer` 节字节预算（`http_field_section_budget`）统一按规范化行开销（`name + value + 4`，与收到的 OWS 长度无关）及终止空行计入 `max_http_header_bytes`（计费失败保持原预算不变）；请求 `Trailer`（`http_request_trailers`）独立于初始请求头存储并按全有或全无追加，禁止字段（RFC 9110 §6.5.1）在显式追加或 HTTP/2 下直接拒绝，而在 HTTP/1 接收时计入字节预算后按 RFC 9112 §7.1.2 丢弃不保留；响应 `Trailer` 通过 `validate_http_response_trailers` 先行构造借用证明（`http_response_trailer_section`），响应头序列化（`append_http1_response_head`）优先保留显式 `Date`（未设置时复用缓存时间）且从同一十进制 token 测量并写出 `Content-Length`；
-  - 条件请求遵循 RFC 9110 §13.2.2 优先级，重复的 `If-Modified-Since` / `If-Unmodified-Since` 首部行按无效日期条件直接忽略（不取末行生效），日期形式的 `If-Range` 要求强验证器且时间戳精确相等；`Range` 解析使用有界定长零分配集合并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，不重复发送表示字节）；携带 `Content-Encoding` 的表示遇到多段 `Range` 时按 RFC 9110 §8.4 / §14.6 回退完整表示（单段仍返回 206），`If-Range` 命中授权的 206 按 RFC 9110 §15.3.7 精简非必需表示首部；
+  - 条件请求与缓存指令：条件请求遵循 RFC 9110 §13.2.2 优先级，重复的 `If-Modified-Since` / `If-Unmodified-Since` 首部行按无效日期条件直接忽略（不取末行生效），日期形式的 `If-Range` 要求强验证器且时间戳精确相等；`Cache-Control` 跨多行首部作为单一指令列表增量解析，重复的新鲜度 delta-seconds 指令严格保留首次出现的值；`Range` 解析使用有界定长零分配集合并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，不重复发送表示字节）；携带 `Content-Encoding` 的表示遇到多段 `Range` 时按 RFC 9110 §8.4 / §14.6 回退完整表示（单段仍返回 206），`If-Range` 命中授权的 206 按 RFC 9110 §15.3.7 精简非必需表示首部；
   - Cookie 语义与 `Set-Cookie`（RFC 6265 / RFC 6265bis）：强制校验 `__Secure-`（需 `Secure`）、`__Host-`（需 `Secure`、`Path=/` 且无 `Domain`）与 `SameSite=None`（需 `Secure`）；删除 Cookie 使用 Epoch 0 `Expires` 而非 `Max-Age=0`（符合 RFC 6265 §4.1.1 非零首数字约束）；400 天寿命上限仅在客户端 Cookie Jar 封顶而不限制服务端发送；`Set-Cookie` 解析（RFC 6265 §5.2）零分配借用响应头（`Expires` 独立遵循 cookie-date 语法）；请求 `Cookie` 拼接（`append_cookie_request_pair`）支持输入借用目标缓冲（扩容后重定位偏移并先写键值对再写前导 `"; "`）；URI 引用修复（`percent_encode_uri_reference`）保留合法百分比三元组不二次编码（RFC 3986 §2.4），无需转义时零分配返回原视图，需转义且输入与输出缓冲存在地址别名时安全处理。
 - HTTP/2 与 HTTP 优先级：
   - 重点核对连接前言与 `SETTINGS` 同步、流状态机与并发/流控窗口、HPACK 动态表上限与伪首部/普通首部顺序（首部列表按 RFC 9113 §6.5.2 包含伪首部每字段 `+32` 字节计费）、帧长度与填充/优先级约束、`GOAWAY` / `RST_STREAM` / `PING` 及 Extended `CONNECT`（RFC 8441），严格区分流级错误与连接级错误（RFC 9113 §5.4）；
@@ -156,7 +156,7 @@
 - 监听配置中重复端点必须拒绝，不能因端口复用静默成功。各 worker 在准备阶段独立绑定监听；全部 ready 后发布 Windows 共享监听矩阵，全部启动 hook 和服务 barrier 成功后才发起 accept。任一阶段失败或取消均回滚全部监听与资源，不留下部分服务，且失败原因可见。
 - 停机分阶段：停止接入 → 排空（关闭空闲和未完成请求头的连接，已接纳请求在 `drain_timeout` 内完成，HTTP/2 发送 `GOAWAY` 排空，WebSocket 以 1001 发起关闭）→ 强制关闭剩余连接 → 最终退役。
 - 停止接入先封闭 accept 投递并取消重试：POSIX 关闭本 worker 监听器唤醒 pending accept；Windows 精确取消每个 pending `AcceptEx`，保持共享监听句柄和全部 IOCP owner 存活，直到原生完成已转递、全部 origin 消费完成且通知与定时器已 join，才由各 owner 关闭自身监听器并 finalize。冷启动取消及未启动 worker 不等待不存在的接收器。
-- teardown 先终止 I/O，再 join 全部后台操作。外部生产者静默、跨线程 channel 双方退役确认及后台任务完成前，`core` 保持 owner 事件循环存活。用户 hook 和 `join` 由生命周期调用线程执行。
+- teardown 先终止 I/O，再 join 全部后台操作。外部生产者静默、跨线程 channel 双方退役确认及后台任务完成前，`core` 保持 owner 事件循环存活；若 `event_loop_pool::join()` 在 `start()` 前被调用，则创建短生命周期临时 owner 线程排空已接纳任务并运行停止回调（在池自身 worker 线程上调用 `join()` 立即抛 `std::logic_error`）。用户 hook 和 `join` 由生命周期调用线程执行。
 
 ## Web 核心设计
 
