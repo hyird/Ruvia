@@ -22,6 +22,20 @@ struct fixed_string {
         return std::string_view(value_, n - 1);
     }
     [[nodiscard]] constexpr std::string_view view() const&& = delete;
+    [[nodiscard]] constexpr const char* data() const& noexcept RUVIA_LIFETIMEBOUND {
+        return value_;
+    }
+    [[nodiscard]] constexpr const char* data() const&& = delete;
+    [[nodiscard]] constexpr std::size_t size() const noexcept {
+        return n - 1;
+    }
+    [[nodiscard]] constexpr bool empty() const noexcept {
+        return n == 1;
+    }
+    constexpr operator std::string_view() const& noexcept RUVIA_LIFETIMEBOUND {
+        return view();
+    }
+    constexpr operator std::string_view() const&& = delete;
 };
 
 template <std::size_t n>

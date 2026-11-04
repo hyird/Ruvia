@@ -140,8 +140,12 @@ task<void> websocket_client_state::perform_handshake() {
         const auto validated =
             validate_http1_websocket_client_response(encoded_key, config_.negotiation_, *parsed_value);
         if ((validated.index() != 0)) {
+            const auto error = std::get<1>(validated);
             throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
-                "invalid WebSocket handshake response");
+                "invalid WebSocket handshake response",
+                error == websocket_client_handshake_error::response_status
+                    ? std::optional<http_status_code>(parsed_value->head().status())
+                    : std::nullopt);
         }
         selected_subprotocol_.assign(std::get<0>(validated).selected_subprotocol_);
         negotiated_compression_ = std::get<0>(validated).compression_;

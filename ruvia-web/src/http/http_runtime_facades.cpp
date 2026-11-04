@@ -141,9 +141,12 @@ response_stream_writer& context::stream() {
 }
 
 sse_writer context::stream_sse() {
-    set_stable_response_header("Content-Type", "text/event-stream");
-    set_stable_response_header("Cache-Control", "no-cache");
-    return sse_writer(stream());
+    auto& writer = stream();
+    if (!writer.committed()) {
+        set_stable_response_header("Content-Type", "text/event-stream");
+        set_stable_response_header("Cache-Control", "no-cache");
+    }
+    return sse_writer(writer);
 }
 
 namespace {
@@ -294,6 +297,26 @@ void websocket::abort() noexcept {
         return;
     }
     abort_(target_);
+}
+
+std::optional<std::uint16_t> websocket::peer_close_code() const noexcept {
+    if (!worker_->is_current()) {
+        std::terminate();
+    }
+    if (!operation_scope_.active()) {
+        return std::nullopt;
+    }
+    return peer_close_code_(target_);
+}
+
+std::string_view websocket::peer_close_reason() const& noexcept {
+    if (!worker_->is_current()) {
+        std::terminate();
+    }
+    if (!operation_scope_.active()) {
+        return {};
+    }
+    return peer_close_reason_(target_);
 }
 
 task<void> websocket::write(websocket_opcode opcode, std::string_view payload_value, bool compress) {

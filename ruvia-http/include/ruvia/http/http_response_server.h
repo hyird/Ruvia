@@ -20,8 +20,6 @@
 namespace ruvia {
 
 class http_response_trailer_section;
-[[nodiscard]] http_response_trailer_section validate_http_response_trailers(
-    std::span<const http_header_view> trailers);
 
 // Borrowed proof that the complete terminal section passed the shared response-
 // trailer rules. The source span must outlive its synchronous consumption.

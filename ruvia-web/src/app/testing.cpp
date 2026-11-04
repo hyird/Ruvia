@@ -173,7 +173,8 @@ struct test_app::impl_type final {
 
         const auto& routes_value = *routes_;
         const auto resolution = routes_value.resolve(parsed_value);
-        const auto services = capabilities_->make_context_services(stop_token_);
+        const auto services = capabilities_->make_context_services(stop_token_)
+                                  .with_plain_transport(request.remote_address_, request.remote_port_);
 
         // A malformed request is rejected before admission, with no coding
         // promise, exactly as a server answers a malformed head.
@@ -202,7 +203,9 @@ struct test_app::impl_type final {
         const auto& request_services = admission ? admission->services() : services;
         const auto tail = admission ? admission->tail()
                                     : detail::http_response_tail(parsed_value,
-                                          detail::http_response_coding_policy::disabled(), {}, request_start);
+                                          detail::http_response_coding_policy::disabled(),
+                                          request.remote_address_, request.remote_address_,
+                                          request_start);
         const auto preparation = tail.prepare(response, options_, worker_);
         const auto prepared = preparation.ready() != nullptr
                                   ? *preparation.ready()
@@ -315,6 +318,18 @@ test_app& test_app::on_error(http_error_handler handler) {
 test_app& test_app::on_not_found(http_not_found_handler handler) {
     impl_->require_configurable();
     impl_->configuration_.on_not_found(std::move(handler));
+    return *this;
+}
+
+test_app& test_app::on_error(std::nullptr_t) {
+    impl_->require_configurable();
+    impl_->configuration_.on_error(nullptr);
+    return *this;
+}
+
+test_app& test_app::on_not_found(std::nullptr_t) {
+    impl_->require_configurable();
+    impl_->configuration_.on_not_found(nullptr);
     return *this;
 }
 

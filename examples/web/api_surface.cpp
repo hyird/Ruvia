@@ -8,44 +8,24 @@
 #include <array>
 #include <charconv>
 #include <chrono>
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <iostream>
 #include <memory_resource>
-#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <type_traits>
 #include <utility>
-#include <vector>
 
-#include "ruvia/http/http1_client_request_writer.h"
-#include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_client_redirect.h"
-#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/auth/jwt.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/csrf.h"
-#include "ruvia/web/db/db_handle.h"
-#include "ruvia/web/db/db_rows.h"
-#include "ruvia/web/db/db_schema.h"
-#include "ruvia/web/db/db_types.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/multipart_reader.h"
-#include "ruvia/web/rate_limit.h"
-#include "ruvia/web/redis/redis_types.h"
-#include "ruvia/web/security_headers.h"
-#include "ruvia/web/session.h"
 #include "ruvia/web/streaming.h"
-#include "ruvia/web/websocket.h"
 
 RUVIA_MODEL(surface_json_message, RUVIA_OPTIONAL_FIELD(message, ruvia::string));
 
@@ -73,6 +53,9 @@ class surface_context_middleware final {
 public:
     ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
+        if (c.committed()) {
+            co_return;
+        }
         if (c.exception()) {
             const auto* downstream_response = c.response();
             const bool had_downstream_error_response = downstream_response != nullptr;

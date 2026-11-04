@@ -124,6 +124,7 @@ public:
 
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
+    [[nodiscard]] bool is_current() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
     [[nodiscard]] web_worker_stats stats() const noexcept;
 

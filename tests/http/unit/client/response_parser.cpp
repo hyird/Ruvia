@@ -88,6 +88,9 @@ void check_response_head(ruvia::testing::test_context& ruvia_ctx,
         RUVIA_CHECK_EQ(fields[1].name(), std::string_view("Content-Length"));
         RUVIA_CHECK_EQ(fields[1].value(), std::string_view("0"));
     }
+    RUVIA_CHECK_EQ(head.header("x-test").value_or(""), value);
+    RUVIA_CHECK_EQ(head.header("CONTENT-LENGTH").value_or(""), std::string_view("0"));
+    RUVIA_CHECK(!head.header("X-Missing").has_value());
 }
 
 void check_empty_response_head(ruvia::testing::test_context& ruvia_ctx,

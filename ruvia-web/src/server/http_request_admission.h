@@ -138,11 +138,17 @@ private:
 class http_response_tail final {
 public:
     http_response_tail(const http_request& request, http_response_coding_policy coding_policy,
-        std::string_view client_address, std::chrono::steady_clock::time_point start) noexcept
+        std::string_view remote_address, std::string_view client_address,
+        std::chrono::steady_clock::time_point start) noexcept
         : request_(&request),
           coding_policy_(coding_policy),
+          remote_address_(remote_address),
           client_address_(client_address),
           start_(start) {}
+
+    http_response_tail(const http_request& request, http_response_coding_policy coding_policy,
+        std::string_view client_address, std::chrono::steady_clock::time_point start) noexcept
+        : http_response_tail(request, coding_policy, client_address, client_address, start) {}
 
     [[nodiscard]] const http_response_coding_policy& coding_policy() const noexcept {
         return coding_policy_;
@@ -183,6 +189,7 @@ public:
 private:
     const http_request* request_;
     http_response_coding_policy coding_policy_;
+    std::string_view remote_address_;
     std::string_view client_address_;
     std::chrono::steady_clock::time_point start_;
     mutable request_io_metrics io_metrics_{};

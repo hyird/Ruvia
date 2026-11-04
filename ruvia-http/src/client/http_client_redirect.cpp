@@ -181,10 +181,6 @@ struct http_client_redirect_authority final {
 
 }  // namespace
 
-bool is_http_client_redirect_status(http_status_code status) noexcept {
-    return is_http_redirect_status(status);
-}
-
 http_client_response_header_lookup lookup_unique_http_client_response_header(
     const http_client_response_head& head, std::string_view name) noexcept {
     std::string_view found;

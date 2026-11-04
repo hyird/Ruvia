@@ -267,20 +267,51 @@ public:
 
     // Rethrows the stored error, or throws blocking_operation_rejected if the
     // operation was rejected.
-    t_type value() && {
-        if (payload_.error_ != nullptr) {
-            std::rethrow_exception(payload_.error_);
-        }
-        if (payload_.status_ != blocking_status::completed) {
-            throw blocking_operation_rejected(payload_.status_);
-        }
-        if constexpr (!std::is_void_v<t_type>) {
-            auto& value = payload_.value_;
-            if (!value.has_value()) {
-                std::terminate();
-            }
-            return std::move(value).value();
-        }
+    [[nodiscard]] decltype(auto) value() const&
+        requires(!std::is_void_v<t_type>)
+    {
+        rethrow_if_not_completed();
+        return current_value();
+    }
+
+    void value() const&
+        requires(std::is_void_v<t_type>)
+    {
+        rethrow_if_not_completed();
+    }
+
+    void value() const&& = delete;
+
+    [[nodiscard]] decltype(auto) value() &
+        requires(!std::is_void_v<t_type>)
+    {
+        rethrow_if_not_completed();
+        return current_value();
+    }
+
+    void value() &
+        requires(std::is_void_v<t_type>)
+    {
+        rethrow_if_not_completed();
+    }
+
+    [[nodiscard]] t_type value() &&
+        requires(!std::is_void_v<t_type>)
+    {
+        rethrow_if_not_completed();
+        return std::move(current_value());
+    }
+
+    void value() &&
+        requires(std::is_void_v<t_type>)
+    {
+        rethrow_if_not_completed();
+    }
+
+    [[nodiscard]] t_type take_value() &&
+        requires(!std::is_void_v<t_type>)
+    {
+        return std::move(*this).value();
     }
 
 private:
@@ -293,6 +324,33 @@ private:
     explicit blocking_result(detail::blocking_payload<t_type>&& payload_value) noexcept(
         std::is_nothrow_move_constructible_v<detail::blocking_payload<t_type>>)
         : payload_(std::move(payload_value)) {}
+
+    void rethrow_if_not_completed() const {
+        if (payload_.error_ != nullptr) {
+            std::rethrow_exception(payload_.error_);
+        }
+        if (payload_.status_ != blocking_status::completed) {
+            throw blocking_operation_rejected(payload_.status_);
+        }
+    }
+
+    [[nodiscard]] decltype(auto) current_value() const noexcept
+        requires(!std::is_void_v<t_type>)
+    {
+        if (!payload_.value_.has_value()) {
+            std::terminate();
+        }
+        return static_cast<const t_type&>(*payload_.value_);
+    }
+
+    [[nodiscard]] decltype(auto) current_value() noexcept
+        requires(!std::is_void_v<t_type>)
+    {
+        if (!payload_.value_.has_value()) {
+            std::terminate();
+        }
+        return static_cast<t_type&>(*payload_.value_);
+    }
 
     detail::blocking_payload<t_type> payload_;
 };
@@ -438,6 +496,12 @@ template <typename fn_type>
         timeout = worker_timer_saturating_duration_cast(*options.timeout_);
     }
     return detail::run_blocking_until(std::move(worker_value), timeout, std::move(options.stop_token_), std::move(fn));
+}
+
+template <typename fn_type>
+[[nodiscard]] auto run_blocking(worker_handle worker_value, fn_type fn)
+    -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
+    return run_blocking(std::move(worker_value), operation_options{}, std::move(fn));
 }
 
 }  // namespace ruvia

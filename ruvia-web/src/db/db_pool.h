@@ -267,6 +267,9 @@ public:
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;
     }
+    [[nodiscard]] const worker_handle& worker() const noexcept {
+        return worker_;
+    }
     [[nodiscard]] slot_type& slot(std::size_t index) noexcept {
         return slots_[index];
     }

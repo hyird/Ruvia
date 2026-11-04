@@ -19,6 +19,8 @@ RUVIA_MODEL(json_token_holder,
     RUVIA_OPTIONAL_FIELD(object, ruvia::json_object),
     RUVIA_OPTIONAL_FIELD(items, ruvia::array<ruvia::json_value>));
 
+RUVIA_MODEL(json_validated_child,
+    RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN(3, "name too short")));
 RUVIA_TEST(json_token_moves_preserve_complete_tokens_and_reset_sources) {
     const std::string input = "{\"payload\":\"" + std::string(160, 'x') + "\"}";
     const auto check = [&]<typename token_type>(std::string_view empty) {
@@ -245,8 +247,15 @@ RUVIA_TEST(json_value_get_reads_root_scalars_and_arrays_and_models) {
     RUVIA_CHECK(parsed_value.has_value());
     RUVIA_CHECK_EQ(parsed_value->size(), 2U);
     RUVIA_CHECK(!number.get<ruvia::array<ruvia::int32>>().has_value());
-}
+    auto valid_rule = ruvia::json_value::parse(R"({"name":"ada"})");
+    RUVIA_CHECK(valid_rule.get<json_validated_child>().has_value());
+    auto invalid_rule = ruvia::json_value::parse(R"({"name":"ab"})");
+    RUVIA_CHECK(!invalid_rule.get<json_validated_child>().has_value());
 
+    auto obj_rule = ruvia::json_object::parse(R"({"good":{"name":"ada"},"bad":{"name":"ab"}})");
+    RUVIA_CHECK(obj_rule.get<json_validated_child>("good").has_value());
+    RUVIA_CHECK(!obj_rule.get<json_validated_child>("bad").has_value());
+}
 RUVIA_TEST(json_value_dynamic_traversal_reclaims_decoded_key_on_exception) {
     ruvia::test::counting_memory_resource resource;
     std::string body = "{\"" + std::string(256, 'k') + "\\u0061\":1}";

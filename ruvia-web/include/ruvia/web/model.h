@@ -392,6 +392,14 @@ public:
         return items_;
     }
     [[nodiscard]] std::span<const std::uint8_t> view() const&& = delete;
+    [[nodiscard]] const std::uint8_t* data() const& noexcept RUVIA_LIFETIMEBOUND {
+        return items_.data();
+    }
+    [[nodiscard]] const std::uint8_t* data() const&& = delete;
+    operator std::span<const std::uint8_t>() const& noexcept RUVIA_LIFETIMEBOUND {
+        return view();
+    }
+    operator std::span<const std::uint8_t>() const&& = delete;
     [[nodiscard]] std::size_t size() const noexcept {
         return items_.size();
     }
@@ -1287,9 +1295,7 @@ public:
 
     template <typename t_type>
         requires detail::is_model_field<t_type>
-    [[nodiscard]] std::optional<t_type> get() const {
-        return detail::parse_json_document<t_type>(view(), resource_, detail::model_string_storage::borrowed);
-    }
+    [[nodiscard]] std::optional<t_type> get() const;
 
     template <typename t_type>
         requires detail::is_model_field<t_type>
@@ -1418,34 +1424,7 @@ public:
 
     template <typename t_type>
         requires detail::is_model_field<t_type>
-    [[nodiscard]] std::optional<t_type> get(std::string_view field) const {
-        auto* const resource = resource_;
-        std::optional<t_type> result;
-        bool last_match_failed = false;
-        const auto visited = detail::visit_json_object_fields(resolved_pmr_resource_tag{}, view(),
-            resource, [&](std::string_view key, std::string_view value_view) {
-                if (key != field) {
-                    return true;
-                }
-
-                detail::skip_json_whitespace(value_view);
-                auto value = detail::parse_json_document<t_type>(value_view, resource,
-                    detail::model_string_storage::borrowed);
-                if (!value) {
-                    result.reset();
-                    last_match_failed = true;
-                    return true;
-                }
-                result.emplace(std::move(*value));
-                last_match_failed = false;
-                return true;
-            });
-
-        if (visited != detail::json_object_visit_result::complete || last_match_failed) {
-            return std::nullopt;
-        }
-        return result;
-    }
+    [[nodiscard]] std::optional<t_type> get(std::string_view field) const;
 
 private:
     friend class json_value;
@@ -1482,15 +1461,6 @@ private:
     std::pmr::memory_resource* resource_;
     detail::model_text_storage storage_;
 };
-
-template <typename t_type>
-    requires detail::is_model_field<t_type>
-[[nodiscard]] inline std::optional<t_type> json_value::get(std::string_view field) const {
-    if (!is_object()) {
-        return std::nullopt;
-    }
-    return json_object(resolved_pmr_resource_tag{}, view(), resource_).get<t_type>(field);
-}
 
 template <typename visitor_type>
 [[nodiscard]] inline bool json_value::for_each_element(visitor_type&& visitor) const {

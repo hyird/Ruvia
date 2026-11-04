@@ -58,7 +58,7 @@ public:
     [[nodiscard]] http_status_code status() const noexcept {
         return status_;
     }
-    [[nodiscard]] std::span<const http_header> headers() const& noexcept {
+    [[nodiscard]] std::span<const http_header> headers() const& noexcept RUVIA_LIFETIMEBOUND {
         return headers_;
     }
     std::span<const http_header> headers() const&& = delete;
@@ -90,11 +90,11 @@ public:
     [[nodiscard]] bool empty() const noexcept {
         return size_ == 0;
     }
-    [[nodiscard]] std::span<const std::byte> bytes() const& noexcept {
+    [[nodiscard]] std::span<const std::byte> bytes() const& noexcept RUVIA_LIFETIMEBOUND {
         return {data_.get(), size_};
     }
     std::span<const std::byte> bytes() const&& = delete;
-    [[nodiscard]] std::string_view text() const& noexcept {
+    [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND {
         return {reinterpret_cast<const char*>(data_.get()), size_};
     }
     std::string_view text() const&& = delete;
@@ -190,27 +190,27 @@ public:
 
     // Informational heads are retained in wire order without a count cap.
     // Aggregate field-byte and in-flight allocation budgets still apply.
-    [[nodiscard]] std::span<const http_client_informational_response> informational_responses() const& noexcept;
+    [[nodiscard]] std::span<const http_client_informational_response> informational_responses() const& RUVIA_LIFETIMEBOUND;
     std::span<const http_client_informational_response> informational_responses() const&& = delete;
     // The status the response is processed as; a received 600..999 is
     // processed as 500 (RFC 9110 section 15).
-    [[nodiscard]] http_status_code status() const noexcept;
+    [[nodiscard]] http_status_code status() const;
     // The status code as received, including an invalid 600..999.
-    [[nodiscard]] http_received_status received_status() const noexcept;
-    [[nodiscard]] http_protocol_version protocol_version() const noexcept;
+    [[nodiscard]] http_received_status received_status() const;
+    [[nodiscard]] http_protocol_version protocol_version() const;
     // Queues RFC 9218 PRIORITY_UPDATE on a live HTTP/2 response; a
     // response the peer has already completed is left unchanged. Throws
     // http_client_error(closing) once the response transport is retired.
     // Worker-affine; the connection driver owns writing the queued frame.
     void reprioritize(http_priority priority) &;
     void reprioritize(http_priority) && = delete;
-    [[nodiscard]] std::span<const http_header> headers() const& noexcept;
+    [[nodiscard]] std::span<const http_header> headers() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const http_header> headers() const&& = delete;
-    [[nodiscard]] std::span<const http_header> trailers() const& noexcept;
+    [[nodiscard]] std::span<const http_header> trailers() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::span<const http_header> trailers() const&& = delete;
-    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> header(std::string_view) const&& = delete;
-    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& noexcept;
+    [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view) const&& = delete;
     [[nodiscard]] http_client_response_body& body() & noexcept {
         return body_;
@@ -249,26 +249,28 @@ public:
     http_client_tunnel(http_client_tunnel&& other) noexcept;
     http_client_tunnel& operator=(http_client_tunnel&& other) noexcept;
     ~http_client_tunnel();
-    [[nodiscard]] http_status_code status() const noexcept {
+    [[nodiscard]] http_status_code status() const {
         return response_.status();
     }
-    [[nodiscard]] http_protocol_version protocol_version() const noexcept {
+    [[nodiscard]] http_protocol_version protocol_version() const {
         return response_.protocol_version();
     }
-    [[nodiscard]] std::span<const http_header> headers() const& noexcept {
+    [[nodiscard]] std::span<const http_header> headers() const& RUVIA_LIFETIMEBOUND {
         return response_.headers();
     }
     std::span<const http_header> headers() const&& = delete;
-    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& noexcept {
+    [[nodiscard]] std::optional<std::string_view> header(std::string_view name) const& RUVIA_LIFETIMEBOUND {
         return response_.header(name);
     }
     std::optional<std::string_view> header(std::string_view) const&& = delete;
-    [[nodiscard]] std::span<const http_client_informational_response> informational_responses() const& noexcept {
+    [[nodiscard]] std::span<const http_client_informational_response> informational_responses() const& RUVIA_LIFETIMEBOUND {
         return response_.informational_responses();
     }
     std::span<const http_client_informational_response> informational_responses() const&& = delete;
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() &;
     task<std::optional<std::span<const std::byte>>> read() && = delete;
+    [[nodiscard]] task<std::optional<std::string_view>> text() &;
+    task<std::optional<std::string_view>> text() && = delete;
     [[nodiscard]] task<void> write(std::string_view bytes) &;
     task<void> write(std::string_view) && = delete;
     [[nodiscard]] task<void> write(std::span<const std::byte> bytes) &;
@@ -479,10 +481,11 @@ public:
     [[nodiscard]] http_client_stats stats() const;
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const;
     [[nodiscard]] std::optional<http_client_push> next_push() const;
-    [[nodiscard]] std::string_view host() const&;
+    [[nodiscard]] std::string_view host() const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view host() const&& = delete;
     [[nodiscard]] std::uint16_t port() const;
     [[nodiscard]] http_scheme scheme() const;
+    [[nodiscard]] http_origin_view origin() const;
 
 private:
     friend class detail::http_client_registry;

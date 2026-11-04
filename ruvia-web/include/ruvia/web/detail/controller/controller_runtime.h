@@ -25,6 +25,12 @@ struct context_task_result<task<result_type> (controller_type::*)(context&)> {
     using type = result_type;
 };
 
+template <typename controller_type, typename result_type>
+struct context_task_result<task<result_type> (controller_type::*)(context&) const> {
+    static constexpr bool ok = true;
+    using type = result_type;
+};
+
 // Unevaluated probe used by RUVIA_GET_WS / RUVIA_CONNECT / RUVIA_CONNECT_PROTOCOL
 // to distinguish a leading route-config expression `(config) + probe` (binary +)
 // from a leading middleware type `(M) + probe` (C-style cast of +probe to M).
@@ -151,8 +157,11 @@ class controller_registration_access final {
         }
     }
 
-    template <task<void> (controller_type::*handler)(context&)>
+    template <auto handler>
     [[nodiscard]] static route_stream_handler bind_stream(controller_type* instance) noexcept {
+        using result_type = typename context_task_result<decltype(handler)>::type;
+        static_assert(context_task_result<decltype(handler)>::ok && std::is_same_v<result_type, void>,
+            "stream/upgrade/tunnel handler must take context& and return task<void>");
         return callback_access::make<task<void>(context&)>(instance, &invoke_stream<handler>);
     }
 
@@ -175,7 +184,7 @@ class controller_registration_access final {
         return (static_cast<controller_type*>(target)->*handler)(context_value);
     }
 
-    template <task<void> (controller_type::*handler)(context&)>
+    template <auto handler>
     [[nodiscard]] static task<void> invoke_stream(void* target, context& context_value) {
         return (static_cast<controller_type*>(target)->*handler)(context_value);
     }

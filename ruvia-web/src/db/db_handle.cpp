@@ -80,6 +80,13 @@ db_handle db_handle::with_options(operation_options options) const {
     return copy;
 }
 
+const worker_handle& db_handle::worker() const& {
+    registration_.require_active();
+    return detail::visit_db_pool(client_, [](const auto& client) -> const worker_handle& {
+        return client.worker();
+    });
+}
+
 void db_handle::expire_capability(void* target) noexcept {
     auto& handle = *static_cast<db_handle*>(target);
     handle.cache_ = nullptr;

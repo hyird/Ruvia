@@ -17,6 +17,7 @@
 #include <asio/buffer.hpp>
 #include <asio/error.hpp>
 
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_runtime_context.h"
@@ -359,18 +360,18 @@ make_worker_notification_state(
 
 namespace ruvia {
 
-worker_notification::wait_awaiter_type::wait_awaiter_type(worker_notification& owner_value) noexcept
+worker_notification::wait_operation::wait_operation(worker_notification& owner_value) noexcept
     : owner_(&owner_value) {}
 
-bool worker_notification::wait_awaiter_type::await_ready() {
+bool worker_notification::wait_operation::await_ready() {
     return owner_->state_->wait_ready();
 }
 
-bool worker_notification::wait_awaiter_type::await_suspend(std::coroutine_handle<> continuation) {
+bool worker_notification::wait_operation::await_suspend(std::coroutine_handle<> continuation) {
     return owner_->state_->begin_wait(continuation);
 }
 
-worker_notification_wait_status worker_notification::wait_awaiter_type::await_resume() {
+worker_notification_wait_status worker_notification::wait_operation::await_resume() {
     return owner_->state_->take_wait_result();
 }
 
@@ -386,13 +387,16 @@ worker_notification::worker_notification(
     worker_runtime_context& runtime, worker_notification_options options)
     : worker_notification(detail::make_worker_notification_state(runtime.io_context(), runtime.handle(), options)) {}
 
+worker_notification::worker_notification(
+    const event_loop& loop, worker_notification_options options)
+    : worker_notification(detail::make_worker_notification_state(loop.io_context(), loop.handle(), options)) {}
 worker_notification::~worker_notification() = default;
 
 worker_notification_status worker_notification::notify() noexcept {
     return state_->notify();
 }
 
-worker_notification::wait_awaiter_type& worker_notification::wait() noexcept {
+worker_notification::wait_operation& worker_notification::wait() noexcept {
     return wait_awaiter_;
 }
 

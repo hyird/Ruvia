@@ -19,10 +19,6 @@
 
 namespace ruvia {
 
-// The redirect statuses whose Location a client may follow; the same set as
-// is_http_redirect_status().
-[[nodiscard]] bool is_http_client_redirect_status(http_status_code status) noexcept;
-
 enum class http_unique_header_status : std::uint8_t {
     absent,
     found,

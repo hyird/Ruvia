@@ -107,6 +107,8 @@ RUVIA_TEST(representation_response_plan_resolves_supported_range_outcomes) {
     RUVIA_CHECK(multi.multipart_ranges() != nullptr);
     RUVIA_CHECK_EQ(multi.status(), ruvia::http_status::partial_content);
     if (const auto* ranges = multi.multipart_ranges()) {
+        static_assert(std::is_same_v<decltype(ranges),
+            const ruvia::http_representation_response_plan::multipart_type*>);
         RUVIA_CHECK_EQ(ranges->size(), std::size_t{2});
     }
 }

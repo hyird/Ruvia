@@ -38,6 +38,18 @@ public:
         return storage_.get_deleter().capacity_;
     }
 
+    [[nodiscard]] std::size_t size() const noexcept {
+        return size_;
+    }
+
+    [[nodiscard]] bool empty() const noexcept {
+        return size_ == 0;
+    }
+
+    [[nodiscard]] bool full() const noexcept {
+        return size_ == capacity();
+    }
+
     [[nodiscard]] value_type* prepare_push() noexcept {
         if (prepared_) {
             std::terminate();
@@ -70,6 +82,9 @@ public:
     }
 
     [[nodiscard]] value_type* front() noexcept {
+        return size_ == 0 ? nullptr : storage_.get() + head_;
+    }
+    [[nodiscard]] const value_type* front() const noexcept {
         return size_ == 0 ? nullptr : storage_.get() + head_;
     }
 

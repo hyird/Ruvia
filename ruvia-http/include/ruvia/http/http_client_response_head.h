@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -63,6 +65,11 @@ public:
         return headers_;
     }
     [[nodiscard]] std::span<const http_header> headers() const&& = delete;
+
+    // Case-insensitive lookup; the last repeated field wins.
+    [[nodiscard]] std::optional<std::string_view> header(
+        std::string_view name) const& noexcept RUVIA_LIFETIMEBOUND;
+    std::optional<std::string_view> header(std::string_view name) const&& = delete;
 
     // Transfers the owned parsed fields to a consumer that retains the head's
     // metadata but needs to extend the fields' lifetime independently.

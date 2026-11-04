@@ -29,7 +29,7 @@ inline constexpr std::size_t max_retained_block_bytes = static_cast<std::size_t>
 // 1 MiB, sizes rounded to 4 KiB) a worker keeps for exact-size reuse; blocks
 // freed beyond it are returned immediately. Zero disables the cache; values
 // above max_retained_block_bytes are rejected.
-struct memory_pool_config {
+struct memory_pool_config final {
     std::size_t request_initial_buffer_bytes_{request_arena_initial_bytes};
     std::size_t retained_block_bytes_{default_retained_block_bytes};
 };
@@ -74,12 +74,12 @@ public:
     void trim(const worker_handle& owner);
 
     template <typename t_type = std::byte>
-    [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() & noexcept {
+    [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() const& noexcept {
         return std::pmr::polymorphic_allocator<t_type>(resource_);
     }
 
     template <typename t_type = std::byte>
-    [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() && = delete;
+    [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() const&& = delete;
 
     [[nodiscard]] std::pmr::memory_resource* resource() & noexcept {
         return resource_;
@@ -126,12 +126,12 @@ public:
     request_memory fork() const&& = delete;
 
     template <typename t_type = std::byte>
-    [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() & noexcept {
+    [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() const& noexcept {
         return std::pmr::polymorphic_allocator<t_type>(&arena_);
     }
 
     template <typename t_type = std::byte>
-    [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() && = delete;
+    [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() const&& = delete;
 
     [[nodiscard]] std::pmr::memory_resource* resource() & noexcept;
     [[nodiscard]] std::pmr::memory_resource* resource() const& noexcept;

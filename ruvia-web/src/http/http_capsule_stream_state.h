@@ -155,7 +155,7 @@ public:
         owned_input_.reset();
         offset_ = 0;
         if (server_) {
-            auto chunk = co_await server_->read();
+            auto chunk = co_await server_->read_raw();
             if (!chunk) {
                 co_return false;
             }
@@ -174,7 +174,7 @@ public:
     }
     [[nodiscard]] task<void> send_bytes(std::pmr::string&& bytes_value) {
         if (server_ != nullptr) {
-            co_await server_->write(std::move(bytes_value));
+            co_await server_->write_raw(std::move(bytes_value));
             co_return;
         }
         const auto limit = client_->response_.state_->tunnel_->config_.max_chunk_bytes_;

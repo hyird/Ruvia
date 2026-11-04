@@ -18,13 +18,27 @@ namespace ruvia {
 // Owns only a detachable owner pointer and a stable worker handle; queued work
 // retains the target so that releasing it never depends on the owner's lifetime.
 template <typename owner_type>
+class worker_cancellation_target;
+
+template <typename owner_type>
+[[nodiscard]] inline std::shared_ptr<worker_cancellation_target<owner_type>>
+make_worker_cancellation_target(owner_type& owner_value, const worker_handle& worker_value);
+
+template <typename owner_type>
 class worker_cancellation_target final
     : public std::enable_shared_from_this<worker_cancellation_target<owner_type>> {
+private:
+    struct constructor_token final {};
+
 public:
-    worker_cancellation_target(owner_type& owner_value, const worker_handle& worker_value) noexcept
+    worker_cancellation_target(
+        constructor_token, owner_type& owner_value, const worker_handle& worker_value) noexcept
         : owner_(&owner_value),
           worker_(worker_value) {}
-
+    worker_cancellation_target(const worker_cancellation_target&) = delete;
+    worker_cancellation_target& operator=(const worker_cancellation_target&) = delete;
+    worker_cancellation_target(worker_cancellation_target&&) = delete;
+    worker_cancellation_target& operator=(worker_cancellation_target&&) = delete;
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_;
     }
@@ -57,6 +71,10 @@ public:
     }
 
 private:
+    friend std::shared_ptr<worker_cancellation_target<owner_type>>
+    make_worker_cancellation_target<owner_type>(owner_type&, const worker_handle&);
+
+    // Construction is restricted to make_worker_cancellation_target via constructor_token.
     std::atomic<owner_type*> owner_;
     worker_handle worker_;
     std::uint64_t next_operation_id_{0};
@@ -67,7 +85,8 @@ template <typename owner_type>
 make_worker_cancellation_target(owner_type& owner_value, const worker_handle& worker_value) {
     using target_type = worker_cancellation_target<owner_type>;
     return std::allocate_shared<target_type>(
-        std::pmr::polymorphic_allocator<target_type>(process_resource()), owner_value, worker_value);
+        std::pmr::polymorphic_allocator<target_type>(process_resource()),
+        typename target_type::constructor_token{}, owner_value, worker_value);
 }
 
 template <typename target_type>

@@ -3,9 +3,9 @@
 #include <cstdint>
 #include <memory_resource>
 #include <string>
-#include <string_view>
 #include <utility>
 
+#include "ruvia/http/detail/client/http1_client_initial_content_state.h"
 #include "ruvia/http/detail/field/http_connection_fields.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http_known_method.h"
@@ -15,12 +15,6 @@ namespace ruvia {
 namespace detail {
 
 struct http1_client_request_prepare_result_access;
-
-enum class http1_client_initial_content_state : std::uint8_t {
-    complete,
-    pending,
-    awaiting_continue,
-};
 
 struct http1_client_exchange_state_access;
 
@@ -59,36 +53,5 @@ private:
     detail::http1_client_initial_content_state content_state_{
         detail::http1_client_initial_content_state::complete};
 };
-
-namespace detail {
-
-struct http1_client_exchange_state_access final {
-    [[nodiscard]] static constexpr http_known_method method(
-        const http1_client_exchange_state& state_value) noexcept {
-        return state_value.method_;
-    }
-
-    [[nodiscard]] static constexpr http_connection_options connection_options(
-        const http1_client_exchange_state& state_value) noexcept {
-        return state_value.connection_options_;
-    }
-
-    [[nodiscard]] static constexpr http1_close_policy close_policy(
-        const http1_client_exchange_state& state_value) noexcept {
-        return state_value.close_policy_;
-    }
-
-    [[nodiscard]] static constexpr http1_client_initial_content_state content_state(
-        const http1_client_exchange_state& state_value) noexcept {
-        return state_value.content_state_;
-    }
-
-    [[nodiscard]] static std::string_view offered_upgrade_protocols(
-        const http1_client_exchange_state& state_value) noexcept {
-        return state_value.offered_upgrade_protocols_;
-    }
-};
-
-}  // namespace detail
 
 }  // namespace ruvia

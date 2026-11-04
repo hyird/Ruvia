@@ -21,6 +21,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_tunnel.h"
+#include "ruvia/web/websocket_client.h"
 
 #include "http_server_fixture.h"
 #include "test_harness.h"
@@ -34,6 +35,8 @@ struct udp_tunnel_observation {
     std::atomic<bool> capsule_bound_rejected_{};
     std::atomic<bool> failed_{};
     std::atomic<bool> dynamic_invoked_{};
+    std::atomic<bool> ws_subprotocol_matched_{};
+    std::atomic<bool> ws_peer_close_matched_{};
 };
 
 struct retained_tunnel_results {
@@ -60,11 +63,41 @@ class udp_tunnel_routes final {
     RUVIA_GET("/udp-tunnel-retained", take_retained);
     RUVIA_CONNECT_PROTOCOL("connect-udp", "/udp-tunnel/:host/:port", dynamic);
     RUVIA_GET("/udp-tunnel-sibling", sibling);
+    const ruvia::websocket_route_config ws_config{
+        .subprotocols_ = {"chat.v2", "chat.v1"}, .require_subprotocol_ = true};
+    RUVIA_GET_WS("/udp-tunnel-ws", ws_inspect, ws_config);
     RUVIA_ROUTES_END
 
     ruvia::task<void> retain_capsule(ruvia::context& c) {
         auto& retained = c.worker_state<retained_tunnel_results>();
-        std::optional stream(c.tunnel().capsules());
+        auto& tunnel = c.tunnel();
+        std::optional stream(tunnel.capsules());
+        unsigned adapted_rejected{};
+        try {
+            (void)tunnel.capsules();
+        } catch (const std::logic_error&) {
+            ++adapted_rejected;
+        }
+        try {
+            (void)tunnel.datagrams();
+        } catch (const std::logic_error&) {
+            ++adapted_rejected;
+        }
+        try {
+            (void)tunnel.udp();
+        } catch (const std::logic_error&) {
+            ++adapted_rejected;
+        }
+        try {
+            (void)tunnel.read();
+        } catch (const std::logic_error&) {
+            ++adapted_rejected;
+        }
+        try {
+            (void)tunnel.write("raw");
+        } catch (const std::logic_error&) {
+            ++adapted_rejected;
+        }
         retained.capsule_ = co_await stream->read();
         auto read = stream->read();
         auto write = stream->write(42, "unstarted");
@@ -87,7 +120,7 @@ class udp_tunnel_routes final {
         } catch (const std::logic_error&) {
             ++expired;
         }
-        retained.cold_operations_expired_ = expired == 3;
+        retained.cold_operations_expired_ = expired == 3 && adapted_rejected == 5;
     }
 
     ruvia::task<void> retain_datagram(ruvia::context& c) {
@@ -100,15 +133,17 @@ class udp_tunnel_routes final {
     ruvia::task<ruvia::http_response> take_retained(ruvia::context& c) {
         auto& retained = c.worker_state<retained_tunnel_results>();
         if (retained.capsule_) {
-            auto response = c.text(retained.cold_operations_expired_ && retained.capsule_->type() == 42
-                                       ? retained.capsule_->payload()
+            auto response = c.text(retained.cold_operations_expired_ && retained.capsule_->type() == 42 &&
+                                           retained.capsule_->bytes().size() == retained.capsule_->text().size()
+                                       ? retained.capsule_->text()
                                        : std::string_view("invalid-capsule-state"));
             retained.capsule_.reset();
             co_return response;
         }
         if (retained.datagram_) {
-            const auto payload = retained.datagram_->payload();
-            auto response = c.text(std::string_view(reinterpret_cast<const char*>(payload.data()), payload.size()));
+            auto response = c.text(retained.datagram_->bytes().size() == retained.datagram_->text().size()
+                                       ? retained.datagram_->text()
+                                       : std::string_view("invalid-datagram-state"));
             retained.datagram_.reset();
             co_return response;
         }
@@ -133,7 +168,7 @@ class udp_tunnel_routes final {
             }
             auto first_read = original.read();
             auto last_read = original.read();
-            auto first_write = original.send("ready");
+            auto first_write = original.send(std::pmr::string("ready", c.pool()));
             auto last_write = original.send("second-ready");
             auto finish = original.finish();
             auto tunnel = std::move(original);
@@ -187,6 +222,17 @@ class udp_tunnel_routes final {
     ruvia::task<ruvia::http_response> sibling(ruvia::context& c) {
         co_return c.text("sibling");
     }
+    ruvia::task<void> ws_inspect(ruvia::context& c) {
+        auto& observation = *c.worker_state<std::shared_ptr<udp_tunnel_observation>>();
+        auto& ws = c.websocket();
+        observation.ws_subprotocol_matched_ = ws.subprotocol() == "chat.v2";
+        co_await ws.pong();
+        while (auto message = co_await ws.read()) {
+            co_await ws.send(std::move(*message));
+        }
+        observation.ws_peer_close_matched_ =
+            ws.peer_close_code() == std::uint16_t{4001} && ws.peer_close_reason() == "client-done";
+    }
 };
 }  // namespace udp_tunnel_test
 
@@ -237,7 +283,8 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
                 auto ready = co_await tunnel.read();
                 RUVIA_CHECK(ready.has_value());
                 if (ready) {
-                    RUVIA_CHECK_EQ(std::string_view(reinterpret_cast<const char*>(ready->payload().data()), ready->payload().size()), expected);
+                    RUVIA_CHECK_EQ(ready->text(), expected);
+                    RUVIA_CHECK_EQ(ready->bytes().size(), expected.size());
                 }
             }
             std::optional<ruvia::http_datagram> retained;
@@ -245,7 +292,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             ruvia::task_scope reader(worker);
             const auto receive = [&]() -> ruvia::task<void> {
                 retained = co_await tunnel.read();
-                RUVIA_CHECK(retained && std::string(reinterpret_cast<const char*>(retained->payload().data()), retained->payload().size()) == "dns-query");
+                RUVIA_CHECK(retained && retained->text() == "dns-query");
                 RUVIA_CHECK(!(co_await tunnel.read()));
             };
             reader.spawn(receive());
@@ -272,7 +319,7 @@ RUVIA_TEST(http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) 
             RUVIA_CHECK(observation->read_overlap_rejected_);
             RUVIA_CHECK(observation->write_overlap_rejected_);
             RUVIA_CHECK(!observation->failed_);
-            RUVIA_CHECK(retained && std::string(reinterpret_cast<const char*>(retained->payload().data()), retained->payload().size()) == "dns-query");
+            RUVIA_CHECK(retained && retained->text() == "dns-query");
             auto next_sibling = co_await client.handle().send({.target_ = "/udp-tunnel-sibling"});
             auto next_sibling_body = co_await next_sibling.body().read_all();
             RUVIA_CHECK(std::string_view(
@@ -505,6 +552,56 @@ RUVIA_TEST(server_capsule_and_udp_results_outlive_unread_input_and_http1_http2_c
                 break;
             }
         }
+        attachment.stop();
+    };
+    auto done = attachment.loop().start(run());
+    attachment.run();
+    done.get();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+RUVIA_TEST(server_and_client_websocket_expose_negotiated_subprotocol_and_peer_close) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    std::exception_ptr failure;
+    ruvia::test::http_server_fixture server(io);
+    auto run = [&]() -> ruvia::task<void> {
+        for (const auto protocol :
+            {ruvia::websocket_client_protocol::http1, ruvia::websocket_client_protocol::http2}) {
+            udp_observation->ws_subprotocol_matched_ = false;
+            udp_observation->ws_peer_close_matched_ = false;
+            const std::array<ruvia::borrowed_text, 2> subprotocols{"chat.v1", "chat.v2"};
+            ruvia::websocket_client client(attachment.loop(),
+                {.scheme_ = ruvia::websocket_scheme::ws,
+                    .protocol_ = protocol,
+                    .host_ = "127.0.0.1",
+                    .port_ = server.endpoint().port(),
+                    .target_ = "/udp-tunnel-ws",
+                    .subprotocols_ = subprotocols});
+            try {
+                co_await client.connect();
+                auto handle = client.handle();
+                RUVIA_CHECK_EQ(handle.subprotocol(), std::string_view("chat.v2"));
+                RUVIA_CHECK_EQ(client.subprotocol(), std::string_view("chat.v2"));
+                co_await handle.send(
+                    ruvia::websocket_message::borrow(ruvia::websocket_opcode::text, "ping-echo"));
+                const auto echoed = co_await handle.read();
+                RUVIA_CHECK(echoed && echoed->text() && echoed->payload() == "ping-echo");
+                co_await handle.close(
+                    {.code_ = ruvia::websocket_close_code::from_value(4001), .reason_ = "client-done"});
+                RUVIA_CHECK(udp_observation->ws_subprotocol_matched_);
+                RUVIA_CHECK(udp_observation->ws_peer_close_matched_);
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            co_await client.shutdown();
+            if (failure) {
+                break;
+            }
+        }
+        server.finish();
         attachment.stop();
     };
     auto done = attachment.loop().start(run());

@@ -21,6 +21,7 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/http/port_number.h"
 #include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/client_tcp_config.h"
@@ -92,16 +93,23 @@ public:
         closing,
     };
 
-    websocket_client_error(code_type code, std::string_view message)
+    websocket_client_error(code_type code, std::string_view message,
+        std::optional<http_status_code> status = std::nullopt)
         : std::runtime_error(std::string(message)),
-          code_(code) {}
+          code_(code),
+          status_(status) {}
 
     [[nodiscard]] code_type code() const noexcept {
         return code_;
     }
 
+    [[nodiscard]] std::optional<http_status_code> status() const noexcept {
+        return status_;
+    }
+
 private:
     code_type code_;
+    std::optional<http_status_code> status_{};
 };
 
 namespace detail {
@@ -139,13 +147,20 @@ public:
     [[nodiscard]] task<void> ping(string_type&& payload) const {
         return ping_owned(std::move(payload));
     }
-    [[nodiscard]] task<void> pong(std::string_view payload) const;
+    [[nodiscard]] task<void> pong(std::string_view payload = {}) const;
     template <std::same_as<std::pmr::string> string_type>
     [[nodiscard]] task<void> pong(string_type&& payload) const {
         return pong_owned(std::move(payload));
     }
+    [[nodiscard]] task<void> send(websocket_message&& message, websocket_send_options options = {}) const;
     [[nodiscard]] task<void> close(websocket_close_options options = {}) const;
     void abort() noexcept;
+    [[nodiscard]] bool connected() const;
+    [[nodiscard]] std::string_view subprotocol() const& RUVIA_LIFETIMEBOUND;
+    std::string_view subprotocol() const&& = delete;
+    [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const noexcept;
+    [[nodiscard]] std::string_view peer_close_reason() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view peer_close_reason() const&& = delete;
 
 private:
     friend class detail::websocket_client_state;
@@ -204,9 +219,12 @@ public:
     task<void> shutdown() && = delete;
 
     [[nodiscard]] bool connected() const;
-    [[nodiscard]] std::string_view subprotocol() const&;
+    [[nodiscard]] std::string_view subprotocol() const& RUVIA_LIFETIMEBOUND;
     std::string_view subprotocol() const&& = delete;
-    [[nodiscard]] const worker_handle& worker() const& noexcept;
+    [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const noexcept;
+    [[nodiscard]] std::string_view peer_close_reason() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view peer_close_reason() const&& = delete;
+    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND;
     const worker_handle& worker() const&& = delete;
 
 private:

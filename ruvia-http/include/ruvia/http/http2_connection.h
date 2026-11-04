@@ -292,6 +292,9 @@ private:
 [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
     http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
     std::string_view authority, std::string_view target, std::span<const http_header> headers = {});
+[[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
+    http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
+    std::string_view authority, std::string_view target, std::span<const http_header_view> headers);
 
 // Validates the server's 2xx response on a still-open stream, then its
 // selection against the negotiation. The result view borrows the response head.

@@ -44,16 +44,20 @@ public:
     void spawn(task<void>) && = delete;
     // Stop control is worker-affine like the rest of the scope. The stop state
     // is created by the first token request, so a scope whose token is never
-    // observed allocates none; get_stop_token() may throw std::bad_alloc.
+    // observed allocates none; token() may throw std::bad_alloc.
     void request_stop() & noexcept;
     void request_stop() && = delete;
-    [[nodiscard]] stop_token get_stop_token() const&;
-    stop_token get_stop_token() const&& = delete;
+    [[nodiscard]] stop_token token() const&;
+    stop_token token() const&& = delete;
     [[nodiscard]] bool stop_requested() const& noexcept;
     bool stop_requested() const&& = delete;
     // Includes a spawn currently acquiring its child node.
     [[nodiscard]] std::size_t size() const& noexcept;
     std::size_t size() const&& = delete;
+    [[nodiscard]] bool empty() const& noexcept {
+        return size() == 0;
+    }
+    bool empty() const&& = delete;
     // One join: single-use, movable only before it is awaited. A cold join
     // does not close spawn admission; starting it claims the scope exactly
     // once and prevents further spawning. It waits for in-progress spawn

@@ -68,11 +68,11 @@ public:
     template <typename entity_type>
     db_repository<entity_type, db_transaction> repository() && = delete;
 
-    task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) &;
+    [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) &;
     task<db_rows> query(std::string_view, std::span<const db_value> = {}) && = delete;
     task<db_rows> query(std::string_view, std::initializer_list<db_value>) & = delete;
     task<db_rows> query(std::string_view, std::initializer_list<db_value>) && = delete;
-    task<db_exec_result> execute(
+    [[nodiscard]] task<db_exec_result> execute(
         std::string_view sql, std::span<const db_value> params = {}) &;
     task<db_exec_result> execute(
         std::string_view, std::span<const db_value> = {}) && = delete;
@@ -85,23 +85,23 @@ public:
     // and the same temporary-safety as db_handle::query()/execute().
     // Fixed SQL uses MariaDB placeholders by default; specify postgresql
     // for numbered parameters. Values are owned by the existing operation path.
-    template <fixed_string sql, db_driver driver = db_driver::mariadb, typename... params_type>
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
         requires(detail::db_parameter<params_type> && ...)
     [[nodiscard]] task<db_rows> query(params_type&&... params) & {
         detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(query_driver());
         return query(sql.view(), std::forward<params_type>(params)...);
     }
-    template <fixed_string sql, db_driver driver = db_driver::mariadb, typename... params_type>
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
         requires(detail::db_parameter<params_type> && ...)
     task<db_rows> query(params_type&&...) && = delete;
 
-    template <fixed_string sql, db_driver driver = db_driver::mariadb, typename... params_type>
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
         requires(detail::db_parameter<params_type> && ...)
     [[nodiscard]] task<db_exec_result> execute(params_type&&... params) & {
         detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(query_driver());
         return execute(sql.view(), std::forward<params_type>(params)...);
     }
-    template <fixed_string sql, db_driver driver = db_driver::mariadb, typename... params_type>
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
         requires(detail::db_parameter<params_type> && ...)
     task<db_exec_result> execute(params_type&&...) && = delete;
 
@@ -126,23 +126,23 @@ public:
         requires detail::db_parameter_pack<params_type...>
     task<db_exec_result> execute(std::string_view, params_type&&...) && = delete;
 
-    task<void> commit() &;
+    [[nodiscard]] task<void> commit() &;
     task<void> commit() && = delete;
-    task<void> rollback() &;
+    [[nodiscard]] task<void> rollback() &;
     task<void> rollback() && = delete;
-    task<void> savepoint(std::string_view name) &;
+    [[nodiscard]] task<void> savepoint(std::string_view name) &;
     task<void> savepoint(std::string_view) && = delete;
-    task<void> rollback_to_savepoint(std::string_view name) &;
+    [[nodiscard]] task<void> rollback_to_savepoint(std::string_view name) &;
     task<void> rollback_to_savepoint(std::string_view) && = delete;
-    task<void> release_savepoint(std::string_view name) &;
+    [[nodiscard]] task<void> release_savepoint(std::string_view name) &;
     task<void> release_savepoint(std::string_view) && = delete;
-    task<void> notify(std::string_view channel, std::string_view payload = {}) &;
+    [[nodiscard]] task<void> notify(std::string_view channel, std::string_view payload = {}) &;
     task<void> notify(std::string_view, std::string_view = {}) && = delete;
-    task<void> advisory_lock(std::int64_t key) &;
+    [[nodiscard]] task<void> advisory_lock(std::int64_t key) &;
     task<void> advisory_lock(std::int64_t) && = delete;
-    task<void> advisory_lock(std::int32_t class_id, std::int32_t object_id) &;
+    [[nodiscard]] task<void> advisory_lock(std::int32_t class_id, std::int32_t object_id) &;
     task<void> advisory_lock(std::int32_t, std::int32_t) && = delete;
-    task<void> advisory_lock(std::string_view key, std::int64_t seed = 0) &;
+    [[nodiscard]] task<void> advisory_lock(std::string_view key, std::int64_t seed = 0) &;
     task<void> advisory_lock(std::string_view, std::int64_t = 0) && = delete;
     [[nodiscard]] task<bool> try_advisory_lock(std::int64_t key) &;
     task<bool> try_advisory_lock(std::int64_t) && = delete;
@@ -150,7 +150,7 @@ public:
     task<bool> try_advisory_lock(std::int32_t, std::int32_t) && = delete;
     [[nodiscard]] task<bool> try_advisory_lock(std::string_view key, std::int64_t seed = 0) &;
     task<bool> try_advisory_lock(std::string_view, std::int64_t = 0) && = delete;
-    task<void> declare_cursor(
+    [[nodiscard]] task<void> declare_cursor(
         std::string_view name, std::string_view sql, std::span<const db_value> params = {}, bool scroll = false) &;
     task<void> declare_cursor(
         std::string_view, std::string_view, std::span<const db_value> = {}, bool = false) && = delete;
@@ -160,7 +160,7 @@ public:
         std::string_view, std::string_view, std::initializer_list<db_value>, bool = false) && = delete;
     [[nodiscard]] task<db_rows> fetch_cursor(std::string_view name, std::uint64_t count = 1) &;
     task<db_rows> fetch_cursor(std::string_view, std::uint64_t = 1) && = delete;
-    task<void> close_cursor(std::string_view name) &;
+    [[nodiscard]] task<void> close_cursor(std::string_view name) &;
     task<void> close_cursor(std::string_view) && = delete;
 
 private:
@@ -284,6 +284,8 @@ public:
     // Inherits an empty token; a supplied state replaces user cancellation.
     // Timeout can only tighten. Accumulation requires a caller-owned stop_group.
     [[nodiscard]] db_handle with_options(operation_options options) const;
+    [[nodiscard]] const worker_handle& worker() const&;
+    const worker_handle& worker() const&& = delete;
 #ifdef RUVIA_ENABLE_REDIS
     [[nodiscard]] db_query_result_cache query_result_cache() const;
 #endif
@@ -291,18 +293,17 @@ public:
     template <typename entity_type>
     [[nodiscard]] db_repository<entity_type, db_handle> repository() const;
 
-    task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const;
+    [[nodiscard]] task<db_rows> query(std::string_view sql, std::span<const db_value> params = {}) const;
     task<db_rows> query(
         std::string_view sql, std::initializer_list<db_value> params) const = delete;
-    task<db_exec_result> execute(
+    [[nodiscard]] task<db_exec_result> execute(
         std::string_view sql, std::span<const db_value> params = {}) const;
     task<db_exec_result> execute(
         std::string_view sql, std::initializer_list<db_value> params) const = delete;
-    task<db_stream_result> query_stream(
+    [[nodiscard]] task<db_stream_result> query_stream(
         std::string_view sql, std::span<const db_value> params = {}) const;
     task<db_stream_result> query_stream(
         std::string_view sql, std::initializer_list<db_value> params) const = delete;
-
     // Bound parameters as ordinary arguments: query(sql, id, name). Each one is
     // converted to a db_value and cloned into the prepared statement before the
     // call returns -- the span overloads below build the statement synchronously,
@@ -313,21 +314,21 @@ public:
     // span instead; a span cannot construct a db_value, so it never reaches here.
     // Fixed SQL uses MariaDB placeholders by default; specify postgresql
     // for numbered parameters. Values are owned by the existing operation path.
-    template <fixed_string sql, db_driver driver = db_driver::mariadb, typename... params_type>
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
         requires(detail::db_parameter<params_type> && ...)
     [[nodiscard]] task<db_rows> query(params_type&&... params) const {
         detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(query_driver());
         return query(sql.view(), std::forward<params_type>(params)...);
     }
 
-    template <fixed_string sql, db_driver driver = db_driver::mariadb, typename... params_type>
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
         requires(detail::db_parameter<params_type> && ...)
     [[nodiscard]] task<db_exec_result> execute(params_type&&... params) const {
         detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(query_driver());
         return execute(sql.view(), std::forward<params_type>(params)...);
     }
 
-    template <fixed_string sql, db_driver driver = db_driver::mariadb, typename... params_type>
+    template <fixed_string sql, db_driver driver = db_driver::unspecified, typename... params_type>
         requires(detail::db_parameter<params_type> && ...)
     [[nodiscard]] task<db_stream_result> query_stream(params_type&&... params) const {
         detail::validate_db_sql_literal<sql, driver, sizeof...(params_type)>(query_driver());
@@ -357,9 +358,9 @@ public:
         return query_stream(sql, std::span<const db_value>(values));
     }
 
-    task<db_transaction> begin_transaction(
+    [[nodiscard]] task<db_transaction> begin_transaction(
         db_transaction_options options = {}) const;
-    task<void> notify(std::string_view channel, std::string_view payload = {}) const;
+    [[nodiscard]] task<void> notify(std::string_view channel, std::string_view payload = {}) const;
 
 private:
     friend class detail::db_registry;

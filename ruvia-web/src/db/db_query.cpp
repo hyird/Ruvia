@@ -10,6 +10,7 @@
 
 #include "db/db_sql_format.h"
 #include "query_storage.h"
+#include "util/pmr_owned_storage.h"
 
 namespace ruvia::detail {
 
@@ -1370,7 +1371,7 @@ db_query& db_query::cache(const db_cache_setting_type& setting) {
     return std::visit([&](const auto& value) -> db_query& {
         using t_type = std::remove_cvref_t<decltype(value)>;
         if constexpr (std::same_as<t_type, db_cache_options>) {
-            return cache(std::string_view(value.id_), value.milliseconds_);
+            return cache(std::string_view(value.id_), value.duration_);
         } else if constexpr (std::same_as<t_type, std::chrono::milliseconds>) {
             return cache(std::string_view{}, value);
         } else {
@@ -1386,13 +1387,13 @@ db_query& db_query::cache(const db_cache_setting_type& setting) {
     },
         setting);
 }
-db_query& db_query::cache(std::string_view id, std::optional<std::chrono::milliseconds> milliseconds) {
-    if (milliseconds && milliseconds->count() <= 0) {
+db_query& db_query::cache(std::string_view id, std::optional<std::chrono::milliseconds> duration) {
+    if (duration && duration->count() <= 0) {
         throw std::invalid_argument("cache duration must be positive");
     }
     auto& s = storage();
     s.cache_id_ = id;
-    s.cache_duration_ = milliseconds;
+    s.cache_duration_ = duration;
     s.cache_enabled_ = true;
     return *this;
 }
@@ -1794,6 +1795,10 @@ db_query& db_query::or_where(db_expression predicate) {
     const auto previous = storage().predicate_;
     return where(previous == no_db_node ? predicate : binary(db_expression(storage_.get(), previous), db_binary_operator::or_value, predicate));
 }
+db_query& db_query::clear_where() {
+    storage().predicate_ = no_db_node;
+    return *this;
+}
 db_query& db_query::group_by(std::span<const db_expression> expressions) {
     auto& s = storage();
     for (const auto expression : expressions) {
@@ -1821,6 +1826,10 @@ db_query& db_query::and_having(db_expression predicate) {
 db_query& db_query::or_having(db_expression predicate) {
     const auto previous = storage().having_;
     return having(previous == no_db_node ? predicate : binary(db_expression(storage_.get(), previous), db_binary_operator::or_value, predicate));
+}
+db_query& db_query::clear_having() {
+    storage().having_ = no_db_node;
+    return *this;
 }
 db_query& db_query::order_by(db_expression expression, db_order_direction direction, db_nulls_order nulls) {
     const auto index = require_expression(expression);
@@ -2208,6 +2217,21 @@ db_query& db_query::combine(db_set_operation operation, const db_query& query) {
     const auto index = s.queries_.size();
     s.queries_.push_back(std::move(snapshot));
     s.set_operations_.push_back({operation, index});
+    return *this;
+}
+db_statement& db_statement::operator=(db_statement&& other) {
+    if (this != &other) {
+        auto* target = resource();
+        auto sql_value = detail::rebind_owned_storage(other.sql_, target);
+        auto params_value = other.params_.get_allocator().resource() == target
+                                ? std::move(other.params_)
+                                : detail::clone_db_values(other.params_, target);
+        sql_.swap(sql_value);
+        params_.swap(params_value);
+        returns_rows_ = std::exchange(other.returns_rows_, false);
+        other.sql_.clear();
+        other.params_.clear();
+    }
     return *this;
 }
 

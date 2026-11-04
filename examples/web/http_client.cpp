@@ -56,7 +56,7 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> forward(ruvia::context& c) {
-        const auto incoming_body = co_await c.req().text();
+        const auto incoming_body = co_await c.req().bytes();
         auto client = c.http_client();
 
         try {

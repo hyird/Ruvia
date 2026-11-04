@@ -520,6 +520,10 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
 
     auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
     auto active_receiver = std::move(receiver);
+    ruvia::one_shot_completion<int> empty_completion;
+    if (empty_completion.valid() || !completion.valid() || receiver.valid() || !active_receiver.valid()) {
+        co_return;
+    }
     ruvia::task_scope scope(worker_value);
     scope.spawn(wait_for_value(active_receiver, 42, success));
     const bool completed = completion.complete(42).accepted();

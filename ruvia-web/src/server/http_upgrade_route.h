@@ -174,16 +174,21 @@ public:
     static constexpr bool native_stream = server_websocket_connection<stream_type>::native_stream;
     using stream_argument_type = typename server_websocket_connection<stream_type>::stream_argument_type;
 
-    websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression) noexcept
+    websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression,
+        std::string_view subprotocol = {},
+        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
         requires(native_stream)
         : stream_(&stream),
-          compression_(compression) {}
+          compression_(compression),
+          subprotocol_(subprotocol, resource != nullptr ? resource : std::pmr::get_default_resource()) {}
 
-    websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression) noexcept
+    websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression,
+        std::string_view subprotocol = {},
+        std::pmr::memory_resource* resource = std::pmr::get_default_resource())
         requires(!native_stream)
         : stream_(std::move(stream)),
-          compression_(compression) {}
-
+          compression_(compression),
+          subprotocol_(subprotocol, resource != nullptr ? resource : std::pmr::get_default_resource()) {}
     [[nodiscard]] stream_argument_type release_stream() noexcept {
         if constexpr (native_stream) {
             return *stream_;
@@ -196,9 +201,14 @@ public:
         return compression_;
     }
 
+    [[nodiscard]] std::string_view subprotocol() const noexcept {
+        return subprotocol_;
+    }
+
 private:
     std::conditional_t<native_stream, stream_type*, stream_type> stream_;
     websocket_compression compression_{};
+    std::pmr::string subprotocol_;
 };
 
 template <typename stream_type, typename commit_upgrade_type>
@@ -231,7 +241,8 @@ struct websocket_upgrade_session_operation final {
             protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
             &inbound_, pending_frames_,
             make_server_websocket_connection_options(
-                options_, committed->compression(), websocket_endpoint_.deflate()));
+                options_, committed->compression(), websocket_endpoint_.deflate()),
+            committed->subprotocol());
         co_await invoke_websocket_handler(
             *session_, scanner_entry_, resolved_.stream_handler(), context_value);
     }

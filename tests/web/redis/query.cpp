@@ -86,3 +86,11 @@ RUVIA_TEST(redis_predicate_self_combination_preserves_operands) {
         RUVIA_CHECK(!predicate.empty());
     }
 }
+
+RUVIA_TEST(redis_predicate_negation_and_entity_column_name) {
+    static_assert(redis_query_user::column_name<"email">() == "email");
+    const auto pred = !(redis_query_user::column<"email">() == "alice@example.com");
+    RUVIA_CHECK(!pred.empty());
+    const ruvia::redis_predicate empty;
+    RUVIA_CHECK(ruvia::testing::throws_on([&] { (void)!empty; }));
+}

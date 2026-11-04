@@ -15,7 +15,17 @@ namespace ruvia::detail {
 
 template <middleware middleware_type>
 [[nodiscard]] task<void> invoke_middleware(void* target, context& context_value, next& next_value) {
-    return static_cast<middleware_type*>(target)->handle(context_value, next_value);
+    if constexpr (requires {
+                      static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::handle);
+                  }) {
+        constexpr auto method =
+            static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::handle);
+        return (static_cast<middleware_type*>(target)->*method)(context_value, next_value);
+    } else {
+        constexpr auto method =
+            static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::handle);
+        return (static_cast<const middleware_type*>(target)->*method)(context_value, next_value);
+    }
 }
 
 // Constructs the middleware from the arguments use<T>(args...) captured. The

@@ -39,13 +39,12 @@ private:
     friend struct detail::streaming_access;
     friend class multipart_reader;
 
-    struct token_type final {};
     using read_type = detail::callback_ref<task<std::optional<std::span<const std::byte>>>()>;
 
-public:
-    body_reader(token_type, void* target, read_type::invoke_type read) noexcept
+    body_reader(void* target, read_type::invoke_type read) noexcept
         : read_(detail::callback_access::make<task<std::optional<std::span<const std::byte>>>()>(target, read)) {}
 
+public:
     body_reader(const body_reader&) = delete;
     body_reader& operator=(const body_reader&) = delete;
 
@@ -133,6 +132,9 @@ public:
     [[nodiscard]] bool aborted() const noexcept {
         return aborted_(target_);
     }
+    [[nodiscard]] bool committed() const noexcept {
+        return committed_(target_);
+    }
 
     /// 正常结束正文并可附 Trailer；未提交时可用于提交一个空响应。
     /// Trailer 视图在调用返回前复制到 owner storage；HTTP/1.0 等无法承载的可选
@@ -190,10 +192,6 @@ private:
 
     task<void> write_owned(std::pmr::string&& chunk);
 
-    [[nodiscard]] bool committed() const noexcept {
-        return committed_(target_);
-    }
-
     std::pmr::memory_resource* resource_;
     void* target_;
     commit_type commit_;
@@ -231,6 +229,9 @@ public:
 
     [[nodiscard]] bool aborted() const noexcept {
         return writer_ == nullptr || writer_->aborted();
+    }
+    [[nodiscard]] bool committed() const noexcept {
+        return writer().committed();
     }
 
     task<void> end(std::span<const http_header_view> trailers = {});

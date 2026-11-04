@@ -65,10 +65,6 @@ private:
     }
 };
 
-std::string_view characters(std::span<const std::byte> bytes_value) {
-    return {reinterpret_cast<const char*>(bytes_value.data()), bytes_value.size()};
-}
-
 ruvia::task<void> client_session(ruvia::event_loop loop, ruvia::http_client_config config,
     std::string_view selection) {
     ruvia::http_client client(loop, config);
@@ -91,8 +87,8 @@ ruvia::task<void> client_session(ruvia::event_loop loop, ruvia::http_client_conf
             // finish() half-closes only sending. Keep reading to the peer FIN.
             co_await tunnel.finish();
             std::string echoed;
-            while (const auto chunk = co_await tunnel.read()) {
-                echoed.append(characters(*chunk));
+            while (const auto chunk = co_await tunnel.text()) {
+                echoed.append(*chunk);
             }
             if (echoed != "byte stream") {
                 throw std::runtime_error("incorrect CONNECT echo");
@@ -110,10 +106,10 @@ ruvia::task<void> client_session(ruvia::event_loop loop, ruvia::http_client_conf
             auto stream = std::move(*opened.tunnel()).udp();
             co_await stream.send("udp payload");
             auto reply = co_await stream.read();
-            if (!reply || characters(reply->payload()) != "udp payload") {
+            if (!reply || reply->text() != "udp payload") {
                 throw std::runtime_error("incorrect UDP echo");
             }
-            std::cout << "UDP: " << characters(reply->payload()) << '\n';
+            std::cout << "UDP: " << reply->text() << '\n';
             co_await stream.finish();
             while (co_await stream.read()) {
             }

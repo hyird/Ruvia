@@ -119,7 +119,7 @@ struct db_cache_config final {
     bool always_enabled_{false};
     bool ignore_errors_{false};
     // Use a distinct namespace for databases sharing one Redis database.
-    std::string name_space_{"ruvia:query-result-cache"};
+    std::string key_prefix_{"ruvia:query-result-cache"};
 };
 
 // application startup resolves this alias to its existing worker-local Redis capability.
@@ -130,7 +130,7 @@ struct db_query_cache_registration final {
 
 struct db_cache_options final {
     borrowed_text id_{};
-    std::optional<std::chrono::milliseconds> milliseconds_{};
+    std::optional<std::chrono::milliseconds> duration_{};
 };
 
 using db_cache_setting_type = std::variant<std::monostate, bool, std::chrono::milliseconds, db_cache_options>;
@@ -398,6 +398,9 @@ public:
     [[nodiscard]] std::optional<std::string_view> value() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::optional<std::string_view> value() const&& = delete;
 
+    [[nodiscard]] bool is_null() const noexcept {
+        return !value().has_value();
+    }
     // string_view is a raw borrow, valid only while this field's row storage
     // remains alive. Repository mapped results instead require db_mapped_value.
     template <detail::db_text_scalar t_type>
@@ -415,6 +418,7 @@ public:
 private:
     friend struct detail::db_result_access;
     friend class db_row;
+    friend class db_rows;
 
     struct borrowed_tag_type final {};
 
@@ -443,6 +447,11 @@ public:
     [[nodiscard]] const db_field& operator[](std::size_t index) const&& = delete;
     [[nodiscard]] const db_field& operator[](std::string_view column) const& RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const db_field& operator[](std::string_view column) const&& = delete;
+    [[nodiscard]] bool contains(std::string_view column) const noexcept;
+    [[nodiscard]] const db_field* find(std::string_view column) const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] const db_field* find(std::string_view column) const&& = delete;
+    [[nodiscard]] std::span<const std::pmr::string> column_names() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::span<const std::pmr::string> column_names() const&& = delete;
     [[nodiscard]] const db_field* begin() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const db_field* begin() const&& = delete;
     [[nodiscard]] const db_field* end() const& noexcept RUVIA_LIFETIMEBOUND;
@@ -450,11 +459,11 @@ public:
 
 private:
     friend struct detail::db_result_access;
+    friend class db_rows;
 
     db_row() noexcept = default;
     db_row(const db_field* fields_value, std::size_t size, const std::pmr::string* column_names,
         std::size_t column_count) noexcept;
-    [[nodiscard]] std::span<const std::pmr::string> column_names() const noexcept;
 
     std::span<const db_field> fields_{};
     std::span<const std::pmr::string> column_names_{};

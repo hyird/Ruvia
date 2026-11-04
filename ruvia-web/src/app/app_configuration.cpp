@@ -71,10 +71,17 @@ void app_configuration::add_worker_state(worker_state_definition definition) {
 // A second app-wide registration throws like a duplicate scoped prefix rather
 // than silently replacing the first by call order.
 void app_configuration::on_error(http_error_handler handler) {
+    if (!handler) {
+        throw std::invalid_argument("error handler must not be null");
+    }
     if (error_handler_) {
         throw std::invalid_argument("duplicate app-wide error handler");
     }
     error_handler_ = std::move(handler);
+}
+
+void app_configuration::on_error(std::nullptr_t) noexcept {
+    error_handler_ = nullptr;
 }
 
 void app_configuration::on_error(scoped_error_handler_options options) {
@@ -82,10 +89,17 @@ void app_configuration::on_error(scoped_error_handler_options options) {
 }
 
 void app_configuration::on_not_found(http_not_found_handler handler) {
+    if (!handler) {
+        throw std::invalid_argument("not found handler must not be null");
+    }
     if (not_found_handler_) {
         throw std::invalid_argument("duplicate app-wide not found handler");
     }
     not_found_handler_ = std::move(handler);
+}
+
+void app_configuration::on_not_found(std::nullptr_t) noexcept {
+    not_found_handler_ = nullptr;
 }
 
 void app_configuration::on_not_found(scoped_not_found_handler_options options) {

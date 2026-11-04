@@ -85,6 +85,12 @@ private:
 
 RUVIA_TEST(stop_registration_self_reset_retires_each_callback_target_once) {
     ruvia::stop_source source;
+    ruvia::move_only_function<void()> empty_fn;
+    RUVIA_CHECK(empty_fn == nullptr);
+    RUVIA_CHECK(nullptr == empty_fn);
+    ruvia::move_only_function<void()> valid_fn{[] {}};
+    RUVIA_CHECK(valid_fn != nullptr);
+    RUVIA_CHECK(nullptr != valid_fn);
     ruvia::stop_registration registration;
     stop_token_test::callback_retirement_state state{&registration};
     source.token().register_callback(registration,

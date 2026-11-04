@@ -184,6 +184,26 @@ RUVIA_TEST(websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields) 
             RUVIA_CHECK(ruvia::validate_http2_websocket_client_response(negotiation, head->head(), true).index() == 0);
         }
     }
+    {
+        std::pmr::unsynchronized_pool_resource resource;
+        auto connection = ruvia::http2_connection::client({.resource_ = &resource});
+        std::pmr::string settings_wire(&resource);
+        constexpr std::array<char, 6> enable_connect_protocol{0x00, 0x08, 0x00, 0x00, 0x00, 0x01};
+        std::array<char, ruvia::http2_frame_header_bytes> header{};
+        RUVIA_CHECK(ruvia::encode_http2_frame_header(
+            header, static_cast<std::uint32_t>(enable_connect_protocol.size()),
+            ruvia::http2_frame_type::settings, 0, 0));
+        settings_wire.append(header.data(), header.size());
+        settings_wire.append(enable_connect_protocol.data(), enable_connect_protocol.size());
+        RUVIA_CHECK(connection.feed(settings_wire) == ruvia::http2_feed_result::accepted);
+        while (connection.next_event()) {
+        }
+        ruvia::websocket_client_negotiation negotiation({}, &resource);
+        const std::array<ruvia::http_header_view, 1> borrowed_headers{{{"x-trace", "borrowed"}}};
+        const auto submitted = ruvia::submit_http2_websocket_client_request(
+            connection, negotiation, "https", "example.test", "/ws", borrowed_headers);
+        RUVIA_CHECK(std::holds_alternative<std::uint32_t>(submitted));
+    }
 
     // RFC 9113 section 8.2.2: connection-specific header fields in HTTP/2
     // responses are rejected as forbidden_field.
@@ -280,7 +300,6 @@ concept ws_client_negotiation_accepts_fields =
 template <typename head_type>
 concept ws_client_negotiation_accepts_response_head =
     requires(const ruvia::websocket_client_negotiation& negotiation, head_type&& head) {
-        negotiation.validate_response(std::forward<head_type>(head), true);
         ruvia::validate_http2_websocket_client_response(negotiation, std::forward<head_type>(head), true);
     };
 

@@ -741,6 +741,15 @@ int main() {
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
         const auto worker_value = attachment.loop().handle();
         auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
+        ruvia::channel_sender<int> empty_sender;
+        if (empty_sender.valid() || !sender.valid() || !receiver.valid()) {
+            return 1;
+        }
+        auto [cap_sender, cap_receiver] = ruvia::make_channel<int>(worker_value, 2);
+        if (!cap_sender.valid() || !cap_receiver.valid()) {
+            return 1;
+        }
+        cap_receiver.close();
         if (!sender.send(9).accepted()) {
             return 1;
         }

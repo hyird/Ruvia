@@ -31,6 +31,21 @@ void check_response_operation_affinity(void* target) noexcept {
     }
 }
 
+detail::http_client_response_state& require_response_state(
+    detail::http_client_response_state* state_value) {
+    if (state_value == nullptr) {
+        throw std::logic_error("response owner has moved");
+    }
+    return *state_value;
+}
+
+detail::http_client_response_state& require_response_body_state(
+    detail::http_client_response_state* state_value) {
+    auto& state = require_response_state(state_value);
+    check_response_operation_affinity(&state);
+    return state;
+}
+
 }  // namespace
 
 http_client_response::http_client_response(detail::http_client_pool& pool)
@@ -86,38 +101,36 @@ void http_client_response::release() noexcept {
     state_value->release_reference();
 }
 
-std::span<const http_client_informational_response> http_client_response::informational_responses() const& noexcept {
-    return state_->informational_;
+std::span<const http_client_informational_response> http_client_response::informational_responses() const& {
+    return require_response_state(state_).informational_;
 }
 
-http_status_code http_client_response::status() const noexcept {
-    return state_->status_.status();
+http_status_code http_client_response::status() const {
+    return require_response_state(state_).status_.status();
 }
-http_received_status http_client_response::received_status() const noexcept {
-    return state_->status_;
+http_received_status http_client_response::received_status() const {
+    return require_response_state(state_).status_;
 }
-http_protocol_version http_client_response::protocol_version() const noexcept {
-    return state_->protocol_version_;
+http_protocol_version http_client_response::protocol_version() const {
+    return require_response_state(state_).protocol_version_;
 }
 void http_client_response::reprioritize(http_priority priority) & {
-    if (state_ == nullptr) {
-        throw std::logic_error("response owner has moved");
-    }
-    check_response_operation_affinity(state_);
-    if (state_->complete_) {
+    auto& state_value = require_response_state(state_);
+    check_response_operation_affinity(&state_value);
+    if (state_value.complete_) {
         // The peer already finished the stream; there is nothing left to schedule.
         return;
     }
-    if (state_->abandoned_ || state_->pool_ == nullptr) {
+    if (state_value.abandoned_ || state_value.pool_ == nullptr) {
         throw http_client_error(http_client_error::code_type::closing, "response transport is retired");
     }
-    state_->pool_->reprioritize(*state_, priority);
+    state_value.pool_->reprioritize(state_value, priority);
 }
-std::span<const http_header> http_client_response::headers() const& noexcept {
-    return state_->headers_;
+std::span<const http_header> http_client_response::headers() const& {
+    return require_response_state(state_).headers_;
 }
-std::span<const http_header> http_client_response::trailers() const& noexcept {
-    return state_->trailers_;
+std::span<const http_header> http_client_response::trailers() const& {
+    return require_response_state(state_).trailers_;
 }
 
 void detail::http_client_response_state::retain_reference() noexcept {
@@ -240,13 +253,15 @@ bool http_client_response_body::complete() const {
 }
 
 task<std::optional<std::span<const std::byte>>> http_client_response_body::read() & {
-    check_response_operation_affinity(state_);
-    return ::ruvia::make_scoped_operation(state_->body_operation_scope_, state_->consume_body<std::span<const std::byte>>());
+    auto& state_value = require_response_body_state(state_);
+    return ::ruvia::make_scoped_operation(
+        state_value.body_operation_scope_, state_value.consume_body<std::span<const std::byte>>());
 }
 
 task<std::optional<std::string_view>> http_client_response_body::text() & {
-    check_response_operation_affinity(state_);
-    return ::ruvia::make_scoped_operation(state_->body_operation_scope_, state_->consume_body<std::string_view>());
+    auto& state_value = require_response_body_state(state_);
+    return ::ruvia::make_scoped_operation(
+        state_value.body_operation_scope_, state_value.consume_body<std::string_view>());
 }
 
 template <typename view>
@@ -296,8 +311,9 @@ template task<std::optional<std::string_view>> detail::http_client_response_stat
 template task<void> detail::http_client_response_state::consume_body<void>(response_stream_writer*);
 
 task<http_client_response_bytes> http_client_response_body::read_all(std::size_t max_bytes) & {
-    check_response_operation_affinity(state_);
-    return ::ruvia::make_scoped_operation(state_->body_operation_scope_, state_->read_all(max_bytes));
+    auto& state_value = require_response_body_state(state_);
+    return ::ruvia::make_scoped_operation(
+        state_value.body_operation_scope_, state_value.read_all(max_bytes));
 }
 
 task<http_client_response_bytes> detail::http_client_response_state::read_all(std::size_t max_bytes) {
@@ -348,22 +364,25 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
 }
 
 task<void> http_client_response_body::pipe_to(response_stream_writer& output) & {
-    check_response_operation_affinity(state_);
-    return ::ruvia::make_scoped_operation(state_->body_operation_scope_, state_->consume_body<void>(&output));
+    auto& state_value = require_response_body_state(state_);
+    return ::ruvia::make_scoped_operation(
+        state_value.body_operation_scope_, state_value.consume_body<void>(&output));
 }
 
-std::optional<std::string_view> http_client_response::header(std::string_view name) const& noexcept {
-    const auto match = std::ranges::find_if(state_->headers_,
+std::optional<std::string_view> http_client_response::header(std::string_view name) const& {
+    const auto& headers_value = require_response_state(state_).headers_;
+    const auto match = std::ranges::find_if(headers_value,
         [name](const auto& header_value) { return http_ascii_equals_ignore_case(header_value.name(), name); });
-    return match == state_->headers_.end() ? std::nullopt
-                                           : std::optional<std::string_view>(match->value());
+    return match == headers_value.end() ? std::nullopt
+                                        : std::optional<std::string_view>(match->value());
 }
 
-std::optional<std::string_view> http_client_response::trailer(std::string_view name) const& noexcept {
-    const auto match = std::ranges::find_if(state_->trailers_,
+std::optional<std::string_view> http_client_response::trailer(std::string_view name) const& {
+    const auto& trailers_value = require_response_state(state_).trailers_;
+    const auto match = std::ranges::find_if(trailers_value,
         [name](const auto& header_value) { return http_ascii_equals_ignore_case(header_value.name(), name); });
-    return match == state_->trailers_.end() ? std::nullopt
-                                            : std::optional<std::string_view>(match->value());
+    return match == trailers_value.end() ? std::nullopt
+                                         : std::optional<std::string_view>(match->value());
 }
 
 http_client_handle::http_client_handle(detail::http_client_pool& pool,
@@ -400,6 +419,7 @@ http_client_handle http_client_handle::with_options(operation_options options) c
 
 task<http_client_response> http_client_handle::send(
     const http_client_request_view& view) const {
+    registration_.require_active();
     validate_operation_options(options_);
     detail::http_client_request_storage request(view.method_.view(), view.target_.view(), view.headers_, resource_);
     if (const auto* bytes = view.content_.borrowed_bytes()) {
@@ -502,6 +522,11 @@ std::uint16_t http_client_handle::port() const {
 http_scheme http_client_handle::scheme() const {
     registration_.require_active();
     return pool_->scheme();
+}
+
+http_origin_view http_client_handle::origin() const {
+    registration_.require_active();
+    return pool_->origin();
 }
 
 http_client_handle context::http_client() const {

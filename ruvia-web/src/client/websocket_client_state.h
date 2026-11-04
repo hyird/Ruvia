@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -54,6 +56,8 @@ public:
     void abort() noexcept;
     [[nodiscard]] bool connected();
     [[nodiscard]] std::string_view subprotocol();
+    [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const noexcept;
+    [[nodiscard]] std::string_view peer_close_reason() const noexcept;
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_;
     }
@@ -149,6 +153,7 @@ private:
     void require_current() const;
     [[nodiscard]] ruvia::websocket_connection& require_protocol() noexcept;
     [[nodiscard]] bool protocol_open() const noexcept;
+    void record_peer_close(const websocket_close_event& close_event) noexcept;
     // Worker only: records the first abort reason and retires the client.
     void retire(client_abort_reason reason) noexcept;
     // Any thread, including stop callbacks: defers retire(reason) to the worker
@@ -206,6 +211,9 @@ private:
     std::optional<ruvia::websocket_connection> protocol_;
     std::optional<websocket_http2_transport> http2_;
     std::pmr::string selected_subprotocol_;
+    std::optional<std::uint16_t> peer_close_code_{};
+    std::array<char, 123> peer_close_reason_{};
+    std::uint8_t peer_close_reason_size_{0};
     websocket_compression negotiated_compression_{};
     client_abort_reason abort_reason_{client_abort_reason::none};
     bool read_active_{false};

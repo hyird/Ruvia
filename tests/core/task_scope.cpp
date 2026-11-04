@@ -202,7 +202,7 @@ ruvia::task<void> verify_stop_callback_reentrant_join_waits_for_finish(
     bool active_during_stop_callback = false;
     bool completed_after_node_release = false;
     ruvia::stop_registration registration;
-    primary->get_stop_token().register_callback(registration, [&] {
+    primary->token().register_callback(registration, [&] {
         active_during_stop_callback =
             primary.has_value() && primary->size() == 1 && resource.live_allocations() != 0;
         observer.spawn(join_and_destroy_on_failure(
@@ -224,6 +224,9 @@ ruvia::task<void> wait_for_stop(ruvia::worker_handle worker_value, ruvia::stop_t
 ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
     {
         ruvia::task_scope empty_scope(worker_value);
+        if (!empty_scope.empty()) {
+            co_return;
+        }
         {
             auto discarded_cold_join = empty_scope.join();
             static_cast<void>(discarded_cold_join);
@@ -337,11 +340,11 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
             static_cast<void>(discarded_join);
         }
         bool stopped = false;
-        cancelled_scope.spawn(wait_for_stop(worker_value, cancelled_scope.get_stop_token(), stopped));
+        cancelled_scope.spawn(wait_for_stop(worker_value, cancelled_scope.token(), stopped));
         auto join = cancelled_scope.join();
         cancelled_scope.request_stop();
         co_await std::move(join);
-        if (!stopped || !cancelled_scope.stop_requested() || cancelled_scope.size() != 0 || resource.live_allocations() != 0) {
+        if (!stopped || !cancelled_scope.stop_requested() || !cancelled_scope.empty() || cancelled_scope.size() != 0 || resource.live_allocations() != 0) {
             co_return;
         }
     }

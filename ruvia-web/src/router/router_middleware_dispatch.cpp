@@ -224,6 +224,10 @@ task<http_response> detail::route_table::run_unmatched_chain(
 
 task<void> detail::route_table::contain_failure(
     const route_table& table, context& context_value, std::exception_ptr exception) {
+    if (detail::context_access::output_committed(context_value)) {
+        detail::context_access::set_error(context_value, std::move(exception));
+        co_return;
+    }
     auto response = co_await table.handle_exception(context_value, exception);
     detail::context_access::set_response(context_value, std::move(response));
 }

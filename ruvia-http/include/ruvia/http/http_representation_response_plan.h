@@ -56,7 +56,7 @@ public:
     struct precondition_failed_type final {};
     struct range_unsatisfiable_type final {};
     using partial_type = http_byte_range;
-    using multipart = http_byte_range_set;
+    using multipart_type = http_byte_range_set;
 
     [[nodiscard]] const full_type* full() const& noexcept;
     [[nodiscard]] const full_type* full() const&& = delete;
@@ -68,8 +68,8 @@ public:
     [[nodiscard]] const range_unsatisfiable_type* range_unsatisfiable() const&& = delete;
     [[nodiscard]] const partial_type* partial() const& noexcept;
     [[nodiscard]] const partial_type* partial() const&& = delete;
-    [[nodiscard]] const multipart* multipart_ranges() const& noexcept;
-    [[nodiscard]] const multipart* multipart_ranges() const&& = delete;
+    [[nodiscard]] const multipart_type* multipart_ranges() const& noexcept;
+    [[nodiscard]] const multipart_type* multipart_ranges() const&& = delete;
     [[nodiscard]] http_status_code status() const noexcept;
     // True when a partial() or multipart_ranges() outcome answers a request
     // whose If-Range matched. RFC 9110 §15.3.7: such a 206 SHOULD NOT repeat
@@ -86,7 +86,7 @@ private:
         const http_request&, http_selected_representation_metadata,
         http_representation_response_options);
 
-    using value_type = std::variant<full_type, not_modified_type, precondition_failed_type, range_unsatisfiable_type, partial_type, multipart>;
+    using value_type = std::variant<full_type, not_modified_type, precondition_failed_type, range_unsatisfiable_type, partial_type, multipart_type>;
 
     template <typename alternative_type>
     explicit http_representation_response_plan(alternative_type alternative, bool authorized_by_if_range = false) noexcept

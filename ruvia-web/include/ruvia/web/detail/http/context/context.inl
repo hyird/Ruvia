@@ -6,6 +6,8 @@
 #include <utility>
 
 #include "ruvia/web/detail/http/context/request_bindings.h"
+#include "ruvia/web/detail/model/parse/form_parser.h"
+#include "ruvia/web/integer.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/validation.h"
 
@@ -22,10 +24,62 @@ inline const std::remove_cvref_t<t_type>& context::request_state() const {
 }
 
 template <typename t_type>
-    requires detail::is_model<t_type>
+    requires detail::is_model_json_value<t_type>
 inline http_response context::json(const t_type& value) {
     auto body = to_json(value, {.resource_ = arena()});
     return json_serialized(body);
+}
+
+template <detail::parsed_integer t_type>
+inline std::optional<t_type> context_request::query(std::string_view name) const {
+    const auto raw = query(name);
+    if (!raw.has_value()) {
+        return std::nullopt;
+    }
+    const auto parsed_value = parse_integer<t_type>(*raw);
+    if (parsed_value.index() != 0) {
+        detail::throw_invalid_query();
+    }
+    return std::get<0>(parsed_value);
+}
+
+template <std::same_as<bool> t_type>
+inline std::optional<bool> context_request::query(std::string_view name) const {
+    const auto raw = query(name);
+    if (!raw.has_value()) {
+        return std::nullopt;
+    }
+    const auto parsed_value = detail::parse_form_bool(*raw);
+    if (!parsed_value.has_value()) {
+        detail::throw_invalid_query();
+    }
+    return *parsed_value;
+}
+
+template <detail::parsed_integer t_type>
+inline std::optional<t_type> context_request::param(std::string_view name) const {
+    const auto raw = param(name);
+    if (!raw.has_value()) {
+        return std::nullopt;
+    }
+    const auto parsed_value = parse_integer<t_type>(*raw);
+    if (parsed_value.index() != 0) {
+        detail::throw_invalid_param();
+    }
+    return std::get<0>(parsed_value);
+}
+
+template <std::same_as<bool> t_type>
+inline std::optional<bool> context_request::param(std::string_view name) const {
+    const auto raw = param(name);
+    if (!raw.has_value()) {
+        return std::nullopt;
+    }
+    const auto parsed_value = detail::parse_form_bool(*raw);
+    if (!parsed_value.has_value()) {
+        detail::throw_invalid_param();
+    }
+    return *parsed_value;
 }
 
 template <typename t_type>

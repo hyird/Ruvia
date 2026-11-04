@@ -260,10 +260,10 @@ RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after
                     bytes_value.assign("mutated");
                     co_await std::move(write);
                     retained = co_await stream.read();
-                    RUVIA_CHECK(retained && retained->type() == 0x123456789ULL && retained->payload() == std::string(4099, 'c'));
+                    RUVIA_CHECK(retained && retained->type() == 0x123456789ULL && retained->text() == std::string(4099, 'c') && retained->bytes().size() == 4099);
                     co_await stream.write(0, "");
                     auto empty = co_await stream.read();
-                    RUVIA_CHECK(empty && empty->type() == 0 && empty->payload().empty());
+                    RUVIA_CHECK(empty && empty->type() == 0 && empty->text().empty() && empty->bytes().empty());
                     co_await stream.finish();
                     RUVIA_CHECK(!(co_await stream.read()));
                     // Discarding a cold read expires its scope without running it.
@@ -279,8 +279,8 @@ RUVIA_TEST(http2_client_capsule_stream_retains_results_and_cold_operations_after
                     auto plain = std::move(*plain_result.tunnel());
                     RUVIA_CHECK(!plain.header("Capsule-Protocol"));
                     std::string answer;
-                    while (auto bytes = co_await plain.read()) {
-                        answer.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
+                    while (auto text_chunk = co_await plain.text()) {
+                        answer.append(*text_chunk);
                     }
                     RUVIA_CHECK_EQ(answer, std::string("rejected"));
                     co_await plain.finish();

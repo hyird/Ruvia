@@ -134,8 +134,15 @@ inline auto async_start_task(task<t_type>&& pending_task, completion_token_type&
         token, std::move(pending_task));
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+namespace detail {
 template <typename result_type, typename initiate_type>
 class asio_completion_awaiter;
+}  // namespace detail
+
 template <typename result_type>
 class asio_completion final {
 public:
@@ -145,6 +152,14 @@ public:
 
     [[nodiscard]] std::error_code error_code() const noexcept {
         return error_code_;
+    }
+
+    [[nodiscard]] bool succeeded() const noexcept {
+        return !error_code_;
+    }
+
+    [[nodiscard]] bool failed() const noexcept {
+        return static_cast<bool>(error_code_);
     }
 
     [[nodiscard]] const result_type& result() const& noexcept {
@@ -161,9 +176,23 @@ public:
         return std::move(result_);
     }
 
+    [[nodiscard]] const result_type& value() const& noexcept {
+        return result_;
+    }
+    const result_type& value() const&& = delete;
+
+    [[nodiscard]] result_type& value() & noexcept {
+        return result_;
+    }
+    result_type& value() && = delete;
+
+    [[nodiscard]] result_type take_value() && {
+        return std::move(result_);
+    }
+
 private:
     template <typename, typename>
-    friend class asio_completion_awaiter;
+    friend class detail::asio_completion_awaiter;
 
     asio_completion(std::error_code error_code, result_type&& result_value) noexcept(
         std::is_nothrow_move_constructible_v<result_type>)
@@ -185,15 +214,27 @@ public:
         return error_code_;
     }
 
+    [[nodiscard]] bool succeeded() const noexcept {
+        return !error_code_;
+    }
+
+    [[nodiscard]] bool failed() const noexcept {
+        return static_cast<bool>(error_code_);
+    }
+
 private:
     template <typename, typename>
-    friend class asio_completion_awaiter;
+    friend class detail::asio_completion_awaiter;
 
     explicit asio_completion(std::error_code error_code) noexcept
         : error_code_(error_code) {}
 
     std::error_code error_code_;
 };
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 
 // Asio completion signatures always provide an error code and may also provide
 // a result that remains meaningful on partial failure (for example transferred

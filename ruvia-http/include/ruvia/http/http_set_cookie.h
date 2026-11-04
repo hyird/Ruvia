@@ -5,6 +5,7 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/cookies.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 
 namespace ruvia {
@@ -14,6 +15,7 @@ enum class http_set_cookie_attribute : std::uint8_t {
     path = 1U << 1,
     same_site_none = 1U << 2,
     partitioned = 1U << 3,
+    http_only = 1U << 4,
 };
 
 // Borrowed, allocation-free Set-Cookie fields for outbound client runtimes,
@@ -57,6 +59,18 @@ public:
         return mask != 0U && (mask & (mask - 1U)) == 0U && (attributes_ & mask) != 0U;
     }
 
+    [[nodiscard]] constexpr bool http_only() const noexcept {
+        return has(http_set_cookie_attribute::http_only);
+    }
+
+    [[nodiscard]] constexpr bool same_site_none() const noexcept {
+        return has(http_set_cookie_attribute::same_site_none);
+    }
+
+    [[nodiscard]] constexpr std::optional<cookie_same_site> same_site() const noexcept {
+        return same_site_;
+    }
+
 private:
     friend std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noexcept;
 
@@ -78,6 +92,7 @@ private:
     std::string_view domain_;
     std::optional<std::time_t> expires_;
     std::optional<std::int64_t> max_age_seconds_;
+    std::optional<cookie_same_site> same_site_{};
     std::uint8_t attributes_{0};
 };
 

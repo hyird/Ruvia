@@ -321,6 +321,12 @@ RUVIA_TEST(model_nullable_response_emits_explicit_null_without_emitting_absence)
     RUVIA_CHECK(!response.is_null<"required">());
     RUVIA_CHECK_EQ(std::string_view(ruvia::to_json(response)),
         std::string_view(R"({"required":"note","dynamic":null})"));
+    response.set_null<"optional">().reset<"optional">().set<"optional">("val");
+    RUVIA_CHECK(response.is_set<"optional">() && response.has_value<"optional">());
+    response.set_null<"optional">();
+    RUVIA_CHECK(!response.is_set<"optional">() && !response.has_value<"optional">() && response.is_null<"optional">());
+    response.reset<"optional">();
+    RUVIA_CHECK(!response.is_set<"optional">() && !response.has_value<"optional">() && !response.is_null<"optional">());
 }
 
 RUVIA_TEST(model_dynamic_owned_tokens_and_presence_survive_rebinding_and_reclaim_memory) {

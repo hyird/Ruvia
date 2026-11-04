@@ -28,6 +28,9 @@ class session final {
 public:
     [[nodiscard]] std::string_view data() const& noexcept;
     std::string_view data() const&& = delete;
+    [[nodiscard]] bool empty() const noexcept {
+        return data().empty();
+    }
     // Every non-empty write replaces an existing session identity at commit.
     // Repeated writes in one request publish one new ID; reads keep the ID.
     void set(std::string_view data);

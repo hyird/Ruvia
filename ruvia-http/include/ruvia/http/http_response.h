@@ -3,14 +3,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -152,9 +150,7 @@ private:
 [[nodiscard]] http_buffered_response_write_plan plan_buffered_http_response_write(
     http_known_method request_method, const http_response& response) noexcept;
 
-class http_response_headers;
 class set_cookie_plan;
-struct http_response_header;
 
 enum class http_response_header_mode : std::uint8_t {
     replace,
@@ -276,6 +272,14 @@ public:
     // Replace cookies with the same name, Domain/Path scope, and Partitioned
     // state; partitioned and unpartitioned cookies may coexist.
     void set_cookie(const set_cookie_plan& plan);
+    void allow_methods(
+        std::uint32_t method_mask, std::span<const std::string_view> extension_methods = {});
+    void content_range(
+        http_content_length offset, http_content_length length, http_content_length size);
+    void content_range_unsatisfied(http_content_length size);
+    void add_vary_token(std::string_view token);
+    void reserve(std::size_t count);
+    void transfer_from(const http_response_headers& source, http_response_header_transfer mode);
     // Owned bytes are copied so either block may change or be destroyed;
     // stable views are shared. Reserves room for additional_headers more fields.
     // Throws length_error before cloning if the total field count cannot fit.
@@ -313,7 +317,6 @@ private:
     // Header-only transaction publication. `staged` must be a clone of a block
     // sharing this resource; it is left empty and independent.
     void commit(http_response_headers&& staged) noexcept;
-    void transfer_from(const http_response_headers& source, http_response_header_transfer mode);
     // Appends the source's fields in place when none can interact with an
     // existing field. Returns false, leaving this block unchanged, otherwise.
     [[nodiscard]] bool try_append_disjoint(const http_response_headers& source, http_response_header_transfer mode);
@@ -344,10 +347,6 @@ private:
     void erase_later_set_cookie_headers(http_response_header& retained,
         std::string_view cookie_name, bool has_path, std::string_view path,
         std::string_view domain, bool partitioned) noexcept;
-    void allow_methods(std::uint32_t method_mask, std::span<const std::string_view> extension_methods);
-    void set_content_range(std::uint64_t offset, std::uint64_t length, std::uint64_t size);
-    void set_content_range_unsatisfied(std::uint64_t size);
-
     // Descriptor storage.
     [[nodiscard]] http_response_header* inline_data() noexcept;
     [[nodiscard]] const http_response_header* inline_data() const noexcept;
@@ -378,7 +377,6 @@ private:
     // Drops every header from new_end onward; the dropped headers must
     // already be released.
     void truncate(iterator new_end) noexcept;
-    void reserve(std::size_t count);
     http_response_header& append_prepared_header(http_response_header header) noexcept;
     void clear() noexcept;
     void spill(std::size_t min_capacity);
@@ -433,6 +431,10 @@ public:
     // allocation. The staged block is left empty and independent.
     void commit_headers(http_response_headers&& staged) noexcept;
     // Borrowed byte representation; file and empty bodies return an empty view.
+    [[nodiscard]] std::string_view body() const& noexcept RUVIA_LIFETIMEBOUND {
+        return body_bytes();
+    }
+    std::string_view body() const&& = delete;
     [[nodiscard]] std::string_view body_bytes() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view body_bytes() const&& = delete;
     [[nodiscard]] std::optional<http_response_file_view> file_body() const& noexcept;

@@ -37,6 +37,7 @@ public:
     [[nodiscard]] static web_worker_handle handle(std::shared_ptr<web_worker_dispatch> dispatch) noexcept;
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
+    [[nodiscard]] bool is_current() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
     [[nodiscard]] web_worker_post_result post(job_type job);
     [[nodiscard]] web_worker_stats stats() const noexcept;

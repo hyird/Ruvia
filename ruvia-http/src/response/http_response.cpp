@@ -311,17 +311,21 @@ void http_response::multipart_file_body(http_native_path_view_type file, http_co
         memory_resource(), file, size.value(), identity, std::move(plan), std::move(opened));
 }
 
+void http_response_headers::add_vary_token(std::string_view token) {
+    detail::add_vary_token(*this, resource_, token);
+}
+
 void http_response::content_range(
     http_content_length offset, http_content_length length, http_content_length size) {
-    headers_.set_content_range(offset.value(), length.value(), size.value());
+    headers_.content_range(offset, length, size);
 }
 
 void http_response::content_range_unsatisfied(http_content_length size) {
-    headers_.set_content_range_unsatisfied(size.value());
+    headers_.content_range_unsatisfied(size);
 }
 
 void http_response::add_vary_token(std::string_view token) {
-    detail::add_vary_token(*this, token);
+    headers_.add_vary_token(token);
 }
 
 }  // namespace ruvia

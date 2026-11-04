@@ -141,6 +141,14 @@ RUVIA_TEST(http1_client_request_writer_emits_one_canonical_scatter_gather_plan) 
     if (gated != nullptr) {
         RUVIA_CHECK(gated->bytes() == "payload");
     }
+    const std::array<std::byte, 7> raw_bytes{std::byte{'p'}, std::byte{'a'}, std::byte{'y'},
+        std::byte{'l'}, std::byte{'o'}, std::byte{'a'}, std::byte{'d'}};
+    const auto byte_content =
+        http_client_request_content_view::bytes(std::span<const std::byte>(raw_bytes));
+    RUVIA_CHECK(byte_content.borrowed_bytes() != nullptr);
+    if (const auto* borrowed = byte_content.borrowed_bytes()) {
+        RUVIA_CHECK_EQ(borrowed->value(), std::string_view("payload"));
+    }
 }
 
 RUVIA_TEST(http1_client_request_content_distinguishes_absent_from_explicit_empty) {

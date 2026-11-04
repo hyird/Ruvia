@@ -85,10 +85,30 @@ public:
         return std::get<index>(fields_).is_null();
     }
 
+    template <fixed_string field>
+    [[nodiscard]] bool is_set() const noexcept {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        return std::get<index>(fields_).is_set();
+    }
+
+    template <fixed_string field>
+    [[nodiscard]] bool has_value() const noexcept {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        return std::get<index>(fields_).has_value();
+    }
+
     template <fixed_string field, typename value_type>
     void set(value_type&& value) & {
         constexpr auto index = model_field_index<field, descriptor_types...>();
         std::get<index>(fields_).assign(std::forward<value_type>(value), resource_);
+    }
+
+    template <fixed_string field>
+        requires(std::tuple_element_t<model_field_index<field, descriptor_types...>(),
+            std::tuple<descriptor_types...>>::nullable)
+    void set_null() & noexcept {
+        constexpr auto index = model_field_index<field, descriptor_types...>();
+        std::get<index>(fields_).set_null();
     }
 
     template <fixed_string field>

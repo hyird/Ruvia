@@ -31,7 +31,7 @@ enum class dotenv_missing_file_policy : std::uint8_t {
     require,
 };
 
-struct dotenv_options {
+struct dotenv_options final {
     dotenv_existing_variable_policy existing_variables_{dotenv_existing_variable_policy::preserve};
     dotenv_missing_file_policy missing_file_{dotenv_missing_file_policy::ignore};
 };
@@ -64,6 +64,9 @@ public:
 
     [[nodiscard]] bool loaded() const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
+    [[nodiscard]] bool empty() const noexcept {
+        return size() == 0;
+    }
 
 private:
     struct state_deleter_type final {
@@ -109,7 +112,10 @@ std::optional<std::remove_cvref_t<t_type>> env::parse_typed_value(std::string_vi
         return value;
     } else if constexpr (std::is_same_v<value_type, bool>) {
         return parse_bool_value(value);
-    } else if constexpr (std::is_integral_v<value_type> || std::is_floating_point_v<value_type>) {
+    } else if constexpr ((std::is_integral_v<value_type> && !std::is_same_v<value_type, char> &&
+                             !std::is_same_v<value_type, wchar_t> && !std::is_same_v<value_type, char8_t> &&
+                             !std::is_same_v<value_type, char16_t> && !std::is_same_v<value_type, char32_t>) ||
+                         std::is_floating_point_v<value_type>) {
         return parse_arithmetic_value<value_type>(value);
     } else {
         static_assert(unsupported_typed_env_value<value_type>,

@@ -160,11 +160,11 @@ RUVIA_TEST(jwt_payload_is_move_only_and_transfers_pmr_storage_without_allocating
     static_assert(!std::is_copy_constructible_v<ruvia::jwt_payload>);
     static_assert(!std::is_copy_assignable_v<ruvia::jwt_payload>);
     static_assert(std::is_nothrow_move_constructible_v<ruvia::jwt_payload>);
-    static_assert(!std::is_move_assignable_v<ruvia::jwt_payload>);
+    static_assert(std::is_move_assignable_v<ruvia::jwt_payload>);
     static_assert(!std::is_copy_constructible_v<ruvia::jwt_claim>);
     static_assert(!std::is_copy_assignable_v<ruvia::jwt_claim>);
     static_assert(std::is_nothrow_move_constructible_v<ruvia::jwt_claim>);
-    static_assert(!std::is_move_assignable_v<ruvia::jwt_claim>);
+    static_assert(std::is_move_assignable_v<ruvia::jwt_claim>);
 
     const std::string audience(100, 'a');
     const std::string claim_name(90, 'n');
@@ -1068,4 +1068,25 @@ RUVIA_TEST(jwt_bearer_token_extraction) {
              "Bearer a\tb", "Bearer abc ", "Bearer ===", "Bearer a;b"}) {
         RUVIA_CHECK(!jwt_bearer_token(malformed).has_value());
     }
+}
+
+RUVIA_TEST(jwt_payload_audiences_and_move_assignment) {
+    auto verify = verify_options(secret);
+    verify.audience_ = "aud-2";
+    verify.expiration_claim_ = jwt_expiration_claim_policy::allow_missing;
+    const auto token = signed_token_with_payload(
+        secret, R"({"iss":"issuer","sub":"user","aud":["aud-1","aud-2"],"exp":1700000000,"role":"admin"})");
+    auto decoded = decode_jwt_unverified(token);
+    RUVIA_CHECK_EQ(decoded.audiences().size(), std::size_t{2});
+    if (decoded.audiences().size() == 2) {
+        RUVIA_CHECK_EQ(std::string_view(decoded.audiences()[0]), std::string_view("aud-1"));
+        RUVIA_CHECK_EQ(std::string_view(decoded.audiences()[1]), std::string_view("aud-2"));
+    }
+    const auto other_token = signed_token_with_payload(secret, R"({"sub":"other"})");
+    auto assigned = decode_jwt_unverified(other_token);
+    assigned = std::move(decoded);
+    RUVIA_CHECK_EQ(assigned.subject(), std::string_view("user"));
+    RUVIA_CHECK_EQ(assigned.audiences().size(), std::size_t{2});
+    RUVIA_CHECK(assigned.expires_at() != nullptr && assigned.expires_at()->text() == "1700000000");
+    RUVIA_CHECK_EQ(assigned.claim("role"), std::optional<std::string_view>("admin"));
 }

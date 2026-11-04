@@ -49,6 +49,9 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                         if (event->ping() != nullptr) {
                             co_await flush_protocol_output_now();
                         } else if (event->close() != nullptr || event->protocol_error() != nullptr || event->transport_end() != nullptr) {
+                            if (const auto* close_event = event->close()) {
+                                record_peer_close(*close_event);
+                            }
                             liveness_state_ = websocket_liveness_idle{};
                             co_await flush_protocol_output_now();
                         }

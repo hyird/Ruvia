@@ -69,7 +69,7 @@ public:
     jwt_claim(const jwt_claim&) = delete;
     jwt_claim& operator=(const jwt_claim&) = delete;
     jwt_claim(jwt_claim&&) noexcept = default;
-    jwt_claim& operator=(jwt_claim&&) = delete;
+    jwt_claim& operator=(jwt_claim&& other);
 
     [[nodiscard]] std::string_view name() const& noexcept {
         return name_;
@@ -135,7 +135,7 @@ public:
     jwt_numeric_date(const jwt_numeric_date&) = delete;
     jwt_numeric_date& operator=(const jwt_numeric_date&) = delete;
     jwt_numeric_date(jwt_numeric_date&& other) noexcept;
-    jwt_numeric_date& operator=(jwt_numeric_date&&) = delete;
+    jwt_numeric_date& operator=(jwt_numeric_date&& other);
 
     [[nodiscard]] std::string_view text() const& noexcept;
     std::string_view text() const&& = delete;
@@ -154,7 +154,7 @@ public:
     jwt_payload(const jwt_payload&) = delete;
     jwt_payload& operator=(const jwt_payload&) = delete;
     jwt_payload(jwt_payload&&) noexcept = default;
-    jwt_payload& operator=(jwt_payload&&) = delete;
+    jwt_payload& operator=(jwt_payload&& other);
     [[nodiscard]] std::string_view issuer() const& noexcept;
     [[nodiscard]] std::string_view issuer() const&& = delete;
     [[nodiscard]] std::string_view subject() const& noexcept;
@@ -163,6 +163,8 @@ public:
     // (RFC 7519 §4.1.3); use has_audience to test membership across all of them.
     [[nodiscard]] std::string_view audience() const& noexcept;
     [[nodiscard]] std::string_view audience() const&& = delete;
+    [[nodiscard]] std::span<const std::pmr::string> audiences() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::span<const std::pmr::string> audiences() const&& = delete;
     [[nodiscard]] bool has_audience(std::string_view audience) const noexcept;
     [[nodiscard]] std::string_view id() const& noexcept;
     [[nodiscard]] std::string_view id() const&& = delete;
@@ -203,7 +205,7 @@ private:
 // Decodes and validates the three-part token structure, JOSE header (requiring
 // a non-empty "alg" string and rejecting duplicate keys / "crit" / "b64"), and
 // payload claims without verifying the signature or time-based claims.
-[[nodiscard]] jwt_payload jwt_decode_unverified(jwt_decode_unverified_options options);
+[[nodiscard]] jwt_payload jwt_decode_unverified(const jwt_decode_unverified_options& options);
 // Returns the b64token of an "Authorization: Bearer <token>" field value
 // (RFC 6750 §2.1: 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" / "+" / "/" )
 // *"="), or nullopt for another scheme or a malformed token. The scheme name

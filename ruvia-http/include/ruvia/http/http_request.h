@@ -126,6 +126,11 @@ public:
     }
     [[nodiscard]] std::span<const http_header_view> headers() const&& = delete;
 
+    [[nodiscard]] std::string_view body() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::string_view(reinterpret_cast<const char*>(body_.data()), body_.size());
+    }
+    std::string_view body() const&& = delete;
+
     [[nodiscard]] std::span<const std::byte> body_bytes() const& noexcept RUVIA_LIFETIMEBOUND {
         return body_;
     }

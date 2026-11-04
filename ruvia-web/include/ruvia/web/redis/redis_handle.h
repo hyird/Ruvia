@@ -232,7 +232,7 @@ public:
 
     // Consumes the batch before returning the lazy task, so the coroutine frame
     // owns every command and never borrows this builder through `this`.
-    task<std::pmr::vector<redis_value>> exec() &&;
+    [[nodiscard]] task<std::pmr::vector<redis_value>> exec() &&;
 
 private:
     friend class ::ruvia::redis_handle;
@@ -379,14 +379,14 @@ public:
     ~redis_subscription();
 
     // Non-empty name lists; names are binary-safe.
-    task<void> subscribe(std::span<const std::string_view> channels) &;
+    [[nodiscard]] task<void> subscribe(std::span<const std::string_view> channels) &;
     task<void> subscribe(std::span<const std::string_view>) && = delete;
-    task<void> psubscribe(std::span<const std::string_view> patterns) &;
+    [[nodiscard]] task<void> psubscribe(std::span<const std::string_view> patterns) &;
     task<void> psubscribe(std::span<const std::string_view>) && = delete;
     // An empty list unsubscribes from every channel (pattern) of this connection.
-    task<void> unsubscribe(std::span<const std::string_view> channels = {}) &;
+    [[nodiscard]] task<void> unsubscribe(std::span<const std::string_view> channels = {}) &;
     task<void> unsubscribe(std::span<const std::string_view> = {}) && = delete;
-    task<void> punsubscribe(std::span<const std::string_view> patterns = {}) &;
+    [[nodiscard]] task<void> punsubscribe(std::span<const std::string_view> patterns = {}) &;
     task<void> punsubscribe(std::span<const std::string_view> = {}) && = delete;
 
     template <typename... channels_type>
@@ -476,132 +476,145 @@ public:
 
     // 单次租约没有可依赖的前序写入历史；WAIT/WAITAOF 在此同步拒绝。
     // 将写入与屏障合并到同一非事务 pipeline，参见 pipeline()。
-    task<redis_value> command(std::span<const std::string_view> args) const;
+    [[nodiscard]] task<redis_value> command(std::span<const std::string_view> args) const;
     task<redis_value> command(
         std::initializer_list<std::string_view> args) const = delete;
 
-    task<void> ping() const;
-    task<std::pmr::string> ping(std::string_view message) const;
-    task<std::optional<std::pmr::string>> get(std::string_view key) const;
-    task<std::pmr::vector<std::optional<std::pmr::string>>> mget(
+    [[nodiscard]] task<void> ping() const;
+    [[nodiscard]] task<std::pmr::string> ping(std::string_view message) const;
+    [[nodiscard]] task<std::optional<std::pmr::string>> get(std::string_view key) const;
+    [[nodiscard]] task<std::pmr::vector<std::optional<std::pmr::string>>> mget(
         std::span<const std::string_view> keys) const;
     task<std::pmr::vector<std::optional<std::pmr::string>>> mget(
         std::initializer_list<std::string_view> keys) const = delete;
-    task<redis_set_result> set(
+    [[nodiscard]] task<redis_set_result> set(
         std::string_view key, std::string_view value, redis_set_options options = {}) const;
-    task<void> mset(
+    [[nodiscard]] task<void> mset(
         std::span<const std::pair<std::string_view, std::string_view>> items) const;
     task<void> mset(
         std::initializer_list<std::pair<std::string_view, std::string_view>> items) const = delete;
-    task<std::optional<std::pmr::string>> get_del(std::string_view key) const;
-    task<std::int64_t> append(std::string_view key, std::string_view value) const;
-    task<std::int64_t> strlen(std::string_view key) const;
-    task<std::int64_t> incr_by(std::string_view key, std::int64_t value) const;
-    task<std::int64_t> decr(std::string_view key) const;
-    task<std::int64_t> decr_by(std::string_view key, std::int64_t value) const;
-    task<std::int64_t> del(std::string_view key) const;
+    [[nodiscard]] task<std::optional<std::pmr::string>> get_del(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> append(std::string_view key, std::string_view value) const;
+    [[nodiscard]] task<std::int64_t> strlen(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> incr_by(std::string_view key, std::int64_t value) const;
+    [[nodiscard]] task<std::int64_t> decr(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> decr_by(std::string_view key, std::int64_t value) const;
+    [[nodiscard]] task<std::int64_t> del(std::string_view key) const;
     [[nodiscard]] task<std::int64_t> del(std::span<const std::string_view> keys) const;
-    task<std::int64_t> unlink(std::string_view key) const;
+    task<std::int64_t> del(std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<std::int64_t> unlink(std::string_view key) const;
     [[nodiscard]] task<std::int64_t> unlink(std::span<const std::string_view> keys) const;
-    task<bool> exists(std::string_view key) const;
-    task<bool> touch(std::string_view key) const;
-    task<std::pmr::string> type(std::string_view key) const;
-    task<void> rename(std::string_view key, std::string_view new_key) const;
-    task<bool> rename_nx(std::string_view key, std::string_view new_key) const;
-    task<bool> expire(std::string_view key, std::chrono::seconds ttl) const;
-    task<bool> expire_at(
+    task<std::int64_t> unlink(std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<bool> exists(std::string_view key) const;
+    [[nodiscard]] task<bool> touch(std::string_view key) const;
+    [[nodiscard]] task<std::pmr::string> type(std::string_view key) const;
+    [[nodiscard]] task<void> rename(std::string_view key, std::string_view new_key) const;
+    [[nodiscard]] task<bool> rename_nx(std::string_view key, std::string_view new_key) const;
+    [[nodiscard]] task<bool> expire(std::string_view key, std::chrono::seconds ttl) const;
+    [[nodiscard]] task<bool> pexpire(std::string_view key, std::chrono::milliseconds ttl) const;
+    [[nodiscard]] task<bool> expire_at(
         std::string_view key, std::chrono::system_clock::time_point expires_at) const;
-    task<bool> persist(std::string_view key) const;
-    task<redis_ttl> ttl(std::string_view key) const;
-    task<redis_ttl> pttl(std::string_view key) const;
-    task<std::int64_t> incr(std::string_view key) const;
-    task<std::optional<std::pmr::string>> hget(
+    [[nodiscard]] task<bool> persist(std::string_view key) const;
+    [[nodiscard]] task<redis_ttl> ttl(std::string_view key) const;
+    [[nodiscard]] task<redis_ttl> pttl(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> incr(std::string_view key) const;
+    [[nodiscard]] task<std::optional<std::pmr::string>> hget(
         std::string_view key, std::string_view field) const;
-    task<std::int64_t> hset(
+    [[nodiscard]] task<std::int64_t> hset(
         std::string_view key, std::string_view field, std::string_view value) const;
-    task<std::int64_t> hset(std::string_view key,
+    [[nodiscard]] task<std::int64_t> hset(std::string_view key,
         std::span<const std::pair<std::string_view, std::string_view>> fields) const;
     task<std::int64_t> hset(std::string_view key,
         std::initializer_list<std::pair<std::string_view, std::string_view>> fields_value) const = delete;
-    task<std::pmr::vector<std::optional<std::pmr::string>>> hmget(
+    [[nodiscard]] task<std::pmr::vector<std::optional<std::pmr::string>>> hmget(
         std::string_view key, std::span<const std::string_view> fields) const;
     task<std::pmr::vector<std::optional<std::pmr::string>>> hmget(
         std::string_view key, std::initializer_list<std::string_view> fields_value) const = delete;
-    task<std::pmr::vector<redis_key_value>> hget_all(std::string_view key) const;
-    task<std::int64_t> hdel(std::string_view key, std::string_view field) const;
-    task<bool> hexists(std::string_view key, std::string_view field) const;
-    task<std::int64_t> hlen(std::string_view key) const;
-    task<std::pmr::vector<std::pmr::string>> hkeys(std::string_view key) const;
-    task<std::pmr::vector<std::pmr::string>> hvals(std::string_view key) const;
-    task<std::int64_t> hincr_by(
+    [[nodiscard]] task<std::pmr::vector<redis_key_value>> hget_all(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> hdel(std::string_view key, std::string_view field) const;
+    [[nodiscard]] task<bool> hexists(std::string_view key, std::string_view field) const;
+    [[nodiscard]] task<std::int64_t> hlen(std::string_view key) const;
+    [[nodiscard]] task<std::pmr::vector<std::pmr::string>> hkeys(std::string_view key) const;
+    [[nodiscard]] task<std::pmr::vector<std::pmr::string>> hvals(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> hincr_by(
         std::string_view key, std::string_view field, std::int64_t value) const;
-    task<std::int64_t> lpush(std::string_view key, std::string_view value) const;
-    task<std::int64_t> rpush(std::string_view key, std::string_view value) const;
-    task<std::optional<std::pmr::string>> lpop(std::string_view key) const;
-    task<std::optional<std::pmr::string>> rpop(std::string_view key) const;
-    task<std::int64_t> llen(std::string_view key) const;
-    task<std::pmr::vector<std::pmr::string>> lrange(
+    [[nodiscard]] task<std::int64_t> lpush(std::string_view key, std::string_view value) const;
+    [[nodiscard]] task<std::int64_t> rpush(std::string_view key, std::string_view value) const;
+    [[nodiscard]] task<std::optional<std::pmr::string>> lpop(std::string_view key) const;
+    [[nodiscard]] task<std::optional<std::pmr::string>> rpop(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> llen(std::string_view key) const;
+    [[nodiscard]] task<std::pmr::vector<std::pmr::string>> lrange(
         std::string_view key, std::int64_t start, std::int64_t stop) const;
-    task<std::optional<std::pmr::string>> lindex(
+    [[nodiscard]] task<std::optional<std::pmr::string>> lindex(
         std::string_view key, std::int64_t index) const;
-    task<void> lset(
+    [[nodiscard]] task<void> lset(
         std::string_view key, std::int64_t index, std::string_view value) const;
-    task<void> ltrim(std::string_view key, std::int64_t start, std::int64_t stop) const;
-    task<std::int64_t> lrem(
+    [[nodiscard]] task<void> ltrim(std::string_view key, std::int64_t start, std::int64_t stop) const;
+    [[nodiscard]] task<std::int64_t> lrem(
         std::string_view key, std::int64_t count, std::string_view value) const;
-    task<std::int64_t> sadd(std::string_view key, std::string_view member) const;
-    task<std::int64_t> srem(std::string_view key, std::string_view member) const;
-    task<std::pmr::vector<std::pmr::string>> smembers(std::string_view key) const;
-    task<std::int64_t> scard(std::string_view key) const;
-    task<bool> sismember(std::string_view key, std::string_view member) const;
-    task<std::optional<std::pmr::string>> spop(std::string_view key) const;
-    task<std::optional<std::pmr::string>> srand_member(std::string_view key) const;
-    task<std::pmr::vector<std::pmr::string>> sinter(
+    [[nodiscard]] task<std::int64_t> sadd(std::string_view key, std::string_view member) const;
+    [[nodiscard]] task<std::int64_t> srem(std::string_view key, std::string_view member) const;
+    [[nodiscard]] task<std::pmr::vector<std::pmr::string>> smembers(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> scard(std::string_view key) const;
+    [[nodiscard]] task<bool> sismember(std::string_view key, std::string_view member) const;
+    [[nodiscard]] task<std::optional<std::pmr::string>> spop(std::string_view key) const;
+    [[nodiscard]] task<std::optional<std::pmr::string>> srand_member(std::string_view key) const;
+    [[nodiscard]] task<std::pmr::vector<std::pmr::string>> sinter(
         std::span<const std::string_view> keys) const;
     task<std::pmr::vector<std::pmr::string>> sinter(
         std::initializer_list<std::string_view> keys) const = delete;
-    task<std::pmr::vector<std::pmr::string>> sunion(
+    [[nodiscard]] task<std::pmr::vector<std::pmr::string>> sunion(
         std::span<const std::string_view> keys) const;
     task<std::pmr::vector<std::pmr::string>> sunion(
         std::initializer_list<std::string_view> keys) const = delete;
-    task<std::pmr::vector<std::pmr::string>> sdiff(
+    [[nodiscard]] task<std::pmr::vector<std::pmr::string>> sdiff(
         std::span<const std::string_view> keys) const;
     task<std::pmr::vector<std::pmr::string>> sdiff(
         std::initializer_list<std::string_view> keys) const = delete;
-    task<std::int64_t> zadd(
+    [[nodiscard]] task<std::int64_t> zadd(
         std::string_view key, double score, std::string_view member) const;
-    task<std::int64_t> zrem(std::string_view key, std::string_view member) const;
-    task<std::pmr::vector<std::pmr::string>> zrange(
+    [[nodiscard]] task<std::int64_t> zrem(std::string_view key, std::string_view member) const;
+    [[nodiscard]] task<std::pmr::vector<std::pmr::string>> zrange(
         std::string_view key, std::int64_t start, std::int64_t stop) const;
-    task<std::pmr::vector<redis_scored_value>> zrange_with_scores(
+    [[nodiscard]] task<std::pmr::vector<redis_scored_value>> zrange_with_scores(
         std::string_view key, std::int64_t start, std::int64_t stop) const;
-    task<std::optional<double>> zscore(
+    [[nodiscard]] task<std::optional<double>> zscore(
         std::string_view key, std::string_view member) const;
-    task<std::int64_t> zcard(std::string_view key) const;
-    task<std::int64_t> zcount(std::string_view key, double min, double max) const;
-    task<redis_scan_result> scan(redis_scan_options options = {}) const;
-    task<redis_hash_scan_result> hscan(
+    [[nodiscard]] task<std::int64_t> zcard(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> zcount(std::string_view key, double min, double max) const;
+    [[nodiscard]] task<redis_scan_result> scan(redis_scan_options options = {}) const;
+    [[nodiscard]] task<redis_hash_scan_result> hscan(
         std::string_view key, redis_scan_options options = {}) const;
-    task<redis_scan_result> sscan(
+    [[nodiscard]] task<redis_scan_result> sscan(
         std::string_view key, redis_scan_options options = {}) const;
-    task<redis_z_scan_result> zscan(
+    [[nodiscard]] task<redis_z_scan_result> zscan(
         std::string_view key, redis_scan_options options = {}) const;
-    task<redis_value> eval(std::string_view script,
+    [[nodiscard]] task<redis_value> eval(std::string_view script,
         std::span<const std::string_view> keys = {},
         std::span<const std::string_view> args = {}) const;
-    task<redis_value> eval_sha(std::string_view sha1,
+    [[nodiscard]] task<redis_value> eval_sha(std::string_view sha1,
         std::span<const std::string_view> keys = {},
         std::span<const std::string_view> args = {}) const;
-    task<std::pmr::string> script_load(std::string_view script) const;
-    task<std::pmr::vector<bool>> script_exists(
+    [[nodiscard]] task<std::pmr::string> script_load(std::string_view script) const;
+    [[nodiscard]] task<std::pmr::vector<bool>> script_exists(
         std::span<const std::string_view> sha1s) const;
     task<std::pmr::vector<bool>> script_exists(
         std::initializer_list<std::string_view> sha1s) const = delete;
-    task<std::optional<redis_key_value>> blpop(
+    [[nodiscard]] task<std::optional<redis_key_value>> blpop(
+        std::string_view key, redis_block_wait wait) const {
+        const std::string_view keys[]{key};
+        return blpop(std::span<const std::string_view>(keys), wait);
+    }
+    [[nodiscard]] task<std::optional<redis_key_value>> blpop(
         std::span<const std::string_view> keys, redis_block_wait wait) const;
-    task<std::optional<redis_key_value>> brpop(
+    [[nodiscard]] task<std::optional<redis_key_value>> brpop(
+        std::string_view key, redis_block_wait wait) const {
+        const std::string_view keys[]{key};
+        return brpop(std::span<const std::string_view>(keys), wait);
+    }
+    [[nodiscard]] task<std::optional<redis_key_value>> brpop(
         std::span<const std::string_view> keys, redis_block_wait wait) const;
-    task<std::optional<redis_x_read_group_result>> xread_group(std::string_view group,
+    [[nodiscard]] task<std::optional<redis_x_read_group_result>> xread_group(std::string_view group,
         std::string_view consumer, std::span<const redis_stream_read_view> streams,
         redis_x_read_group_options options = {}) const;
 
@@ -627,6 +640,19 @@ public:
         keys_type&&... keys) const {
         const std::string_view views[]{std::string_view(keys)...};
         return mget(std::span<const std::string_view>(views));
+    }
+    template <typename... keys_type>
+        requires(detail::redis_argument_pack<keys_type...> && sizeof...(keys_type) >= 2)
+    [[nodiscard]] task<std::int64_t> del(keys_type&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return del(std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires(detail::redis_argument_pack<keys_type...> && sizeof...(keys_type) >= 2)
+    [[nodiscard]] task<std::int64_t> unlink(keys_type&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return unlink(std::span<const std::string_view>(views));
     }
 
     // Alternating key/value arguments: mset(k1, v1, k2, v2).
@@ -703,7 +729,7 @@ public:
     [[nodiscard]] redis_transaction transaction() const;
 
     // Delivers to a channel on the ordinary pool; returns the receiver count.
-    task<std::int64_t> publish(std::string_view channel, std::string_view payload) const;
+    [[nodiscard]] task<std::int64_t> publish(std::string_view channel, std::string_view payload) const;
     // A dedicated Pub/Sub connection bound to this handle's scope, stop token
     // and operation timeout. Like an infinite blocking wait, it requires a
     // stoppable token or a finite timeout (std::invalid_argument otherwise).

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -44,7 +45,7 @@ public:
     server_websocket_connection(stream_argument_type stream, const worker_handle& worker_value,
         connection_scanner::entry& scanner_entry, websocket_lifecycle_options lifecycle_options,
         protocol_byte_limit message_limit, std::pmr::memory_resource* resource, std::string_view initial_bytes,
-        websocket_connection_options protocol_options)
+        websocket_connection_options protocol_options, std::string_view subprotocol_value = {})
         : stream_(std::forward<stream_argument_type>(stream)),
           worker_(&worker_value),
           scanner_entry_(scanner_entry),
@@ -54,6 +55,7 @@ public:
               protocol_options.message_limit_ = message_limit;
               return protocol_options;
           }()),
+          subprotocol_(subprotocol_value),
           background_write_signal_(worker_value),
           reader_done_signal_(worker_value) {
         buffer_.append(initial_bytes);
@@ -62,8 +64,8 @@ public:
     }
 
     server_websocket_connection(stream_argument_type, worker_handle&&, connection_scanner::entry&, websocket_lifecycle_options,
-        protocol_byte_limit, std::pmr::memory_resource*, std::string_view, websocket_connection_options) = delete;
-
+        protocol_byte_limit, std::pmr::memory_resource*, std::string_view, websocket_connection_options,
+        std::string_view = {}) = delete;
     ~server_websocket_connection() = default;
 
     server_websocket_connection(const server_websocket_connection&) = delete;
@@ -89,6 +91,18 @@ public:
 
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return *worker_;
+    }
+
+    [[nodiscard]] std::string_view subprotocol() const noexcept {
+        return subprotocol_;
+    }
+
+    [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const noexcept {
+        return peer_close_code_;
+    }
+
+    [[nodiscard]] std::string_view peer_close_reason() const noexcept {
+        return {peer_close_reason_.data(), peer_close_reason_size_};
     }
 
     void require_current_worker() const noexcept {
@@ -304,6 +318,15 @@ private:
     void abort_transport(bool force_transport = false) noexcept;
     // Aborts the transport and retains the first background write failure.
     void fail_background(std::exception_ptr failure) noexcept;
+    void record_peer_close(const websocket_close_event& close_event) noexcept {
+        peer_close_code_ = close_event.close_code();
+        const auto reason = close_event.reason();
+        const auto count = (std::min)(reason.size(), peer_close_reason_.size());
+        if (count != 0) {
+            std::char_traits<char>::copy(peer_close_reason_.data(), reason.data(), count);
+        }
+        peer_close_reason_size_ = static_cast<std::uint8_t>(count);
+    }
     void notify_write_idle() noexcept;
     [[nodiscard]] bool has_operations_to_drain() const noexcept {
         return read_phase_ != read_phase_type::idle || write_active_ || write_phase_ != write_phase_type::idle;
@@ -315,6 +338,10 @@ private:
     websocket_lifecycle_options lifecycle_options_{};
     http_io_buffer buffer_;
     websocket_connection protocol_;
+    std::string_view subprotocol_{};
+    std::optional<std::uint16_t> peer_close_code_{};
+    std::array<char, 123> peer_close_reason_{};
+    std::uint8_t peer_close_reason_size_{0};
     worker_signal background_write_signal_;
     worker_signal reader_done_signal_;
     write_phase_type write_phase_{write_phase_type::idle};

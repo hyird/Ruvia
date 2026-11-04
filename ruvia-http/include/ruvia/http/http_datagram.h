@@ -1,11 +1,14 @@
 #pragma once
 
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
+#include <type_traits>
 #include <variant>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
@@ -74,12 +77,38 @@ public:
     explicit http_capsule_decoder(http_capsule_config config = {});
     [[nodiscard]] http_capsule_status feed(std::span<const char> input, bool fin, http_capsule_callback_type callback,
         void* context, http_capsule_retention retention = http_capsule_retention::all);
+    template <typename visitor_type>
+        requires std::invocable<visitor_type&, http_capsule_event>
+    [[nodiscard]] http_capsule_status feed(std::span<const char> input, bool fin,
+        visitor_type&& visitor,
+        http_capsule_retention retention = http_capsule_retention::all) {
+        auto& target = visitor;
+        return feed(
+            input, fin,
+            +[](void* context, http_capsule_event event) {
+                (*static_cast<std::remove_reference_t<visitor_type>*>(context))(event);
+            },
+            std::addressof(target), retention);
+    }
     // Stops at the first complete kept capsule. The unconsumed suffix stays with
     // the caller; FIN is committed only after all input is consumed. This permits
     // pull-based adapters without buffering a queue of complete capsules.
     [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin,
         http_capsule_callback_type callback, void* context,
         http_capsule_retention retention = http_capsule_retention::all);
+    template <typename visitor_type>
+        requires std::invocable<visitor_type&, http_capsule_event>
+    [[nodiscard]] http_capsule_feed_result feed_one(std::span<const char> input, bool fin,
+        visitor_type&& visitor,
+        http_capsule_retention retention = http_capsule_retention::all) {
+        auto& target = visitor;
+        return feed_one(
+            input, fin,
+            +[](void* context, http_capsule_event event) {
+                (*static_cast<std::remove_reference_t<visitor_type>*>(context))(event);
+            },
+            std::addressof(target), retention);
+    }
 
 private:
     enum class payload_mode : std::uint8_t { deliver,

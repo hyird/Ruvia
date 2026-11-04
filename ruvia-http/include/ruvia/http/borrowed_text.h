@@ -129,6 +129,9 @@ public:
     constexpr borrowed_span(std::span<const element_type> values) noexcept
         : values_(values) {}
 
+    constexpr borrowed_span(std::span<element_type> values) noexcept
+        : values_(values) {}
+
     template <typename range_type>
         requires(!std::same_as<std::remove_cvref_t<range_type>, borrowed_span>) &&
                 (!std::same_as<std::remove_cvref_t<range_type>, std::span<const element_type>>) &&
@@ -144,6 +147,11 @@ public:
     constexpr borrowed_span(std::initializer_list<element_type>) = delete;
 
     constexpr borrowed_span& operator=(std::span<const element_type> values) noexcept {
+        values_ = values;
+        return *this;
+    }
+
+    constexpr borrowed_span& operator=(std::span<element_type> values) noexcept {
         values_ = values;
         return *this;
     }

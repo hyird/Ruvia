@@ -186,6 +186,25 @@ public:
     [[nodiscard]] http_error_info info() const& noexcept;
     [[nodiscard]] http_error_info info() const&& = delete;
 
+    [[nodiscard]] http_status_code status() const noexcept {
+        return status_;
+    }
+
+    [[nodiscard]] std::string_view status_text() const& noexcept {
+        return status_text_;
+    }
+    [[nodiscard]] std::string_view status_text() const&& = delete;
+
+    [[nodiscard]] std::string_view code() const& noexcept {
+        return code_;
+    }
+    [[nodiscard]] std::string_view code() const&& = delete;
+
+    [[nodiscard]] std::string_view message() const& noexcept {
+        return message_;
+    }
+    [[nodiscard]] std::string_view message() const&& = delete;
+
     [[nodiscard]] std::span<const validation_issue> validation_issues() const& noexcept {
         return validation_issues_;
     }

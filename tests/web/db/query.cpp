@@ -1620,7 +1620,7 @@ RUVIA_TEST(db_query_expression_ownership_import_subquery_cast_and_cache_methods_
     RUVIA_CHECK(state.returns_rows());
     RUVIA_CHECK(!state.has_where());
     RUVIA_CHECK(!state.has_grouping());
-    state.cache(false).cache(std::chrono::milliseconds(50)).cache(db_cache_options{.id_ = "cq-cache", .milliseconds_ = std::chrono::milliseconds(25)});
+    state.cache(false).cache(std::chrono::milliseconds(50)).cache(db_cache_options{.id_ = "cq-cache", .duration_ = std::chrono::milliseconds(25)});
     state.select(state.value(1)).from("cq_devices");
     const auto state_statement = state.compile(db_driver::postgresql, nullptr);
     RUVIA_CHECK(state_statement.params().size() == std::size_t{1});
@@ -2168,6 +2168,35 @@ RUVIA_TEST(db_query_self_import_and_tuple_empty_in_and_predicate_self_merge) {
         RUVIA_CHECK_EQ(compiled.sql(),
             R"(SELECT $1 FROM "items" WHERE ((("id" = $2) AND ("id" = $3)) OR (("id" = $4) AND ("id" = $5))))");
     }
+}
+
+RUVIA_DB_PROJECTION(projection_schema_check,
+    db_column<"id", std::int64_t>,
+    db_column<"label", std::pmr::string>)
+
+RUVIA_TEST(db_query_clear_and_bitwise_and_projection_schema) {
+    static_assert(projection_schema_check::column_index<"id">() == 0);
+    static_assert(projection_schema_check::column_index<"label">() == 1);
+    static_assert(projection_schema_check::column_name<"id">() == "id");
+    static_assert(projection_schema_check::column_name<"label">() == "label");
+    const auto bit_expr = ((db_expr::column("flags") & 3) | 4) ^ 1;
+    db_query query;
+    query.select(bit_expr.expression(query))
+        .from("items")
+        .where(query.binary(query.column("id"), db_binary_operator::equal, query.value(1)))
+        .group_by({query.column("id")})
+        .having(query.binary(query.column("id"), db_binary_operator::greater, query.value(0)));
+    RUVIA_CHECK(query.has_where());
+    query.clear_where().clear_having();
+    RUVIA_CHECK(!query.has_where());
+    auto compiled = query.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK_EQ(compiled.sql(), R"(SELECT ((("flags" & $1) | $2) # $3) FROM "items" GROUP BY "id")");
+
+    db_query other;
+    other.select(other.value(42));
+    compiled = other.compile(db_driver::postgresql, nullptr);
+    RUVIA_CHECK_EQ(compiled.sql(), "SELECT $1");
+    RUVIA_CHECK_EQ(compiled.params().size(), std::size_t{1});
 }
 
 }  // namespace

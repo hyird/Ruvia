@@ -3,6 +3,7 @@
 #include <variant>
 
 #include "ruvia/http/detail/parser/http_parser_syntax.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 
 #include "client/http_client_response_head.h"
@@ -182,3 +183,17 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia {
+
+std::optional<std::string_view> http_client_response_head::header(
+    std::string_view name) const& noexcept {
+    for (auto field = headers_.rbegin(); field != headers_.rend(); ++field) {
+        if (http_ascii_equals_ignore_case(field->name(), name)) {
+            return field->value();
+        }
+    }
+    return std::nullopt;
+}
+
+}  // namespace ruvia

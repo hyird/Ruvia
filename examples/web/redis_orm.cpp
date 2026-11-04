@@ -28,8 +28,8 @@ RUVIA_REDIS_ENTITY(cached_user, "users",
 const ruvia::redis_repository_config user_redis_config{
     .prefix_ = "ruvia:example:users",
     .indexes_ = {
-        {.field_ = "name", .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true},
-        {.field_ = "age", .kind_ = ruvia::redis_index_kind::numeric},
+        {.column_ = "name", .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true},
+        {.column_ = "age", .kind_ = ruvia::redis_index_kind::numeric},
     },
 };
 RUVIA_MODEL(create_cached_user,
@@ -90,7 +90,7 @@ private:
     ruvia::task<ruvia::http_response> adults(ruvia::context& c) {
         const ruvia::redis_find_options find_options{
             .where_ = cached_user::column<"age">() >= 18,
-            .order_ = {{.field_ = "name", .direction_ = ruvia::redis_order_direction::asc}},
+            .order_ = {{.column_ = "name", .direction_ = ruvia::redis_order_direction::asc}},
             .take_ = 20};
         auto users = co_await c.redis().repository<cached_user>(user_redis_config).find(find_options);
         cached_users_response response({.resource_ = c.arena()});

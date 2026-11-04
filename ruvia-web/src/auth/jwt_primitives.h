@@ -90,6 +90,10 @@ struct jwt_payload_access final {
     [[nodiscard]] static jwt_claim claim(std::pmr::string name, std::pmr::string value) noexcept {
         return jwt_claim(std::move(name), std::move(value));
     }
+    [[nodiscard]] static jwt_numeric_date numeric_date(
+        std::string_view text, std::pmr::memory_resource* resource) {
+        return jwt_numeric_date(text, resource);
+    }
 
     [[nodiscard]] static bool decode_jwt_payload_claim(jwt_payload& payload_value, std::string_view key,
         std::string_view value, std::pmr::memory_resource* resource);

@@ -143,6 +143,13 @@ public:
         c.edit_response().header("X-Test-Always", "on");
     }
 };
+class testing_facade_const_middleware final {
+public:
+    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) const {
+        co_await next_value();
+        c.edit_response().header("X-Const-Middleware", "yes");
+    }
+};
 
 // Rejects requests under /guarded before reaching the answer.
 class testing_facade_unmatched_reject final {
@@ -263,6 +270,10 @@ public:
     RUVIA_POST("/sub-stream", sub_stream, ruvia::stream_body);
     RUVIA_GET("/sub-checks", sub_checks);
     RUVIA_GET("/sub-refused-file", sub_refused_file);
+    RUVIA_GET("/typed/:id/:active", typed_inputs);
+    RUVIA_POST("/json-array", json_array);
+    RUVIA_GET("/const-handler", const_handler, testing_facade_const_middleware);
+    RUVIA_GET("/conn-info", conn_info_handler);
     RUVIA_CONNECT("example.com:443", connect_authority);
     RUVIA_METHOD("PROPFIND", "/files", propfind);
     RUVIA_METHOD("PURGE", "/files", purge);
@@ -423,6 +434,53 @@ private:
         } catch (const std::logic_error&) {
             co_return c.body("unbound");
         }
+    }
+    ruvia::task<ruvia::http_response> typed_inputs(ruvia::context& c) const {
+        const auto id = c.req().param<std::uint32_t>("id").value_or(0);
+        const auto active = c.req().param<bool>("active").value_or(false);
+        const auto page = c.req().query<std::int64_t>("page").value_or(1);
+        const auto verbose = c.req().query<bool>("verbose").value_or(false);
+        const auto* optional_user = c.try_request_state<testing_facade_user>();
+        const std::string_view span_args[] = {"12", "true"};
+        std::pmr::string reply(c.arena());
+        reply.append(std::to_string(id));
+        reply.push_back(':');
+        reply.append(active ? "1" : "0");
+        reply.push_back(':');
+        reply.append(std::to_string(page));
+        reply.push_back(':');
+        reply.append(verbose ? "1" : "0");
+        reply.push_back(':');
+        reply.append(optional_user == nullptr ? "none" : optional_user->name_);
+        reply.push_back(':');
+        reply.append(c.url_for("/t/typed/:id/:active", std::span<const std::string_view>(span_args)));
+        co_return c.text(std::move(reply));
+    }
+
+    ruvia::task<ruvia::http_response> json_array(ruvia::context& c) const {
+        const auto raw = co_await c.req().text();
+        auto items = ruvia::from_json<ruvia::array<ruvia::string>>(raw, {.resource_ = c.arena()});
+        items.emplace_back("tail", ruvia::model_options{.resource_ = c.arena()});
+        co_return c.json(items);
+    }
+
+    ruvia::task<ruvia::http_response> const_handler(ruvia::context& c) const {
+        const auto* user_ptr = c.try_request_state<testing_facade_user>();
+        co_return c.text(user_ptr == nullptr ? "const-ok" : user_ptr->name_);
+    }
+
+    ruvia::task<ruvia::http_response> conn_info_handler(ruvia::context& c) const {
+        std::pmr::string reply(c.arena());
+        reply.append(c.conn().remote().address());
+        reply.push_back(':');
+        reply.append(std::to_string(c.conn().remote().port()));
+        reply.push_back('/');
+        reply.append(c.conn().client().address());
+        reply.push_back('/');
+        reply.append(c.conn().via_trusted_proxy() ? "proxy" : "direct");
+        reply.push_back('/');
+        reply.append(c.conn().plain() != nullptr ? "plain" : "tls");
+        co_return c.text(std::move(reply));
     }
 
     ruvia::task<ruvia::http_response> slash_link(ruvia::context& c) {
@@ -1675,4 +1733,40 @@ RUVIA_TEST(testing_facade_reads_file_bodies_and_negotiates_precompressed_static_
     }
     testing_facade_static_root().reset();
     fs::remove_all(dir, ignored);
+}
+
+RUVIA_TEST(testing_facade_supports_typed_params_queries_const_handlers_json_arrays_and_remote_info) {
+    ruvia::test_app app;
+    app.trusted_proxies({.cidrs_ = {"10.0.0.0/8"}, .trust_x_forwarded_proto_ = true});
+
+    const auto typed =
+        app.request(ruvia::test_request::get("/t/typed/42/true?page=-5&verbose=1"));
+    RUVIA_CHECK_EQ(typed.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(typed.body(), "42:1:-5:1:none:/t/typed/12/true");
+
+    const auto bad_param = app.request(ruvia::test_request::get("/t/typed/not-an-int/true"));
+    RUVIA_CHECK_EQ(bad_param.status(), ruvia::http_status::bad_request);
+
+    const auto bad_query = app.request(ruvia::test_request::get("/t/typed/42/true?page=abc"));
+    RUVIA_CHECK_EQ(bad_query.status(), ruvia::http_status::bad_request);
+
+    const auto const_res = app.request(ruvia::test_request::get("/t/const-handler"));
+    RUVIA_CHECK_EQ(const_res.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(const_res.body(), "const-ok");
+    RUVIA_CHECK_EQ(const_res.header("X-Const-Middleware").value_or(""), "yes");
+
+    ruvia::array<ruvia::string> input_items;
+    input_items.emplace_back("first");
+    const auto array_res =
+        app.request(ruvia::test_request::post("/t/json-array").json(input_items));
+    RUVIA_CHECK_EQ(array_res.status(), ruvia::http_status::ok);
+    RUVIA_CHECK_EQ(array_res.body(), R"(["first","tail"])");
+
+    const auto direct_conn = app.request(ruvia::test_request::get("/t/conn-info"));
+    RUVIA_CHECK_EQ(direct_conn.body(), "127.0.0.1:0/127.0.0.1/direct/plain");
+
+    const auto proxied_conn = app.request(ruvia::test_request::get("/t/conn-info")
+            .remote("10.1.2.3", 12345)
+            .header("X-Forwarded-For", "203.0.113.9"));
+    RUVIA_CHECK_EQ(proxied_conn.body(), "10.1.2.3:12345/203.0.113.9/proxy/plain");
 }

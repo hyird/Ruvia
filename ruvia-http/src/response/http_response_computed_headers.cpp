@@ -142,7 +142,11 @@ void http_response_headers::allow_methods(
     write_allow_header_value(header_value, method_mask, extension_methods);
 }
 
-void http_response_headers::set_content_range(std::uint64_t offset, std::uint64_t length, std::uint64_t size) {
+void http_response_headers::content_range(
+    http_content_length offset_value, http_content_length length_value, http_content_length size_value) {
+    const auto offset = offset_value.value();
+    const auto length = length_value.value();
+    const auto size = size_value.value();
     if (length == 0) {
         throw std::logic_error("file response byte range length must not be zero");
     }
@@ -158,7 +162,8 @@ void http_response_headers::set_content_range(std::uint64_t offset, std::uint64_
     write_content_range_header_value(header_value, offset, length, size);
 }
 
-void http_response_headers::set_content_range_unsatisfied(std::uint64_t size) {
+void http_response_headers::content_range_unsatisfied(http_content_length size_value) {
+    const auto size = size_value.value();
     const auto value_size =
         std::string_view("bytes */").size() + http_unsigned_decimal_size(size);
     auto& header_value =

@@ -30,6 +30,7 @@ RUVIA_TEST(dotenv_typed_lookup_does_not_hide_invalid_values) {
 
     RUVIA_CHECK(!env.get<std::uint16_t>("MISSING").has_value());
     RUVIA_CHECK_EQ(env.get<std::uint16_t>("PORT").value_or(0), std::uint16_t{8080});
+    RUVIA_CHECK(!env.empty());
 
     bool bad_port_threw = false;
     try {

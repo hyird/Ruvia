@@ -44,7 +44,7 @@ inline constexpr auto redis_query_columns = [] {
 }();
 
 struct redis_index_definition final {
-    std::pmr::string field_;
+    std::pmr::string column_;
     redis_index_kind kind_{};
     bool sortable_{false};
 };
@@ -63,7 +63,7 @@ struct redis_mapping final {
 
     [[nodiscard]] redis_index_kind index_kind(std::string_view column) const noexcept {
         for (const auto& index : indexes_) {
-            if (index.field_ == column) {
+            if (index.column_ == column) {
                 return index.kind_;
             }
         }
@@ -71,7 +71,7 @@ struct redis_mapping final {
     }
     [[nodiscard]] bool sortable(std::string_view column) const noexcept {
         for (const auto& index : indexes_) {
-            if (index.field_ == column) {
+            if (index.column_ == column) {
                 return index.sortable_;
             }
         }

@@ -3,8 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <initializer_list>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -105,6 +107,8 @@ public:
     // from listen(). The application keeps only the parsed credentials; this
     // call's copy of each private-key password is cleansed before it returns.
     application& listen(listen_config config);
+    application& listen(std::span<const listen_config> configs);
+    application& listen(std::initializer_list<listen_config> configs);
     // Disabled by default. A config enables response coding and precompressed
     // static variant negotiation; nullptr disables both.
     application& compression(compression_config config);
@@ -131,6 +135,8 @@ public:
     // std::invalid_argument instead of silently replacing the first.
     application& on_error(http_error_handler handler);
     application& on_not_found(http_not_found_handler handler);
+    application& on_error(std::nullptr_t);
+    application& on_not_found(std::nullptr_t);
     // Path-prefix-scoped fallbacks, the Hono sub-app scoping analog: the
     // deepest matching registered prefix wins, matching on whole path
     // segments ("/api" scopes "/api" and "/api/x", never "/apix") compared
@@ -185,6 +191,8 @@ public:
     // have drained (or server_config::drain_timeout_ passed), before runtime
     // join. Also runs when published startup is cancelled or a start hook fails.
     application& on_stop(app_hook hook);
+    application& on_start(std::nullptr_t);
+    application& on_stop(std::nullptr_t);
 #ifdef RUVIA_ENABLE_DATABASE
     application& database(db_registration_config config);
     application& database(std::nullptr_t);

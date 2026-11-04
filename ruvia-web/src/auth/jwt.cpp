@@ -14,6 +14,7 @@
 #include "auth/jwt_date.h"
 #include "auth/jwt_primitives.h"
 #include "util/constant_time.h"
+#include "util/pmr_owned_storage.h"
 
 namespace ruvia {
 
@@ -201,6 +202,74 @@ jwt_payload::jwt_payload(std::pmr::memory_resource* resource)
       id_(issuer_.get_allocator().resource()),
       claims_(issuer_.get_allocator().resource()) {}
 
+jwt_claim& jwt_claim::operator=(jwt_claim&& other) {
+    if (this != &other) {
+        auto* const target = name_.get_allocator().resource();
+        auto new_name = detail::rebind_owned_storage(other.name_, target, other.value_);
+        auto new_value = detail::rebind_owned_storage(other.value_, target, other.name_);
+        name_.swap(new_name);
+        value_.swap(new_value);
+        other.name_.clear();
+        other.value_.clear();
+    }
+    return *this;
+}
+
+jwt_payload& jwt_payload::operator=(jwt_payload&& other) {
+    if (this == &other) {
+        return *this;
+    }
+    auto* const target = issuer_.get_allocator().resource();
+    if (other.issuer_.get_allocator().resource() == target) {
+        issuer_ = std::move(other.issuer_);
+        subject_ = std::move(other.subject_);
+        audiences_ = std::move(other.audiences_);
+        id_ = std::move(other.id_);
+        expires_at_ = std::exchange(other.expires_at_, std::nullopt);
+        not_before_ = std::exchange(other.not_before_, std::nullopt);
+        issued_at_ = std::exchange(other.issued_at_, std::nullopt);
+        claims_ = std::move(other.claims_);
+        other.issuer_.clear();
+        other.subject_.clear();
+        other.audiences_.clear();
+        other.id_.clear();
+        other.claims_.clear();
+        return *this;
+    }
+    jwt_payload rebound(target);
+    rebound.issuer_.assign(other.issuer_);
+    rebound.subject_.assign(other.subject_);
+    rebound.audiences_.assign(other.audiences_.begin(), other.audiences_.end());
+    rebound.id_.assign(other.id_);
+    if (other.expires_at_) {
+        rebound.expires_at_.emplace(
+            detail::jwt_payload_access::numeric_date(other.expires_at_->text(), target));
+    }
+    if (other.not_before_) {
+        rebound.not_before_.emplace(
+            detail::jwt_payload_access::numeric_date(other.not_before_->text(), target));
+    }
+    if (other.issued_at_) {
+        rebound.issued_at_.emplace(
+            detail::jwt_payload_access::numeric_date(other.issued_at_->text(), target));
+    }
+    rebound.claims_.reserve(other.claims_.size());
+    for (const auto& item : other.claims_) {
+        rebound.claims_.push_back(detail::jwt_payload_access::claim(
+            std::pmr::string(item.name(), target), std::pmr::string(item.value(), target)));
+    }
+    *this = std::move(rebound);
+    other.issuer_.clear();
+    other.subject_.clear();
+    other.audiences_.clear();
+    other.id_.clear();
+    other.expires_at_.reset();
+    other.not_before_.reset();
+    other.issued_at_.reset();
+    other.claims_.clear();
+    return *this;
+}
+
 std::string_view jwt_payload::issuer() const& noexcept {
     return issuer_;
 }
@@ -209,6 +278,9 @@ std::string_view jwt_payload::subject() const& noexcept {
 }
 std::string_view jwt_payload::audience() const& noexcept {
     return audiences_.empty() ? std::string_view{} : std::string_view(audiences_.front());
+}
+std::span<const std::pmr::string> jwt_payload::audiences() const& noexcept {
+    return audiences_;
 }
 bool jwt_payload::has_audience(std::string_view audience) const noexcept {
     return std::ranges::find(audiences_, audience, [](const auto& value) noexcept {
@@ -372,7 +444,7 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
     return payload_value;
 }
 
-jwt_payload jwt_decode_unverified(jwt_decode_unverified_options options) {
+jwt_payload jwt_decode_unverified(const jwt_decode_unverified_options& options) {
     auto* resolved = pmr_resource_or_default(options.resource_);
     const auto token = options.token_.view();
     const auto parts = detail::jwt_split_token(token);

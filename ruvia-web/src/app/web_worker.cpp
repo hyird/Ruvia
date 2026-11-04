@@ -70,6 +70,10 @@ bool web_worker_handle::accepting() const noexcept {
     return dispatch_ && dispatch_->accepting();
 }
 
+bool web_worker_handle::is_current() const noexcept {
+    return dispatch_ && dispatch_->is_current();
+}
+
 worker_id_type web_worker_handle::id() const noexcept {
     return dispatch_ ? dispatch_->id() : 0;
 }
@@ -124,6 +128,10 @@ bool web_worker_dispatch::valid() const noexcept {
 
 bool web_worker_dispatch::accepting() const noexcept {
     return worker_.accepting();
+}
+
+bool web_worker_dispatch::is_current() const noexcept {
+    return worker_.is_current();
 }
 
 worker_id_type web_worker_dispatch::id() const noexcept {

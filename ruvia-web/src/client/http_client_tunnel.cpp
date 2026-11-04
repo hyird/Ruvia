@@ -112,6 +112,12 @@ task<std::optional<std::span<const std::byte>>> http_client_tunnel::read() & {
     }
     return response_.body().read();
 }
+task<std::optional<std::string_view>> http_client_tunnel::text() & {
+    if (response_.state_ == nullptr) {
+        throw std::logic_error("HTTP client tunnel is empty");
+    }
+    return response_.body().text();
+}
 task<void> http_client_tunnel::write(std::span<const std::byte> bytes_value) & {
     return write(std::string_view(reinterpret_cast<const char*>(bytes_value.data()), bytes_value.size()));
 }

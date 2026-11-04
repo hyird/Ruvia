@@ -445,7 +445,7 @@ struct http2_sans_io_session_engine::websocket_upgrade_commit final {
         return ruvia::detail::websocket_upgrade_commit<transport_type>(
             tunnel_upgrade_commit::finish_commit(
                 engine_, stream_id_, streaming_body_, stream_signal_, context_value),
-            submitted_handshake->compression());
+            submitted_handshake->compression(), submitted_handshake->subprotocol(), context_value.pool());
     }
 };
 

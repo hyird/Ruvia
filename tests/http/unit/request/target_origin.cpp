@@ -30,6 +30,20 @@ constexpr http_target_origin_connection secured{.secured_ = true};
     return ruvia::decide_http_target_origin(request, connection);
 }
 
+template <typename origin_type>
+concept target_origin_allows_host = requires(origin_type&& origin) {
+    std::forward<origin_type>(origin).host();
+};
+
+template <typename origin_type>
+concept target_origin_allows_address = requires(origin_type&& origin) {
+    std::forward<origin_type>(origin).address();
+};
+
+static_assert(target_origin_allows_host<const http_target_origin&>);
+static_assert(!target_origin_allows_host<http_target_origin>);
+static_assert(target_origin_allows_address<const http_target_origin&>);
+static_assert(!target_origin_allows_address<http_target_origin>);
 }  // namespace
 
 RUVIA_TEST(target_origin_dns_reference_names_follow_label_and_full_name_boundaries) {

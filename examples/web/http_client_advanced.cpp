@@ -26,15 +26,11 @@
 
 namespace {
 
-ruvia::task<void> follow_redirect(ruvia::http_client& client, const ruvia::http_client_config& config) {
+ruvia::task<void> follow_redirect(const ruvia::http_client_handle& origin) {
     std::pmr::unsynchronized_pool_resource memory;
-    const auto origin = config.scheme_ == ruvia::http_scheme::https
-                            ? ruvia::http_origin_view::https({.host_ = config.host_, .port_ = config.port_})
-                            : ruvia::http_origin_view::http({.host_ = config.host_, .port_ = config.port_});
     std::pmr::string target("/features/redirect", &memory);
-    const auto requests = client.handle();
     for (unsigned hop = 0; hop != 4; ++hop) {
-        auto response = co_await requests.send({.target_ = target});
+        auto response = co_await origin.send({.target_ = target});
         if (!ruvia::is_http_redirect_status(response.status())) {
             auto bytes_value = co_await response.body().read_all();
             std::cout << "redirected bytes=" << bytes_value.bytes().size() << '\n';
@@ -44,7 +40,7 @@ ruvia::task<void> follow_redirect(ruvia::http_client& client, const ruvia::http_
         if (!location) {
             throw std::runtime_error("redirect has no Location");
         }
-        auto destination = ruvia::resolve_http_client_redirect_target(origin,
+        auto destination = ruvia::resolve_http_client_redirect_target(origin.origin(),
             {.current_target_ = target, .location_ = *location, .resource_ = &memory});
         const auto* resolved = std::get_if<ruvia::http_client_resolved_redirect>(&destination);
         if (!resolved || resolved->cross_origin()) {
@@ -114,7 +110,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
                           << " alt-svc=" << (advertisement->alternative_service() != nullptr) << '\n';
             }
         }
-        co_await follow_redirect(client, config);
+        co_await follow_redirect(origin);
         {
             auto response = co_await bounded.send({.target_ = "/features/safe"});
             while (co_await response.body().read()) {

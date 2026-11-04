@@ -49,7 +49,7 @@ ruvia::task<void> exercise_lease_and_close(
         auto discarded_cold_acquire = scheduler.acquire(std::nullopt);
         static_cast<void>(discarded_cold_acquire);
     }
-    const auto first = co_await scheduler.acquire(std::nullopt);
+    const auto first = co_await scheduler.acquire();
     if (!first.has_value()) {
         co_return;
     }

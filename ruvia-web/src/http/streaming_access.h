@@ -21,7 +21,7 @@ struct streaming_access final {
     using stream_cancel_on_peer_eof_type = response_stream_writer::cancel_on_peer_eof_type;
 
     [[nodiscard]] static body_reader make_body_reader(void* target, body_read_type read) noexcept {
-        return body_reader(body_reader::token_type{}, target, read);
+        return body_reader(target, read);
     }
 
     [[nodiscard]] static response_stream_writer make_response_stream_writer(std::pmr::memory_resource& resource, void* target,

@@ -62,12 +62,20 @@ void context_response_editor::status(http_status_code status_code) {
 }
 
 std::pmr::string context::url_for(
-    std::string_view pattern, std::initializer_list<std::string_view> values) const {
+    std::string_view pattern, std::span<const std::string_view> values) const {
     if (services().routes() == nullptr) {
         throw std::logic_error("url_for requires a route table bound to this context");
     }
-    return services().routes()->url_for(
-        pattern, std::span<const std::string_view>(values.begin(), values.size()), arena());
+    return services().routes()->url_for(pattern, values, arena());
+}
+
+std::pmr::string context::url_for(
+    std::string_view pattern, std::initializer_list<std::string_view> values) const {
+    return url_for(pattern, std::span<const std::string_view>(values.begin(), values.size()));
+}
+
+bool context::committed() const noexcept {
+    return response_output().committed();
 }
 
 void context_response_editor::remove_header(std::string_view name) {
@@ -148,11 +156,14 @@ http_response context::text(static_text body) {
 }
 
 response_stream_writer& context::stream_text() {
-    draft().header("Content-Type", "text/plain; charset=UTF-8");
-    if (!response_state().draft().header("X-Content-Type-Options")) {
-        draft().header("X-Content-Type-Options", "nosniff");
+    auto& writer = stream();
+    if (!response_output().committed()) {
+        draft().header("Content-Type", "text/plain; charset=UTF-8");
+        if (!response_state().draft().header("X-Content-Type-Options")) {
+            draft().header("X-Content-Type-Options", "nosniff");
+        }
     }
-    return stream();
+    return writer;
 }
 
 http_response context::json_serialized(std::pmr::string& body) {
@@ -192,7 +203,11 @@ http_response context::html(static_text body) {
 }
 
 http_response context::error(http_error_info_options options) const {
-    auto response = detail::make_default_error_response(arena(), http_error_info(options));
+    return error(http_error_info(options));
+}
+
+http_response context::error(const http_error_info& info) const {
+    auto response = detail::make_default_error_response(arena(), info);
     return response;
 }
 

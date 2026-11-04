@@ -499,11 +499,12 @@ bool detail::static_root_access::same_snapshot(
 
 namespace {
 
-[[nodiscard]] std::unique_ptr<detail::static_root_state, static_root::state_deleter_type>
+[[nodiscard]] std::unique_ptr<detail::static_root_state, pmr_object_deleter<detail::static_root_state>>
 build_static_root_state(const std::filesystem::path& root, detail::static_root_config_storage config_storage) {
     const auto canonical_root = canonical_static_root_path(root);
-    std::unique_ptr<detail::static_root_state, static_root::state_deleter_type> state(
-        make_static_root_state(std::move(config_storage)));
+    std::unique_ptr<detail::static_root_state, pmr_object_deleter<detail::static_root_state>> state(
+        make_static_root_state(std::move(config_storage)),
+        pmr_object_deleter<detail::static_root_state>{process_resource()});
     std::error_code ec;
     auto& state_value = *state;
     http_assign_native_path(state_value.root_, canonical_root);
@@ -642,7 +643,8 @@ std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_roo
     auto* const resource = pmr_resource_or_default(object_resource);
     auto* const storage = resource->allocate(sizeof(static_root), alignof(static_root));
     try {
-        auto* const result_value = ::new (storage) static_root(std::move(state));
+        auto* const result_value = ::new (storage) static_root(
+            std::unique_ptr<detail::static_root_state, static_root::state_deleter_type>(state.release()));
         return std::unique_ptr<static_root, pmr_object_deleter<static_root>>(
             result_value, pmr_object_deleter<static_root>{resource});
     } catch (...) {
@@ -661,7 +663,8 @@ std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_roo
     auto* const resource = pmr_resource_or_default(object_resource);
     auto* const storage = resource->allocate(sizeof(static_root), alignof(static_root));
     try {
-        auto* const result_value = ::new (storage) static_root(std::move(state));
+        auto* const result_value = ::new (storage) static_root(
+            std::unique_ptr<detail::static_root_state, static_root::state_deleter_type>(state.release()));
         return std::unique_ptr<static_root, pmr_object_deleter<static_root>>(
             result_value, pmr_object_deleter<static_root>{resource});
     } catch (...) {
@@ -676,8 +679,9 @@ static_root::static_root(std::unique_ptr<detail::static_root_state, state_delete
 static_root::static_root(const std::filesystem::path& root, static_root_options options)
     : state_([&] {
           detail::validate_static_root_options(options);
-          return build_static_root_state(
+          auto built = build_static_root_state(
               root, detail::store_validated_static_root_config(options, process_resource()));
+          return std::unique_ptr<detail::static_root_state, state_deleter_type>(built.release());
       }()) {
     detail::static_root_access::install_resident_bodies(*this, nullptr,
         {.max_file_bytes_ = options.resident_max_bytes_.value_or(0),

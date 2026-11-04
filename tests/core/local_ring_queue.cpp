@@ -67,12 +67,21 @@ RUVIA_TEST(local_ring_queue_fifo_full_recovery_and_repeated_slot_wrap) {
     for (const std::size_t capacity : {1, 3, 5, 8}) {
         ruvia::local_ring_queue<std::size_t> queue(capacity);
         RUVIA_CHECK_EQ(queue.capacity(), capacity);
+        RUVIA_CHECK(queue.empty());
+        RUVIA_CHECK(!queue.full());
+        RUVIA_CHECK_EQ(queue.size(), std::size_t{0});
+        const auto& const_queue = queue;
+        RUVIA_CHECK(const_queue.front() == nullptr);
         std::size_t next_input = 1;
         std::size_t next_output = 1;
         for (std::size_t round = 0; round != 1000; ++round) {
             for (std::size_t index = 0; index != capacity; ++index) {
                 RUVIA_CHECK(queue.try_push(next_input++));
             }
+            RUVIA_CHECK(queue.full());
+            RUVIA_CHECK(!queue.empty());
+            RUVIA_CHECK_EQ(queue.size(), capacity);
+            RUVIA_CHECK(const_queue.front() != nullptr);
             RUVIA_CHECK(queue.prepare_push() == nullptr);
             RUVIA_CHECK(!queue.try_push(std::size_t{0}));
 

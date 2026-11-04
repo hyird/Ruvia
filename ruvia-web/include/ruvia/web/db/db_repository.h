@@ -734,6 +734,31 @@ public:
     db_query_builder& group_by(std::initializer_list<db_expression> expressions) {
         return group_by(std::span<const db_expression>(expressions.begin(), expressions.size()));
     }
+    db_query_builder& group_by(const db_expr& expression) {
+        const std::array expressions{expression};
+        return group_by(std::span<const db_expr>(expressions));
+    }
+    db_query_builder& group_by(std::span<const db_expr> expressions) {
+        static constexpr std::size_t inline_capacity = 16;
+        if (expressions.size() <= inline_capacity) {
+            std::array<db_expression, inline_capacity> imported{};
+            for (std::size_t i = 0; i < expressions.size(); ++i) {
+                imported[i] = expressions[i].expression(query_, entity_type::table_name(), alias_);
+            }
+            query_.group_by(std::span<const db_expression>(imported.data(), expressions.size()));
+            return *this;
+        }
+        std::pmr::vector<db_expression> imported(query_.resource());
+        imported.reserve(expressions.size());
+        for (const auto& expression : expressions) {
+            imported.push_back(expression.expression(query_, entity_type::table_name(), alias_));
+        }
+        query_.group_by(imported);
+        return *this;
+    }
+    db_query_builder& group_by(std::initializer_list<db_expr> expressions) {
+        return group_by(std::span<const db_expr>(expressions.begin(), expressions.size()));
+    }
     db_query_builder& group_by(std::span<const std::string_view> columns) {
         if (columns.size() <= column_capacity) {
             std::array<db_expression, column_capacity> expressions{};
@@ -759,6 +784,19 @@ public:
     db_query_builder& add_group_by(db_expression expression) {
         query_.add_group_by(query_.import_expression(expression));
         return *this;
+    }
+    db_query_builder& add_group_by(const db_expr& expression) {
+        query_.add_group_by(expression.expression(query_, entity_type::table_name(), alias_));
+        return *this;
+    }
+    db_query_builder& add_group_by(std::span<const db_expr> expressions) {
+        for (const auto& expression : expressions) {
+            add_group_by(expression);
+        }
+        return *this;
+    }
+    db_query_builder& add_group_by(std::initializer_list<db_expr> expressions) {
+        return add_group_by(std::span<const db_expr>(expressions.begin(), expressions.size()));
     }
     db_query_builder& add_group_by(std::string_view column) {
         detail::require_entity_column<entity_type>(column);
@@ -791,6 +829,44 @@ public:
         query_.add_order_by(query_.import_expression(expression), direction, nulls);
         return *this;
     }
+    db_query_builder& order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value) {
+        query_.order_by(expression.expression(query_, entity_type::table_name(), alias_), direction, nulls);
+        return *this;
+    }
+    db_query_builder& add_order_by(const db_expr& expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value) {
+        query_.add_order_by(expression.expression(query_, entity_type::table_name(), alias_), direction, nulls);
+        return *this;
+    }
+    db_query_builder& order_by(const db_order_term& term) {
+        return order_by(term.expression_, term.direction_, term.nulls_);
+    }
+    db_query_builder& order_by(std::span<const db_order_term> terms) {
+        for (const auto& term : terms) {
+            if (term.expression_.empty()) {
+                throw std::invalid_argument("cannot evaluate an empty database expression");
+            }
+        }
+        query_.clear_order();
+        for (const auto& term : terms) {
+            add_order_by(term);
+        }
+        return *this;
+    }
+    db_query_builder& order_by(std::initializer_list<db_order_term> terms) {
+        return order_by(std::span<const db_order_term>(terms.begin(), terms.size()));
+    }
+    db_query_builder& add_order_by(const db_order_term& term) {
+        return add_order_by(term.expression_, term.direction_, term.nulls_);
+    }
+    db_query_builder& add_order_by(std::span<const db_order_term> terms) {
+        for (const auto& term : terms) {
+            add_order_by(term);
+        }
+        return *this;
+    }
+    db_query_builder& add_order_by(std::initializer_list<db_order_term> terms) {
+        return add_order_by(std::span<const db_order_term>(terms.begin(), terms.size()));
+    }
     db_query_builder& distinct(bool enabled = true) {
         query_.distinct(enabled);
         return *this;
@@ -815,6 +891,31 @@ public:
     }
     db_query_builder& distinct_on(std::initializer_list<db_expression> expressions) {
         return distinct_on(std::span<const db_expression>(expressions.begin(), expressions.size()));
+    }
+    db_query_builder& distinct_on(const db_expr& expression) {
+        const std::array expressions{expression};
+        return distinct_on(std::span<const db_expr>(expressions));
+    }
+    db_query_builder& distinct_on(std::span<const db_expr> expressions) {
+        static constexpr std::size_t inline_capacity = 16;
+        if (expressions.size() <= inline_capacity) {
+            std::array<db_expression, inline_capacity> imported{};
+            for (std::size_t i = 0; i < expressions.size(); ++i) {
+                imported[i] = expressions[i].expression(query_, entity_type::table_name(), alias_);
+            }
+            query_.distinct_on(std::span<const db_expression>(imported.data(), expressions.size()));
+            return *this;
+        }
+        std::pmr::vector<db_expression> imported(query_.resource());
+        imported.reserve(expressions.size());
+        for (const auto& expression : expressions) {
+            imported.push_back(expression.expression(query_, entity_type::table_name(), alias_));
+        }
+        query_.distinct_on(imported);
+        return *this;
+    }
+    db_query_builder& distinct_on(std::initializer_list<db_expr> expressions) {
+        return distinct_on(std::span<const db_expr>(expressions.begin(), expressions.size()));
     }
     db_query_builder& distinct_on(std::span<const std::string_view> columns) {
         if (columns.size() <= column_capacity) {
@@ -850,6 +951,10 @@ public:
         query_.or_where(predicate.expression(query_, entity_type::table_name(), alias_));
         return *this;
     }
+    db_query_builder& clear_where() {
+        query_.clear_where();
+        return *this;
+    }
     db_query_builder& order_by(std::string_view column, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value) {
         detail::require_entity_column<entity_type>(column);
         query_.order_by(query_.column(column, alias_), direction, nulls);
@@ -874,11 +979,15 @@ public:
         query_.add_order_by(column.expression(query_, default_alias), direction, nulls);
         return *this;
     }
-    db_query_builder& offset(std::uint64_t count) {
+    db_query_builder& clear_order() {
+        query_.clear_order();
+        return *this;
+    }
+    db_query_builder& offset(std::optional<query_row_count> count) {
         query_.offset(count);
         return *this;
     }
-    db_query_builder& limit(std::uint64_t count) {
+    db_query_builder& limit(std::optional<query_row_count> count) {
         query_.limit(count);
         return *this;
     }
@@ -896,12 +1005,16 @@ public:
         query_.cache(setting);
         return *this;
     }
-    db_query_builder& cache(std::string_view id, std::optional<std::chrono::milliseconds> milliseconds = {}) {
-        query_.cache(id, milliseconds);
+    db_query_builder& cache(std::string_view id, std::optional<std::chrono::milliseconds> duration = {}) {
+        query_.cache(id, duration);
         return *this;
     }
     db_query_builder& set_lock(const db_lock_options& options) {
         query_.lock(options);
+        return *this;
+    }
+    db_query_builder& clear_lock() {
+        query_.clear_lock();
         return *this;
     }
 
@@ -1139,8 +1252,17 @@ public:
         query_.set(column, query_.import_expression(value));
         return *this;
     }
+    db_write_query_builder& set(std::string_view column, const db_expr& value) {
+        detail::require_entity_column<entity_type>(column);
+        if (detail::is_generated_entity_column<entity_type>(column) || value.empty()) {
+            throw std::invalid_argument("SET requires a writable entity column and expression");
+        }
+        query_.set(column, value.expression(query_, entity_type::table_name(), alias_));
+        return *this;
+    }
     template <detail::db_parameter v_type>
-        requires(!std::same_as<std::remove_cvref_t<v_type>, db_expression>)
+        requires(!std::same_as<std::remove_cvref_t<v_type>, db_expression> &&
+                 !std::same_as<std::remove_cvref_t<v_type>, db_expr>)
     db_write_query_builder& set(std::string_view column, v_type&& value) {
         detail::require_entity_column<entity_type>(column);
         if (detail::is_generated_entity_column<entity_type>(column)) {
@@ -1580,8 +1702,16 @@ public:
     [[nodiscard]] task<entity_rows<entity_type>> find(const db_find_options& options = {}) const {
         return find_builder(options).get_many();
     }
-    [[nodiscard]] task<std::optional<entity_type>> find_one(const db_find_options& options) const {
+    template <std::same_as<db_predicate> predicate_type>
+    [[nodiscard]] task<entity_rows<entity_type>> find(const predicate_type& where) const {
+        return find(db_find_options{.where_ = where});
+    }
+    [[nodiscard]] task<std::optional<entity_type>> find_one(const db_find_options& options = {}) const {
         return find_builder(options).get_one();
+    }
+    template <std::same_as<db_predicate> predicate_type>
+    [[nodiscard]] task<std::optional<entity_type>> find_one(const predicate_type& where) const {
+        return find_one(db_find_options{.where_ = where});
     }
     [[nodiscard]] task<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(const db_find_options& options = {}) const {
         return find_builder(options).get_many_and_count();
@@ -1589,8 +1719,16 @@ public:
     [[nodiscard]] task<std::uint64_t> count(const db_find_options& options = {}) const {
         return find_builder(options).get_count();
     }
+    template <std::same_as<db_predicate> predicate_type>
+    [[nodiscard]] task<std::uint64_t> count(const predicate_type& where) const {
+        return count(db_find_options{.where_ = where});
+    }
     [[nodiscard]] task<bool> exists(const db_find_options& options = {}) const {
         return find_builder(options).get_exists();
+    }
+    template <std::same_as<db_predicate> predicate_type>
+    [[nodiscard]] task<bool> exists(const predicate_type& where) const {
+        return exists(db_find_options{.where_ = where});
     }
     [[nodiscard]] task<entity_type> save(const entity_type& entity) const {
         auto query = save_query(std::span<const entity_type>(&entity, 1));

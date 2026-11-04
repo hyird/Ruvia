@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "ruvia/web/app.h"
+#include "ruvia/web/context.h"
 
 #include "test_harness.h"
 
@@ -347,4 +348,37 @@ RUVIA_TEST(noexcept_app_callback_retires_owner_before_target_destruction) {
     RUVIA_CHECK(!callback);
     RUVIA_CHECK(owner_was_empty);
     RUVIA_CHECK_EQ(destroyed, 1);
+}
+
+RUVIA_TEST(application_multi_listen_and_null_handler_validation) {
+    auto& app = ruvia::app();
+    RUVIA_CHECK(throws_invalid([&] {
+        app.listen(std::initializer_list<ruvia::listen_config>{});
+    }));
+    RUVIA_CHECK(throws_invalid([&] {
+        app.listen({
+            {.address_ = "127.0.0.1", .http_ = 8080},
+            {.address_ = "127.0.0.1", .http_ = 8080},
+        });
+    }));
+    app.listen({
+        {.address_ = "127.0.0.1", .http_ = 8080},
+        {.address_ = "127.0.0.1", .http_ = 8081},
+    });
+
+    RUVIA_CHECK(throws_invalid([&] { app.on_start(ruvia::app_hook{}); }));
+    RUVIA_CHECK(throws_invalid([&] { app.on_stop(ruvia::app_hook{}); }));
+    app.on_start([] {}).on_start(nullptr);
+    app.on_stop([] {}).on_stop(nullptr);
+
+    RUVIA_CHECK(throws_invalid([&] { app.on_error(ruvia::http_error_handler{nullptr}); }));
+    RUVIA_CHECK(throws_invalid([&] { app.on_not_found(ruvia::http_not_found_handler{nullptr}); }));
+    app.on_error([](ruvia::context& c, ruvia::http_error_info info) -> ruvia::task<ruvia::http_response> {
+        co_return c.error(info);
+    });
+    app.on_error(nullptr);
+    app.on_not_found([](ruvia::context& c) -> ruvia::task<ruvia::http_response> {
+        co_return c.text("missing");
+    });
+    app.on_not_found(nullptr);
 }

@@ -282,6 +282,11 @@ ruvia::task<void> exercise_stoppable_sleep(const ruvia::worker_handle& worker_va
         ruvia::timer_sleep_result::elapsed) {
         co_return;
     }
+    if (co_await ruvia::sleep_until(worker_value,
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(1), idle.token()) !=
+        ruvia::timer_sleep_result::elapsed) {
+        co_return;
+    }
 
     // Already stopped before the call: must not suspend for the full duration.
     ruvia::stop_source stopped;

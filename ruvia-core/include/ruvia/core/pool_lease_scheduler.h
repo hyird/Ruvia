@@ -47,7 +47,7 @@ public:
     // fires: the acquire completes only through release(), close() (closed),
     // or its stop token (cancelled). It never throws for that.
     [[nodiscard]] pool_lease_acquire acquire(
-        const std::optional<std::chrono::milliseconds>& timeout, stop_token stop = {});
+        const std::optional<std::chrono::milliseconds>& timeout = std::nullopt, stop_token stop = {});
 
     // Return a caller-owned slot on the bound worker. A queued acquire takes
     // ownership before this call returns, but its coroutine resumes in a later

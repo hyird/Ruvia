@@ -107,6 +107,10 @@ public:
         return operations_ != nullptr;
     }
 
+    [[nodiscard]] friend constexpr bool operator==(const move_only_function& fn, std::nullptr_t) noexcept {
+        return !fn;
+    }
+
     // The value-parameter signature is part of the erased callable contract;
     // forwarding it preserves value and reference argument behavior.
     // NOLINTNEXTLINE(performance-unnecessary-value-param)

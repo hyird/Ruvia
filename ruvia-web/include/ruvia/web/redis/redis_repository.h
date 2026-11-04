@@ -62,7 +62,7 @@ public:
     }
     redis_predicate(redis_predicate&&) noexcept = default;
     redis_predicate& operator=(redis_predicate&&) noexcept = default;
-    bool empty() const noexcept {
+    [[nodiscard]] bool empty() const noexcept {
         return storage_ == nullptr;
     }
     redis_predicate& and_where(const redis_predicate& other) {
@@ -94,6 +94,17 @@ public:
     friend redis_predicate operator||(redis_predicate left, const redis_predicate& right) {
         left.append(detail::redis_binary_operator::logical_or, right);
         return left;
+    }
+    [[nodiscard]] redis_predicate operator!() const {
+        if (empty()) {
+            throw std::invalid_argument("cannot negate an empty Redis predicate");
+        }
+        redis_predicate result(*this);
+        auto& storage = *result.storage_;
+        const auto operand = storage.root_;
+        storage.root_ = storage.add(detail::redis_predicate_node::kind_type::logical_not);
+        storage.nodes_[storage.root_].operands_ = {operand};
+        return result;
     }
 
 private:
@@ -145,37 +156,37 @@ class redis_field_reference final {
 
 public:
     template <detail::redis_predicate_argument value_type>
-    redis_predicate operator==(value_type&& value) const {
+    [[nodiscard]] redis_predicate operator==(value_type&& value) const {
         return compare(operation::equal, std::forward<value_type>(value));
     }
     template <detail::redis_predicate_argument value_type>
-    redis_predicate operator!=(value_type&& value) const {
+    [[nodiscard]] redis_predicate operator!=(value_type&& value) const {
         return compare(operation::not_equal, std::forward<value_type>(value));
     }
     template <detail::redis_predicate_argument value_type>
-    redis_predicate operator<(value_type&& value) const {
+    [[nodiscard]] redis_predicate operator<(value_type&& value) const {
         return compare(operation::less, std::forward<value_type>(value));
     }
     template <detail::redis_predicate_argument value_type>
-    redis_predicate operator<=(value_type&& value) const {
+    [[nodiscard]] redis_predicate operator<=(value_type&& value) const {
         return compare(operation::less_equal, std::forward<value_type>(value));
     }
     template <detail::redis_predicate_argument value_type>
-    redis_predicate operator>(value_type&& value) const {
+    [[nodiscard]] redis_predicate operator>(value_type&& value) const {
         return compare(operation::greater, std::forward<value_type>(value));
     }
     template <detail::redis_predicate_argument value_type>
-    redis_predicate operator>=(value_type&& value) const {
+    [[nodiscard]] redis_predicate operator>=(value_type&& value) const {
         return compare(operation::greater_equal, std::forward<value_type>(value));
     }
-    redis_predicate is_null() const {
+    [[nodiscard]] redis_predicate is_null() const {
         return compare(operation::equal, nullptr);
     }
-    redis_predicate is_not_null() const {
+    [[nodiscard]] redis_predicate is_not_null() const {
         return compare(operation::not_equal, nullptr);
     }
     template <detail::redis_predicate_argument lower_type, detail::redis_predicate_argument upper_type>
-    redis_predicate between(lower_type&& lower, upper_type&& upper) const {
+    [[nodiscard]] redis_predicate between(lower_type&& lower, upper_type&& upper) const {
         auto result_value = create_field(4);
         auto& storage = *result_value.storage_;
         const auto lower_node = storage.add_value(std::forward<lower_type>(lower));
@@ -186,22 +197,22 @@ public:
     }
     template <typename value_type>
         requires detail::redis_predicate_argument<const value_type&>
-    redis_predicate in(std::span<const value_type> values) const {
+    [[nodiscard]] redis_predicate in(std::span<const value_type> values) const {
         return list(values, operation::in);
     }
     template <typename value_type>
         requires detail::redis_predicate_argument<const value_type&>
-    redis_predicate in(std::initializer_list<value_type> values) const {
+    [[nodiscard]] redis_predicate in(std::initializer_list<value_type> values) const {
         return in(std::span<const value_type>(values.begin(), values.size()));
     }
     template <typename value_type>
         requires detail::redis_predicate_argument<const value_type&>
-    redis_predicate not_in(std::span<const value_type> values) const {
+    [[nodiscard]] redis_predicate not_in(std::span<const value_type> values) const {
         return list(values, operation::not_in);
     }
     template <typename value_type>
         requires detail::redis_predicate_argument<const value_type&>
-    redis_predicate not_in(std::initializer_list<value_type> values) const {
+    [[nodiscard]] redis_predicate not_in(std::initializer_list<value_type> values) const {
         return not_in(std::span<const value_type>(values.begin(), values.size()));
     }
 
@@ -288,6 +299,13 @@ struct redis_entity_storage final {
         using descriptor_type = ::ruvia::detail::redis_entity_storage<::ruvia::fixed_string{key_prefix}, __VA_ARGS__>; \
         using storage_type = typename descriptor_type::type;                                                           \
         storage_type entity_;                                                                                          \
+        template <typename>                                                                                            \
+        friend class ::ruvia::entity_rows;                                                                             \
+        explicit name(storage_type&& entity) noexcept                                                                  \
+            : entity_(std::move(entity)) {}                                                                            \
+        [[nodiscard]] name rebind_for_rows(std::pmr::memory_resource* resource) const {                                \
+            return name(entity_.rebind(resource));                                                                     \
+        }                                                                                                              \
                                                                                                                        \
     public:                                                                                                            \
         using redis_entity_type = name;                                                                                \
@@ -308,6 +326,10 @@ struct redis_entity_storage final {
             return storage_type::template index<field_name>();                                                         \
         }                                                                                                              \
         template <::ruvia::fixed_string field_name>                                                                    \
+        static consteval std::string_view column_name() noexcept {                                                     \
+            return storage_type::template column_name<field_name>();                                                   \
+        }                                                                                                              \
+        template <::ruvia::fixed_string field_name>                                                                    \
         static constexpr ::ruvia::redis_field_reference<name, field_name> column() noexcept {                          \
             return {};                                                                                                 \
         }                                                                                                              \
@@ -324,7 +346,7 @@ enum class redis_order_direction : std::uint8_t {
 };
 
 struct redis_find_order final {
-    borrowed_text field_{};
+    borrowed_text column_{};
     redis_order_direction direction_{redis_order_direction::asc};
 };
 
@@ -351,7 +373,7 @@ enum class redis_index_kind : std::uint8_t {
 };
 
 struct redis_index_config final {
-    borrowed_text field_{};
+    borrowed_text column_{};
     redis_index_kind kind_{redis_index_kind::tag};
     bool sortable_{false};
 };
@@ -430,9 +452,13 @@ public:
                 : std::optional<std::uint64_t>(options.skip_ ? options.skip_->value() : 0U)};
         return handle_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
     }
+    template <std::same_as<redis_predicate> predicate_type>
+    [[nodiscard]] task<entity_rows<entity_type>> find(const predicate_type& where) const {
+        return find(redis_find_options{.where_ = where});
+    }
 
     [[nodiscard]] task<std::optional<entity_type>> find_one(
-        const redis_find_options& options) const {
+        const redis_find_options& options = {}) const {
         const auto memory = resource();
         const bool plain = !options.order_.has_value() && !options.skip_ && !options.take_;
         if (plain) {
@@ -454,6 +480,10 @@ public:
         return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
     }
 
+    template <std::same_as<redis_predicate> predicate_type>
+    [[nodiscard]] task<std::optional<entity_type>> find_one(const predicate_type& where) const {
+        return find_one(redis_find_options{.where_ = where});
+    }
     [[nodiscard]] task<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
@@ -470,6 +500,11 @@ public:
             detail::compile_redis_find(mapping(), options, memory, true), detail::redis_map_count{});
     }
 
+    template <std::same_as<redis_predicate> predicate_type>
+    [[nodiscard]] task<std::uint64_t> count(const predicate_type& where) const {
+        return count(redis_find_options{.where_ = where});
+    }
+
     [[nodiscard]] task<bool> exists(
         const redis_find_options& options = {}) const {
         const auto memory = resource();
@@ -483,6 +518,11 @@ public:
         return handle_.template command_mapped<bool>(
             detail::compile_redis_find(mapping(), options, memory, true),
             detail::redis_map_exists{});
+    }
+
+    template <std::same_as<redis_predicate> predicate_type>
+    [[nodiscard]] task<bool> exists(const predicate_type& where) const {
+        return exists(redis_find_options{.where_ = where});
     }
 
     [[nodiscard]] task<redis_write_result> delete_by(

@@ -36,11 +36,23 @@ void websocket_abort_thunk(void* target) noexcept {
 }
 
 template <typename connection_type>
+[[nodiscard]] std::optional<std::uint16_t> websocket_peer_close_code_thunk(void* target) noexcept {
+    return static_cast<connection_type*>(target)->peer_close_code();
+}
+
+template <typename connection_type>
+[[nodiscard]] std::string_view websocket_peer_close_reason_thunk(void* target) noexcept {
+    return static_cast<connection_type*>(target)->peer_close_reason();
+}
+
+template <typename connection_type>
 [[nodiscard]] websocket make_websocket_facade(
     connection_type& connection, std::pmr::memory_resource& resource) noexcept {
-    return websocket(resource, connection.worker(), &connection, &websocket_read_thunk<connection_type>,
-        &websocket_write_thunk<connection_type>, &websocket_close_thunk<connection_type>,
-        &websocket_abort_thunk<connection_type>);
+    return websocket(resource, connection.worker(), &connection, connection.subprotocol(),
+        &websocket_read_thunk<connection_type>, &websocket_write_thunk<connection_type>,
+        &websocket_close_thunk<connection_type>, &websocket_abort_thunk<connection_type>,
+        &websocket_peer_close_code_thunk<connection_type>,
+        &websocket_peer_close_reason_thunk<connection_type>);
 }
 
 // The terminal handler borrows an established connection, but does not close it:

@@ -9,14 +9,10 @@
 #include <variant>
 
 #include "ruvia/http/http1_client_request_writer.h"
-#include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/websocket_protocol.h"
 
 namespace ruvia {
-class http2_connection;
-class http_client_response_head;
-
 struct websocket_client_negotiation_config_view final {
     borrowed_span<std::string_view> subprotocols_{};
     websocket_client_deflate_offer deflate_{};
@@ -83,16 +79,6 @@ public:
     template <detail::http_temporary_owning_range<http_header> fields_type>
     std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
     validate_fields(fields_type&&) const = delete;
-    // submit_http2_websocket_client_request() with this negotiation.
-    [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>
-    submit_http2_request(http2_connection& connection,
-        std::string_view scheme, std::string_view authority, std::string_view target,
-        std::span<const http_header_view> headers = {}) const;
-    // validate_http2_websocket_client_response() with this negotiation.
-    [[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-    validate_response(const http_client_response_head& head, bool stream_open) const;
-    std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-    validate_response(const http_client_response_head&&, bool) const = delete;
     // The resource the configuration was copied into.
     [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
         return resource_;

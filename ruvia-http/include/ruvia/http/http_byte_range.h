@@ -5,7 +5,6 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
-#include <exception>
 #include <limits>
 #include <stdexcept>
 #include <string_view>

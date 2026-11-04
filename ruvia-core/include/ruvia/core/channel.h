@@ -285,6 +285,10 @@ class channel_sender final {
 public:
     channel_sender() noexcept = default;
 
+    [[nodiscard]] bool valid() const noexcept {
+        return state_ != nullptr;
+    }
+
     // The sender must remain alive throughout the call, including payload
     // moves and destruction. Concurrent sends are delivered in publication
     // order; closure during a payload move returns that value as rejected.
@@ -371,6 +375,9 @@ public:
         close();
     }
 
+    [[nodiscard]] bool valid() const noexcept {
+        return state_ != nullptr;
+    }
     // The receiver owns the receive side: destroying it prevents cold receives
     // from consuming buffered values and closes pending receives. Require a
     // named owner so storing an operation cannot silently turn a temporary
@@ -433,6 +440,13 @@ template <typename t_type>
     auto state_value = detail::make_worker_bound_state<detail::channel_state<t_type>>(
         resolved, std::move(worker_value), options.capacity_, resolved);
     return std::pair(channel_sender<t_type>(state_value), channel_receiver<t_type>(state_value));
+}
+
+template <typename t_type>
+[[nodiscard]] auto make_channel(
+    worker_handle worker_value, std::size_t capacity, std::pmr::memory_resource* resource = nullptr) {
+    return make_channel<t_type>(
+        std::move(worker_value), channel_options{.capacity_ = capacity, .resource_ = resource});
 }
 
 }  // namespace ruvia

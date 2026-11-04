@@ -252,11 +252,21 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
                     break;
                 case 8U:
                     if (http_ascii_equals_ignore_case(attribute, "SameSite")) {
-                        if (http_ascii_equals_ignore_case(argument, "None")) {
+                        if (http_ascii_equals_ignore_case(argument, "Strict")) {
+                            result.same_site_ = cookie_same_site::strict;
+                            result.clear(http_set_cookie_attribute::same_site_none);
+                        } else if (http_ascii_equals_ignore_case(argument, "Lax")) {
+                            result.same_site_ = cookie_same_site::lax;
+                            result.clear(http_set_cookie_attribute::same_site_none);
+                        } else if (http_ascii_equals_ignore_case(argument, "None")) {
+                            result.same_site_ = cookie_same_site::none;
                             result.set(http_set_cookie_attribute::same_site_none);
                         } else {
+                            result.same_site_.reset();
                             result.clear(http_set_cookie_attribute::same_site_none);
                         }
+                    } else if (http_ascii_equals_ignore_case(attribute, "HttpOnly")) {
+                        result.set(http_set_cookie_attribute::http_only);
                     }
                     break;
                 case 11U:

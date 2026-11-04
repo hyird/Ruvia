@@ -16,7 +16,7 @@
 
 ## 1. 分层架构与命名空间
 
-Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念均位于顶层命名空间 `namespace ruvia`（HTTP 状态码常量位于嵌套命名空间 `namespace ruvia::http_status`）：
+Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念均位于顶层命名空间 `namespace ruvia`（HTTP 状态码常量与 WebSocket 关闭码常量分别位于嵌套命名空间 `namespace ruvia::http_status` 与 `namespace ruvia::websocket_close_status`）：
 
 | 库目录 | CMake Target | 头文件前缀 | 职责与边界 |
 | --- | --- | --- | --- |

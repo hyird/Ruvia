@@ -96,11 +96,22 @@ const db_field& db_row::operator[](std::size_t index) const& noexcept {
     return fields_[index];
 }
 
-const db_field& db_row::operator[](std::string_view column) const& {
+bool db_row::contains(std::string_view column) const noexcept {
+    return find(column) != nullptr;
+}
+
+const db_field* db_row::find(std::string_view column) const& noexcept {
     for (std::size_t index = 0; index < column_names_.size(); ++index) {
         if (column_names_[index] == column) {
-            return fields_[index];
+            return &fields_[index];
         }
+    }
+    return nullptr;
+}
+
+const db_field& db_row::operator[](std::string_view column) const& {
+    if (const auto* field = find(column)) {
+        return *field;
     }
     throw std::out_of_range("database result has no such column");
 }
@@ -114,7 +125,7 @@ const db_field* db_row::end() const& noexcept {
     return fields_.empty() ? first : first + fields_.size();
 }
 
-std::span<const std::pmr::string> db_row::column_names() const noexcept {
+std::span<const std::pmr::string> db_row::column_names() const& noexcept {
     return column_names_;
 }
 
@@ -138,6 +149,59 @@ db_rows::~db_rows() {
     if (const auto* owned = std::get_if<owned_raw_result_type>(&raw_result_)) {
         owned->release_(owned->value_);
     }
+}
+
+db_rows& db_rows::operator=(db_rows&& other) {
+    if (this == &other) {
+        return *this;
+    }
+    auto* const target = rows_.get_allocator().resource();
+    if (other.rows_.get_allocator().resource() == target &&
+        other.fields_.get_allocator().resource() == target &&
+        other.column_names_.get_allocator().resource() == target) {
+        if (const auto* owned = std::get_if<owned_raw_result_type>(&raw_result_)) {
+            owned->release_(owned->value_);
+        }
+        rows_ = std::move(other.rows_);
+        fields_ = std::move(other.fields_);
+        column_names_ = std::move(other.column_names_);
+        raw_result_ = other.raw_result_;
+        other.raw_result_.template emplace<no_raw_result_type>();
+        return *this;
+    }
+    std::pmr::vector<std::pmr::string> new_column_names(other.column_names_, target);
+    std::pmr::vector<db_field> new_fields(target);
+    new_fields.reserve(other.fields_.size());
+    for (const auto& field : other.fields_) {
+        if (const auto text = field.value()) {
+            new_fields.push_back(db_field(*text, target));
+        } else {
+            new_fields.push_back(db_field(nullptr, target));
+        }
+    }
+    std::pmr::vector<db_row> new_rows(target);
+    new_rows.reserve(other.rows_.size());
+    std::size_t field_offset = 0;
+    for (const auto& row : other.rows_) {
+        new_rows.push_back(db_row(
+            new_fields.data() + field_offset, row.size(), new_column_names.data(), new_column_names.size()));
+        field_offset += row.size();
+    }
+    if (const auto* owned = std::get_if<owned_raw_result_type>(&raw_result_)) {
+        owned->release_(owned->value_);
+    }
+    raw_result_.template emplace<no_raw_result_type>();
+    rows_.swap(new_rows);
+    fields_.swap(new_fields);
+    column_names_.swap(new_column_names);
+    if (const auto* owned = std::get_if<owned_raw_result_type>(&other.raw_result_)) {
+        owned->release_(owned->value_);
+    }
+    other.raw_result_.template emplace<no_raw_result_type>();
+    other.rows_.clear();
+    other.fields_.clear();
+    other.column_names_.clear();
+    return *this;
 }
 
 bool db_rows::empty() const noexcept {
@@ -165,6 +229,14 @@ const db_row& db_rows::front() const& noexcept {
     return rows_.front();
 }
 
+const db_row& db_rows::back() const& noexcept {
+    return rows_.back();
+}
+
+std::span<const std::pmr::string> db_rows::column_names() const& noexcept {
+    return column_names_;
+}
+
 db_migration_report::db_migration_report(std::pmr::memory_resource* resource)
     : db_migration_report(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource)) {}
 
@@ -173,6 +245,18 @@ db_migration_report::db_migration_report(
     : applied_(resource),
       skipped_(resource) {}
 
+db_migration_report& db_migration_report::operator=(db_migration_report&& other) {
+    if (this != &other) {
+        auto* const target = applied_.get_allocator().resource();
+        auto new_applied = detail::rebind_owned_storage(other.applied_, target, other.skipped_);
+        auto new_skipped = detail::rebind_owned_storage(other.skipped_, target, other.applied_);
+        applied_.swap(new_applied);
+        skipped_.swap(new_skipped);
+        other.applied_.clear();
+        other.skipped_.clear();
+    }
+    return *this;
+}
 std::span<const std::pmr::string> db_migration_report::applied() const& noexcept {
     return applied_;
 }

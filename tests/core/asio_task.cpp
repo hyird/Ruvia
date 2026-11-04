@@ -59,6 +59,17 @@ ruvia::task<void> fail() {
 }  // namespace ruvia::test::asio_task_tests
 
 int main() {
+    {
+        auto ok_void = ruvia::asio_completion<void>::completed({});
+        auto err_void = ruvia::asio_completion<void>::completed(std::make_error_code(std::errc::invalid_argument));
+        auto ok_val = ruvia::asio_completion<int>::completed({}, 17);
+        const auto& const_val = ok_val;
+        if (!ok_void.succeeded() || ok_void.failed() || err_void.succeeded() || !err_void.failed() ||
+            !ok_val.succeeded() || ok_val.failed() || const_val.value() != 17 || ok_val.value() != 17 ||
+            std::move(ok_val).take_value() != 17) {
+            return 1;
+        }
+    }
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
     const auto worker_value = loop.handle();

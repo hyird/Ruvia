@@ -53,7 +53,7 @@ public:
     db_rows(const db_rows&) = delete;
     db_rows& operator=(const db_rows&) = delete;
     db_rows(db_rows&& other) noexcept;
-    db_rows& operator=(db_rows&&) = delete;
+    db_rows& operator=(db_rows&& other);
     ~db_rows();
 
     [[nodiscard]] bool empty() const noexcept;
@@ -66,6 +66,10 @@ public:
     [[nodiscard]] const db_row* end() const&& = delete;
     [[nodiscard]] const db_row& front() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const db_row& front() const&& = delete;
+    [[nodiscard]] const db_row& back() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] const db_row& back() const&& = delete;
+    [[nodiscard]] std::span<const std::pmr::string> column_names() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::span<const std::pmr::string> column_names() const&& = delete;
 
 private:
     friend struct detail::db_result_access;
@@ -104,9 +108,9 @@ public:
     // Each read has one operation deadline, including any EOF/trailing-result
     // drain needed before returning nullopt. A separate close starts its own
     // deadline; idle time between operations is not charged.
-    task<std::optional<db_row>> read() &;
+    [[nodiscard]] task<std::optional<db_row>> read() &;
     task<std::optional<db_row>> read() && = delete;
-    task<void> close() &;
+    [[nodiscard]] task<void> close() &;
     task<void> close() && = delete;
 
 private:

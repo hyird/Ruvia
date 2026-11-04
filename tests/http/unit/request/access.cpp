@@ -92,6 +92,7 @@ RUVIA_TEST(request_public_reset_clears_borrowed_views_and_owned_headers) {
     RUVIA_CHECK(request.headers().empty());
     RUVIA_CHECK(!request.header("Host").has_value());
     RUVIA_CHECK(request.body_bytes().empty());
+    RUVIA_CHECK(request.body().empty());
     RUVIA_CHECK(request.protocol_version() == http_protocol_version::http11);
     RUVIA_CHECK(request.target_form() == http_request_target_form::origin);
 }
@@ -241,6 +242,17 @@ RUVIA_TEST(owned_header_lowercase_copy_normalizes_only_the_name_in_one_allocatio
     RUVIA_CHECK_EQ(memory.live_bytes_, std::size_t{0});
 }
 
+RUVIA_TEST(request_body_string_view_and_known_method_bits_match_contracts) {
+    const std::array<std::byte, 4> payload{
+        std::byte{'d'}, std::byte{'a'}, std::byte{'t'}, std::byte{'a'}};
+    const auto request = ruvia::make_parsed_http_request(
+        "POST", "/", {}, payload, std::pmr::get_default_resource());
+    RUVIA_CHECK_EQ(request.body(), std::string_view("data"));
+    RUVIA_CHECK_EQ(request.body_bytes().size(), std::size_t{4});
+    static_assert(ruvia::http_known_method_bit(http_known_method::get) == 1U);
+    static_assert(ruvia::http_known_method_bit(http_known_method::unknown) == 0U);
+}
+
 namespace {
 
 template <typename method_type, typename target_type, typename body_type>
@@ -255,5 +267,12 @@ static_assert(!make_parsed_request_accepts<std::string, const std::string&, cons
 static_assert(!make_parsed_request_accepts<const std::string&, std::string, const std::vector<std::byte>&>);
 static_assert(!make_parsed_request_accepts<const std::string&, const std::string&, std::vector<std::byte>>);
 static_assert(!make_parsed_request_accepts<const std::string&, const std::string&, std::array<std::byte, 1>>);
+
+template <typename request_type>
+concept request_allows_body = requires(request_type&& req) {
+    std::forward<request_type>(req).body();
+};
+static_assert(request_allows_body<const http_request&>);
+static_assert(!request_allows_body<http_request>);
 
 }  // namespace

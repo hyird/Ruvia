@@ -769,6 +769,12 @@ private:
     friend db_expr operator/(const db_expr& lhs, v_type&& rhs);
     template <detail::db_parameter v_type>
     friend db_expr operator%(const db_expr& lhs, v_type&& rhs);
+    template <detail::db_parameter v_type>
+    friend db_expr operator&(const db_expr& lhs, v_type&& rhs);
+    template <detail::db_parameter v_type>
+    friend db_expr operator|(const db_expr& lhs, v_type&& rhs);
+    template <detail::db_parameter v_type>
+    friend db_expr operator^(const db_expr& lhs, v_type&& rhs);
     friend db_predicate operator==(const db_expr& lhs, const db_expr& rhs);
     friend db_predicate operator!=(const db_expr& lhs, const db_expr& rhs);
     friend db_predicate operator<(const db_expr& lhs, const db_expr& rhs);
@@ -851,6 +857,18 @@ template <detail::db_parameter v_type>
 [[nodiscard]] db_expr operator%(const db_expr& lhs, v_type&& rhs) {
     return lhs.binary(db_binary_operator::modulo, db_expr::value(std::forward<v_type>(rhs)));
 }
+template <detail::db_parameter v_type>
+[[nodiscard]] db_expr operator&(const db_expr& lhs, v_type&& rhs) {
+    return lhs.binary(db_binary_operator::bit_and, db_expr::value(std::forward<v_type>(rhs)));
+}
+template <detail::db_parameter v_type>
+[[nodiscard]] db_expr operator|(const db_expr& lhs, v_type&& rhs) {
+    return lhs.binary(db_binary_operator::bit_or, db_expr::value(std::forward<v_type>(rhs)));
+}
+template <detail::db_parameter v_type>
+[[nodiscard]] db_expr operator^(const db_expr& lhs, v_type&& rhs) {
+    return lhs.binary(db_binary_operator::bit_xor, db_expr::value(std::forward<v_type>(rhs)));
+}
 
 [[nodiscard]] inline db_predicate operator==(const db_expr& lhs, const db_expr& rhs) {
     return lhs.compare_expr(db_binary_operator::equal, rhs);
@@ -903,8 +921,8 @@ struct db_order_term final {
 // span 及元素中的文本均为借用；over 调用入口同步复制或导入。
 // 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_window_options final {
-    std::span<const db_expr> partition_by_{};
-    std::span<const db_order_term> order_by_{};
+    borrowed_span<db_expr> partition_by_{};
+    borrowed_span<db_order_term> order_by_{};
     std::optional<db_window_frame_options> frame_{};
 };
 struct db_case_branch final {
@@ -966,10 +984,10 @@ struct db_assignment final {
 // span 及元素中的文本均为借用；on_conflict 调用入口同步复制或导入。
 // 独立保存 options 时，数组及文本 owner 必须存活到入口消费完成。
 struct db_conflict_options final {
-    std::span<const borrowed_text> columns_{};
+    borrowed_span<borrowed_text> columns_{};
     borrowed_text constraint_{};
     db_expression target_where_{};
-    std::span<const db_assignment> update_{};
+    borrowed_span<db_assignment> update_{};
     db_expression update_where_{};
     bool do_nothing_{false};
     // MariaDB matches any unique key. This explicit mode does not pretend to
@@ -1051,7 +1069,7 @@ public:
     db_statement(const db_statement&) = delete;
     db_statement& operator=(const db_statement&) = delete;
     db_statement(db_statement&&) noexcept = default;
-    db_statement& operator=(db_statement&&) = delete;
+    db_statement& operator=(db_statement&& other);
     [[nodiscard]] std::string_view sql() const& noexcept {
         return sql_;
     }
@@ -1107,7 +1125,7 @@ public:
     [[nodiscard]] bool has_writes() const;
     [[nodiscard]] bool has_grouping() const;
     db_query& cache(const db_cache_setting_type& setting);
-    db_query& cache(std::string_view id, std::optional<std::chrono::milliseconds> milliseconds = {});
+    db_query& cache(std::string_view id, std::optional<std::chrono::milliseconds> duration = {});
 
     // Trusted SQL syntax interleaved with expression arguments. Values belong in
     // value() arguments, never in the syntax strings. parts.size() == args.size()+1.
@@ -1234,6 +1252,7 @@ public:
     db_query& where(db_expression predicate);
     db_query& and_where(db_expression predicate);
     db_query& or_where(db_expression predicate);
+    db_query& clear_where();
     db_query& group_by(std::span<const db_expression> expressions);
     db_query& group_by(std::initializer_list<db_expression> expressions) {
         return group_by(std::span<const db_expression>(expressions.begin(), expressions.size()));
@@ -1242,6 +1261,7 @@ public:
     db_query& having(db_expression predicate);
     db_query& and_having(db_expression predicate);
     db_query& or_having(db_expression predicate);
+    db_query& clear_having();
     db_query& order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value);
     db_query& add_order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value);
     db_query& clear_order();

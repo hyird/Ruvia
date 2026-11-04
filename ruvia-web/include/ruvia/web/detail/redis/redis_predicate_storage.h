@@ -126,7 +126,8 @@ struct redis_predicate_node final {
         literal,
         binary,
         between,
-        list };
+        list,
+        logical_not };
 
     explicit redis_predicate_node(kind_type kind, std::pmr::memory_resource* resource)
         : kind_(kind),

@@ -99,18 +99,21 @@ http1_deferred_access_log::http1_deferred_access_log(std::pmr::polymorphic_alloc
       text_(allocator) {}
 
 void http1_deferred_access_log::defer(std::size_t head_end, const http_request& request,
-    std::string_view client_address, std::chrono::steady_clock::time_point start, http_status_code status,
+    std::string_view remote_address, std::string_view client_address,
+    std::chrono::steady_clock::time_point start, http_status_code status,
     const request_io_metrics& io_metrics) {
     const auto method = request.method();
     const auto path = request.path();
     const auto text_begin = text_.size();
-    const auto required_text = text_begin + method.size() + path.size() + client_address.size();
+    const auto required_text =
+        text_begin + method.size() + path.size() + remote_address.size() + client_address.size();
     if (required_text > text_.capacity()) {
         text_.reserve(
             std::max<std::size_t>(required_text, std::max<std::size_t>(256, text_.capacity() * 2)));
     }
     text_.append(method);
     text_.append(path);
+    text_.append(remote_address);
     text_.append(client_address);
     if (entries_.size() == entries_.capacity()) {
         entries_.reserve(std::max<std::size_t>(8, entries_.capacity() * 2));
@@ -120,7 +123,8 @@ void http1_deferred_access_log::defer(std::size_t head_end, const http_request& 
         .text_begin_ = text_begin,
         .method_bytes_ = method.size(),
         .path_bytes_ = path.size(),
-        .address_bytes_ = client_address.size(),
+        .remote_address_bytes_ = remote_address.size(),
+        .client_address_bytes_ = client_address.size(),
         .start_ = start,
         .io_metrics_ = io_metrics,
         .known_method_ = request.known_method(),
@@ -141,7 +145,11 @@ void http1_deferred_access_log::complete(const access_log_sink& access_log, std:
             .known_method_ = entry.known_method_,
             .path_ = fields.substr(entry.method_bytes_, entry.path_bytes_),
             .protocol_version_ = entry.protocol_version_,
-            .remote_address_ = fields.substr(entry.method_bytes_ + entry.path_bytes_, entry.address_bytes_),
+            .remote_address_ =
+                fields.substr(entry.method_bytes_ + entry.path_bytes_, entry.remote_address_bytes_),
+            .client_address_ = fields.substr(
+                entry.method_bytes_ + entry.path_bytes_ + entry.remote_address_bytes_,
+                entry.client_address_bytes_),
             .status_ = entry.status_,
             .duration_micros_ = access_log_record_access::duration_since(entry.start_),
             .db_count_ = entry.io_metrics_.db_count_,

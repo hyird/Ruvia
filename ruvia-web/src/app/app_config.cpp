@@ -26,49 +26,112 @@ application& application::load_dotenv(const std::filesystem::path& path, dotenv_
         [&](detail::app_state& state_value) { detail::load_env_from_file(state_value.env_, path, options); });
 }
 
+namespace {
+
+void append_listen_config(
+    std::pmr::vector<detail::http_server_listener_definition>& replacement, const listen_config& config) {
+    const auto address = detail::normalize_listen_address(config.address_.view());
+    if (!config.http_.has_value() && !config.https_.has_value()) {
+        throw std::invalid_argument("listen config must enable HTTP, HTTPS, or both");
+    }
+    detail::ensure_non_zero_optional_port(config.http_, "HTTP listen port must not be zero");
+    detail::ensure_non_zero_optional_port(config.https_, "HTTPS listen port must not be zero");
+    if (config.http_.has_value() && config.http_ == config.https_) {
+        throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
+    }
+    if (config.auto_https_redirect_ &&
+        (!config.http_.has_value() || !config.https_.has_value())) {
+        throw std::invalid_argument(
+            "automatic HTTPS redirect requires both HTTP and HTTPS ports");
+    }
+
+    if (!config.https_.has_value() && detail::has_tls_configuration(config.tls_)) {
+        throw std::invalid_argument("TLS config requires an HTTPS listen port");
+    }
+
+    const auto ensure_unique_endpoint = [&](const asio::ip::tcp::endpoint& endpoint) {
+        for (const auto& existing : replacement) {
+            if (existing.endpoint_ == endpoint) {
+                throw std::invalid_argument("duplicate listen endpoint");
+            }
+        }
+    };
+
+    if (config.http_.has_value()) {
+        const auto endpoint = asio::ip::tcp::endpoint(address, config.http_->value());
+        ensure_unique_endpoint(endpoint);
+        if (config.auto_https_redirect_) {
+            replacement.emplace_back(endpoint,
+                detail::http_server_listener_definition::redirect_http_to_https{config.https_->value()});
+        } else {
+            replacement.emplace_back(endpoint);
+        }
+    }
+    if (config.https_.has_value()) {
+        const auto endpoint = asio::ip::tcp::endpoint(address, config.https_->value());
+        ensure_unique_endpoint(endpoint);
+        // Credentials load once, here; the definition keeps no file name or password.
+        auto tls = detail::load_http_server_tls(config.tls_, replacement.get_allocator().resource());
+        replacement.emplace_back(endpoint, std::move(tls));
+    }
+}
+
+class tls_password_span_cleanser final {
+public:
+    explicit tls_password_span_cleanser(std::span<const listen_config> configs) noexcept
+        : configs_(configs) {}
+
+    ~tls_password_span_cleanser() {
+        for (const auto& config : configs_) {
+            detail::tls_password_cleanser cleanser(const_cast<tls_config&>(config.tls_));
+        }
+    }
+
+    tls_password_span_cleanser(const tls_password_span_cleanser&) = delete;
+    tls_password_span_cleanser& operator=(const tls_password_span_cleanser&) = delete;
+
+private:
+    std::span<const listen_config> configs_;
+};
+
+}  // namespace
+
 application& application::listen(listen_config config) {
     const detail::tls_password_cleanser password_cleanser(config.tls_);
     return detail::mutate_stopped_app(*this, *state_, "cannot change listeners while app is running",
         [&config](detail::app_state& state_value) {
-            const auto address = detail::normalize_listen_address(config.address_.view());
-            if (!config.http_.has_value() && !config.https_.has_value()) {
-                throw std::invalid_argument("listen config must enable HTTP, HTTPS, or both");
-            }
-            detail::ensure_non_zero_optional_port(config.http_, "HTTP listen port must not be zero");
-            detail::ensure_non_zero_optional_port(config.https_, "HTTPS listen port must not be zero");
-            if (config.http_.has_value() && config.http_ == config.https_) {
-                throw std::invalid_argument("HTTP and HTTPS listen ports must be different");
-            }
-            if (config.auto_https_redirect_ &&
-                (!config.http_.has_value() || !config.https_.has_value())) {
-                throw std::invalid_argument(
-                    "automatic HTTPS redirect requires both HTTP and HTTPS ports");
-            }
-
-            if (!config.https_.has_value() && detail::has_tls_configuration(config.tls_)) {
-                throw std::invalid_argument("TLS config requires an HTTPS listen port");
-            }
-
             auto* const resource = process_resource();
             std::pmr::vector<detail::http_server_listener_definition> replacement(resource);
             replacement.reserve(config.http_.has_value() && config.https_.has_value() ? 2 : 1);
-            if (config.http_.has_value()) {
-                const auto endpoint = asio::ip::tcp::endpoint(address, config.http_->value());
-                if (config.auto_https_redirect_) {
-                    replacement.emplace_back(endpoint,
-                        detail::http_server_listener_definition::redirect_http_to_https{config.https_->value()});
-                } else {
-                    replacement.emplace_back(endpoint);
-                }
+            append_listen_config(replacement, config);
+            state_value.listeners_ = std::move(replacement);
+        });
+}
+
+application& application::listen(std::span<const listen_config> configs) {
+    const tls_password_span_cleanser password_cleanser(configs);
+    return detail::mutate_stopped_app(*this, *state_, "cannot change listeners while app is running",
+        [configs](detail::app_state& state_value) {
+            if (configs.empty()) {
+                throw std::invalid_argument("listen config list must not be empty");
             }
-            if (config.https_.has_value()) {
-                // Credentials load once, here; the definition keeps no file name or password.
-                auto tls = detail::load_http_server_tls(config.tls_, resource);
-                replacement.emplace_back(asio::ip::tcp::endpoint(address, config.https_->value()),
-                    std::move(tls));
+            auto* const resource = process_resource();
+            std::pmr::vector<detail::http_server_listener_definition> replacement(resource);
+            std::size_t endpoint_count = 0;
+            for (const auto& config : configs) {
+                endpoint_count += static_cast<std::size_t>(config.http_.has_value()) +
+                                  static_cast<std::size_t>(config.https_.has_value());
+            }
+            replacement.reserve(endpoint_count);
+            for (const auto& config : configs) {
+                append_listen_config(replacement, config);
             }
             state_value.listeners_ = std::move(replacement);
         });
+}
+
+application& application::listen(std::initializer_list<listen_config> configs) {
+    return listen(std::span<const listen_config>(configs.begin(), configs.size()));
 }
 
 application& application::server(server_config config) {
@@ -80,13 +143,35 @@ application& application::server(server_config config) {
 application& application::on_start(app_hook hook) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_start hook while app is running",
-        [&hook](detail::app_state& state_value) { state_value.on_start_hooks_.push_back(std::move(hook)); });
+        [&hook](detail::app_state& state_value) {
+            if (!hook) {
+                throw std::invalid_argument("on_start hook must not be null");
+            }
+            state_value.on_start_hooks_.push_back(std::move(hook));
+        });
+}
+
+application& application::on_start(std::nullptr_t) {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot register on_start hook while app is running",
+        [](detail::app_state& state_value) { state_value.on_start_hooks_.clear(); });
 }
 
 application& application::on_stop(app_hook hook) {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_stop hook while app is running",
-        [&hook](detail::app_state& state_value) { state_value.on_stop_hooks_.push_back(std::move(hook)); });
+        [&hook](detail::app_state& state_value) {
+            if (!hook) {
+                throw std::invalid_argument("on_stop hook must not be null");
+            }
+            state_value.on_stop_hooks_.push_back(std::move(hook));
+        });
+}
+
+application& application::on_stop(std::nullptr_t) {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot register on_stop hook while app is running",
+        [](detail::app_state& state_value) { state_value.on_stop_hooks_.clear(); });
 }
 
 application& application::rate_limit(rate_limit_config config) {

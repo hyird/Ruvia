@@ -105,7 +105,7 @@ void task_scope::request_stop() & noexcept {
     }
 }
 
-stop_token task_scope::get_stop_token() const& {
+stop_token task_scope::token() const& {
     if (!stop_source_) {
         stop_source_.emplace();
         if (stop_requested_) {

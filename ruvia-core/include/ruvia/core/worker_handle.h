@@ -43,7 +43,7 @@ class worker_dispatcher;
 struct worker_handle_access;
 }  // namespace detail
 
-class worker_handle {
+class worker_handle final {
 public:
     worker_handle() noexcept = default;
 

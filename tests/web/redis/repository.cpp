@@ -48,7 +48,7 @@ RUVIA_REDIS_ENTITY(test_redis_user, "users",
 
 const ruvia::redis_repository_config test_redis_repository_config{
     .prefix_ = "users",
-    .indexes_ = {{.field_ = "name", .kind_ = redis_index_kind::tag}},
+    .indexes_ = {{.column_ = "name", .kind_ = redis_index_kind::tag}},
 };
 
 RUVIA_REDIS_ENTITY(test_redis_unsigned_pk_user, "upk_users",
@@ -689,14 +689,14 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
             RUVIA_CHECK(throws_invalid_argument([&] { (void)repository.count({.skip_ = invalid}); }));
         }
         RUVIA_CHECK(throws_invalid_argument([&] {
-            (void)repository.exists({.order_ = ruvia::redis_find_order{.field_ = "missing_field"}});
+            (void)repository.exists({.order_ = ruvia::redis_find_order{.column_ = "missing_field"}});
         }));
 
         const ruvia::redis_repository_config indexed_user_config{
             .prefix_ = "users",
             .indexes_ = {
-                {.field_ = "id", .kind_ = redis_index_kind::tag},
-                {.field_ = "age", .kind_ = redis_index_kind::numeric},
+                {.column_ = "id", .kind_ = redis_index_kind::tag},
+                {.column_ = "age", .kind_ = redis_index_kind::numeric},
             },
         };
         const auto indexed_users = client.handle().repository<test_redis_user>(indexed_user_config);
@@ -714,7 +714,7 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
         }));
 
         const auto unsigned_repo = client.handle().repository<test_redis_unsigned_pk_user>(
-            {.prefix_ = "upk_users", .indexes_ = {{.field_ = "id", .kind_ = redis_index_kind::numeric}}});
+            {.prefix_ = "upk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
         test_redis_unsigned_pk_user unsigned_changes;
         unsigned_changes.set<"name">("Alice");
         RUVIA_CHECK(throws_invalid_argument([&] {
@@ -728,7 +728,7 @@ RUVIA_TEST(redis_repository_rejects_invalid_input_before_io) {
         }));
 
         const auto signed_repo = client.handle().repository<test_redis_signed_pk_user>(
-            {.prefix_ = "spk_users", .indexes_ = {{.field_ = "id", .kind_ = redis_index_kind::numeric}}});
+            {.prefix_ = "spk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
         test_redis_signed_pk_user signed_changes;
         signed_changes.set<"name">("Bob");
         RUVIA_CHECK(throws_invalid_argument([&] {

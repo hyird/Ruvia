@@ -70,8 +70,12 @@ task<void> websocket_http2_transport::connect() {
     const auto negotiated =
         validate_http2_websocket_client_response(config.negotiation_, *response_, !response_stream_ended_);
     if ((negotiated.index() != 0)) {
+        const auto error = std::get<1>(negotiated);
         throw websocket_client_error(websocket_client_error::code_type::handshake_rejected,
-            "invalid HTTP/2 WebSocket handshake response");
+            "invalid HTTP/2 WebSocket handshake response",
+            error == websocket_client_handshake_error::response_status
+                ? std::optional<http_status_code>(response_->status())
+                : std::nullopt);
     }
     owner_.selected_subprotocol_.assign(std::get<0>(negotiated).selected_subprotocol_);
     owner_.negotiated_compression_ = std::get<0>(negotiated).compression_;

@@ -49,10 +49,7 @@ RUVIA_MODEL(user_response, RUVIA_OPTIONAL_FIELD(id, ruvia::string),
 
 ruvia::task<ruvia::http_response> example_error_handler(
     ruvia::context& c, ruvia::http_error_info error) {
-    co_return c.error({.status_ = error.status(),
-        .code_ = error.code(),
-        .message_ = error.message(),
-        .status_text_ = error.status_text()});
+    co_return c.error(error);
 }
 
 // Prefix-scoped fallbacks: the longest matching registered prefix wins, on
@@ -66,10 +63,7 @@ ruvia::task<ruvia::http_response> api_not_found(ruvia::context& c) {
 
 ruvia::task<ruvia::http_response> api_error(ruvia::context& c, ruvia::http_error_info error) {
     c.policy().header("X-Api-Error", "true");
-    co_return c.error({.status_ = error.status(),
-        .code_ = error.code(),
-        .message_ = error.message(),
-        .status_text_ = error.status_text()});
+    co_return c.error(error);
 }
 
 class basic_http_controller final {
@@ -123,16 +117,8 @@ private:
         body.append("\nuser-agent=");
         body.append(c.req().header("User-Agent").value_or(""));
         body.append("\npage=");
-        std::uint32_t page = 1;
-        if (auto raw = c.req().query("page")) {
-            auto parsed_value = ruvia::parse_integer<std::uint32_t>(*raw);
-            if (parsed_value.index() != 0) {
-                co_return c.error({.status_ = ruvia::http_status::bad_request,
-                    .code_ = "invalid_page",
-                    .message_ = "page must be a uint32 decimal integer"});
-            }
-            page = std::max(std::uint32_t{1}, std::get<0>(parsed_value));
-        }
+        const std::uint32_t page =
+            std::max(std::uint32_t{1}, c.req().query<std::uint32_t>("page").value_or(1));
         char buffer[16]{};
         const auto [ptr, ec] = std::to_chars(buffer, buffer + sizeof(buffer), page);
         if (ec == std::errc{}) {

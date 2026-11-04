@@ -21,6 +21,12 @@ enum class http_known_method : std::uint8_t {
     unknown
 };
 
+[[nodiscard]] constexpr std::uint32_t http_known_method_bit(http_known_method method) noexcept {
+    return method == http_known_method::unknown
+               ? 0U
+               : (std::uint32_t{1} << static_cast<std::uint32_t>(method));
+}
+
 // HTTP methods are an extensible, case-sensitive token space. http_known_method is
 // only the framework's fixed semantic classification; it is never the wire value.
 [[nodiscard]] http_known_method classify_http_method(std::string_view method) noexcept;

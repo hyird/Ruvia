@@ -8,6 +8,7 @@
 // external sans-I/O driver that follows the framing plan. Socket/TLS
 // configuration, pools, redirect limits, and timeouts also belong there.
 
+#include <cstddef>
 #include <cstdint>
 #include <memory_resource>
 #include <optional>
@@ -126,6 +127,11 @@ public:
     [[nodiscard]] static constexpr http_client_request_content_view bytes(
         std::string_view value) noexcept {
         return http_client_request_content_view(http_client_request_bytes_view(value));
+    }
+
+    [[nodiscard]] static http_client_request_content_view bytes(
+        std::span<const std::byte> value) noexcept {
+        return bytes(std::string_view(reinterpret_cast<const char*>(value.data()), value.size()));
     }
 
     template <typename traits_type, typename allocator_type>

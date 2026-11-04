@@ -2,33 +2,22 @@
 
 #include <algorithm>
 #include <chrono>
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
-#include <initializer_list>
-#include <memory>
-#include <memory_resource>
 #include <optional>
-#include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <type_traits>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/memory_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
-#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/detail/callback.h"
@@ -247,6 +236,10 @@ public:
         return path_;
     }
 
+    [[nodiscard]] constexpr std::string_view client_address() const noexcept {
+        return client_address_;
+    }
+
     [[nodiscard]] constexpr std::string_view remote_address() const noexcept {
         return remote_address_;
     }
@@ -287,6 +280,7 @@ private:
         std::string_view path_;
         http_protocol_version protocol_version_;
         std::string_view remote_address_;
+        std::string_view client_address_;
         http_status_code status_;
         std::uint64_t duration_micros_;
         std::uint64_t db_count_{0};
@@ -299,6 +293,7 @@ private:
         : method_(fields.method_),
           path_(fields.path_),
           remote_address_(fields.remote_address_),
+          client_address_(fields.client_address_.empty() ? fields.remote_address_ : fields.client_address_),
           duration_micros_(fields.duration_micros_),
           db_count_(fields.db_count_),
           db_duration_micros_(fields.db_duration_micros_),
@@ -311,6 +306,7 @@ private:
     std::string_view method_;
     std::string_view path_;
     std::string_view remote_address_;
+    std::string_view client_address_;
     std::uint64_t duration_micros_;
     std::uint64_t db_count_{0};
     std::uint64_t db_duration_micros_{0};

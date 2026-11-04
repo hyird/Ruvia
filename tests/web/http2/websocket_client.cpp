@@ -487,7 +487,11 @@ void exercise_handshake_end(ruvia::testing::test_context& ruvia_ctx, handshake_e
             co_await client.connect();
             connected = true;
             const auto client_handle = client.handle();
-            closed_by_peer = !(co_await client_handle.read());
+            closed_by_peer = !(co_await client_handle.read()) &&
+                             client_handle.peer_close_code() == std::uint16_t{1000} &&
+                             client_handle.peer_close_reason() == std::string_view("bye") &&
+                             client.peer_close_code() == std::uint16_t{1000} &&
+                             client.peer_close_reason() == std::string_view("bye");
         } catch (const ruvia::websocket_client_error& error) {
             connect_error = error.code();
         } catch (...) {

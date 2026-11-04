@@ -41,7 +41,7 @@
 
 ## 分层与目录
 
-| 库目录 | 公开 Target / 命名空间 | 职责与依赖边界 |
+|库目录|公开 Target（统一顶层 `namespace ruvia`）|职责与依赖边界|
 | --- | --- | --- |
 | `ruvia-core` | `ruvia::core` | 独立运行时底座：协程任务、事件循环、有界通道、阻塞卸载池；不含 HTTP/Web 语义，不公开依赖 TLS、压缩或数据后端 |
 | `ruvia-http` | `ruvia::http` | 独立 sans-I/O 协议层：HTTP/1.0、HTTP/1.1、HTTP/2 消息、分帧、连接、压缩编解码与 WebSocket 协议语义；不依赖 `core`、Asio、socket 或 OpenSSL |

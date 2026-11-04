@@ -157,7 +157,7 @@ task<void> demonstrate_cache(db_client& db) {
     auto handle = db.handle();
     auto devices = handle.repository<device>();
     const std::array<db_find_order, 1> cache_order{{{"id"}}};
-    const db_find_options options{.order_ = cache_order, .take_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .milliseconds_ = std::chrono::seconds(30)}};
+    const db_find_options options{.order_ = cache_order, .take_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .duration_ = std::chrono::seconds(30)}};
     auto [page, total] = co_await devices.find_and_count(options);
     std::cout << "cached page=" << page.size() << ", total=" << total << '\n';
     auto query = devices.query_builder();
@@ -191,7 +191,7 @@ task<void> run(const db_config& settings, event_loop_attachment& attachment) {
             co_await redis->connect();
             auto store_value = redis->handle();
             db = std::make_unique<db_client>(attachment.loop(), settings, store_value,
-                db_cache_config{.name_space_ = "orm-demo"});
+                db_cache_config{.key_prefix_ = "orm-demo"});
 #else
             (void)port;
             throw std::invalid_argument("ORM query caching requires Redis support");

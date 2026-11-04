@@ -165,6 +165,10 @@ public:
         return issues_.empty();
     }
 
+    [[nodiscard]] bool valid() const noexcept {
+        return ok();
+    }
+
     [[nodiscard]] const issue_list_type& issues() const& noexcept {
         return issues_;
     }
@@ -244,6 +248,71 @@ template <typename t_type>
     return std::move(*parsed_value);
 }
 
+template <typename t_type>
+    requires detail::is_model_field<t_type>
+[[nodiscard]] inline std::optional<t_type> json_value::get() const {
+    auto parsed_value = detail::parse_json_document<t_type>(view(), resource_, detail::model_string_storage::borrowed);
+    if (!parsed_value) {
+        return std::nullopt;
+    }
+    if constexpr (detail::model_validation_access::contains_model<t_type>()) {
+        validator validator_value({.resource_ = resource_});
+        detail::model_validation_access::validate_value(*parsed_value, validator_value);
+        if (!validator_value.valid()) {
+            return std::nullopt;
+        }
+    }
+    return parsed_value;
+}
+
+template <typename t_type>
+    requires detail::is_model_field<t_type>
+[[nodiscard]] inline std::optional<t_type> json_object::get(std::string_view field) const {
+    auto* const resource = resource_;
+    std::optional<t_type> result;
+    bool last_match_failed = false;
+    const auto visited = detail::visit_json_object_fields(resolved_pmr_resource_tag{}, view(),
+        resource, [&](std::string_view key, std::string_view value_view) {
+            if (key != field) {
+                return true;
+            }
+
+            detail::skip_json_whitespace(value_view);
+            auto value = detail::parse_json_document<t_type>(value_view, resource,
+                detail::model_string_storage::borrowed);
+            if (!value) {
+                result.reset();
+                last_match_failed = true;
+                return true;
+            }
+            if constexpr (detail::model_validation_access::contains_model<t_type>()) {
+                validator validator_value({.resource_ = resource});
+                detail::model_validation_access::validate_value(*value, validator_value);
+                if (!validator_value.valid()) {
+                    result.reset();
+                    last_match_failed = true;
+                    return true;
+                }
+            }
+            result.emplace(std::move(*value));
+            last_match_failed = false;
+            return true;
+        });
+
+    if (visited != detail::json_object_visit_result::complete || last_match_failed) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+template <typename t_type>
+    requires detail::is_model_field<t_type>
+[[nodiscard]] inline std::optional<t_type> json_value::get(std::string_view field) const {
+    if (!is_object()) {
+        return std::nullopt;
+    }
+    return json_object(resolved_pmr_resource_tag{}, view(), resource_).get<t_type>(field);
+}
 }  // namespace ruvia
 
 // RUVIA_MIN / RUVIA_MAX constrain a field's magnitude. For a number field this
@@ -264,9 +333,9 @@ template <typename t_type>
 // Patterns are limited to 256 bytes and bounded matching work. Exceeding a
 // match limit fails validation. Use RUVIA_CUSTOM for matching syntax outside
 // this dialect.
-#define RUVIA_PATTERN(message, pattern) \
+#define RUVIA_PATTERN(pattern, message) \
     ::ruvia::detail::model::pattern_rule<pattern, ::ruvia::fixed_string{message}>
-#define RUVIA_CUSTOM(message, predicate) \
+#define RUVIA_CUSTOM(predicate, message) \
     ::ruvia::detail::model::custom<predicate, ::ruvia::fixed_string{message}>
 
 namespace ruvia {

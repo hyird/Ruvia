@@ -118,11 +118,11 @@ public:
 
     [[nodiscard]] std::filesystem::path path() const;
 
+private:
     struct state_deleter_type final {
         void operator()(detail::static_root_state* state) const noexcept;
     };
 
-private:
     explicit static_root(std::unique_ptr<detail::static_root_state, state_deleter_type> state) noexcept;
     friend class detail::static_root_access;
 

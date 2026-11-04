@@ -19,7 +19,7 @@ using ruvia::http_known_method;
 using ruvia::http_response;
 
 constexpr std::uint32_t method_bit(http_known_method method) {
-    return std::uint32_t{1} << static_cast<std::uint32_t>(method);
+    return ruvia::http_known_method_bit(method);
 }
 
 http_response make_response() {

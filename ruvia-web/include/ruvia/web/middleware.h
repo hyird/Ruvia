@@ -159,7 +159,7 @@ private:
 };
 
 // A middleware is any final class with a public
-//     task<void> handle(context&, next&)
+//     task<void> handle(context&, next&) [const]
 // member. It derives from nothing: the framework composes it through per-type
 // entry points and reads its route properties from static members. A
 // middleware that produces the response calls context::respond() before it
@@ -172,7 +172,7 @@ private:
 // context so app.h does not pull it in.
 template <typename middleware_type>
 concept middleware = std::is_class_v<middleware_type> && std::is_final_v<middleware_type> &&
-                     requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::handle); };
+                     (requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::handle); } || requires { static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::handle); });
 
 template <typename policy_type>
 concept route_policy =

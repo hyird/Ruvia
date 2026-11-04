@@ -16,6 +16,7 @@
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_datagram.h"
 
 namespace ruvia {
@@ -45,10 +46,19 @@ public:
     [[nodiscard]] std::uint64_t type() const noexcept {
         return type_;
     }
-    [[nodiscard]] std::string_view payload() const& noexcept {
+    [[nodiscard]] std::string_view payload() const& noexcept RUVIA_LIFETIMEBOUND {
         return payload_ ? std::string_view(*payload_) : std::string_view{};
     }
     std::string_view payload() const&& = delete;
+    [[nodiscard]] std::span<const std::byte> bytes() const& noexcept RUVIA_LIFETIMEBOUND {
+        const auto view = payload();
+        return std::as_bytes(std::span(view.data(), view.size()));
+    }
+    std::span<const std::byte> bytes() const&& = delete;
+    [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND {
+        return payload();
+    }
+    std::string_view text() const&& = delete;
 
 private:
     friend class http_capsule_stream;
@@ -109,12 +119,21 @@ public:
     http_datagram& operator=(const http_datagram&) = delete;
     http_datagram(http_datagram&&) noexcept = default;
     http_datagram& operator=(http_datagram&&) noexcept = default;
-    [[nodiscard]] std::span<const std::byte> payload() const& noexcept {
-        auto bytes_value = capsule_.payload();
-        bytes_value.remove_prefix(std::min(offset_, bytes_value.size()));
-        return std::as_bytes(std::span(bytes_value.data(), bytes_value.size()));
+    [[nodiscard]] std::span<const std::byte> payload() const& noexcept RUVIA_LIFETIMEBOUND {
+        const auto view = text();
+        return std::as_bytes(std::span(view.data(), view.size()));
     }
     std::span<const std::byte> payload() const&& = delete;
+    [[nodiscard]] std::span<const std::byte> bytes() const& noexcept RUVIA_LIFETIMEBOUND {
+        return payload();
+    }
+    std::span<const std::byte> bytes() const&& = delete;
+    [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND {
+        auto bytes_value = capsule_.payload();
+        bytes_value.remove_prefix(std::min(offset_, bytes_value.size()));
+        return bytes_value;
+    }
+    std::string_view text() const&& = delete;
 
 private:
     friend class http_datagram_stream;
@@ -143,6 +162,12 @@ public:
     task<void> send(std::span<const std::byte>) && = delete;
     [[nodiscard]] task<void> send(std::string_view payload) &;
     task<void> send(std::string_view) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] task<void> send(string_type&& payload) & {
+        return send(std::string_view(payload));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> send(string_type&&) && = delete;
     [[nodiscard]] task<void> finish() & {
         return stream_.finish();
     }
@@ -171,8 +196,6 @@ private:
 // send() owns its payload before returning.
 class http_udp_tunnel final {
 public:
-    explicit http_udp_tunnel(http_datagram_stream stream) noexcept
-        : stream_(std::move(stream)) {}
     http_udp_tunnel(const http_udp_tunnel&) = delete;
     http_udp_tunnel& operator=(const http_udp_tunnel&) = delete;
     http_udp_tunnel(http_udp_tunnel&&) noexcept = default;
@@ -183,6 +206,12 @@ public:
     task<void> send(std::span<const std::byte>) && = delete;
     [[nodiscard]] task<void> send(std::string_view payload) &;
     task<void> send(std::string_view) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] task<void> send(string_type&& payload) & {
+        return send(std::string_view(payload));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> send(string_type&&) && = delete;
     [[nodiscard]] task<void> finish() & {
         return stream_.finish();
     }
@@ -193,6 +222,10 @@ public:
     void abort() && = delete;
 
 private:
+    friend class http_tunnel;
+    friend class http_client_tunnel;
+    explicit http_udp_tunnel(http_datagram_stream stream) noexcept
+        : stream_(std::move(stream)) {}
     http_datagram_stream stream_;
 };
 struct http_tunnel_route_config final {
@@ -262,9 +295,12 @@ private:
     http_tunnel(std::pmr::memory_resource& resource, const worker_handle& worker_value,
         void* target, read_type read, write_type write, finish_type finish_value, abort_type abort,
         bool datagrams) noexcept;
+    [[nodiscard]] task<std::optional<std::pmr::string>> read_raw();
     [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes);
+    [[nodiscard]] task<void> write_raw(std::pmr::string&& bytes);
     void abort_input(bool malformed) noexcept;
     void require_active() const;
+    void require_unadapted() const;
     std::pmr::memory_resource& resource_;
     const worker_handle& worker_;
     void* target_;
@@ -273,6 +309,7 @@ private:
     finish_type finish_;
     abort_type abort_;
     bool datagrams_;
+    bool adapted_{false};
     bool read_active_{false};
     bool write_active_{false};
     bool send_ended_{false};

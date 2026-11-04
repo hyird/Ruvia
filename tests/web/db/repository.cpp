@@ -1758,4 +1758,20 @@ static_assert(db_upsert_options_accepts_conflict_paths<const std::vector<ruvia::
 static_assert(!db_upsert_options_accepts_conflict_paths<std::vector<ruvia::borrowed_text>>);
 static_assert(!db_upsert_options_accepts_conflict_paths<std::array<ruvia::borrowed_text, 1>>);
 
+template <typename columns_type>
+concept db_conflict_options_accepts_columns = requires(columns_type&& columns) {
+    ruvia::db_conflict_options{.columns_ = std::forward<columns_type>(columns)};
+};
+
+template <typename partition_type>
+concept db_window_options_accepts_partition = requires(partition_type&& partitions) {
+    ruvia::db_window_options{.partition_by_ = std::forward<partition_type>(partitions)};
+};
+
+static_assert(db_conflict_options_accepts_columns<const std::vector<ruvia::borrowed_text>&>);
+static_assert(!db_conflict_options_accepts_columns<std::vector<ruvia::borrowed_text>>);
+static_assert(!db_conflict_options_accepts_columns<std::array<ruvia::borrowed_text, 1>>);
+static_assert(db_window_options_accepts_partition<const std::vector<ruvia::db_expr>&>);
+static_assert(!db_window_options_accepts_partition<std::vector<ruvia::db_expr>>);
+static_assert(!db_window_options_accepts_partition<std::array<ruvia::db_expr, 1>>);
 }  // namespace

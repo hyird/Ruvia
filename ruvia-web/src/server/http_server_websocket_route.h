@@ -50,7 +50,8 @@ struct http1_websocket_upgrade_commit final {
             co_return std::nullopt;
         }
         tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
-        co_return websocket_upgrade_commit<stream_type>(dispatch_.stream_, handshake.compression());
+        co_return websocket_upgrade_commit<stream_type>(
+            dispatch_.stream_, handshake.compression(), handshake.subprotocol(), dispatch_.memory_.resource());
     }
 };
 

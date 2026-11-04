@@ -757,6 +757,11 @@ RUVIA_TEST(request_memory_fork_uses_the_configured_initial_buffer_bytes) {
         std::array<std::byte, 256> initial;
         ruvia::request_memory parent(worker, initial);
         const ruvia::request_memory child_value = parent.fork();
+        const auto& const_worker = worker;
+        auto worker_alloc = const_worker.allocator<int>();
+        auto req_alloc = child_value.allocator<int>();
+        static_cast<void>(worker_alloc);
+        static_cast<void>(req_alloc);
         const auto live_before = upstream.live_bytes_;
         // Two allocations that only fit one block of the configured size. The
         // pool may add bookkeeping allocations of its own, so bytes are what prove

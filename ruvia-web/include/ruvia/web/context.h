@@ -42,6 +42,7 @@
 #include "ruvia/web/detail/http/request/request_fields_access.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/integer.h"
 #include "ruvia/web/model.h"
 namespace ruvia {
 
@@ -368,6 +369,14 @@ public:
     [[nodiscard]] std::optional<std::string_view> cookie(std::string_view name) const;
     [[nodiscard]] std::optional<std::string_view> param(std::string_view name) const;
 
+    template <detail::parsed_integer t_type>
+    [[nodiscard]] std::optional<t_type> query(std::string_view name) const;
+    template <std::same_as<bool> t_type>
+    [[nodiscard]] std::optional<bool> query(std::string_view name) const;
+    template <detail::parsed_integer t_type>
+    [[nodiscard]] std::optional<t_type> param(std::string_view name) const;
+    template <std::same_as<bool> t_type>
+    [[nodiscard]] std::optional<bool> param(std::string_view name) const;
     // Materialized once in request order, preserving duplicates. Header names
     // retain their semantic spelling; header get/count
     // and header_model binding compare names ASCII case-insensitively.
@@ -556,10 +565,10 @@ public:
     context_request req() const&& = delete;
 
     // Connection metadata borrows this request's transport state.
-    [[nodiscard]] conn_info conn() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const conn_info& conn() const& noexcept RUVIA_LIFETIMEBOUND {
         return conn_info_;
     }
-    conn_info conn() const&& = delete;
+    const conn_info& conn() const&& = delete;
 
     // The exception that failed the current middleware/handler dispatch, or
     // null. Distinct from error(status, code, message) which constructs an
@@ -570,9 +579,10 @@ public:
 
     // Borrowed for this request. Copy the returned handle when it must outlive
     // the handler; the copy owns a terminal-safe dispatcher endpoint.
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         return capabilities_.worker();
     }
+    const worker_handle& worker() const&& = delete;
 
     // Borrows this worker's registered instance; never hand it to another
     // worker. An unregistered type throws std::logic_error.
@@ -667,6 +677,10 @@ public:
     template <typename t_type>
     [[nodiscard]] const std::remove_cvref_t<t_type>& request_state() const;
 
+    template <typename t_type>
+    [[nodiscard]] const std::remove_cvref_t<t_type>* try_request_state() const noexcept {
+        return request_bindings().try_get_state<t_type>();
+    }
     [[nodiscard]] const ruvia::env& env() const noexcept;
 
     // Re-enter the immutable route table on this worker. Authentication,
@@ -687,6 +701,8 @@ public:
     [[nodiscard]] std::pmr::string url_for(
         std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
 
+    [[nodiscard]] std::pmr::string url_for(
+        std::string_view pattern, std::span<const std::string_view> values) const;
 #ifdef RUVIA_ENABLE_DATABASE
     [[nodiscard]] db_handle db() const;
     [[nodiscard]] db_handle db(std::string_view alias) const;
@@ -738,6 +754,7 @@ public:
     // 只读观察已选择的缓冲响应（不包含尚待应用的 policy）；没有响应则为 nullptr。
     [[nodiscard]] const http_response* response() const noexcept;
 
+    [[nodiscard]] bool committed() const noexcept;
     // 将独立响应移入 context；替换丢弃旧响应全部字段，不自动合并草稿。
     // next() 在 respond() 后启动是控制流错误；已提交后不得替换。
     void respond(http_response&& response);
@@ -763,7 +780,7 @@ public:
     [[nodiscard]] http_response text(static_text body);
 
     template <typename t_type>
-        requires detail::is_model<t_type>
+        requires detail::is_model_json_value<t_type>
     [[nodiscard]] http_response json(const t_type& value);
 
     [[nodiscard]] http_response html(std::string_view body);
@@ -792,6 +809,7 @@ public:
         const static_root& root, static_file_response_options options);
 
     [[nodiscard]] http_response error(http_error_info_options options) const;
+    [[nodiscard]] http_response error(const http_error_info& info) const;
 
     [[nodiscard]] task<http_response> not_found();
 

@@ -1,6 +1,8 @@
 #pragma once
 
+#include <charconv>
 #include <chrono>
+#include <cmath>
 #include <compare>
 #include <concepts>
 #include <cstddef>
@@ -20,6 +22,8 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/client_tcp_config.h"
+#include "ruvia/web/integer.h"
+#include "ruvia/web/model.h"
 #include "ruvia/web/tls_config.h"
 
 namespace ruvia {
@@ -32,7 +36,7 @@ class redis_hash_scan_result;
 class redis_z_scan_result;
 class redis_x_read_group_result;
 
-struct redis_config {
+struct redis_config final {
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
     std::string host_{"127.0.0.1"};
     // Checked before narrowing; must be non-zero.
@@ -272,7 +276,7 @@ private:
     std::optional<std::chrono::milliseconds> remaining_;
 };
 
-struct redis_scan_options {
+struct redis_scan_options final {
     // A scan options value may be retained before the command copies its
     // arguments. Keep MATCH zero-copy while rejecting owning-string rvalues
     // that would leave a saved options value with an already-dangling view.
@@ -559,6 +563,48 @@ private:
     code_type code_;
 };
 
+namespace detail {
+
+template <typename t_type>
+concept redis_text_scalar = std::is_same_v<t_type, std::remove_cv_t<t_type>> &&
+                            (std::is_same_v<t_type, bool> || is_model_integer<t_type> ||
+                                std::is_floating_point_v<t_type> || std::is_same_v<t_type, std::pmr::string> ||
+                                std::is_same_v<t_type, string> || std::is_same_v<t_type, std::string_view>);
+
+template <redis_text_scalar t_type>
+[[nodiscard]] t_type convert_redis_text(std::string_view text, std::pmr::memory_resource* resource) {
+    if constexpr (std::is_same_v<t_type, std::string_view>) {
+        return text;
+    } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
+        return std::pmr::string(text, resource);
+    } else if constexpr (std::is_same_v<t_type, string>) {
+        return string(text, model_options{.resource_ = resource});
+    } else if constexpr (std::is_same_v<t_type, bool>) {
+        if (text == "1" || text == "t" || text == "true" || text == "TRUE") {
+            return true;
+        }
+        if (text == "0" || text == "f" || text == "false" || text == "FALSE") {
+            return false;
+        }
+        throw redis_error(redis_error::code_type::protocol_error, "redis value is not a boolean");
+    } else if constexpr (std::is_floating_point_v<t_type>) {
+        t_type converted{};
+        const auto* const last = text.data() + text.size();
+        const auto [end, error] = std::from_chars(text.data(), last, converted);
+        if (error != std::errc{} || end != last || !std::isfinite(converted)) {
+            throw redis_error(redis_error::code_type::protocol_error, "redis value is not a valid number");
+        }
+        return converted;
+    } else {
+        const auto parsed = parse_integer<t_type>(text);
+        if (std::holds_alternative<integer_parse_error>(parsed)) {
+            throw redis_error(redis_error::code_type::protocol_error, "redis value is not a valid number");
+        }
+        return std::get<t_type>(parsed);
+    }
+}
+
+}  // namespace detail
 class redis_value final {
 public:
     // PMR containers construct every nested result in their own resource.
@@ -582,6 +628,21 @@ public:
 
     [[nodiscard]] kind_type kind() const noexcept;
     [[nodiscard]] bool null() const noexcept;
+    [[nodiscard]] bool is_null() const noexcept {
+        return null();
+    }
+    [[nodiscard]] bool is_string() const noexcept {
+        return kind() == kind_type::string;
+    }
+    [[nodiscard]] bool is_integer() const noexcept {
+        return kind() == kind_type::integer;
+    }
+    [[nodiscard]] bool is_array() const noexcept {
+        return kind() == kind_type::array;
+    }
+    [[nodiscard]] bool is_error() const noexcept {
+        return kind() == kind_type::error;
+    }
     [[nodiscard]] std::string_view string() const&;
     [[nodiscard]] std::string_view string() const&& = delete;
     [[nodiscard]] std::string_view error() const&;
@@ -589,6 +650,34 @@ public:
     [[nodiscard]] std::int64_t integer() const;
     [[nodiscard]] std::span<const redis_value> array() const&;
     [[nodiscard]] std::span<const redis_value> array() const&& = delete;
+
+    template <detail::redis_text_scalar t_type>
+    [[nodiscard]] std::optional<t_type> as() const& {
+        if (is_null()) {
+            return std::nullopt;
+        }
+        if (is_integer()) {
+            if constexpr (std::is_same_v<t_type, bool>) {
+                if (integer_ == 0) {
+                    return false;
+                }
+                if (integer_ == 1) {
+                    return true;
+                }
+                throw redis_error(redis_error::code_type::protocol_error, "redis value is not a boolean");
+            } else if constexpr (detail::is_model_integer<t_type>) {
+                if (!std::in_range<t_type>(integer_)) {
+                    throw redis_error(redis_error::code_type::protocol_error, "redis value is out of range");
+                }
+                return static_cast<t_type>(integer_);
+            } else if constexpr (std::is_floating_point_v<t_type>) {
+                return static_cast<t_type>(integer_);
+            }
+        }
+        return detail::convert_redis_text<t_type>(string(), string_.get_allocator().resource());
+    }
+    template <detail::redis_text_scalar t_type>
+    [[nodiscard]] std::optional<t_type> as() const&& = delete;
 
 private:
     friend class detail::redis_pool;

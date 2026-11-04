@@ -7,6 +7,8 @@
 #include <string_view>
 #include <type_traits>
 
+#include "ruvia/http/borrowed_text.h"
+
 namespace ruvia {
 
 class http_request;
@@ -56,15 +58,17 @@ public:
 
     // dns_name: the host text (percent-encoded unreserved octets decoded, a
     // single trailing dot stripped, letter case preserved). ipv4/ipv6: empty.
-    [[nodiscard]] constexpr std::string_view host() const noexcept {
+    [[nodiscard]] constexpr std::string_view host() const& noexcept RUVIA_LIFETIMEBOUND {
         return decoded_host_size_ != 0 ? std::string_view(decoded_host_.data(), decoded_host_size_) : host_;
     }
+    std::string_view host() const&& = delete;
 
     // ipv4/ipv6: the address in network byte order (4 or 16 bytes).
     // dns_name: empty.
-    [[nodiscard]] std::span<const std::uint8_t> address() const noexcept {
+    [[nodiscard]] std::span<const std::uint8_t> address() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::span(address_.data(), address_size_);
     }
+    std::span<const std::uint8_t> address() const&& = delete;
 
     [[nodiscard]] static constexpr http_target_origin accepted() noexcept {
         return http_target_origin(http_target_origin_action::accept);

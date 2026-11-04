@@ -20,6 +20,11 @@ void require_positive_redis_ttl(std::chrono::seconds ttl, const char* message) {
         throw std::invalid_argument(message);
     }
 }
+void require_positive_redis_pttl(std::chrono::milliseconds ttl, const char* message) {
+    if (ttl.count() <= 0) {
+        throw std::invalid_argument(message);
+    }
+}
 
 task<redis_ttl> redis_ttl_command(detail::redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource,
@@ -278,6 +283,17 @@ task<bool> redis_handle::expire(std::string_view key, std::chrono::seconds ttl) 
     detail::emplace_redis_string(args, "EXPIRE");
     detail::emplace_redis_string(args, key);
     args.emplace_back(detail::redis_seconds_string(ttl, resource_));
+    return scoped(detail::execute_redis_integer_bool(executor(), std::move(args), resource_));
+}
+
+task<bool> redis_handle::pexpire(std::string_view key, std::chrono::milliseconds ttl) const {
+    registration_.require_active();
+    require_positive_redis_pttl(ttl, "redis pexpire TTL must be greater than zero");
+    std::pmr::vector<std::pmr::string> args(resource_);
+    args.reserve(3);
+    detail::emplace_redis_string(args, "PEXPIRE");
+    detail::emplace_redis_string(args, key);
+    args.emplace_back(detail::redis_milliseconds_string(ttl, resource_));
     return scoped(detail::execute_redis_integer_bool(executor(), std::move(args), resource_));
 }
 

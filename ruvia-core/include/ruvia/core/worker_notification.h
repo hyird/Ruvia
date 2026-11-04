@@ -9,6 +9,7 @@
 
 namespace ruvia {
 
+class event_loop;
 class worker_runtime;
 class worker_runtime_context;
 
@@ -45,17 +46,17 @@ class worker_notification_state;
 // runtime stops. A cold, never-awaited instance can be destroyed directly.
 class worker_notification final {
 public:
-    class wait_awaiter_type final {
+    class wait_operation final {
     public:
-        wait_awaiter_type(const wait_awaiter_type&) = delete;
-        wait_awaiter_type& operator=(const wait_awaiter_type&) = delete;
+        wait_operation(const wait_operation&) = delete;
+        wait_operation& operator=(const wait_operation&) = delete;
 
         [[nodiscard]] bool await_ready();
         [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation);
         [[nodiscard]] worker_notification_wait_status await_resume();
 
     private:
-        explicit wait_awaiter_type(worker_notification& owner_value) noexcept;
+        explicit wait_operation(worker_notification& owner_value) noexcept;
 
         worker_notification* owner_;
         friend class worker_notification;
@@ -65,6 +66,9 @@ public:
         worker_runtime& runtime, worker_notification_options options = {});
     explicit worker_notification(
         worker_runtime_context& runtime, worker_notification_options options = {});
+    explicit worker_notification(
+        const event_loop& loop, worker_notification_options options = {});
+    worker_notification(event_loop&&, worker_notification_options = {}) = delete;
     ~worker_notification();
 
     worker_notification(const worker_notification&) = delete;
@@ -80,7 +84,7 @@ public:
     // outstanding wait. Constructing or discarding a cold task around wait()
     // does not register an operation. A notification racing with registration
     // may resume asynchronously.
-    [[nodiscard]] wait_awaiter_type& wait() noexcept;
+    [[nodiscard]] wait_operation& wait() noexcept;
 
     // Worker-affine and nonblocking. A pending wait completes as closed after
     // Asio delivers and drains its cancellation completion.
@@ -93,7 +97,7 @@ private:
     explicit worker_notification(state_pointer state) noexcept;
 
     state_pointer state_;
-    wait_awaiter_type wait_awaiter_;
+    wait_operation wait_awaiter_;
 };
 
 }  // namespace ruvia

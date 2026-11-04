@@ -57,6 +57,9 @@ public:
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] bool is_current() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
+    [[nodiscard]] bool has_blocking_pool() const noexcept {
+        return handle().has_blocking_pool();
+    }
 
     // A retired pool loop or attachment is invalid; accessing its context or
     // obtaining a fresh executor then throws std::logic_error. Previously

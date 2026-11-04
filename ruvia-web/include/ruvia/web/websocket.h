@@ -92,48 +92,48 @@ public:
     /// can transfer their existing allocation; incompatible inputs are copied.
     /// Output operations share one write lane: starting a second before the
     /// current operation completes throws std::logic_error.
-    task<void> text(std::string_view payload, websocket_send_options options = {}) &;
+    [[nodiscard]] task<void> text(std::string_view payload, websocket_send_options options = {}) &;
     task<void> text(std::string_view, websocket_send_options = {}) && = delete;
 
     /// Zero-copy text frame: takes ownership of an already-allocated payload.
     template <std::same_as<std::pmr::string> string_type>
-    task<void> text(string_type&& payload, websocket_send_options options = {}) & {
+    [[nodiscard]] task<void> text(string_type&& payload, websocket_send_options options = {}) & {
         return write(websocket_opcode::text, std::move(payload), options.compress_);
     }
     template <std::same_as<std::pmr::string> string_type>
     task<void> text(string_type&&, websocket_send_options = {}) && = delete;
 
-    task<void> binary(std::string_view payload, websocket_send_options options = {}) &;
+    [[nodiscard]] task<void> binary(std::string_view payload, websocket_send_options options = {}) &;
     task<void> binary(std::string_view, websocket_send_options = {}) && = delete;
 
-    task<void> binary(std::span<const std::byte> payload, websocket_send_options options = {}) &;
+    [[nodiscard]] task<void> binary(std::span<const std::byte> payload, websocket_send_options options = {}) &;
     task<void> binary(std::span<const std::byte>, websocket_send_options = {}) && = delete;
 
     /// Zero-copy binary frame.
     template <std::same_as<std::pmr::string> string_type>
-    task<void> binary(string_type&& payload, websocket_send_options options = {}) & {
+    [[nodiscard]] task<void> binary(string_type&& payload, websocket_send_options options = {}) & {
         return write(websocket_opcode::binary, std::move(payload), options.compress_);
     }
     template <std::same_as<std::pmr::string> string_type>
     task<void> binary(string_type&&, websocket_send_options = {}) && = delete;
 
-    task<void> pong(std::string_view payload) &;
-    task<void> pong(std::string_view) && = delete;
+    [[nodiscard]] task<void> pong(std::string_view payload = {}) &;
+    task<void> pong(std::string_view = {}) && = delete;
 
     /// Zero-copy pong frame.
     template <std::same_as<std::pmr::string> string_type>
-    task<void> pong(string_type&& payload) & {
+    [[nodiscard]] task<void> pong(string_type&& payload) & {
         return write(websocket_opcode::pong, std::move(payload));
     }
     template <std::same_as<std::pmr::string> string_type>
     task<void> pong(string_type&&) && = delete;
 
-    task<void> ping(std::string_view payload = {}) &;
+    [[nodiscard]] task<void> ping(std::string_view payload = {}) &;
     task<void> ping(std::string_view = {}) && = delete;
 
     /// Zero-copy ping frame.
     template <std::same_as<std::pmr::string> string_type>
-    task<void> ping(string_type&& payload) & {
+    [[nodiscard]] task<void> ping(string_type&& payload) & {
         return write(websocket_opcode::ping, std::move(payload));
     }
     template <std::same_as<std::pmr::string> string_type>
@@ -147,13 +147,22 @@ public:
     /// call throws std::logic_error while a read is pending. A message built
     /// with websocket_message::borrow over caller storage must keep that
     /// storage alive and unchanged until the operation completes.
-    task<void> send(websocket_message&& message, websocket_send_options options = {}) &;
+    [[nodiscard]] task<void> send(websocket_message&& message, websocket_send_options options = {}) &;
     task<void> send(websocket_message&&, websocket_send_options = {}) && = delete;
 
     /// Started close cannot overlap a running read, close, or output operation.
-    task<void> close(websocket_close_options options = {}) &;
+    [[nodiscard]] task<void> close(websocket_close_options options = {}) &;
     task<void> close(websocket_close_options = {}) && = delete;
     void abort() noexcept;
+
+    [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND {
+        return subprotocol_;
+    }
+    std::string_view subprotocol() const&& = delete;
+
+    [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const noexcept;
+    [[nodiscard]] std::string_view peer_close_reason() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view peer_close_reason() const&& = delete;
 
 private:
     template <typename connection_type>
@@ -164,15 +173,23 @@ private:
     using write_type = task<void> (*)(void*, websocket_opcode, std::string_view, bool);
     using close_type = task<void> (*)(void*, websocket_close_options);
     using abort_type = void (*)(void*) noexcept;
+    using peer_close_code_type = std::optional<std::uint16_t> (*)(void*) noexcept;
+    using peer_close_reason_type = std::string_view (*)(void*) noexcept;
 
-    websocket(std::pmr::memory_resource& resource, const worker_handle& worker_value, void* target, read_type read, write_type write, close_type close, abort_type abort) noexcept
+    websocket(std::pmr::memory_resource& resource, const worker_handle& worker_value, void* target,
+        std::string_view subprotocol_value, read_type read, write_type write, close_type close,
+        abort_type abort, peer_close_code_type peer_close_code,
+        peer_close_reason_type peer_close_reason) noexcept
         : resource_(&resource),
           worker_(&worker_value),
           target_(target),
+          subprotocol_(subprotocol_value),
           read_(read),
           write_(write),
           close_(close),
-          abort_(abort) {
+          abort_(abort),
+          peer_close_code_(peer_close_code),
+          peer_close_reason_(peer_close_reason) {
         operation_scope_.bind_worker(worker_value);
     }
 
@@ -191,10 +208,13 @@ private:
     std::pmr::memory_resource* resource_;
     const worker_handle* worker_;
     void* target_;
+    std::string_view subprotocol_;
     read_type read_;
     write_type write_;
     close_type close_;
     abort_type abort_;
+    peer_close_code_type peer_close_code_;
+    peer_close_reason_type peer_close_reason_;
     bool read_active_{false};
     bool write_active_{false};
     bool close_active_{false};

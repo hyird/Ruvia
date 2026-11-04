@@ -92,7 +92,7 @@ public:
     db_migration_report(const db_migration_report&) = delete;
     db_migration_report& operator=(const db_migration_report&) = delete;
     db_migration_report(db_migration_report&&) noexcept = default;
-    db_migration_report& operator=(db_migration_report&&) = delete;
+    db_migration_report& operator=(db_migration_report&& other);
 
     [[nodiscard]] std::span<const std::pmr::string> applied() const& noexcept;
     [[nodiscard]] std::span<const std::pmr::string> applied() const&& = delete;

@@ -19,6 +19,7 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_runtime_context.h"
 
@@ -91,6 +92,14 @@ ruvia::task<void> cold_wait(ruvia::worker_notification& notification) {
     static_cast<void>(co_await notification.wait());
 }
 
+ruvia::task<void> wait_close_and_stop_attachment(ruvia::worker_notification& notification,
+    ruvia::event_loop_attachment& attachment, std::atomic<int>& result_value) {
+    const auto status = co_await notification.wait();
+    notification.close();
+    attachment.stop();
+    result_value.store(status == ruvia::worker_notification_wait_status::notified ? 1 : 2,
+        std::memory_order_release);
+}
 ruvia::task<void> notify_on_worker(
     ruvia::worker_notification& notification, std::atomic<int>& result_value) {
     result_value.store(static_cast<int>(notification.notify()), std::memory_order_release);
@@ -228,7 +237,7 @@ ruvia::task<void> probe_concurrent_wait(
 
 struct notify_during_registration final {
     ruvia::worker_notification& notification_;
-    ruvia::worker_notification::wait_awaiter_type& wait_;
+    ruvia::worker_notification::wait_operation& wait_;
 
     bool await_ready() {
         const bool ready = wait_.await_ready();
@@ -708,6 +717,20 @@ RUVIA_TEST(worker_notification_startup_validation_rolls_back) {
     RUVIA_CHECK(invalid_timeout_rejected);
     RUVIA_CHECK(unbounded_timeout_rejected);
     RUVIA_CHECK(stop(worker));
+}
+
+RUVIA_TEST(worker_notification_borrows_event_loop) {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+    const auto loop = attachment.loop();
+    ruvia::worker_notification notification(loop);
+    RUVIA_CHECK_EQ(notification.notify(), ruvia::worker_notification_status::notified);
+    std::atomic<int> wait_result{0};
+    auto waiting = spawn(
+        loop, wait_close_and_stop_attachment(notification, attachment, wait_result));
+    attachment.run();
+    RUVIA_CHECK(finish(waiting));
+    RUVIA_CHECK_EQ(wait_result.load(std::memory_order_acquire), 1);
 }
 
 }  // namespace

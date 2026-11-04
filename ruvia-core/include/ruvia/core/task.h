@@ -29,7 +29,7 @@ class task_scope;
 // the terminate below and of the co_await deletions can drift out of step with
 // this one, and the compiler would not say a word.
 template <typename t_type>
-class [[nodiscard]] task {
+class [[nodiscard]] task final {
 public:
     using value_type = t_type;
     using promise_type = detail::task_promise<t_type>;

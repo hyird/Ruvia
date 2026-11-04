@@ -49,6 +49,7 @@ RUVIA_TEST(response_public_write_plan_distinguishes_head_from_bodyless_status) {
     RUVIA_CHECK(!head_plan.send_body());
     RUVIA_CHECK(head_plan.matches_response(response));
     RUVIA_CHECK_EQ(response.body_bytes(), "head-representation");
+    RUVIA_CHECK_EQ(response.body(), "head-representation");
     RUVIA_CHECK(!response.file_body().has_value());
 
     const auto no_content_plan = ruvia::plan_http_response_body(
@@ -132,4 +133,18 @@ RUVIA_TEST(response_public_cookie_and_metadata_capabilities) {
         invalid_vary_rejected = true;
     }
     RUVIA_CHECK(invalid_vary_rejected);
+
+    auto staged = response.headers().clone();
+    staged.reserve(12);
+    staged.allow_methods(ruvia::http_known_method_bit(ruvia::http_known_method::get));
+    staged.content_range(0, 4, 10);
+    staged.add_vary_token("Origin");
+    RUVIA_CHECK_EQ(staged.header("Allow").value_or(""), "GET");
+    RUVIA_CHECK_EQ(staged.header("Content-Range").value_or(""), "bytes 0-3/10");
+    staged.content_range_unsatisfied(10);
+    RUVIA_CHECK_EQ(staged.header("Content-Range").value_or(""), "bytes */10");
+    auto merged = response.headers().clone();
+    merged.transfer_from(staged, ruvia::http_response_header_transfer::apply);
+    RUVIA_CHECK_EQ(merged.header("Allow").value_or(""), "GET");
+    RUVIA_CHECK_EQ(merged.header("Content-Range").value_or(""), "bytes */10");
 }

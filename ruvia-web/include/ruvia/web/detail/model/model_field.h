@@ -96,6 +96,14 @@ public:
         return state_ == detail::model_field_state::null;
     }
 
+    [[nodiscard]] bool is_set() const noexcept {
+        return value_.has_value();
+    }
+
+    [[nodiscard]] bool has_value() const noexcept {
+        return value_.has_value();
+    }
+
     [[nodiscard]] const std::optional<field_value_type>& value() const& noexcept {
         return value_;
     }
@@ -147,6 +155,12 @@ public:
             assign_field_value(value_, std::forward<input_type>(input), resource);
             state_ = detail::model_field_state::parsed;
         }
+    }
+
+    void set_null() noexcept
+        requires nullable
+    {
+        assign_null();
     }
 
     void reset() noexcept {

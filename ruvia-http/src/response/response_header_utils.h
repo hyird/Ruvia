@@ -15,21 +15,21 @@
 
 namespace ruvia::detail {
 
-inline bool set_known_static_vary_token(http_response& response, std::string_view token) {
+inline bool set_known_static_vary_token(http_response_headers& headers, std::string_view token) {
     if (token == "Accept-Encoding" || token == "Origin" ||
         token == "Access-Control-Request-Headers" || token == "Access-Control-Request-Method") {
-        response.header_stable_view("Vary", token);
+        headers.header_stable_view("Vary", token);
         return true;
     }
     return false;
 }
 
 [[nodiscard]] inline bool response_vary_has_token(
-    const http_response& response, std::string_view token) noexcept {
-    if (!response_has_known_header(response, response_header_vary)) {
+    const http_response_headers& headers, std::string_view token) noexcept {
+    if (!response_has_known_header(headers, response_header_vary)) {
         return false;
     }
-    for (const auto& header : response.headers()) {
+    for (const auto& header : headers) {
         if (http_response_header_access::known_bit(header) == response_header_vary &&
             http_has_token(header.value(), token)) {
             return true;
@@ -38,21 +38,21 @@ inline bool set_known_static_vary_token(http_response& response, std::string_vie
     return false;
 }
 
-inline void add_vary_token(http_response& response, std::string_view token) {
-    // RFC 9110 sections 5.2-5.3 define repeated Vary field lines as one
+inline void add_vary_token(http_response_headers& headers,
+    std::pmr::memory_resource* resource, std::string_view token) {
     // comma-joined value in wire order. Inspect every line: the O(1) known-header
     // lookup intentionally returns only the first occurrence and cannot decide
     // wildcard or token membership for this list-based field.
     token = http_trim_ows(token);
-    if (token.empty() || response_vary_has_token(response, "*")) {
+    if (token.empty() || response_vary_has_token(headers, "*")) {
         return;
     }
 
     if (token == "*") {
-        response.header_stable_view("Vary", "*");
+        headers.header_stable_view("Vary", "*");
         return;
     }
-    if (response_vary_has_token(response, token)) {
+    if (response_vary_has_token(headers, token)) {
         return;
     }
     if (!is_valid_http_header_name(token)) {
@@ -61,8 +61,8 @@ inline void add_vary_token(http_response& response, std::string_view token) {
 
     std::size_t existing_value_count = 0;
     std::size_t existing_bytes = 0;
-    if (response_has_known_header(response, response_header_vary)) {
-        for (const auto& header : response.headers()) {
+    if (response_has_known_header(headers, response_header_vary)) {
+        for (const auto& header : headers) {
             if (http_response_header_access::known_bit(header) != response_header_vary ||
                 http_trim_ows(header.value()).empty()) {
                 continue;
@@ -72,8 +72,8 @@ inline void add_vary_token(http_response& response, std::string_view token) {
         }
     }
     if (existing_value_count == 0) {
-        if (!set_known_static_vary_token(response, token)) {
-            response.header("Vary", token);
+        if (!set_known_static_vary_token(headers, token)) {
+            headers.header("Vary", token);
         }
         return;
     }
@@ -83,7 +83,7 @@ inline void add_vary_token(http_response& response, std::string_view token) {
     if (total_size <= inline_vary_capacity) {
         std::array<char, inline_vary_capacity> buffer{};
         std::size_t length = 0;
-        for (const auto& header : response.headers()) {
+        for (const auto& header : headers) {
             if (http_response_header_access::known_bit(header) != response_header_vary ||
                 http_trim_ows(header.value()).empty()) {
                 continue;
@@ -96,13 +96,13 @@ inline void add_vary_token(http_response& response, std::string_view token) {
         }
         std::memcpy(buffer.data() + length, token.data(), token.size());
         length += token.size();
-        response.header("Vary", std::string_view(buffer.data(), length));
+        headers.header("Vary", std::string_view(buffer.data(), length));
         return;
     }
 
-    std::pmr::string updated(response.memory_resource());
+    std::pmr::string updated(resource);
     updated.reserve(total_size);
-    for (const auto& header : response.headers()) {
+    for (const auto& header : headers) {
         if (http_response_header_access::known_bit(header) != response_header_vary ||
             http_trim_ows(header.value()).empty()) {
             continue;
@@ -111,7 +111,7 @@ inline void add_vary_token(http_response& response, std::string_view token) {
         updated.append(", ");
     }
     updated.append(token);
-    response.header("Vary", updated);
+    headers.header("Vary", updated);
 }
 
 }  // namespace ruvia::detail

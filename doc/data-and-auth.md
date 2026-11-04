@@ -152,7 +152,7 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
 
 `db_query` 可脱离数据库连接独立构建并编译为目标方言的参数化语句（`auto stmt = query.compile(driver, resource);`，再通过 `db.query(stmt.sql(), stmt.params())` 执行）：
 
-`db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `std::span<const T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样借用集合及元素中的文本。请使用具名 `const std::array` 或 C 数组保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。`std::span` 不拥有元素，不延长生命周期，也不能阻止所有悬垂。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
+`db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
 
 - **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。
   `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `skip_`、`take_` 共用 `"ruvia/web/entity_rows.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
@@ -401,8 +401,8 @@ RUVIA_REDIS_ENTITY(cached_user, "user:",
 const ruvia::redis_repository_config user_repo_config{
     .prefix_ = "user:",
     .indexes_ = {
-        {.field_ = "role", .kind_ = ruvia::redis_index_kind::tag},
-        {.field_ = "score", .kind_ = ruvia::redis_index_kind::numeric, .sortable_ = true},
+        {.column_ = "role", .kind_ = ruvia::redis_index_kind::tag},
+        {.column_ = "score", .kind_ = ruvia::redis_index_kind::numeric, .sortable_ = true},
     },
 };
 
@@ -412,7 +412,7 @@ auto repo = c.redis().repository<cached_user>(user_repo_config);
 // 条件查询：
 auto rows = co_await repo.find({
     .where_ = (cached_user::column<"role">() == "admin") && (cached_user::column<"score">() >= 80),
-    .order_ = {{.field_ = "score", .direction_ = ruvia::redis_order_direction::desc}},
+    .order_ = {{.column_ = "score", .direction_ = ruvia::redis_order_direction::desc}},
     .take_ = 20,
 });
 ```

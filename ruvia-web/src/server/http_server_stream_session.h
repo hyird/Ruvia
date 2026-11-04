@@ -579,8 +579,8 @@ task<std::optional<http_connection_close>> worker_connections::serve_requests(
                 std::make_exception_ptr(rejected->exception()), parsed_value, routes_value,
                 request_memory_value, admission->services(), response));
         }
-        http_response_tail fallback_tail(
-            parsed_value.request_, http_response_coding_policy::disabled(), remote_address, request_start);
+        http_response_tail fallback_tail(parsed_value.request_,
+            http_response_coding_policy::disabled(), remote_address, remote_address, request_start);
         auto& tail = admission ? admission->tail() : fallback_tail;
         auto connection_plan = request_completion->connection_plan();
         if (request_completion->buffered_response() != nullptr) {

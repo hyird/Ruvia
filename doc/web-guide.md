@@ -258,8 +258,8 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h
 | `c.req().method()` / `c.req().known_method()` | 请求方法字符串视图（如 `"GET"`）与 `http_known_method` 枚举 |
 | `c.req().path()` / `c.req().target()` / `c.req().route_path()` | 请求路径、原始请求目标与命中的注册路由模式 |
 | `c.req().scheme()` / `c.req().authority()` / `c.req().protocol_version()` | 请求 scheme、authority 与协议版本（`http10` / `http11` / `http2`） |
-| `c.req().param(name)` / `c.req().param_fields()` | 获取路径参数值（`std::optional<std::string_view>`）或参数列表 |
-| `c.req().query(name)` / `c.req().queries(name)` / `c.req().query_fields()` | 获取单个/多个同名 URL 查询参数（已自动 URL 解码） |
+| `c.req().param(name)` / `c.req().param<T>(name)` / `c.req().param_fields()` | 获取路径参数字符串视图、类型化解析标量值（整数或 `bool`，缺失返回 `std::nullopt`，格式非法自动抛 HTTP 400）或参数列表 |
+| `c.req().query(name)` / `c.req().query<T>(name)` / `c.req().queries(name)` / `c.req().query_fields()` | 获取单个/类型化/多个同名 URL 查询参数（已自动 URL 解码） |
 | `c.req().header(name)` / `c.req().header_fields()` | 大小写不敏感读取请求头 |
 | `c.req().cookie(name)` / `c.req().signed_cookie({.name_ = ..., .secret_ = ...})` | 读取普通 Cookie 或验证 HMAC 签名并提取 Cookie 原值 |
 | `c.req().negotiate(type, supported)` | 在候选列表中按 `Accept*` 权重协商最佳匹配（单候选时 `has_value()` 即表示客户端接受该值） |
@@ -304,13 +304,13 @@ ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
 | `editor.status(code)` / `header(name, value, options = {})` / `remove_header(name)` / `priority(fields)` | 设置 `200..599` 状态、响应头或 RFC 9218 优先级；头默认替换，可指定 `http_response_header_mode::append` |
 | `editor.set_cookie(options)` / `set_signed_cookie(options)` / `delete_cookie(options)` | 设置普通/HMAC 签名 Cookie 或用过去的 `Expires` 使其过期；`max_age_ = 0s` 同样使用过去的 `Expires`，并覆盖同时设置的 `expires_` |
 | `http_response text(...)` / `html(...)` / `body(...)` | 构造 `text/plain; charset=utf-8`、`text/html; charset=utf-8` 或原始响应体（支持字符串字面量、`std::string_view`、`std::pmr::string&&`、`std::span<const std::byte>`、`ruvia::static_text`） |
-| `template <typename T> http_response json(const T& model)` | 将 `RUVIA_MODEL` 实例序列化为 `application/json` 响应 |
+| `template <typename T> http_response json(const T& value)` | 将 `RUVIA_MODEL` 或模型数组（`ruvia::array<T>` / `boxed_array<T>`）序列化为 `application/json` 响应 |
 | `http_response redirect(redirect_response_options options)` | 构造重定向响应（默认 `302 Found`）；绝对或 `//` 开头的 Location authority 含 `\` 时抛 `std::invalid_argument`，避免浏览器把反斜杠当路径分隔符而改变主机 |
 | `http_response file(file_response_options options)` | 构造磁盘文件响应，支持 Range 与条件请求 |
 | `http_response static_file(const static_root& root, static_file_response_options options)` | 从预构建的 `static_root` 快照构造响应 |
-| `http_response error(http_error_info_options options) const` | 构造标准 JSON 错误响应 |
+| `http_response error(http_error_info_options options) const` / `error(const http_error_info& info) const` | 构造标准 JSON 错误响应（传入 `http_error_info` 时自动保留 `validation_issues`） |
 | `task<http_response> not_found()` | 调用当前匹配的 404 处理器生成响应 |
-| `void respond(http_response&&)` / `const http_response* response() const noexcept` | 选择或替换尚未提交的缓冲响应 / 只读观察选定响应（不包含尚待应用的 policy，不是最终线上响应头） |
+| `void respond(http_response&&)` / `const http_response* response() const noexcept` / `bool committed() const noexcept` | 选择或替换尚未提交的缓冲响应 / 只读观察选定响应（不包含尚待应用的 policy，不是最终线上响应头） / 查询响应头或流升级是否已提交 |
 
 草稿字段只属于下一次成功的 `body/text/json/html/file/static_file/redirect` 构造；成功后草稿清空，构造失败则保留。`error()` 构造独立错误响应，不继承草稿。异常进入错误处理器前框架清空失败处理器的草稿，避免表示字段污染错误响应。
 
@@ -446,8 +446,8 @@ CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字�
 - `RUVIA_MAX(limit, message)`：数值上限或字符串 UTF-8 字节长度上限
 - `RUVIA_EMAIL(message)`：电子邮件格式校验
 - `RUVIA_ONE_OF(message, val1, val2, ...)`：枚举白名单校验
-- `RUVIA_PATTERN(message, pattern)`：整串锚定正则模式校验
-- `RUVIA_CUSTOM(message, predicate)`：自定义谓词函数校验
+- `RUVIA_PATTERN(pattern, message)`：整串锚定正则模式校验
+- `RUVIA_CUSTOM(predicate, message)`：自定义谓词函数校验
 
 ```cpp
 #include "ruvia/web/model.h"
@@ -471,9 +471,10 @@ RUVIA_MODEL(create_user_request,
 
 - `m.get<"username">()`：获取只读字段值；非空必填字段返回引用，其余字段返回只读 `std::optional` 引用。`ruvia::string` 可调用 `.view()`，标量包装可读取 `.value_` 或隐式转换。
 - `m.set<"username">("alice")`：设置字段值（支持链式调用）
-- `m.is_present<"role">()`：查询输入中是否出现该字段，默认值及应用后续修改不改变输入来源记录；`m.is_null<"nickname">()` 查询当前字段是否为 `null`。
-- `m.ensure<"nested">()`：确保可原地修改的字段已初始化并返回可变引用。`json_value` 字段不提供此入口：用 `get()` 读取，用 `set<"field">(token)` 替换；声明 `RUVIA_NULLABLE` 后可用 `set<"field">(nullptr)` 设置 null。这样 token 替换与字段 null 状态始终经过同一个检查入口。
-- `m.reset<"nickname">()`：将可选字段恢复为缺失状态；必填字段不提供此入口，可空必填字段用 `set(nullptr)` 设置 null。
+- `m.set_null<"nickname">()`：将 `RUVIA_NULLABLE` 字段置为 `null`（等价于 `m.set<"nickname">(nullptr)`，支持链式调用）
+- `m.is_set<"username">()` / `m.has_value<"username">()`：查询该字段当前是否持有有效非空值（含默认值、初始值、输入解析值或应用 `set` 赋值）；`m.is_present<"role">()` 查询原始输入中是否出现该字段，默认值及应用后续修改不改变输入来源记录；`m.is_null<"nickname">()` 查询当前字段是否为 `null`。
+- `m.ensure<"nested">()`：确保可原地修改的字段已初始化并返回可变引用。`json_value` 字段不提供此入口：用 `get()` 读取，用 `set<"field">(token)` 替换；声明 `RUVIA_NULLABLE` 后可用 `set<"field">(nullptr)` 或 `set_null<"field">()` 设置 null。这样 token 替换与字段 null 状态始终经过同一个检查入口。
+- `m.reset<"nickname">()`：将可选字段恢复为缺失状态并返回模型引用（支持链式调用）；必填字段不提供此入口，可空必填字段用 `set_null<"field">()` 或 `set(nullptr)` 设置 null。
 
 #### 路由级多源绑定中间件
 

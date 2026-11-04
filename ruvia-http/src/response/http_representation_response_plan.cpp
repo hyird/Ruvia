@@ -30,9 +30,9 @@ const http_representation_response_plan::partial_type* http_representation_respo
     return std::get_if<partial_type>(&value_);
 }
 
-const http_representation_response_plan::multipart*
+const http_representation_response_plan::multipart_type*
 http_representation_response_plan::multipart_ranges() const& noexcept {
-    return std::get_if<multipart>(&value_);
+    return std::get_if<multipart_type>(&value_);
 }
 
 http_status_code http_representation_response_plan::status() const noexcept {

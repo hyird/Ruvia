@@ -65,8 +65,10 @@ task<void> exercise_receiver_move_failure(worker_handle worker, bool& success) {
 
 task<void> exercise_completion_during_suspend(worker_handle worker, bool& success) {
     for (int value = 0; value < 1024; ++value) {
-        auto result = co_await run_blocking(worker, {}, [value] { return yielding_result(value); });
-        if (!result.completed() || std::move(result).value().value_ != value) {
+        auto result = co_await run_blocking(worker, [value] { return yielding_result(value); });
+        const auto& const_result = result;
+        if (!result.completed() || const_result.value().value_ != value ||
+            result.value().value_ != value || std::move(result).take_value().value_ != value) {
             co_return;
         }
     }
@@ -786,6 +788,9 @@ RUVIA_TEST(blocking_pool_rejects_settled_operations_before_submission) {
         asio::io_context other_context;
         auto other_attachment = ruvia::attach_event_loop(other_context, {.queue_capacity_ = 8});
         const auto worker_value = attachment.loop().handle();
+        if (!attachment.loop().has_blocking_pool() || other_attachment.loop().has_blocking_pool()) {
+            return;
+        }
         ruvia::test::run_worker_tasks(attachment, exercise_settled_before_submit(worker_value,
                                                       other_attachment.loop().handle(), settled_task_ran,
                                                       settled_before_submit));

@@ -77,6 +77,9 @@ task<websocket_event> websocket_client_state::poll_protocol_event(
             std::terminate();
         }
         if (event->close() != nullptr || event->transport_end() != nullptr) {
+            if (const auto* close_event = event->close()) {
+                record_peer_close(*close_event);
+            }
             co_await wait_for_write_idle(write_wait_type::reader);
             write_guard_type write_guard(*this, write_phase_type::application);
             co_await flush_output();

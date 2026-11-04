@@ -156,6 +156,10 @@ class one_shot_completion final {
 public:
     one_shot_completion() noexcept = default;
 
+    [[nodiscard]] bool valid() const noexcept {
+        return state_ != nullptr;
+    }
+
     // Keep this completion handle alive through the call, including payload
     // moves and destruction. Concurrent attempts report in_progress while the
     // first value is being constructed.
@@ -244,6 +248,9 @@ public:
         close();
     }
 
+    [[nodiscard]] bool valid() const noexcept {
+        return state_ != nullptr;
+    }
     // The receiver owns the receive side: destroying it closes every cold or
     // running wait. Require a named owner so storing an operation cannot
     // silently turn a temporary receiver into an already-closed operation.

@@ -99,6 +99,13 @@ public:
         return body(json_text, "application/json");
     }
 
+    template <typename t_type>
+        requires detail::is_model_json_value<t_type>
+    test_request& json(const t_type& value) {
+        const auto serialized = to_json(value);
+        return json(std::string_view(serialized));
+    }
+
     test_request& form(std::string_view url_encoded) {
         return body(url_encoded, "application/x-www-form-urlencoded");
     }
@@ -115,6 +122,12 @@ public:
         return *this;
     }
 
+    test_request& remote(std::string_view address, std::uint16_t port = 0) {
+        remote_address_.assign(address);
+        remote_port_ = port;
+        return *this;
+    }
+
 private:
     friend class test_app;
 
@@ -127,6 +140,8 @@ private:
     std::vector<std::pair<std::string, std::string>> headers_;
     std::string cookies_;
     std::string body_;
+    std::string remote_address_{"127.0.0.1"};
+    std::uint16_t remote_port_{0};
 };
 
 // One in-memory application instance. Construction is cheap; controllers are
@@ -185,6 +200,8 @@ public:
     // tests to choose different handlers by call order.
     test_app& on_error(http_error_handler handler);
     test_app& on_not_found(http_not_found_handler handler);
+    test_app& on_error(std::nullptr_t);
+    test_app& on_not_found(std::nullptr_t);
     test_app& on_error(scoped_error_handler_options options);
     test_app& on_not_found(scoped_not_found_handler_options options);
 

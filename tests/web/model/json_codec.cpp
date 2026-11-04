@@ -56,7 +56,7 @@ RUVIA_MODEL(codec_presence,
     RUVIA_OPTIONAL_FIELD(emitted, ruvia::string, RUVIA_NULLABLE, RUVIA_EMIT_NULL),
     RUVIA_OPTIONAL_FIELD(empty, ruvia::string, RUVIA_OMIT_EMPTY));
 RUVIA_MODEL(codec_rules,
-    RUVIA_REQUIRED_FIELD(value, ruvia::string, RUVIA_CUSTOM("not valid", counted_predicate)));
+    RUVIA_REQUIRED_FIELD(value, ruvia::string, RUVIA_CUSTOM(counted_predicate, "not valid")));
 RUVIA_MODEL(codec_dynamic,
     RUVIA_REQUIRED_FIELD(value, ruvia::json_value),
     RUVIA_REQUIRED_FIELD(object, ruvia::json_object));

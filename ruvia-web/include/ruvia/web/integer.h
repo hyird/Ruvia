@@ -14,13 +14,24 @@ enum class integer_parse_error {
     out_of_range,
 };
 
+namespace detail {
+template <typename t_type>
+concept parsed_integer =
+    std::integral<t_type> && !std::same_as<std::remove_cv_t<t_type>, bool> &&
+    !std::same_as<std::remove_cv_t<t_type>, char> &&
+    !std::same_as<std::remove_cv_t<t_type>, wchar_t> &&
+    !std::same_as<std::remove_cv_t<t_type>, char8_t> &&
+    !std::same_as<std::remove_cv_t<t_type>, char16_t> &&
+    !std::same_as<std::remove_cv_t<t_type>, char32_t> &&
+    requires(const char* first, const char* last, t_type& value) {
+        std::from_chars(first, last, value, 10);
+    };
+}  // namespace detail
+
 // Strict decimal input: no whitespace, leading '+', or trailing characters.
 // A leading '-' is accepted only for signed integers. Format errors take
 // precedence over overflow when the input also contains trailing characters.
-template <std::integral t_type>
-    requires(!std::same_as<std::remove_cv_t<t_type>, bool> && requires(const char* first, const char* last, t_type& value) {
-        std::from_chars(first, last, value, 10);
-    })
+template <detail::parsed_integer t_type>
 [[nodiscard]] constexpr std::variant<t_type, integer_parse_error> parse_integer(std::string_view text) noexcept {
     if (text.empty()) {
         return integer_parse_error::invalid_format;

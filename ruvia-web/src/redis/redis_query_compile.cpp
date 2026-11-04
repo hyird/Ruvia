@@ -409,6 +409,12 @@ private:
             append_between(output, nodes, node);
             return;
         }
+        if (node.kind_ == node_kind::logical_not) {
+            output.append("-(");
+            append_expression(output, nodes, nodes[node.operands_[0]], depth + 1U);
+            output.push_back(')');
+            return;
+        }
         switch (node.binary_) {
             case redis_binary_operator::logical_and:
             case redis_binary_operator::logical_or:
@@ -572,7 +578,7 @@ redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns
         std::pmr::vector<redis_index_definition>(resource)};
     result_value.indexes_.reserve(config.indexes_.size());
     for (const auto& index : config.indexes_) {
-        const std::string_view field = index.field_;
+        const std::string_view field = index.column_;
         if (result_value.index_kind(field) != redis_index_kind::none) {
             throw std::invalid_argument("duplicate Redis index column");
         }
@@ -610,9 +616,9 @@ std::pmr::vector<std::pmr::string> compile_redis_find(const redis_mapping& mappi
     if (options.order_.has_value()) {
         const auto& order = *options.order_;
         if (count_only) {
-            compiler.validate_sort_field(order.field_);
+            compiler.validate_sort_field(order.column_);
         } else {
-            sort_field_name = compiler.sort_field(order.field_);
+            sort_field_name = compiler.sort_field(order.column_);
         }
         switch (order.direction_) {
             case redis_order_direction::asc:
@@ -681,7 +687,7 @@ std::pmr::vector<std::pmr::string> compile_redis_index(
     args.push_back(redis_entity_storage_prefix(mapping.prefix_, resource));
     emplace_redis_string(args, "SCHEMA");
     for (const auto& definition : mapping.indexes_) {
-        const std::string_view field = definition.field_;
+        const std::string_view field = definition.column_;
         if (definition.kind_ == redis_index_kind::tag) {
             args.push_back(shadow_field(tag_shadow, field, resource));
             emplace_redis_string(args, "AS");

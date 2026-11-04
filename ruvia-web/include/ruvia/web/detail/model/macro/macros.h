@@ -55,6 +55,14 @@
         [[nodiscard]] bool is_null() const noexcept {                                                      \
             return fields_.template is_null<field>();                                                      \
         }                                                                                                  \
+        template <::ruvia::fixed_string field>                                                             \
+        [[nodiscard]] bool is_set() const noexcept {                                                       \
+            return fields_.template is_set<field>();                                                       \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field>                                                             \
+        [[nodiscard]] bool has_value() const noexcept {                                                    \
+            return fields_.template has_value<field>();                                                    \
+        }                                                                                                  \
         template <::ruvia::fixed_string field, typename value_type>                                        \
         t_type& set(value_type&& value) & {                                                                \
             fields_.template set<field>(std::forward<value_type>(value));                                  \
@@ -62,6 +70,15 @@
         }                                                                                                  \
         template <::ruvia::fixed_string field, typename value_type>                                        \
         t_type& set(value_type&&) && = delete;                                                             \
+        template <::ruvia::fixed_string field>                                                             \
+            requires requires(storage_type& storage) { storage.template set_null<field>(); }               \
+        t_type& set_null() & noexcept {                                                                    \
+            fields_.template set_null<field>();                                                            \
+            return *this;                                                                                  \
+        }                                                                                                  \
+        template <::ruvia::fixed_string field>                                                             \
+            requires requires(storage_type& storage) { storage.template set_null<field>(); }               \
+        t_type& set_null() && = delete;                                                                    \
         template <::ruvia::fixed_string field>                                                             \
             requires requires(storage_type& storage) { storage.template ensure<field>(); }                 \
         [[nodiscard]] decltype(auto) ensure() & RUVIA_LIFETIMEBOUND {                                      \
@@ -72,12 +89,13 @@
         [[nodiscard]] decltype(auto) ensure() && = delete;                                                 \
         template <::ruvia::fixed_string field>                                                             \
             requires requires(storage_type& storage) { storage.template reset<field>(); }                  \
-        void reset() & noexcept {                                                                          \
+        t_type& reset() & noexcept {                                                                       \
             fields_.template reset<field>();                                                               \
+            return *this;                                                                                  \
         }                                                                                                  \
         template <::ruvia::fixed_string field>                                                             \
             requires requires(storage_type& storage) { storage.template reset<field>(); }                  \
-        void reset() && = delete;                                                                          \
+        t_type& reset() && = delete;                                                                       \
         [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {                               \
             return fields_.resource();                                                                     \
         }                                                                                                  \

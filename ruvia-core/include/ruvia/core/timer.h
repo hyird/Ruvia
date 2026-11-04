@@ -4,6 +4,7 @@
 #include <coroutine>
 #include <cstdint>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
@@ -48,6 +49,10 @@ template <typename rep_type, typename period_type>
     std::chrono::duration<rep_type, period_type> duration, stop_token stop_token_value = {});
 template <typename rep_type, typename period_type>
 sleep_operation sleep_for(worker_handle&&, std::chrono::duration<rep_type, period_type>, stop_token = {}) = delete;
+[[nodiscard]] sleep_operation sleep_until(const worker_handle& worker_value,
+    std::chrono::steady_clock::time_point deadline, stop_token stop_token_value = {});
+sleep_operation sleep_until(
+    worker_handle&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
 
 // One sleep on the caller's worker: single-use, movable only before it is
 // awaited, and started on the borrowed worker by co_await. An empty stop token
@@ -67,15 +72,23 @@ public:
 private:
     template <typename rep_type, typename period_type>
     friend sleep_operation sleep_for(const worker_handle&, std::chrono::duration<rep_type, period_type>, stop_token);
+    friend sleep_operation sleep_until(
+        const worker_handle&, std::chrono::steady_clock::time_point, stop_token);
 
     sleep_operation(const worker_handle& worker_value, std::chrono::steady_clock::duration duration,
         stop_token stop_token_value) noexcept
         : worker_(&worker_value),
-          duration_(duration),
+          target_(duration),
+          stop_token_(std::move(stop_token_value)) {}
+
+    sleep_operation(const worker_handle& worker_value, std::chrono::steady_clock::time_point deadline,
+        stop_token stop_token_value) noexcept
+        : worker_(&worker_value),
+          target_(deadline),
           stop_token_(std::move(stop_token_value)) {}
 
     const worker_handle* worker_;
-    std::chrono::steady_clock::duration duration_;
+    std::variant<std::chrono::steady_clock::duration, std::chrono::steady_clock::time_point> target_;
     stop_token stop_token_;
     std::coroutine_handle<> continuation_{};
     worker_timer_outcome outcome_{worker_timer_outcome::expired};

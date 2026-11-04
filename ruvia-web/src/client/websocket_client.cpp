@@ -175,6 +175,30 @@ std::string_view websocket_client_state::subprotocol() {
     return selected_subprotocol_;
 }
 
+std::optional<std::uint16_t> websocket_client_state::peer_close_code() const noexcept {
+    if (!worker_.is_current()) {
+        std::terminate();
+    }
+    return peer_close_code_;
+}
+
+std::string_view websocket_client_state::peer_close_reason() const noexcept {
+    if (!worker_.is_current()) {
+        std::terminate();
+    }
+    return {peer_close_reason_.data(), peer_close_reason_size_};
+}
+
+void websocket_client_state::record_peer_close(const websocket_close_event& close_event) noexcept {
+    peer_close_code_ = close_event.close_code();
+    const auto reason = close_event.reason();
+    const auto count = (std::min)(reason.size(), peer_close_reason_.size());
+    if (count != 0) {
+        std::char_traits<char>::copy(peer_close_reason_.data(), reason.data(), count);
+    }
+    peer_close_reason_size_ = static_cast<std::uint8_t>(count);
+}
+
 }  // namespace ruvia::detail
 
 namespace ruvia {
@@ -190,9 +214,7 @@ websocket_client_handle::websocket_client_handle(const websocket_client_handle& 
       options_(other.options_),
       registration_(other.registration_, this) {}
 
-void websocket_client_handle::expire_capability(void* target) noexcept {
-    static_cast<websocket_client_handle*>(target)->state_ = nullptr;
-}
+void websocket_client_handle::expire_capability(void*) noexcept {}
 
 websocket_client_handle websocket_client_handle::with_options(operation_options options) const {
     validate_operation_options(options);
@@ -250,6 +272,12 @@ task<void> websocket_client_handle::pong_owned(std::pmr::string&& payload_value)
     return state_->write(websocket_opcode::pong, std::move(payload_value), options_);
 }
 
+task<void> websocket_client_handle::send(
+    websocket_message&& message, websocket_send_options options) const {
+    registration_.require_active();
+    return state_->write(message.opcode(), message.payload(), options_, options);
+}
+
 task<void> websocket_client_handle::close(websocket_close_options options) const {
     registration_.require_active();
     return state_->close(options, options_);
@@ -259,6 +287,22 @@ void websocket_client_handle::abort() noexcept {
     if (state_ != nullptr) {
         state_->abort();
     }
+}
+
+bool websocket_client_handle::connected() const {
+    return state_->connected();
+}
+
+std::string_view websocket_client_handle::subprotocol() const& {
+    return state_->subprotocol();
+}
+
+std::optional<std::uint16_t> websocket_client_handle::peer_close_code() const noexcept {
+    return state_->peer_close_code();
+}
+
+std::string_view websocket_client_handle::peer_close_reason() const& noexcept {
+    return state_->peer_close_reason();
 }
 
 websocket_client::websocket_client(event_loop loop, const websocket_client_config& config)
@@ -296,6 +340,14 @@ bool websocket_client::connected() const {
 
 std::string_view websocket_client::subprotocol() const& {
     return state_->subprotocol();
+}
+
+std::optional<std::uint16_t> websocket_client::peer_close_code() const noexcept {
+    return state_->peer_close_code();
+}
+
+std::string_view websocket_client::peer_close_reason() const& noexcept {
+    return state_->peer_close_reason();
 }
 
 const worker_handle& websocket_client::worker() const& noexcept {

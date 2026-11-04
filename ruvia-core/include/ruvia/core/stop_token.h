@@ -43,7 +43,7 @@ public:
     [[nodiscard]] stop_state* operator->() const noexcept {
         return state_;
     }
-    // Whether this refers to a stop state at all. Unlike stop_possible(), this
+    // Whether this refers to a stop state at all. Unlike stoppable(), this
     // stays true after the source died unstopped.
     [[nodiscard]] explicit operator bool() const noexcept {
         return state_ != nullptr;

@@ -126,6 +126,7 @@ class response_policy_routes final {
     RUVIA_GET("/policy-head-naive", head_naive);
     RUVIA_GET("/policy-head-read-after-write", head_read_after_write);
     RUVIA_GET("/policy-head-convert", stream, exception_converting_middleware);
+    RUVIA_GET("/policy-stream-fail-after-commit", stream_fail_after_commit, exception_converting_middleware);
     RUVIA_GET_WS("/policy-websocket", websocket);
     RUVIA_CONNECT("policy-target.test:443", tunnel);
     RUVIA_CONNECT("denied-target.test:443", tunnel, connect_denying_middleware);
@@ -144,6 +145,18 @@ class response_policy_routes final {
             co_return;
         }
         co_await context_value.stream().write("chunk");
+    }
+
+    ruvia::task<void> stream_fail_after_commit(ruvia::context& context_value) {
+        auto& output = context_value.stream_text();
+        if (co_await output.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        if (!context_value.committed() || !output.committed()) {
+            co_return;
+        }
+        co_await output.write("partial");
+        throw std::runtime_error("failed after stream commit");
     }
 
     // 完成态不是取消：不启动正文生产，误用 write/sleep 必须明确拒绝。
@@ -520,6 +533,19 @@ RUVIA_TEST(http1_head_only_stream_is_a_success_for_error_converting_middleware) 
     RUVIA_CHECK(text.find("chunk") == std::string::npos);
     RUVIA_CHECK(text.find("HTTP/1.1 500 ") == std::string::npos);
     RUVIA_CHECK(text.ends_with("\r\n\r\nplain"));
+}
+
+RUVIA_TEST(http1_stream_failure_after_commit_is_not_converted_to_buffered_response_by_middleware) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto output = exchange(server.endpoint(),
+        "GET /policy-stream-fail-after-commit HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    RUVIA_CHECK(output.has_value());
+    const auto text = output.value_or("");
+    RUVIA_CHECK(text.starts_with("HTTP/1.1 200 "));
+    RUVIA_CHECK(text.find("partial") != std::string::npos);
+    RUVIA_CHECK(text.find("0\r\n\r\n") == std::string::npos);
 }
 
 // A failed CONNECT closes the connection: bytes the client already sent for

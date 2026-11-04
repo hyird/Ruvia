@@ -15,6 +15,8 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/auth/jwt.h"
 
+#include "util/pmr_owned_storage.h"
+
 namespace ruvia {
 namespace {
 
@@ -287,6 +289,15 @@ jwt_numeric_date::jwt_numeric_date(std::string_view text, std::pmr::memory_resou
 jwt_numeric_date::jwt_numeric_date(jwt_numeric_date&& other) noexcept
     : text_(std::move(other.text_)) {
     other.text_.clear();
+}
+
+jwt_numeric_date& jwt_numeric_date::operator=(jwt_numeric_date&& other) {
+    if (this != &other) {
+        auto rebound = detail::rebind_owned_storage(other.text_, text_.get_allocator().resource());
+        text_.swap(rebound);
+        other.text_.clear();
+    }
+    return *this;
 }
 
 std::string_view jwt_numeric_date::text() const& noexcept {

@@ -10,6 +10,7 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/detail/client/http1_client_exchange_state_access.h"
 #include "ruvia/http/http1_client_exchange_state.h"
 #include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_transfer_coding.h"

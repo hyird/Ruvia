@@ -82,21 +82,37 @@ void http_tunnel::require_active() const {
         throw std::logic_error("HTTP tunnel session has expired");
     }
 }
+void http_tunnel::require_unadapted() const {
+    if (adapted_) {
+        throw std::logic_error("HTTP tunnel is already adapted to a capsule stream");
+    }
+}
 task<std::optional<std::pmr::string>> http_tunnel::read() & {
+    require_active();
+    require_unadapted();
+    return read_raw();
+}
+task<std::optional<std::pmr::string>> http_tunnel::read_raw() {
     require_active();
     return ::ruvia::make_scoped_operation(operations_, read_tunnel(target_, read_, read_active_, running_operations_));
 }
 task<void> http_tunnel::write(std::string_view bytes_value) & {
     require_active();
+    require_unadapted();
     if (send_ended_) {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
-    return write_owned(std::pmr::string(bytes_value, &resource_));
+    return write_raw(std::pmr::string(bytes_value, &resource_));
 }
 task<void> http_tunnel::write(std::span<const std::byte> bytes_value) & {
     return write(as_chars(bytes_value));
 }
 task<void> http_tunnel::write_owned(std::pmr::string&& bytes_value) {
+    require_active();
+    require_unadapted();
+    return write_raw(std::move(bytes_value));
+}
+task<void> http_tunnel::write_raw(std::pmr::string&& bytes_value) {
     require_active();
     if (send_ended_) {
         throw std::logic_error("HTTP tunnel send direction has ended");
@@ -160,7 +176,9 @@ void http_capsule::release() noexcept {
 }
 http_capsule_stream::http_capsule_stream(http_tunnel& tunnel, http_capsule_config config) {
     tunnel.require_active();
+    tunnel.require_unadapted();
     state_ = make_pmr_object<detail::http_capsule_stream_state>(&tunnel.resource_, tunnel, config).release();
+    tunnel.adapted_ = true;
 }
 http_capsule_stream::http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config) {
     if (!tunnel.response_.state_ || !tunnel.response_.state_->memory_domain().worker().is_current()) {
@@ -201,6 +219,7 @@ http_capsule_stream http_tunnel::capsules(http_capsule_config config) & {
     if (!datagrams_) {
         throw std::logic_error("HTTP tunnel route did not declare datagrams");
     }
+    require_unadapted();
     return http_capsule_stream(*this, config);
 }
 http_capsule_stream http_client_tunnel::capsules(http_capsule_config config) && {

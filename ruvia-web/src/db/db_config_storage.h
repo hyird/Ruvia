@@ -24,15 +24,15 @@ struct db_cache_config_storage final {
         : duration_(source_value.duration_),
           always_enabled_(source_value.always_enabled_),
           ignore_errors_(source_value.ignore_errors_),
-          name_space_(source_value.name_space_, resource) {
-        if (duration_.count() <= 0 || name_space_.empty()) {
+          key_prefix_(source_value.key_prefix_, resource) {
+        if (duration_.count() <= 0 || key_prefix_.empty()) {
             throw std::invalid_argument("database cache requires a positive duration and nonempty namespace");
         }
     }
     std::chrono::milliseconds duration_;
     bool always_enabled_;
     bool ignore_errors_;
-    std::pmr::string name_space_;
+    std::pmr::string key_prefix_;
 };
 #endif
 

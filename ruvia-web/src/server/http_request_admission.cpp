@@ -93,7 +93,8 @@ void http_response_tail::record_access(const access_log_sink& access_log, http_s
         .known_method_ = request_->known_method(),
         .path_ = request_->path(),
         .protocol_version_ = request_->protocol_version(),
-        .remote_address_ = client_address_,
+        .remote_address_ = remote_address_,
+        .client_address_ = client_address_,
         .status_ = status,
         .duration_micros_ = access_log_record_access::duration_since(start_),
         .db_count_ = io_metrics_.db_count_,
@@ -108,7 +109,7 @@ void http_response_tail::defer_access(const access_log_sink& access_log, http1_d
     if (!access_log.callback_) {
         return;
     }
-    deferred.defer(head_end, *request_, client_address_, start_, status, io_metrics_);
+    deferred.defer(head_end, *request_, remote_address_, client_address_, start_, status, io_metrics_);
 }
 
 http_request_admission admit_http_request(const http_request_admission_input& input,
@@ -125,11 +126,12 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // would otherwise share the proxy's single key. Resolved once per request
     // and bound to the services every context of this request is created from.
     const auto connection = services.resolve_conn_info(request);
+    const auto remote_address = connection.remote().address();
     const auto client_address = connection.client().address();
 
     const auto* resolved = input.resolution_.resolved();
     http_request_admission admission(
-        http_response_tail(request, coding_policy, client_address, input.start_), services);
+        http_response_tail(request, coding_policy, remote_address, client_address, input.start_), services);
     admission.services_.bind_conn_info(connection);
     admission.services_.bind_response_coding(input.coding_);
     admission.resolved_ = resolved;

@@ -65,7 +65,8 @@ void enforce_route_rate_limit(context& context_value, const void* declaration, c
 // follows. Worker-local, like the app-wide rule. A refused request is answered
 // like one the app-wide rule refuses: 429 through the application error
 // handler, with Retry-After and X-RateLimit-* fields.
-template <std::size_t max_requests, std::int64_t window_ms>
+template <std::size_t max_requests, std::int64_t window_ms,
+    rate_limit_overflow_policy overflow_policy = rate_limit_overflow_policy::deny>
 class rate_limit final {
 public:
     static_assert(max_requests > 0, "route rate limit max requests must be greater than 0");
@@ -82,6 +83,7 @@ private:
     static constexpr rate_limit_rule rule_{
         .max_requests_ = max_requests,
         .window_ = std::chrono::milliseconds(window_ms),
+        .overflow_policy_ = overflow_policy,
     };
 };
 

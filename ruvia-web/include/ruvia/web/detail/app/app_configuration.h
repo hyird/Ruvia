@@ -55,8 +55,10 @@ public:
     void add_worker_state(worker_state_definition definition);
     void on_error(http_error_handler handler);
     void on_error(scoped_error_handler_options options);
+    void on_error(std::nullptr_t) noexcept;
     void on_not_found(http_not_found_handler handler);
     void on_not_found(scoped_not_found_handler_options options);
+    void on_not_found(std::nullptr_t) noexcept;
 
     [[nodiscard]] std::span<const worker_state_definition> worker_states() const noexcept {
         return worker_states_;

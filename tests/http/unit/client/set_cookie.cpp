@@ -71,6 +71,10 @@ RUVIA_TEST(set_cookie_parser_exposes_client_storage_fields) {
     RUVIA_CHECK(parsed_value->domain() == "example.com");
     RUVIA_CHECK(parsed_value->max_age_seconds() == 60);
     RUVIA_CHECK(parsed_value->has(ruvia::http_set_cookie_attribute::secure));
+    RUVIA_CHECK(parsed_value->has(ruvia::http_set_cookie_attribute::http_only));
+    RUVIA_CHECK(parsed_value->http_only());
+    RUVIA_CHECK(!parsed_value->same_site().has_value());
+    RUVIA_CHECK(!parsed_value->same_site_none());
     RUVIA_CHECK(!parsed_value->has(static_cast<ruvia::http_set_cookie_attribute>(
         static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::secure) |
         static_cast<std::uint8_t>(ruvia::http_set_cookie_attribute::path))));
@@ -157,6 +161,15 @@ RUVIA_TEST(set_cookie_parser_tracks_storage_security_attributes) {
         return;
     }
     RUVIA_CHECK(!overridden->has(ruvia::http_set_cookie_attribute::same_site_none));
+    RUVIA_CHECK(parsed_value->same_site_none());
+    RUVIA_CHECK(parsed_value->same_site() == ruvia::cookie_same_site::none);
+    RUVIA_CHECK(!overridden->same_site_none());
+    RUVIA_CHECK(overridden->same_site() == ruvia::cookie_same_site::lax);
+    const auto strict = ruvia::parse_set_cookie("sid=abc; samesite=STRICT");
+    RUVIA_CHECK(strict.has_value() && strict->same_site() == ruvia::cookie_same_site::strict);
+    const auto unknown_same_site =
+        ruvia::parse_set_cookie("sid=abc; SameSite=Strict; SameSite=Unknown");
+    RUVIA_CHECK(unknown_same_site.has_value() && !unknown_same_site->same_site().has_value());
 }
 
 RUVIA_TEST(set_cookie_parser_preserves_quoted_cookie_value) {

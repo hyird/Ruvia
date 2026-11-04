@@ -237,6 +237,10 @@ public:
         static_assert(result_value < sizeof...(columns), "unknown entity column");
         return result_value;
     }
+    template <fixed_string name>
+    static consteval std::string_view column_name() noexcept {
+        return std::tuple_element_t<index<name>(), columns_type>::name.view();
+    }
     explicit entity_value_storage(std::pmr::memory_resource* resource = nullptr)
         : resource_(pmr_resource_or_default(resource)),
           slots_(entity_value_slot<typename columns::value_type>(resource_)...) {}
@@ -290,6 +294,21 @@ public:
     }
     std::pmr::memory_resource* resource() const noexcept {
         return resource_;
+    }
+    [[nodiscard]] entity_value_storage rebind(std::pmr::memory_resource* resource) const {
+        entity_value_storage copy(resource);
+        for_each_descriptor<columns_type>([&]<typename column_type, std::size_t> {
+            constexpr auto name = column_type::name;
+            const auto& source_slot = slot<name>();
+            if (source_slot.state_ == decltype(source_slot.state_)::value) {
+                copy.template set<name>(source_slot.value_);
+            } else if (source_slot.state_ == decltype(source_slot.state_)::null) {
+                if constexpr (column_type::options.nullable_) {
+                    copy.template set_null<name>();
+                }
+            }
+        });
+        return copy;
     }
 
 private:

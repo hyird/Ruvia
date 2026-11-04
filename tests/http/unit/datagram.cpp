@@ -73,13 +73,27 @@ RUVIA_TEST(http_capsule_incremental_unknown_empty_and_datagram) {
     auto empty = ruvia::encode_http_capsule_header(prefix, 0, 0);
     wire.append(prefix.data(), std::get<0>(empty));
     ruvia::http_capsule_decoder decoder;
-    capture capture;
+    capture capture_state;
     for (const char& byte : wire) {
-        RUVIA_CHECK(decoder.feed({&byte, 1}, false, capsule, &capture) == ruvia::http_capsule_status::need_more_data);
+        RUVIA_CHECK(decoder.feed({&byte, 1}, false, capsule, &capture_state) == ruvia::http_capsule_status::need_more_data);
     }
-    RUVIA_CHECK_EQ(capture.body_, std::string("hello"));
-    RUVIA_CHECK_EQ(capture.ends_, 2u);
-    RUVIA_CHECK(decoder.feed({}, true, capsule, &capture) == ruvia::http_capsule_status::end);
+    RUVIA_CHECK_EQ(capture_state.body_, std::string("hello"));
+    RUVIA_CHECK_EQ(capture_state.ends_, 2u);
+    RUVIA_CHECK(decoder.feed({}, true, capsule, &capture_state) == ruvia::http_capsule_status::end);
+    ruvia::http_capsule_decoder lambda_decoder;
+    capture lambda_capture;
+    RUVIA_CHECK(lambda_decoder.feed(wire, true, [&](ruvia::http_capsule_event event) {
+        capsule(&lambda_capture, event);
+    }) == ruvia::http_capsule_status::end);
+    RUVIA_CHECK_EQ(lambda_capture.body_, std::string("hello"));
+    RUVIA_CHECK_EQ(lambda_capture.ends_, 2u);
+    ruvia::http_capsule_decoder pull_lambda_decoder;
+    capture pull_lambda_capture;
+    const auto pull_first = pull_lambda_decoder.feed_one(wire, true, [&](ruvia::http_capsule_event event) {
+        capsule(&pull_lambda_capture, event);
+    });
+    RUVIA_CHECK(pull_first.capsule_complete_);
+    RUVIA_CHECK_EQ(pull_lambda_capture.body_, std::string("hello"));
 }
 RUVIA_TEST(http_capsule_truncated_and_length_limit_are_terminal) {
     const std::array prefix{char(0), char(3)};
