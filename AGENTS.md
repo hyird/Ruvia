@@ -35,6 +35,7 @@
 - 使用 C++20。源码只放在三个库、`examples` 和 `tests`。
 - 各库自带 `CMakeLists.txt`、`include` 和 `src`，只拥有自己的源码、预编译头（`src/pch.h`）和公开命名根。`src` 最多一层职责目录；`ruvia-core/src` 保持扁平。
 - 跨库只用非 `detail` 公开 API，严禁穿透内部头、跨组件 `detail` 头或相对物理路径。需要跨库共享的通用辅助能力由所属下层库公开提供。
+- 公开头文件保持最小包含闭包（Include Firewall）：核心入口头（如 `context.h`）对独立子系统句柄（客户端、WebSocket、隧道、流式、Session、数据库、Redis 等）优先使用前置声明，由实际消费该能力的编译单元按需包含对应定义头，避免全量头文件耦合传染。
 - sans-I/O 与网络驱动边界：
   - `ruvia-http` 只产出确定性的解析结果、协议计划（如 representation response plan、首部校验、帧编码与流控预算消费）和状态机转换，不持有 socket、定时器或协程挂起；
   - `ruvia-web` 严格消费 `ruvia-http` 的协议计划驱动读写、超时与重连，不在 Web 层二次解析协议语法或绕过协议状态机拼接报文。
@@ -60,8 +61,8 @@
   - 服务端 `session` 仅接受固定长度合法格式 ID，每次非空写入在响应头 commit 时自动轮换新 ID 防止会话固定攻击，替换已过期或被吊销会话返回 409；一旦响应头（含流式、WebSocket 或 `CONNECT` 握手头）开始发送，任何会话写操作立即抛出 `std::logic_error`。
   - 静态文件服务在构造期归一化根目录并建立内存索引，默认拒绝隐藏路径段（`.` 开头或包含 `/.`，防止泄露 `.env`、`.git` 等敏感文件）、符号链接越界与非普通文件。
   - 代理转发首部（`Forwarded` / `X-Forwarded-*`）仅在可信代理（`trusted_proxy_config`）下采信；Cookie 签名、JWT 验证等安全凭证对比使用常量时间比较。
-  - TLS 安全基线（RFC 9846 / RFC 9525）：仅协商 TLS 1.2（强制仅限 ECDHE + AEAD 套件，拒绝重协商）或 TLS 1.3；证书主机名校验严格匹配 `subjectAltName`（DNS 名匹配 `DNS-ID` 且通配符仅限最左完整标签，IP 字面量匹配 `IP` 条目，绝不使用 `subject Common Name`）；每条 TLS 连接发出的记录总数（含握手、控制与 `KeyUpdate`）受 `max_outgoing_records_`（$1 \dots 2^{23}$）硬上限约束，`KeyUpdate` 不重置连接级计数，达限即终止连接以防触及 RFC 9846 §5.5 单密钥 AEAD 用量极限；服务端 Ticket 密钥按 2 小时周期轮换并在停签一个周期后销毁，跨 worker 会话恢复严格绑定原 `server_name`。
-- 输出合规与脱敏：对外文本使用合法 UTF-8；系统错误信息先转换编码，JSON 输出始终转义合法。对外错误响应不回显内部异常描述、SQL 语句、宿主文件路径或上游内部细节，服务端脱敏后记录诊断原因；日志、代码与构建制品不得包含真实密钥、令牌或凭据。
+  - TLS 安全基线（RFC 9846 / RFC 9525）：证书、私钥与 CA 在 `listen()` 或客户端注册时一次性加载校验，私钥口令副本在调用返回前主动擦除（cleanse）；仅协商 TLS 1.2（强制 ECDHE + AEAD，拒绝重协商）或 TLS 1.3；主机名校验严格匹配 `subjectAltName`（`DNS-ID` 最左完整标签通配、`IP` 精确匹配，禁用 `Common Name`）；每条连接发出记录数（含握手、控制与 `KeyUpdate`）受 `max_outgoing_records_`（$1 \dots 2^{23}$）硬上限约束，`KeyUpdate` 不重置计数，达限即终止连接以符合 RFC 9846 §5.5；服务端 Ticket 密钥每 2 小时轮换并在停签一个周期后销毁，跨 worker 会话恢复严格绑定原 `server_name`。
+- 输出合规与脱敏：对外文本使用合法 UTF-8；受限长度文本或校验诊断（如 `validation_issue`）按字节上限截断时必须回退半个多字节序列以保持 UTF-8 码点完整；系统错误信息先转换编码，JSON 输出始终转义合法。对外错误响应不回显内部异常描述、SQL 语句、宿主文件路径或上游内部细节，服务端脱敏后记录诊断原因；日志、代码与构建制品不得包含真实密钥、令牌或凭据。
 - 故障隔离与不变量恢复：
   - 对端正常断开、自身停机或排空引起的中止属于正常生命周期结束，不按故障上报或计数；真实异常必须上报，不得静默吞掉。
   - 单次请求、单个 HTTP/2 流、单条连接或单次后端调用的超时、取消与协议错误严格隔离在当前作用域内回收，不得破坏 worker 状态机或升级为 worker/进程故障；可恢复异常捕获边界所保留的对象必须维持完整不变量。
@@ -73,7 +74,7 @@
 - 涉及协议义务的代码注释与变更说明应标注具体适用的 RFC 条款；内部约束不得冒充 RFC 要求，偏离 `SHOULD` 须说明理由。
 - 校验限于协议语法、分帧、路由、安全边界和明确资源限制，不以“更严格”代替正确性。产品限制单独说明，不冒充 RFC 要求，也不为字段数、分块数或消息数另设无依据限制。
 - 沿「请求解析 → 正文分帧与解码 → 响应计划与序列化 → 网络驱动与生命周期回收」完整主链审查，不只检查孤立函数。
-- HTTP/1 与通用表示语义：重点核对 `Host` 与请求目标、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为；增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；条件请求遵循 RFC 9110 §13.2.2 优先级，`Range` 解析使用定长零分配集合（`http_byte_range_set`，上限 16 防分片 DoS）并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，绝不重复发送相同表示字节）。
+- HTTP/1 与通用表示语义：重点核对 `Host` 与请求目标、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为；增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；条件请求遵循 RFC 9110 §13.2.2 优先级，`Range` 解析使用定长零分配集合（`http_byte_range_set`，上限 16 防分片 DoS）并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，不重复发送表示字节）；携带 `Content-Encoding` 的表示遇到多段 `Range` 请求时按 RFC 9110 §8.4 / §14.6 回退完整表示（单段仍返回 206），`If-Range` 命中授权的 206 按 RFC 9110 §15.3.7 精简非必需表示首部。
 - HTTP/2 重点核对连接前言与 `SETTINGS` 同步、流状态机与并发/流控窗口、HPACK 动态表上限与伪首部/普通首部顺序、帧长度与填充/优先级约束、`GOAWAY` / `RST_STREAM` / `PING` 及 Extended `CONNECT`（RFC 8441），严格区分流级错误与连接级错误（RFC 9113 §5.4）：
   - 出站 HPACK 编码绝不插入动态表条目（容量缩减直接置零），确保状态有界与确定性；
   - `enable_push_` 与 `ORIGIN` 帧（RFC 8336，仅限认证 TLS 连接，严禁用于 `h2c` 或显式代理）仅限客户端启用，服务端构造时直接拒绝；
@@ -154,8 +155,8 @@
 ## Web 核心设计
 
 - `controller` 是不继承框架类型的 `final` 类，由 `RUVIA_ROUTES_BEGIN(type)` … `RUVIA_ROUTES_END` 宏声明路由并在 `main` 前自动注册；注册去重后封存，不维护手工清单。
-- 中间件是满足 `ruvia::middleware` 概念的 `final` 类型，不继承框架基类；继续调用为 single-shot。
-- `controller` 和中间件保持 per-worker。进程只拥有一份不可变路由查找计划，各 worker 路由契约必须一致；路由和中间件链在启动前构建，冲突启动即报错。
+- 中间件是满足 `ruvia::middleware` 概念的 `final` 类型，不继承框架基类；继续调用为 single-shot。前缀作用域中间件（`use_at`）按百分比解码并归一化尾斜杠后的完整路径段匹配（如 `/admin` 覆盖 `/%61dmin/x` 但不匹配 `/administrator`），归属关系在启动期编译进路由计划，仅跨边界的参数化路由在分发期检查请求路径。
+- `controller`、中间件与 `use_worker_state` 注册的状态均保持 per-worker。进程只拥有一份不可变路由查找计划，各 worker 路由契约必须一致；路由和中间件链在启动前构建，冲突启动即报错。
 - 上下文只暴露 typed capability；callback 由应用拥有。
 - 响应元数据显式分为下一次构造消耗的 `draft()`、当前缓冲响应的 `edit_response()` 和交付时应用的跨替换 `policy()`；替换不自动继承旧响应字段。流式生产者先 `commit()` 并区分正文阶段与正常完成，正常完成不得伪装成取消或中止。
 - `model_type` 使用编译期 schema，解析、校验和序列化职责分离：必填与可空独立（`RUVIA_OPTIONAL_FIELD` 仅允许字段缺失，允许 `null` 须显式声明 `RUVIA_NULLABLE`，`RUVIA_DEFAULT` 仅作用于缺失的可选字段）；数值转换拒绝 `bool`/字符充当整数并执行精确整数与窄化浮点范围检查；跨分配器拥有化支持递归重绑定（`rebind_for_model`），移动操作检测源与目标地址重叠（`model_address_within`）防止自包含结构移动时先销毁自身存储。
