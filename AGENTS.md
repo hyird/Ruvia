@@ -90,7 +90,7 @@
 - 全双工与长生命周期会话（WebSocket、HTTP/2 流、CONNECT / Capsule 隧道、流式传输）：
   - 读、写、心跳保活与关闭握手共享会话状态但保持单向线性通道互斥（`body_reader`、`response_stream_writer`、`http_capsule_stream` 均在操作启动时独占对应读或写通道，未启动的冷操作允许并存；`http_capsule_stream` 严禁与原始隧道读写混用，未知 Capsule 类型原样交付上层忽略）；`CONNECT-UDP`（RFC 9298 / RFC 9297）本端发送强制携带唯一 `Capsule-Protocol: ?1`，接收端将非布尔、`?0` 或重复字段按缺省忽略并拒绝 204/205/206 响应；Capsule 增量解码器对不保留的类型或未知 Context ID 直接零缓冲流式跳过（不受 `max_capsule_length_` 限制，但短于 Context ID 的畸形 `DATAGRAM` 仍保留报错），`feed_one` 在首个完整保留 Capsule 处停止并将未消费后缀归还调用方；
   - 响应完成不等于请求上传完成（如客户端流式请求收到响应 `END_STREAM` 仅关闭接收半边，发送半边仍须显式完成或重置）；复用或排空连接前必须满足请求与响应双向的消息边界和生命周期契约。后续字节归属不明时关闭连接，不继续解析；非 2xx `CONNECT` 的关闭遵守 RFC 9931；
-  - WebSocket 握手、读写并发与关闭（RFC 6455 / RFC 8441）：子协议集合（`websocket_subprotocol_set`）对本端配置与客户端发送强制要求 token 唯一且超限拒绝（不截断），服务端接收则容忍并跳过重复提供项；客户端握手由版本无关的 `websocket_client_negotiation` 统一复用子协议与 `permessage-deflate` 选择校验（HTTP/1.1 校验 `101` 与 `Sec-WebSocket-Accept`，HTTP/2 Extended `CONNECT` 校验 `2xx`、流未随 `HEADERS` 提前关闭及无连接特定首部）；写通道仅在完整消息边界之间轮询挂起读通道的控制帧，绝不打断在途完整消息；禁用单帧压缩（`compress_ = false`）时同步绕过压缩字典更新以防侧信道泄漏；服务端刷出响应 Close 后立即计划关闭传输，客户端则保持传输打开等待对端 EOF（期间丢弃残余输入）；
+  - WebSocket 握手、读写并发与关闭（RFC 6455 / RFC 8441）：子协议集合（`websocket_subprotocol_set`）对本端配置与客户端发送强制要求 token 唯一且超限拒绝（不截断），服务端接收则容忍并跳过重复提供项；客户端握手由版本无关的 `websocket_client_negotiation` 统一复用子协议与 `permessage-deflate` 选择校验（HTTP/1.1 校验 `101` 与 `Sec-WebSocket-Accept`，HTTP/2 Extended `CONNECT` 校验 `2xx`、流未随 `HEADERS` 提前关闭及无连接特定首部）；写通道仅在完整消息边界之间轮询挂起读通道的控制帧，绝不打断在途完整消息；禁用单帧压缩（`compress_ = false`）时同步绕过压缩字典更新以防侧信道泄漏；`websocket_close_code` 严格限制在合法线面状态码空间（拒绝 `1005`/`1006` 等本地伪状态码）；服务端刷出响应 Close 后立即计划关闭传输，客户端则保持传输打开等待对端 EOF（期间丢弃残余输入）；
   - 任一方向发生错误、超时或半关闭时，必须协同唤醒并取消或排空另一方向的挂起操作，确保全部读写与定时器操作完成后才释放会话与底层传输。
 - TLS 关闭、TCP Lingering Close（RFC 9112 §9.6 / §9.8）与 HTTP/2 排空：关闭连接的 HTTP/1 最终响应与以 `GOAWAY` 结束的 HTTP/2 会话执行有界 lingering close（TLS 发送 `close_notify`，TCP 半关闭发送端，在有界时间与字节预算内排空对端未读输入），防止未读输入触发 TCP RST 抹掉最终响应；空闲、请求头超时与排空关闭等待请求的连接发送 TLS `close_notify`，写超时、传输错误与强制停机直接关闭；消息完整性依赖连接关闭时，不得将未认证的 TLS 截断当作完整消息。充当中间代理时按协议处理逐跳字段，不得丢失需要保留的重复字段语义。
 - 缺陷结论以 RFC 条款和公开行为复现为证据；说明审查覆盖范围，不以已有测试通过宣称“绝对无 BUG”。
@@ -130,9 +130,9 @@
   - POSIX（Linux 等）：使用 `SO_REUSEADDR` + `SO_REUSEPORT`，缺失或设置失败则启动失败；每个 worker 直接接受本 worker 的监听器。
   - Windows：每个 worker 使用 `SO_REUSEADDR` 独立绑定监听 socket，全部 ready 后在共享监听句柄矩阵上发起原生 `AcceptEx`，不使用单监听回退（不保证严格均衡，也不阻止其他进程复用端口）。监听 IOCP 收到属于其他 worker 的完成时，只向 origin worker 的预留有界完成槽（容量由 worker 与监听器矩阵确定，不占用普通业务队列）发布结果并唤醒，禁止在当前线程处理或销毁 origin 的 socket、业务状态及 PMR。
 - 跨线程调度、唤醒与通道：
-  - 跨线程业务调度走有界队列，禁止直接操作其他 worker 的连接或状态；调度入口与事件循环同属一个 owner，入口先于上下文退役；请求期只借用稳定 worker 句柄，显式卸载可复制一次；
+  - 跨线程业务调度走有界队列，禁止直接操作其他 worker 的连接或状态；`post_factory` 先预留有界准入再同步执行工厂，非平凡 `post` 在调用用户构造/移动前先保存 `worker_handle` 快照以防重入退役清空原句柄；调度入口与事件循环同属一个 owner，入口先于上下文退役；请求期只借用稳定 worker 句柄，显式卸载可复制一次；
   - 跨线程唤醒（`worker_notification`）采用原子锁存与非阻塞原生写，已存在未决锁存时自动合并（`coalesced`）避免唤醒风暴，析构前须确保生产者静默且 owner worker 已显式 `close()` 并 `join` 挂起等待；
-  - 已持有资源的冷路径异步清理使用 `event_loop::defer_cleanup` 获取退役保护租约，绕过普通业务队列有界准入但保证在事件循环释放物理上下文前执行完毕；
+  - 已持有资源的冷路径异步清理使用 `event_loop::defer_cleanup` 获取退役保护租约，绕过普通业务队列有界准入但保证在事件循环释放物理上下文前执行完毕；已接纳挂起协程的延迟恢复（`defer_resume`）不受有界队列满拒绝，在本 worker 线程上零类型擦除直达事件循环下一轮次；
   - 跨 worker 有界 `channel` 在构造期预分配槽位，预留（`reserved_`）与已入队（`queued_`）合并计入容量上限防超发；单次异步交付（`one_shot`）将停机钩子作为首个成员以确保最后解链，并在互斥锁外执行结果值的移动提取或析构；跨 worker 投递的数据须持有独立所有权，确需共享可变数据时须明确同步与一致性语义，优先使用不可变快照。
 
 协程、结构化并发、租约与连接池：
@@ -161,7 +161,7 @@
 ## Web 核心设计
 
 - `controller` 是不继承框架类型的 `final` 类，由 `RUVIA_ROUTES_BEGIN(type)` … `RUVIA_ROUTES_END` 宏声明路由并在 `main` 前自动注册；注册去重后封存，不维护手工清单。
-- 中间件是满足 `ruvia::middleware` 概念的 `final` 类型，不继承框架基类；继续调用为 single-shot。前缀作用域中间件（`use_at`）按百分比解码并归一化尾斜杠后的完整路径段匹配（如 `/admin` 覆盖 `/%61dmin/x` 但不匹配 `/administrator`），归属关系在启动期编译进路由计划，仅跨边界的参数化路由在分发期检查请求路径。
+- 中间件是满足 `ruvia::middleware` 概念的 `final` 类型，不继承框架基类；继续调用（`next`）通过三态控制块（`fresh` / `invoked` / `expired`）强制 single-shot 并在当前中间件栈帧退出后立即失效以防逃逸。前缀作用域中间件（`use_at`）按百分比解码并归一化尾斜杠后的完整路径段匹配（如 `/admin` 覆盖 `/%61dmin/x` 但不匹配 `/administrator`），归属关系在启动期编译进路由计划，仅跨边界的参数化路由在分发期检查请求路径。
 - `controller`、中间件与 `use_worker_state` 注册的状态均保持 per-worker。进程只拥有一份不可变路由查找计划，各 worker 路由契约必须一致；路由和中间件链在启动前构建，冲突启动即报错。
 - 上下文（`context` 与 `web_worker_context`）只暴露 typed capability（`web_worker_context` 直接借用 worker 的客户端注册表与停止令牌，启动后台任务零所有权复制，worker 退役前 `join` 全部已投递任务）；callback 由应用拥有。
 - 响应元数据显式分为下一次构造消耗的 `draft()`、当前缓冲响应的 `edit_response()` 和交付时应用的跨替换 `policy()`；替换不自动继承旧响应字段。流式生产者先 `commit()` 并区分正文阶段与正常完成，正常完成不得伪装成取消或中止。
