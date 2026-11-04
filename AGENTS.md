@@ -124,14 +124,14 @@
 线程与连接：
 
 - 生产 `application` 是进程级单例，通过 `ruvia::app()` 获取，不可自行构造、复制或移动；配置与生命周期入口唯一。
-- `core` 是线程、事件循环、调度入口和通用 worker 生命周期的唯一 owner。`event_loop_pool` 与 Web 组合复用同一承载，Web 不另建线程、事件循环或启停主链。
+- `core` 是线程、事件循环、调度入口和通用 worker 生命周期的唯一 owner（`current_worker_guard` 严禁单线程并发嵌套运行多个 worker；附着外部 `asio::io_context` 时通过自定义 Asio `service` 强制独占 `claim()` 并在 `service::shutdown()` 阶段自动退役 worker 状态，防止句柄暴露悬垂 `io_context&`）。`event_loop_pool` 与 Web 组合复用同一承载，Web 不另建线程、事件循环或启停主链。
 - 每个业务 worker 独占一个 standalone Asio 事件循环，在本 worker 上独立 bind/listen 全部监听端点；n 个业务 worker 不另配网络接入线程（阻塞池和信号线程另计）。
 - Web 只拥有 worker-local 业务状态、能力、监听器、连接 I/O 和接入/退役策略，通过生命周期扩展点接入 `core`。待接受 socket 从创建起归发起 accept 的 origin worker，全部请求、TCP I/O、TLS、协议定时器和连接生命周期均留在该 worker，不设独立 acceptor、跨 worker 连接交接或连接交接队列。
 - 平台监听模型：
   - POSIX（Linux 等）：使用 `SO_REUSEADDR` + `SO_REUSEPORT`，缺失或设置失败则启动失败；每个 worker 直接接受本 worker 的监听器。
   - Windows：每个 worker 使用 `SO_REUSEADDR` 独立绑定监听 socket，全部 ready 后在共享监听句柄矩阵上发起原生 `AcceptEx`，不使用单监听回退（不保证严格均衡，也不阻止其他进程复用端口）。监听 IOCP 收到属于其他 worker 的完成时，只向 origin worker 的预留有界完成槽（容量由 worker 与监听器矩阵确定，不占用普通业务队列）发布结果并唤醒，禁止在当前线程处理或销毁 origin 的 socket、业务状态及 PMR。
 - 跨线程调度、唤醒与通道：
-  - 跨线程业务调度走有界队列，禁止直接操作其他 worker 的连接或状态；`post_factory` 先预留有界准入再同步执行工厂，非平凡 `post` 在调用用户构造/移动前先保存 `worker_handle` 快照以防重入退役清空原句柄；调度入口与事件循环同属一个 owner，入口先于上下文退役；请求期只借用稳定 worker 句柄，显式卸载可复制一次；
+  - 跨线程业务调度走有界队列（`worker_dispatcher` 构造期预分配 $2 \times \text{capacity}$ 节点池，`drain()` 锁内整链摘取 `ready` 队列并在锁外批量执行，确保有界准入未满时 `free` 链表永非空且运行期零堆分配），禁止直接操作其他 worker 的连接或状态；`post_factory` 先预留有界准入再同步执行工厂，非平凡 `post` 在调用用户构造/移动前先保存 `worker_handle` 快照以防重入退役清空原句柄；调度入口与事件循环同属一个 owner，入口先于上下文退役；请求期只借用稳定 worker 句柄，显式卸载可复制一次；
   - 跨线程唤醒（`worker_notification`）采用原子锁存与非阻塞原生写，已存在未决锁存时自动合并（`coalesced`）避免唤醒风暴，析构前须确保生产者静默且 owner worker 已显式 `close()` 并 `join` 挂起等待；worker 内侵入式唤醒（`worker_signal`）在构造冷等待操作时即递增 `reserved_waits_` 且仅限未启动态移动，存在未决或预留等待时析构直接 `std::terminate()`；
   - 已持有资源的冷路径异步清理使用 `event_loop::defer_cleanup` 获取退役保护租约，绕过普通业务队列有界准入但保证在事件循环释放物理上下文前执行完毕；已接纳挂起协程的延迟恢复（`defer_resume`）不受有界队列满拒绝，在本 worker 线程上零类型擦除直达事件循环下一轮次；
   - 跨 worker 有界 `channel` 在构造期预分配槽位，预留（`reserved_`）与已入队（`queued_`）合并计入容量上限防超发；单次异步交付（`one_shot`）将停机钩子作为首个成员以确保最后解链，并在互斥锁外执行结果值的移动提取或析构；投递结果（`worker_delivery_result`）在因队列满、关闭或停机被拒时完整保留并向调用方退回未消费的值或可调用对象，等待结果（`worker_wait_result`）在构造时固定结果类别且禁用赋值；跨 worker 投递的数据须持有独立所有权，确需共享可变数据时须明确同步与一致性语义，优先使用不可变快照。
@@ -141,7 +141,7 @@
 - 协程保持 lazy 和 structured ownership。公开协程统一使用单一模板 `ruvia::task<t_type>`（`void` 通过 `task_promise<void>` 复用同一主模板而不单独偏特化，且仅允许右值 `&&` 执行 `co_await`）；超对齐（over-aligned）局部变量必须存放在独立拥有的堆存储中，禁止直接置于协程栈帧以规避编译器帧对齐缺陷。
 - 未启动任务可丢弃；已启动任务必须完成。取消后必须 `co_await` / `join`，禁止销毁挂起帧或静默 detach。`event_loop::start` 启动的 `root_task` 由事件循环持有协程帧直至完成（严禁在所属事件循环线程上同步 `wait()` 自锁，且须在销毁可能借用调用方 PMR 的 moved-from 中间结果对象后才 `publish_completion()`），放弃 `root_task` 句柄绝不销毁挂起帧，未消费异常统一路由至循环的 failure sink。
 - 结构化并发（`task_scope` 与 `operation_scope`）：`task_scope` 绑定地址稳定的左值 `worker_handle`，单次 `join()` 启动后立即封闭 `spawn` 准入并等待在途准入及全部子任务退役（析构时若有活跃子任务或未决 `join` 则 `std::terminate()`，未经 `join` 消费的已完成子任务异常转发至 `report_unhandled_failure`）；`operation_scope` 在关闭时先退役冷任务帧，`close_and_join()` 等待已启动帧、线性租约及能力清理回调全部完成（含清理回调重入），且 `scoped_capability_registration` 须声明在宿主负载成员之后以确保先解链再析构负载。
-- `stop_token` 只引用一个取消状态（`stop_state` 由进程级 mimalloc 分配，支持最末持有者在任意线程释放；`request_stop()` 在锁外执行回调，跨线程解链等待运行中回调返回而回调自解链绝不自等待）；多源取消由地址稳定的 `stop_group` 显式拥有，其寿命覆盖使用者完成和 join。`operation_options` 派生（`with_options`）替换明确提供的用户 token（不隐式累加），而超时覆盖只允许收紧（tighten）已有截止期；客户端关闭仍通过自身生命周期独立终止操作。外部线程触发的 `stop_token` 回调不得直接操作 worker 局部定时器或连接槽，须经可分离的 `worker_cancellation_target`（按非零递增 64 位 `operation_id` 寻址，宿主析构时 `detach` 原子置空）或带代际计数（`slot + generation`）的 `worker_timer_cancellation` 投递回所属 worker 线程执行（定时器队列停止后 `schedule_timer` 返回 `worker_stopping`，不存储回调且不绑定注册项），且带取消的等待操作（如 `sleep_operation`）须将 `stop_registration` 声明为末位成员以确保先拆卸回调再销毁定时器与借用句柄。
+- `stop_token` 只引用一个取消状态（`stop_state` 由进程级 mimalloc 分配，支持最末持有者在任意线程释放；`request_stop()` 在锁外执行回调，跨线程解链等待运行中回调返回而回调自解链绝不自等待）；多源取消由地址稳定的 `stop_group` 显式拥有，其寿命覆盖使用者完成和 join。`operation_options` 派生（`with_options`）替换明确提供的用户 token（不隐式累加），而超时覆盖只允许收紧（tighten）已有截止期；客户端关闭仍通过自身生命周期独立终止操作。外部线程触发的 `stop_token` 回调不得直接操作 worker 局部定时器或连接槽，须经可分离的 `worker_cancellation_target`（按非零递增 64 位 `operation_id` 寻址，宿主析构时 `detach` 原子置空）或带代际计数（`slot + generation`）的 `worker_timer_cancellation` 投递回所属 worker 线程执行（每个 worker 由单一底层 `asio::steady_timer` 与最小堆驱动全部业务定时器，跨线程无通知取消直接 CAS 置零 `active_generation_` 免唤醒；定时器队列停止后 `schedule_timer` 返回 `worker_stopping`，不存储回调且不绑定注册项），且带取消的等待操作（如 `sleep_operation`）须将 `stop_registration` 声明为末位成员以确保先拆卸回调再销毁定时器与借用句柄。
 - 线性 lease 在任务启动时占用，不得并发或失败后复用。
 - 连接池与脏连接回收契约（`slot_pool` / `pool_lease_scheduler`）：
   - 数据库、Redis 与出站客户端连接池均保持 worker-local 且地址稳定，槽位在构造期预分配，统一管理租约排队、按 operation id 寻址的取消与单槽截止期定时器；`release()` 在返回前将空闲槽位所有权即刻移交排队等待者（后续取消或 `close()` 不得推翻该已提交获取），但等待者协程延迟至下一轮 worker 事件循环恢复，严禁在 `release()` 内联同步恢复；
