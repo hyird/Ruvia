@@ -72,13 +72,13 @@
 ## 协议实现与审查
 
 - HTTP/1.0、HTTP/1.1、HTTP/2、TLS、WebSocket、HTTP 隧道（含 CONNECT-UDP / Capsule）、缓存、条件请求、范围请求、压缩、DNS 等协议及其扩展的实现必须符合适用的现行 RFC，以正文、适用更新及已验证勘误为准。HTTP 参照 RFC 9110/9111/9112/9113，TLS 1.3 参照 [RFC 9846](https://www.rfc-editor.org/info/rfc9846/)（取代 RFC 8446）。
-- 区分 MUST、SHOULD、MAY 及发送方、接收方、中间代理的义务，不把发送方的 MUST NOT 自动变成接收方的拒绝规则。按规范忽略、容忍或规范化输入；未知但合法的扩展不等于格式错误，不支持的能力按协议处理。
+- 区分 MUST、SHOULD、MAY 及发送方、接收方、中间代理的义务，不把发送方的 MUST NOT 自动变成接收方的拒绝规则。出站首部显式区分本端生成（`generated`）与代理转发（`forwarded`，RFC 9110 §2.2：保留收到的 `Content-Type`、`Origin` 与 CORS 请求值并容忍 `Content-Encoding` / `Upgrade` 中的合法空成员，但绝不放宽字段字节安全、单例首部计数或写入器所有权，且按 §7.6.1 剥离/重建逐跳首部）。按规范忽略、容忍或规范化输入；未知但合法的扩展不等于格式错误，不支持的能力按协议处理。
 - 涉及协议义务的代码注释与变更说明应标注具体适用的 RFC 条款；内部约束不得冒充 RFC 要求，偏离 `SHOULD` 须说明理由。
 - 校验限于协议语法、分帧、路由、安全边界和明确资源限制，不以“更严格”代替正确性。产品限制单独说明，不冒充 RFC 要求，也不为字段数、分块数或消息数另设无依据限制。
 - 沿「请求解析 → 正文分帧与解码 → 响应计划与序列化 → 网络驱动与生命周期回收」完整主链审查，不只检查孤立函数。
 - HTTP/1 与通用表示语义：
   - 重点核对 `Host` 与请求目标（`http_authority_view` 拒绝 `userinfo` 并严格区分端口缺省、空端口与显式数值端口；默认端口未知即 `0` 时，缺省/空端口绝不与显式 `:0` 相等，非法 authority 永不相等）、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为（通用 1xx 临时响应排除 `101 Switching Protocols`，`101` 仅由专用协议升级驱动边界生成；若 1xx 含 `Connection: close`，按 RFC 9112 在刷出后立即关闭连接；`CONNECT` 与 `TRACE` 接受显式零长度分帧但拒绝非空正文，而 `OPTIONS` 正文要求 `Content-Type` 仅约束发送方 RFC 9110 §9.3.7，入站准入不因缺失 `Content-Type` 拒绝）；
-  - HTTP/1 客户端请求准备阶段由写入器原子决定 `Expect: 100-continue` 发射与正文门控（`continue_gated`，门控等待超时归属 I/O 运行时策略），并将进入线面计划的协议事实打包为自包含状态（`http1_client_exchange_state`）移交响应解析器，使响应解析彻底脱离调用方请求方法与首部存储的生命周期且常规请求零分配；携带正文的客户端请求必须在通知外部已完整写出预备请求正文后才可接受 `101`，且 `1xx` 的 `allow_reuse` 仅允许当前交换继续等待最终响应而不提前归还连接池；
+  - HTTP/1 客户端请求准备阶段由写入器原子决定 `Expect: 100-continue` 发射与正文门控（`continue_gated`，门控等待超时归属 I/O 运行时策略），并将进入线面计划的协议事实打包为自包含状态（`http1_client_exchange_state`）移交响应解析器，使响应解析彻底脱离调用方请求方法与首部存储的生命周期且常规请求零分配；携带正文的客户端请求必须在通知外部已完整写出预备请求正文后才可接受 `101`，且 `1xx` 的 `allow_reuse` 仅允许当前交换继续等待最终响应而不提前归还连接池；客户端响应头保留原始状态码（`received_status()`）但将收到的 `600..999` 按 RFC 9110 §15 映射为 `500` 处理，且 `HEAD` 响应（含 `205`）的 `Content-Length` 仅作元数据而不作为接收正文长度；
   - 增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；逗号列表与分号参数统一复用唯一引号感知扫描器（`http_find_unquoted_delimiter`，识别 `quoted-string` 与 `\"` 转义），但 `Cookie` 解析按 RFC 6265 严禁赋予 `"` 引号包裹语义；
   - 请求 `Trailer`（`http_request_trailers`）独立于初始请求头存储并按全有或全无及独立字节预算追加，禁止字段（RFC 9110 §6.5.1）在显式追加或 HTTP/2 下直接拒绝，而在 HTTP/1 接收时计入字节预算后按 RFC 9112 §7.1.2 丢弃不保留；响应 `Trailer` 通过 `validate_http_response_trailers` 先行构造借用证明（`http_response_trailer_section`），响应头序列化（`append_http1_response_head`）优先保留显式 `Date`（未设置时复用缓存时间）且从同一十进制 token 测量并写出 `Content-Length`；
   - 条件请求遵循 RFC 9110 §13.2.2 优先级，重复的 `If-Modified-Since` / `If-Unmodified-Since` 首部行按无效日期条件直接忽略（不取末行生效），日期形式的 `If-Range` 要求强验证器且时间戳精确相等；`Range` 解析使用有界定长零分配集合并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，不重复发送表示字节）；携带 `Content-Encoding` 的表示遇到多段 `Range` 时按 RFC 9110 §8.4 / §14.6 回退完整表示（单段仍返回 206），`If-Range` 命中授权的 206 按 RFC 9110 §15.3.7 精简非必需表示首部；
@@ -168,14 +168,14 @@
 - `model_type` 使用编译期 schema，解析、校验和序列化职责分离：必填与可空独立（`RUVIA_OPTIONAL_FIELD` 仅允许字段缺失，允许 `null` 须显式声明 `RUVIA_NULLABLE`，`RUVIA_DEFAULT` 仅作用于缺失的可选字段）；数值转换拒绝 `bool`/字符充当整数并执行精确整数与窄化浮点范围检查；跨分配器拥有化支持递归重绑定（`rebind_for_model`），移动操作检测源与目标地址重叠防止自包含结构移动时先销毁自身存储。
 - ORM 与直接查询保持独立公开路线，不混用内部实现。映射结果的标量及容器元素必须递归拥有数据；借用字段读取只在显式持有原始结果的路线提供。数值查询谓词保持字面量精度（不将 `double` 隐式窄化为 `float`）。
 - 数据库与 Redis 韧性：
-  - 事务外查询/执行可按驱动契约共享流水线连接，事务内独占连接租约；`db_transaction` 与 `db_stream_result` 的操作借用堆上地址稳定的内部状态（移动外层句柄不使冷任务或运行中帧失效），并发启动重叠操作抛出 `std::logic_error` 但绝不中止当前已持有事务的在途语句；涉及数据库事务与其他外部 I/O 的流程须明确一致性边界和失败补偿，避免持有数据库事务或锁等待无关远程操作；
+  - 事务外查询/执行可按驱动契约共享流水线连接（PostgreSQL 常规 `query` / `execute` 每连接维护有界服务端命名预处理语句集合，流式查询以无名语句运行，`db_migrator` 使用独立专用连接），事务内独占连接租约；`db_transaction` 与 `db_stream_result` 的操作借用堆上地址稳定的内部状态（移动外层句柄不使冷任务或运行中帧失效），并发启动重叠操作抛出 `std::logic_error` 但绝不中止当前已持有事务的在途语句；涉及数据库事务与其他外部 I/O 的流程须明确一致性边界和失败补偿，避免持有数据库事务或锁等待无关远程操作；
   - 编译期 SQL 字面量（`fixed_string`）在编译期拒绝 NUL 字节、推导或验证数据库方言（MariaDB `?` vs PostgreSQL `$n`，正确跳过注释、字符串与 dollar-quoted 标签/含 `$` 标识符）并断言占位符数与实参个数严格匹配；
   - 单次 SQL 执行与迁移（`db_migration`）严格限制为单条语句，迁移 ID 在启动期做大小写不敏感去重校验；PostgreSQL 迁移默认将 DDL 与迁移记录写入置于同一事务（仅不支持事务的 DDL 显式声明 `unwrapped`），且必须识别已执行迁移内容被篡改；
   - Redis 连接池隔离与批处理：同一别名下常规请求/响应池与按需惰性建连的独立阻塞命令池（`blocking_pool_size_per_worker_`）物理隔离，防止阻塞命令耗尽常规连接；有界阻塞命令在命令写出时按“服务端阻塞时长 + 宽限期”武装截止期（不因槽位获取或建连耗时缩减等待窗口），无限期阻塞等待强制要求显式 `stop_token` 或操作超时；RESP 响应同时受总字节（`max_reply_bytes_`）与数组嵌套深度（`max_array_depth_`）约束；批处理（`redis_batch`）在返回前完成参数拥有化，事务（`transaction`）严禁含阻塞命令或同步屏障，非事务 `pipeline` 仅允许携带具备明确超时或可取消 `stop_token` 的 `WAIT` / `WAITAOF` 屏障；
   - 数据库查询结果缓存（Redis 承载）须共享同一操作的剩余截止期与组合取消令牌（`stop_group`）：遇到取消或停机（`cancelled` / `closing`）时必须立即上抛，不得被容错开关静默吞掉；截止期超时统一按查询超时处理。
 - 出站客户端（`http_client` / `websocket_client`）：
   - 可独立绑定事件循环，应用上下文只提供便捷入口；outbound origin 启动前固定，请求期不建池，传输层支持 Happy Eyeballs 并发连接尝试与冗余分支取消；
-  - 强制执行两级出站结果内存预算（已保留结果 `max_retained_bytes_` 与在途分配 `max_in_flight_bytes_`）；`request_timeout_` 覆盖从获取连接槽到响应体被慢速消费者完整排空的全周期，超时立即失败并销毁连接；
+  - 强制执行两级出站结果内存预算（已保留结果 `max_retained_bytes_` 与在途分配 `max_in_flight_bytes_`，空 `http_client_response_bytes` 不持有存储且不占用保留配额）；`request_timeout_` 覆盖从获取连接槽到响应体被慢速消费者完整排空的全周期，超时立即失败并销毁连接；
   - 连接通告（`ORIGIN` / `Alt-Svc`）仅作有界只读观测，绝不自动改变已注册 origin、连接归并、TLS 身份或缓存策略；
   - 出站重定向由 `ruvia-http` 生成 RFC 9110 §15.4 方法/正文改写计划及无 DNS 同源判定（IPv6 字面量按二进制地址比较），跨源凭证剥离与重定向次数上限由 `ruvia-web` I/O 驱动强制执行。
 
