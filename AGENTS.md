@@ -59,7 +59,8 @@
   - 限流对客户端地址做规范化归并（无作用域 IPv6 按 `/64` 聚合、IPv4-mapped IPv6 归并至对应 IPv4、作用域 IPv6 包含数值 scope），防止通过同网段地址变形绕过配额。
   - 服务端 `session` 仅接受固定长度合法格式 ID，每次非空写入在响应头 commit 时自动轮换新 ID 防止会话固定攻击，替换已过期或被吊销会话返回 409；一旦响应头（含流式、WebSocket 或 `CONNECT` 握手头）开始发送，任何会话写操作立即抛出 `std::logic_error`。
   - 静态文件服务在构造期归一化根目录并建立内存索引，默认拒绝隐藏路径段（`.` 开头或包含 `/.`，防止泄露 `.env`、`.git` 等敏感文件）、符号链接越界与非普通文件。
-  - 代理转发首部（`Forwarded` / `X-Forwarded-*`）仅在可信代理配置下采信；Cookie 签名、JWT 验证等安全凭证对比使用常量时间比较。
+  - 代理转发首部（`Forwarded` / `X-Forwarded-*`）仅在可信代理（`trusted_proxy_config`）下采信；Cookie 签名、JWT 验证等安全凭证对比使用常量时间比较。
+  - TLS 安全基线（RFC 9846 / RFC 9525）：仅协商 TLS 1.2（强制仅限 ECDHE + AEAD 套件，拒绝重协商）或 TLS 1.3；证书主机名校验严格匹配 `subjectAltName`（DNS 名匹配 `DNS-ID` 且通配符仅限最左完整标签，IP 字面量匹配 `IP` 条目，绝不使用 `subject Common Name`）；每条 TLS 连接发出的记录总数（含握手、控制与 `KeyUpdate`）受 `max_outgoing_records_`（$1 \dots 2^{23}$）硬上限约束，`KeyUpdate` 不重置连接级计数，达限即终止连接以防触及 RFC 9846 §5.5 单密钥 AEAD 用量极限；服务端 Ticket 密钥按 2 小时周期轮换并在停签一个周期后销毁，跨 worker 会话恢复严格绑定原 `server_name`。
 - 输出合规与脱敏：对外文本使用合法 UTF-8；系统错误信息先转换编码，JSON 输出始终转义合法。对外错误响应不回显内部异常描述、SQL 语句、宿主文件路径或上游内部细节，服务端脱敏后记录诊断原因；日志、代码与构建制品不得包含真实密钥、令牌或凭据。
 - 故障隔离与不变量恢复：
   - 对端正常断开、自身停机或排空引起的中止属于正常生命周期结束，不按故障上报或计数；真实异常必须上报，不得静默吞掉。
@@ -78,11 +79,13 @@
   - `enable_push_` 与 `ORIGIN` 帧（RFC 8336，仅限认证 TLS 连接，严禁用于 `h2c` 或显式代理）仅限客户端启用，服务端构造时直接拒绝；
   - 致命连接错误后仍允许释放已持有的请求租约与 DATA 额度而不生成新帧；释放失败的丢弃租约在后续 `feed()`、`next_event()` 或输出排空时自动重试，`const` 查询绝不修改内部状态。
 - 全双工与长生命周期会话（WebSocket、HTTP/2 流、CONNECT / Capsule 隧道、流式传输）：
-  - 读、写、心跳保活（Ping/Pong liveness）与关闭握手共享会话状态但保持单向通道职责独立；
+  - 读、写、心跳保活（Ping/Pong liveness）与关闭握手共享会话状态但保持单向线性通道互斥（`body_reader`、`response_stream_writer`、`http_capsule_stream` 均在操作启动时独占对应读或写通道，未启动的冷操作允许并存；`http_capsule_stream` 严禁与原始隧道读写混用，未知 Capsule 类型原样交付上层忽略）；
   - 响应完成不等于请求上传完成（如客户端流式请求收到响应 `END_STREAM` 仅关闭接收半边，发送半边仍须显式完成或重置）；复用或排空连接前必须满足请求与响应双向的消息边界和生命周期契约。后续字节归属不明时关闭连接，不继续解析；非 2xx `CONNECT` 的关闭遵守 RFC 9931；
   - WebSocket 关闭握手严格遵循 RFC 6455 §7.1.1 角色不对称契约：服务端刷出响应 Close 后立即计划关闭传输（`end_transport`），客户端则保持传输打开等待对端 EOF（`awaiting_peer_eof`，期间丢弃残余输入）直至 `notify_transport_eof()`；
   - 任一方向发生错误、超时或半关闭时，必须协同唤醒并取消或排空另一方向的挂起操作，确保全部读写与定时器操作完成后才释放会话与底层传输。
-- TLS 关闭与 HTTP/2 排空遵循适用协议并保持有界；消息完整性依赖连接关闭时，不得将未认证的 TLS 截断当作完整消息。充当中间代理时按协议处理逐跳字段，不得丢失需要保留的重复字段语义。
+- TLS 关闭、TCP Lingering Close（RFC 9112 §9.6 / §9.8）与 HTTP/2 排空：
+  - 关闭连接的 HTTP/1 最终响应与以 `GOAWAY` 结束的 HTTP/2 会话执行有界 lingering close（TLS 发送 `close_notify`，TCP 半关闭发送端，在最多 2s / 4 MiB 预算内读取并丢弃对端未读输入），防止未读对端输入触发 TCP RST 抹掉最终响应；空闲、请求头超时与排空关闭等待请求的连接发送 TLS `close_notify`，写超时、传输错误与强制停机直接关闭；
+  - 消息完整性依赖连接关闭时，不得将未认证的 TLS 截断当作完整消息。充当中间代理时按协议处理逐跳字段，不得丢失需要保留的重复字段语义。
 - 缺陷结论以 RFC 条款和公开行为复现为证据；说明审查覆盖范围，不以已有测试通过宣称“绝对无 BUG”。
 
 ## 性能与内存治理
@@ -96,6 +99,7 @@
   - 异步操作在构造冷任务完成参数拥有化后，调用方应在 `co_await` 进入网络 I/O 挂起前立即释放不再使用的临时源容器，降低并发挂起期间的内存驻留水位。
 - 预算、背压、防压缩炸弹与防慢速攻击：
   - 框架的长期队列、缓存、连接池等待队列和外部输入驱动的缓冲，须明确资源预算及背压、拒绝或淘汰机制；重试须可取消且受生命周期约束；
+  - 每个 worker 强制执行不可禁用的两级实时入站缓冲上限（`max_inbound_buffer_bytes_per_worker_` 与 `max_inbound_buffer_bytes_per_connection_`，覆盖缓冲/流式请求体、CONNECT 隧道读取与 WebSocket 会话，含容量与重分配重叠），超限抛出 `std::bad_alloc`（未捕获请求返回 503）；超出 `max_connections_per_worker_` 的新连接在 TLS 握手与协议探测前直接关闭 socket，不伪造响应；达到 `max_requests_per_connection_` 时 HTTP/2 按 RFC 9113 §6.8 两阶段 `GOAWAY` 优雅排空；
   - 流式解码与帧接收（如 WebSocket `feed()` 与 HTTP 内容解压）必须同时约束待消费输入缓冲上限（`max_buffered_input_bytes_`）与解压后消息/正文上限（`protocol_byte_limit`），拒绝时保持零消费且不破坏已排队输出；
   - 服务端连接超时区分基于最后成功 I/O 的阶段无活动超时（`idle`、`initial_read`、`payload_read`、`write`）与不可被慢速涓流刷新的绝对阶段完成截止期（`initial_read_completion`、`payload_read_completion`），排空回调（如 HTTP/2 `GOAWAY`）受固定关闭宽限期兜底，防止慢速连接长期滞留。
 - sans-I/O HTTP/2 DATA 提交只消费流控窗口和调用方输出额度允许的前缀，未消费后缀始终归调用方；协议层不代存阻塞正文。已编码输出与 socket 写完成仍分别记账。
@@ -155,10 +159,10 @@
 - ORM 与直接查询保持独立公开路线，不混用内部实现。映射结果的标量及容器元素必须递归拥有数据；借用字段读取只在显式持有原始结果的路线提供。
 - 数据库与 Redis 韧性：
   - 事务外查询/执行可按驱动契约共享流水线连接，事务内独占连接租约；涉及数据库事务与其他外部 I/O 的流程须明确一致性边界和失败补偿，避免持有数据库事务或锁等待无关远程操作；
-  - 单次 SQL 执行与迁移（`db_migration`）严格限制为单条语句（禁用多语句拼接防注入并对齐底层扩展协议），迁移 ID 在启动期做大小写不敏感去重校验；PostgreSQL 迁移默认将 DDL 与迁移记录写入置于同一事务（仅不支持事务的 DDL 显式声明 `unwrapped`），且必须识别已执行迁移内容被篡改；
+  - 编译期 SQL 字面量（`fixed_string`）在编译期（`consteval` / `static_assert`）拒绝 NUL 字节、推导或验证数据库方言（MariaDB `?` vs PostgreSQL `$n`，正确跳过注释、字符串与 dollar-quoted 标签/含 `$` 标识符）并断言占位符数与实参个数严格匹配；单次 SQL 执行与迁移（`db_migration`）严格限制为单条语句，迁移 ID 在启动期做大小写不敏感去重校验；PostgreSQL 迁移默认将 DDL 与迁移记录写入置于同一事务（仅不支持事务的 DDL 显式声明 `unwrapped`），且必须识别已执行迁移内容被篡改；
   - Redis 批处理（`redis_batch`）在调用返回前完成参数拥有化：事务（`transaction`）内严禁包含阻塞命令或同步屏障，非事务 `pipeline` 仅允许携带具备明确 `timeout_` 或可取消 `stop_token_` 的 `WAIT` / `WAITAOF` 屏障，拒绝无限期占用连接槽的阻塞命令；
   - 数据库查询结果缓存（Redis 承载）须共享同一操作的剩余截止期（`operation_timeout`）与组合取消令牌（`stop_group`）：遇到取消或停机（`cancelled` / `closing`）时必须立即上抛，不得被容错开关静默吞掉；截止期超时统一按查询超时处理。
-- `http_client` 与 `websocket_client` 可独立绑定事件循环，应用上下文只提供便捷入口；outbound origin 启动前固定，请求期不建池，传输层支持 Happy Eyeballs 并发连接尝试与冗余分支取消。
+- `http_client` 与 `websocket_client` 可独立绑定事件循环，应用上下文只提供便捷入口；outbound origin 启动前固定，请求期不建池，传输层支持 Happy Eyeballs 并发连接尝试与冗余分支取消；出站重定向由 `ruvia-http` 生成 RFC 9110 §15.4 方法/正文改写计划（如改写为 `GET` 时 `content_disposition::drop` 剥离表示与内容首部）及无 DNS 同源判定（IPv6 字面量按二进制地址比较），跨源凭证剥离与重定向次数上限由 `ruvia-web` I/O 驱动强制执行。
 
 ## README 内容规范
 
