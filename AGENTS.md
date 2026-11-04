@@ -88,7 +88,7 @@
   - 出站 HPACK 编码不插入动态表条目（容量缩减直接置零）；`enable_push_` 与 `ORIGIN` 帧（RFC 8336，仅限认证 TLS 连接，禁用 `h2c` 或显式代理）仅限客户端启用，接受 `PUSH_PROMISE` 不自动确立传输权威，驱动在消费推送响应前须对照已认证连接校验推送 URI 的 origin；
   - HTTP 优先级（RFC 9218 / RFC 8941）本端构造严格校验 `0..7`，对端字典解析忽略未知成员、参数类型错误与越界值（按线序后出现的成员覆盖前值，缺省响应参数保持未设置以便代理合并）；致命连接错误后仍允许无帧释放已持有的请求租约与 DATA 额度，释放失败由后续推进自动重试。
 - 全双工与长生命周期会话（WebSocket、HTTP/2 流、CONNECT / Capsule 隧道、流式传输）：
-  - 读、写、心跳保活与关闭握手共享会话状态但保持单向线性通道互斥（`body_reader`、`response_stream_writer`、`http_capsule_stream` 均在操作启动时独占对应读或写通道，未启动的冷操作允许并存；`http_capsule_stream` 严禁与原始隧道读写混用，未知 Capsule 类型原样交付上层忽略）；`CONNECT-UDP`（RFC 9298 / RFC 9297）本端发送强制携带唯一 `Capsule-Protocol: ?1`，接收端将非布尔、`?0` 或重复字段按缺省忽略并拒绝 204/205/206 响应；Capsule 增量解码器对不保留的类型或未知 Context ID 直接零缓冲流式跳过（不受 `max_capsule_length_` 限制，但短于 Context ID 的畸形 `DATAGRAM` 仍保留报错），`feed_one` 在首个完整保留 Capsule 处停止并将未消费后缀归还调用方；
+  - 读、写、心跳保活与关闭握手共享会话状态但保持单向线性通道互斥（`body_reader`、`response_stream_writer`、`http_capsule_stream` 均在操作启动时独占对应读或写通道，未启动的冷操作允许并存；`http_capsule_stream` 严禁与原始隧道读写混用，未知 Capsule 类型原样交付上层忽略）；SSE 消息（`sse_message`）区分 `data_` 缺省（不发射 `data` 行，不触发客户端派发 `MessageEvent`）与存在空串（发射 `data:` 派发空负载事件），并强制校验合法 UTF-8 与 `event`/`id` 无非法换行；`CONNECT-UDP`（RFC 9298 / RFC 9297）本端发送强制携带唯一 `Capsule-Protocol: ?1`，接收端将非布尔、`?0` 或重复字段按缺省忽略并拒绝 204/205/206 响应；Capsule 增量解码器对不保留的类型或未知 Context ID 直接零缓冲流式跳过（不受 `max_capsule_length_` 限制，但短于 Context ID 的畸形 `DATAGRAM` 仍保留报错），`feed_one` 在首个完整保留 Capsule 处停止并将未消费后缀归还调用方；
   - 响应完成不等于请求上传完成（如客户端流式请求收到响应 `END_STREAM` 仅关闭接收半边，发送半边仍须显式完成或重置）；复用或排空连接前必须满足请求与响应双向的消息边界和生命周期契约。后续字节归属不明时关闭连接，不继续解析；非 2xx `CONNECT` 的关闭遵守 RFC 9931；
   - WebSocket 握手、读写并发与关闭（RFC 6455 / RFC 8441）：子协议集合（`websocket_subprotocol_set`）对本端配置与客户端发送强制要求 token 唯一且超限拒绝（不截断），服务端接收则容忍并跳过重复提供项；客户端握手由版本无关的 `websocket_client_negotiation` 统一复用子协议与 `permessage-deflate` 选择校验（HTTP/1.1 校验 `101` 与 `Sec-WebSocket-Accept`，HTTP/2 Extended `CONNECT` 校验 `2xx`、流未随 `HEADERS` 提前关闭及无连接特定首部）；写通道仅在完整消息边界之间轮询挂起读通道的控制帧，绝不打断在途完整消息；禁用单帧压缩（`compress_ = false`）时同步绕过压缩字典更新以防侧信道泄漏；`websocket_close_code` 严格限制在合法线面状态码空间（拒绝 `1005`/`1006` 等本地伪状态码）；服务端刷出响应 Close 后立即计划关闭传输，客户端则保持传输打开等待对端 EOF（期间丢弃残余输入）；
   - 任一方向发生错误、超时或半关闭时，必须协同唤醒并取消或排空另一方向的挂起操作，确保全部读写与定时器操作完成后才释放会话与底层传输。
@@ -116,7 +116,7 @@
   - `worker_memory` 无内部同步锁，直接对接进程级 mimalloc 上游（不经过全局默认 PMR）：小对象走 worker 常驻小对象池，中等大块走受 `retained_block_bytes_` 预算约束的对齐精确尺寸块缓存，超出预算立即归还上游；
   - 单次请求和握手使用 `request_memory`（`monotonic_buffer_resource` arena），优先复用连接预留的初始缓冲块，派生独立子操作时通过 `fork()` 获取同 worker 上游的独立 arena；长生命周期连接状态、结果、池化数据以及无请求 arena 的后台投递任务（`web_worker_context`）使用 `worker_memory` 可回收 `pool()`（后台任务分配的存储须在任务作用域结束前于本 worker 销毁）；
   - 异步入口返回前完成输入拥有化和资源归一化（如跨请求复用的查询谓词暂存于进程级 PMR，生成异步操作前归一化至目标 worker 内存池）；拥有型 PMR 集合（如 `entity_rows`）跨不同 `memory_resource` 移动赋值时必须先在目标资源中递归重绑定全部元素后再交换，防止浅拷贝或分配器失配；
-  - 长连接不得累积临时分配，存活数据不得被后续操作提前回收；流式缓冲按摊销方式压缩，禁止按块重复 O(N²) 搬移；worker 在完整扫描周期无活跃交换与 I/O 活动时触发 `trim_when_idle`，归还缓存大块并排空当前线程的协程帧缓存。
+  - 长连接不得累积临时分配，存活数据不得被后续操作提前回收；网络输入缓冲（`http_io_buffer`）为读取扩容时不零初始化待覆写字节，`consume()` 仅推进游标保持既有可读视图有效，`prepare()` 仅在已消费前缀足以覆盖存活字节时才前移压缩（否则几何扩容摊销开销），`clear_retaining_small()` 归还超大块，严禁按块重复 O(N²) 搬移；worker 在完整扫描周期无活跃交换与 I/O 活动时触发 `trim_when_idle`，归还缓存大块并排空当前线程的协程帧缓存。
 
 ## 运行时、连接池与生命周期
 
@@ -138,8 +138,8 @@
 协程、结构化并发、租约与连接池：
 
 - 协程保持 lazy 和 structured ownership。公开协程统一使用单一模板 `ruvia::task<t_type>`（`void` 通过 `task_promise<void>` 复用同一主模板而不单独偏特化，且仅允许右值 `&&` 执行 `co_await`）；超对齐（over-aligned）局部变量必须存放在独立拥有的堆存储中，禁止直接置于协程栈帧以规避编译器帧对齐缺陷。
-- 未启动任务可丢弃；已启动任务必须完成。取消后必须 `co_await` / `join`，禁止销毁挂起帧或静默 detach。`event_loop::start` 启动的 `root_task` 由事件循环持有协程帧直至完成，放弃 `root_task` 句柄绝不销毁挂起帧，未消费异常统一路由至循环的 failure sink。
-- 结构化并发（`task_scope`）：绑定地址稳定的左值 `worker_handle`；单次 `join()` 启动后立即封闭 `spawn` 准入并等待在途准入及全部子任务退役。析构时若仍有活跃子任务或未决 `join` 则触发 `std::terminate()`；子任务全部完成但未经 `join` 消费的异常必须转发至 `report_unhandled_failure`，严禁静默吞没。
+- 未启动任务可丢弃；已启动任务必须完成。取消后必须 `co_await` / `join`，禁止销毁挂起帧或静默 detach。`event_loop::start` 启动的 `root_task` 由事件循环持有协程帧直至完成（严禁在所属事件循环线程上同步 `wait()` 自锁，且须在销毁可能借用调用方 PMR 的 moved-from 中间结果对象后才 `publish_completion()`），放弃 `root_task` 句柄绝不销毁挂起帧，未消费异常统一路由至循环的 failure sink。
+- 结构化并发（`task_scope` 与 `operation_scope`）：`task_scope` 绑定地址稳定的左值 `worker_handle`，单次 `join()` 启动后立即封闭 `spawn` 准入并等待在途准入及全部子任务退役（析构时若有活跃子任务或未决 `join` 则 `std::terminate()`，未经 `join` 消费的已完成子任务异常转发至 `report_unhandled_failure`）；`operation_scope` 在关闭时先退役冷任务帧，`close_and_join()` 等待已启动帧、线性租约及能力清理回调全部完成（含清理回调重入），且 `scoped_capability_registration` 须声明在宿主负载成员之后以确保先解链再析构负载。
 - `stop_token` 只引用一个取消状态（`stop_state` 由进程级 mimalloc 分配，支持最末持有者在任意线程释放；`request_stop()` 在锁外执行回调，跨线程解链等待运行中回调返回而回调自解链绝不自等待）；多源取消由地址稳定的 `stop_group` 显式拥有，其寿命覆盖使用者完成和 join。选项派生替换明确提供的用户 token，不隐式累加；客户端关闭仍通过自身生命周期独立终止操作。外部线程触发的 `stop_token` 回调不得直接操作 worker 局部定时器或连接槽，须经可分离的 `worker_cancellation_target`（按非零递增 64 位 `operation_id` 寻址，宿主析构时 `detach` 原子置空）投递回所属 worker 线程执行，且带取消的等待操作（如 `sleep_operation`）须将 `stop_registration` 声明为末位成员以确保先拆卸回调再销毁定时器与借用句柄。
 - 线性 lease 在任务启动时占用，不得并发或失败后复用。
 - 连接池与脏连接回收契约（`slot_pool` / `pool_lease_scheduler`）：
