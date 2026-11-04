@@ -117,7 +117,7 @@
   - `worker_memory` 无内部同步锁，直接对接进程级线程安全 `process_resource()`（mimalloc 上游，不替换全局默认 PMR，`construct_pmr_object` 在构造抛异常时立即按原尺寸/对齐归还已分配内存）：小对象走 worker 常驻小对象池，中等大块走受 `retained_block_bytes_` 预算约束的对齐精确尺寸块缓存，超出预算立即归还上游；
   - 单次请求和握手使用 `request_memory`（`monotonic_buffer_resource` arena），优先复用连接预留的初始缓冲块，派生独立子操作时通过 `fork()` 获取同 worker 上游的独立 arena；长生命周期连接状态、结果、池化数据以及无请求 arena 的后台投递任务（`web_worker_context`）使用 `worker_memory` 可回收 `pool()`（后台任务分配的存储须在任务作用域结束前于本 worker 销毁）；
   - 异步入口返回前完成输入拥有化和资源归一化（如跨请求复用的查询谓词暂存于进程级 PMR，生成异步操作前归一化至目标 worker 内存池）；拥有型 PMR 集合（如 `entity_rows`）跨不同 `memory_resource` 移动赋值时必须先在目标资源中递归重绑定全部元素后再交换，防止浅拷贝或分配器失配（通过 `consteval` 编译期递归判定字段是否含 PMR 资源 `entity_type_has_resource`，对不含 PMR 资源的纯标量或 `optional<标量>` 直接编译期短路）；
-  - 长连接不得累积临时分配，存活数据不得被后续操作提前回收；流或连接内建暂存缓冲（如 HTTP/2 流局部首部/Trailer 编码块、Redis 连接写缓冲与网络输入缓冲 `http_io_buffer`）优先原位复用，使用后若容量超过保留阈值（`http_retained_pmr_string_bytes`）则主动归还大块存储，否则仅清空内容保留小容量；`http_io_buffer` 为读取扩容时不零初始化待覆写字节，`consume()` 仅推进游标保持既有可读视图有效，`prepare()` 仅在已消费前缀足以覆盖存活字节时才前移压缩（否则几何扩容摊销开销），多命令流水线追加先校验字节求和溢出并依赖几何扩容保持摊销 $O(\text{total})$，严禁按块重复搬移或逐命令精确 `reserve(size + delta)` 导致 $O(N^2)$ 重分配；worker 在完整扫描周期无活跃交换与 I/O 活动时触发 `trim_when_idle`，归还缓存大块并排空当前线程的协程帧缓存。
+  - 长连接不得累积临时分配，存活数据不得被后续操作提前回收；流或连接内建暂存缓冲（如 HTTP/2 流局部首部/Trailer 编码块、Redis 连接写缓冲与网络输入缓冲 `http_io_buffer`）优先原位复用，使用后若容量超过保留阈值（`http_retained_pmr_string_bytes`）则主动归还大块存储，否则仅清空内容保留小容量；HTTP/1 连接读缓冲（`connection_read_buffer`）在连接中途待处理字节回落时缩容超 `max_http_header_bytes` 的缓冲，归还有界工作集池时保留 ≤16 KiB 容量以免大首部请求反复扩缩，且流水线合并写出通过 `http1_deferred_access_log` 在对应响应头真正写入 socket 后才发射访问日志；`http_io_buffer` 为读取扩容时不零初始化待覆写字节，`consume()` 仅推进游标保持既有可读视图有效，`prepare()` 仅在已消费前缀足以覆盖存活字节时才前移压缩（否则几何扩容摊销开销），多命令流水线追加先校验字节求和溢出并依赖几何扩容保持摊销 $O(\text{total})$，严禁按块重复搬移或逐命令精确 `reserve(size + delta)` 导致 $O(N^2)$ 重分配；worker 在完整扫描周期无活跃交换与 I/O 活动时触发 `trim_when_idle`，归还缓存大块并排空当前线程的协程帧缓存。
 
 ## 运行时、连接池与生命周期
 
@@ -138,7 +138,7 @@
 
 协程、结构化并发、租约与连接池：
 
-- 协程保持 lazy 和 structured ownership。公开协程统一使用单一模板 `ruvia::task<t_type>`（`void` 通过 `task_promise<void>` 复用同一主模板而不单独偏特化，且仅允许右值 `&&` 执行 `co_await`）；超对齐（over-aligned）局部变量必须存放在独立拥有的堆存储中，禁止直接置于协程栈帧以规避编译器帧对齐缺陷。
+- 协程保持 lazy 和 structured ownership。公开协程统一使用单一模板 `ruvia::task<t_type>`（`void` 通过 `task_promise<void>` 复用同一主模板而不单独偏特化，且仅允许右值 `&&` 执行 `co_await`）；异步发起与协程挂起的双向竞争统一由 `suspend_race_state` 裁决（严禁在协程真正挂起前从 `await_suspend` 内联恢复 continuation，且负载移动抛异常时回滚至原状态）；超对齐（over-aligned）局部变量必须存放在独立拥有的堆存储中，禁止直接置于协程栈帧以规避编译器帧对齐缺陷。
 - 未启动任务可丢弃；已启动任务必须完成。取消后必须 `co_await` / `join`，禁止销毁挂起帧或静默 detach。`event_loop::start` 启动的 `root_task` 由事件循环持有协程帧直至完成（严禁在所属事件循环线程上同步 `wait()` 自锁，且须在销毁可能借用调用方 PMR 的 moved-from 中间结果对象后才 `publish_completion()`），放弃 `root_task` 句柄绝不销毁挂起帧，未消费异常统一路由至循环的 failure sink。
 - 结构化并发（`task_scope` 与 `operation_scope`）：`task_scope` 绑定地址稳定的左值 `worker_handle`，单次 `join()` 启动后立即封闭 `spawn` 准入并等待在途准入及全部子任务退役（析构时若有活跃子任务或未决 `join` 则 `std::terminate()`，未经 `join` 消费的已完成子任务异常转发至 `report_unhandled_failure`）；`operation_scope` 在关闭时先退役冷任务帧，`close_and_join()` 等待已启动帧、线性租约及能力清理回调全部完成（含清理回调重入），且 `scoped_capability_registration` 须声明在宿主负载成员之后以确保先解链再析构负载。
 - `stop_token` 只引用一个取消状态（`stop_state` 由进程级 mimalloc 分配，支持最末持有者在任意线程释放；`request_stop()` 在锁外执行回调，跨线程解链等待运行中回调返回而回调自解链绝不自等待）；多源取消由地址稳定的 `stop_group` 显式拥有，其寿命覆盖使用者完成和 join。`operation_options` 派生（`with_options`）替换明确提供的用户 token（不隐式累加），而超时覆盖只允许收紧（tighten）已有截止期；客户端关闭仍通过自身生命周期独立终止操作。外部线程触发的 `stop_token` 回调不得直接操作 worker 局部定时器或连接槽，须经可分离的 `worker_cancellation_target`（按非零递增 64 位 `operation_id` 寻址，宿主析构时 `detach` 原子置空）或带代际计数（`slot + generation`）的 `worker_timer_cancellation` 投递回所属 worker 线程执行（每个 worker 由单一底层 `asio::steady_timer` 与最小堆驱动全部业务定时器，跨线程无通知取消直接 CAS 置零 `active_generation_` 免唤醒；定时器队列停止后 `schedule_timer` 返回 `worker_stopping`，不存储回调且不绑定注册项），且带取消的等待操作（如 `sleep_operation`）须将 `stop_registration` 声明为末位成员以确保先拆卸回调再销毁定时器与借用句柄。
@@ -175,7 +175,7 @@
   - Redis 连接池隔离与批处理：同一别名下常规请求/响应池与按需惰性建连的独立阻塞命令池（`blocking_pool_size_per_worker_`）物理隔离，防止阻塞命令耗尽常规连接；有界阻塞命令在命令写出时按“服务端阻塞时长 + 宽限期”武装截止期（不因槽位获取或建连耗时缩减等待窗口），无限期阻塞等待强制要求显式 `stop_token` 或操作超时；RESP 响应同时受总字节（`max_reply_bytes_`）与数组嵌套深度（`max_array_depth_`）约束；批处理（`redis_batch`）在返回前完成参数拥有化，事务（`transaction`）严禁含阻塞命令或同步屏障，非事务 `pipeline` 仅允许携带具备明确超时或可取消 `stop_token` 的 `WAIT` / `WAITAOF` 屏障；
   - 数据库查询结果缓存（Redis 承载）须共享同一操作的剩余截止期与组合取消令牌（`stop_group`）：遇到取消或停机（`cancelled` / `closing`）时必须立即上抛，不得被容错开关静默吞掉；截止期超时统一按查询超时处理。
 - 出站客户端（`http_client` / `websocket_client`）：
-  - 可独立绑定事件循环，应用上下文只提供便捷入口；outbound origin 启动前固定，请求期不建池，传输层在构造期预解析 IP 字面量端点（`literal_endpoint_`，连接时直接跳过 DNS Resolver）并支持 Happy Eyeballs 并发连接尝试与冗余分支取消，且已启用的客户端 TCP 套接字策略（如 `no_delay` / `keep_alive`）应用失败时建连直接失败而不静默降级；
+  - 可独立绑定事件循环，应用上下文只提供便捷入口；outbound origin 启动前固定，请求期不建池，传输层在构造期预解析 IP 字面量端点（`literal_endpoint_`，连接时直接跳过 DNS Resolver）并支持 Happy Eyeballs（RFC 8305：以首个解析地址族为首交错去重 IPv6/IPv4 端点，按 250ms 阶梯并发尝试并在首个连接胜出或取消时立即关闭其余在途 socket），且已启用的客户端 TCP 套接字策略（如 `no_delay` / `keep_alive`）应用失败时建连直接失败而不静默降级；
   - 强制执行两级出站结果内存预算（已保留结果 `max_retained_bytes_` 与在途分配 `max_in_flight_bytes_`，空 `http_client_response_bytes` 不持有存储且不占用保留配额；全量收集 `collect_all_` 发现响应体超限时立即丢弃并释放已缓冲前缀 `discard_response_body()`，防止无用半截数据滞留占用预算）；`request_timeout_` 覆盖从获取连接槽到响应体被慢速消费者完整排空的全周期，超时立即失败并销毁连接；
   - 连接通告（`ORIGIN` / `Alt-Svc`）仅作有界只读观测，绝不自动改变已注册 origin、连接归并、TLS 身份或缓存策略；
   - 出站重定向由 `ruvia-http` 生成 RFC 9110 §15.4 方法/正文改写计划及无 DNS 同源判定（IPv6 字面量按二进制地址比较），跨源凭证剥离与重定向次数上限由 `ruvia-web` I/O 驱动强制执行。
