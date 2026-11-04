@@ -65,10 +65,10 @@ template <typename visitor_type, typename key_allocation_type>
 
         bool consumed = false;
         if (key->encoding() == json_string_encoding::escaped) {
-            if (!consume_key_allocation(key->raw().size()) ||
-                !decode_json_string_into(key->raw(), decoded_key)) {
+            if (!consume_key_allocation(key->raw().size())) {
                 return false;
             }
+            decode_json_string_into(*key, decoded_key);
             consumed = static_cast<bool>(visitor_ref(std::string_view(decoded_key), remaining));
         } else {
             consumed = static_cast<bool>(visitor_ref(key->raw(), remaining));

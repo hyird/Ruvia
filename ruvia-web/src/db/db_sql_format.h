@@ -155,10 +155,11 @@ enum class db_sql_type_usage : std::uint8_t { column,
 
 void append_db_expression(std::pmr::string& output, db_expression expression, db_driver driver);
 
-inline void append_db_dollar_body(std::pmr::string& output, std::string_view body) {
+template <typename contains_fn_type>
+[[nodiscard]] inline std::string_view select_db_dollar_delimiter(
+    std::array<char, 32>& delimiter_buf, contains_fn_type&& contains_delimiter) noexcept {
     std::string_view delimiter = "$ruvia$";
-    std::array<char, 32> delimiter_buf;
-    for (std::uint64_t suffix = 1; body.find(delimiter) != std::string_view::npos; ++suffix) {
+    for (std::uint64_t suffix = 1; contains_delimiter(delimiter); ++suffix) {
         std::string_view("$ruvia").copy(delimiter_buf.data(), 6);
         std::array<char, http_max_unsigned_decimal_size> digits;
         const auto formatted = http_format_unsigned(digits, suffix);
@@ -168,6 +169,15 @@ inline void append_db_dollar_body(std::pmr::string& output, std::string_view bod
         delimiter_buf[length++] = '$';
         delimiter = std::string_view(delimiter_buf.data(), length);
     }
+    return delimiter;
+}
+
+inline void append_db_dollar_body(std::pmr::string& output, std::string_view body) {
+    std::array<char, 32> delimiter_buf;
+    const auto delimiter = select_db_dollar_delimiter(
+        delimiter_buf, [body](std::string_view candidate) noexcept {
+            return body.find(candidate) != std::string_view::npos;
+        });
     output.reserve(output.size() + delimiter.size() * 2U + body.size());
     output.append(delimiter);
     output.append(body);

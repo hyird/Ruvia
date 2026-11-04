@@ -39,7 +39,6 @@ http2_buffered_response_writer::http2_buffered_response_writer(ruvia::http2_conn
       file_io_(std::move(file_io)) {}
 
 void http2_buffered_response_writer::wake_writer() noexcept {
-    output_budget_.wake();
     write_signal_.notify();
 }
 

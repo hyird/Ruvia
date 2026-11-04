@@ -14,27 +14,6 @@ using namespace detail;
 
 namespace {
 
-// The tightest ceiling any of the route's middlewares declared. Several may:
-// a controller-wide one and a route-specific one, and the stricter must win
-// rather than the last registered.
-[[nodiscard]] std::size_t declared_request_body_limit(
-    std::span<const detail::controller_middleware_descriptor> controller_middlewares,
-    std::span<const detail::controller_middleware_descriptor> route_middlewares) noexcept {
-    std::size_t limit = 0;
-    const auto consider =
-        [&limit](std::span<const detail::controller_middleware_descriptor> descriptors) noexcept {
-            for (const auto& descriptor : descriptors) {
-                const auto declared = descriptor.request_body_limit();
-                if (declared != 0 && (limit == 0 || declared < limit)) {
-                    limit = declared;
-                }
-            }
-        };
-    consider(controller_middlewares);
-    consider(route_middlewares);
-    return limit;
-}
-
 // Whether two route patterns register the same route: segment by segment, a
 // literal matches a literal with the same canonical form (the lookup's
 // equivalence), a parameter matches the same parameter and the wildcard the
@@ -138,7 +117,8 @@ void detail::router::register_endpoint(http_known_method method, std::string_vie
     const bool dynamic = (tunnel == nullptr || !tunnel->protocol().empty()) && is_dynamic_path(path);
     const auto index = routes.size();
     // Any failure here aborts the whole plan compile, so nothing is rolled back.
-    append_route_middlewares(controller_middlewares, route_middlewares);
+    const auto max_request_body_bytes =
+        append_route_middlewares(controller_middlewares, route_middlewares);
     routes.emplace_back(plan_->resource_,
         route_entry::init_type{.index_ = index,
             .controller_ = controller_slot_,
@@ -147,7 +127,7 @@ void detail::router::register_endpoint(http_known_method method, std::string_vie
             .path_ = path,
             .endpoint_ = std::move(endpoint),
             .dynamic_ = dynamic,
-            .max_request_body_bytes_ = declared_request_body_limit(controller_middlewares, route_middlewares)});
+            .max_request_body_bytes_ = max_request_body_bytes});
     route_hashes_.push_back(hash);
 }
 

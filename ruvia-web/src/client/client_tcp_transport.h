@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <system_error>
@@ -182,6 +183,7 @@ private:
     const worker_handle& worker_;
     asio::ssl::context& tls_;
     client_tcp_endpoint endpoint_;
+    std::optional<asio::ip::tcp::endpoint> literal_endpoint_{};
     client_wire_counters& counters_;
     client_host_resolver resolver_;
     std::pmr::memory_resource* pool_resource_;

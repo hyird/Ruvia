@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
@@ -9,7 +10,6 @@
 #include <memory_resource>
 #include <optional>
 #include <utility>
-#include <vector>
 
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
@@ -193,8 +193,7 @@ struct db_pipeline_record final {
 template <typename io_type>
 struct db_pipeline_group final {
     explicit db_pipeline_group(std::pmr::memory_resource* resource)
-        : records_(db_pipeline_depth, resource),
-          io_(resource) {}
+        : io_(resource) {}
 
     [[nodiscard]] db_pipeline_record<io_type>& record(std::size_t offset) noexcept {
         return records_[(head_ + offset) % db_pipeline_depth];
@@ -209,7 +208,7 @@ struct db_pipeline_group final {
         return pending_ != 0 && records_[head_].member_ == nullptr;
     }
 
-    std::pmr::vector<db_pipeline_record<io_type>> records_;
+    std::array<db_pipeline_record<io_type>, db_pipeline_depth> records_{};
     // The driver's protocol state of the connection's flights.
     typename io_type::group_data io_;
     // Why the connection failed, once closing_.

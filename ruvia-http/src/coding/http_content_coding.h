@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <string_view>
 #include <utility>
 
@@ -33,7 +32,6 @@ struct http_content_coding_field_result_access final {
 class http_content_coding_field_parser final {
 public:
     constexpr http_content_coding_field_parser() noexcept = default;
-    explicit constexpr http_content_coding_field_parser(std::pmr::memory_resource*) noexcept {}
 
     void update(std::string_view value) noexcept;
 

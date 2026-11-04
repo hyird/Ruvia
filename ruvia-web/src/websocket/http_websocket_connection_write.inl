@@ -144,6 +144,7 @@ task<void> server_websocket_connection<stream_type>::detach_and_drain_writes() {
             co_await write_lane_.wait();
         }
     }
+    co_await background_tasks_.join();
 }
 
 template <typename stream_type>
@@ -194,6 +195,9 @@ auto server_websocket_connection<stream_type>::write_bytes(const websocket_outpu
 
 template <typename stream_type>
 task<std::error_code> server_websocket_connection<stream_type>::write_adapted(const websocket_output_plan& plan) {
+    if (plan.borrowed_bytes().empty()) {
+        co_return co_await stream_.write_bytes(plan.bytes(), plan.disposition());
+    }
     if (const auto error = co_await stream_.write_bytes(plan.bytes(), websocket_transport_disposition::keep_open)) {
         co_return error;
     }

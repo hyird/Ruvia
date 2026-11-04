@@ -3,6 +3,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <span>
@@ -23,9 +24,11 @@
 namespace ruvia::detail {
 namespace {
 void number(std::pmr::string& out, std::uint64_t value) {
-    for (unsigned index = 0; index < 8; ++index) {
-        out.push_back(static_cast<char>((value >> (index * 8)) & 255));
+    std::array<char, 8> encoded;
+    for (unsigned index = 0; index < encoded.size(); ++index) {
+        encoded[index] = static_cast<char>((value >> (index * 8)) & 255);
     }
+    out.append(encoded.data(), encoded.size());
 }
 void text(std::pmr::string& out, std::string_view value) {
     number(out, value.size());
@@ -92,14 +95,32 @@ void release_cache_storage(void* storage) noexcept {
 // into SHA-256 instead of copying the entire input into a temporary string.
 class cache_key_hasher final {
 public:
-    cache_key_hasher()
-        : context_(EVP_MD_CTX_new(), &EVP_MD_CTX_free) {
-        if (!context_ || EVP_DigestInit_ex(context_.get(), EVP_sha256(), nullptr) != 1) {
-            throw std::runtime_error("database cache key digest failed");
+    cache_key_hasher() = default;
+    ~cache_key_hasher() {
+        if (context_ != nullptr) {
+            EVP_MD_CTX_free(context_);
         }
     }
+    cache_key_hasher(const cache_key_hasher&) = delete;
+    cache_key_hasher& operator=(const cache_key_hasher&) = delete;
+
     void bytes(std::string_view value) {
-        if (!value.empty() && EVP_DigestUpdate(context_.get(), value.data(), value.size()) != 1) {
+        if (value.empty()) {
+            return;
+        }
+        if (context_ == nullptr) {
+            if (value.size() <= buffer_.size() - buffered_) {
+                std::memcpy(buffer_.data() + buffered_, value.data(), value.size());
+                buffered_ += value.size();
+                return;
+            }
+            context_ = EVP_MD_CTX_new();
+            if (context_ == nullptr || EVP_DigestInit_ex(context_, EVP_sha256(), nullptr) != 1 ||
+                (buffered_ != 0 && EVP_DigestUpdate(context_, buffer_.data(), buffered_) != 1)) {
+                throw std::runtime_error("database cache key digest failed");
+            }
+        }
+        if (EVP_DigestUpdate(context_, value.data(), value.size()) != 1) {
             throw std::runtime_error("database cache key digest failed");
         }
     }
@@ -120,15 +141,23 @@ public:
     }
     void append_result(std::pmr::string& output) {
         std::array<unsigned char, SHA256_DIGEST_LENGTH> hash;
-        unsigned length = 0;
-        if (EVP_DigestFinal_ex(context_.get(), hash.data(), &length) != 1 || length != hash.size()) {
-            throw std::runtime_error("database cache key digest failed");
+        if (context_ == nullptr) {
+            if (!SHA256(buffer_.data(), buffered_, hash.data())) {
+                throw std::runtime_error("database cache key digest failed");
+            }
+        } else {
+            unsigned length = 0;
+            if (EVP_DigestFinal_ex(context_, hash.data(), &length) != 1 || length != hash.size()) {
+                throw std::runtime_error("database cache key digest failed");
+            }
         }
         http_append_lower_hex(output, hash);
     }
 
 private:
-    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> context_;
+    std::array<unsigned char, 512> buffer_;
+    std::size_t buffered_{0};
+    EVP_MD_CTX* context_{nullptr};
 };
 
 }  // namespace
@@ -252,20 +281,18 @@ db_rows decode_db_cache_rows(std::pmr::string bytes_value, std::pmr::memory_reso
 std::pmr::string db_cache_scope(std::string_view name_space, std::string_view alias,
     const db_config_storage& config, std::pmr::memory_resource* resource) {
     const auto server_name = config.tls_.server_name_ ? std::string_view(*config.tls_.server_name_) : std::string_view{};
-    std::pmr::string identity(resource);
-    identity.reserve(8U * 8U + name_space.size() + alias.size() + config.host_.size() +
-                     config.database_.size() + config.username_.size() + server_name.size());
-    text(identity, name_space);
-    text(identity, alias);
-    number(identity, static_cast<std::uint64_t>(config.driver_));
-    text(identity, config.host_);
-    number(identity, config.port_);
-    text(identity, config.database_);
-    text(identity, config.username_);
-    text(identity, server_name);
+    cache_key_hasher identity;
+    identity.text(name_space);
+    identity.text(alias);
+    identity.number(static_cast<std::uint64_t>(config.driver_));
+    identity.text(config.host_);
+    identity.number(config.port_);
+    identity.text(config.database_);
+    identity.text(config.username_);
+    identity.text(server_name);
     std::pmr::string result(resource);
     result.reserve(digest_text_bytes);
-    append_digest(result, identity);
+    identity.append_result(result);
     return result;
 }
 std::pmr::string db_cache_prefix(std::string_view name_space, std::pmr::memory_resource* resource) {

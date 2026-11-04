@@ -29,9 +29,8 @@ namespace ruvia {
     // may retain Content-Length metadata because their body is suppressed.
     if (writer_owns_http1_chunked) {
         response.remove_header("Content-Length");
-    }
-    if (framing == http_response_stream_framing::http1_chunked ||
-        framing == http_response_stream_framing::http1_close_delimited) {
+    } else if (framing == http_response_stream_framing::http1_chunked ||
+               framing == http_response_stream_framing::http1_close_delimited) {
         response.remove_header("Transfer-Encoding");
     }
     if (framing == http_response_stream_framing::http1_close_delimited && !body_plan.body_suppressed()) {
@@ -43,13 +42,10 @@ namespace ruvia {
         response.remove_header("Trailer");
     }
 
-    const bool needs_http1_chunked = writer_owns_http1_chunked && !detail::response_has_known_header(response,
-                                                                      detail::response_header_transfer_encoding);
-    if (needs_http1_chunked) {
-        response.reserve_headers(response.headers().size() + 1);
-    }
-
     if (writer_owns_http1_chunked) {
+        if (!detail::response_has_known_header(response, detail::response_header_transfer_encoding)) {
+            response.reserve_headers(response.headers().size() + 1);
+        }
         response.header_stable_view("Transfer-Encoding", "chunked");
     }
 

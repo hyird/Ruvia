@@ -118,10 +118,7 @@ void detail::load_env_from_file(env& env_value, const std::filesystem::path& pat
             continue;
         }
 
-        detail::env_variable variable;
-        variable.name_ = std::move(entry.name_);
-        variable.value_ = std::move(entry.value_);
-        variables.insert(it, std::move(variable));
+        variables.insert(it, std::move(entry));
     }
 
     state_value.loaded_ = true;

@@ -109,6 +109,7 @@ struct static_root_state final {
     std::pmr::vector<static_root_entry> entries_;
     std::pmr::vector<std::pmr::string> directories_;
     std::uint64_t fingerprint_{0};
+    bool has_sidecars_{false};
 #if defined(__unix__)
     // The indexed root, opened once: each request opens its entry relative to
     // it. Owned by this state and closed with it.
@@ -228,6 +229,10 @@ public:
         return response_validators_;
     }
 
+    [[nodiscard]] bool has_memory_variants() const noexcept {
+        return memory_variants_ != nullptr && !memory_variants_->empty();
+    }
+
     [[nodiscard]] std::optional<static_root_memory_variant_view> memory_variant(
         http_content_coding coding) const noexcept {
         if (memory_variants_ == nullptr) {
@@ -301,6 +306,7 @@ public:
         const static_root& root, std::pmr::memory_resource* resource);
     [[nodiscard]] static std::string_view index_file(const static_root& root) noexcept;
     [[nodiscard]] static bool has_directory_index(const static_root& root) noexcept;
+    [[nodiscard]] static bool has_sidecars(const static_root& root) noexcept;
     [[nodiscard]] static std::optional<static_root_entry_view> find(
         const static_root& root, std::string_view relative_path) noexcept;
     [[nodiscard]] static std::optional<static_root_entry_view> find_variant(

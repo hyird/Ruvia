@@ -56,8 +56,6 @@ task<void> redis_ok_command(redis_command_executor executor, std::pmr::vector<st
 task<std::pmr::string> redis_status_command(redis_command_executor executor,
     std::pmr::vector<std::pmr::string> args, std::pmr::memory_resource* resource);
 
-[[nodiscard]] std::pmr::string redis_seconds_string(
-    std::chrono::seconds ttl, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::string redis_milliseconds_string(
     std::chrono::milliseconds ttl, std::pmr::memory_resource* resource);
 [[nodiscard]] std::pmr::string redis_cursor_string(

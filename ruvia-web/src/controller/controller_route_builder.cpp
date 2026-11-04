@@ -15,42 +15,31 @@ using namespace detail;
 
 namespace {
 
-std::pmr::string join_controller_paths(std::string_view prefix, std::string_view path) {
-    auto* resource = registration_resource();
-    if (prefix.empty() || prefix == "/") {
-        if (path.empty()) {
-            return std::pmr::string{"/", resource};
+[[nodiscard]] std::size_t write_joined_controller_path(
+    char* destination, std::string_view prefix, std::string_view path) noexcept {
+    std::size_t length = 0;
+    if (!prefix.empty() && prefix != "/") {
+        if (prefix.front() != '/') {
+            destination[length++] = '/';
         }
-        if (path.front() == '/') {
-            return std::pmr::string(path, resource);
+        prefix.copy(destination + length, prefix.size());
+        length += prefix.size();
+        if (length > 1 && destination[length - 1] == '/') {
+            --length;
         }
-
-        std::pmr::string output(resource);
-        output.reserve(path.size() + 1);
-        output.push_back('/');
-        output.append(path);
-        return output;
-    }
-
-    std::pmr::string output(resource);
-    output.reserve(prefix.size() + path.size() + 1);
-    output.append(prefix.front() == '/' ? prefix : std::string_view{});
-    if (prefix.front() != '/') {
-        output.push_back('/');
-        output.append(prefix);
-    }
-    if (output.size() > 1 && output.back() == '/') {
-        output.pop_back();
     }
     if (path.empty() || path == "/") {
-        return output;
+        if (length == 0) {
+            destination[length++] = '/';
+        }
+        return length;
     }
     if (path.front() == '/') {
         path.remove_prefix(1);
     }
-    output.push_back('/');
-    output.append(path);
-    return output;
+    destination[length++] = '/';
+    path.copy(destination + length, path.size());
+    return length + path.size();
 }
 
 struct scoped_controller_path final {
@@ -72,37 +61,23 @@ struct scoped_controller_path final {
         }
         const std::size_t max_size = prefix.size() + path.size() + 2U;
         if (max_size <= inline_capacity) {
-            std::size_t length = 0;
-            if (!prefix.empty() && prefix != "/") {
-                if (prefix.front() != '/') {
-                    inline_[length++] = '/';
-                }
-                prefix.copy(inline_.data() + length, prefix.size());
-                length += prefix.size();
-                if (length > 1 && inline_[length - 1] == '/') {
-                    --length;
-                }
-            }
-            if (path.empty() || path == "/") {
-                if (length == 0) {
-                    inline_[length++] = '/';
-                }
-                view_ = std::string_view(inline_.data(), length);
-                return;
-            }
-            if (path.front() == '/') {
-                path.remove_prefix(1);
-            }
-            inline_[length++] = '/';
-            path.copy(inline_.data() + length, path.size());
-            length += path.size();
+            const auto length = write_joined_controller_path(inline_.data(), prefix, path);
             view_ = std::string_view(inline_.data(), length);
             return;
         }
-        heap_ = join_controller_paths(prefix, path);
+        heap_.resize(max_size);
+        heap_.resize(write_joined_controller_path(heap_.data(), prefix, path));
         view_ = heap_;
     }
 };
+
+[[nodiscard]] std::pmr::string join_controller_paths(std::string_view prefix, std::string_view path) {
+    scoped_controller_path joined(prefix, path);
+    if (!joined.heap_.empty()) {
+        return std::move(joined.heap_);
+    }
+    return std::pmr::string(joined.view_, registration_resource());
+}
 [[nodiscard]] std::pmr::vector<controller_middleware_descriptor> merge_middleware_descriptors(
     std::span<const controller_middleware_descriptor> base, std::span<const controller_middleware_descriptor> extra) {
     std::pmr::vector<controller_middleware_descriptor> middlewares(registration_resource());

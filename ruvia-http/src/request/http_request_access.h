@@ -107,27 +107,21 @@ struct http_request_access final {
         request.headers_.reserve(count, request.resource());
     }
 
-    static bool add_header(http_request& request, http_header_view header_value) {
-        return add_header(
-            request, header_value, request_header_kind_known_slot(classify_request_header(header_value.name())));
-    }
-
     static bool add_header(
-        http_request& request, http_header_view header_value, std::size_t known_slot) {
+        http_request& request, http_header_view header_value, request_header_kind kind) {
         if (request.headers_.size() == UINT16_MAX) {
             return false;
         }
-        const auto kind = known_slot < cached_header_slots
-                              ? static_cast<std::uint8_t>(known_slot + 1)
-                              : std::uint8_t{0};
-        request.headers_.append(header_value, kind);
+        const auto known_slot = known_header_slot(kind);
+        request.headers_.append(
+            header_value, known_slot < cached_header_slots ? kind : request_header_kind::other);
         if (known_slot < cached_header_slots) {
             request.cached_headers_[known_slot] = static_cast<std::uint16_t>(request.headers_.size());
         }
         return true;
     }
 
-    [[nodiscard]] static std::uint8_t header_kind(
+    [[nodiscard]] static request_header_kind header_kind(
         const http_request& request, std::size_t index) noexcept {
         return request.headers_.kind_at(index);
     }

@@ -10,17 +10,12 @@
 #include "redis/redis_handle_helpers.h"
 #include "redis/redis_registry.h"
 #include "redis/redis_types_access.h"
-#include "redis/redis_utils.h"
 namespace ruvia {
 
 namespace {
 
-void require_positive_redis_ttl(std::chrono::seconds ttl, const char* message) {
-    if (ttl.count() <= 0) {
-        throw std::invalid_argument(message);
-    }
-}
-void require_positive_redis_pttl(std::chrono::milliseconds ttl, const char* message) {
+template <typename duration_type>
+void require_positive_redis_ttl(duration_type ttl, const char* message) {
     if (ttl.count() <= 0) {
         throw std::invalid_argument(message);
     }
@@ -277,35 +272,24 @@ task<bool> redis_handle::rename_nx(std::string_view key, std::string_view new_ke
 task<bool> redis_handle::expire(std::string_view key, std::chrono::seconds ttl) const {
     registration_.require_active();
     require_positive_redis_ttl(ttl, "redis expire TTL must be greater than zero");
-    std::pmr::vector<std::pmr::string> args(resource_);
-    args.reserve(3);
-    detail::emplace_redis_string(args, "EXPIRE");
-    detail::emplace_redis_string(args, key);
-    args.emplace_back(detail::redis_seconds_string(ttl, resource_));
-    return scoped(detail::execute_redis_integer_bool(executor(), std::move(args), resource_));
+    return scoped(detail::execute_redis_integer_bool(executor(),
+        detail::make_redis_integer_command("EXPIRE", key, ttl.count(), resource_).args_, resource_));
 }
 
 task<bool> redis_handle::pexpire(std::string_view key, std::chrono::milliseconds ttl) const {
     registration_.require_active();
-    require_positive_redis_pttl(ttl, "redis pexpire TTL must be greater than zero");
-    std::pmr::vector<std::pmr::string> args(resource_);
-    args.reserve(3);
-    detail::emplace_redis_string(args, "PEXPIRE");
-    detail::emplace_redis_string(args, key);
-    args.emplace_back(detail::redis_milliseconds_string(ttl, resource_));
-    return scoped(detail::execute_redis_integer_bool(executor(), std::move(args), resource_));
+    require_positive_redis_ttl(ttl, "redis pexpire TTL must be greater than zero");
+    return scoped(detail::execute_redis_integer_bool(executor(),
+        detail::make_redis_integer_command("PEXPIRE", key, ttl.count(), resource_).args_, resource_));
 }
 
 task<bool> redis_handle::expire_at(
     std::string_view key, std::chrono::system_clock::time_point expires_at) const {
     registration_.require_active();
-    std::pmr::vector<std::pmr::string> args(resource_);
-    args.reserve(3);
-    detail::emplace_redis_string(args, "PEXPIREAT");
-    detail::emplace_redis_string(args, key);
-    args.emplace_back(detail::redis_milliseconds_string(
-        std::chrono::ceil<std::chrono::milliseconds>(expires_at.time_since_epoch()), resource_));
-    return scoped(detail::execute_redis_integer_bool(executor(), std::move(args), resource_));
+    const auto expires_ms =
+        std::chrono::ceil<std::chrono::milliseconds>(expires_at.time_since_epoch()).count();
+    return scoped(detail::execute_redis_integer_bool(executor(),
+        detail::make_redis_integer_command("PEXPIREAT", key, expires_ms, resource_).args_, resource_));
 }
 
 task<bool> redis_handle::persist(std::string_view key) const {

@@ -150,10 +150,6 @@ http2_connection::submit_response_head(
     if (!append_http2_response_headers(*stream, response, *head_plan)) {
         return http2_response_head_submit_error::invalid_message;
     }
-    std::optional<std::pmr::string> retired_header_block;
-    if (stream->local_header_block().capacity() > http_retained_pmr_string_bytes) {
-        retired_header_block.emplace(stream->local_header_block().get_allocator());
-    }
     const auto end_stream =
         write_plan.send_body() ? http2_end_stream::keep_open : http2_end_stream::end_stream;
     append_response_header_frames(*stream, std::string_view(stream->local_header_block()), end_stream);
@@ -170,11 +166,7 @@ http2_connection::submit_response_head(
     if (stream->tunnel().pending() != nullptr) {
         (void)stream->reject_connect();
     }
-    if (retired_header_block) {
-        stream->local_header_block().swap(*retired_header_block);
-    } else {
-        stream->local_header_block().clear();
-    }
+    http2_release_local_header_block(*stream);
     release_local_request_stream_if_closed(*stream);
     retire_completed_local_push(stream_id);
     return write_plan;
@@ -413,30 +405,37 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
     if (!stream->local_content().length_complete()) {
         throw std::invalid_argument("HTTP/2 request ended before declared Content-Length");
     }
-    http2_header_list_size size;
-    std::size_t reserve_bytes = 0;
-    for (const auto& field : trailers) {
-        if (!http2_is_valid_outbound_regular_header(field.name(), field.value()) ||
-            is_forbidden_http_request_trailer_name(field.name()) || !size.add(field.name(), field.value())) {
-            throw std::invalid_argument("invalid HTTP/2 request trailer");
-        }
-        reserve_bytes += field.name().size() + field.value().size() + 6U;
-    }
-    std::pmr::string block(resource_);
-    if (reserve_bytes > 15U) {
-        block.reserve(reserve_bytes);
-    }
-    std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
-    std::pmr::string lower_name_scratch(resource_);
-    for (const auto& field : trailers) {
-        hpack_encoder::encode_header(block,
-            http2_lower_header_name(field.name(), lower_name_stack, lower_name_scratch),
-            field.value());
-    }
-    if (block.empty()) {
+    if (trailers.empty()) {
         output_.append_frame(http2_frame_type::data, http2_flag_end_stream, stream_id, {});
     } else {
-        append_response_header_frames(*stream, block, http2_end_stream::end_stream);
+        http2_header_list_size size;
+        std::size_t reserve_bytes = 0;
+        for (const auto& field : trailers) {
+            if (!http2_is_valid_outbound_regular_header(field.name(), field.value()) ||
+                is_forbidden_http_request_trailer_name(field.name()) || !size.add(field.name(), field.value())) {
+                throw std::invalid_argument("invalid HTTP/2 request trailer");
+            }
+            reserve_bytes += field.name().size() + field.value().size() + 6U;
+        }
+        auto& block = stream->local_header_block();
+        try {
+            block.clear();
+            if (reserve_bytes > 15U) {
+                block.reserve(reserve_bytes);
+            }
+            std::array<char, http2_lower_header_stack_bytes> lower_name_stack;
+            std::pmr::string lower_name_scratch(resource_);
+            for (const auto& field : trailers) {
+                hpack_encoder::encode_header(block,
+                    http2_lower_header_name(field.name(), lower_name_stack, lower_name_scratch),
+                    field.value());
+            }
+        } catch (...) {
+            block.clear();
+            throw;
+        }
+        append_response_header_frames(*stream, std::string_view(block), http2_end_stream::end_stream);
+        http2_release_local_header_block(*stream);
     }
     (void)stream->commit_local_end_stream();
     release_local_request_stream_if_closed(*stream);
@@ -457,12 +456,19 @@ http2_finish_status http2_connection::finish_response(
     }
     // Encode the complete semantic trailer section before output or phase changes.
     // Body input must already be consumed; DATA and terminal HEADERS preserve order.
-    std::pmr::string trailer_block(resource_);
-    append_http2_response_trailers(trailer_block, trailers);
-    if (trailer_block.empty()) {
+    if (trailers.empty()) {
         output_.append_frame(http2_frame_type::data, http2_flag_end_stream, stream_id, {});
     } else {
+        auto& trailer_block = stream->local_header_block();
+        try {
+            trailer_block.clear();
+            append_http2_response_trailers(trailer_block, trailers);
+        } catch (...) {
+            trailer_block.clear();
+            throw;
+        }
         append_response_header_frames(*stream, std::string_view(trailer_block), http2_end_stream::end_stream);
+        http2_release_local_header_block(*stream);
     }
     (void)stream->commit_local_end_stream();
     release_local_request_stream_if_closed(*stream);

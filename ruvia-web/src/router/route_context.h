@@ -17,8 +17,7 @@ namespace ruvia {
     const auto& route = resolved.route();
     const auto values = resolved.match().values();
     return detail::context_access::make(memory, request, route.path(), route.param_names().data(),
-        values.data(), values.size(), reinterpret_cast<std::uintptr_t>(&route),
-        services.with_route_body_limit(route.max_request_body_bytes()));
+        values.data(), values.size(), reinterpret_cast<std::uintptr_t>(&route), services);
 }
 
 }  // namespace ruvia

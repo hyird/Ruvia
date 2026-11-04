@@ -38,11 +38,11 @@ struct context_access final {
 
     [[nodiscard]] static http_response make_static_json_response(
         context& context_value, std::string_view json_body) {
-        http_response response(context_value.arena());
-        response.content_type(http_content_type::application_json);
+        auto response = context_value.response_state().take_draft_or_new();
+        if (!response.header("Content-Type")) {
+            response.content_type(http_content_type::application_json);
+        }
         response.static_body(json_body);
-        context_value.apply_response_state(response, std::nullopt);
-        context_value.response_state().reset_draft();
         return response;
     }
 
@@ -62,6 +62,10 @@ struct context_access final {
     [[nodiscard]] static const context_request_body_source& request_body_source(
         const context& context_value) noexcept {
         return context_value.request_body_source();
+    }
+
+    [[nodiscard]] static context_services& services(context& context_value) noexcept {
+        return context_value.services();
     }
 
     [[nodiscard]] static const context_services& services(const context& context_value) noexcept {

@@ -70,8 +70,6 @@ private:
 void task_frame_deallocate_sized(void* pointer, std::size_t bytes_value) noexcept;
 [[nodiscard]] void* task_frame_allocate_aligned(std::size_t bytes_value, std::size_t alignment);
 void task_frame_deallocate_aligned(void* pointer) noexcept;
-// This thread's cached frame bytes, and the drain worker_memory::trim() uses.
-[[nodiscard]] std::size_t task_frame_cached_bytes() noexcept;
 void task_frame_cache_release() noexcept;
 
 template <std::size_t t_alignment>

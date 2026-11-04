@@ -93,7 +93,6 @@ task<void> redis_subscription_connection::send(std::pmr::vector<std::pmr::string
         }
         auto& write_buffer = connection_.write_buffer();
         write_buffer.clear();
-        write_buffer.reserve(resp_command_serialized_size(args));
         append_resp_command(write_buffer, args);
         // The serialized request owns the bytes needed by the write.
         std::pmr::vector<std::pmr::string>(args.get_allocator()).swap(args);

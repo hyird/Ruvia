@@ -82,7 +82,7 @@ namespace {
     const auto limit = std::min(headers.size(), last_index);
     for (std::size_t i = 0; i < limit; ++i) {
         if (http_request_access::header_kind(request, i) !=
-            static_cast<std::uint8_t>(request_header_kind::sec_websocket_protocol)) {
+            request_header_kind::sec_websocket_protocol) {
             continue;
         }
         present = true;

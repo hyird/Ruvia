@@ -95,7 +95,7 @@ private:
 // Answers a rejection through the application's error handler, adding the
 // rate-limit headers when that is why the request was refused.
 [[nodiscard]] task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request,
-    request_memory& memory, const http_request_rejection& rejection, context_services services);
+    request_memory& memory, const http_request_rejection& rejection, const context_services& services);
 
 // Result of the synchronous first preparation pass. ready() is null only when
 // a blocking-pool encode or the application error handler must be awaited
@@ -162,6 +162,10 @@ public:
     // promise (and must not be transformed again).
     void disable_response_coding() noexcept {
         coding_policy_ = http_response_coding_policy::disabled();
+    }
+    void bind_addresses(std::string_view remote_address, std::string_view client_address) noexcept {
+        remote_address_ = remote_address;
+        client_address_ = client_address;
     }
 
     // All arguments borrow the current request owner through completion. Only

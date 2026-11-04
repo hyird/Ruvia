@@ -186,7 +186,7 @@ void strip_utf8_bom(std::string_view& line) noexcept {
     }
 }
 
-[[nodiscard]] dotenv_entry parse_entry(
+[[nodiscard]] env_variable parse_entry(
     std::string_view line, const std::filesystem::path& path, std::size_t line_number) {
     line = trim(line);
     if (line.starts_with("export") && line.size() > 6 && is_space(line[6])) {
@@ -205,7 +205,7 @@ void strip_utf8_bom(std::string_view& line) noexcept {
     }
 
     auto parsed_value = parse_value(line.substr(separator + 1), path, line_number);
-    dotenv_entry entry;
+    env_variable entry;
     entry.name_.assign(key.data(), key.size());
     entry.value_ = std::move(parsed_value);
     return entry;
@@ -213,9 +213,9 @@ void strip_utf8_bom(std::string_view& line) noexcept {
 
 }  // namespace
 
-std::pmr::vector<dotenv_entry> read_dotenv_entries(
+std::pmr::vector<env_variable> read_dotenv_entries(
     std::istream& input, const std::filesystem::path& path) {
-    std::pmr::vector<dotenv_entry> entries(process_resource());
+    std::pmr::vector<env_variable> entries(process_resource());
     std::pmr::string line(process_resource());
     std::size_t line_number = 0;
 

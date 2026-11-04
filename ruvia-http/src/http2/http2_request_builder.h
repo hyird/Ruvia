@@ -28,10 +28,6 @@ public:
         return standard_connect ? stream.request_authority() : stream.request_path();
     }
 
-    [[nodiscard]] static std::string_view request_path(const http2_stream_state& stream) noexcept {
-        return split_request_target(request_target(stream)).path_;
-    }
-
     [[nodiscard]] static http_request build(http2_stream_state& stream,
         std::pmr::memory_resource* resource, std::string_view body) {
         auto request = http_request_access::make();
@@ -43,7 +39,7 @@ public:
         const auto* pending = stream.tunnel().pending();
         const bool standard_connect =
             pending != nullptr && pending->form() == http2_connect_form::standard;
-        const auto target = request_target(stream);
+        const auto target = standard_connect ? stream.request_authority() : stream.request_path();
         if (target.empty() && (standard_connect || !stream.has_path())) {
             throw std::logic_error("validated HTTP/2 request cannot be materialized");
         }
@@ -70,7 +66,8 @@ public:
         http_request_access::reserve_headers(request, header_count);
         for (std::size_t i = 0; i < stream.remote_header_count(); ++i) {
             const auto header_value = stream.remote_header_at(i);
-            if (!add_header(request, header_value.name_, header_value.value_, header_value.kind_)) {
+            if (!http_request_access::add_header(request,
+                    http_header_view{header_value.name_, header_value.value_}, header_value.kind_)) {
                 throw std::logic_error("validated HTTP/2 request cannot be materialized");
             }
         }
@@ -78,12 +75,14 @@ public:
         // value that is not legal Host syntax. Never manufacture an invalid
         // regular field from that distinct pseudo-header grammar.
         if (synthesize_host) {
-            if (!add_header(request, "host", authority, request_header_kind::host)) {
+            if (!http_request_access::add_header(
+                    request, http_header_view{"host", authority}, request_header_kind::host)) {
                 throw std::logic_error("validated HTTP/2 request cannot be materialized");
             }
         }
         if (stream.has_cookie()) {
-            if (!add_header(request, "cookie", stream.request_cookie(), request_header_kind::cookie)) {
+            if (!http_request_access::add_header(request,
+                    http_header_view{"cookie", stream.request_cookie()}, request_header_kind::cookie)) {
                 throw std::logic_error("validated HTTP/2 request cannot be materialized");
             }
         }
@@ -106,12 +105,6 @@ private:
         }
         return request_target_parts_type{
             .path_ = target.substr(0, query), .query_string_ = target.substr(query + 1)};
-    }
-
-    static bool add_header(http_request& request, std::string_view name, std::string_view value,
-        request_header_kind kind) {
-        return http_request_access::add_header(
-            request, http_header_view{name, value}, request_header_kind_known_slot(kind));
     }
 };
 

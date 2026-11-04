@@ -407,13 +407,9 @@ template <typename t_type>
             }
             return model_value_factory::make_string(parsed_value->raw(), resource);
         }
-        auto decoded = decode_json_string(parsed_value->raw(), resource);
         input = remaining;
-        if (!decoded.has_value()) {
-            return std::nullopt;
-        }
         field_type value = make_request_value<field_type>(resource);
-        value.assign_owned(std::move(*decoded));
+        value.assign_owned(decode_json_string(*parsed_value, resource));
         return value;
     } else if constexpr (is_ruvia_bytes<field_type>) {
         // Escaped base64 may allocate both a decoded token and a byte value.
@@ -426,11 +422,8 @@ template <typename t_type>
         if (token->encoding() == json_string_encoding::literal) {
             value = decode_model_binary(token->raw(), resource);
         } else {
-            const auto decoded = decode_json_string(token->raw(), resource);
-            if (!decoded) {
-                return std::nullopt;
-            }
-            value = decode_model_binary(*decoded, resource);
+            const auto decoded = decode_json_string(*token, resource);
+            value = decode_model_binary(decoded, resource);
         }
         if (!value) {
             return std::nullopt;

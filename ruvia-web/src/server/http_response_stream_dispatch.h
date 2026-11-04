@@ -279,7 +279,7 @@ struct response_stream_no_peer_abort final {
 template <typename sink, typename peer_aborted_type = response_stream_no_peer_abort>
 task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_value, const route_table& routes_value,
     const http_request& request, const resolved_route& route, request_memory& request_memory_value,
-    context_services services, peer_aborted_type peer_aborted = {}) {
+    const context_services& services, peer_aborted_type peer_aborted = {}) {
     auto response_stream = make_response_stream_writer(sink_value, *request_memory_value.upstream_resource());
 
     std::exception_ptr exception;

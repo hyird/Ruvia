@@ -24,52 +24,42 @@ inline bool set_known_static_vary_token(http_response_headers& headers, std::str
     return false;
 }
 
-[[nodiscard]] inline bool response_vary_has_token(
-    const http_response_headers& headers, std::string_view token) noexcept {
-    if (!response_has_known_header(headers, response_header_vary)) {
-        return false;
-    }
-    for (const auto& header : headers) {
-        if (http_response_header_access::known_bit(header) == response_header_vary &&
-            http_has_token(header.value(), token)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 inline void add_vary_token(http_response_headers& headers,
     std::pmr::memory_resource* resource, std::string_view token) {
     // comma-joined value in wire order. Inspect every line: the O(1) known-header
     // lookup intentionally returns only the first occurrence and cannot decide
     // wildcard or token membership for this list-based field.
     token = http_trim_ows(token);
-    if (token.empty() || response_vary_has_token(headers, "*")) {
+    if (token.empty()) {
         return;
     }
 
-    if (token == "*") {
-        headers.header_stable_view("Vary", "*");
-        return;
-    }
-    if (response_vary_has_token(headers, token)) {
-        return;
-    }
-    if (!is_valid_http_header_name(token)) {
-        throw std::invalid_argument("invalid HTTP Vary header token");
-    }
-
+    const bool wildcard_token = token == "*";
     std::size_t existing_value_count = 0;
     std::size_t existing_bytes = 0;
     if (response_has_known_header(headers, response_header_vary)) {
         for (const auto& header : headers) {
-            if (http_response_header_access::known_bit(header) != response_header_vary ||
-                http_trim_ows(header.value()).empty()) {
+            if (http_response_header_access::known_bit(header) != response_header_vary) {
+                continue;
+            }
+            const auto value = header.value();
+            if (http_has_token(value, "*") || (!wildcard_token && http_has_token(value, token))) {
+                return;
+            }
+            if (http_trim_ows(value).empty()) {
                 continue;
             }
             ++existing_value_count;
-            existing_bytes += header.value().size();
+            existing_bytes += value.size();
         }
+    }
+
+    if (wildcard_token) {
+        headers.header_stable_view("Vary", "*");
+        return;
+    }
+    if (!is_valid_http_header_name(token)) {
+        throw std::invalid_argument("invalid HTTP Vary header token");
     }
     if (existing_value_count == 0) {
         if (!set_known_static_vary_token(headers, token)) {

@@ -18,6 +18,7 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_io_buffer.h"
@@ -57,7 +58,8 @@ public:
           }()),
           subprotocol_(subprotocol_value),
           write_lane_(worker_value),
-          reader_done_signal_(worker_value) {
+          reader_done_signal_(worker_value),
+          background_tasks_(worker_value, {.resource_ = resource}) {
         buffer_.append(initial_bytes);
         scanner_entry_.register_periodic_check(periodic_check_, this, &server_websocket_connection::heartbeat_tick_thunk,
             &server_websocket_connection::drain_thunk);
@@ -203,7 +205,14 @@ private:
         borrowed_frame_guard_type(
             server_websocket_connection& connection, websocket_opcode opcode, std::string_view payload, bool compress)
             : connection_(&connection) {
-            if (!connection.accept_submitted_frame(connection.protocol_.submit_borrowed_frame(opcode, payload, compress))) {
+            const auto status = [&] {
+                if constexpr (native_stream) {
+                    return connection.protocol_.submit_borrowed_frame(opcode, payload, compress);
+                } else {
+                    return connection.protocol_.submit_frame(opcode, payload, compress);
+                }
+            }();
+            if (!connection.accept_submitted_frame(status)) {
                 connection_ = nullptr;
             }
         }
@@ -294,13 +303,6 @@ private:
     // sized by recent traffic, so an idle connection holds little read storage.
     task<bool> read_more();
     task<std::error_code> write_adapted(const websocket_output_plan& plan);
-    [[nodiscard]] auto executor() const {
-        if constexpr (native_stream) {
-            return stream_.get_executor();
-        } else {
-            return stream_.executor();
-        }
-    }
     auto write_bytes(const websocket_output_plan& plan);
     void close_stream() noexcept;
     void abort_transport(bool force_transport = false) noexcept;
@@ -334,6 +336,7 @@ private:
     // websocket_idle_read_bytes: the next such read then waits in a buffer of
     // that size.
     bool small_frames_{true};
+    task_scope background_tasks_;
     // Declared last so destruction unregisters before any callback target state
     // starts to disappear.
     connection_scanner::periodic_check_registration periodic_check_;

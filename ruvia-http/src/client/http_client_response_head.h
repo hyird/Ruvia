@@ -35,7 +35,6 @@ struct http1_client_parsed_response_head final {
     // The status the response is processed as (received_status_.status()).
     http_status_code status_code_;
     http_protocol_version protocol_version_;
-    bool content_length_field_present_{false};
     bool saw_transfer_encoding_{false};
     bool all_upgrade_protocols_offered_{true};
     http_connection_options connection_options_;
@@ -62,6 +61,6 @@ using http1_client_response_planning_result_type =
 // Decide the response plan a parsed head implies for this request.
 [[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(
     const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response,
-    http1_client_request_content_phase request_content_phase);
+    http1_client_request_content_phase request_content_phase, bool interim_faulty_framing = false);
 
 }  // namespace ruvia::detail

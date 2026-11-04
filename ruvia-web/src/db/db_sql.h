@@ -92,15 +92,17 @@ struct mariadb_statement_traits final {
 
 [[nodiscard]] mariadb_statement_traits mariadb_statement_traits_of(std::string_view sql) noexcept;
 
-// A statement that must have the connection to itself: LOAD ... LOCAL INFILE
-// answers its command with a request for the file, then reads the file's
-// content as packets of the same command, so a command sent behind it would
-// be read as file content. A statement led by an executable comment counts as
-// one, since the comment may hide a LOAD.
-[[nodiscard]] bool mariadb_exclusive_statement(std::string_view sql) noexcept;
+struct mariadb_statement_classification final {
+    // A statement that must have the connection to itself: LOAD ... LOCAL INFILE
+    // answers its command with a request for the file, then reads the file's
+    // content as packets of the same command, so a command sent behind it would
+    // be read as file content. A statement led by an executable comment counts as
+    // one, since the comment may hide a LOAD.
+    bool exclusive_{false};
+    // A statement that may run a stored procedure: a CALL, or one hidden behind
+    // an executable comment.
+    bool calls_routine_{false};
+};
 
-// A statement that may run a stored procedure: a CALL, or one hidden behind
-// an executable comment.
-[[nodiscard]] bool mariadb_calls_routine(std::string_view sql) noexcept;
-
+[[nodiscard]] mariadb_statement_classification classify_mariadb_statement(std::string_view sql) noexcept;
 }  // namespace ruvia::detail

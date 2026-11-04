@@ -161,112 +161,71 @@ void append_utf8(output_t_type& output, std::uint32_t code_point) {
     }
 }
 
-[[nodiscard]] inline bool decode_json_string_into(
-    std::string_view input, std::pmr::string& output) {
-    output.clear();
-    output.reserve(input.size());
+inline void decode_json_string_into(
+    const json_string_token& token, std::pmr::string& decoded) {
+    const auto raw = token.raw();
+    if (token.encoding() == json_string_encoding::literal) {
+        decoded.assign(raw.data(), raw.size());
+        return;
+    }
+    decoded.clear();
+    decoded.reserve(raw.size());
     std::size_t chunk_begin = 0;
-    std::size_t i = 0;
-    while ((i = find_json_string_token_byte(input, i)) != std::string_view::npos) {
-        const char c = input[i];
-        if (c != '\\') {
-            const auto uc = static_cast<unsigned char>(c);
-            if (uc < 0x20) {
-                output.clear();
-                return false;
-            }
-            if (uc >= 0x80) {
-                // RFC 8259 §8.1 requires JSON to be UTF-8: ill-formed input is
-                // rejected rather than passed through verbatim.
-                const auto sequence = scan_json_utf8_sequence(input, i);
-                if (!sequence.well_formed_) {
-                    output.clear();
-                    return false;
-                }
-                i += sequence.length_;
-                continue;
-            }
-            ++i;
-            continue;
-        }
-
-        if (i + 1 >= input.size()) {
-            output.clear();
-            return false;
-        }
+    for (std::size_t i = raw.find('\\', chunk_begin); i != std::string_view::npos;
+        i = raw.find('\\', chunk_begin)) {
         if (i > chunk_begin) {
-            output.append(input.data() + chunk_begin, i - chunk_begin);
+            decoded.append(raw.data() + chunk_begin, i - chunk_begin);
         }
-        const char escape = input[++i];
+        const char escape = raw[++i];
         switch (escape) {
             case '"':
             case '\\':
             case '/':
-                output.push_back(escape);
+                decoded.push_back(escape);
                 break;
             case 'b':
-                output.push_back('\b');
+                decoded.push_back('\b');
                 break;
             case 'f':
-                output.push_back('\f');
+                decoded.push_back('\f');
                 break;
             case 'n':
-                output.push_back('\n');
+                decoded.push_back('\n');
                 break;
             case 'r':
-                output.push_back('\r');
+                decoded.push_back('\r');
                 break;
             case 't':
-                output.push_back('\t');
+                decoded.push_back('\t');
                 break;
             case 'u': {
                 std::uint32_t code_point = 0;
-                if (!read_json_hex4(input.substr(i + 1), code_point)) {
-                    output.clear();
-                    return false;
-                }
+                (void)read_json_hex4(raw.substr(i + 1), code_point);
                 i += 4;
                 if (is_json_high_surrogate(code_point)) {
-                    if (i + 6 >= input.size() || input[i + 1] != '\\' || input[i + 2] != 'u') {
-                        output.clear();
-                        return false;
-                    }
                     std::uint32_t low = 0;
-                    if (!read_json_hex4(input.substr(i + 3), low) || !is_json_low_surrogate(low)) {
-                        output.clear();
-                        return false;
-                    }
+                    (void)read_json_hex4(raw.substr(i + 3), low);
                     i += 6;
                     code_point = 0x10000 + (((code_point - 0xD800) << 10) | (low - 0xDC00));
-                } else if (is_json_low_surrogate(code_point)) {
-                    output.clear();
-                    return false;
                 }
-                append_utf8(output, code_point);
+                append_utf8(decoded, code_point);
                 break;
             }
             default:
-                output.clear();
-                return false;
+                break;
         }
         chunk_begin = ++i;
     }
-    if (chunk_begin < input.size()) {
-        output.append(input.data() + chunk_begin, input.size() - chunk_begin);
+    if (chunk_begin < raw.size()) {
+        decoded.append(raw.data() + chunk_begin, raw.size() - chunk_begin);
     }
-    return true;
 }
 
-// Returns the complete decoded string or no value for malformed escape/UTF-8
-// input. Mutable caller storage is intentionally not accepted: a failure must
-// never expose the prefix produced before the malformed byte sequence.
-[[nodiscard]] inline std::optional<std::pmr::string> decode_json_string(
-    std::string_view input, std::pmr::memory_resource* resource) {
-    std::pmr::string output(pmr_resource_or_default(resource));
-    if (!decode_json_string_into(input, output)) {
-        return std::nullopt;
-    }
-    return output;
+[[nodiscard]] inline std::pmr::string decode_json_string(
+    const json_string_token& token, std::pmr::memory_resource* resource) {
+    std::pmr::string decoded(pmr_resource_or_default(resource));
+    decode_json_string_into(token, decoded);
+    return decoded;
 }
 
 }  // namespace ruvia::detail

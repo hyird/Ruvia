@@ -223,7 +223,13 @@ void client_request_policy::discard_expired(std::chrono::system_clock::time_poin
 http_client_request_view client_request_policy::prepare_request(
     const http_client_request_storage& request, client_prepared_request_scratch& scratch) {
     const auto& input_headers = request.headers();
-    auto field_count = input_headers.size();
+    const auto max_prepared_headers = input_headers.size() + 2;
+    http_header_view* prepared_begin = scratch.inline_headers_.data();
+    if (max_prepared_headers > scratch.inline_headers_.size()) {
+        scratch.overflow_headers_.resize(max_prepared_headers);
+        prepared_begin = scratch.overflow_headers_.data();
+    }
+    std::size_t index = 0;
     bool add_user_agent = !config_.user_agent_.empty();
     scratch.overflow_cookie_header_.clear();
     std::size_t cookie_header_bytes = 0;
@@ -233,16 +239,16 @@ http_client_request_view client_request_policy::prepare_request(
         if (add_user_agent && name.size() == 10U && http_ascii_equals_ignore_case(name, "user-agent")) {
             add_user_agent = false;
         }
-        if (name.size() != 6U || !http_ascii_equals_ignore_case(name, "cookie")) {
+        if (name.size() == 6U && http_ascii_equals_ignore_case(name, "cookie")) {
+            if (cookie_header_bytes != 0) {
+                cookie_header_bytes += 2;
+            }
+            cookie_header_bytes += field.value().size();
             continue;
         }
-        --field_count;
-        if (cookie_header_bytes != 0) {
-            cookie_header_bytes += 2;
-        }
-        cookie_header_bytes += field.value().size();
+        prepared_begin[index++] = http_header_view{name, field.value()};
     }
-    const bool has_input_cookie = field_count != input_headers.size();
+    const bool has_input_cookie = index != input_headers.size();
 
     // RFC 9110 §9.3.8: TRACE reflects the request, so stored credentials stay
     // out; caller-written Cookie fields above remain the caller's choice.
@@ -308,44 +314,16 @@ http_client_request_view client_request_policy::prepare_request(
         }
         cookie_header_view = std::string_view(cookie_begin, static_cast<std::size_t>(cursor - cookie_begin));
     }
-    const bool add_cookie = !cookie_header_view.empty();
-    field_count += static_cast<std::size_t>(add_user_agent) + static_cast<std::size_t>(add_cookie);
-    std::span<const http_header_view> prepared_headers{};
-    if (field_count <= scratch.inline_headers_.size()) {
-        std::size_t index = 0;
-        for (const auto& field : input_headers) {
-            if (!has_input_cookie || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
-                scratch.inline_headers_[index++] = http_header_view{field.name(), field.value()};
-            }
-        }
-        if (add_user_agent) {
-            scratch.inline_headers_[index++] = http_header_view{"user-agent", config_.user_agent_};
-        }
-        if (add_cookie) {
-            scratch.inline_headers_[index++] = http_header_view{"cookie", cookie_header_view};
-        }
-        prepared_headers = std::span<const http_header_view>(scratch.inline_headers_.data(), index);
-    } else {
-        auto& headers = scratch.overflow_headers_;
-        headers.clear();
-        headers.reserve(field_count);
-        for (const auto& field : input_headers) {
-            if (!has_input_cookie || !http_ascii_equals_ignore_case(field.name(), "cookie")) {
-                headers.emplace_back(field.name(), field.value());
-            }
-        }
-        if (add_user_agent) {
-            headers.emplace_back("user-agent", config_.user_agent_);
-        }
-        if (add_cookie) {
-            headers.emplace_back("cookie", cookie_header_view);
-        }
-        prepared_headers = std::span<const http_header_view>(headers);
+    if (add_user_agent) {
+        prepared_begin[index++] = http_header_view{"user-agent", config_.user_agent_};
+    }
+    if (!cookie_header_view.empty()) {
+        prepared_begin[index++] = http_header_view{"cookie", cookie_header_view};
     }
     http_client_request_view result;
     result.method_ = request.method();
     result.target_ = request.target();
-    result.headers_ = prepared_headers;
+    result.headers_ = std::span<const http_header_view>(prepared_begin, index);
     result.content_ = request.has_body() ? http_client_request_content_view::bytes(request.body())
                                          : http_client_request_content_view::none();
     return result;

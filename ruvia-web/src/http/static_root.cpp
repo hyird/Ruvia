@@ -127,6 +127,9 @@ namespace {
 [[nodiscard]] const detail::static_root_entry* find_fresh_sidecar_entry(
     const detail::static_root_state& state_value, const detail::static_root_entry& identity,
     std::string_view suffix) {
+    if (!state_value.has_sidecars_) {
+        return nullptr;
+    }
     static constexpr std::size_t inline_path_capacity = 256;
     std::array<char, inline_path_capacity> inline_path;
     std::pmr::string variant_path(process_resource());
@@ -256,6 +259,10 @@ bool detail::static_root_access::has_directory_index(const static_root& root) no
     return !root.state_->config_.index_file_.empty();
 }
 
+bool detail::static_root_access::has_sidecars(const static_root& root) noexcept {
+    return root.state_->has_sidecars_;
+}
+
 std::optional<detail::static_root_entry_view> detail::static_root_access::find(
     const static_root& root, std::string_view relative_path) noexcept {
     auto entry_value = find_variant(root, relative_path);
@@ -374,6 +381,7 @@ void detail::static_root_access::install_precompressed_variants(
         }
 
         std::optional<std::pmr::string> plain;
+        const std::pmr::string* plain_bytes = entry.resident_bytes_.get();
         for (const auto& sidecar : detail::static_precompression_sidecars) {
             const auto coding = sidecar.content_coding_;
             if (!options.enabled(coding) || find_fresh_sidecar_entry(state_value, entry, sidecar.suffix_) != nullptr) {
@@ -386,18 +394,19 @@ void detail::static_root_access::install_precompressed_variants(
                     continue;
                 }
             }
-            if (!plain.has_value()) {
+            if (plain_bytes == nullptr) {
                 plain = read_static_root_entry_bytes(entry, resource);
                 if (!plain.has_value()) {
                     entry.memory_variants_.clear();
                     break;
                 }
+                plain_bytes = &*plain;
             }
-            if (plain->empty()) {
+            if (plain_bytes->empty()) {
                 continue;
             }
             auto encoded = encode_http_content(
-                coding, *plain, {.max_encoded_bytes_ = plain->size() - 1, .resource_ = resource});
+                coding, *plain_bytes, {.max_encoded_bytes_ = plain_bytes->size() - 1, .resource_ = resource});
             if (encoded.has_value()) {
                 store_precompressed_variant(entry, coding, std::move(*encoded),
                     emit_response_validators, resource);
@@ -571,9 +580,10 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
             continue;
         }
         const auto extension = detail::lower_static_file_extension_from_utf8(relative, upstream);
+        const bool is_sidecar_extension = detail::is_precompressed_sidecar_extension(extension);
         const bool directly_servable = detail::file_type_allowed(extension, config);
         bool usable_as_sidecar = false;
-        if (!directly_servable && detail::is_precompressed_sidecar_extension(extension)) {
+        if (!directly_servable && is_sidecar_extension) {
             const auto stem_view =
                 std::string_view(relative).substr(0, relative.size() - extension.size());
             usable_as_sidecar = detail::file_type_allowed(
@@ -609,6 +619,9 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         if (state_value.entries_.empty()) {
             state_value.entries_.reserve(8);
         }
+        if (is_sidecar_extension) {
+            state_value.has_sidecars_ = true;
+        }
         state_value.entries_.push_back(std::move(entry));
     }
     if (ec) {
@@ -639,18 +652,7 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
 std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::make(
     std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
     const static_root_config_storage& config) {
-    auto state = build_static_root_state(root, detail::static_root_config_storage(config, process_resource()));
-    auto* const resource = pmr_resource_or_default(object_resource);
-    auto* const storage = resource->allocate(sizeof(static_root), alignof(static_root));
-    try {
-        auto* const result_value = ::new (storage) static_root(
-            std::unique_ptr<detail::static_root_state, static_root::state_deleter_type>(state.release()));
-        return std::unique_ptr<static_root, pmr_object_deleter<static_root>>(
-            result_value, pmr_object_deleter<static_root>{resource});
-    } catch (...) {
-        resource->deallocate(storage, sizeof(static_root), alignof(static_root));
-        throw;
-    }
+    return make(object_resource, root, detail::static_root_config_storage(config, process_resource()));
 }
 
 std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::make(
@@ -662,15 +664,10 @@ std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_roo
     auto state = build_static_root_state(root, std::move(stored));
     auto* const resource = pmr_resource_or_default(object_resource);
     auto* const storage = resource->allocate(sizeof(static_root), alignof(static_root));
-    try {
-        auto* const result_value = ::new (storage) static_root(
-            std::unique_ptr<detail::static_root_state, static_root::state_deleter_type>(state.release()));
-        return std::unique_ptr<static_root, pmr_object_deleter<static_root>>(
-            result_value, pmr_object_deleter<static_root>{resource});
-    } catch (...) {
-        resource->deallocate(storage, sizeof(static_root), alignof(static_root));
-        throw;
-    }
+    auto* const result_value = ::new (storage) static_root(
+        std::unique_ptr<detail::static_root_state, static_root::state_deleter_type>(state.release()));
+    return std::unique_ptr<static_root, pmr_object_deleter<static_root>>(
+        result_value, pmr_object_deleter<static_root>{resource});
 }
 
 static_root::static_root(std::unique_ptr<detail::static_root_state, state_deleter_type> state) noexcept

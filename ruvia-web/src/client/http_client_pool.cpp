@@ -222,12 +222,11 @@ void http_client_pool::spawn_request(
 task<http_client_tunnel_result> http_client_pool::open_tunnel(
     http_client_request_storage request, http_client_tunnel_config config, operation_options options) {
     require_accepting();
-    auto owned_request = std::move(request).into_resource(resource_);
     http_client_response response(*this);
     auto& state_value = *response.state_;
     state_value.tunnel_.emplace(state_value.memory_domain().worker(), state_value.resource_, config);
-    state_value.tunnel_->udp_ = owned_request.udp_tunnel();
-    spawn_request(std::move(owned_request), std::move(options), state_value);
+    state_value.tunnel_->udp_ = request.udp_tunnel();
+    spawn_request(std::move(request), std::move(options), state_value);
     co_await state_value.await_head("CONNECT handshake failed");
     if (state_value.tunnel_->accepted_) {
         co_return http_client_tunnel_result(http_client_tunnel(std::move(response)));
@@ -238,22 +237,19 @@ task<http_client_tunnel_result> http_client_pool::open_tunnel(
 task<http_client_exchange> http_client_pool::open_request(
     http_client_request_storage request, http_client_upload_config upload, operation_options options) {
     require_accepting();
-    auto owned_request = std::move(request).into_resource(resource_);
     http_client_response response(*this);
     auto& state_value = *response.state_;
     state_value.upload_.emplace(state_value.memory_domain().worker(), state_value.resource_, upload);
     state_value.upload_->content_released_ = upload.expectation_ == http_client_request_expectation::none;
-    spawn_request(std::move(owned_request), std::move(options), state_value);
+    spawn_request(std::move(request), std::move(options), state_value);
     co_return http_client_exchange(std::move(response));
 }
 
 task<http_client_response> http_client_pool::execute(http_client_request_storage request, operation_options options) {
     require_accepting();
-    // The request owns all data before transport work can outlive the caller.
-    auto owned_request = std::move(request).into_resource(resource_);
     http_client_response response(*this);
     auto& state_value = *response.state_;
-    spawn_request(std::move(owned_request), std::move(options), state_value);
+    spawn_request(std::move(request), std::move(options), state_value);
     co_await state_value.await_head("HTTP client request failed before the response head");
     co_return response;
 }

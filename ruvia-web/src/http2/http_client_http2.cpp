@@ -210,11 +210,8 @@ void http_client_connection::on_http2_event(http2_event& event) {
         }
     } else if (auto* chunk = event.message_body_chunk()) {
         consume_http2_data(chunk->stream_id(), chunk->bytes(), chunk->take_credit());
-        // Unretained credits returned on destruction; flush their WINDOW_UPDATE.
-        http2_.wake_writer();
     } else if (auto* data = event.tunnel_data()) {
         consume_http2_data(data->stream_id(), data->bytes(), data->take_credit());
-        http2_.wake_writer();
     } else if (const auto* tunnel_end = event.tunnel_end()) {
         if (auto* stream = find_http2_stream(tunnel_end->stream_id()); stream != nullptr && !stream->failed()) {
             auto& state_value = *stream->state_;

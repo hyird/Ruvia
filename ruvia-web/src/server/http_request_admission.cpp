@@ -76,8 +76,8 @@ http_request_rejection http_request_rejection::rate_limited(rate_limit_rejection
 }
 
 task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request,
-    request_memory& memory, const http_request_rejection& rejection, context_services services) {
-    auto response = co_await routes.handle_error(request, memory, rejection.error(), std::move(services));
+    request_memory& memory, const http_request_rejection& rejection, const context_services& services) {
+    auto response = co_await routes.handle_error(request, memory, rejection.error(), services);
     if (const auto* rate_limit = rejection.rate_limit()) {
         apply_rate_limit_rejection_headers(response, *rate_limit);
     }
@@ -125,14 +125,16 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // Keyed on the client, not the hop: behind a trusted proxy every request
     // would otherwise share the proxy's single key. Resolved once per request
     // and bound to the services every context of this request is created from.
-    const auto connection = services.resolve_conn_info(request);
-    const auto remote_address = connection.remote().address();
-    const auto client_address = connection.client().address();
-
     const auto* resolved = input.resolution_.resolved();
     http_request_admission admission(
-        http_response_tail(request, coding_policy, remote_address, client_address, input.start_), services);
-    admission.services_.bind_conn_info(connection);
+        http_response_tail(request, coding_policy, {}, {}, input.start_), services);
+    if (services.peer_trusted()) {
+        admission.services_.bind_conn_info(services.resolve_conn_info(request));
+    }
+    const auto& connection = admission.services_.get_conn_info();
+    const auto remote_address = connection.remote().address();
+    const auto client_address = connection.client().address();
+    admission.tail_.bind_addresses(remote_address, client_address);
     admission.services_.bind_response_coding(input.coding_);
     if (resolved != nullptr) {
         admission.services_.bind_route_body_limit(resolved->route().max_request_body_bytes());

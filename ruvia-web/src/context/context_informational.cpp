@@ -1,4 +1,3 @@
-#include <array>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -7,6 +6,7 @@
 
 #include "context/context_services.h"
 #include "context/http_interim_response_output.h"
+#include "http/inline_http_header_views.h"
 #include "util/operation_lane_lease.h"
 
 namespace ruvia {
@@ -35,23 +35,8 @@ task<void> http_interim_response_output::write_owned(http_status_code status, st
     if (final_committed_) {
         throw std::logic_error("the final response has already started");
     }
-    static constexpr std::size_t inline_capacity = 16;
-    std::array<http_header_view, inline_capacity> inline_views{};
-    std::pmr::vector<http_header_view> heap_views(resource_);
-    std::span<const http_header_view> active_views;
-    if (fields_value.size() <= inline_capacity) {
-        for (std::size_t i = 0; i < fields_value.size(); ++i) {
-            inline_views[i] = http_header_view(fields_value[i].name(), fields_value[i].value());
-        }
-        active_views = std::span<const http_header_view>(inline_views.data(), fields_value.size());
-    } else {
-        heap_views.reserve(fields_value.size());
-        for (const auto& field : fields_value) {
-            heap_views.emplace_back(field.name(), field.value());
-        }
-        active_views = heap_views;
-    }
-    const http_interim_response_head head(status, active_views);
+    const detail::inline_http_header_views<16> active_views(fields_value, resource_);
+    const http_interim_response_head head(status, active_views.view());
     co_await write_(target_, head);
 }
 task<void> http_interim_response_output::send_continue() {

@@ -233,9 +233,8 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
         if (host_header_index >= 0 && i == static_cast<std::size_t>(host_header_index)) {
             value = bound_host_field_value(target_view, value);
         }
-        (void)http_request_access::add_header(request_,
-            http_header_view{header_value.name_.bind(buffer), value},
-            request_header_kind_known_slot(header_value.kind_));
+        (void)http_request_access::add_header(
+            request_, http_header_view{header_value.name_.bind(buffer), value}, header_value.kind_);
     }
 
     response_coding_qualities_ = block.response_coding_qualities_;
@@ -312,8 +311,7 @@ http_request make_parsed_http_request(
         if (kind == detail::request_header_kind::host) {
             field = http_header_view{field.name(), bound_host_field_value(target_view, field.value())};
         }
-        if (!http_request_access::add_header(
-                request, field, detail::request_header_kind_known_slot(kind))) {
+        if (!http_request_access::add_header(request, field, kind)) {
             throw http_parse_protocol_error(http_parse_error::header_too_large);
         }
     }

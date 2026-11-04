@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "ruvia/http/http_accept_match.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/static_files.h"
 
@@ -20,23 +21,7 @@ namespace ruvia::detail {
     if (right.starts_with('.')) {
         right.remove_prefix(1);
     }
-    if (left.size() != right.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < left.size(); ++i) {
-        auto left_character = left[i];
-        auto right_character = right[i];
-        if (left_character >= 'A' && left_character <= 'Z') {
-            left_character = static_cast<char>(left_character + ('a' - 'A'));
-        }
-        if (right_character >= 'A' && right_character <= 'Z') {
-            right_character = static_cast<char>(right_character + ('a' - 'A'));
-        }
-        if (left_character != right_character) {
-            return false;
-        }
-    }
-    return true;
+    return http_ascii_equals_ignore_case(left, right);
 }
 
 [[nodiscard]] inline bool static_root_serves_dotfiles(static_dotfile_policy policy) {

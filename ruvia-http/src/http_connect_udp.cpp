@@ -283,7 +283,7 @@ bool is_http_connect_udp_upgrade_request(const http_request& request) noexcept {
         detail::http_request_access::known_header_index(request, detail::request_header_kind::upgrade);
     const auto limit = std::min(headers.size(), last_index);
     for (std::size_t i = 0; i < limit; ++i) {
-        if (static_cast<detail::request_header_kind>(detail::http_request_access::header_kind(request, i)) !=
+        if (detail::http_request_access::header_kind(request, i) !=
             detail::request_header_kind::upgrade) {
             continue;
         }

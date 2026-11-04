@@ -34,23 +34,17 @@ namespace ruvia::detail {
 
 // Duplex CONNECT transport driven by one HTTP/2 session reader and writer.
 // Queued input retains its receive-window credit until the application consumes it.
-template <typename executor_type>
 class http2_sans_io_tunnel_transport final {
 public:
     http2_sans_io_tunnel_transport(ruvia::http2_connection& connection, std::uint32_t stream_id,
         http2_sans_io_body_queue& body_queue, http2_sans_io_stream_signal& signal, worker_signal& write_signal,
-        http2_data_output_budget& output_budget, executor_type executor) noexcept
+        http2_data_output_budget& output_budget) noexcept
         : connection_(connection),
           stream_id_(stream_id),
           body_queue_(body_queue),
           signal_(signal),
           write_signal_(write_signal),
-          output_budget_(output_budget),
-          executor_(executor) {}
-    [[nodiscard]] executor_type executor() const noexcept {
-        return executor_;
-    }
-
+          output_budget_(output_budget) {}
     template <typename buffer_type>
     [[nodiscard]] task<bool> read_more(buffer_type& buffer) {
         for (;;) {
@@ -153,7 +147,6 @@ private:
     http2_sans_io_stream_signal& signal_;
     worker_signal& write_signal_;
     http2_data_output_budget& output_budget_;
-    executor_type executor_;
     bool aborted_{false};
 };
 

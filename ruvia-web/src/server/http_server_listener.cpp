@@ -42,7 +42,6 @@ http_server_listener_definition http_server_listener_definition::clone(std::pmr:
 http_server_session_config::http_server_session_config(
     const http_server_listener_definition& definition, std::pmr::memory_resource* resource)
     : transport_(clone_transport(definition.transport_, pmr_resource_or_default(resource))),
-      sni_contexts_(pmr_resource_or_default(resource)),
-      sni_lookup_(pmr_resource_or_default(resource)) {}
+      sni_contexts_(pmr_resource_or_default(resource)) {}
 
 }  // namespace ruvia::detail

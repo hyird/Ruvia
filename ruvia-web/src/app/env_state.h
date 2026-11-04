@@ -31,12 +31,7 @@ struct env_access final {
     }
 };
 
-struct dotenv_entry final {
-    std::pmr::string name_{process_resource()};
-    std::pmr::string value_{process_resource()};
-};
-
-[[nodiscard]] std::pmr::vector<dotenv_entry> read_dotenv_entries(
+[[nodiscard]] std::pmr::vector<env_variable> read_dotenv_entries(
     std::istream& input, const std::filesystem::path& path);
 [[nodiscard]] std::filesystem::path dotenv_executable_directory();
 // prefix followed by path in UTF-8. path::string() narrows a Windows wide path

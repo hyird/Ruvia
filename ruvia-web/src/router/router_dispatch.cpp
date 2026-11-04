@@ -76,17 +76,17 @@ struct document_root_probe final {
 
 task<std::optional<http_response>> detail::route_table::dispatch_response_stream(
     const http_request& request, const resolved_route& resolved, request_memory& memory,
-    response_stream_writer& response_stream, context_services services) const {
+    response_stream_writer& response_stream, const context_services& services) const {
     if (resolved.route().endpoint().response_stream() == nullptr) {
         throw std::logic_error("route is not a response stream route");
     }
     return dispatch_stream_route(
-        request, resolved, memory, resolved.stream_handler(), services.with_response_stream(response_stream));
+        request, resolved, memory, resolved.stream_handler(), services, &response_stream);
 }
 
 task<std::optional<http_response>> detail::route_table::dispatch_upgrade(const http_request& request,
     const resolved_route& resolved, request_memory& memory, const route_stream_handler& handler,
-    context_services services) const {
+    const context_services& services) const {
     const auto& endpoint = resolved.route().endpoint();
     if (endpoint.tunnel() == nullptr && endpoint.websocket() == nullptr) {
         throw std::logic_error("route is not an upgrade route");
@@ -96,7 +96,8 @@ task<std::optional<http_response>> detail::route_table::dispatch_upgrade(const h
 
 task<void> detail::route_table::dispatch_buffered_response(const http_request& request,
     const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
-    context_services services, static_file_selection_mode static_file_mode, http_response& response) const {
+    const context_services& services, static_file_selection_mode static_file_mode,
+    http_response& response) const {
     std::exception_ptr dispatch_exception;
     try {
         const auto* resolved = resolution.resolved();
@@ -116,8 +117,8 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             const auto method = request.known_method();
             if (fallback_probe.entry_.has_value() &&
                 (method == http_known_method::get || method == http_known_method::head)) {
-                auto context_value =
-                    detail::context_access::make(memory, request, services.with_routes(*this));
+                auto context_value = detail::context_access::make(memory, request, services);
+                detail::context_access::services(context_value).bind_routes(*this);
                 auto fallback_response = detail::context_access::static_file_resolved(
                     context_value, *document_root.root(), fallback_probe.relative_, {},
                     *fallback_probe.entry_, static_file_mode);
@@ -174,7 +175,8 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             }
 
             if (unmatched_response) {
-                auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
+                auto context_value = detail::context_access::make(memory, request, services);
+                detail::context_access::services(context_value).bind_routes(*this);
                 auto terminal = [&unmatched_response](context&) -> task<http_response> {
                     co_return std::move(*unmatched_response);
                 };
@@ -195,7 +197,10 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             co_return;
         }
 
-        auto context_value = make_route_context(memory, request, *resolved, services.with_routes(*this));
+        auto context_value = make_route_context(memory, request, *resolved, services);
+        auto& context_services_value = detail::context_access::services(context_value);
+        context_services_value.bind_routes(*this);
+        context_services_value.bind_route_body_limit(resolved->route().max_request_body_bytes());
         std::exception_ptr exception;
         try {
             response = co_await invoke_route(*resolved, context_value);

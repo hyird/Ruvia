@@ -18,13 +18,15 @@
 namespace ruvia::detail {
 struct client_host_resolver::query final {
     std::pmr::string host_;
-    std::pmr::string service_;
+    std::uint16_t port_;
 
     [[nodiscard]] client_resolve_result operator()() const {
         asio::io_context io;
         asio::ip::tcp::resolver resolver(io);
+        std::array<char, http_max_unsigned_decimal_size> digits;
+        const auto service = http_format_unsigned(digits, port_);
         client_resolve_result result;
-        result.addresses_ = resolver.resolve(host_, service_, result.error_);
+        result.addresses_ = resolver.resolve(host_, service, result.error_);
         return result;
     }
 };
@@ -59,9 +61,7 @@ client_resolve_operation client_host_resolver::resolve(std::string_view host, st
     if (const auto address = parse_ip_address(host)) {
         return client_resolve_result{.literal_ = asio::ip::tcp::endpoint(*address, port)};
     }
-    std::array<char, http_max_unsigned_decimal_size> digits;
-    const auto service = http_format_unsigned(digits, port);
-    return resolve_query(query{std::pmr::string(host, process_resource()), std::pmr::string(service, process_resource())}, timeout);
+    return resolve_query(query{std::pmr::string(host, process_resource()), port}, timeout);
 }
 
 task<client_resolve_result> client_host_resolver::resolve_query(query input, operation_timeout timeout) {

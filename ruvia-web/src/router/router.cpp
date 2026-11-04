@@ -78,14 +78,22 @@ void detail::router::set_global_middlewares(std::span<const controller_middlewar
     global_middleware_descriptors_.assign(descriptors.begin(), descriptors.end());
 }
 
-void detail::router::append_route_middlewares(
+std::size_t detail::router::append_route_middlewares(
     std::span<const controller_middleware_descriptor> controller_middlewares,
     std::span<const controller_middleware_descriptor> route_middlewares) {
     const auto offset = route_middleware_descriptors_.size();
+    std::size_t body_limit = 0;
     for (const auto middlewares : {controller_middlewares, route_middlewares}) {
         for (const auto& descriptor : middlewares) {
+            const auto declared_limit = descriptor.request_body_limit();
+            if (declared_limit != 0) {
+                if (body_limit == 0 || declared_limit < body_limit) {
+                    body_limit = declared_limit;
+                }
+                continue;
+            }
             // Declarations the server reads before the body is accepted.
-            if (descriptor.stream_request_body() || descriptor.request_body_limit() != 0) {
+            if (descriptor.stream_request_body()) {
                 continue;
             }
             const auto* const key = descriptor.validated_model_type_key();
@@ -99,6 +107,7 @@ void detail::router::append_route_middlewares(
         }
     }
     route_middleware_ranges_.push_back({offset, route_middleware_descriptors_.size() - offset});
+    return body_limit;
 }
 
 void detail::router::declare_controllers(

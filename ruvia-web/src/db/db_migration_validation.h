@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/detail/db/db_sql_scan.h"
 
@@ -67,23 +68,7 @@ namespace ruvia::detail {
 // the ambiguity is refused at the source instead.
 [[nodiscard]] inline bool migration_ids_collide(
     std::string_view left, std::string_view right) noexcept {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    for (std::size_t i = 0; i < left.size(); ++i) {
-        auto a = static_cast<unsigned char>(left[i]);
-        auto b = static_cast<unsigned char>(right[i]);
-        if (a >= 'A' && a <= 'Z') {
-            a = static_cast<unsigned char>(a - 'A' + 'a');
-        }
-        if (b >= 'A' && b <= 'Z') {
-            b = static_cast<unsigned char>(b - 'A' + 'a');
-        }
-        if (a != b) {
-            return false;
-        }
-    }
-    return true;
+    return http_ascii_equals_ignore_case(left, right);
 }
 
 // A migration is one statement. Both backends enforce that anyway -- libpq's

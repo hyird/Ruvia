@@ -109,7 +109,7 @@ public:
     }
 
 private:
-    std::array<std::string_view, 64> names_{};
+    std::array<std::string_view, 64> names_;
     std::size_t size_ = 0;
 };
 

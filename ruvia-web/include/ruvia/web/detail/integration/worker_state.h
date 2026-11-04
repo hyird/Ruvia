@@ -155,15 +155,13 @@ public:
         if (initialized_) {
             throw std::logic_error("worker state registry is already initialized");
         }
-        validate_worker_state_definitions(definitions_);
         entries_.reserve(definitions_.size());
         type_index_.reserve(definitions_.size());
         try {
             for (const auto& definition : definitions_) {
-                entries_.push_back(instance_entry_type{definition.type_key_,
-                    definition.create_instance_(definition.factory_, resource_),
-                    definition.destroy_instance_});
-                type_index_.push_back(type_index_entry_type{definition.type_key_, entries_.size() - 1});
+                auto* const instance_value = definition.create_instance_(definition.factory_, resource_);
+                entries_.push_back(instance_entry_type{instance_value, definition.destroy_instance_});
+                type_index_.push_back(type_index_entry_type{definition.type_key_, instance_value});
             }
             std::ranges::sort(type_index_, std::less<const void*>{}, &type_index_entry_type::type_key_);
         } catch (...) {
@@ -187,7 +185,7 @@ public:
         if (match == type_index_.end() || match->type_key_ != type_key) {
             return nullptr;
         }
-        return entries_[match->entry_index_].instance_;
+        return match->instance_;
     }
 
 private:
@@ -200,14 +198,13 @@ private:
     }
 
     struct instance_entry_type final {
-        const void* type_key_{nullptr};
         void* instance_{nullptr};
         worker_state_definition::destroy_instance_type destroy_{nullptr};
     };
 
     struct type_index_entry_type final {
         const void* type_key_{nullptr};
-        std::size_t entry_index_{0};
+        void* instance_{nullptr};
     };
 
     void destroy_entries() noexcept {

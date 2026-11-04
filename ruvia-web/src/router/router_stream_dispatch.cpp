@@ -40,10 +40,17 @@ private:
 
 task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
     const http_request& request, const resolved_route& resolved, request_memory& memory,
-    route_stream_handler handler, context_services services) const {
+    route_stream_handler handler, const context_services& services,
+    response_stream_writer* response_stream) const {
     const auto& route = resolved.route();
-    auto context_value = make_route_context(memory, request, resolved, services.with_routes(*this));
-    const auto* response_stream_output = services.response_output().response_stream();
+    auto context_value = make_route_context(memory, request, resolved, services);
+    auto& context_services_value = detail::context_access::services(context_value);
+    context_services_value.bind_routes(*this);
+    context_services_value.bind_route_body_limit(route.max_request_body_bytes());
+    if (response_stream != nullptr) {
+        context_services_value.bind_response_stream(*response_stream);
+    }
+    const auto* response_stream_output = context_services_value.response_output().response_stream();
     response_stream_context_binding stream_context_binding(
         response_stream_output != nullptr ? &response_stream_output->writer() : nullptr);
     if (response_stream_output != nullptr) {

@@ -79,13 +79,13 @@ namespace ruvia::detail {
 template <typename session_type, typename establish_type, typename finish_type>
 [[nodiscard]] task<std::optional<http_response>> run_http_upgrade_route(
     const route_table& routes, const http_request& request, const resolved_route& resolved, request_memory& memory,
-    context_services services, std::optional<session_type>& session, establish_type& establish,
+    const context_services& services, std::optional<session_type>& session, establish_type& establish,
     finish_type& finish) {
     const auto terminal = callback_access::bind<task<void>(context&)>(establish);
     std::optional<http_response> buffered;
     std::exception_ptr failure;
     try {
-        buffered = co_await routes.dispatch_upgrade(request, resolved, memory, terminal, std::move(services));
+        buffered = co_await routes.dispatch_upgrade(request, resolved, memory, terminal, services);
     } catch (...) {
         failure = std::current_exception();
     }
@@ -145,7 +145,7 @@ struct tunnel_upgrade_session_operation final {
 template <typename transport_type, typename commit_upgrade_type>
 [[nodiscard]] task<std::optional<http_response>> execute_tunnel_upgrade_session(
     const route_table& routes, const http_request& request, const resolved_route& resolved,
-    request_memory& memory, context_services services, const http_server_options& options,
+    request_memory& memory, const context_services& services, const http_server_options& options,
     connection_scanner::entry& scanner_entry, std::pmr::memory_resource& inbound, bool udp,
     std::string_view pending, commit_upgrade_type commit_upgrade) {
     const auto& endpoint = *resolved.route().endpoint().tunnel();
@@ -256,7 +256,7 @@ struct websocket_upgrade_session_operation final {
 template <typename stream_type, typename commit_upgrade_type>
 [[nodiscard]] task<std::optional<http_response>> execute_websocket_upgrade_session(
     const route_table& routes, const http_request& request, const resolved_route& resolved,
-    request_memory& memory, context_services services, const http_server_options& options,
+    request_memory& memory, const context_services& services, const http_server_options& options,
     connection_scanner::entry& scanner_entry, std::pmr::memory_resource& inbound,
     std::string_view pending_frames, commit_upgrade_type commit_upgrade) {
     const auto& websocket_endpoint = *resolved.route().endpoint().websocket();

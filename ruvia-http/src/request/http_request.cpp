@@ -69,8 +69,7 @@ std::optional<std::string_view> http_request::cookie(std::string_view name) cons
     // The one-based cache points to the last Cookie field; only earlier fields can contribute.
     for (std::size_t i = last_cookie_index - 1; i > 0; --i) {
         const auto index = i - 1;
-        if (headers_.kind_at(index) !=
-            static_cast<std::uint8_t>(detail::request_header_kind::cookie)) {
+        if (headers_.kind_at(index) != detail::request_header_kind::cookie) {
             continue;
         }
         if (auto value = find_in(headers_[index].value())) {
@@ -91,7 +90,7 @@ http_response_coding_selection http_response_coding_selection_for(const http_req
         const auto limit = last_index <= headers.size() ? last_index : headers.size();
         for (std::size_t i = 0; i < limit; ++i) {
             if (detail::http_request_access::header_kind(request, i) ==
-                static_cast<std::uint8_t>(detail::request_header_kind::accept_encoding)) {
+                detail::request_header_kind::accept_encoding) {
                 qualities.update(headers[i].value());
             }
         }

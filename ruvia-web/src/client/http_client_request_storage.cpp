@@ -54,28 +54,6 @@ http_client_request_storage::http_client_request_storage(http_client_request_sto
     static_assert(std::is_nothrow_move_constructible_v<decltype(body_)>);
 }
 
-http_client_request_storage http_client_request_storage::into_resource(
-    std::pmr::memory_resource* resource) && {
-    auto* destination_resource = pmr_resource_or_default(resource);
-    if (method_.get_allocator().resource() == destination_resource) {
-        return std::move(*this);
-    }
-
-    http_client_request_storage result(method_, target_, destination_resource);
-    result.headers_.reserve(headers_.size());
-    for (const auto& header : headers_) {
-        result.headers_.emplace_back(header.name(), header.value(), destination_resource);
-    }
-    result.body_.assign(body_);
-    result.has_body_ = has_body_;
-    result.upload_ = upload_;
-    result.tunnel_ = tunnel_;
-    result.is_tunnel_ = is_tunnel_;
-    result.tunnel_authority_.assign(tunnel_authority_);
-    result.tunnel_protocol_.assign(tunnel_protocol_);
-    return result;
-}
-
 void http_client_request_storage::set_tunnel(std::string_view authority, std::string_view protocol) {
     tunnel_authority_.assign(authority);
     tunnel_protocol_.assign(protocol);

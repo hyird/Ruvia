@@ -18,6 +18,9 @@ namespace {
 
 template <typename args_type>
 [[nodiscard]] std::size_t resp_serialized_size(const args_type& args) {
+    if (args.empty()) {
+        throw std::invalid_argument("redis command must not be empty");
+    }
     const auto decimal_size = [](std::size_t value) {
         if (value > std::numeric_limits<std::uint64_t>::max()) {
             throw std::length_error("redis RESP length is too large");
@@ -46,16 +49,11 @@ template <typename args_type>
     return size;
 }
 
-// Writes the RESP multi-bulk encoding of `args` to `output`. No manual
-// reserve: `output` is the per-connection write buffer reused across requests,
-// so in steady state it already holds enough capacity, and std::pmr::string's
-// geometric growth keeps pipelined appends amortized O(total) bytes (an exact
-// per-command reserve would instead force O(n^2) copying for large pipelines).
+// Writes the RESP multi-bulk encoding of `args` to `output`. Callers reserve
+// the required capacity up front (per command in append_resp_command(), or once
+// for the whole batch in redis_pool::execute_commands()).
 template <typename args_type>
-void serialize_resp_command(std::pmr::string& output, const args_type& args, std::size_t serialized_size) {
-    if (serialized_size > std::numeric_limits<std::size_t>::max() - output.size()) {
-        throw std::length_error("redis RESP output is too large");
-    }
+void serialize_resp_command_impl(std::pmr::string& output, const args_type& args) {
     output.push_back('*');
     append_redis_number(output, static_cast<std::uint64_t>(args.size()));
     output.append("\r\n", 2);
@@ -71,24 +69,36 @@ void serialize_resp_command(std::pmr::string& output, const args_type& args, std
     }
 }
 
+template <typename args_type>
+void append_resp_command_impl(std::pmr::string& output, const args_type& args) {
+    const auto serialized_size = resp_serialized_size(args);
+    if (serialized_size > std::numeric_limits<std::size_t>::max() - output.size()) {
+        throw std::length_error("redis RESP output is too large");
+    }
+    output.reserve(output.size() + serialized_size);
+    serialize_resp_command_impl(output, args);
+}
+
 [[nodiscard]] redis_reply_builder& builder_of(const redisReadTask* task_value) noexcept {
     return *static_cast<redis_reply_builder*>(task_value->privdata);
 }
 
 }  // namespace
 
+void serialize_resp_command(std::pmr::string& output, std::span<const std::string_view> args) {
+    serialize_resp_command_impl(output, args);
+}
+
+void serialize_resp_command(std::pmr::string& output, std::span<const std::pmr::string> args) {
+    serialize_resp_command_impl(output, args);
+}
+
 void append_resp_command(std::pmr::string& output, std::span<const std::string_view> args) {
-    if (args.empty()) {
-        throw std::invalid_argument("redis command must not be empty");
-    }
-    serialize_resp_command(output, args, resp_serialized_size(args));
+    append_resp_command_impl(output, args);
 }
 
 void append_resp_command(std::pmr::string& output, std::span<const std::pmr::string> args) {
-    if (args.empty()) {
-        throw std::invalid_argument("redis command must not be empty");
-    }
-    serialize_resp_command(output, args, resp_serialized_size(args));
+    append_resp_command_impl(output, args);
 }
 
 std::size_t resp_command_serialized_size(std::span<const std::string_view> args) {

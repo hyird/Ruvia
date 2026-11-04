@@ -144,8 +144,8 @@ void http_response_headers::erase_later_set_cookie_headers(http_response_header&
     }
     if (write != end_value) {
         truncate(write);
+        rebuild_known_header_index();
     }
-    rebuild_known_header_index();
 }
 
 }  // namespace ruvia

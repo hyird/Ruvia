@@ -15,10 +15,6 @@
 
 namespace ruvia::detail {
 
-[[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(
-    const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response,
-    http1_client_request_content_phase request_content_phase, bool interim_faulty_framing);
-
 struct http1_client_response_parse_result_access final {
     [[nodiscard]] static http1_client_response_parse_result need_more() noexcept {
         return http1_client_response_parse_result(http1_client_response_need_more());

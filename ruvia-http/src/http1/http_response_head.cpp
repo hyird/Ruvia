@@ -25,13 +25,6 @@ namespace ruvia::detail {
 
 namespace {
 
-struct response_head_flags {
-    http_protocol_version protocol_version_{http_protocol_version::http11};
-    bool emit_chunked_transfer_encoding_{false};
-    bool emit_content_length_{false};
-    std::uint64_t canonical_content_length_{0};
-};
-
 inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-Encoding: chunked\r\n";
 
 [[nodiscard]] std::optional<std::uint64_t> explicit_content_length(const http_response& response) {
@@ -63,7 +56,7 @@ inline constexpr std::string_view content_length_name = "Content-Length";
 }
 
 void emit_response_head(const http_response& response, http_raw_wire_sink& sink_value, http_status_code response_status,
-    std::string_view reason_phrase, std::string_view date_header, response_head_flags flags,
+    std::string_view reason_phrase, std::string_view date_header, bool emit_chunked_transfer_encoding,
     std::string_view content_length_value) noexcept {
     emit_http1_status_line(sink_value, response_status, reason_phrase);
 
@@ -84,10 +77,10 @@ void emit_response_head(const http_response& response, http_raw_wire_sink& sink_
     if ((known_bits & response_header_date) == 0 && !date_header.empty()) {
         sink_value.append(date_header);
     }
-    if (flags.emit_chunked_transfer_encoding_) {
+    if (emit_chunked_transfer_encoding) {
         sink_value.append(chunked_transfer_encoding_header);
     }
-    if (flags.emit_content_length_) {
+    if (!content_length_value.empty()) {
         sink_value.append(content_length_name);
         sink_value.append(std::string_view(": "));
         sink_value.append(content_length_value);
@@ -164,16 +157,8 @@ void append_http1_response_head(
                 (known_bits & detail::response_header_content_length) != 0
             ? detail::explicit_content_length(response)
             : std::nullopt;
-    const detail::response_head_flags flags{.protocol_version_ = plan.protocol_version(),
-        .emit_chunked_transfer_encoding_ = emit_chunked_transfer_encoding,
-        .emit_content_length_ = auto_content_length_owned_by_writer || declared_content_length.has_value(),
-        // Buffered HEAD metadata retains the selected representation length.
-        // A status-level no-content policy that still owns framing (205) is
-        // canonicalized to zero for both buffered and streaming heads.
-        .canonical_content_length_ = declared_content_length.value_or(
-            body_plan.status_allows_body()
-                ? (buffered != nullptr ? buffered->content_length() : std::uint64_t{0})
-                : std::uint64_t{0})};
+    const bool emit_content_length =
+        auto_content_length_owned_by_writer || declared_content_length.has_value();
 
     const auto reason_phrase = http_reason_phrase(response_status);
     const auto date_header = (known_bits & detail::response_header_date) == 0
@@ -181,10 +166,18 @@ void append_http1_response_head(
                                  : std::string_view{};
     // Reuse the formatted token for exact measurement and emission instead of
     // separately dividing the length to count its digits.
+    // Buffered HEAD metadata retains the selected representation length.
+    // A status-level no-content policy that still owns framing (205) is
+    // canonicalized to zero for both buffered and streaming heads.
     std::array<char, http_max_unsigned_decimal_size> content_length_buffer;
-    const auto content_length_value = flags.emit_content_length_
-                                          ? http_format_unsigned(content_length_buffer, flags.canonical_content_length_)
-                                          : std::string_view{};
+    const auto content_length_value =
+        emit_content_length
+            ? http_format_unsigned(content_length_buffer,
+                  declared_content_length.value_or(
+                      body_plan.status_allows_body()
+                          ? (buffered != nullptr ? buffered->content_length() : std::uint64_t{0})
+                          : std::uint64_t{0}))
+            : std::string_view{};
 
     // Measure the exact emitted head before touching reusable output storage.
     // This both bounds the unchecked raw stack sink and enforces the shared
@@ -219,15 +212,15 @@ void append_http1_response_head(
     if (emit_chunked_transfer_encoding) {
         charge(head_budget.add(detail::chunked_transfer_encoding_header.size()));
     }
-    if (flags.emit_content_length_) {
+    if (!content_length_value.empty()) {
         charge(head_budget.add_field(detail::content_length_name.size(), content_length_value.size()));
     }
     charge(head_budget.add(2));
 
     head.append_generated(head_budget.bytes(), [&](char* cursor_value) noexcept {
         detail::http_raw_wire_sink sink_value(cursor_value);
-        detail::emit_response_head(response, sink_value, response_status, reason_phrase, date_header, flags,
-            content_length_value);
+        detail::emit_response_head(response, sink_value, response_status, reason_phrase, date_header,
+            emit_chunked_transfer_encoding, content_length_value);
         detail::check_http_wire_end(sink_value.position(), cursor_value + head_budget.bytes());
     });
 }

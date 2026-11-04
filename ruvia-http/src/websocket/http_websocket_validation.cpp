@@ -91,8 +91,7 @@ websocket_handshake_validation_result validate_websocket_handshake(const http_re
 
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
-        const auto kind =
-            static_cast<detail::request_header_kind>(detail::http_request_access::header_kind(request, i));
+        const auto kind = detail::http_request_access::header_kind(request, i);
         const auto& header_value = headers[i];
         if (kind == detail::request_header_kind::connection) {
             if (connection_options.parse_field(

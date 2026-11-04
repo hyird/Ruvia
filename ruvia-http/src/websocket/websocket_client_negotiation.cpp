@@ -130,9 +130,9 @@ inline constexpr std::string_view extensions_header_name = "sec-websocket-extens
     return &table[index];
 }
 
-template <class protocol_type, class field_type>
-void validate_and_visit_config(const websocket_client_negotiation_config_view& config,
-    protocol_type&& protocol, field_type&& field) {
+template <class field_type>
+void validate_and_visit_config(
+    const websocket_client_negotiation_config_view& config, field_type&& field) {
     const auto& offer = config.deflate_.compression_;
     auto valid_window = [](std::optional<int> window_bits) {
         return !window_bits || (*window_bits >= 8 && *window_bits <= 15);
@@ -158,7 +158,6 @@ void validate_and_visit_config(const websocket_client_negotiation_config_view& c
             throw std::invalid_argument("WebSocket subprotocol field too large");
         }
         joined_bytes += protocol_view.size();
-        protocol(protocol_view);
     }
     // The generated Sec-WebSocket-* fields alone must fit the field section;
     // the handshake owner budgets the application headers it accepts.
@@ -191,7 +190,7 @@ void validate_and_visit_config(const websocket_client_negotiation_config_view& c
 }
 }  // namespace
 void websocket_client_negotiation::validate_configuration(websocket_client_negotiation_config_view config) {
-    validate_and_visit_config(config, [](std::string_view) {}, [](std::string_view, std::string_view, std::size_t) {});
+    validate_and_visit_config(config, [](std::string_view, std::string_view, std::size_t) {});
 }
 websocket_client_negotiation::websocket_client_negotiation(
     websocket_client_negotiation_config_view config, std::pmr::memory_resource* resource)
@@ -199,8 +198,7 @@ websocket_client_negotiation::websocket_client_negotiation(
       deflate_(config.deflate_) {
     auto* const memory = resource_;
     validate_and_visit_config(
-        config, [](std::string_view) {},
-        [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
+        config, [&](std::string_view name, std::string_view value, std::size_t value_bytes) {
             if (name == "Sec-WebSocket-Version") {
                 fields_[field_count_++] = http_header(version_storage.data(), 21, 2);
             } else if (name == "Sec-WebSocket-Protocol") {
@@ -236,11 +234,10 @@ websocket_client_negotiation::websocket_client_negotiation(
                     joined.append(protocol_view);
                 }
                 fields_[field_count_++] = http_header(protocol_header_name, joined, memory);
-            } else if (const auto* const static_ext = static_deflate_extension_storage(config.deflate_)) {
-                fields_[field_count_++] = http_header(static_ext->data(),
-                    extensions_header_name.size(),
-                    static_ext->size() - extensions_header_name.size());
-            } else if (name == "Sec-WebSocket-Extensions" && value_bytes > value.size()) {
+            } else if (value_bytes < value.size()) {
+                fields_[field_count_++] =
+                    http_header(value.data(), extensions_header_name.size(), value_bytes);
+            } else if (value_bytes > value.size()) {
                 static constexpr std::string_view suffix = "; client_max_window_bits";
                 std::array<char, 128> offer_buffer;
                 std::memcpy(offer_buffer.data(), value.data(), value.size());

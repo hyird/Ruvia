@@ -164,10 +164,6 @@ public:
         cached_bytes_ = 0;
     }
 
-    [[nodiscard]] std::size_t cached_bytes() const noexcept {
-        return cached_bytes_;
-    }
-
     [[nodiscard]] void* take_block(std::size_t class_bytes) noexcept {
         void*& head = bins_[bin_index(class_bytes)];
         void* block = head;
@@ -227,10 +223,6 @@ void* task_frame_allocate_aligned(std::size_t bytes_value, std::size_t alignment
 
 void task_frame_deallocate_aligned(void* pointer) noexcept {
     mi_free(pointer);
-}
-
-std::size_t task_frame_cached_bytes() noexcept {
-    return task_frame_cache_destroyed ? 0 : frame_cache.cached_bytes();
 }
 
 void task_frame_cache_release() noexcept {

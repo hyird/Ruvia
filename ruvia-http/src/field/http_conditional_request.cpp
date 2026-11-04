@@ -38,12 +38,12 @@ http_conditional_headers get_http_conditional_headers(const http_request& reques
     bool saw_modified_since = false;
     for (std::size_t i = 0; i < limit; ++i) {
         const auto kind = detail::http_request_access::header_kind(request, i);
-        if (kind == static_cast<std::uint8_t>(detail::request_header_kind::if_unmodified_since)) {
+        if (kind == detail::request_header_kind::if_unmodified_since) {
             if (saw_unmodified_since) {
                 result.if_unmodified_since_ = {};
             }
             saw_unmodified_since = true;
-        } else if (kind == static_cast<std::uint8_t>(detail::request_header_kind::if_modified_since)) {
+        } else if (kind == detail::request_header_kind::if_modified_since) {
             if (saw_modified_since) {
                 result.if_modified_since_ = {};
             }
@@ -98,10 +98,9 @@ http_etag_preconditions get_http_etag_preconditions(
     const auto limit = std::min(headers.size(), std::max(last_match, last_none_match));
     for (std::size_t i = 0; i < limit; ++i) {
         const auto kind = detail::http_request_access::header_kind(request, i);
-        if (has_if_match && kind == static_cast<std::uint8_t>(detail::request_header_kind::if_match)) {
+        if (has_if_match && kind == detail::request_header_kind::if_match) {
             result.if_match_.update(headers[i].value(), etag, true);
-        } else if (has_if_none_match &&
-                   kind == static_cast<std::uint8_t>(detail::request_header_kind::if_none_match)) {
+        } else if (has_if_none_match && kind == detail::request_header_kind::if_none_match) {
             result.if_none_match_.update(headers[i].value(), etag, false);
         }
     }

@@ -37,6 +37,7 @@
 #include "context/context_services.h"
 #include "http2/cleartext_upgrade.h"
 #include "integration/worker_capabilities.h"
+#include "ratelimit/rate_limit_key.h"
 #include "server/http_connection_close.h"
 #include "server/http_server_connection_guards.h"
 #include "server/http_server_stream_session.h"
@@ -70,21 +71,9 @@ void assign_remote_address(std::pmr::string& output, const asio::ip::address& ad
         }
         v4 = asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
     }
-    const auto bytes_value = v4.to_bytes();
     std::array<char, 15> buffer;
-    char* cursor_value = buffer.data();
-    for (std::size_t i = 0; i < bytes_value.size(); ++i) {
-        if (i != 0) {
-            *cursor_value++ = '.';
-        }
-        const auto [ptr, ec] = std::to_chars(cursor_value, buffer.data() + buffer.size(), bytes_value[i]);
-        if (ec != std::errc{}) {
-            output = address.to_string();
-            return;
-        }
-        cursor_value = ptr;
-    }
-    output.assign(buffer.data(), static_cast<std::size_t>(cursor_value - buffer.data()));
+    const auto formatted = format_ipv4_address(v4, buffer);
+    output.assign(formatted.data(), formatted.size());
 }
 
 bool is_http2_alpn_selected(server_tls_stream& tls_stream) noexcept {
@@ -188,11 +177,16 @@ int select_sni_context(SSL* ssl, int*, void* arg) noexcept {
         return SSL_TLSEXT_ERR_OK;
     }
     const std::string_view server_name(name);
-    const auto& lookup = *static_cast<const sni_context_lookup_type*>(arg);
-    for (const auto& [host, context] : lookup) {
-        if (http_ascii_equals_ignore_case(host, server_name)) {
+    auto& listener_value = *static_cast<http_server_session_config*>(arg);
+    const auto* tls = listener_value.tls();
+    if (tls == nullptr) {
+        return SSL_TLSEXT_ERR_OK;
+    }
+    const auto count = std::min(tls->sni_identities_.size(), listener_value.sni_contexts_.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        if (http_ascii_equals_ignore_case(tls->sni_identities_[i].host_, server_name)) {
             // for a name that has its own certificate: fail the handshake.
-            if (SSL_set_SSL_CTX(ssl, context->native_handle()) == nullptr) {
+            if (SSL_set_SSL_CTX(ssl, listener_value.sni_contexts_[i].native_handle()) == nullptr) {
                 return SSL_TLSEXT_ERR_ALERT_FATAL;
             }
             break;
@@ -335,7 +329,6 @@ void worker_connections::retire_tls() noexcept {
     for (auto& configured : listeners_) {
         auto& session = configured->session_;
         session.tls_context_.reset();
-        session.sni_lookup_.clear();
         session.sni_contexts_.clear();
         session.ticket_keys_.reset();
     }
@@ -461,7 +454,6 @@ void worker_connections::report_accept_failure(std::exception_ptr failure, bool 
 void worker_connections::configure_tls(http_server_session_config& listener_value) {
     listener_value.tls_context_.reset();
     listener_value.sni_contexts_.clear();
-    listener_value.sni_lookup_.clear();
     listener_value.ticket_keys_.reset();
     const auto* tls = listener_value.tls();
     if (tls == nullptr) {
@@ -491,20 +483,15 @@ void worker_connections::configure_tls(http_server_session_config& listener_valu
         auto& context_value = listener_value.sni_contexts_.emplace_back(asio::ssl::context::tls_server);
         configure(context_value, sni.certificate_);
     }
-    listener_value.sni_lookup_.reserve(tls->sni_identities_.size());
-    for (std::size_t i = 0; i < tls->sni_identities_.size(); ++i) {
-        listener_value.sni_lookup_.emplace_back(tls->sni_identities_[i].host_, &listener_value.sni_contexts_[i]);
-    }
-
     listener_value.tls_context_.emplace(asio::ssl::context::tls_server);
     auto& context_value = *listener_value.tls_context_;
     configure(context_value, tls->certificate_);
     // The client hello callback runs before OpenSSL looks up the offered
     // session, which the server_name callback would be too late for.
     SSL_CTX_set_client_hello_cb(context_value.native_handle(), &bind_session_to_server_name, nullptr);
-    if (!listener_value.sni_lookup_.empty()) {
+    if (!listener_value.sni_contexts_.empty()) {
         SSL_CTX_set_tlsext_servername_callback(context_value.native_handle(), &select_sni_context);
-        SSL_CTX_set_tlsext_servername_arg(context_value.native_handle(), &listener_value.sni_lookup_);
+        SSL_CTX_set_tlsext_servername_arg(context_value.native_handle(), &listener_value);
     }
 }
 

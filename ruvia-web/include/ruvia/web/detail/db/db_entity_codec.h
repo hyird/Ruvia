@@ -67,15 +67,107 @@ struct postgresql_array_text final {
     return {source, elements};
 }
 
+template <typename visitor_type, typename reserve_type = void (*)(std::size_t)>
+void for_each_postgresql_array_element(std::string_view source, std::pmr::memory_resource* resource, visitor_type&& visit, reserve_type&& reserve = +[](std::size_t) noexcept {}) {
+    const auto array = parse_postgresql_array_text(source);
+    const auto contents = array.contents_;
+    if (array.elements_) {
+        reserve(*array.elements_);
+    }
+    std::pmr::string escaped_token(resource);
+    std::size_t element_count = 0;
+    std::size_t token_start = 1;
+    std::size_t chunk_start = 1;
+    std::size_t token_end = 1;
+    bool quoted = false;
+    bool quoted_token = false;
+    bool quote_closed = false;
+    bool escaped = false;
+    bool has_escapes = false;
+    auto append = [&](std::size_t default_end) {
+        const std::size_t end = quote_closed ? token_end : default_end;
+        if (quoted || escaped || (end == token_start && !quoted_token) ||
+            (array.elements_ && element_count >= *array.elements_)) {
+            throw_invalid_postgresql_array();
+        }
+        std::string_view token;
+        if (has_escapes) {
+            if (end > chunk_start) {
+                escaped_token.append(contents.data() + chunk_start, end - chunk_start);
+            }
+            token = escaped_token;
+        } else {
+            token = contents.substr(token_start, end - token_start);
+        }
+        ++element_count;
+        if (token == "NULL" && !quoted_token) {
+            visit(std::optional<std::string_view>{});
+        } else {
+            visit(std::optional<std::string_view>{token});
+        }
+        token_start = default_end + 1;
+        chunk_start = token_start;
+        token_end = token_start;
+        quoted = false;
+        quoted_token = false;
+        quote_closed = false;
+        has_escapes = false;
+    };
+    for (std::size_t i = 1; i + 1 < contents.size(); ++i) {
+        const char ch = contents[i];
+        if (escaped) {
+            chunk_start = i;
+            escaped = false;
+        } else if (ch == '\\') {
+            if (quote_closed) {
+                throw_invalid_postgresql_array();
+            }
+            if (!has_escapes) {
+                has_escapes = true;
+                escaped_token.clear();
+            }
+            if (i > chunk_start) {
+                escaped_token.append(contents.data() + chunk_start, i - chunk_start);
+            }
+            escaped = true;
+            quoted_token = true;
+        } else if (ch == '"') {
+            if (quoted) {
+                quoted = false;
+                quote_closed = true;
+                token_end = i;
+            } else {
+                if (i != token_start || quoted_token || quote_closed) {
+                    throw_invalid_postgresql_array();
+                }
+                quoted = true;
+                quoted_token = true;
+                token_start = i + 1;
+                chunk_start = i + 1;
+            }
+        } else if (ch == ',' && !quoted) {
+            append(i);
+        } else {
+            if (quote_closed || (!quoted && (ch == '{' || ch == '}'))) {
+                throw_invalid_postgresql_array();
+            }
+        }
+    }
+    if (contents.size() > 2) {
+        append(contents.size() - 1);
+    }
+    if (array.elements_ && element_count != *array.elements_) {
+        throw_invalid_postgresql_array();
+    }
+}
+
 template <db_mapped_value t_type>
-void decode_array_element(std::string_view text, t_type& value, std::pmr::memory_resource* resource) {
+[[nodiscard]] t_type decode_array_element(std::string_view text, std::pmr::memory_resource* resource) {
     if constexpr (is_optional<t_type>::value) {
         using v_type = typename is_optional<t_type>::value_type;
-        auto inner = entity_value_slot<v_type>::make_value(resource);
-        decode_array_element(text, inner, resource);
-        value = std::move(inner);
+        return decode_array_element<v_type>(text, resource);
     } else {
-        value = convert_db_text<t_type>(text, resource);
+        return convert_db_text<t_type>(text, resource);
     }
 }
 
@@ -97,100 +189,22 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
         if (!source_value) {
             throw_invalid_postgresql_array();
         }
-        const auto array = parse_postgresql_array_text(*source_value);
-        const auto contents = array.contents_;
         out.clear();
-        if (array.elements_) {
-            out.reserve(*array.elements_);
-        }
-        std::pmr::string escaped_token(resource);
-        std::size_t token_start = 1;
-        std::size_t chunk_start = 1;
-        std::size_t token_end = 1;
-        bool quoted = false;
-        bool quoted_token = false;
-        bool quote_closed = false;
-        bool escaped = false;
-        bool has_escapes = false;
-        auto append = [&](std::size_t default_end) {
-            const std::size_t end = quote_closed ? token_end : default_end;
-            if (quoted || escaped || (end == token_start && !quoted_token) || (array.elements_ && out.size() >= *array.elements_)) {
-                throw_invalid_postgresql_array();
-            }
-            std::string_view token;
-            if (has_escapes) {
-                if (end > chunk_start) {
-                    escaped_token.append(contents.data() + chunk_start, end - chunk_start);
-                }
-                token = escaped_token;
-            } else {
-                token = contents.substr(token_start, end - token_start);
-            }
-            if (token == "NULL" && !quoted_token) {
-                if constexpr (is_optional<v_type>::value) {
-                    out.emplace_back(std::nullopt);
-                } else {
-                    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "NULL array element");
-                }
-            } else {
-                auto value = entity_value_slot<v_type>::make_value(resource);
-                decode_array_element(token, value, resource);
-                out.push_back(std::move(value));
-            }
-            token_start = default_end + 1;
-            chunk_start = token_start;
-            token_end = token_start;
-            quoted = false;
-            quoted_token = false;
-            quote_closed = false;
-            has_escapes = false;
-        };
-        for (std::size_t i = 1; i + 1 < contents.size(); ++i) {
-            const char ch = contents[i];
-            if (escaped) {
-                chunk_start = i;
-                escaped = false;
-            } else if (ch == '\\') {
-                if (quote_closed) {
-                    throw_invalid_postgresql_array();
-                }
-                if (!has_escapes) {
-                    has_escapes = true;
-                    escaped_token.clear();
-                }
-                if (i > chunk_start) {
-                    escaped_token.append(contents.data() + chunk_start, i - chunk_start);
-                }
-                escaped = true;
-                quoted_token = true;
-            } else if (ch == '"') {
-                if (quoted) {
-                    quoted = false;
-                    quote_closed = true;
-                    token_end = i;
-                } else {
-                    if (i != token_start || quoted_token || quote_closed) {
-                        throw_invalid_postgresql_array();
+        for_each_postgresql_array_element(
+            *source_value, resource,
+            [&out, resource](std::optional<std::string_view> element) {
+                if (!element) {
+                    if constexpr (is_optional<v_type>::value) {
+                        out.emplace_back(std::nullopt);
+                    } else {
+                        throw db_conversion_error(
+                            db_conversion_error::code_type::invalid_format, "NULL array element");
                     }
-                    quoted = true;
-                    quoted_token = true;
-                    token_start = i + 1;
-                    chunk_start = i + 1;
+                } else {
+                    out.push_back(decode_array_element<v_type>(*element, resource));
                 }
-            } else if (ch == ',' && !quoted) {
-                append(i);
-            } else {
-                if (quote_closed || (!quoted && (ch == '{' || ch == '}'))) {
-                    throw_invalid_postgresql_array();
-                }
-            }
-        }
-        if (contents.size() > 2) {
-            append(contents.size() - 1);
-        }
-        if (array.elements_ && out.size() != *array.elements_) {
-            throw_invalid_postgresql_array();
-        }
+            },
+            [&out](std::size_t count) { out.reserve(count); });
     } else if constexpr (std::is_same_v<u_type, std::pmr::string>) {
         if (auto value = field.as<std::string_view>()) {
             out.assign(*value);

@@ -38,10 +38,11 @@ private:
     // DNS names are at most 253 octets without the trailing dot; a longer
     // host is checked without caching.
     static constexpr std::size_t cached_key_capacity = 253;
+    static constexpr std::size_t key_storage_capacity = 256;
     static constexpr std::size_t cache_size = 4;
 
     struct cached_verdict final {
-        std::array<char, cached_key_capacity> key_;
+        std::uint8_t key_offset_{0};
         std::uint8_t key_size_{0};
         http_target_host_kind kind_{http_target_host_kind::dns_name};
         bool covered_{false};
@@ -50,9 +51,10 @@ private:
     [[nodiscard]] bool check(const http_target_origin& origin) const noexcept;
 
     X509* certificate_;
-    std::array<cached_verdict, cache_size> cache_;
-    std::size_t cached_{0};
-    std::size_t next_{0};
+    std::array<char, key_storage_capacity> key_storage_{};
+    std::array<cached_verdict, cache_size> cache_{};
+    std::uint16_t key_used_{0};
+    std::uint8_t cached_{0};
 };
 
 }  // namespace ruvia::detail

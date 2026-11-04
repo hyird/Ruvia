@@ -77,12 +77,12 @@ private:
         static_cast<std::size_t>(http2_local_settings::max_concurrent_streams) * 16;
 
     struct closed_stream_record_type final {
-        std::uint32_t id_{0};
-        http2_stream_close_source source_{http2_stream_close_source::local};
-        bool reset_sent_{false};
+        std::uint32_t id_;
+        http2_stream_close_source source_;
+        bool reset_sent_;
     };
 
-    std::array<closed_stream_record_type, record_limit> records_{};
+    std::array<closed_stream_record_type, record_limit> records_;
     std::size_t size_{0};
     std::size_t replace_index_{0};
     std::uint32_t forgotten_local_request_reset_through_{0};

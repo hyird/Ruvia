@@ -76,16 +76,16 @@ private:
     void validate_route_target(http_known_method method, std::string_view method_token, std::string_view path,
         const route_endpoint& endpoint) const;
     void validate_no_dynamic_route_conflict() const;
-    void append_route_middlewares(std::span<const controller_middleware_descriptor> controller_middlewares,
+    [[nodiscard]] std::size_t append_route_middlewares(
+        std::span<const controller_middleware_descriptor> controller_middlewares,
         std::span<const controller_middleware_descriptor> route_middlewares);
     void build_middleware_frames();
     void build_static_index();
     void build_static_method_mask();
     void build_extension_paths();
     void build_dynamic_routes();
-    void bind_dynamic_param_names(route_entry& route);
     void append_dynamic_param_name(route_entry& route, std::string_view name);
-    void insert_dynamic(compiled_route_plan::dynamic_node_type& root, const route_entry& route);
+    void insert_dynamic(compiled_route_plan::dynamic_node_type& root, route_entry& route);
     void build_url_patterns();
 
     [[nodiscard]] static bool is_dynamic_path(std::string_view path) noexcept;

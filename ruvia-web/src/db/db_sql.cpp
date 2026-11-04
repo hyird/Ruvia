@@ -482,16 +482,15 @@ mariadb_statement_traits mariadb_statement_traits_of(std::string_view sql) noexc
     return {true, escaped.traits_.integer_params_ | plain.traits_.integer_params_};
 }
 
-bool mariadb_exclusive_statement(std::string_view sql) noexcept {
+mariadb_statement_classification classify_mariadb_statement(std::string_view sql) noexcept {
     const auto leading = leading_sql_token(sql, true);
-    return leading.kind_ == sql_token::kind::hidden ||
-           (leading.kind_ == sql_token::kind::word && sql_keyword(leading.text_, "load"));
-}
-
-bool mariadb_calls_routine(std::string_view sql) noexcept {
-    const auto leading = leading_sql_token(sql, true);
-    return leading.kind_ == sql_token::kind::hidden ||
-           (leading.kind_ == sql_token::kind::word && sql_keyword(leading.text_, "call"));
+    if (leading.kind_ == sql_token::kind::hidden) {
+        return {true, true};
+    }
+    if (leading.kind_ != sql_token::kind::word) {
+        return {};
+    }
+    return {sql_keyword(leading.text_, "load"), sql_keyword(leading.text_, "call")};
 }
 
 }  // namespace ruvia::detail

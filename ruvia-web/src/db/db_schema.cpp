@@ -947,23 +947,13 @@ std::pmr::vector<db_migration> db_schema::compile(std::string_view id) const {
             for (const auto& s : statements_) {
                 body_size += s.sql_.size() + 1U;
             }
-            std::string_view delimiter = "$ruvia$";
             std::array<char, 32> delimiter_buf;
-            const auto contains_delimiter = [&](std::string_view candidate) noexcept {
-                return std::ranges::any_of(statements_, [&](const auto& s) {
-                    return s.sql_.find(candidate) != std::string::npos;
+            const auto delimiter = detail::select_db_dollar_delimiter(
+                delimiter_buf, [&](std::string_view candidate) noexcept {
+                    return std::ranges::any_of(statements_, [&](const auto& s) {
+                        return s.sql_.find(candidate) != std::string::npos;
+                    });
                 });
-            };
-            for (std::uint64_t suffix = 1; contains_delimiter(delimiter); ++suffix) {
-                std::string_view("$ruvia").copy(delimiter_buf.data(), 6);
-                std::array<char, http_max_unsigned_decimal_size> digits;
-                const auto formatted = http_format_unsigned(digits, suffix);
-                std::size_t length = 6;
-                formatted.copy(delimiter_buf.data() + length, formatted.size());
-                length += formatted.size();
-                delimiter_buf[length++] = '$';
-                delimiter = std::string_view(delimiter_buf.data(), length);
-            }
             std::string sql;
             sql.reserve(3U + delimiter.size() * 2U + body_size);
             sql += "DO ";

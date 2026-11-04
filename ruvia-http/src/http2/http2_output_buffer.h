@@ -182,7 +182,7 @@ public:
         if (transfer_storage) {
             reset_after_drain(logical_end);
         } else {
-            consume_batch(batch_bytes);
+            consume_batch(batch_bytes, segment_count);
         }
         if (observer != nullptr) {
             // A callback may append or drain more frames. Their vector may
@@ -221,15 +221,13 @@ public:
 private:
     // Advances the cursor past whole segments; the cursor always stays on a
     // segment boundary, so no partial-segment bookkeeping exists.
-    void consume_batch(std::size_t bytes_value) noexcept {
+    void consume_batch(std::size_t bytes_value, std::size_t segment_count) noexcept {
         if (bytes_value == bytes_.size() - consumed_) {
             reset_after_drain(base_offset_ + bytes_.size());
             return;
         }
         consumed_ += bytes_value;
-        while (segment_offset_ < segments_.size() && segments_[segment_offset_].end_ <= consumed_) {
-            ++segment_offset_;
-        }
+        segment_offset_ += segment_count;
         compact_consumed_prefix();
     }
 

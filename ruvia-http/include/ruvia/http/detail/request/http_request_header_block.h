@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/http/detail/field/request_header_kind.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia::detail {
@@ -52,7 +53,7 @@ public:
     [[nodiscard]] const http_header_view& operator[](std::size_t index) const noexcept {
         return fields_[index];
     }
-    [[nodiscard]] std::uint8_t kind_at(std::size_t index) const noexcept {
+    [[nodiscard]] request_header_kind kind_at(std::size_t index) const noexcept {
         return kinds_[index];
     }
     [[nodiscard]] std::span<const http_header_view> fields() const noexcept {
@@ -69,7 +70,7 @@ public:
         auto* owner_value = resource == nullptr ? std::pmr::get_default_resource() : resource;
         auto* memory = static_cast<std::byte*>(owner_value->allocate(bytes_for(count), alignof(http_header_view)));
         auto* replacement = reinterpret_cast<http_header_view*>(memory);
-        auto* replacement_kinds = reinterpret_cast<std::uint8_t*>(replacement + count);
+        auto* replacement_kinds = reinterpret_cast<request_header_kind*>(replacement + count);
         for (std::size_t i = 0; i < size_; ++i) {
             std::construct_at(replacement + i, fields_[i]);
             replacement_kinds[i] = kinds_[i];
@@ -83,7 +84,7 @@ public:
         capacity_ = static_cast<std::uint16_t>(count);
     }
 
-    void append(http_header_view field, std::uint8_t kind) {
+    void append(http_header_view field, request_header_kind kind) {
         if (size_ == UINT16_MAX) {
             throw std::logic_error("request header block is full");
         }
@@ -99,7 +100,7 @@ public:
 
 private:
     [[nodiscard]] static std::size_t bytes_for(std::size_t count) noexcept {
-        return count * sizeof(http_header_view) + count;
+        return count * sizeof(http_header_view) + count * sizeof(request_header_kind);
     }
 
     void release() noexcept {
@@ -115,7 +116,7 @@ private:
     }
 
     http_header_view* fields_{nullptr};
-    std::uint8_t* kinds_{nullptr};
+    request_header_kind* kinds_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
     std::uint16_t size_{0};
     std::uint16_t capacity_{0};

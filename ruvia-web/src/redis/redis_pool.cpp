@@ -126,7 +126,7 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
         }
         for (const auto& command : commands) {
             const std::span<const std::pmr::string> args = command.args_;
-            append_resp_command(write_buffer, args);
+            serialize_resp_command(write_buffer, args);
         }
         if (wrap_transaction) {
             write_buffer.append(exec_command);

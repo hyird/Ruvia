@@ -26,9 +26,6 @@ public:
     http_client_request_storage(http_client_request_storage&& other) noexcept;
     http_client_request_storage& operator=(http_client_request_storage&&) noexcept = delete;
 
-    [[nodiscard]] http_client_request_storage into_resource(
-        std::pmr::memory_resource* resource) &&;
-
     http_client_request_storage& set_body(std::string_view body);
 
     void set_tunnel(std::string_view authority, std::string_view protocol);

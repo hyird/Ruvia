@@ -28,19 +28,17 @@ constexpr std::uintptr_t fallback_route_scope = 2;
     return now_ms <= 0 ? std::uint64_t{0} : static_cast<std::uint64_t>(now_ms);
 }
 
-[[nodiscard]] std::uint64_t next_reset_at_ms(std::int64_t now_ms, const rate_limit_rule& rule) noexcept {
-    const auto now = safe_now_ms(now_ms);
+[[nodiscard]] std::uint64_t next_reset_at_ms(std::uint64_t now_ms, const rate_limit_rule& rule) noexcept {
     const auto window_ms = static_cast<std::uint64_t>(rule.window_.count());
     const auto max_time = std::numeric_limits<std::uint64_t>::max();
-    return window_ms > max_time - now ? max_time : now + window_ms;
+    return window_ms > max_time - now_ms ? max_time : now_ms + window_ms;
 }
 
-[[nodiscard]] std::int64_t reset_after_ms(std::int64_t now_ms, std::uint64_t reset_at_ms) noexcept {
-    const auto now = safe_now_ms(now_ms);
-    if (reset_at_ms <= now) {
+[[nodiscard]] std::int64_t reset_after_ms(std::uint64_t now_ms, std::uint64_t reset_at_ms) noexcept {
+    if (reset_at_ms <= now_ms) {
         return 1;
     }
-    const auto remaining = reset_at_ms - now;
+    const auto remaining = reset_at_ms - now_ms;
     const auto max_hint = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
     return remaining > max_hint ? std::numeric_limits<std::int64_t>::max()
                                 : static_cast<std::int64_t>(remaining);
@@ -67,9 +65,8 @@ void install(rate_limit_slot& slot, rate_limit_scope scope, std::string_view key
 }
 
 [[nodiscard]] std::optional<rate_limit_rejection> consume(rate_limit_slot& slot, const rate_limit_rule& rule,
-    std::int64_t now_ms, std::uint64_t reset_at_ms) noexcept {
-    const auto now = safe_now_ms(now_ms);
-    if (slot.reset_at_ms_ <= now) {
+    std::uint64_t now_ms, std::uint64_t reset_at_ms) noexcept {
+    if (slot.reset_at_ms_ <= now_ms) {
         slot.reset_at_ms_ = reset_at_ms;
         slot.count_ = 1;
         return std::nullopt;
@@ -119,8 +116,7 @@ std::optional<rate_limit_rejection> rate_limiter::allow(
         return overflow_decision(rule);
     }
 
-    const auto now_ms = steady_now_ms();
-    const auto now = safe_now_ms(now_ms);
+    const auto now_ms = safe_now_ms(steady_now_ms());
     const auto reset_at_ms = next_reset_at_ms(now_ms, rule);
     const auto hash = key_hash(scope, key);
     const auto mask = slots_.size() - 1;
@@ -137,7 +133,7 @@ std::optional<rate_limit_rejection> rate_limiter::allow(
         if (key_equals(slot, scope, key, hash)) {
             return consume(slot, rule, now_ms, reset_at_ms);
         }
-        if (reclaimable == nullptr && expired(slot, now)) {
+        if (reclaimable == nullptr && expired(slot, now_ms)) {
             reclaimable = &slot;
         }
     }

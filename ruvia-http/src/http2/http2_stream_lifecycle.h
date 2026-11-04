@@ -23,14 +23,6 @@ public:
     }
     [[nodiscard]] const http2_remote_receive_state& remote_receive() const&& = delete;
 
-    [[nodiscard]] bool queued() const noexcept {
-        return queued_;
-    }
-
-    [[nodiscard]] bool dispatch_started() const noexcept {
-        return dispatch_started_;
-    }
-
 private:
     friend class http2_stream_state;
 
@@ -62,7 +54,6 @@ private:
         if (!remote_receive_.abort()) {
             return false;
         }
-        queued_ = false;
         return true;
     }
 
@@ -146,32 +137,9 @@ private:
         return local_send_.commit_end_stream();
     }
 
-    [[nodiscard]] bool try_mark_queued() noexcept {
-        if (queued_ || aborted()) {
-            return false;
-        }
-        queued_ = true;
-        return true;
-    }
-
-    void clear_queued() noexcept {
-        queued_ = false;
-    }
-
-    [[nodiscard]] bool try_start_dispatch() noexcept {
-        queued_ = false;
-        if (dispatch_started_ || aborted()) {
-            return false;
-        }
-        dispatch_started_ = true;
-        return true;
-    }
-
     http2_local_send_state local_send_;
     http2_remote_receive_state remote_receive_;
-    bool queued_ : 1 {false};
-    bool dispatch_started_ : 1 {false};
-    bool peer_concurrency_slot_held_ : 1 {false};
+    bool peer_concurrency_slot_held_{false};
 };
 
 }  // namespace ruvia::detail

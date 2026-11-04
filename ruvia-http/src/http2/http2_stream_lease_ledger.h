@@ -22,12 +22,12 @@ public:
         abandon,
     };
     struct release_type final {
-        std::uint32_t stream_id_{0};
-        release_kind_type kind_{release_kind_type::after_credits};
+        std::uint32_t stream_id_;
+        release_kind_type kind_;
     };
     struct credit_type final {
-        std::uint32_t stream_id_{0};
-        std::uint32_t bytes_{0};
+        std::uint32_t stream_id_;
+        std::uint32_t bytes_;
     };
 
     [[nodiscard]] const release_type* release(std::uint32_t stream_id) const noexcept {
@@ -109,9 +109,9 @@ public:
     }
 
 private:
-    std::array<release_type, http2_stream_table::max_streams> releases_{};
+    std::array<release_type, http2_stream_table::max_streams> releases_;
     std::size_t release_count_{0};
-    std::array<credit_type, http2_stream_table::max_streams> credits_{};
+    std::array<credit_type, http2_stream_table::max_streams> credits_;
     std::size_t credit_count_{0};
 };
 

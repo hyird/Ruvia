@@ -25,6 +25,14 @@ public:
     void reset_draft() noexcept {
         draft_.reset();
     }
+    [[nodiscard]] http_response take_draft_or_new() noexcept {
+        if (!draft_) {
+            return http_response(resource_);
+        }
+        auto response = std::move(*draft_);
+        draft_.reset();
+        return response;
+    }
     [[nodiscard]] http_response& draft() {
         if (!draft_) {
             draft_.emplace(resource_);

@@ -12,7 +12,6 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_base64.h"
-#include "ruvia/web/detail/json/json_string.h"
 
 namespace ruvia::detail {
 

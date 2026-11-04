@@ -137,6 +137,20 @@ struct mysql_wait final {
     }
 };
 
+[[nodiscard]] db_socket_readiness mysql_status_readiness(int status) noexcept {
+    db_socket_readiness wanted = db_socket_readiness::none;
+    if ((status & MYSQL_WAIT_READ) != 0) {
+        wanted = wanted | db_socket_readiness::read;
+    }
+    if ((status & MYSQL_WAIT_WRITE) != 0) {
+        wanted = wanted | db_socket_readiness::write;
+    }
+    if ((status & MYSQL_WAIT_EXCEPT) != 0) {
+        wanted = wanted | db_socket_readiness::error;
+    }
+    return wanted;
+}
+
 [[nodiscard]] mysql_wait wait_for_mysql(
     mariadb_pool& pool, std::size_t index, int status, const operation_timeout& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
@@ -149,16 +163,7 @@ struct mysql_wait final {
         const auto milliseconds = mysql_get_timeout_value_ms(&connection);
         driver_deadline = worker_timer_deadline_after(std::chrono::milliseconds(milliseconds == 0 ? 1 : milliseconds));
     }
-    db_socket_readiness wanted = db_socket_readiness::none;
-    if ((status & MYSQL_WAIT_READ) != 0) {
-        wanted = wanted | db_socket_readiness::read;
-    }
-    if ((status & MYSQL_WAIT_WRITE) != 0) {
-        wanted = wanted | db_socket_readiness::write;
-    }
-    if ((status & MYSQL_WAIT_EXCEPT) != 0) {
-        wanted = wanted | db_socket_readiness::error;
-    }
+    const auto wanted = mysql_status_readiness(status);
 
     if (wanted == db_socket_readiness::none) {
         const auto selected_deadline = select_mysql_wait_deadline(operation_deadline, driver_deadline);
@@ -207,7 +212,8 @@ task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::strin
         sql = interpolated_sql;
     }
     validate_mariadb_sql_length(sql.size());
-    if (mariadb_calls_routine(sql)) {
+    const auto classification = classify_mariadb_statement(sql);
+    if (classification.calls_routine_) {
         statements.routine_called();
     }
     int query_result = 0;
@@ -218,7 +224,7 @@ task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::strin
     }
     if (query_result != 0) {
         throw mysql_statement_error(pool, index, "mysql_real_query",
-            mysql_local_infile_refused(connection, mariadb_exclusive_statement(sql)));
+            mysql_local_infile_refused(connection, classification.exclusive_));
     }
 }
 
@@ -643,8 +649,9 @@ bool mariadb_pipeline_io::queue(
         sql = statement.interpolated_;
     }
     validate_mariadb_sql_length(sql.size());
+    const auto classification = classify_mariadb_statement(statement.sql_);
     flight = {deferred ? std::string_view{} : sql, statement.sql_, statement.params_, 0, false, deferred,
-        mariadb_exclusive_statement(statement.sql_), mariadb_calls_routine(statement.sql_)};
+        classification.exclusive_, classification.calls_routine_};
     return false;
 }
 
@@ -777,16 +784,7 @@ db_socket_readiness mariadb_pipeline_io::wanted(pool_type& pool, std::size_t slo
     if (data.operation_ == mariadb_operation::none) {
         return db_socket_readiness::none;
     }
-    auto wanted = db_socket_readiness::none;
-    if ((data.status_ & MYSQL_WAIT_READ) != 0) {
-        wanted = wanted | db_socket_readiness::read;
-    }
-    if ((data.status_ & MYSQL_WAIT_WRITE) != 0) {
-        wanted = wanted | db_socket_readiness::write;
-    }
-    if ((data.status_ & MYSQL_WAIT_EXCEPT) != 0) {
-        wanted = wanted | db_socket_readiness::error;
-    }
+    const auto wanted = mysql_status_readiness(data.status_);
     // A wait for libmariadb's own timeout alone is bounded by the pool's I/O
     // timeout instead, which needs a socket to wait on.
     return wanted == db_socket_readiness::none ? db_socket_readiness::read : wanted;

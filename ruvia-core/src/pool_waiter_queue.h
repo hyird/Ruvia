@@ -91,13 +91,6 @@ public:
         return true;
     }
 
-    [[nodiscard]] bool commit_cancellation(
-        std::uint64_t id, std::coroutine_handle<>& continuation) noexcept {
-        continuation = {};
-        auto* waiter = find(id);
-        return waiter != nullptr && commit_cancellation(*waiter, continuation);
-    }
-
     [[nodiscard]] bool expire(pool_lease_acquire& waiter) noexcept {
         if (!waiter.queued_) {
             return false;

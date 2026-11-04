@@ -1,6 +1,7 @@
 #include "client/client_tcp_transport.h"
 
 #include <chrono>
+#include <stdexcept>
 #include <utility>
 #include <variant>
 
@@ -11,6 +12,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/socket.h"
 
 #include "client/client_happy_eyeballs.h"
 #include "tls/tls_stream_end.h"
@@ -27,13 +29,21 @@ client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::cont
     : worker_(worker_value),
       tls_(tls),
       endpoint_(endpoint),
+      literal_endpoint_([&]() -> std::optional<asio::ip::tcp::endpoint> {
+          if (const auto address = parse_ip_address(endpoint_.host_)) {
+              return asio::ip::tcp::endpoint(*address, endpoint_.port_);
+          }
+          return std::nullopt;
+      }()),
       counters_(counters),
       resolver_(worker_value),
       pool_resource_(pmr_resource_or_default(resource)),
       stream_(io.get_executor(), tls) {
     // Owners build their transports eagerly, before any member that must be
     // retired, so a host this worker cannot look up rejects the client itself.
-    require_client_host_lookup(endpoint_.host_, worker_);
+    if (!literal_endpoint_.has_value() && !worker_.has_blocking_pool()) {
+        throw std::invalid_argument("a DNS host requires an event loop with a blocking pool");
+    }
 }
 
 client_tcp_transport::~client_tcp_transport() = default;
@@ -203,27 +213,15 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     if (!arm(read_, timeout)) {
         co_return aborted();
     }
-    client_resolve_result resolved;
-    {
-        auto pending = resolver_.resolve(endpoint_.host_, endpoint_.port_, timeout);
-        if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
-            resolved = std::move(*immediate);
-        } else {
-            resolved = co_await std::move(std::get<task<client_resolve_result>>(pending));
-        }
-    }
     if (abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
         co_return finish(read_, timeout, {}, 0, client_transport_status::resolve_failed);
     }
-    if (resolved.error_) {
-        co_return finish(read_, timeout, resolved.error_, 0, client_transport_status::resolve_failed);
-    }
-    if (resolved.literal_) {
+    if (literal_endpoint_.has_value()) {
         // One numeric endpoint needs neither a resolver result allocation nor
         // the multi-address race. The same transport deadline and cancellation
         // own this socket as in the ordinary I/O paths.
         stream_.next_layer().replace_socket(asio::ip::tcp::socket(stream_.get_executor()));
-        const auto connected = co_await async_asio([this, endpoint = *resolved.literal_](auto handler) mutable {
+        const auto connected = co_await async_asio([this, endpoint = *literal_endpoint_](auto handler) mutable {
             stream_.next_layer().socket().async_connect(endpoint, std::move(handler));
         });
         if (connected.error_code() || abort_reason_ != client_abort_reason::none ||
@@ -231,6 +229,21 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
             co_return finish(read_, timeout, connected.error_code(), 0, client_transport_status::connect_failed);
         }
     } else {
+        client_resolve_result resolved;
+        {
+            auto pending = resolver_.resolve(endpoint_.host_, endpoint_.port_, timeout);
+            if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
+                resolved = std::move(*immediate);
+            } else {
+                resolved = co_await std::move(std::get<task<client_resolve_result>>(pending));
+            }
+        }
+        if (abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
+            co_return finish(read_, timeout, {}, 0, client_transport_status::resolve_failed);
+        }
+        if (resolved.error_) {
+            co_return finish(read_, timeout, resolved.error_, 0, client_transport_status::resolve_failed);
+        }
         client_happy_eyeballs connector(worker_, stream_.get_executor(), resolved.addresses_, pool_resource_);
         connecting_ = &connector;
         struct clear_connector final {

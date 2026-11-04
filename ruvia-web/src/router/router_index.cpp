@@ -137,21 +137,26 @@ detail::route_resolution detail::route_table::resolve_extension_method(
     // Not registered anywhere means the server does not know this method, which
     // is 501 and not this function's business -- dispatch decides that before
     // asking about any particular resource.
-    if (!recognizes_method_token(method_token)) {
-        return route_resolution{};
-    }
+    bool recognized_method = false;
     for (const auto index : plan_->extension_route_indices_) {
         const auto& route = plan_->routes_[index];
         // RFC 9110 9.1: the method token is case-sensitive.
-        if (route.method_token() == method_token && uri_paths_equivalent(route.path(), path)) {
+        if (route.method_token() != method_token) {
+            continue;
+        }
+        recognized_method = true;
+        if (uri_paths_equivalent(route.path(), path)) {
             return resolved(route);
         }
+    }
+    if (!recognized_method) {
+        return route_resolution{};
     }
 
     // The path exists under other methods, so this is 405 rather than 404. The
     // mask cannot carry extension tokens; the resolution carries them for Allow.
     const auto hash = plan_->static_method_mask_ != 0 ? path_hash(path) : 0;
-    auto method_mask = allowed_methods(path, http_known_method::unknown, hash);
+    auto method_mask = allowed_methods(path, hash);
     const auto extension_methods = extension_methods_for(path);
     if (method_mask != 0 || !extension_methods.empty()) {
         method_mask |= 1U << method_index(http_known_method::options);
@@ -204,8 +209,11 @@ detail::route_resolution detail::route_table::resolve(
     if (!has_static_method && plan_->static_method_mask_ != 0) {
         hash = path_hash(path);
     }
+    std::uint32_t excluded_mask = is_routable_method(method) ? (1U << method_index(method)) : 0U;
+    std::uint32_t initial_mask = 0;
     if (method == http_known_method::head) {
-        const auto* fallback = (plan_->static_method_mask_ & (1U << method_index(http_known_method::get))) != 0
+        const auto get_bit = 1U << method_index(http_known_method::get);
+        const auto* fallback = (plan_->static_method_mask_ & get_bit) != 0
                                    ? find_static_route(http_known_method::get, path, hash)
                                    : nullptr;
         if (fallback == nullptr) {
@@ -214,8 +222,12 @@ detail::route_resolution detail::route_table::resolve(
         if (fallback != nullptr && supports_head_fallback(*fallback)) {
             return resolved(*fallback, match);
         }
+        excluded_mask |= get_bit;
+        if (fallback != nullptr) {
+            initial_mask |= get_bit;
+        }
     }
-    auto method_mask = allowed_methods(path, method, hash);
+    auto method_mask = allowed_methods(path, hash, excluded_mask, initial_mask);
     // A resource may be served only by extension methods. It still exists, so
     // an unsupported known method is 405 and OPTIONS must answer with Allow --
     // the mask alone cannot tell that apart from no resource at all.
@@ -288,19 +300,15 @@ const detail::route_entry* detail::route_table::find_static_route(
     }
 }
 
-std::uint32_t detail::route_table::allowed_methods(
-    std::string_view path, http_known_method requested_method, std::uint64_t hash) const noexcept {
-    std::uint32_t mask = 0;
-    auto candidate_mask = plan_->static_method_mask_ | plan_->dynamic_method_mask_;
+std::uint32_t detail::route_table::allowed_methods(std::string_view path, std::uint64_t hash,
+    std::uint32_t excluded_mask, std::uint32_t initial_mask) const noexcept {
+    std::uint32_t mask = initial_mask;
     // Keep OPTIONS in the candidate mask: a path whose only registered method is
     // OPTIONS must yield a non-zero Allow set so resolve() answers 405 (method known
     // but unsupported, RFC 9110 15.5.6) instead of 404. Clearing it here made such a
     // path resolve to not-found. resolve() still ORs OPTIONS into any non-zero mask,
     // so GET-only paths keep advertising OPTIONS.
-    if (is_routable_method(requested_method)) {
-        candidate_mask &= ~(1U << method_index(requested_method));
-    }
-
+    auto candidate_mask = (plan_->static_method_mask_ | plan_->dynamic_method_mask_) & ~excluded_mask;
     while (candidate_mask != 0) {
         const auto i = static_cast<std::size_t>(std::countr_zero(candidate_mask));
         const auto method = static_cast<http_known_method>(i);

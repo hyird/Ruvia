@@ -76,7 +76,7 @@ private:
     struct dynamic_node_type;
 
     struct dynamic_static_child_type final {
-        std::pmr::string segment_;
+        std::string_view segment_;
         dynamic_node_type* node_{nullptr};
     };
 

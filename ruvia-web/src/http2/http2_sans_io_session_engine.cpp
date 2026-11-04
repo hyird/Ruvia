@@ -312,7 +312,6 @@ void http2_sans_io_session_engine::touch_activity() noexcept {
 }
 
 void http2_sans_io_session_engine::wake_writer() noexcept {
-    output_budget_.wake();
     write_signal_.notify();
 }
 
@@ -393,7 +392,7 @@ bool http2_sans_io_session_engine::push_request(std::uint32_t associated_stream_
 }
 
 struct http2_sans_io_session_engine::tunnel_upgrade_commit final {
-    using transport_type = http2_sans_io_tunnel_transport<asio::any_io_executor>;
+    using transport_type = http2_sans_io_tunnel_transport;
 
     http2_sans_io_session_engine& engine_;
     std::uint32_t stream_id_;
@@ -407,8 +406,7 @@ struct http2_sans_io_session_engine::tunnel_upgrade_commit final {
         context_access::commit_upgrade(context_value);
         engine_value.wake_writer();
         return transport_type(engine_value.connection_, stream_id_value, streaming_body_value.queue(),
-            stream_signal_value, engine_value.write_signal_, engine_value.output_budget_,
-            engine_value.executor_);
+            stream_signal_value, engine_value.write_signal_, engine_value.output_budget_);
     }
 
     [[nodiscard]] transport_type operator()(
@@ -423,7 +421,7 @@ struct http2_sans_io_session_engine::tunnel_upgrade_commit final {
 };
 
 struct http2_sans_io_session_engine::websocket_upgrade_commit final {
-    using transport_type = http2_sans_io_tunnel_transport<asio::any_io_executor>;
+    using transport_type = http2_sans_io_tunnel_transport;
 
     http2_sans_io_session_engine& engine_;
     std::uint32_t stream_id_;
@@ -590,8 +588,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         wake_writer();
                         co_return;
                     }
-                    auto buffered = co_await execute_tunnel_upgrade_session<
-                        http2_sans_io_tunnel_transport<asio::any_io_executor>>(
+                    auto buffered = co_await execute_tunnel_upgrade_session<http2_sans_io_tunnel_transport>(
                         routes_, request, *resolved, request_memory_value, dispatch_services, options,
                         session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(),
                         std::string_view{},
@@ -627,8 +624,7 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         wake_writer();
                         co_return;
                     }
-                    auto buffered = co_await execute_websocket_upgrade_session<
-                        http2_sans_io_tunnel_transport<asio::any_io_executor>>(
+                    auto buffered = co_await execute_websocket_upgrade_session<http2_sans_io_tunnel_transport>(
                         routes_, request, *resolved, request_memory_value, dispatch_services, options,
                         session_.scanner_entry(), inbound_buffers_, std::string_view{},
                         websocket_upgrade_commit{

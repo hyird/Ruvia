@@ -254,7 +254,6 @@ http2_connection::submit_regular_request_head(std::string_view method,
         // above is retryable; append_response_header_frames pre-reserves the complete
         // frame sequence, so a throwing resource cannot strand a created stream.
         append_response_header_frames(stream, std::string_view(block), end_stream);
-        http2_release_local_header_block(stream);
         if (without_content) {
             stream.begin_local_content_forbidden();
         } else if (expected_length) {
@@ -310,7 +309,6 @@ http2_connection::submit_connect_request_head(
         http2_encode_request_authority(block, authority);
         http2_encode_outbound_request_headers(block, headers);
         append_response_header_frames(stream, std::string_view(block), http2_end_stream::keep_open);
-        http2_release_local_header_block(stream);
     });
 }
 
@@ -370,7 +368,6 @@ http2_connection::submit_extended_connect_request_head(
         http2_encode_request_path(block, path);
         http2_encode_outbound_request_headers(block, headers);
         append_response_header_frames(stream, std::string_view(block), http2_end_stream::keep_open);
-        http2_release_local_header_block(stream);
     });
 }
 

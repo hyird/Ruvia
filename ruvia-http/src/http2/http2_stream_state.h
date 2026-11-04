@@ -204,14 +204,6 @@ public:
     }
     [[nodiscard]] const http2_remote_receive_state& remote_receive() const&& = delete;
 
-    [[nodiscard]] bool queued() const noexcept {
-        return lifecycle_.queued();
-    }
-
-    [[nodiscard]] bool dispatch_started() const noexcept {
-        return lifecycle_.dispatch_started();
-    }
-
     [[nodiscard]] bool hold_peer_concurrency_slot() noexcept {
         return lifecycle_.hold_peer_concurrency_slot();
     }
@@ -343,18 +335,6 @@ public:
         return lifecycle_.commit_local_end_stream();
     }
 
-    [[nodiscard]] bool try_mark_queued() noexcept {
-        return lifecycle_.try_mark_queued();
-    }
-
-    void clear_queued() noexcept {
-        lifecycle_.clear_queued();
-    }
-
-    [[nodiscard]] bool try_start_dispatch() noexcept {
-        return lifecycle_.try_start_dispatch();
-    }
-
     void parse_request_expectation_field(std::string_view value) noexcept {
         expectations_.parse_field(value);
     }
@@ -374,11 +354,6 @@ public:
                     known_length->received_bytes() < known_length->declared_length()));
         return content_can_follow ? http_request_content_indication::will_follow
                                   : http_request_content_indication::no_content;
-    }
-
-    [[nodiscard]] http_server_expectation_plan expectation_plan(
-        http_unsupported_expectation_policy unsupported_policy) const noexcept {
-        return expectations_.server_plan(request_content_indication(), unsupported_policy);
     }
 
     void record_request_pseudo_header(http2_request_pseudo_header header) noexcept {

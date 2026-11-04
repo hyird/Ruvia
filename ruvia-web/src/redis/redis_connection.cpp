@@ -235,7 +235,6 @@ task<void> redis_connection::authenticate(const operation_timeout& connect_timeo
     auto run_control = [this, &connect_timeout, command_timeout](
                            std::span<const std::string_view> args) -> task<redis_value> {
         write_buffer_.clear();
-        write_buffer_.reserve(resp_command_serialized_size(args));
         append_resp_command(write_buffer_, args);
         const auto deadline_value = connect_timeout.constrained_by(command_timeout);
         co_await write_request(deadline_value);

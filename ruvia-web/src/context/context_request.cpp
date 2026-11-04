@@ -413,6 +413,9 @@ std::span<const std::string_view> context_request::queries(std::string_view name
 }
 
 std::optional<std::string_view> context_request::cookie(std::string_view name) const {
+    if (const auto& cache = context_->request_storage().cookies_) {
+        return cache->get(name);
+    }
     return context_->request_.cookie(name);
 }
 
@@ -438,9 +441,6 @@ const request_name_value_list& context_request::cookie_fields() const {
                 ++cookie_count;
                 return true;
             });
-    }
-    if (cookie_header_count == 0) {
-        return empty_request_fields();
     }
     auto cookies = detail::request_name_value_list_access::make(context_->arena());
     if (cookie_count != 0) {

@@ -57,7 +57,7 @@ namespace ruvia::detail {
     websocket_request_header_validator validator(http_field_list_role::recipient);
     const auto headers = request.headers();
     for (std::size_t i = 0; i < headers.size(); ++i) {
-        const auto kind = static_cast<request_header_kind>(http_request_access::header_kind(request, i));
+        const auto kind = http_request_access::header_kind(request, i);
         if (!validator.observe_header(kind, headers[i].value())) {
             return websocket_handshake_validation_result::make_invalid_request();
         }

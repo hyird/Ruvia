@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/web/detail/db/db_result_access.h"
 
 #include "db/db_sql.h"
@@ -148,14 +149,8 @@ struct mariadb_statement final {
 // Whether the comma-separated `list` names `name`, as the server compares
 // variable names: regardless of case.
 [[nodiscard]] bool lists(std::string_view list, std::string_view name) noexcept {
-    const auto same = [](char left, char right) {
-        const auto lower = [](char value) {
-            return value >= 'A' && value <= 'Z' ? static_cast<char>(value - 'A' + 'a') : value;
-        };
-        return lower(left) == lower(right);
-    };
     while (!list.empty()) {
-        if (std::ranges::equal(next_item(list), name, same)) {
+        if (http_ascii_equals_ignore_case(next_item(list), name)) {
             return true;
         }
     }
@@ -441,10 +436,7 @@ bool mariadb_names_session_tracking(std::string_view sql) noexcept {
         if (underscore < 7 || sql.size() - (underscore - 7) < name.size()) {
             continue;
         }
-        const auto candidate = sql.substr(underscore - 7, name.size());
-        if (std::ranges::equal(candidate, name, [](char left, char right) {
-                return (left >= 'A' && left <= 'Z' ? static_cast<char>(left - 'A' + 'a') : left) == right;
-            })) {
+        if (http_ascii_equals_ignore_case(sql.substr(underscore - 7, name.size()), name)) {
             return true;
         }
     }

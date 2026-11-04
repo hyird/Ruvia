@@ -10,37 +10,29 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] std::size_t dynamic_node_upper_bound(std::string_view path) noexcept {
-    std::size_t count = 0;
-    while (true) {
-        std::string_view segment;
-        std::string_view rest;
-        if (!detail::split_path_segment(path, segment, rest)) {
-            return count;
-        }
-        if (segment != "*") {
-            ++count;
-        }
-        if (rest.empty()) {
-            return count;
-        }
-        path = rest;
-    }
-}
+struct dynamic_route_upper_bounds final {
+    std::size_t nodes_{0};
+    std::size_t param_names_{0};
+};
 
-[[nodiscard]] std::size_t dynamic_param_name_upper_bound(std::string_view path) noexcept {
-    std::size_t count = 0;
+[[nodiscard]] dynamic_route_upper_bounds dynamic_upper_bounds(std::string_view path) noexcept {
+    dynamic_route_upper_bounds bounds;
     while (true) {
         std::string_view segment;
         std::string_view rest;
         if (!detail::split_path_segment(path, segment, rest)) {
-            return count;
+            return bounds;
         }
-        if (segment == "*" || (!segment.empty() && segment.front() == ':')) {
-            ++count;
+        if (segment == "*") {
+            ++bounds.param_names_;
+        } else {
+            ++bounds.nodes_;
+            if (!segment.empty() && segment.front() == ':') {
+                ++bounds.param_names_;
+            }
         }
         if (rest.empty()) {
-            return count;
+            return bounds;
         }
         path = rest;
     }
@@ -72,8 +64,9 @@ void detail::router::build_dynamic_routes() {
     std::size_t param_name_capacity = 0;
     for (const auto& route : plan.routes_) {
         if (route.dynamic()) {
-            dynamic_node_capacity += dynamic_node_upper_bound(route.path());
-            param_name_capacity += dynamic_param_name_upper_bound(route.path());
+            const auto bounds = dynamic_upper_bounds(route.path());
+            dynamic_node_capacity += bounds.nodes_;
+            param_name_capacity += bounds.param_names_;
         }
     }
     // Both reserved up front: trie nodes and parameter-name views are borrowed
@@ -85,7 +78,6 @@ void detail::router::build_dynamic_routes() {
         if (!route.dynamic()) {
             continue;
         }
-        bind_dynamic_param_names(route);
         if (const auto* tunnel = route.endpoint().tunnel()) {
             const auto protocol = tunnel->protocol();
             auto found = std::ranges::find(
@@ -105,34 +97,6 @@ void detail::router::build_dynamic_routes() {
     }
     for (auto& root : plan.dynamic_roots_) {
         sort_dynamic_node(root);
-    }
-}
-
-void detail::router::bind_dynamic_param_names(route_entry& route) {
-    auto path = route.path();
-    while (true) {
-        std::string_view segment;
-        std::string_view rest;
-        if (!split_path_segment(path, segment, rest)) {
-            return;
-        }
-        if (segment == "*") {
-            if (!rest.empty()) {
-                throw std::invalid_argument("wildcard route segment must be final");
-            }
-            append_dynamic_param_name(route, "*");
-            return;
-        }
-        if (!segment.empty() && segment.front() == ':') {
-            if (segment.size() == 1) {
-                throw std::invalid_argument("route parameter name must not be empty");
-            }
-            append_dynamic_param_name(route, segment.substr(1));
-        }
-        if (rest.empty()) {
-            return;
-        }
-        path = rest;
     }
 }
 
@@ -165,7 +129,7 @@ void detail::router::append_dynamic_param_name(route_entry& route, std::string_v
     route.param_names_ = std::span<const std::string_view>(names_storage.data() + offset, names.size() + 1);
 }
 
-void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root, const route_entry& route) {
+void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root, route_entry& route) {
     auto path = route.path();
     auto* node_value = &root;
     auto& plan = *plan_;
@@ -181,6 +145,7 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
             if (!rest.empty()) {
                 throw std::invalid_argument("wildcard route segment must be final");
             }
+            append_dynamic_param_name(route, "*");
             node_value->wildcard_route_index_ = route.index();
             return;
         }
@@ -188,6 +153,7 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
             if (segment.size() == 1) {
                 throw std::invalid_argument("route parameter name must not be empty");
             }
+            append_dynamic_param_name(route, segment.substr(1));
             if (!node_value->param_child_) {
                 plan.dynamic_node_arena_.emplace_back(plan.resource_);
                 node_value->param_child_ = &plan.dynamic_node_arena_.back();
@@ -204,9 +170,8 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
             if (child_node == nullptr) {
                 plan.dynamic_node_arena_.emplace_back(plan.resource_);
                 child_node = &plan.dynamic_node_arena_.back();
-                auto child_value = compiled_route_plan::dynamic_static_child_type{
-                    std::pmr::string(segment, plan.resource_), child_node};
-                node_value->static_children_.push_back(std::move(child_value));
+                node_value->static_children_.push_back(
+                    compiled_route_plan::dynamic_static_child_type{segment, child_node});
             }
             node_value = child_node;
         }

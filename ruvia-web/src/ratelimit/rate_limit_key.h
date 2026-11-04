@@ -22,6 +22,19 @@ namespace ruvia::detail {
 inline constexpr std::size_t rate_limit_key_buffer_bytes =
     37 + std::numeric_limits<asio::ip::scope_id_type>::digits10 + 1;
 static_assert(rate_limit_key_buffer_bytes <= 64);
+[[nodiscard]] inline std::string_view format_ipv4_address(
+    const asio::ip::address_v4& address, std::span<char, 15> buffer) noexcept {
+    const auto bytes_value = address.to_bytes();
+    char* cursor_value = buffer.data();
+    char* const end = buffer.data() + buffer.size();
+    for (std::size_t i = 0; i < bytes_value.size(); ++i) {
+        if (i != 0) {
+            *cursor_value++ = '.';
+        }
+        cursor_value = std::to_chars(cursor_value, end, bytes_value[i]).ptr;
+    }
+    return std::string_view(buffer.data(), static_cast<std::size_t>(cursor_value - buffer.data()));
+}
 
 // Rate-limit key derived from a peer address string. A genuine IPv6 address is
 // grouped by its /64 network prefix: a single client typically controls an entire
@@ -58,17 +71,8 @@ static_assert(rate_limit_key_buffer_bytes <= 64);
         return std::string_view(buffer, static_cast<std::size_t>(end - buffer));
     }
     if (address.is_v4_mapped()) {
-        const auto bytes_value = asio::ip::make_address_v4(asio::ip::v4_mapped, address).to_bytes();
-        char* cursor_value = buffer;
-        for (std::size_t i = 0; i < bytes_value.size(); ++i) {
-            if (i != 0) {
-                *cursor_value++ = '.';
-            }
-            cursor_value = std::to_chars(
-                cursor_value, buffer + rate_limit_key_buffer_bytes, bytes_value[i])
-                               .ptr;
-        }
-        return std::string_view(buffer, static_cast<std::size_t>(cursor_value - buffer));
+        return format_ipv4_address(asio::ip::make_address_v4(asio::ip::v4_mapped, address),
+            std::span<char, 15>(buffer, 15));
     }
     const auto bytes_value = address.to_bytes();
     buffer[0] = 'v';

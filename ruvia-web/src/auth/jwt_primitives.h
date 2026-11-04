@@ -79,6 +79,12 @@ private:
     std::size_t reserve_hint_{0};
 };
 
+[[nodiscard]] inline bool jwt_is_reserved_claim(std::string_view name) noexcept {
+    return name.size() == 3 &&
+           (name == "iss" || name == "sub" || name == "aud" || name == "exp" || name == "nbf" ||
+               name == "iat" || name == "jti");
+}
+
 void jwt_append_json_member(
     jwt_json_buffer& out, bool& first, std::string_view name, std::string_view value);
 void jwt_append_json_numeric_date(
@@ -96,7 +102,7 @@ struct jwt_payload_access final {
     }
 
     [[nodiscard]] static bool decode_jwt_payload_claim(jwt_payload& payload_value, std::string_view key,
-        std::string_view value, std::pmr::memory_resource* resource);
+        std::string_view& value, std::pmr::memory_resource* resource);
     static jwt_payload decode_payload_json(std::string_view json, std::pmr::memory_resource* resource);
 };
 

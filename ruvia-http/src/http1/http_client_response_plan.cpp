@@ -238,10 +238,4 @@ http1_client_response_planning_result_type plan_http1_client_response(
         discards_content);
 }
 
-http1_client_response_planning_result_type plan_http1_client_response(
-    const http1_client_exchange_state& exchange_state, const http1_client_parsed_response_head& response,
-    http1_client_request_content_phase request_content_phase) {
-    return plan_http1_client_response(exchange_state, response, request_content_phase, false);
-}
-
 }  // namespace ruvia::detail

@@ -6,12 +6,6 @@
 #include <utility>
 #include <variant>
 
-#include <asio/bind_allocator.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/detached.hpp>
-#include <asio/recycling_allocator.hpp>
-
-#include "ruvia/core/async.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/websocket_protocol.h"
 
@@ -64,8 +58,7 @@ void server_websocket_connection<stream_type>::start_going_away() noexcept {
     going_away_pending_ = false;
     write_lane_.begin();
     try {
-        asio::co_spawn(executor(), ruvia::as_awaitable(write_going_away_close()),
-            asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+        background_tasks_.spawn(write_going_away_close());
     } catch (...) {
         finish_write();
         fail_background(std::current_exception());
@@ -114,8 +107,7 @@ void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) 
     liveness_state_ = websocket_sending_ping(++heartbeat_sequence_);
     write_lane_.begin();
     try {
-        asio::co_spawn(executor(), ruvia::as_awaitable(write_heartbeat_ping()),
-            asio::bind_allocator(asio::recycling_allocator<void>(), asio::detached));
+        background_tasks_.spawn(write_heartbeat_ping());
     } catch (...) {
         finish_write();
         fail_background(std::current_exception());

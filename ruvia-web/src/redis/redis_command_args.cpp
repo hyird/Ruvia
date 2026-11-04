@@ -88,17 +88,9 @@ std::pmr::vector<std::pmr::string> own_redis_args(
     return own_redis_args(std::span<const std::string_view>(args.begin(), args.size()), resource);
 }
 
-std::pmr::string redis_seconds_string(std::chrono::seconds ttl, std::pmr::memory_resource* resource) {
-    std::pmr::string output(resource);
-    append_redis_number(output, static_cast<std::int64_t>(ttl.count()));
-    return output;
-}
-
 std::pmr::string redis_milliseconds_string(
     std::chrono::milliseconds ttl, std::pmr::memory_resource* resource) {
-    std::pmr::string output(resource);
-    append_redis_number(output, static_cast<std::int64_t>(ttl.count()));
-    return output;
+    return redis_int_string(static_cast<std::int64_t>(ttl.count()), resource);
 }
 
 std::pmr::string redis_cursor_string(

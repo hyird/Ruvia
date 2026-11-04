@@ -21,11 +21,6 @@ namespace ruvia {
 namespace detail {
 namespace {
 
-[[nodiscard]] bool jwt_is_reserved_claim(std::string_view name) noexcept {
-    return name == "iss" || name == "sub" || name == "aud" || name == "exp" || name == "nbf" ||
-           name == "iat" || name == "jti";
-}
-
 // Views into the caller's token.
 struct jwt_token_parts final {
     std::string_view header_;

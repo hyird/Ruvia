@@ -193,7 +193,7 @@ http_content_coding_field_result request_content_coding(const http_request& requ
     const auto limit = last_index <= headers.size() ? last_index : headers.size();
     for (std::size_t i = 0; i < limit; ++i) {
         if (detail::http_request_access::header_kind(request, i) ==
-            static_cast<std::uint8_t>(detail::request_header_kind::content_encoding)) {
+            detail::request_header_kind::content_encoding) {
             parser.update(headers[i].value());
         }
     }

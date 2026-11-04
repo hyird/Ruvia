@@ -28,8 +28,21 @@ namespace {
 // text() and stream_text(): plain UTF-8 text plus nosniff, so a browser never
 // sniffs application text into an active content type. An
 // X-Content-Type-Options the application set keeps its value.
+void set_default_content_type(http_response& response, http_content_type content_type) {
+    if (!response.header("Content-Type")) {
+        response.content_type(content_type);
+    }
+}
+
 void mark_plain_text(http_response& response) {
     response.content_type(http_content_type::text_plain_utf8);
+    if (!response.header("X-Content-Type-Options")) {
+        response.header_stable_view("X-Content-Type-Options", "nosniff");
+    }
+}
+
+void mark_plain_text_defaults(http_response& response) {
+    set_default_content_type(response, http_content_type::text_plain_utf8);
     if (!response.header("X-Content-Type-Options")) {
         response.header_stable_view("X-Content-Type-Options", "nosniff");
     }
@@ -97,61 +110,47 @@ void context::store_response(http_response&& response) {
 }
 
 http_response context::body(std::string_view body) {
-    http_response response(arena());
+    auto response = response_state().take_draft_or_new();
     response.body(body);
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
 http_response context::body_owned(std::pmr::string&& body) {
-    http_response response(arena());
+    auto response = response_state().take_draft_or_new();
     response.owned_body(std::move(body));
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
 http_response context::body(std::span<const std::byte> body) {
-    http_response response(arena());
+    auto response = response_state().take_draft_or_new();
     response.body(byte_body_view(body));
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
 http_response context::body(static_text body) {
-    http_response response(arena());
+    auto response = response_state().take_draft_or_new();
     response.static_body(body.view());
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
 http_response context::text(std::string_view body) {
-    http_response response(arena());
-    mark_plain_text(response);
+    auto response = response_state().take_draft_or_new();
+    mark_plain_text_defaults(response);
     response.body(body);
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
 http_response context::text_owned(std::pmr::string&& body) {
-    http_response response(arena());
-    mark_plain_text(response);
+    auto response = response_state().take_draft_or_new();
+    mark_plain_text_defaults(response);
     response.owned_body(std::move(body));
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
 http_response context::text(static_text body) {
-    http_response response(arena());
-    mark_plain_text(response);
+    auto response = response_state().take_draft_or_new();
+    mark_plain_text_defaults(response);
     response.static_body(body.view());
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
@@ -164,38 +163,30 @@ response_stream_writer& context::stream_text() {
 }
 
 http_response context::json_serialized(std::pmr::string& body) {
-    http_response response(arena());
-    response.content_type(http_content_type::application_json);
+    auto response = response_state().take_draft_or_new();
+    set_default_content_type(response, http_content_type::application_json);
     response.owned_body(std::move(body));
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
 http_response context::html(std::string_view body) {
-    http_response response(arena());
-    response.content_type(http_content_type::text_html_utf8);
+    auto response = response_state().take_draft_or_new();
+    set_default_content_type(response, http_content_type::text_html_utf8);
     response.body(body);
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
 http_response context::html_owned(std::pmr::string&& body) {
-    http_response response(arena());
-    response.content_type(http_content_type::text_html_utf8);
+    auto response = response_state().take_draft_or_new();
+    set_default_content_type(response, http_content_type::text_html_utf8);
     response.owned_body(std::move(body));
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
 http_response context::html(static_text body) {
-    http_response response(arena());
-    response.content_type(http_content_type::text_html_utf8);
+    auto response = response_state().take_draft_or_new();
+    set_default_content_type(response, http_content_type::text_html_utf8);
     response.static_body(body.view());
-    apply_response_state(response, std::nullopt);
-    response_state().reset_draft();
     return response;
 }
 
@@ -228,10 +219,8 @@ task<http_response> context::not_found_task() {
 }
 
 http_response context::streaming_head() {
-    http_response response(arena());
-    apply_response_state(response, std::nullopt);
+    auto response = response_state().take_draft_or_new();
     response_state().apply_policy(response);
-    response_state().reset_draft();
     return response;
 }
 

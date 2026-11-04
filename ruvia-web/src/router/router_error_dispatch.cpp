@@ -2,6 +2,7 @@
 #include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
@@ -31,6 +32,8 @@ namespace {
 // an application error handler may suspend while it is read.
 struct classified_error final {
     http_error error_;
+    std::string_view accepted_codings_{};
+    std::optional<detail::rate_limit_rejection> rate_limit_rejection_{};
     // Not an HTTP-mapped failure: answered with a generic 500.
     bool unexpected_{false};
 };
@@ -44,15 +47,19 @@ struct classified_error final {
         return {.error_ = http_error({.status_ = ruvia::http_status::internal_server_error,
                                          .message_ = "unhandled exception"},
                     resource)};
+    } catch (const detail::inbound_transport_error&) {
+        throw;
     } catch (const detail::unsupported_request_content_coding& error) {
         return {.error_ = http_error({.status_ = http_unsupported_content_coding::status(),
                                          .code_ = "unsupported_content_coding",
                                          .message_ = error.what()},
-                    resource)};
-    } catch (const detail::rate_limit_rejected&) {
+                    resource),
+            .accepted_codings_ = error.accepted_codings()};
+    } catch (const detail::rate_limit_rejected& rejected) {
         const auto error = detail::rate_limit_rejection_error();
         return {.error_ = http_error(
-                    {.status_ = error.status(), .code_ = error.code(), .message_ = error.message()}, resource)};
+                    {.status_ = error.status(), .code_ = error.code(), .message_ = error.message()}, resource),
+            .rate_limit_rejection_ = rejected.rejection()};
     } catch (const http_error& error) {
         return {.error_ = http_error(error, resource)};
     } catch (const http_protocol_error& error) {
@@ -94,44 +101,18 @@ void report_unexpected_failure(const classified_error& error_info, const std::ex
     }
 }
 
-// A failed I/O on the connection's own transport -- a handler's interim head
-// or the 100 Continue its body read sent to a peer that went away -- is not a
-// handler fault and cannot be answered: no response reaches that peer. It is
-// not turned into a response but propagated to the session, which ends the
-// connection; the connection failure sink then classifies it, so a peer that
-// reset is a normal end and anything else is reported once, as itself.
-void rethrow_inbound_transport_error(const std::exception_ptr& exception) {
-    try {
-        if (exception != nullptr) {
-            std::rethrow_exception(exception);
-        }
-    } catch (const detail::inbound_transport_error&) {
-        throw;
-        // Any other failure is answered below.
-        // NOLINTNEXTLINE(bugprone-empty-catch)
-    } catch (...) {
-    }
-}
-
-void apply_exception_response_metadata(http_response& response, const std::exception_ptr& exception) {
-    try {
-        if (exception != nullptr) {
-            std::rethrow_exception(exception);
-        }
-    } catch (const detail::unsupported_request_content_coding& error) {
-        response.header_stable_view("Accept-Encoding", error.accepted_codings());
-    } catch (const detail::rate_limit_rejected& rejected) {
-        detail::apply_rate_limit_rejection_headers(response, rejected.rejection());
-        // Classification only; the caller still owns and dispatches the exception.
-        // NOLINTNEXTLINE(bugprone-empty-catch)
-    } catch (...) {
+void apply_exception_response_metadata(http_response& response, const classified_error& error_info) {
+    if (!error_info.accepted_codings_.empty()) {
+        response.header_stable_view("Accept-Encoding", error_info.accepted_codings_);
+    } else if (error_info.rate_limit_rejection_.has_value()) {
+        detail::apply_rate_limit_rejection_headers(response, *error_info.rate_limit_rejection_);
     }
 }
 
 }  // namespace
 
 task<http_response> detail::route_table::handle_error(const http_request& request,
-    request_memory& memory, http_error_info error, context_services services) const {
+    request_memory& memory, http_error_info error, const context_services& services) const {
     const auto error_handler = error_handler_for(request.path());
     // Nothing to wrap and no handler: the original allocation-free path.
     if (error_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
@@ -139,7 +120,8 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
         co_return response;
     }
 
-    auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
+    auto context_value = detail::context_access::make(memory, request, services);
+    detail::context_access::services(context_value).bind_routes(*this);
     auto terminal = [error, error_handler](context& terminal_context) -> task<http_response> {
         if (error_handler == nullptr) {
             co_return make_default_error_response(terminal_context.arena(), error);
@@ -162,31 +144,31 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
 }
 
 task<http_response> detail::route_table::handle_exception(const http_request& request,
-    request_memory& memory, std::exception_ptr exception, context_services services) const {
-    return handle_exception(request, memory, std::move(exception), std::move(services),
-        error_handler_for(request.path()));
+    request_memory& memory, std::exception_ptr exception, const context_services& services) const {
+    return handle_exception(
+        request, memory, std::move(exception), services, error_handler_for(request.path()));
 }
 
 task<http_response> detail::route_table::handle_exception(const http_request& request,
-    request_memory& memory, std::exception_ptr exception, context_services services,
+    request_memory& memory, std::exception_ptr exception, const context_services& services,
     http_error_handler_ref error_handler) const {
-    rethrow_inbound_transport_error(exception);
     if (error_handler == nullptr) {
         const auto error_info = classify_exception(memory.resource(), exception);
         report_unexpected_failure(error_info, exception, nullptr);
         auto response = make_default_error_response(memory.resource(), error_info.error_.info());
-        apply_exception_response_metadata(response, exception);
+        apply_exception_response_metadata(response, error_info);
         co_return response;
     }
 
-    auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
+    auto context_value = detail::context_access::make(memory, request, services);
+    detail::context_access::services(context_value).bind_routes(*this);
     auto response = co_await handle_exception(context_value, exception, error_handler);
     detail::context_access::apply_response_policy(context_value, response);
     co_return response;
 }
 
 task<http_response> detail::route_table::handle_not_found(
-    const http_request& request, request_memory& memory, context_services services) const {
+    const http_request& request, request_memory& memory, const context_services& services) const {
     const auto not_found_handler = not_found_handler_for(request.path());
     if (not_found_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
         auto response = make_default_error_response(memory.resource(),
@@ -194,8 +176,8 @@ task<http_response> detail::route_table::handle_not_found(
         co_return response;
     }
 
-    auto context_value = detail::context_access::make(memory, request, services.with_routes(*this));
-
+    auto context_value = detail::context_access::make(memory, request, services);
+    detail::context_access::services(context_value).bind_routes(*this);
     // The handler's own failure keeps going through handle_exception, exactly as
     // before; wrapping it in the chain must not change which layer answers it.
     auto terminal = [this, not_found_handler](context& terminal_context) -> task<http_response> {
@@ -230,14 +212,13 @@ task<http_response> detail::route_table::handle_exception(
 
 task<http_response> detail::route_table::handle_exception(context& context_value,
     std::exception_ptr exception, http_error_handler_ref error_handler) const {
-    rethrow_inbound_transport_error(exception);
+    const auto error_info = classify_exception(context_value.arena(), exception);
     detail::context_access::set_error(context_value, exception);
     detail::context_access::discard_draft(context_value);
-    const auto error_info = classify_exception(context_value.arena(), exception);
     report_unexpected_failure(error_info, exception, error_handler);
 
     auto response = co_await invoke_error_handler(context_value, error_info.error_.info(), error_handler);
-    apply_exception_response_metadata(response, exception);
+    apply_exception_response_metadata(response, error_info);
     co_return response;
 }
 

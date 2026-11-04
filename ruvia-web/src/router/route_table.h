@@ -99,7 +99,8 @@ public:
     // successful completion assigns the selected final response directly.
     task<void> dispatch_buffered_response(const http_request& request,
         const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
-        context_services services, static_file_selection_mode static_file_mode, http_response& response) const;
+        const context_services& services, static_file_selection_mode static_file_mode,
+        http_response& response) const;
     // HTTP/1 holds a matched buffered route's context in its existing session
     // frame and awaits this non-coroutine entry directly. Other callers use
     // dispatch_buffered_response to own that lifetime. Direct callers apply
@@ -111,19 +112,19 @@ public:
     // If finalization fails, destroy the context before the request-only fallback.
     [[nodiscard]] task<http_response> finalize_failure(context& context, std::exception_ptr exception) const;
     task<http_response> handle_error(const http_request& request, request_memory& memory,
-        http_error_info error, context_services services) const;
+        http_error_info error, const context_services& services) const;
     task<http_response> handle_exception(const http_request& request, request_memory& memory,
-        std::exception_ptr exception, context_services services) const;
+        std::exception_ptr exception, const context_services& services) const;
     // Absence means the bound output handled the request; a value is the one
     // buffered response produced before a response-stream commit.
     task<std::optional<http_response>> dispatch_response_stream(const http_request& request,
         const resolved_route& route, request_memory& memory, response_stream_writer& response_stream,
-        context_services services) const;
+        const context_services& services) const;
     // A CONNECT tunnel or WebSocket upgrade: `handler` is the terminal that
     // commits the upgrade. Absence means the terminal took the request.
     task<std::optional<http_response>> dispatch_upgrade(const http_request& request,
         const resolved_route& route, request_memory& memory, const route_stream_handler& handler,
-        context_services services) const;
+        const context_services& services) const;
     // The not-found handler that applies to `path`: the tightest prefix scope
     // covering it, else the plan-wide one; null when neither is configured.
     [[nodiscard]] http_not_found_handler_ref not_found_handler_for(std::string_view path) const noexcept;
@@ -168,13 +169,13 @@ private:
         http_known_method method, std::string_view path, std::uint64_t hash) const noexcept;
     [[nodiscard]] const route_entry* find_dynamic_route(
         http_known_method method, std::string_view path, route_match& match) const noexcept;
-    [[nodiscard]] std::uint32_t allowed_methods(
-        std::string_view path, http_known_method requested_method, std::uint64_t hash) const noexcept;
+    [[nodiscard]] std::uint32_t allowed_methods(std::string_view path, std::uint64_t hash,
+        std::uint32_t excluded_mask = 0, std::uint32_t initial_mask = 0) const noexcept;
     // The handler is copied into the coroutine frame: callers may pass one
     // bound from the resolved route as a temporary.
     [[nodiscard]] task<std::optional<http_response>> dispatch_stream_route(const http_request& request,
         const resolved_route& route, request_memory& memory, route_stream_handler handler,
-        context_services services) const;
+        const context_services& services, response_stream_writer* response_stream = nullptr) const;
 
     // A route's own frames and, only when some are conditional, their scopes.
     [[nodiscard]] middleware_chain route_chain(const route_entry& route) const noexcept;
@@ -190,13 +191,13 @@ private:
     [[nodiscard]] static task<void> contain_failure(
         const route_table& table, context& context, std::exception_ptr exception);
     [[nodiscard]] task<http_response> handle_not_found(
-        const http_request& request, request_memory& memory, context_services services) const;
+        const http_request& request, request_memory& memory, const context_services& services) const;
     [[nodiscard]] task<http_response> handle_exception(
         context& context, std::exception_ptr exception) const;
     [[nodiscard]] task<http_response> handle_exception(context& context, std::exception_ptr exception,
         http_error_handler_ref error_handler) const;
     [[nodiscard]] task<http_response> handle_exception(const http_request& request, request_memory& memory,
-        std::exception_ptr exception, context_services services,
+        std::exception_ptr exception, const context_services& services,
         http_error_handler_ref error_handler) const;
 
     [[nodiscard]] http_error_handler_ref error_handler_for(std::string_view path) const noexcept;

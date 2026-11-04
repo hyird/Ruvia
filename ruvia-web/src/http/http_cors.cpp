@@ -69,18 +69,6 @@ struct cors_request_fields final {
     // CORS is an application policy, not message framing. Opaque or malformed
     // metadata may reach the handler but must not generate cross-origin grants.
     // Never select one origin from a multi-origin value for a CORS decision.
-    if (!options) {
-        for (const auto& field : request.headers()) {
-            if (!http_ascii_equals_ignore_case(field.name(), "Origin")) {
-                continue;
-            }
-            if (result.origin_.has_value() || !is_valid_cors_origin(field.value())) {
-                return std::nullopt;
-            }
-            result.origin_ = field.value();
-        }
-        return result;
-    }
     bool first_header_name = true;
     for (const auto& field : request.headers()) {
         if (http_ascii_equals_ignore_case(field.name(), "Origin")) {
@@ -88,6 +76,9 @@ struct cors_request_fields final {
                 return std::nullopt;
             }
             result.origin_ = field.value();
+            continue;
+        }
+        if (!options) {
             continue;
         }
         if (http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Method")) {
@@ -128,41 +119,29 @@ void reflect_cors_request_header_names(
         return;
     }
     static constexpr std::size_t inline_capacity = 256;
-    if (size <= inline_capacity) {
-        std::array<char, inline_capacity> buffer;
-        std::size_t length = 0;
-        for (const auto& field : request.headers()) {
-            if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
-                continue;
-            }
-            http_field_name_list names(field.value());
-            while (const auto name = names.next()) {
-                if (length != 0) {
-                    buffer[length++] = ',';
-                    buffer[length++] = ' ';
-                }
-                std::memcpy(buffer.data() + length, name->data(), name->size());
-                length += name->size();
-            }
-        }
-        response.header("Access-Control-Allow-Headers", std::string_view(buffer.data(), length));
-        return;
+    std::array<char, inline_capacity> inline_buffer;
+    std::pmr::string overflow_buffer(response.memory_resource());
+    char* target = inline_buffer.data();
+    if (size > inline_buffer.size()) {
+        overflow_buffer.resize(size);
+        target = overflow_buffer.data();
     }
-    std::pmr::string value(response.memory_resource());
-    value.reserve(size);
+    std::size_t length = 0;
     for (const auto& field : request.headers()) {
         if (!http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
             continue;
         }
         http_field_name_list names(field.value());
         while (const auto name = names.next()) {
-            if (!value.empty()) {
-                value.append(", ");
+            if (length != 0) {
+                target[length++] = ',';
+                target[length++] = ' ';
             }
-            value.append(*name);
+            std::memcpy(target + length, name->data(), name->size());
+            length += name->size();
         }
     }
-    response.header("Access-Control-Allow-Headers", value);
+    response.header("Access-Control-Allow-Headers", std::string_view(target, length));
 }
 
 void validate_cors_header_names(const std::vector<std::string>& names, const char* empty_message) {
