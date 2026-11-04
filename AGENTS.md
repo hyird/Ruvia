@@ -41,8 +41,8 @@
 - 跨库只用非 `detail` 公开 API，严禁穿透内部头、跨组件 `detail` 头或相对物理路径。需要跨库共享的通用辅助能力由所属下层库公开提供。
 - 公开头文件保持最小包含闭包（Include Firewall）：核心入口头（如 `context.h`）对独立子系统句柄优先使用前置声明，由实际消费该能力的编译单元按需包含定义头，避免全量头文件耦合传染。
 - sans-I/O 与网络驱动边界：
-  - `ruvia-http` 只产出确定性的解析结果、协议计划（表示响应计划、首部校验、重定向改写计划、帧编码与流控预算消费）和状态机转换，不持有 socket、定时器或协程挂起；
-  - `ruvia-web` 严格消费 `ruvia-http` 的协议计划驱动读写、超时、重连与跨源策略，不在 Web 层二次解析协议语法或绕过协议状态机拼接报文。
+  - `ruvia-http` 只产出确定性的解析结果、协议计划（表示响应计划、首部校验、重定向改写计划、帧编码与流控预算消费）和状态机转换，不持有 socket、定时器、协程挂起或执行系统文件 I/O（文件响应体仅通过不透明的 `http_response_file_identity` 与 `uintptr_t + release` 函数指针封装的 `http_response_file_handle` 传递已打开原生句柄）；
+  - `ruvia-web` 严格消费 `ruvia-http` 的协议计划驱动读写、超时、重连与跨源策略，直接复用构帧时已打开的同一原生文件句柄发送文件响应（避免二次解析路径及 TOCTOU 替换风险），不在 Web 层二次解析协议语法或绕过协议状态机拼接报文。
 - 构建、链接与安装闭包：
   - 根 `CMakeLists.txt` 统一管理第三方依赖查找与 `ruviaConfig.cmake` 的 `find_dependency` 导出，确保构建期与安装消费期依赖完全一致。
   - 非 Windows 下 `ruvia-core` 以 `WHOLE_ARCHIVE` 链接启用 `override` 的静态 `mimalloc-static`（消费方不得混用其他全局分配器替换）；Windows 统一使用 MSVC 静态运行时（`MultiThreaded$<$<CONFIG:Debug>:Debug>`）与普通 mimalloc。
@@ -55,7 +55,7 @@
   - 跨当前表达式留存的零拷贝文本或连续序列视图（如配置项、消息首部、Cookie 属性、路由/查询选项、WebSocket/隧道参数、字节转换 `as_bytes` / `as_chars`），必须通过 `borrowed_text`、`borrowed_span` 等受检视图类型在编译期拒绝绑定临时拥有型容器（rvalue `std::string`、`std::vector`、`std::initializer_list` 等）；返回对象内部存储借用的访问器标注 `RUVIA_LIFETIMEBOUND`；`move_only_function` 的引用返回签名严格要求目标直接返回兼容引用，禁止从按值返回或隐式转换临时量生成悬垂引用；
   - 被异步操作、子协程节点、定时器或取消注册借用自身地址的宿主（如 `task_scope`、`slot_pool`、`worker_memory`、`request_memory`、`session`、`env`），其构造参数（如拒绝右值 `worker_handle&&`）与成员操作（如 `spawn`、`join`、`allocator`、`resource`、`fork`、`data`、`get`）必须使用左值引用限定（`&` / `const&`）并显式 `= delete` 右值重载，从编译期阻断临时宿主悬垂。
 - 原始整数域受检转换、时钟单调性与防溢出：
-  - 公开辅助函数与边界入口对任意输入安全，检查边界、溢出及输入输出别名；数字文本解析（`parse_integer`）严格拒绝空白、前导 `+` 与尾随字符，且格式错误优先于溢出报告；
+  - 公开辅助函数与边界入口对任意输入安全，检查边界、溢出及输入输出别名（如 `http_base64_encode` 通过计算正向/反向分组分界点支持任意偏移内存重叠与原地编码，解码严格区分必选填充与禁止填充）；数字文本解析（`parse_integer`）严格拒绝空白、前导 `+` 与尾随字符，且格式错误优先于溢出报告；
   - 端口、状态码、`Content-Length`、HPACK 索引与动态表容量、协议字节预算（`protocol_byte_limit`）、查询行数、Redis 批量计数、WebSocket 关闭码、HTTP 优先级 urgency 及超时/容量参数，必须在窄化或转为无符号类型前的**原始整数域**完成符号与范围校验（如 `std::in_range`），严禁隐式转换导致负数缠绕为超大无符号上限或高位截断改变目标语义；
   - 可配置时长和字节大小参与运算时统一使用饱和算术或减法分段比较（`worker_timer_saturating_duration_cast` 保持整数全因子精确换算，浮点转换将 `NaN` 映射为 `0`、无穷大饱和至边界）；所有超时、限流窗口、连接扫描与耗时统计统一使用单调时钟（`std::chrono::steady_clock`），日历时钟仅用于协议时间戳（HTTP Date、Cookie、JWT），防止系统时钟回拨导致超时失效。
 - 配置、会话、静态文件与 TLS 安全：
