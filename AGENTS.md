@@ -116,7 +116,7 @@
   - 框架动态存储通过显式传递的 `worker_memory` / `request_memory` 管理（禁止使用 `thread_local` 隐式全局池），公开启动配置不要求用户提供 PMR；
   - `worker_memory` 无内部同步锁，直接对接进程级线程安全 `process_resource()`（mimalloc 上游，不替换全局默认 PMR，`construct_pmr_object` 在构造抛异常时立即按原尺寸/对齐归还已分配内存）：小对象走 worker 常驻小对象池，中等大块走受 `retained_block_bytes_` 预算约束的对齐精确尺寸块缓存，超出预算立即归还上游；
   - 单次请求和握手使用 `request_memory`（`monotonic_buffer_resource` arena），优先复用连接预留的初始缓冲块，派生独立子操作时通过 `fork()` 获取同 worker 上游的独立 arena；长生命周期连接状态、结果、池化数据以及无请求 arena 的后台投递任务（`web_worker_context`）使用 `worker_memory` 可回收 `pool()`（后台任务分配的存储须在任务作用域结束前于本 worker 销毁）；
-  - 异步入口返回前完成输入拥有化和资源归一化（如跨请求复用的查询谓词暂存于进程级 PMR，生成异步操作前归一化至目标 worker 内存池）；拥有型 PMR 集合（如 `entity_rows`）跨不同 `memory_resource` 移动赋值时必须先在目标资源中递归重绑定全部元素后再交换，防止浅拷贝或分配器失配；
+  - 异步入口返回前完成输入拥有化和资源归一化（如跨请求复用的查询谓词暂存于进程级 PMR，生成异步操作前归一化至目标 worker 内存池）；拥有型 PMR 集合（如 `entity_rows`）跨不同 `memory_resource` 移动赋值时必须先在目标资源中递归重绑定全部元素后再交换，防止浅拷贝或分配器失配（通过 `consteval` 编译期递归判定字段是否含 PMR 资源 `entity_type_has_resource`，对不含 PMR 资源的纯标量或 `optional<标量>` 直接编译期短路）；
   - 长连接不得累积临时分配，存活数据不得被后续操作提前回收；流或连接内建暂存缓冲（如 HTTP/2 流局部首部/Trailer 编码块、Redis 连接写缓冲与网络输入缓冲 `http_io_buffer`）优先原位复用，使用后若容量超过保留阈值（`http_retained_pmr_string_bytes`）则主动归还大块存储，否则仅清空内容保留小容量；`http_io_buffer` 为读取扩容时不零初始化待覆写字节，`consume()` 仅推进游标保持既有可读视图有效，`prepare()` 仅在已消费前缀足以覆盖存活字节时才前移压缩（否则几何扩容摊销开销），多命令流水线追加先校验字节求和溢出并依赖几何扩容保持摊销 $O(\text{total})$，严禁按块重复搬移或逐命令精确 `reserve(size + delta)` 导致 $O(N^2)$ 重分配；worker 在完整扫描周期无活跃交换与 I/O 活动时触发 `trim_when_idle`，归还缓存大块并排空当前线程的协程帧缓存。
 
 ## 运行时、连接池与生命周期
@@ -166,7 +166,7 @@
 - `controller`、中间件与 `use_worker_state` 注册的状态均保持 per-worker。进程只拥有一份不可变路由查找计划，各 worker 路由契约必须一致；路由和中间件链在启动前构建，冲突启动即报错。
 - 上下文（`context` 与 `web_worker_context`）只暴露 typed capability（`web_worker_context` 直接借用 worker 的客户端注册表与停止令牌，启动后台任务零所有权复制，worker 退役前 `join` 全部已投递任务）；callback 由应用拥有。
 - 响应元数据显式分为下一次构造消耗的 `draft()`、当前缓冲响应的 `edit_response()` 和交付时应用的跨替换 `policy()`；构造响应时通过 `take_draft_or_new()` 原位移动接管 `draft` 实例并仅在未显式设置时补充默认 `Content-Type`（消除新建空响应再拷贝 `draft` 字段的开销），替换不自动继承旧响应字段。流式生产者先 `commit()` 并区分正文阶段与正常完成，正常完成不得伪装成取消或中止。
-- `model_type` 使用编译期 schema，解析、校验和序列化职责分离：必填与可空独立（`RUVIA_OPTIONAL_FIELD` 仅允许字段缺失，允许 `null` 须显式声明 `RUVIA_NULLABLE`，`RUVIA_DEFAULT` 仅作用于缺失的可选字段）；数值转换拒绝 `bool`/字符充当整数并执行精确整数与窄化浮点范围检查；跨分配器拥有化支持递归重绑定（`rebind_for_model`），移动操作检测源与目标地址重叠防止自包含结构移动时先销毁自身存储。
+- `model_type` 使用编译期 schema，解析、校验和序列化职责分离：必填与可空独立（`RUVIA_OPTIONAL_FIELD` 仅允许字段缺失，允许 `null` 须显式声明 `RUVIA_NULLABLE`，`RUVIA_DEFAULT` 仅作用于缺失的可选字段）；数值转换拒绝 `bool`/字符充当整数并执行精确整数与窄化浮点范围检查（表单解析对非字符串标量字段在无转义时直接原地解析视图而不分配 `std::pmr::string`）；跨分配器拥有化支持递归重绑定（`rebind_for_model`），移动操作检测源与目标地址重叠防止自包含结构移动时先销毁自身存储。
 - ORM 与直接查询保持独立公开路线，不混用内部实现。映射结果的标量及容器元素必须递归拥有数据；借用字段读取只在显式持有原始结果的路线提供。数值查询谓词保持字面量精度（不将 `double` 隐式窄化为 `float`）。
 - 数据库与 Redis 韧性：
   - 事务外查询/执行可按驱动契约共享流水线连接（PostgreSQL 常规 `query` / `execute` 每连接维护有界服务端命名预处理语句集合，流式查询以无名语句运行，`db_migrator` 使用独立专用连接；MariaDB 单遍扫描分类独占语句与存储过程调用，并强制拒绝 `LOCAL INFILE` 请求以防服务端读取宿主本地文件），事务内独占连接租约；`db_transaction` 与 `db_stream_result` 的操作借用堆上地址稳定的内部状态（移动外层句柄不使冷任务或运行中帧失效），并发启动重叠操作抛出 `std::logic_error` 但绝不中止当前已持有事务的在途语句；涉及数据库事务与其他外部 I/O 的流程须明确一致性边界和失败补偿，避免持有数据库事务或锁等待无关远程操作；
@@ -176,7 +176,7 @@
   - 数据库查询结果缓存（Redis 承载）须共享同一操作的剩余截止期与组合取消令牌（`stop_group`）：遇到取消或停机（`cancelled` / `closing`）时必须立即上抛，不得被容错开关静默吞掉；截止期超时统一按查询超时处理。
 - 出站客户端（`http_client` / `websocket_client`）：
   - 可独立绑定事件循环，应用上下文只提供便捷入口；outbound origin 启动前固定，请求期不建池，传输层在构造期预解析 IP 字面量端点（`literal_endpoint_`，连接时直接跳过 DNS Resolver）并支持 Happy Eyeballs 并发连接尝试与冗余分支取消，且已启用的客户端 TCP 套接字策略（如 `no_delay` / `keep_alive`）应用失败时建连直接失败而不静默降级；
-  - 强制执行两级出站结果内存预算（已保留结果 `max_retained_bytes_` 与在途分配 `max_in_flight_bytes_`，空 `http_client_response_bytes` 不持有存储且不占用保留配额）；`request_timeout_` 覆盖从获取连接槽到响应体被慢速消费者完整排空的全周期，超时立即失败并销毁连接；
+  - 强制执行两级出站结果内存预算（已保留结果 `max_retained_bytes_` 与在途分配 `max_in_flight_bytes_`，空 `http_client_response_bytes` 不持有存储且不占用保留配额；全量收集 `collect_all_` 发现响应体超限时立即丢弃并释放已缓冲前缀 `discard_response_body()`，防止无用半截数据滞留占用预算）；`request_timeout_` 覆盖从获取连接槽到响应体被慢速消费者完整排空的全周期，超时立即失败并销毁连接；
   - 连接通告（`ORIGIN` / `Alt-Svc`）仅作有界只读观测，绝不自动改变已注册 origin、连接归并、TLS 身份或缓存策略；
   - 出站重定向由 `ruvia-http` 生成 RFC 9110 §15.4 方法/正文改写计划及无 DNS 同源判定（IPv6 字面量按二进制地址比较），跨源凭证剥离与重定向次数上限由 `ruvia-web` I/O 驱动强制执行。
 
