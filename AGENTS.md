@@ -77,8 +77,8 @@
 - 校验限于协议语法、分帧、路由、安全边界和明确资源限制，不以“更严格”代替正确性。产品限制单独说明，不冒充 RFC 要求，也不为字段数、分块数或消息数另设无依据限制。
 - 沿「请求解析 → 正文分帧与解码 → 响应计划与序列化 → 网络驱动与生命周期回收」完整主链审查，不只检查孤立函数。
 - HTTP/1 与通用表示语义：
-  - 重点核对 `Host` 与请求目标、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为（通用 1xx 临时响应排除 `101 Switching Protocols`，`101` 仅由专用协议升级驱动边界生成；若 1xx 含 `Connection: close`，按 RFC 9112 在刷出后立即关闭连接）；HTTP/1 客户端请求准备阶段将进入线面计划的协议事实打包为自包含状态（`http1_client_exchange_state`）移交响应解析器，使响应解析彻底脱离调用方请求方法与首部存储的生命周期且常规请求零分配；
-  - 增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；请求 `Trailer`（`http_request_trailers`）独立于初始请求头存储并按全有或全无（all-or-nothing）及独立字节预算追加，禁止字段（RFC 9110 §6.5.1）在显式追加或 HTTP/2 下直接拒绝，而在 HTTP/1 接收时计入字节预算后按 RFC 9112 §7.1.2 丢弃不保留；响应 `Trailer` 通过 `validate_http_response_trailers` 先行完成完整校验并构造借用证明（`http_response_trailer_section`），响应头序列化（`append_http1_response_head`）优先保留显式 `Date`（未设置时复用缓存时间）且从同一十进制 token 测量并写出 `Content-Length`；
+  - 重点核对 `Host` 与请求目标、`Content-Length` / `Transfer-Encoding` 冲突与优先级、重复字段与列表语义，以及 `HEAD`、1xx、204、205、304、`CONNECT`、`Upgrade`、`Expect: 100-continue` 的特殊行为（通用 1xx 临时响应排除 `101 Switching Protocols`，`101` 仅由专用协议升级驱动边界生成；若 1xx 含 `Connection: close`，按 RFC 9112 在刷出后立即关闭连接）；HTTP/1 客户端请求准备阶段将进入线面计划的协议事实打包为自包含状态（`http1_client_exchange_state`）移交响应解析器，使响应解析彻底脱离调用方请求方法与首部存储的生命周期且常规请求零分配；携带正文的客户端请求必须在通知外部已完整写出预备请求正文后才可接受 `101`，且 `1xx` 的 `allow_reuse` 仅允许当前交换继续等待最终响应而不提前归还连接池；
+  - 增量处理覆盖任意切分、EOF、输出缓冲不足、chunk 扩展、trailer、消费量及流水线残余字节；逗号列表与分号参数统一复用唯一引号感知扫描器（`http_find_unquoted_delimiter`，识别 `quoted-string` 与 `\"` 转义），但 `Cookie` 解析按 RFC 6265 严禁赋予 `"` 引号包裹语义；请求 `Trailer`（`http_request_trailers`）独立于初始请求头存储并按全有或全无（all-or-nothing）及独立字节预算追加，禁止字段（RFC 9110 §6.5.1）在显式追加或 HTTP/2 下直接拒绝，而在 HTTP/1 接收时计入字节预算后按 RFC 9112 §7.1.2 丢弃不保留；响应 `Trailer` 通过 `validate_http_response_trailers` 先行完成完整校验并构造借用证明（`http_response_trailer_section`），响应头序列化（`append_http1_response_head`）优先保留显式 `Date`（未设置时复用缓存时间）且从同一十进制 token 测量并写出 `Content-Length`；
   - 条件请求遵循 RFC 9110 §13.2.2 优先级，`Range` 解析使用有界定长零分配集合并按 RFC 9110 §14.2 / §15.3.7.2 自动合并重叠或相邻区间（保留首成员接收顺序，不重复发送表示字节）；携带 `Content-Encoding` 的表示遇到多段 `Range` 时按 RFC 9110 §8.4 / §14.6 回退完整表示（单段仍返回 206），`If-Range` 命中授权的 206 按 RFC 9110 §15.3.7 精简非必需表示首部；`Set-Cookie` 解析（RFC 6265 §5.2）零分配借用响应头，其 `Expires` 的 cookie-date 语法独立于且不放宽标准 HTTP-date 语法；URI 引用修复（`percent_encode_uri_reference`）保留合法百分比三元组不二次编码（RFC 3986 §2.4），无需转义时零分配返回原视图，需转义且输入与输出缓冲存在地址别名时安全处理。
 - HTTP/2 与 HTTP 优先级：重点核对连接前言与 `SETTINGS` 同步、流状态机与并发/流控窗口、HPACK 动态表上限与伪首部/普通首部顺序、帧长度与填充/优先级约束、`GOAWAY` / `RST_STREAM` / `PING` 及 Extended `CONNECT`（RFC 8441），严格区分流级错误与连接级错误（RFC 9113 §5.4）：出站 HPACK 编码不插入动态表条目（容量缩减直接置零）；`enable_push_` 与 `ORIGIN` 帧（RFC 8336，仅限认证 TLS 连接，禁用 `h2c` 或显式代理）仅限客户端启用，接受 `PUSH_PROMISE` 不自动确立传输权威，驱动在消费推送响应前须对照已认证连接校验推送 URI 的 origin；HTTP 优先级（RFC 9218 / RFC 8941）本端构造严格校验 `0..7`，对端字典解析忽略未知成员、参数类型错误与越界值（按线序后出现的成员覆盖前值，缺省响应参数保持未设置以便代理合并）；致命连接错误后仍允许无帧释放已持有的请求租约与 DATA 额度，释放失败由后续推进自动重试。
 - 全双工与长生命周期会话（WebSocket、HTTP/2 流、CONNECT / Capsule 隧道、流式传输）：
@@ -108,7 +108,7 @@
   - 优先值所有权与 RAII。借用视图不延长 owner 寿命，零拷贝不得破坏借用有效期；分配器覆盖对象寿命，结果持有存储直到析构；
   - 框架动态存储通过显式传递的 `worker_memory` / `request_memory` 管理（禁止使用 `thread_local` 隐式全局池），公开启动配置不要求用户提供 PMR；
   - `worker_memory` 无内部同步锁，直接对接进程级 mimalloc 上游（不经过全局默认 PMR）：小对象走 worker 常驻小对象池，中等大块走受 `retained_block_bytes_` 预算约束的对齐精确尺寸块缓存，超出预算立即归还上游；
-  - 单次请求和握手使用 `request_memory`（`monotonic_buffer_resource` arena），优先复用连接预留的初始缓冲块，派生独立子操作时通过 `fork()` 获取同 worker 上游的独立 arena；长生命周期连接状态、结果和池化数据使用 `worker_memory` 可回收池；
+  - 单次请求和握手使用 `request_memory`（`monotonic_buffer_resource` arena），优先复用连接预留的初始缓冲块，派生独立子操作时通过 `fork()` 获取同 worker 上游的独立 arena；长生命周期连接状态、结果、池化数据以及无请求 arena 的后台投递任务（`web_worker_context`）使用 `worker_memory` 可回收 `pool()`（后台任务分配的存储须在任务作用域结束前于本 worker 销毁）；
   - 异步入口返回前完成输入拥有化和资源归一化（如跨请求复用的查询谓词暂存于进程级 PMR，生成异步操作前归一化至目标 worker 内存池）；拥有型 PMR 集合（如 `entity_rows`）跨不同 `memory_resource` 移动赋值时必须先在目标资源中递归重绑定全部元素后再交换，防止浅拷贝或分配器失配；
   - 长连接不得累积临时分配，存活数据不得被后续操作提前回收；流式缓冲按摊销方式压缩，禁止按块重复 O(N²) 搬移；worker 在完整扫描周期无活跃交换与 I/O 活动时触发 `trim_when_idle`，归还缓存大块并排空当前线程的协程帧缓存。
 
@@ -157,7 +157,7 @@
 - `controller` 是不继承框架类型的 `final` 类，由 `RUVIA_ROUTES_BEGIN(type)` … `RUVIA_ROUTES_END` 宏声明路由并在 `main` 前自动注册；注册去重后封存，不维护手工清单。
 - 中间件是满足 `ruvia::middleware` 概念的 `final` 类型，不继承框架基类；继续调用为 single-shot。前缀作用域中间件（`use_at`）按百分比解码并归一化尾斜杠后的完整路径段匹配（如 `/admin` 覆盖 `/%61dmin/x` 但不匹配 `/administrator`），归属关系在启动期编译进路由计划，仅跨边界的参数化路由在分发期检查请求路径。
 - `controller`、中间件与 `use_worker_state` 注册的状态均保持 per-worker。进程只拥有一份不可变路由查找计划，各 worker 路由契约必须一致；路由和中间件链在启动前构建，冲突启动即报错。
-- 上下文只暴露 typed capability；callback 由应用拥有。
+- 上下文（`context` 与 `web_worker_context`）只暴露 typed capability（`web_worker_context` 直接借用 worker 的客户端注册表与停止令牌，启动后台任务零所有权复制，worker 退役前 `join` 全部已投递任务）；callback 由应用拥有。
 - 响应元数据显式分为下一次构造消耗的 `draft()`、当前缓冲响应的 `edit_response()` 和交付时应用的跨替换 `policy()`；替换不自动继承旧响应字段。流式生产者先 `commit()` 并区分正文阶段与正常完成，正常完成不得伪装成取消或中止。
 - `model_type` 使用编译期 schema，解析、校验和序列化职责分离：必填与可空独立（`RUVIA_OPTIONAL_FIELD` 仅允许字段缺失，允许 `null` 须显式声明 `RUVIA_NULLABLE`，`RUVIA_DEFAULT` 仅作用于缺失的可选字段）；数值转换拒绝 `bool`/字符充当整数并执行精确整数与窄化浮点范围检查；跨分配器拥有化支持递归重绑定（`rebind_for_model`），移动操作检测源与目标地址重叠防止自包含结构移动时先销毁自身存储。
 - ORM 与直接查询保持独立公开路线，不混用内部实现。映射结果的标量及容器元素必须递归拥有数据；借用字段读取只在显式持有原始结果的路线提供。数值查询谓词保持字面量精度（不将 `double` 隐式窄化为 `float`）。
